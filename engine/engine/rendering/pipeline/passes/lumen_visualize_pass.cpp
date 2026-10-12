@@ -487,7 +487,7 @@ void lumen_visualize_pass::draw_view(const run_params& params, view mode, const 
                                : mode == view::card_coverage ? coverage_max_trace_distance
                                                              : visualize_max_trace_distance;
     scene.tile = tile;
-    scene.environment_sh = params.rview->tex_safe_get("IRRADIANCE_SH");
+    scene.environment_sh = params.rview->tex_find("IRRADIANCE_SH");
     scene.exposure = params.exposure;
     scene.tonemapping = params.tonemapping;
     params.surface_cache->run_debug(scene);
@@ -874,10 +874,10 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
     // Nothing shows without the cursor, outside the view, or before this frame's reflections traced.
     const bool is_cursor_in_view = cursor.x >= 0.0f && cursor.y >= 0.0f && cursor.x < float(size.width) &&
                                    cursor.y < float(size.height);
-    const auto ray = rview.tex_safe_get(lumen_reflection_pass::ray_texture);
-    const auto hit = rview.tex_safe_get(lumen_reflection_pass::hit_texture);
-    const auto radiance = rview.tex_safe_get(lumen_reflection_pass::radiance_texture);
-    const auto tiles = rview.tex_safe_get(lumen_reflection_pass::tiles_texture);
+    const auto ray = rview.tex_find(lumen_reflection_pass::ray_texture);
+    const auto hit = rview.tex_find(lumen_reflection_pass::hit_texture);
+    const auto radiance = rview.tex_find(lumen_reflection_pass::radiance_texture);
+    const auto tiles = rview.tex_find(lumen_reflection_pass::tiles_texture);
     const uint32_t frame = gfx::get_render_frame();
     using trace_state = lumen_reflection_pass::trace_state;
     const auto* trace = rview.data().try_get<trace_state>(trace_state::view_key);
@@ -982,21 +982,12 @@ void lumen_visualize_pass::draw_lines(const overlay_params& params,
 auto lumen_visualize_pass::acquire_world_target(const world_params& params) -> gfx::frame_buffer::ptr
 {
     auto& rview = *params.rview;
-    const auto size = params.scene_depth->get_size();
-    const auto format = params.scene_depth->info.format;
-    auto& depth = rview.tex_get_or_emplace("LUMEN_VISUALIZE_DEPTH");
-    if(gfx::needs_recreate(depth, size, format))
-    {
-        depth.reset();
-        depth = std::make_shared<gfx::texture>(uint16_t(size.width),
-                                               uint16_t(size.height),
-                                               false,
-                                               1,
-                                               format,
-                                               BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
-    }
-    auto& target = rview.fbo_get_or_emplace("LUMEN_VISUALIZE_TARGET");
-    if(!target || target->get_texture(0) != params.scene_color || target->get_texture(1) != depth)
+    const auto& depth = rview.tex_acquire("LUMEN_VISUALIZE_DEPTH",
+                                          {.size = params.scene_depth->get_size(),
+                                           .format = params.scene_depth->info.format,
+                                           .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST});
+    auto& target = rview.fbo_acquire("LUMEN_VISUALIZE_TARGET");
+    if(gfx::needs_recreate(target, {params.scene_color, depth}))
     {
         target = std::make_shared<gfx::frame_buffer>();
         target->populate({params.scene_color, depth});
@@ -1205,18 +1196,11 @@ void lumen_visualize_pass::draw_primitives(const world_params& params,
 auto lumen_visualize_pass::copy_output(const run_params& params) -> gfx::texture::ptr
 {
     const auto& source = params.output->get_texture(0);
-    const auto size = params.output->get_size();
-    auto& copy = params.rview->tex_get_or_emplace("LUMEN_VISUALIZE_SCENE_COLOR");
-    if(gfx::needs_recreate(copy, size, source->info.format))
-    {
-        copy.reset();
-        copy = std::make_shared<gfx::texture>(uint16_t(size.width),
-                                              uint16_t(size.height),
-                                              false,
-                                              1,
-                                              source->info.format,
-                                              BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
-    }
+    const auto& copy = params.rview->tex_acquire(
+        "LUMEN_VISUALIZE_SCENE_COLOR",
+        {.size = params.output->get_size(),
+         .format = source->info.format,
+         .flags = BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP});
     gfx::render_pass blit_pass("GI/Visualize Copy");
     bgfx::blit(blit_pass.id,
                bgfx::TextureRegion{.handle = copy->native_handle()},
@@ -1227,7 +1211,7 @@ auto lumen_visualize_pass::copy_output(const run_params& params) -> gfx::texture
 void lumen_visualize_pass::draw_screen_view(const run_params& params, view mode, const irect32_t& tile)
 {
     auto& program = screen_program_;
-    const auto& gbuffer = params.rview->fbo_safe_get("GBUFFER");
+    const auto& gbuffer = params.rview->fbo_find("GBUFFER");
     if(!program.program || !program.program->is_valid() || !gbuffer)
     {
         return;
@@ -1242,7 +1226,7 @@ void lumen_visualize_pass::draw_screen_view(const run_params& params, view mode,
         history = lumen_gather_pass::get_current_history(*params.rview);
         scene_color = copy_output(params);
     }
-    const auto environment_sh = params.rview->tex_safe_get("IRRADIANCE_SH");
+    const auto environment_sh = params.rview->tex_find("IRRADIANCE_SH");
     gfx::render_pass pass("GI/Visualize");
     pass.bind(params.output.get());
     const bool is_tile = !tile.empty();

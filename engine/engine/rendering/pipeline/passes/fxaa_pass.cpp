@@ -42,15 +42,10 @@ auto fxaa_pass::create_or_update_output_fb(gfx::render_view& rview,
     // This is presumably your engine’s method to get the bgfx::TextureFormat.
     // If your engine uses something else, adapt accordingly.
 
-    auto& output_tex = rview.tex_get_or_emplace("FXAA_OUTPUT");
-    if(gfx::needs_recreate(output_tex, input_sz, input_format))
-    {
-        output_tex.reset();
-        output_tex =
-            std::make_shared<gfx::texture>(input_sz.width, input_sz.height, false, 1, input_format, BGFX_TEXTURE_RT);
-    }
-    auto& output_fbo = rview.fbo_get_or_emplace("FXAA_OUTPUT");
-    if(gfx::needs_recreate(output_fbo, input_sz))
+    const auto& output_tex =
+        rview.tex_acquire("FXAA_OUTPUT", {.size = input_sz, .format = input_format, .flags = BGFX_TEXTURE_RT});
+    auto& output_fbo = rview.fbo_acquire("FXAA_OUTPUT");
+    if(gfx::needs_recreate(output_fbo, {output_tex}))
     {
         output_fbo.reset();
         output_fbo = std::make_shared<gfx::frame_buffer>();

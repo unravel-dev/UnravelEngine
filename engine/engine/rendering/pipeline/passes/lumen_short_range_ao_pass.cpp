@@ -96,7 +96,7 @@ auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview,
                                            size,
                                            packed_ao_format);
     targets.history_read =
-        rview.tex_safe_get(step.writes_even ? "LUMEN_SHORT_RANGE_AO_HISTORY_B" : "LUMEN_SHORT_RANGE_AO_HISTORY_A");
+        rview.tex_find(step.writes_even ? "LUMEN_SHORT_RANGE_AO_HISTORY_B" : "LUMEN_SHORT_RANGE_AO_HISTORY_A");
     targets.screen = ensure_texture(rview, "LUMEN_SHORT_RANGE_AO_SCREEN", size, bgfx::TextureFormat::RGBA8);
     targets.has_history = step.is_continuous && has_view_size(targets.history_read, size);
     return targets;

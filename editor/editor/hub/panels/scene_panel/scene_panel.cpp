@@ -2140,7 +2140,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     auto& camera_comp = camera_entity.get<camera_component>();
     const auto& camera = camera_comp.get_camera();
     const auto& rview = camera_comp.get_render_view();
-    const auto& obuffer = rview.fbo_safe_get("OBUFFER");
+    const auto& obuffer = rview.fbo_find("OBUFFER");
 
     ImGui::SetCursorScreenPos(pos);
     if(obuffer && obuffer->get_attachment_count() > 0)
@@ -2363,7 +2363,7 @@ void scene_panel::draw_selected_camera(rtti::context& ctx, entt::handle editor_c
     const auto& selected_camera = selected.get<camera_component>();
     const auto& camera = selected_camera.get_camera();
     const auto& viewport_size = camera.get_viewport_size();
-    const auto& obuffer = selected_camera.get_render_view().fbo_safe_get("OBUFFER");
+    const auto& obuffer = selected_camera.get_render_view().fbo_find("OBUFFER");
     const std::string name = make_camera_preview_name(selected);
     const std::string projection = make_camera_preview_projection(camera);
     camera_preview_overlay::preview_desc desc{};

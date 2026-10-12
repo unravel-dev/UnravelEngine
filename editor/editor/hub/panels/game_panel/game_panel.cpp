@@ -159,7 +159,7 @@ void game_panel::draw_ui(rtti::context& ctx)
 
                 const auto& camera = camera_comp.get_camera();
                 const auto& rview = camera_comp.get_render_view();
-                const auto& obuffer = rview.fbo_safe_get("OBUFFER");
+                const auto& obuffer = rview.fbo_find("OBUFFER");
 
                 if(obuffer)
                 {

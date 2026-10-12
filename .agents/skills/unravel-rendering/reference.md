@@ -30,6 +30,15 @@ rendering_system
 ## Render view and framebuffers
 
 - `gfx::render_view` - per-viewport render state
+  - Named textures: `rview.tex_acquire(key, gfx::texture_desc{.size = s, .format = f, .flags = fl})`
+    builds the texture and rebuilds it when the desc changes; `on_create` seeds contents or resets
+    per-view state. Every call site of a key must pass the same desc, or the texture is rebuilt
+    on every call.
+  - Lookups: `tex_find` / `fbo_find` (null when missing), `tex_get` / `fbo_get` (asserted to exist).
+  - Within-pass temporaries: `tex_acquire_transient(desc)` lends a pooled texture until the caller
+    drops it; contents are undefined.
+  - Framebuffers: `fbo_acquire(key)`, rebuilt with `gfx::needs_recreate(fbo, {textures})`, so a
+    texture rebuilt at the same size is not left behind in the fbo.
 - `gfx::frame_buffer` - render targets
 - `camera` / `camera_component` - view/projection matrices
 - `render_pass` - pass ID tracking (`gfx::render_pass::get_last_frame_max_pass_id()`)

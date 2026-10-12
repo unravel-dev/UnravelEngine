@@ -2,6 +2,7 @@
 
 #include "graphics.h"
 #include "texture.h"
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -134,5 +135,24 @@ private:
 inline auto needs_recreate(const gfx::frame_buffer::ptr& fbo, const usize32_t& size) -> bool
 {
     return !fbo || (fbo && fbo->get_size() != size);
+}
+
+/// Whether @p fbo is missing or is not attached to exactly @p textures, in order. Unlike the size
+/// comparison it also catches an attachment rebuilt at the same size (a format or flag change).
+inline auto needs_recreate(const gfx::frame_buffer::ptr& fbo, const std::vector<gfx::texture::ptr>& textures) -> bool
+{
+    if(!fbo)
+    {
+        return true;
+    }
+    const auto& attachments = fbo->get_attachments();
+    return !std::equal(textures.begin(),
+                       textures.end(),
+                       attachments.begin(),
+                       attachments.end(),
+                       [](const gfx::texture::ptr& tex, const fbo_attachment& attachment)
+                       {
+                           return tex == attachment.texture;
+                       });
 }
 } // namespace gfx

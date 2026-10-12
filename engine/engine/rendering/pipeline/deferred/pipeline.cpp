@@ -204,85 +204,40 @@ auto create_or_resize_d_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
                                const pipeline::run_params& params) -> const gfx::texture::ptr&
 {
-    auto& depth = rview.tex_get_or_emplace("DEPTH");
-    if(gfx::needs_recreate(depth, viewport_size))
-    {
-        depth.reset();
-        depth = std::make_shared<gfx::texture>(viewport_size.width,
-                                               viewport_size.height,
-                                               false,
-                                               1,
-                                               bgfx::TextureFormat::D32F,
-                                               BGFX_TEXTURE_RT);
-    }
-
-    return depth;
+    return rview.tex_acquire("DEPTH",
+                             {.size = viewport_size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_RT});
 }
 
 auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& viewport_size) -> const gfx::texture::ptr&
 {
-    auto& hiz = rview.tex_get_or_emplace("HIZBUFFER");
-    if(gfx::needs_recreate(hiz, viewport_size))
-    {
-        // Create Hi-Z texture with compute shader support
-        hiz.reset();
-        hiz = std::make_shared<gfx::texture>(viewport_size.width,
-                                             viewport_size.height,
-                                             true,                            // generate mips
-                                             1,                               // one layer
-                                             bgfx::TextureFormat::R32F,       // R32F for better precision
-                                             BGFX_TEXTURE_RT |                // Render target
-                                                 BGFX_TEXTURE_COMPUTE_WRITE | // Allow compute writes
-                                                 BGFX_SAMPLER_MIN_POINT |     // Point sampling for min filter
-                                                 BGFX_SAMPLER_MAG_POINT |     // Point sampling for mag filter
-                                                 BGFX_SAMPLER_MIP_POINT |     // Point sampling for mips
-                                                 BGFX_SAMPLER_U_CLAMP |       // Clamp UVs
-                                                 BGFX_SAMPLER_V_CLAMP         // Clamp UVs
-        );
-    }
-
-    return hiz;
+    // R32F for precision, a full mip chain, compute-written and point-sampled with clamped UVs.
+    return rview.tex_acquire("HIZBUFFER",
+                             {.size = viewport_size,
+                              .format = bgfx::TextureFormat::R32F,
+                              .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_MIN_POINT |
+                                       BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP |
+                                       BGFX_SAMPLER_V_CLAMP,
+                              .has_mips = true});
 }
 
 auto create_or_resize_g_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
                                const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
 {
-    auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
+    const auto& tex0 = rview.tex_acquire(
+        "GBUFFER_0",
+        {.size = viewport_size, .format = get_default_format(), .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT});
+    const auto& tex1 = rview.tex_acquire("GBUFFER_1", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
+    const auto& tex2 = rview.tex_acquire("GBUFFER_2", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
+    const auto& tex3 = rview.tex_acquire(
+        "GBUFFER_3",
+        {.size = viewport_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT});
 
-    auto& fbo = rview.fbo_get_or_emplace("GBUFFER");
-    if(gfx::needs_recreate(fbo, viewport_size))
+    auto& fbo = rview.fbo_acquire("GBUFFER");
+    if(gfx::needs_recreate(fbo, {tex0, tex1, tex2, tex3, depth}))
     {
-        auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
-
-        auto tex0 = std::make_shared<gfx::texture>(viewport_size.width,
-                                                   viewport_size.height,
-                                                   false,
-                                                   1,
-                                                   get_default_format(),
-                                                   BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
-
-        auto tex1 = std::make_shared<gfx::texture>(viewport_size.width,
-                                                   viewport_size.height,
-                                                   false,
-                                                   1,
-                                                   format,
-                                                   BGFX_TEXTURE_RT);
-
-        auto tex2 = std::make_shared<gfx::texture>(viewport_size.width,
-                                                   viewport_size.height,
-                                                   false,
-                                                   1,
-                                                   format,
-                                                   BGFX_TEXTURE_RT);
-
-        auto tex3 = std::make_shared<gfx::texture>(viewport_size.width,
-                                                   viewport_size.height,
-                                                   false,
-                                                   1,
-                                                   get_default_format(),
-                                                   BGFX_TEXTURE_RT);
-
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex0, tex1, tex2, tex3, depth});
@@ -295,58 +250,42 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
                                const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
 {
-    auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
+    const auto& tex = rview.tex_acquire("LBUFFER", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
 
-    auto& fbo = rview.fbo_get_or_emplace("LBUFFER");
-    if(gfx::needs_recreate(fbo, viewport_size))
+    auto& fbo_depth = rview.fbo_acquire("LBUFFER_DEPTH");
+    if(gfx::needs_recreate(fbo_depth, {tex, depth}))
     {
-        auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
-
-        auto tex = std::make_shared<gfx::texture>(viewport_size.width,
-                                                  viewport_size.height,
-                                                  false,
-                                                  1,
-                                                  format,
-                                                  BGFX_TEXTURE_RT);
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({tex});
-        
-        auto tex_unshadowed = std::make_shared<gfx::texture>(viewport_size.width,
-                                                              viewport_size.height,
-                                                              false,
-                                                              1,
-                                                              format,
-                                                              BGFX_TEXTURE_RT);
-      
-
-        auto& fbo_depth = rview.fbo_get_or_emplace("LBUFFER_DEPTH");
         fbo_depth.reset();
         fbo_depth = std::make_shared<gfx::frame_buffer>();
         fbo_depth->populate({tex, depth});
     }
 
+    auto& fbo = rview.fbo_acquire("LBUFFER");
+    if(gfx::needs_recreate(fbo, {tex}))
+    {
+        fbo.reset();
+        fbo = std::make_shared<gfx::frame_buffer>();
+        fbo->populate({tex});
+    }
+
     return fbo;
 }
 
-/// A viewport-sized reflection target, recreated on resize.
+/// A viewport-sized reflection target, rebuilt when its size, format or flags change.
 auto create_or_resize_reflection_buffer(gfx::render_view& rview,
                                         const std::string& name,
                                         const usize32_t& viewport_size,
                                         const pipeline::run_params& params,
                                         uint64_t texture_flags) -> const gfx::frame_buffer::ptr&
 {
-    auto& fbo = rview.fbo_get_or_emplace(name);
-    if(gfx::needs_recreate(fbo, viewport_size))
+    const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
+    const auto& tex = rview.tex_acquire(name, {.size = viewport_size, .format = format, .flags = texture_flags});
+
+    auto& fbo = rview.fbo_acquire(name);
+    if(gfx::needs_recreate(fbo, {tex}))
     {
-        auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
-
-        auto tex = std::make_shared<gfx::texture>(viewport_size.width,
-                                                  viewport_size.height,
-                                                  false,
-                                                  1,
-                                                  format,
-                                                  texture_flags);
-
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
@@ -373,21 +312,13 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
 {
     auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
 
-    auto& tex = rview.tex_get_or_emplace("OBUFFER");
-    if(gfx::needs_recreate(tex, viewport_size))
+    const auto& tex = rview.tex_acquire("OBUFFER",
+                                        {.size = viewport_size,
+                                         .format = get_default_format(),
+                                         .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT});
     {
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(viewport_size.width,
-                                            viewport_size.height,
-                                            false,
-                                            1,
-                                            get_default_format(),
-                                            BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
-
-    }
-    {
-        auto& fbo = rview.fbo_get_or_emplace("OBUFFER_DEPTH");
-        if(gfx::needs_recreate(fbo, viewport_size))
+        auto& fbo = rview.fbo_acquire("OBUFFER_DEPTH");
+        if(gfx::needs_recreate(fbo, {tex, depth}))
         {
             fbo.reset();
             fbo = std::make_shared<gfx::frame_buffer>();
@@ -395,8 +326,8 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
         }
     }
 
-    auto& fbo = rview.fbo_get_or_emplace("OBUFFER");
-    if(gfx::needs_recreate(fbo, viewport_size))
+    auto& fbo = rview.fbo_acquire("OBUFFER");
+    if(gfx::needs_recreate(fbo, {tex}))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
@@ -423,30 +354,23 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
 auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& viewport_size)
     -> const gfx::frame_buffer::ptr&
 {
-    auto& depth = rview.tex_get_or_emplace("DEPTH");
+    const auto& depth = rview.tex_find("DEPTH");
 
-    auto& tex = rview.tex_get_or_emplace("VELOCITY");
-    if(gfx::needs_recreate(tex, viewport_size, bgfx::TextureFormat::RGBA16F))
-    {
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(viewport_size.width,
-                                             viewport_size.height,
-                                             false,
-                                             1,
-                                             bgfx::TextureFormat::RGBA16F,
-                                             BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-    }
+    const auto& tex = rview.tex_acquire("VELOCITY",
+                                        {.size = viewport_size,
+                                         .format = bgfx::TextureFormat::RGBA16F,
+                                         .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
 
-    auto& camera_fbo = rview.fbo_get_or_emplace("VELOCITY_FBO_CAMERA");
-    if(gfx::needs_recreate(camera_fbo, viewport_size))
+    auto& camera_fbo = rview.fbo_acquire("VELOCITY_FBO_CAMERA");
+    if(gfx::needs_recreate(camera_fbo, {tex}))
     {
         camera_fbo.reset();
         camera_fbo = std::make_shared<gfx::frame_buffer>();
         camera_fbo->populate({tex});
     }
 
-    auto& fbo = rview.fbo_get_or_emplace("VELOCITY_FBO");
-    if(gfx::needs_recreate(fbo, viewport_size))
+    auto& fbo = rview.fbo_acquire("VELOCITY_FBO");
+    if(gfx::needs_recreate(fbo, {tex, depth}))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
@@ -458,29 +382,22 @@ auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& viewpor
 
 auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::texture::ptr&
 {
-    auto& tex = rview.tex_get_or_emplace("IRRADIANCE_SH");
-    if(gfx::needs_recreate(tex, {9, 1}))
-    {
-        // Match auto-exposure: RGBA32F + COMPUTE_WRITE uses glTexStorage2D on GL (immutable
-        // storage). Initial data must go through update_texture_2d (glTexSubImage2D), not
-        // the texture ctor _mem path. BGFX_TEXTURE_RT keeps the GL texture sampleable after
-        // compute image writes (same pattern as Hi-Z and other compute targets).
-        // Layout: 9x1, one texel per SH coefficient, rgb = channels R,G,B (a unused).
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(9,
-                                             1,
-                                             false,
-                                             1,
-                                             bgfx::TextureFormat::RGBA32F,
-                                             BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE |
-                                                 BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
-                                                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-
-        float initial_coeffs[9 * 4] = {};
-        const bgfx::Memory* initial_pixels = bgfx::copy(initial_coeffs, sizeof(initial_coeffs));
-        bgfx::updateTexture2D(tex->native_handle(), 0, 0, 0, 0, 9, 1, initial_pixels);
-    }
-    return tex;
+    // Match auto-exposure: RGBA32F + COMPUTE_WRITE uses glTexStorage2D on GL (immutable
+    // storage). Initial data must go through update_texture_2d (glTexSubImage2D), not
+    // the texture ctor _mem path. BGFX_TEXTURE_RT keeps the GL texture sampleable after
+    // compute image writes (same pattern as Hi-Z and other compute targets).
+    // Layout: 9x1, one texel per SH coefficient, rgb = channels R,G,B (a unused).
+    return rview.tex_acquire("IRRADIANCE_SH",
+                             {.size = {9, 1},
+                              .format = bgfx::TextureFormat::RGBA32F,
+                              .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_MIN_POINT |
+                                       BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP},
+                             [](const gfx::texture::ptr& tex)
+                             {
+                                 float initial_coeffs[9 * 4] = {};
+                                 const bgfx::Memory* initial_pixels = bgfx::copy(initial_coeffs, sizeof(initial_coeffs));
+                                 bgfx::updateTexture2D(tex->native_handle(), 0, 0, 0, 0, 9, 1, initial_pixels);
+                             });
 }
 
 /// Copies into @p light_casters the casters whose world bounds reach into a local light's
@@ -1084,7 +1001,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     const bool taa_active = static_cast<bool>(params.fill_taa_params);
     // GTAO is a fourth consumer: its temporal accumulation reprojects against this depth and
     // treats a missing one as "no history" (raw per-frame noise).
-    const bool gtao_active = static_cast<bool>(rview.tex_safe_get("GTAO"));
+    const bool gtao_active = static_cast<bool>(rview.tex_find("GTAO"));
     snapshot_prev_depth(rview, viewport_size, hiz_active || gi_active || taa_active || gtao_active);
 
     // Clear batch collector for this frame
@@ -1133,8 +1050,8 @@ void deferred::run_lumen_visualize_scene_color(const camera& camera,
         return;
     }
     lumen_visualize_pass::world_params world;
-    const auto& lbuffer = rview.fbo_safe_get("LBUFFER");
-    const auto& gbuffer = rview.fbo_safe_get("GBUFFER");
+    const auto& lbuffer = rview.fbo_find("LBUFFER");
+    const auto& gbuffer = rview.fbo_find("GBUFFER");
     world.scene_color = lbuffer ? lbuffer->get_texture(0) : nullptr;
     world.scene_depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
     world.rview = &rview;
@@ -1198,10 +1115,10 @@ void deferred::run_temporal_probe_pass(const camera& camera,
 {
     temporal_probe_pass::run_params probe_params;
     probe_params.color = output->get_texture(0);
-    probe_params.velocity = rview.tex_safe_get("VELOCITY");
+    probe_params.velocity = rview.tex_find("VELOCITY");
     const auto& probe_gbuffer = rview.fbo_get("GBUFFER");
     probe_params.depth = probe_gbuffer ? probe_gbuffer->get_texture(4) : nullptr;
-    probe_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    probe_params.prev_depth = rview.tex_find("PREV_DEPTH");
     probe_params.cam = &camera;
     temporal_probe_pass_.run(probe_params);
 }
@@ -1231,17 +1148,9 @@ void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& vie
         return;
     }
     auto depth_src = rview.fbo_get("GBUFFER")->get_texture(4);
-    auto& prev_depth = rview.tex_get_or_emplace("PREV_DEPTH");
-    if(gfx::needs_recreate(prev_depth, viewport_size))
-    {
-        prev_depth.reset();
-        prev_depth = std::make_shared<gfx::texture>(viewport_size.width,
-                                                    viewport_size.height,
-                                                    false,
-                                                    1,
-                                                    bgfx::TextureFormat::D32F,
-                                                    BGFX_TEXTURE_BLIT_DST);
-    }
+    const auto& prev_depth = rview.tex_acquire(
+        "PREV_DEPTH",
+        {.size = viewport_size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_BLIT_DST});
     gfx::render_pass blit_pass("History/Prev Depth Blit Pass");
     bgfx::blit(blit_pass.id,
                bgfx::TextureRegion{.handle = prev_depth->native_handle()},
@@ -1789,7 +1698,7 @@ void deferred::run_velocity_debug_pass(const camera& camera,
     {
         return;
     }
-    auto velocity_tex = rview.tex_safe_get("VELOCITY");
+    auto velocity_tex = rview.tex_find("VELOCITY");
     if(!velocity_tex || !velocity_debug_program_.program || !velocity_debug_program_.program->is_valid())
     {
         return;
@@ -2390,8 +2299,8 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     const auto& camera_pos = camera.get_position();
 
     const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
-    const auto& pbuffer = rview.fbo_safe_get("PBUFFER");
+    const auto& rbuffer = rview.fbo_find("RBUFFER");
+    const auto& pbuffer = rview.fbo_find("PBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
 
     gfx::render_pass pass("Indirect Lighting/Pass");
@@ -2420,10 +2329,10 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     // indirect diffuse estimate plus the weight with which it replaces the environment probe --
     // so they feed one consumer slot and only one of them is used. The cache wins when present:
     // it sees geometry off screen and behind the camera, which SSIL cannot at any sample count.
-    auto indirect_diffuse_tex = rview.tex_safe_get("GI_RESOLVE");
+    auto indirect_diffuse_tex = rview.tex_find("GI_RESOLVE");
     if(!indirect_diffuse_tex)
     {
-        indirect_diffuse_tex = rview.tex_safe_get("SSIL");
+        indirect_diffuse_tex = rview.tex_find("SSIL");
     }
     // Transparent (alpha 0) fallback when both are disabled/absent so the shader's
     // mix(irradiance, ssil.rgb, ssil.a) collapses to the pure SH probe. The opaque-black
@@ -2435,7 +2344,7 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     // without it the environment SH answers (fs_pbr_lighting.sh, pbr_indirect). And whether the
     // estimate is SSIL's, whose rays resolved the screen-space visibility per pixel: it takes
     // no screen-space AO, where the GI resolve takes it below its probe lattice.
-    const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_safe_get("GI_RESOLVE");
+    const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_find("GI_RESOLVE");
     // The occlusion of both indirect terms: the screen-space AO, and the GTSO table for the
     // specular. The untraced reflection layer (PBUFFER) takes the full occlusion, the traced
     // layers in RBUFFER only the material AO's.
@@ -2470,7 +2379,7 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
 
 void deferred::clear_traced_reflections(gfx::render_view& rview)
 {
-    const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
+    const auto& rbuffer = rview.fbo_find("RBUFFER");
     if(!rbuffer)
     {
         return;
@@ -2782,10 +2691,10 @@ void deferred::run_ssr_pass(const camera& camera,
     // fallback is BLACK, not LBUFFER: on frame 0 the LBUFFER was just created and has
     // not been written yet (its first clear happens in the direct lighting pass, which
     // runs AFTER SSR), so it would trace one frame of undefined GPU memory as radiance.
-    auto prev_scene = rview.tex_safe_get("PREV_SCENE_HDR");
+    auto prev_scene = rview.tex_find("PREV_SCENE_HDR");
     ssr_params.previous_frame = prev_scene ? prev_scene : default_textures::get().black_texture();
     // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
-    ssr_params.velocity = rview.tex_safe_get("VELOCITY");
+    ssr_params.velocity = rview.tex_find("VELOCITY");
 
     ssr_params.cam = &camera;
 
@@ -2842,8 +2751,8 @@ auto deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, cons
     gtao_params.g_buffer = rview.fbo_get("GBUFFER");
     // This frame's velocity buffer and last frame's depth; a null texture disables the
     // respective temporal path inside the pass.
-    gtao_params.velocity = rview.tex_safe_get("VELOCITY");
-    gtao_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    gtao_params.velocity = rview.tex_find("VELOCITY");
+    gtao_params.prev_depth = rview.tex_find("PREV_DEPTH");
     gtao_params.cam = &camera;
     rparams.fill_gtao_params(gtao_params);
     auto result = gtao_pass_.run(rview, gtao_params);
@@ -2852,7 +2761,7 @@ auto deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, cons
         rview.tex_remove("GTAO");
         return false;
     }
-    rview.tex_get_or_emplace("GTAO") = result;
+    rview.tex_acquire("GTAO") = result;
     rview.data().get_or_emplace<gtao_pass::settings>("GTAO_SETTINGS") = gtao_params.config;
     return true;
 }
@@ -2868,7 +2777,7 @@ auto deferred::get_probe_layer_inputs(gfx::render_view& rview, const gfx::textur
     }
     // The GI reflections own the view: the gather's rough specular is the whole untraced layer (no reflection
     // probes or sky specular are composited under it), read straight from its history.
-    const auto rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
+    const auto rough_specular = rview.tex_find("GI_ROUGH_SPECULAR");
     inputs.texture = rough_specular ? rough_specular : default_textures::get().black_texture();
     inputs.params = {1.0f, get_gi_resolve_scale(rview), rough_specular ? 1.0f : 0.0f, 0.0f};
     return inputs;
@@ -2883,7 +2792,7 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
     // visibility through the multi-bounce fit at the post-process intensity the gather
     // published with it (no bent normal: the ambient axis stays the normal), the untraced
     // specular the bent cone.
-    const auto& lumen_ao = rview.tex_safe_get(lumen_gather_pass::screen_ao_texture);
+    const auto& lumen_ao = rview.tex_find(lumen_gather_pass::screen_ao_texture);
     using screen_ao_state = lumen_gather_pass::screen_ao_state;
     const auto* lumen_ao_state = rview.data().try_get<screen_ao_state>(screen_ao_state::view_key);
     if(lumen_ao && lumen_ao_state && lumen_ao_state->frame == uint32_t(gfx::get_render_frame()))
@@ -2893,7 +2802,7 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
         inputs.multi_bounce_albedo_cap = gi::lumen::LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO;
         return inputs;
     }
-    const auto& gtao_tex = rview.tex_safe_get("GTAO");
+    const auto& gtao_tex = rview.tex_find("GTAO");
     const auto* gtao_settings = rview.data().try_get<gtao_pass::settings>("GTAO_SETTINGS");
     if(gtao_tex && gtao_settings)
     {
@@ -2927,14 +2836,14 @@ void deferred::run_ssil_pass(const camera& camera,
     ssil_pass::run_params ssil_params;
     ssil_params.g_buffer = rview.fbo_get("GBUFFER");
     ssil_params.direct_lighting = rview.fbo_get("LBUFFER")->get_texture(0);
-    ssil_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    ssil_params.prev_depth = rview.tex_find("PREV_DEPTH");
     // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
-    ssil_params.velocity = rview.tex_safe_get("VELOCITY");
-    ssil_params.prev_ssil = rview.tex_safe_get("PREV_SSIL");
+    ssil_params.velocity = rview.tex_find("VELOCITY");
+    ssil_params.prev_ssil = rview.tex_find("PREV_SSIL");
     // Last frame's environment SH (the pass that computes it runs later, in the indirect
     // lighting pass); used as the per-ray miss fallback so escaped rays integrate the
     // environment. Persists across frames in the render_view, so it is null only on frame 0.
-    ssil_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    ssil_params.irradiance_sh = rview.tex_find("IRRADIANCE_SH");
     ssil_params.cam = &camera;
 
     rparams.fill_ssil_params(ssil_params);
@@ -2943,7 +2852,7 @@ void deferred::run_ssil_pass(const camera& camera,
     ssil_params.pre_exposure = get_pre_exposure(rview);
 
     auto result = ssil_pass_.run(rview, ssil_params);
-    rview.tex_get_or_emplace("SSIL") = result;
+    rview.tex_acquire("SSIL") = result;
 
     if(ssil_params.settings.enable_multi_bounce && result)
     {
@@ -2952,21 +2861,11 @@ void deferred::run_ssil_pass(const camera& camera,
         // it edge-aware), so feeding it back is safe -- the old failure mode was a NAIVE
         // full-viewport upscale that bled bright indirect across depth boundaries. Sizing
         // PREV_SSIL to the result keeps the blit a 1:1 copy regardless of trace resolution.
-        const auto prev_sz = result->get_size();
-        auto& prev_ssil = rview.tex_get_or_emplace("PREV_SSIL");
-
-        if(gfx::needs_recreate(prev_ssil, prev_sz))
-        {
-            prev_ssil.reset();
-            prev_ssil = std::make_shared<gfx::texture>(static_cast<std::uint16_t>(prev_sz.width),
-                                                       static_cast<std::uint16_t>(prev_sz.height),
-                                                       false,
-                                                       1,
-                                                       bgfx::TextureFormat::RGBA16F,
-                                                       BGFX_TEXTURE_BLIT_DST |
-                                                           BGFX_SAMPLER_U_CLAMP |
-                                                           BGFX_SAMPLER_V_CLAMP);
-        }
+        const auto& prev_ssil =
+            rview.tex_acquire("PREV_SSIL",
+                              {.size = result->get_size(),
+                               .format = bgfx::TextureFormat::RGBA16F,
+                               .flags = BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
         gfx::render_pass blit_pass("SSIL/Prev SSIL Blit Pass");
         bgfx::blit(blit_pass.id,
                    bgfx::TextureRegion{.handle = prev_ssil->native_handle()},
@@ -2990,7 +2889,7 @@ auto deferred::run_taa_pass(const camera& camera,
         taa_pass_.release_resources(rview);
         return input;
     }
-    const auto& gbuffer = rview.fbo_safe_get("GBUFFER");
+    const auto& gbuffer = rview.fbo_find("GBUFFER");
     if(!input || !gbuffer)
     {
         return input;
@@ -3002,10 +2901,10 @@ auto deferred::run_taa_pass(const camera& camera,
     p.g_buffer = gbuffer;
     // Still the PREVIOUS frame's depth here (the snapshot happens at end of frame);
     // used for disocclusion rejection. Null on the first frame.
-    p.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    p.prev_depth = rview.tex_find("PREV_DEPTH");
     // THIS frame's velocity buffer (produced right after the G-buffer pass); null when the
     // velocity pass is off, which drops the resolve back to camera-only depth reprojection.
-    p.velocity = rview.tex_safe_get("VELOCITY");
+    p.velocity = rview.tex_find("VELOCITY");
     rparams.fill_taa_params(p);
     p.pre_exposure = get_pre_exposure(rview);
     return taa_pass_.run(rview, p);
@@ -3217,15 +3116,15 @@ auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
 
 auto deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params) -> bool
 {
-    const auto rbuffer = rview.fbo_safe_get("RBUFFER");
-    const auto pbuffer = rview.fbo_safe_get("PBUFFER");
+    const auto rbuffer = rview.fbo_find("RBUFFER");
+    const auto pbuffer = rview.fbo_find("PBUFFER");
     if(!rbuffer || !pbuffer)
     {
         return false;
     }
     lumen_reflection_pass::run_params params;
     params.gather = &gather_params;
-    params.rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
+    params.rough_specular = rview.tex_find("GI_ROUGH_SPECULAR");
     params.rough_specular_scale = get_gi_resolve_scale(rview);
     params.traced_output = rbuffer->get_texture(0);
     params.probe_output = pbuffer->get_texture(0);
@@ -3285,7 +3184,7 @@ auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, 
     {
         // The accumulated result ping-pongs between two targets, so it is published under a
         // stable name for the indirect consumer rather than being looked up by its own.
-        rview.tex_get_or_emplace("GI_RESOLVE") = result;
+        rview.tex_acquire("GI_RESOLVE") = result;
         return true;
     }
     // The consumer picks GI_RESOLVE over SSIL purely by presence, so a buffer left behind from when
@@ -3302,16 +3201,16 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
 {
     lumen_run_params params;
     params.settings = gi;
-    params.g_buffer = rview.fbo_safe_get("GBUFFER");
+    params.g_buffer = rview.fbo_find("GBUFFER");
     // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
     // frame, which is exactly what temporal reprojection needs to validate history.
-    params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    params.prev_depth = rview.tex_find("PREV_DEPTH");
     // This frame's environment SH (the irradiance pass runs before GI), the sky of the rays that leave the scene.
-    params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    params.irradiance_sh = rview.tex_find("IRRADIANCE_SH");
     // This frame's Hi-Z pyramid (built earlier in the frame) for the screen traces.
-    params.hiz = rview.tex_safe_get("HIZBUFFER");
+    params.hiz = rview.tex_find("HIZBUFFER");
     // Last frame's post-TAA linear scene color, the radiance of screen trace hits.
-    params.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
+    params.prev_color = rview.tex_find("PREV_SCENE_HDR");
     // This frame's velocity buffer while the velocity pass drew movers this frame or the last (the gather history
     // carries their fast update one frame): moving surfaces reproject from where they were. Without movers every
     // surface is static and the GI passes skip the velocity reads; a buffer from an earlier frame would move them by
@@ -3320,7 +3219,7 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
     const uint64_t render_frame = gfx::get_render_frame();
     const bool has_recent_movers = velocity_movers_frame_ != ~0ull && render_frame >= velocity_movers_frame_ &&
                                    render_frame - velocity_movers_frame_ <= lumen_mover_frames;
-    params.velocity = velocity_run_active_ && has_recent_movers ? rview.tex_safe_get("VELOCITY") : nullptr;
+    params.velocity = velocity_run_active_ && has_recent_movers ? rview.tex_find("VELOCITY") : nullptr;
     params.cam = &camera;
     // Every GI target, its history included, is in this run's pre-exposed space.
     params.pre_exposure = get_pre_exposure(rview);
@@ -3379,7 +3278,7 @@ void deferred::run_lumen_surface_cache(const camera& camera,
     inputs.gi_scene = &gi_scene;
     inputs.view_cache = view_cache;
     // Last frame's environment SH: the irradiance pass runs later in the frame.
-    inputs.environment_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    inputs.environment_sh = rview.tex_find("IRRADIANCE_SH");
     inputs.view_exposure = get_pre_exposure(rview).value;
     lumen_surface_cache_pass_.light(inputs);
 }
@@ -3460,8 +3359,8 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
-    const auto& pbuffer = rview.fbo_safe_get("PBUFFER");
+    const auto& rbuffer = rview.fbo_find("RBUFFER");
+    const auto& pbuffer = rview.fbo_find("PBUFFER");
     const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
 
     gfx::render_pass pass("Debug/Visualization Pass");
@@ -3495,10 +3394,10 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     // being used rather than what used to be. Without this the surface cache result has no
     // isolated view at all, and its noise cannot be told apart from noise arriving from the
     // cache upstream of it.
-    auto indirect_diffuse_tex = rview.tex_safe_get("GI_RESOLVE");
+    auto indirect_diffuse_tex = rview.tex_find("GI_RESOLVE");
     if(!indirect_diffuse_tex)
     {
-        indirect_diffuse_tex = rview.tex_safe_get("SSIL");
+        indirect_diffuse_tex = rview.tex_find("SSIL");
     }
     gfx::set_texture(debug_visualization_program_.s_tex[i],
                      i,
@@ -3506,7 +3405,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto screen_ao = get_screen_ao_inputs(rview);
     gfx::set_texture(debug_visualization_program_.s_tex[8], 8, screen_ao.texture);
     gfx::set_uniform(debug_visualization_program_.u_screen_ao, screen_ao.params.data());
-    const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_safe_get("GI_RESOLVE");
+    const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_find("GI_RESOLVE");
     const float visualize_indirect[4] = {float(tonemapping),
                                          screen_ao.multi_bounce_albedo_cap,
                                          indirect_diffuse_is_ssil ? 1.0f : 0.0f,
@@ -3562,7 +3461,7 @@ void deferred::run_lumen_visualize_overlays(const camera& camera,
                                             const gfx::frame_buffer::ptr& output,
                                             const run_params& rparams)
 {
-    const auto& gbuffer = rview.fbo_safe_get("GBUFFER");
+    const auto& gbuffer = rview.fbo_find("GBUFFER");
     lumen_visualize_pass::overlay_params params;
     params.output = output;
     params.scene_depth = gbuffer ? gbuffer->get_texture(4) : nullptr;

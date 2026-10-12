@@ -49,20 +49,14 @@ auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
                                          trace_resolution res,
                                          uint64_t extra_flags) -> gfx::frame_buffer::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
+    const auto& tex = rview.tex_acquire(name,
+                                        {.size = compute_trace_size(reference->get_size(), res),
+                                         .format = bgfx::TextureFormat::RGBA16F,
+                                         .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                                  extra_flags});
 
-    auto& tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(tex, target_size))
-    {
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(target_size.width, target_size.height, false, 1,
-                                             bgfx::TextureFormat::RGBA16F,
-                                             BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                 BGFX_SAMPLER_V_CLAMP | extra_flags);
-    }
-
-    auto& fbo = rview.fbo_get_or_emplace(name);
-    if(gfx::needs_recreate(fbo, target_size))
+    auto& fbo = rview.fbo_acquire(name);
+    if(gfx::needs_recreate(fbo, {tex}))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
@@ -78,19 +72,11 @@ auto ssil_pass::create_or_update_ssil_tex(gfx::render_view& rview,
                                           trace_resolution res,
                                           uint64_t extra_flags) -> gfx::texture::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
-
-    auto& tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(tex, target_size))
-    {
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(target_size.width, target_size.height, false, 1,
-                                             bgfx::TextureFormat::RGBA16F,
-                                             BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST |
-                                                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | extra_flags);
-    }
-
-    return tex;
+    return rview.tex_acquire(name,
+                             {.size = compute_trace_size(reference->get_size(), res),
+                              .format = bgfx::TextureFormat::RGBA16F,
+                              .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP |
+                                       BGFX_SAMPLER_V_CLAMP | extra_flags});
 }
 
 auto ssil_pass::create_or_update_ssil_fb_mrt(gfx::render_view& rview,
@@ -101,13 +87,11 @@ auto ssil_pass::create_or_update_ssil_fb_mrt(gfx::render_view& rview,
                                              trace_resolution res,
                                              uint64_t extra_flags) -> gfx::frame_buffer::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
-
     auto color_tex = create_or_update_ssil_tex(rview, color_tex_name, reference, res, extra_flags);
     auto moments_tex = create_or_update_ssil_tex(rview, moments_tex_name, reference, res, extra_flags);
 
-    auto& fbo = rview.fbo_get_or_emplace(fbo_name);
-    if(gfx::needs_recreate(fbo, target_size))
+    auto& fbo = rview.fbo_acquire(fbo_name);
+    if(gfx::needs_recreate(fbo, {color_tex, moments_tex}))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
@@ -334,15 +318,10 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     // pass's variance with the kernel weights squared, so the luminance sigma converges.
     auto make_variance_tex = [&](const std::string& name, const usize32_t& size) -> gfx::texture::ptr
     {
-        auto& tex = rview.tex_get_or_emplace(name);
-        if(gfx::needs_recreate(tex, size))
-        {
-            tex.reset();
-            tex = std::make_shared<gfx::texture>(size.width, size.height, false, 1, bgfx::TextureFormat::R16F,
-                                                 BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP |
-                                                     BGFX_SAMPLER_V_CLAMP);
-        }
-        return tex;
+        return rview.tex_acquire(name,
+                                 {.size = size,
+                                  .format = bgfx::TextureFormat::R16F,
+                                  .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
     };
     auto var_a = make_variance_tex("SSIL_VARIANCE_A", sz);
     auto var_b = make_variance_tex("SSIL_VARIANCE_B", sz);
@@ -582,8 +561,8 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     // create_or_update may replace them. If either differs after the call, we have no
     // valid history this frame and must seed (init mode). Both textures are tracked so
     // either-only recreation (e.g. resize that only hits one mip path) still triggers.
-    auto old_read_color = rview.tex_safe_get(read_color_name);
-    auto old_read_moments = rview.tex_safe_get(read_moments_name);
+    auto old_read_color = rview.tex_find(read_color_name);
+    auto old_read_moments = rview.tex_find(read_moments_name);
     auto read_color = create_or_update_ssil_tex(rview, read_color_name, ssil_input, trace_resolution::full);
     auto read_moments = create_or_update_ssil_tex(rview, read_moments_name, ssil_input, trace_resolution::full);
     const bool history_just_allocated =
@@ -591,7 +570,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
 
     auto write_fb = create_or_update_ssil_fb_mrt(rview, write_fb_name, write_color_name, write_moments_name,
                                                  ssil_input, trace_resolution::full);
-    auto write_moments = rview.tex_safe_get(write_moments_name);
+    auto write_moments = rview.tex_find(write_moments_name);
 
     // The temporal result is plumbed back to the caller via the out parameters: no longer
     // aliased under "SSIL_HISTORY_TEMP" / "SSIL_MOMENTS_TEMP" because no external pass

@@ -115,7 +115,7 @@ auto resolve_scene_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
         return {};
     }
 
-    return camera_comp->get_render_view().fbo_safe_get("OBUFFER");
+    return camera_comp->get_render_view().fbo_find("OBUFFER");
 }
 
 auto resolve_game_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
@@ -141,7 +141,7 @@ auto resolve_game_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
             {
                 return;
             }
-            auto obuffer = camera_comp.get_render_view().fbo_safe_get("OBUFFER");
+            auto obuffer = camera_comp.get_render_view().fbo_find("OBUFFER");
             if(obuffer && obuffer->is_valid())
             {
                 found = obuffer;

@@ -6,7 +6,7 @@
 namespace gfx
 {
 
-auto render_view::tex_get_or_emplace(const hpp::string_view& id, bool auto_collect) -> texture::ptr&
+auto render_view::tex_acquire(const hpp::string_view& id, bool auto_collect) -> texture::ptr&
 {
     auto it = textures_.find(id);
     if(it == textures_.end())
@@ -18,15 +18,33 @@ auto render_view::tex_get_or_emplace(const hpp::string_view& id, bool auto_colle
     return it->second.ptr;
 }
 
-auto render_view::tex_get(const hpp::string_view& id) const -> const texture::ptr&
+auto render_view::tex_acquire(const hpp::string_view& id,
+                              const texture_desc& desc,
+                              const texture_created_callback& on_create,
+                              bool auto_collect) -> const texture::ptr&
 {
-    const auto& tex = tex_safe_get(id);
-    assert(tex != nullptr && "Trying to get non existent element");
+    auto& tex = tex_acquire(id, auto_collect);
+    if(!needs_recreate(tex, desc))
+    {
+        return tex;
+    }
+    // Drop the slot's reference first: a texture nothing else holds is released before its
+    // replacement is counted against the GPU memory budget.
+    tex.reset();
+    tex = std::make_shared<texture>(desc);
+    if(on_create)
+    {
+        on_create(tex);
+    }
     return tex;
 }
 
+auto render_view::tex_acquire_transient(const texture_desc& desc) -> texture::ptr
+{
+    return transient_textures_.acquire(desc);
+}
 
-auto render_view::tex_safe_get(const hpp::string_view& id) const -> const texture::ptr&
+auto render_view::tex_find(const hpp::string_view& id) const -> const texture::ptr&
 {
     auto it = textures_.find(id);
     if(it != textures_.end())
@@ -34,11 +52,16 @@ auto render_view::tex_safe_get(const hpp::string_view& id) const -> const textur
         it->second.last_used_frame = get_render_frame();
         return it->second.ptr;
     }
-
     static const texture::ptr empty;
     return empty;
 }
 
+auto render_view::tex_get(const hpp::string_view& id) const -> const texture::ptr&
+{
+    const auto& tex = tex_find(id);
+    assert(tex != nullptr && "Trying to get non existent element");
+    return tex;
+}
 
 void render_view::tex_remove(const hpp::string_view& id)
 {
@@ -49,7 +72,7 @@ void render_view::tex_remove(const hpp::string_view& id)
     }
 }
 
-auto render_view::fbo_get_or_emplace(const hpp::string_view& id, bool auto_collect) -> frame_buffer::ptr&
+auto render_view::fbo_acquire(const hpp::string_view& id, bool auto_collect) -> frame_buffer::ptr&
 {
     auto it = fbos_.find(id);
     if(it == fbos_.end())
@@ -61,14 +84,7 @@ auto render_view::fbo_get_or_emplace(const hpp::string_view& id, bool auto_colle
     return it->second.ptr;
 }
 
-auto render_view::fbo_get(const hpp::string_view& id) const -> const frame_buffer::ptr&
-{
-    const auto& fbo = fbo_safe_get(id);
-    assert(fbo != nullptr && "Trying to get non existent element");
-    return fbo;
-}
-
-auto render_view::fbo_safe_get(const hpp::string_view& id) const -> const frame_buffer::ptr&
+auto render_view::fbo_find(const hpp::string_view& id) const -> const frame_buffer::ptr&
 {
     auto it = fbos_.find(id);
     if(it != fbos_.end())
@@ -76,9 +92,15 @@ auto render_view::fbo_safe_get(const hpp::string_view& id) const -> const frame_
         it->second.last_used_frame = get_render_frame();
         return it->second.ptr;
     }
-
     static const frame_buffer::ptr empty;
     return empty;
+}
+
+auto render_view::fbo_get(const hpp::string_view& id) const -> const frame_buffer::ptr&
+{
+    const auto& fbo = fbo_find(id);
+    assert(fbo != nullptr && "Trying to get non existent element");
+    return fbo;
 }
 
 void render_view::fbo_remove(const hpp::string_view& id)
@@ -107,7 +129,7 @@ void render_view::touch_prefixed(const hpp::string_view& prefix)
     stamp(fbos_);
 }
 
-void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frames)
+void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frames, uint32_t max_transient_idle_frames)
 {
     // Framebuffers first, so an expired fbo+texture pair cascades in one call: the fbo
     // entry goes, its strong attachment references drop, and the texture entry below no
@@ -164,6 +186,7 @@ void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frame
             ++it;
         }
     }
+    transient_textures_.release_unused(current_frame, max_transient_idle_frames);
 }
 
 } // namespace gfx

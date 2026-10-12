@@ -65,39 +65,31 @@ auto compute_slope_match(float speed, float transition_stops, float frame_time) 
     return frame_time / (step * start_time);
 }
 
+/// The desc of a compute-writable 1-row texture.
+auto make_row_desc(std::uint32_t width, bgfx::TextureFormat::Enum format) -> gfx::texture_desc
+{
+    return gfx::texture_desc{.size = {width, 1}, .format = format, .flags = BGFX_TEXTURE_COMPUTE_WRITE};
+}
+
 /**
- * Creates a compute-writable 1-row texture holding @p seed.
+ * Uploads @p seed into the compute-writable 1-row texture @p texture, created empty.
  *
  * Two-step init to dodge a bgfx GL-backend incompatibility: with BGFX_TEXTURE_COMPUTE_WRITE,
  * bgfx creates the texture via glTexStorage2D (immutable storage) but then uploads an initial
  * payload via glTexImage2D, which is GL_INVALID_OPERATION on immutable storage. So the
  * texture is created empty and the seed goes through update_texture_2d (glTexSubImage2D).
  */
-auto create_seeded_row_texture(std::uint16_t width, bgfx::TextureFormat::Enum format, const std::vector<float>& seed)
-    -> gfx::texture::ptr
+void seed_row_texture(const gfx::texture::ptr& texture, const std::vector<float>& seed)
 {
-    auto texture = std::make_shared<gfx::texture>(width, 1, false, 1, format, BGFX_TEXTURE_COMPUTE_WRITE);
     const bgfx::Memory* payload = bgfx::copy(seed.data(), static_cast<std::uint32_t>(seed.size() * sizeof(float)));
-    bgfx::updateTexture2D(texture->native_handle(), 0, 0, 0, 0, width, 1, payload);
-    return texture;
+    bgfx::updateTexture2D(texture->native_handle(), 0, 0, 0, 0, texture->info.width, 1, payload);
 }
 
-/// The view's compute target @p key, recreated when its size or format changed.
+/// The view's compute target @p key, rebuilt when its size or format changed.
 auto ensure_compute_target(gfx::render_view& rview, const char* key, const usize32_t& size, bgfx::TextureFormat::Enum format)
     -> gfx::texture::ptr
 {
-    auto& texture = rview.tex_get_or_emplace(key);
-    if(gfx::needs_recreate(texture, size, format))
-    {
-        texture.reset();
-        texture = std::make_shared<gfx::texture>(std::uint16_t(size.width),
-                                                 std::uint16_t(size.height),
-                                                 false,
-                                                 1,
-                                                 format,
-                                                 BGFX_TEXTURE_COMPUTE_WRITE);
-    }
-    return texture;
+    return rview.tex_acquire(key, {.size = size, .format = format, .flags = BGFX_TEXTURE_COMPUTE_WRITE});
 }
 } // namespace
 
@@ -194,51 +186,47 @@ void auto_exposure_pass::readback_state::reset()
 
 void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
 {
-    auto& exposure_tex = rview.tex_get_or_emplace(exposure_key);
-    if(gfx::needs_recreate(exposure_tex, {1, 1}, bgfx::TextureFormat::RGBA32F))
-    {
-        // Seed a sane state so any reader sampling AUTO_EXPOSURE before the first
-        // run_average() (e.g. tonemapping on frame 0) sees exposure 1, no bias and no local
-        // exposure. The snap flag makes run_average force-converge on its first dispatch with
-        // a clean histogram, so the seed only matters for that short window.
-        exposure_tex.reset();
-        exposure_tex = create_seeded_row_texture(1, bgfx::TextureFormat::RGBA32F, {1.0f, 1.0f, 0.0f, 1.0f});
-        rview.data().get_or_emplace<metering_state>(metering_state::view_key).force_snap = true;
-    }
+    rview.tex_acquire(exposure_key,
+                      make_row_desc(1, bgfx::TextureFormat::RGBA32F),
+                      [&](const gfx::texture::ptr& exposure_tex)
+                      {
+                          // Seed a sane state so any reader sampling AUTO_EXPOSURE before the first
+                          // run_average() (e.g. tonemapping on frame 0) sees exposure 1, no bias and no
+                          // local exposure. The snap flag makes run_average force-converge on its first
+                          // dispatch with a clean histogram, so the seed only matters for that short window.
+                          seed_row_texture(exposure_tex, {1.0f, 1.0f, 0.0f, 1.0f});
+                          rview.data().get_or_emplace<metering_state>(metering_state::view_key).force_snap = true;
+                      });
 
-    auto& history_tex = rview.tex_get_or_emplace(history_key);
-    if(gfx::needs_recreate(history_tex, {history_length, 1}, bgfx::TextureFormat::RGBA32F))
-    {
-        history_tex.reset();
-        history_tex = create_seeded_row_texture(history_length,
-                                                bgfx::TextureFormat::RGBA32F,
-                                                std::vector<float>(std::size_t(history_length) * 4u, 0.0f));
-        rview.data().get_or_emplace<metering_state>(metering_state::view_key).history_index = 0u;
-    }
+    rview.tex_acquire(history_key,
+                      make_row_desc(history_length, bgfx::TextureFormat::RGBA32F),
+                      [&](const gfx::texture::ptr& history_tex)
+                      {
+                          seed_row_texture(history_tex, std::vector<float>(std::size_t(history_length) * 4u, 0.0f));
+                          rview.data().get_or_emplace<metering_state>(metering_state::view_key).history_index = 0u;
+                      });
 
-    auto& histogram_tex = rview.tex_get_or_emplace(histogram_key);
-    if(gfx::needs_recreate(histogram_tex, {std::uint32_t(histogram_bins), 1}, bgfx::TextureFormat::R32F))
-    {
-        histogram_tex.reset();
-        histogram_tex = create_seeded_row_texture(std::uint16_t(histogram_bins),
-                                                  bgfx::TextureFormat::R32F,
-                                                  std::vector<float>(std::size_t(histogram_bins), 0.0f));
-    }
+    rview.tex_acquire(histogram_key,
+                      make_row_desc(std::uint32_t(histogram_bins), bgfx::TextureFormat::R32F),
+                      [](const gfx::texture::ptr& histogram_tex)
+                      {
+                          seed_row_texture(histogram_tex, std::vector<float>(std::size_t(histogram_bins), 0.0f));
+                      });
 }
 
 auto auto_exposure_pass::get_exposure_texture(gfx::render_view& rview) const -> gfx::texture::ptr
 {
-    return rview.tex_safe_get(exposure_key);
+    return rview.tex_find(exposure_key);
 }
 
 auto auto_exposure_pass::get_history_texture(gfx::render_view& rview) const -> gfx::texture::ptr
 {
-    return rview.tex_safe_get(history_key);
+    return rview.tex_find(history_key);
 }
 
 auto auto_exposure_pass::get_histogram_texture(gfx::render_view& rview) const -> gfx::texture::ptr
 {
-    return rview.tex_safe_get(histogram_key);
+    return rview.tex_find(histogram_key);
 }
 
 auto auto_exposure_pass::get_history_index(gfx::render_view& rview) const -> std::uint32_t
@@ -250,8 +238,8 @@ auto auto_exposure_pass::get_history_index(gfx::render_view& rview) const -> std
 auto auto_exposure_pass::get_local_exposure_view(gfx::render_view& rview) const -> local_exposure_view
 {
     local_exposure_view view;
-    view.grid = rview.tex_safe_get(local_grid_key);
-    view.blurred = rview.tex_safe_get(local_blurred_key);
+    view.grid = rview.tex_find(local_grid_key);
+    view.blurred = rview.tex_find(local_blurred_key);
     if(!view.grid || !view.blurred)
     {
         // Neutral settings (or no programs): the tonemapper's own no-op path.
@@ -298,17 +286,9 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
 
     // The per-cell log luminance the local exposure grid bins. Written every frame (one texel
     // per cell), so the local exposure chain can be switched on without a warm-up frame.
-    auto& log_lum_tex = rview.tex_get_or_emplace(log_lum_key);
-    if(gfx::needs_recreate(log_lum_tex, meter_size, bgfx::TextureFormat::R16F))
-    {
-        log_lum_tex.reset();
-        log_lum_tex = std::make_shared<gfx::texture>(std::uint16_t(meter_width),
-                                                     std::uint16_t(meter_height),
-                                                     false,
-                                                     1,
-                                                     bgfx::TextureFormat::R16F,
-                                                     BGFX_TEXTURE_COMPUTE_WRITE);
-    }
+    const auto& log_lum_tex = rview.tex_acquire(
+        log_lum_key,
+        {.size = meter_size, .format = bgfx::TextureFormat::R16F, .flags = BGFX_TEXTURE_COMPUTE_WRITE});
 
     gfx::render_pass pass("Auto Exposure/Histogram");
 
@@ -352,8 +332,23 @@ auto auto_exposure_pass::update_compensation_curve(gfx::render_view& rview, cons
     // The curve compares by value, so the baked copy is both the cache key and the record of what
     // was baked; no hash over the keys' bytes, which could not tell -0 from 0 anyway.
     auto& baked_curve = rview.data().get_or_emplace<math::curve<float>>(compensation_curve_key_data);
-    auto& curve_tex = rview.tex_get_or_emplace(compensation_curve_key);
-    if(curve_tex && baked_curve == config.compensation_curve)
+    bool is_built = false;
+    const auto& curve_tex =
+        rview.tex_acquire(compensation_curve_key,
+                          {.size = {compensation_curve_samples, 1}, .format = bgfx::TextureFormat::R16F},
+                          [&](const gfx::texture::ptr& /*tex*/)
+                          {
+                              is_built = true;
+                          });
+    if(!curve_tex->is_valid())
+    {
+        // The allocation was refused (GPU memory budget). The texture has no initial contents to
+        // restore it from later, so drop it and build it again next frame; until then the
+        // neutral (white) curve is bound.
+        rview.tex_remove(compensation_curve_key);
+        return nullptr;
+    }
+    if(!is_built && baked_curve == config.compensation_curve)
     {
         return curve_tex;
     }
@@ -366,13 +361,7 @@ auto auto_exposure_pass::update_compensation_curve(gfx::render_view& rview, cons
         lut[i] = bx::halfFromFloat(std::exp2(config.compensation_curve.sample(ev100)));
     }
     const bgfx::Memory* payload = bgfx::copy(lut.data(), std::uint32_t(lut.size() * sizeof(std::uint16_t)));
-    curve_tex = std::make_shared<gfx::texture>(compensation_curve_samples,
-                                               1,
-                                               false,
-                                               1,
-                                               bgfx::TextureFormat::R16F,
-                                               BGFX_TEXTURE_NONE,
-                                               payload);
+    bgfx::updateTexture2D(curve_tex->native_handle(), 0, 0, 0, 0, compensation_curve_samples, 1, payload);
     baked_curve = config.compensation_curve;
     return curve_tex;
 }
@@ -485,7 +474,7 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
         rview.tex_remove(local_blurred_key);
         return;
     }
-    auto log_lum_tex = rview.tex_safe_get(log_lum_key);
+    auto log_lum_tex = rview.tex_find(log_lum_key);
     if(!log_lum_tex)
     {
         return;
@@ -530,7 +519,7 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
                                                  const settings& config,
                                                  const usize32_t& meter_size)
 {
-    auto log_lum_tex = rview.tex_safe_get(log_lum_key);
+    auto log_lum_tex = rview.tex_find(log_lum_key);
     const usize32_t blur_size{std::max(1u, (meter_size.width + local_exposure_blur_cells - 1) / local_exposure_blur_cells),
                               std::max(1u, (meter_size.height + local_exposure_blur_cells - 1) / local_exposure_blur_cells)};
     auto downsampled_tex = ensure_compute_target(rview, local_downsampled_key, blur_size, bgfx::TextureFormat::R16F);
@@ -608,7 +597,7 @@ void auto_exposure_pass::submit_exposure_readback(gfx::render_view& rview)
         return;
     }
 
-    auto& target = rview.fbo_get_or_emplace(readback_target_key);
+    auto& target = rview.fbo_acquire(readback_target_key);
     if(!target)
     {
         auto target_tex = std::make_shared<gfx::texture>(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);

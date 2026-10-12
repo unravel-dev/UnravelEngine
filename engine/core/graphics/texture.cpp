@@ -1,6 +1,8 @@
 #include "texture.h"
 #include "utils/bgfx_utils.h"
 
+#include <cassert>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -90,6 +92,81 @@ auto make_load_precreate(std::uint64_t flags, const char* what) -> TexturePreCre
         return try_make_room_for(estimate_texture_gpu_size(info, flags), what, kind);
     };
 }
+
+/// The 16-bit dimension bgfx takes for @p value.
+auto to_dimension(std::uint32_t value) -> std::uint16_t
+{
+    assert(value <= std::numeric_limits<std::uint16_t>::max() && "Texture dimension exceeds 16 bits");
+    return static_cast<std::uint16_t>(value);
+}
+
+/// What the eviction log calls a texture of @p kind.
+auto get_kind_label(texture_kind kind) -> const char*
+{
+    switch(kind)
+    {
+        case texture_kind::tex_3d:
+            return "3D texture";
+        case texture_kind::tex_cube:
+            return "cube texture";
+        case texture_kind::tex_2d:
+            break;
+    }
+    return "2D texture";
+}
+
+/// Sizes @p info the way bgfx sizes the texture @p desc describes.
+void calc_desc_info(bgfx::TextureInfo& info, const texture_desc& desc)
+{
+    const std::uint16_t width = to_dimension(desc.size.width);
+    const std::uint16_t height = to_dimension(desc.size.height);
+    switch(desc.kind)
+    {
+        case texture_kind::tex_3d:
+            bgfx::calcTextureSize(info, width, height, desc.depth, false, desc.has_mips, 1, desc.format);
+            return;
+        case texture_kind::tex_cube:
+            // Six width x width faces at depth 1. Describing a width^3 volume would inflate the
+            // eviction estimate (a mipped 256 RGBA16F cube: ~153 MB instead of ~4 MB) and leave
+            // info.cubeMap false.
+            bgfx::calcTextureSize(info, width, width, 1, true, desc.has_mips, desc.layers, desc.format);
+            return;
+        case texture_kind::tex_2d:
+            break;
+    }
+    bgfx::calcTextureSize(info, width, height, 1, false, desc.has_mips, desc.layers, desc.format);
+}
+
+/// Creates the bgfx texture @p desc describes, with @p mem as its initial contents (may be null).
+auto create_desc_handle(const texture_desc& desc, const bgfx::Memory* mem) -> bgfx::TextureHandle
+{
+    const std::uint16_t width = to_dimension(desc.size.width);
+    const std::uint16_t height = to_dimension(desc.size.height);
+    switch(desc.kind)
+    {
+        case texture_kind::tex_3d:
+            return bgfx::createTexture3D(width, height, desc.depth, desc.has_mips, desc.format, desc.flags, mem);
+        case texture_kind::tex_cube:
+            return bgfx::createTextureCube(width, desc.has_mips, desc.layers, desc.format, desc.flags, mem);
+        case texture_kind::tex_2d:
+            break;
+    }
+    return bgfx::createTexture2D(width, height, desc.has_mips, desc.layers, desc.format, desc.flags, mem);
+}
+
+/// The desc of a texture loaded from a file or memory, read from what the load reported.
+auto describe_loaded(const bgfx::TextureInfo& info, std::uint64_t flags) -> texture_desc
+{
+    const texture_kind kind =
+        info.cubeMap ? texture_kind::tex_cube : (info.depth > 1 ? texture_kind::tex_3d : texture_kind::tex_2d);
+    return texture_desc{.size = {info.width, info.height},
+                        .format = info.format,
+                        .flags = flags,
+                        .has_mips = info.numMips > 1,
+                        .layers = info.numLayers,
+                        .depth = info.depth,
+                        .kind = kind};
+}
 } // namespace
 
 void texture::adopt_loaded_eviction(eviction::backing_buffer backing,
@@ -154,6 +231,7 @@ texture::texture(const char* _path,
     }
 
     flags = _flags;
+    desc_ = describe_loaded(info, _flags);
 }
 
 texture::texture(const void* _data,
@@ -182,6 +260,7 @@ texture::texture(const void* _data,
     }
 
     flags = _flags;
+    desc_ = describe_loaded(info, _flags);
 }
 
 texture::texture(std::uint16_t _width,
@@ -191,48 +270,14 @@ texture::texture(std::uint16_t _width,
                  bgfx::TextureFormat::Enum _format,
                  std::uint64_t _flags /*= BGFX_TEXTURE_NONE */,
                  const bgfx::Memory* _mem /*= nullptr */)
-    : flags(_flags)
+    : texture(texture_desc{.size = {_width, _height},
+                           .format = _format,
+                           .flags = _flags,
+                           .has_mips = _hasMips,
+                           .layers = _numLayers,
+                           .kind = texture_kind::tex_2d},
+              _mem)
 {
-    bgfx::calcTextureSize(info, _width, _height, 1, false, _hasMips, _numLayers, _format);
-    const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
-    const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
-    const bool can_allocate = try_make_room_for(estimated_size, "2D texture", kind);
-
-    if(can_allocate)
-    {
-        handle_ = bgfx::createTexture2D(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
-    }
-    const bool valid = is_valid();
-    if(valid && is_gpu_generated())
-    {
-        gfx::eviction::note_pending_allocation(estimated_size);
-    }
-
-    if(_mem != nullptr && gfx::eviction::is_supported())
-    {
-        eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
-        auto restore = [backing,
-                        width = _width,
-                        height = _height,
-                        has_mips = _hasMips,
-                        layers = _numLayers,
-                        format = _format,
-                        flags = _flags,
-                        estimated_size](texture& self) -> bool
-        {
-            const bgfx::Memory* mem = eviction::make_backing_ref(backing);
-            self.handle_ = bgfx::createTexture2D(width, height, has_mips, layers, format, flags, mem);
-            return self.is_valid();
-        };
-        if(valid)
-        {
-            make_evictable(estimated_size, std::move(restore));
-        }
-        else
-        {
-            make_evictable_deferred(estimated_size, std::move(restore));
-        }
-    }
 }
 
 texture::texture(std::uint16_t _width,
@@ -242,49 +287,14 @@ texture::texture(std::uint16_t _width,
                  bgfx::TextureFormat::Enum _format,
                  std::uint64_t _flags /*= BGFX_TEXTURE_NONE */,
                  const bgfx::Memory* _mem /*= nullptr */)
-    : flags(_flags)
+    : texture(texture_desc{.size = {_width, _height},
+                           .format = _format,
+                           .flags = _flags,
+                           .has_mips = _hasMips,
+                           .depth = _depth,
+                           .kind = texture_kind::tex_3d},
+              _mem)
 {
-    bgfx::calcTextureSize(info, _width, _height, _depth, false, _hasMips, 1, _format);
-    const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
-    const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
-    const bool can_allocate = try_make_room_for(estimated_size, "3D texture", kind);
-
-    if(can_allocate)
-    {
-        handle_ = bgfx::createTexture3D(_width, _height, _depth, _hasMips, _format, _flags, _mem);
-    }
-
-    const bool valid = is_valid();
-    if(valid && is_gpu_generated())
-    {
-        gfx::eviction::note_pending_allocation(estimated_size);
-    }
-
-    if(_mem != nullptr && gfx::eviction::is_supported())
-    {
-        eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
-        auto restore = [backing,
-                        width = _width,
-                        height = _height,
-                        depth = _depth,
-                        has_mips = _hasMips,
-                        format = _format,
-                        flags = _flags,
-                        estimated_size](texture& self) -> bool
-        {
-            const bgfx::Memory* mem = eviction::make_backing_ref(backing);
-            self.handle_ = bgfx::createTexture3D(width, height, depth, has_mips, format, flags, mem);
-            return self.is_valid();
-        };
-        if(valid)
-        {
-            make_evictable(estimated_size, std::move(restore));
-        }
-        else
-        {
-            make_evictable_deferred(estimated_size, std::move(restore));
-        }
-    }
 }
 
 texture::texture(std::uint16_t _size,
@@ -293,50 +303,57 @@ texture::texture(std::uint16_t _size,
                  bgfx::TextureFormat::Enum _format,
                  std::uint64_t _flags /*= BGFX_TEXTURE_NONE */,
                  const bgfx::Memory* _mem /*= nullptr */)
-    : flags(_flags)
+    : texture(texture_desc{.size = {_size, _size},
+                           .format = _format,
+                           .flags = _flags,
+                           .has_mips = _hasMips,
+                           .layers = _numLayers,
+                           .kind = texture_kind::tex_cube},
+              _mem)
 {
-    // Six size x size faces at depth 1. Describing a size^3 volume instead inflated the eviction
-    // estimate (a mipped 256 RGBA16F probe cube: ~153 MB instead of ~4 MB) and left
-    // info.cubeMap false for every cube created here.
-    bgfx::calcTextureSize(info, _size, _size, 1, true, _hasMips, _numLayers, _format);
-    const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
-    const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
-    const bool can_allocate = try_make_room_for(estimated_size, "cube texture", kind);
+}
 
+texture::texture(const texture_desc& desc, const bgfx::Memory* mem) : flags(desc.flags), desc_(desc)
+{
+    assert((desc.kind == texture_kind::tex_3d || desc.depth == 1) && "Only a 3D texture has depth slices");
+    assert((desc.kind != texture_kind::tex_3d || desc.layers == 1) && "A 3D texture has no array layers");
+    assert((desc.kind != texture_kind::tex_cube || desc.size.width == desc.size.height) && "Cube faces are square");
+    calc_desc_info(info, desc);
+    const std::uint64_t estimated_size = estimate_texture_gpu_size(info, desc.flags);
+    const eviction::reclaim_kind kind = texture_reclaim_kind(desc.flags);
+    const bool can_allocate = try_make_room_for(estimated_size, get_kind_label(desc.kind), kind);
     if(can_allocate)
     {
-        handle_ = bgfx::createTextureCube(_size, _hasMips, _numLayers, _format, _flags, _mem);
+        handle_ = create_desc_handle(desc, mem);
     }
     const bool valid = is_valid();
     if(valid && is_gpu_generated())
     {
         gfx::eviction::note_pending_allocation(estimated_size);
     }
-
-    if(_mem != nullptr && gfx::eviction::is_supported())
+    if(mem == nullptr || !gfx::eviction::is_supported())
     {
-        eviction::backing_buffer backing = eviction::make_backing(_mem->data, _mem->size);
-        auto restore = [backing,
-                        size = _size,
-                        has_mips = _hasMips,
-                        layers = _numLayers,
-                        format = _format,
-                        flags = _flags,
-                        estimated_size](texture& self) -> bool
-        {
-            const bgfx::Memory* mem = eviction::make_backing_ref(backing);
-            self.handle_ = bgfx::createTextureCube(size, has_mips, layers, format, flags, mem);
-            return self.is_valid();
-        };
-        if(valid)
-        {
-            make_evictable(estimated_size, std::move(restore));
-        }
-        else
-        {
-            make_evictable_deferred(estimated_size, std::move(restore));
-        }
+        return;
     }
+    eviction::backing_buffer backing = eviction::make_backing(mem->data, mem->size);
+    auto restore = [backing, desc](texture& self) -> bool
+    {
+        self.handle_ = create_desc_handle(desc, eviction::make_backing_ref(backing));
+        return self.is_valid();
+    };
+    if(valid)
+    {
+        make_evictable(estimated_size, std::move(restore));
+    }
+    else
+    {
+        make_evictable_deferred(estimated_size, std::move(restore));
+    }
+}
+
+auto texture::get_desc() const -> const texture_desc&
+{
+    return desc_;
 }
 
 auto texture::get_size() const -> usize32_t

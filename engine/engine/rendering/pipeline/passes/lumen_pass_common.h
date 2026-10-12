@@ -508,20 +508,14 @@ void destroy_handle(Handle& handle)
 /// resolve writes it and their temporal reads it. Nothing reads it across frames.
 inline constexpr const char* view_scratch_rgba16f = "LUMEN_VIEW_SCRATCH_RGBA16F";
 
-/// The render view's texture @p name, recreated at @p size when it is missing or sized differently.
+/// The render view's texture @p name, rebuilt when it is missing or its size, format or flags changed.
 inline auto ensure_texture(gfx::render_view& rview,
                            const std::string& name,
                            const usize32_t& size,
                            bgfx::TextureFormat::Enum format,
                            uint64_t flags = compute_texture_flags) -> gfx::texture::ptr
 {
-    auto& tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(tex, size))
-    {
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(size.width, size.height, false, 1, format, flags);
-    }
-    return tex;
+    return rview.tex_acquire(name, {.size = size, .format = format, .flags = flags});
 }
 
 } // namespace unravel::lumen_pass

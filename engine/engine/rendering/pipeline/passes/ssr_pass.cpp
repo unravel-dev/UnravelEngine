@@ -70,24 +70,14 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
     }
 
     // Otherwise, use the render_view to get or create the SSR output framebuffer
-    auto ref_sz = reference->get_size();
-    auto ref_format = bgfx::TextureFormat::RGBA16F;
+    const auto& ssr_output_tex = rview.tex_acquire("SSR_OUTPUT",
+                                                   {.size = reference->get_size(),
+                                                    .format = bgfx::TextureFormat::RGBA16F,
+                                                    .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                             BGFX_SAMPLER_V_CLAMP});
 
-    auto& ssr_output_tex = rview.tex_get_or_emplace("SSR_OUTPUT");
-    if(gfx::needs_recreate(ssr_output_tex, ref_sz, ref_format))
-    {
-        ssr_output_tex.reset();
-        ssr_output_tex = std::make_shared<gfx::texture>(ref_sz.width,
-                                                        ref_sz.height,
-                                                        false,
-                                                        1,
-                                                        ref_format,
-                                                        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                            BGFX_SAMPLER_V_CLAMP);
-    }
-
-    auto& ssr_output_fbo = rview.fbo_get_or_emplace("SSR_OUTPUT");
-    if(gfx::needs_recreate(ssr_output_fbo, ref_sz))
+    auto& ssr_output_fbo = rview.fbo_acquire("SSR_OUTPUT");
+    if(gfx::needs_recreate(ssr_output_fbo, {ssr_output_tex}))
     {
         ssr_output_fbo.reset();
         ssr_output_fbo = std::make_shared<gfx::frame_buffer>();
@@ -101,41 +91,21 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
                                             const gfx::frame_buffer::ptr& reference,
                                             trace_resolution res) -> gfx::frame_buffer::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = bgfx::TextureFormat::RGBA16F;
-
-    auto& ssr_curr_tex = rview.tex_get_or_emplace("SSR_CURR");
-    if(gfx::needs_recreate(ssr_curr_tex, target_size, ref_format))
-    {
-        ssr_curr_tex.reset();
-        ssr_curr_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                      target_size.height,
-                                                      false,
-                                                      1,
-                                                      ref_format,
-                                                      BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                          BGFX_SAMPLER_V_CLAMP);
-    }
+    const gfx::texture_desc color_desc{.size = compute_trace_size(reference->get_size(), res),
+                                       .format = bgfx::TextureFormat::RGBA16F,
+                                       .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP};
+    const auto& ssr_curr_tex = rview.tex_acquire("SSR_CURR", color_desc);
 
     // Attachment 1: confidence-weighted mean hit distance (view-space metres). The
     // temporal's per-pixel content validation - hit-point velocity read + hit-distance
     // history compare - lives on this lane; R16F covers the trace range at ~0.1%
     // relative, plenty for a compare threshold.
-    auto& ssr_curr_t_tex = rview.tex_get_or_emplace("SSR_CURR_T");
-    if(gfx::needs_recreate(ssr_curr_t_tex, target_size, bgfx::TextureFormat::R16F))
-    {
-        ssr_curr_t_tex.reset();
-        ssr_curr_t_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                        target_size.height,
-                                                        false,
-                                                        1,
-                                                        bgfx::TextureFormat::R16F,
-                                                        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                            BGFX_SAMPLER_V_CLAMP);
-    }
+    auto distance_desc = color_desc;
+    distance_desc.format = bgfx::TextureFormat::R16F;
+    const auto& ssr_curr_t_tex = rview.tex_acquire("SSR_CURR_T", distance_desc);
 
-    auto& ssr_curr_fbo = rview.fbo_get_or_emplace("SSR_CURR");
-    if(gfx::needs_recreate(ssr_curr_fbo, target_size))
+    auto& ssr_curr_fbo = rview.fbo_acquire("SSR_CURR");
+    if(gfx::needs_recreate(ssr_curr_fbo, {ssr_curr_tex, ssr_curr_t_tex}))
     {
         ssr_curr_fbo.reset();
         ssr_curr_fbo = std::make_shared<gfx::frame_buffer>();
@@ -149,35 +119,16 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
                                                 const gfx::frame_buffer::ptr& reference,
                                                 trace_resolution res) -> gfx::texture::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = bgfx::TextureFormat::RGBA16F;
-
-    auto& history_tex = rview.tex_get_or_emplace("SSR_HISTORY");
-    if(gfx::needs_recreate(history_tex, target_size, ref_format))
-    {
-        history_tex.reset();
-        history_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                     target_size.height,
-                                                     false,
-                                                     1,
-                                                     ref_format,
-                                                     BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                         BGFX_SAMPLER_V_CLAMP);
-    }
+    const gfx::texture_desc color_desc{.size = compute_trace_size(reference->get_size(), res),
+                                       .format = bgfx::TextureFormat::RGBA16F,
+                                       .flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                BGFX_SAMPLER_V_CLAMP};
+    const auto& history_tex = rview.tex_acquire("SSR_HISTORY", color_desc);
 
     // Hit-distance history rides alongside the colour history (same size, same blits).
-    auto& history_t_tex = rview.tex_get_or_emplace("SSR_HISTORY_T");
-    if(gfx::needs_recreate(history_t_tex, target_size, bgfx::TextureFormat::R16F))
-    {
-        history_t_tex.reset();
-        history_t_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                       target_size.height,
-                                                       false,
-                                                       1,
-                                                       bgfx::TextureFormat::R16F,
-                                                       BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                           BGFX_SAMPLER_V_CLAMP);
-    }
+    auto distance_desc = color_desc;
+    distance_desc.format = bgfx::TextureFormat::R16F;
+    rview.tex_acquire("SSR_HISTORY_T", distance_desc);
 
     return history_tex;
 }
@@ -186,38 +137,19 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
                                                     const gfx::frame_buffer::ptr& reference,
                                                     trace_resolution res) -> gfx::frame_buffer::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = bgfx::TextureFormat::RGBA16F;
-
-    auto& temp_tex = rview.tex_get_or_emplace("SSR_HISTORY_TEMP");
-    if(gfx::needs_recreate(temp_tex, target_size, ref_format))
-    {
-        temp_tex.reset();
-        temp_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                  target_size.height,
-                                                  false,
-                                                  1,
-                                                  ref_format,
-                                                  BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                      BGFX_SAMPLER_V_CLAMP);
-    }
+    const gfx::texture_desc color_desc{.size = compute_trace_size(reference->get_size(), res),
+                                       .format = bgfx::TextureFormat::RGBA16F,
+                                       .flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                BGFX_SAMPLER_V_CLAMP};
+    const auto& temp_tex = rview.tex_acquire("SSR_HISTORY_TEMP", color_desc);
 
     // MRT lane for the resolved hit-distance history (blitted into SSR_HISTORY_T).
-    auto& temp_t_tex = rview.tex_get_or_emplace("SSR_HISTORY_T_TEMP");
-    if(gfx::needs_recreate(temp_t_tex, target_size, bgfx::TextureFormat::R16F))
-    {
-        temp_t_tex.reset();
-        temp_t_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                    target_size.height,
-                                                    false,
-                                                    1,
-                                                    bgfx::TextureFormat::R16F,
-                                                    BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                        BGFX_SAMPLER_V_CLAMP);
-    }
+    auto distance_desc = color_desc;
+    distance_desc.format = bgfx::TextureFormat::R16F;
+    const auto& temp_t_tex = rview.tex_acquire("SSR_HISTORY_T_TEMP", distance_desc);
 
-    auto& temp_fbo = rview.fbo_get_or_emplace("SSR_HISTORY_TEMP");
-    if(gfx::needs_recreate(temp_fbo, target_size))
+    auto& temp_fbo = rview.fbo_acquire("SSR_HISTORY_TEMP");
+    if(gfx::needs_recreate(temp_fbo, {temp_tex, temp_t_tex}))
     {
         temp_fbo.reset();
         temp_fbo = std::make_shared<gfx::frame_buffer>();
@@ -268,18 +200,12 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
     auto input_size = input_color->get_size();
 
     // Get or create blurred color texture with mip chain
-    auto& blurred_tex = rview.tex_get_or_emplace("SSR_BLURRED_COLOR");
-    if(gfx::needs_recreate(blurred_tex, input_size))
-    {
-        blurred_tex.reset();
-        blurred_tex = std::make_shared<gfx::texture>(input_size.width,
-                                                     input_size.height,
-                                                     true,                       // has mips
-                                                     1,                          // num layers
-                                                     bgfx::TextureFormat::RGBA16F,
-                                                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-                                                         BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
-    }
+    const auto& blurred_tex = rview.tex_acquire("SSR_BLURRED_COLOR",
+                                                {.size = input_size,
+                                                 .format = bgfx::TextureFormat::RGBA16F,
+                                                 .flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                                          BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT,
+                                                 .has_mips = true});
 
     const uint32_t num_mips = settings.cone_tracing.max_mip_level + 1;
     gfx::render_pass pass("Blur Compute Pass");
@@ -333,23 +259,14 @@ auto ssr_pass::create_or_update_ssr_denoise_fb(gfx::render_view& rview,
                                                const gfx::frame_buffer::ptr& reference,
                                                trace_resolution res) -> gfx::frame_buffer::ptr
 {
-    const auto target_size = compute_trace_size(reference->get_size(), res);
+    const auto& denoised_tex = rview.tex_acquire(name,
+                                                 {.size = compute_trace_size(reference->get_size(), res),
+                                                  .format = bgfx::TextureFormat::RGBA16F,
+                                                  .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT |
+                                                           BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
 
-    auto& denoised_tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(denoised_tex, target_size))
-    {
-        denoised_tex.reset();
-        denoised_tex = std::make_shared<gfx::texture>(target_size.width,
-                                                      target_size.height,
-                                                      false,
-                                                      1,
-                                                      bgfx::TextureFormat::RGBA16F,
-                                                      BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT |
-                                                          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-    }
-
-    auto& denoised_fbo = rview.fbo_get_or_emplace(name);
-    if(gfx::needs_recreate(denoised_fbo, target_size))
+    auto& denoised_fbo = rview.fbo_acquire(name);
+    if(gfx::needs_recreate(denoised_fbo, {denoised_tex}))
     {
         denoised_fbo.reset();
         denoised_fbo = std::make_shared<gfx::frame_buffer>();
@@ -589,7 +506,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
 
     // History buffers match ssr_curr's size exactly; ssr_curr already carries the trace
     // resolution, so we ask the helpers not to downscale any further.
-    auto old_history = rview.tex_safe_get("SSR_HISTORY");
+    auto old_history = rview.tex_find("SSR_HISTORY");
     auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, trace_resolution::full);
     auto history_t_tex = rview.tex_get("SSR_HISTORY_T");
     auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, trace_resolution::full);

@@ -374,16 +374,12 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
 
     constexpr uint64_t flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
     const usize32_t size{cloud_shadow_resolution, cloud_shadow_resolution};
-    auto& tex = rview.tex_get_or_emplace(cloud_shadow_tex_key);
-    auto& fbo = rview.fbo_get_or_emplace(cloud_shadow_fbo_key);
-    if(gfx::needs_recreate(tex, size))
-    {
-        // Mips: the lowest level is the mean transmittance the irradiance bake reads.
-        tex = std::make_shared<gfx::texture>(cloud_shadow_resolution, cloud_shadow_resolution, true, 1, bgfx::TextureFormat::R8, flags);
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({tex});
-    }
-    else if(gfx::needs_recreate(fbo, size))
+    // Mips: the lowest level is the mean transmittance the irradiance bake reads.
+    const auto& tex = rview.tex_acquire(
+        cloud_shadow_tex_key,
+        {.size = size, .format = bgfx::TextureFormat::R8, .flags = flags, .has_mips = true});
+    auto& fbo = rview.fbo_acquire(cloud_shadow_fbo_key);
+    if(gfx::needs_recreate(fbo, {tex}))
     {
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
@@ -456,7 +452,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
 
 void atmospheric_pass_perez::release_cloud_resources(gfx::render_view& rview)
 {
-    if(!rview.tex_safe_get(cloud_tex_keys[0]))
+    if(!rview.tex_find(cloud_tex_keys[0]))
     {
         return;
     }
@@ -510,32 +506,30 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     }
 
     bool recreated = false;
+    const auto mark_recreated = [&](const gfx::texture::ptr& /*tex*/)
+    {
+        recreated = true;
+    };
     gfx::texture::ptr cloud_tex[2];
     gfx::texture::ptr cloud_aux[2];
     for(int i = 0; i < 2; ++i)
     {
-        auto& tex = rview.tex_get_or_emplace(cloud_tex_keys[i]);
-        if(gfx::needs_recreate(tex, half_size))
-        {
-            tex = std::make_shared<gfx::texture>(half_w, half_h, false, 1, bgfx::TextureFormat::RGBA16F, cloud_tex_flags);
-            recreated = true;
-        }
+        cloud_tex[i] = rview.tex_acquire(
+            cloud_tex_keys[i],
+            {.size = half_size, .format = bgfx::TextureFormat::RGBA16F, .flags = cloud_tex_flags},
+            mark_recreated);
         // R = history sample count / max, G = scene distance (km) for the depth-aware composite.
-        auto& aux = rview.tex_get_or_emplace(cloud_aux_keys[i]);
-        if(gfx::needs_recreate(aux, half_size))
-        {
-            aux = std::make_shared<gfx::texture>(half_w, half_h, false, 1, bgfx::TextureFormat::RG16F, cloud_tex_flags);
-            recreated = true;
-        }
-        cloud_tex[i] = tex;
-        cloud_aux[i] = aux;
+        cloud_aux[i] = rview.tex_acquire(
+            cloud_aux_keys[i],
+            {.size = half_size, .format = bgfx::TextureFormat::RG16F, .flags = cloud_tex_flags},
+            mark_recreated);
     }
 
     gfx::frame_buffer::ptr cloud_fbo[2];
     for(int i = 0; i < 2; ++i)
     {
-        auto& fbo = rview.fbo_get_or_emplace(cloud_fbo_keys[i]);
-        if(recreated || gfx::needs_recreate(fbo, half_size))
+        auto& fbo = rview.fbo_acquire(cloud_fbo_keys[i]);
+        if(gfx::needs_recreate(fbo, {cloud_tex[i], cloud_aux[i]}))
         {
             fbo = std::make_shared<gfx::frame_buffer>();
             fbo->populate({cloud_tex[i], cloud_aux[i]});

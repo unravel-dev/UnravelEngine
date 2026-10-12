@@ -302,8 +302,8 @@ auto lumen_gather_pass::acquire_probe_targets(gfx::render_view& rview, const fra
     targets.ray_info = ensure_texture(rview, "LUMEN_RAY_INFO", atlas_size, bgfx::TextureFormat::R32F);
     targets.screen_data = ensure_texture(rview, "LUMEN_SCREEN_DATA", record_size, bgfx::TextureFormat::RGBA16F);
     targets.probe_moving = ensure_texture(rview, "LUMEN_PROBE_MOVING", record_size, bgfx::TextureFormat::R8);
-    targets.history_records = rview.tex_safe_get("LUMEN_PROBE_RECORDS" + prev_set);
-    targets.history_radiance = rview.tex_safe_get("LUMEN_PROBE_FILTERED" + prev_set);
+    targets.history_records = rview.tex_find("LUMEN_PROBE_RECORDS" + prev_set);
+    targets.history_radiance = rview.tex_find("LUMEN_PROBE_FILTERED" + prev_set);
     // Last frame's probes are history only in this frame's layout: the same probe count and tracing resolution.
     targets.has_probe_history = step.is_continuous && (experiments_ & experiment_no_history) == 0u &&
                                 !starts_history_over_ &&
@@ -319,7 +319,7 @@ auto lumen_gather_pass::get_current_history(gfx::render_view& rview) -> gfx::tex
     {
         return nullptr;
     }
-    return rview.tex_safe_get(ping_pong->has_written_even() ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B");
+    return rview.tex_find(ping_pong->has_written_even() ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B");
 }
 
 auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
@@ -336,10 +336,10 @@ auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
     const char* rough_read_name = step.writes_even ? "LUMEN_ROUGH_HISTORY_B" : "LUMEN_ROUGH_HISTORY_A";
     history_targets history;
     history.write = ensure_texture(rview, write_name, size, bgfx::TextureFormat::RGBA16F);
-    history.read = rview.tex_safe_get(read_name);
+    history.read = rview.tex_find(read_name);
     // R11G11B10: no reader takes the rough specular's alpha.
     history.rough_write = ensure_texture(rview, rough_write_name, size, rough_history_format);
-    history.rough_read = rview.tex_safe_get(rough_read_name);
+    history.rough_read = rview.tex_find(rough_read_name);
     history.has_history = step.is_continuous && (experiments_ & experiment_no_history) == 0u &&
                           !starts_history_over_ && history.read &&
                           history.rough_read && params.prev_depth && history.read->get_size().width == size.width &&
@@ -759,7 +759,7 @@ void lumen_gather_pass::publish_short_range_ao(gfx::render_view& rview,
                                                const lumen_run_params& params,
                                                const lumen_short_range_ao_pass::frame_targets& short_range_ao)
 {
-    rview.tex_get_or_emplace(screen_ao_texture) = short_range_ao.screen;
+    rview.tex_acquire(screen_ao_texture) = short_range_ao.screen;
     auto& state = rview.data().get_or_emplace<screen_ao_state>(screen_ao_state::view_key);
     state.frame = uint32_t(gfx::get_render_frame());
     state.intensity = std::clamp(params.settings.ambient_occlusion.intensity, 0.0f, 1.0f);
@@ -862,7 +862,7 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& par
         publish_short_range_ao(rview, params, short_range_ao);
     }
     // The reflections read the gather's rough specular history.
-    rview.tex_get_or_emplace("GI_ROUGH_SPECULAR") = history.rough_write;
+    rview.tex_acquire("GI_ROUGH_SPECULAR") = history.rough_write;
     bgfx::discard();
     return history.write;
 }

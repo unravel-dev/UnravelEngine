@@ -47,19 +47,12 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
             h = 1;
 
         auto tex_name = "BLOOM_MIP_" + std::to_string(i);
-        auto& tex = rview.tex_get_or_emplace(tex_name);
-
-        bool tex_changed = false;
-        if(gfx::needs_recreate(tex, {w, h}))
-        {
-            tex.reset();
-            tex = std::make_shared<gfx::texture>(w, h, false, 1, bgfx::TextureFormat::RGBA16F, flags);
-            tex_changed = true;
-        }
+        const auto& tex =
+            rview.tex_acquire(tex_name, {.size = {w, h}, .format = bgfx::TextureFormat::RGBA16F, .flags = flags});
 
         auto fbo_name = "BLOOM_MIP_FBO_" + std::to_string(i);
-        auto& fbo = rview.fbo_get_or_emplace(fbo_name);
-        if(!fbo || tex_changed)
+        auto& fbo = rview.fbo_acquire(fbo_name);
+        if(gfx::needs_recreate(fbo, {tex}))
         {
             fbo.reset();
             fbo = std::make_shared<gfx::frame_buffer>();
@@ -85,18 +78,11 @@ auto bloom_pass::create_or_update_output_fb(gfx::render_view& rview,
         return output;
     }
     auto input_sz = input->get_size();
-    auto& output_tex = rview.tex_get_or_emplace("BLOOM_OUTPUT");
-    if(!output_tex || output_tex->get_size() != input_sz)
-    {
-        output_tex = std::make_shared<gfx::texture>(input_sz.width,
-                                                    input_sz.height,
-                                                    false,
-                                                    1,
-                                                    bgfx::TextureFormat::RGBA16F,
-                                                    BGFX_TEXTURE_RT);
-    }
-    auto& output_fbo = rview.fbo_get_or_emplace("BLOOM_OUTPUT");
-    if(!output_fbo || output_fbo->get_size() != input_sz)
+    const auto& output_tex = rview.tex_acquire(
+        "BLOOM_OUTPUT",
+        {.size = input_sz, .format = bgfx::TextureFormat::RGBA16F, .flags = BGFX_TEXTURE_RT});
+    auto& output_fbo = rview.fbo_acquire("BLOOM_OUTPUT");
+    if(gfx::needs_recreate(output_fbo, {output_tex}))
     {
         output_fbo = std::make_shared<gfx::frame_buffer>();
         gfx::fbo_attachment att;

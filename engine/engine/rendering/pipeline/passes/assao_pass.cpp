@@ -481,7 +481,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
 auto assao_pass::get_ao_texture(gfx::render_view& rview) const -> gfx::texture::ptr
 {
-    return rview.tex_safe_get("ASSAO_AO_MAP");
+    return rview.tex_find("ASSAO_AO_MAP");
 }
 
 auto assao_pass::shutdown() -> int32_t
@@ -521,103 +521,39 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
 
     for(int32_t i = 0; i < 4; i++)
     {
-        auto key = "ASSAO_HALF_DEPTH_" + std::to_string(i);
-        auto& tex = rview.tex_get_or_emplace(key);
-        if(gfx::needs_recreate(tex, halfSz))
-        {
-            tex.reset();
-            tex = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
-                                                 uint16_t(dims.halfSize[1]),
-                                                 true,
-                                                 1,
-                                                 bgfx::TextureFormat::R16F,
-                                                 halfDepthFlags);
-        }
+        rview.tex_acquire(
+            "ASSAO_HALF_DEPTH_" + std::to_string(i),
+            {.size = halfSz, .format = bgfx::TextureFormat::R16F, .flags = halfDepthFlags, .has_mips = true});
     }
 
-    auto& pingA = rview.tex_get_or_emplace("ASSAO_PING_PONG_A");
-    if(gfx::needs_recreate(pingA, halfSz))
-    {
-        pingA.reset();
-        pingA = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
-                                               uint16_t(dims.halfSize[1]),
-                                               false,
-                                               2,
-                                               bgfx::TextureFormat::RG8,
-                                               BGFX_TEXTURE_COMPUTE_WRITE);
-    }
-    auto& pingB = rview.tex_get_or_emplace("ASSAO_PING_PONG_B");
-    if(gfx::needs_recreate(pingB, halfSz))
-    {
-        pingB.reset();
-        pingB = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
-                                               uint16_t(dims.halfSize[1]),
-                                               false,
-                                               2,
-                                               bgfx::TextureFormat::RG8,
-                                               BGFX_TEXTURE_COMPUTE_WRITE);
-    }
+    const gfx::texture_desc pingPongDesc{.size = halfSz,
+                                         .format = bgfx::TextureFormat::RG8,
+                                         .flags = BGFX_TEXTURE_COMPUTE_WRITE,
+                                         .layers = 2};
+    rview.tex_acquire("ASSAO_PING_PONG_A", pingPongDesc);
+    rview.tex_acquire("ASSAO_PING_PONG_B", pingPongDesc);
 
-    auto& finalRes = rview.tex_get_or_emplace("ASSAO_FINAL_RESULTS");
-    if(gfx::needs_recreate(finalRes, halfSz))
-    {
-        finalRes.reset();
-        finalRes = std::make_shared<gfx::texture>(uint16_t(dims.halfSize[0]),
-                                                  uint16_t(dims.halfSize[1]),
-                                                  false,
-                                                  4,
-                                                  bgfx::TextureFormat::RG8,
-                                                  BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
-    }
+    rview.tex_acquire("ASSAO_FINAL_RESULTS",
+                      {.size = halfSz,
+                       .format = bgfx::TextureFormat::RG8,
+                       .flags = BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP,
+                       .layers = 4});
 
-    auto& normals = rview.tex_get_or_emplace("ASSAO_NORMALS");
-    if(gfx::needs_recreate(normals, fullSz))
-    {
-        normals.reset();
-        normals = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
-                                                 uint16_t(dims.size[1]),
-                                                 false,
-                                                 1,
-                                                 bgfx::TextureFormat::RGBA8,
-                                                 BGFX_TEXTURE_COMPUTE_WRITE);
-    }
+    rview.tex_acquire("ASSAO_NORMALS",
+                      {.size = fullSz, .format = bgfx::TextureFormat::RGBA8, .flags = BGFX_TEXTURE_COMPUTE_WRITE});
 
-    auto& importanceMap = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP");
-    if(gfx::needs_recreate(importanceMap, quarterSz))
-    {
-        importanceMap.reset();
-        importanceMap = std::make_shared<gfx::texture>(uint16_t(dims.quarterSize[0]),
-                                                       uint16_t(dims.quarterSize[1]),
-                                                       false,
-                                                       1,
-                                                       bgfx::TextureFormat::R8,
-                                                       BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
-    }
-    auto& importanceMapPong = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP_PONG");
-    if(gfx::needs_recreate(importanceMapPong, quarterSz))
-    {
-        importanceMapPong.reset();
-        importanceMapPong = std::make_shared<gfx::texture>(uint16_t(dims.quarterSize[0]),
-                                                          uint16_t(dims.quarterSize[1]),
-                                                           false,
-                                                           1,
-                                                           bgfx::TextureFormat::R8,
-                                                           BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
-    }
+    const gfx::texture_desc importanceDesc{.size = quarterSz,
+                                           .format = bgfx::TextureFormat::R8,
+                                           .flags = BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP};
+    rview.tex_acquire("ASSAO_IMPORTANCE_MAP", importanceDesc);
+    rview.tex_acquire("ASSAO_IMPORTANCE_MAP_PONG", importanceDesc);
 
     // RGBA8 with the AO in every channel: the lighting reads the screen-space AO from alpha,
     // the layout GTAO's output has.
-    auto& aoMap = rview.tex_get_or_emplace("ASSAO_AO_MAP");
-    if(gfx::needs_recreate(aoMap, fullSz, bgfx::TextureFormat::RGBA8))
-    {
-        aoMap.reset();
-        aoMap = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
-                                               uint16_t(dims.size[1]),
-                                               false,
-                                               1,
-                                               bgfx::TextureFormat::RGBA8,
-                                               BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP);
-    }
+    rview.tex_acquire("ASSAO_AO_MAP",
+                      {.size = fullSz,
+                       .format = bgfx::TextureFormat::RGBA8,
+                       .flags = BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP});
 }
 
 void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* proj, const dimensions& dims)

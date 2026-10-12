@@ -141,13 +141,13 @@ auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview,
     targets.history_write =
         ensure_texture(rview, "LUMEN_REFLECTION_HISTORY" + write_set, size, bgfx::TextureFormat::RGBA16F);
     targets.frames_write = ensure_texture(rview, "LUMEN_REFLECTION_FRAMES" + write_set, size, bgfx::TextureFormat::R32F);
-    targets.history_read = rview.tex_safe_get("LUMEN_REFLECTION_HISTORY" + read_set);
-    targets.frames_read = rview.tex_safe_get("LUMEN_REFLECTION_FRAMES" + read_set);
+    targets.history_read = rview.tex_find("LUMEN_REFLECTION_HISTORY" + read_set);
+    targets.frames_read = rview.tex_find("LUMEN_REFLECTION_FRAMES" + read_set);
     const usize32_t tile_count = {divide_round_up(size.width, reflection_tile_pixels),
                                   divide_round_up(size.height, reflection_tile_pixels)};
     targets.tiles_write =
         ensure_texture(rview, "LUMEN_REFLECTION_TILES" + write_set, tile_count, bgfx::TextureFormat::R8);
-    targets.tiles_read = rview.tex_safe_get("LUMEN_REFLECTION_TILES" + read_set);
+    targets.tiles_read = rview.tex_find("LUMEN_REFLECTION_TILES" + read_set);
     targets.has_history = step.is_continuous && !camera_cut && has_view_size(targets.history_read, size) &&
                           has_view_size(targets.frames_read, size) && has_view_size(targets.tiles_read, tile_count);
     return targets;
@@ -407,7 +407,7 @@ auto lumen_reflection_pass::run(gfx::render_view& rview, const run_params& param
     trace_size_ = get_trace_size(view_size_, downsample_);
     rview.data().get_or_emplace<trace_state>(trace_state::view_key).downsample = downsample_;
     const auto targets = acquire_targets(rview, view_size_, trace_size_, gather->camera_cut);
-    rview.tex_get_or_emplace(tiles_texture) = targets.tiles_write;
+    rview.tex_acquire(tiles_texture) = targets.tiles_write;
     run_screen(params, targets);
     run_world(params, targets);
     run_feedback(params, targets);

@@ -38,21 +38,13 @@ auto scene_history_pass::run(gfx::render_view& rview,
     // fallback, alpha saturates and the readers treat the history as depth-less).
     const auto format = static_cast<bgfx::TextureFormat::Enum>(src_tex->info.format);
     const auto size = src_tex->get_size();
-    auto& prev = rview.tex_get_or_emplace("PREV_SCENE_HDR");
-    if(gfx::needs_recreate(prev, size, format))
-    {
-        prev.reset();
-        prev = std::make_shared<gfx::texture>(size.width,
-                                              size.height,
-                                              false,
-                                              1,
-                                              format,
-                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-    }
+    const auto& prev = rview.tex_acquire(
+        "PREV_SCENE_HDR",
+        {.size = size, .format = format, .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
     // The target wraps the texture; re-populated whenever the texture itself was replaced,
     // not only on a size change, or it would keep drawing into the previous allocation.
-    auto& fbo = rview.fbo_get_or_emplace("PREV_SCENE_HDR");
-    if(gfx::needs_recreate(fbo, size) || fbo->get_texture() != prev)
+    auto& fbo = rview.fbo_acquire("PREV_SCENE_HDR");
+    if(gfx::needs_recreate(fbo, {prev}))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();

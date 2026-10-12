@@ -31,47 +31,29 @@ auto taa_pass::init(rtti::context& ctx) -> bool
 auto taa_pass::create_or_update_history_tex(gfx::render_view& rview,
                                             const gfx::frame_buffer::ptr& reference_color) -> gfx::texture::ptr
 {
-    const auto sz = reference_color->get_size();
-    const auto fmt = reference_color->get_texture(0)->info.format;
-    auto& history_tex = rview.tex_get_or_emplace("TAA_HISTORY");
-    if(gfx::needs_recreate(history_tex, sz, fmt))
-    {
-        history_tex.reset();
-        history_tex = std::make_shared<gfx::texture>(sz.width,
-                                                     sz.height,
-                                                     false,
-                                                     1,
-                                                     fmt,
-                                                     BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST);
-    }
-    return history_tex;
+    return rview.tex_acquire("TAA_HISTORY",
+                             {.size = reference_color->get_size(),
+                              .format = reference_color->get_texture(0)->info.format,
+                              .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST});
 }
 
 auto taa_pass::create_or_update_temp_fb(gfx::render_view& rview,
                                         const gfx::frame_buffer::ptr& reference_color) -> gfx::frame_buffer::ptr
 {
-    const auto sz = reference_color->get_size();
-    const auto fmt = reference_color->get_texture(0)->info.format;
+    const gfx::texture_desc desc{.size = reference_color->get_size(),
+                                 .format = reference_color->get_texture(0)->info.format,
+                                 .flags = BGFX_TEXTURE_RT};
     // Attachment 0 is the displayed resolve (sharpened), attachment 1 the history resolve (never
     // sharpened): the sharpen must stay out of the history feedback loop (fs_taa.sc). The history's
     // alpha is the mover memory that keeps pixels a moving object touched out of the still path.
-    bool is_recreated = false;
-    for(const char* id : {"TAA_TEMP", "TAA_TEMP_HISTORY"})
-    {
-        auto& tex = rview.tex_get_or_emplace(id);
-        if(gfx::needs_recreate(tex, sz, fmt))
-        {
-            tex.reset();
-            tex = std::make_shared<gfx::texture>(sz.width, sz.height, false, 1, fmt, BGFX_TEXTURE_RT);
-            is_recreated = true;
-        }
-    }
-    auto& fbo = rview.fbo_get_or_emplace("TAA_TEMP");
-    if(is_recreated || gfx::needs_recreate(fbo, sz))
+    const auto& resolve = rview.tex_acquire("TAA_TEMP", desc);
+    const auto& history = rview.tex_acquire("TAA_TEMP_HISTORY", desc);
+    auto& fbo = rview.fbo_acquire("TAA_TEMP");
+    if(gfx::needs_recreate(fbo, {resolve, history}))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({rview.tex_safe_get("TAA_TEMP"), rview.tex_safe_get("TAA_TEMP_HISTORY")});
+        fbo->populate({resolve, history});
     }
     return fbo;
 }
@@ -84,7 +66,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
         return input;
     }
 
-    auto old_history = rview.tex_safe_get("TAA_HISTORY");
+    auto old_history = rview.tex_find("TAA_HISTORY");
     auto history_tex = create_or_update_history_tex(rview, input);
     auto temp_fbo = create_or_update_temp_fb(rview, input);
 

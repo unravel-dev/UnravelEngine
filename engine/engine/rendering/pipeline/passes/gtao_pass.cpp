@@ -108,18 +108,9 @@ auto gtao_pass::create_or_update_texture(gfx::render_view& rview,
                                          bool has_mips,
                                          uint64_t flags) -> gfx::texture::ptr
 {
-    auto& tex = rview.tex_get_or_emplace(name);
-    if(gfx::needs_recreate(tex, size, format))
-    {
-        tex.reset();
-        tex = std::make_shared<gfx::texture>(static_cast<uint16_t>(size.width),
-                                             static_cast<uint16_t>(size.height),
-                                             has_mips,
-                                             1,
-                                             format,
-                                             BGFX_TEXTURE_COMPUTE_WRITE | flags);
-    }
-    return tex;
+    return rview.tex_acquire(
+        name,
+        {.size = size, .format = format, .flags = BGFX_TEXTURE_COMPUTE_WRITE | flags, .has_mips = has_mips});
 }
 
 void gtao_pass::set_common_uniforms(const frame_context& ctx, float denoise_axis) const
