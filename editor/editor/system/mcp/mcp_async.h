@@ -36,6 +36,10 @@ struct capture_options
     std::chrono::milliseconds wait_timeout{std::chrono::milliseconds(500)};
     /// Downscale factor in (0, 1]; uses bimg linear resize. Prefer 0.5 to cut tokens.
     double scale{1.0};
+    /// Makes the panel that owns the framebuffer render on the next frame, also while its tab is
+    /// hidden. Called on the main thread. When set, the capture waits for a frame rendered after
+    /// the request instead of reading whatever the framebuffer last held.
+    std::function<void(rtti::context&)> request_render;
 };
 
 /// Action + wait: blit an offscreen FBO color attachment into a READ_BACK

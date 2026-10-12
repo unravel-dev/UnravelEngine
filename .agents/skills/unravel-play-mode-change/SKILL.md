@@ -29,7 +29,12 @@ Play state lives in `play_mode` (`engine/engine/play_mode.h`), not in `events`.
 | `play.is_active()` | Editor chrome, save blocking, play button stop state |
 | `play.is_splash()` | Skip scene render; show splash UI |
 | `play.is_simulation_running()` | Physics, scripts, scene on_load, UI hot-reload |
-| `play.is_paused()` | Pause/resume behavior |
+| `play.is_paused()` | Pause state for UI and status (stays true during a frame step) |
+| `play.is_simulation_paused()` | Gating simulation work (Update, physics): paused and not running a frame step |
+
+A frame step (`skip_next_frame`) is a normal frame, not a separate code path: the engine loop runs the paused frame with
+`play_mode::FRAME_STEP_SECONDS` of game time, so every system advances once in its usual order. Gate simulation on
+`is_simulation_paused()`, never `is_paused()`, or the step skips your system.
 
 ### Editor / MCP facade
 

@@ -187,6 +187,13 @@ void reflection_probe_component::release_resources()
 {
     face_rviews_ = {};
     rview_ = {};
+    has_capture_ = false;
+    // The faces captured by a cycle in progress went with the views: the cycle starts over.
+    for(auto& frame : generated_frame_)
+    {
+        frame = uint64_t(-1);
+    }
+    generated_faces_count_ = 0;
 }
 
 auto reflection_probe_component::get_probe() const -> const reflection_probe&

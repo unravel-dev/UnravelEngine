@@ -42,6 +42,10 @@ namespace unravel
 
 namespace
 {
+    /// Ahead of every system's play-begin handler (model_system runs at 1000). With the splash screen on, the game
+    /// scene is loaded in on_play_begin, and the systems must set up that scene, as they do without the splash.
+    constexpr int PLAY_BEGIN_PRIORITY = 2000;
+
     /// Reload script domains after scenes have been unloaded via unload_scenes_scripting.
     /// App domain always reloads; engine domain follows editor scripting settings.
     void reload_script_domains(rtti::context& ctx, script_system& scripting, bool recompile)
@@ -110,7 +114,7 @@ auto editing_manager::init(rtti::context& ctx) -> bool
     auto& ev = ctx.get_cached<events>();
 
     ev.on_play_before_begin.connect(sentinel_, 1000, this, &editing_manager::on_play_before_begin);
-    ev.on_play_begin.connect(sentinel_, 1000, this, &editing_manager::on_play_begin);
+    ev.on_play_begin.connect(sentinel_, PLAY_BEGIN_PRIORITY, this, &editing_manager::on_play_begin);
     ev.on_play_after_end.connect(sentinel_, -1000, this, &editing_manager::on_play_after_end);
     ev.on_frame_update.connect(sentinel_, frame_update_priority::editing, this, &editing_manager::on_frame_update);
     ev.on_script_recompile.connect(sentinel_, 1000, this, &editing_manager::on_script_recompile);

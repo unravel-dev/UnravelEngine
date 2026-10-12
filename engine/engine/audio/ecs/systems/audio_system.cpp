@@ -67,7 +67,6 @@ auto audio_system::init(rtti::context& ctx) -> bool
     ev.on_play_end.connect(sentinel_, -10, this, &audio_system::on_play_end);
     ev.on_pause.connect(sentinel_, 10, this, &audio_system::on_pause);
     ev.on_resume.connect(sentinel_, -10, this, &audio_system::on_resume);
-    ev.on_skip_next_frame.connect(sentinel_, -10, this, &audio_system::on_skip_next_frame);
 
     audio::set_info_logger(
         [](const std::string& s)
@@ -266,12 +265,6 @@ void audio_system::on_resume(rtti::context& ctx)
         {
             comp.resume();
         });
-}
-
-void audio_system::on_skip_next_frame(rtti::context& ctx)
-{
-    delta_t step(1.0f / 60.0f);
-    on_frame_update(ctx, step);
 }
 
 void audio_system::on_frame_update(rtti::context& ctx, delta_t dt)

@@ -68,7 +68,6 @@ auto physics_system::init(rtti::context& ctx) -> bool
     ev.on_play_end.connect(sentinel_, -10, this, &physics_system::on_play_end);
     ev.on_pause.connect(sentinel_, 10, this, &physics_system::on_pause);
     ev.on_resume.connect(sentinel_, -10, this, &physics_system::on_resume);
-    ev.on_skip_next_frame.connect(sentinel_, -10, this, &physics_system::on_skip_next_frame);
 
     backend_->init();
 
@@ -125,19 +124,13 @@ void physics_system::on_resume(rtti::context& ctx)
     backend_->on_resume(ctx);
 }
 
-void physics_system::on_skip_next_frame(rtti::context& ctx)
-{
-    delta_t step(1.0f / 60.0f);
-    on_frame_update(ctx, step);
-}
-
 void physics_system::on_frame_update(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Physics/System Update");
 
     auto& play = ctx.get_cached<play_mode>();
 
-    if(!play.is_simulation_running() || play.is_paused())
+    if(!play.is_simulation_running() || play.is_simulation_paused())
     {
         return;
     }

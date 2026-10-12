@@ -92,11 +92,6 @@ void game_panel::on_after_render(rtti::context& ctx)
     input.manager.set_is_input_allowed(is_focused());
 }
 
-void game_panel::set_visible_force(bool visible)
-{
-    is_visible_force_ = visible;
-}
-
 void game_panel::on_project_opened()
 {
     // m_skip_frames_ = 100;
@@ -152,6 +147,7 @@ void game_panel::draw_ui(rtti::context& ctx)
 
         bool rendered = false;
         rendering::pipeline_stats pstats;
+        ctx.get_cached<rendering_system>().set_game_view_size(viewport_resolution::compute_viewport_pixels(*current_res, size));
         ec.get_scene().registry->view<camera_component>().each(
             [&](auto e, auto&& camera_comp)
             {

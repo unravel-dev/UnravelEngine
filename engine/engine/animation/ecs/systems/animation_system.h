@@ -66,13 +66,7 @@ private:
      */
     void on_resume(rtti::context& ctx);
 
-    /**
-     * @brief Skips the next frame update.
-     * @param ctx The context for the update.
-     */
-    void on_skip_next_frame(rtti::context& ctx);
-
-    void on_update(scene& scn, delta_t dt, bool force);
+    void on_update(scene& scn, delta_t dt);
 
     /// Per-frame grouping scratch, kept as members so steady-state frames do
     /// not allocate: (group_root, entity) pairs and [begin, end) runs of equal

@@ -30,6 +30,10 @@ auto inspector_reflection_probe_component::inspect(rtti::context& ctx,
     {
         ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), ICON_MDI_REFRESH " Baking...");
     }
+    else if(!data.has_capture())
+    {
+        ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), "Not baked");
+    }
     else
     {
         ImGui::TextColored(ImVec4(0.4f, 0.8f, 0.4f, 1.0f), "Ready");

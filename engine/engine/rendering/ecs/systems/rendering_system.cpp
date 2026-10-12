@@ -218,5 +218,15 @@ void rendering_system::add_debugdraw_call(const std::function<void(gfx::dd_raii&
     debug_draw_callbacks_.emplace_back(callback);
 }
 
+void rendering_system::set_game_view_size(const usize32_t& size)
+{
+    game_view_size_ = size;
+}
+
+auto rendering_system::get_game_view_size() const -> const usize32_t&
+{
+    return game_view_size_;
+}
+
 
 } // namespace unravel

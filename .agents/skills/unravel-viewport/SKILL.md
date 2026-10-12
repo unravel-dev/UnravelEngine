@@ -29,7 +29,7 @@ World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `lo
 | `panel_focus_scene` | Focus Scene panel tab (editing camera) |
 | `panel_focus_game` | Focus Game panel tab (game camera) |
 
-Prefer `panel_focus_game` before play-mode verification / game captures when the Game tab may be buried. Prefer `panel_focus_scene` before scene camera / selection workflows.
+Both captures render their panel for the capture, so they work with the tab hidden. Prefer `panel_focus_game` before play-mode input (input only reaches a focused Game panel). Prefer `panel_focus_scene` before scene camera / selection workflows.
 
 For agent loops, prefer `scale:0.5` to cut token cost. Default `wait_ms` is 500. Scaling/encoding uses bimg.
 

@@ -53,12 +53,17 @@ auto compute_fitted_size(const settings::resolution_settings::resolution& res, I
     return ImVec2(avail_size.x, avail_size.x / res.aspect);
 }
 
+auto compute_viewport_pixels(const settings::resolution_settings::resolution& res, ImVec2 avail_size) -> usize32_t
+{
+    const ImVec2 viewport = compute_viewport_size(res, avail_size);
+    return {static_cast<std::uint32_t>(viewport.x), static_cast<std::uint32_t>(viewport.y)};
+}
+
 void apply_to_camera(camera_component& camera_comp,
                      const settings::resolution_settings::resolution& res,
                      ImVec2 avail_size)
 {
-    const ImVec2 viewport = compute_viewport_size(res, avail_size);
-    camera_comp.set_viewport_size({static_cast<std::uint32_t>(viewport.x), static_cast<std::uint32_t>(viewport.y)});
+    camera_comp.set_viewport_size(compute_viewport_pixels(res, avail_size));
 }
 
 auto get_resolution(rtti::context& ctx, int index) -> const settings::resolution_settings::resolution*

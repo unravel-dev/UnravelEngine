@@ -1487,7 +1487,7 @@ void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         return;
     }
 
-    if(!is_visible())
+    if(!is_visible() && !is_visible_force_)
     {
         auto handle = get_camera();
         if(handle)
@@ -1498,6 +1498,7 @@ void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         return;
     }
     draw_scene(ctx, dt);
+    is_visible_force_ = false;
 }
 
 void scene_panel::on_project_opened()

@@ -1,6 +1,7 @@
 #pragma once
 #include <editor/imgui/integration/imgui.h>
 
+#include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/settings/settings.h>
 
@@ -38,8 +39,16 @@ auto compute_fitted_size(const settings::resolution_settings::resolution& res,
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// compute_viewport_size in whole pixels: the size the cameras render at.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto compute_viewport_pixels(const settings::resolution_settings::resolution& res,
+                             ImVec2 avail_size) -> usize32_t;
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// Apply the resolution preset to the camera component using
-/// compute_viewport_size. Only viewport size is modified; viewport position
+/// compute_viewport_pixels. Only viewport size is modified; viewport position
 /// is left untouched.
 /// </summary>
 //-----------------------------------------------------------------------------

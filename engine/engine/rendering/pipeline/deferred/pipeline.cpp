@@ -621,6 +621,7 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
                     prefilter_params.output_cube_prefiltered = env_cube_prefiltered;
 
                     prefilter_pass_.run(reflection_probe_comp.get_render_view(0), prefilter_params);
+                    reflection_probe_comp.mark_capture_ready();
                 }
 
                 gfx::render_pass::pop_scope();
@@ -2418,11 +2419,15 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
 
     std::vector<entt::entity> sorted_probes;
 
-    // Collect all entities with the relevant components
+    // Collect the active probes that hold a bake: an unbaked probe's cubemap is uninitialized
+    // memory, and a single NaN texel from it spreads across the frame through bloom.
     scn.registry->view<transform_component, reflection_probe_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& probe_comp_ref, auto&& active)
         {
-            sorted_probes.emplace_back(e);
+            if(probe_comp_ref.has_capture())
+            {
+                sorted_probes.emplace_back(e);
+            }
         });
 
     // Sort the probes based on the method and max range

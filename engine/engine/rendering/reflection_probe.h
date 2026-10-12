@@ -32,12 +32,13 @@ enum class reflect_method : std::uint8_t
 /**
  * @brief Enum class describing when a reflection probe refreshes its cubemap.
  *
- * Static probes refresh on request (on_demand) or once after load or an edit; realtime
- * probes refresh continuously, time-sliced across frames.
+ * Every probe bakes once when it is created or loaded, because the capture is never saved; the
+ * mode decides the bakes after that. Static probes refresh on request (on_demand) or after an
+ * edit (once); realtime probes refresh continuously, time-sliced across frames.
  */
 enum class probe_update_mode : std::uint8_t
 {
-    /// Only refreshes when explicitly requested via reflection_probe_component::mark_dirty().
+    /// After the initial bake, only refreshes when explicitly requested via reflection_probe_component::mark_dirty().
     /// Recommended runtime default for probes covering static geometry.
     on_demand = 0,
     /// Bakes once on load (or when edited in the editor), then stops refreshing until marked dirty.

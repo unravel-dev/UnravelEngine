@@ -134,6 +134,25 @@ void internal_m2n_camera_set_exclude_mask(entt::entity id, int mask)
     }
 }
 
+auto internal_m2n_camera_get_viewport_size(entt::entity id) -> math::vec2
+{
+    if(auto comp = safe_get_component<camera_component>(id))
+    {
+        const auto& size = comp->get_viewport_size();
+        return {float(size.width), float(size.height)};
+    }
+    return {};
+}
+
+auto internal_m2n_camera_get_aspect(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<camera_component>(id))
+    {
+        return comp->get_camera().get_aspect_ratio();
+    }
+    return 0.0f;
+}
+
 auto internal_m2n_camera_screen_point_to_ray(entt::entity id,
                                              const math::vec2& origin,
                                              dotnetpp_backend::managed_interface::ray* managed_ray) -> bool
@@ -215,6 +234,9 @@ void register_camera_component_script_bindings()
                           dotnet_internal_call(internal_m2n_camera_get_exclude_mask));
     reg.add_internal_call("internal_m2n_camera_set_exclude_mask",
                           dotnet_internal_call(internal_m2n_camera_set_exclude_mask));
+    reg.add_internal_call("internal_m2n_camera_get_viewport_size",
+                          dotnet_internal_call(internal_m2n_camera_get_viewport_size));
+    reg.add_internal_call("internal_m2n_camera_get_aspect", dotnet_internal_call(internal_m2n_camera_get_aspect));
     reg.add_internal_call("internal_m2n_camera_screen_point_to_ray",
                           dotnet_internal_call(internal_m2n_camera_screen_point_to_ray));
     reg.add_internal_call("internal_m2n_camera_screen_point_to_world_2d",

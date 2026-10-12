@@ -26,7 +26,11 @@ auto camera::get_ppu() const -> float
 void camera::set_viewport_size(const usize32_t& viewport_size)
 {
     viewport_size_ = viewport_size;
-    set_aspect_ratio(float(viewport_size.width) / float(viewport_size.height));
+    // An empty viewport has no aspect: keep the last one instead of a NaN or infinite projection.
+    if(viewport_size.width > 0 && viewport_size.height > 0)
+    {
+        set_aspect_ratio(float(viewport_size.width) / float(viewport_size.height));
+    }
 }
 
 void camera::set_viewport_pos(const ipoint32_t& viewportPos)
@@ -529,6 +533,12 @@ auto camera::world_to_viewport(const math::vec3& pos) const -> math::vec3
 
 auto camera::viewport_to_ray(const math::vec2& point, math::vec3& vec_ray_start, math::vec3& vec_ray_dir) const -> bool
 {
+    // No viewport yet (a host sizes the camera when it first shows it): there is no screen to cast from.
+    if(viewport_size_.width == 0 || viewport_size_.height == 0)
+    {
+        return false;
+    }
+
     // Ensure we have an up-to-date projection and view matrix
     math::transform mtx_proj = get_projection();
     math::transform mtx_view = get_view();

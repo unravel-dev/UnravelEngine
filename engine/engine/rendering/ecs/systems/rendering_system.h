@@ -101,6 +101,22 @@ public:
 
     void add_debugdraw_call(const std::function<void(gfx::dd_raii& dd)>& callback);
 
+    /**
+     * @brief Sets the size of the view the game is shown in: the main window in the player, the
+     * Game panel's resolution in the editor.
+     *
+     * The host showing the game sets it whenever it sizes the game cameras; scripts read it as the
+     * screen size.
+     * @param size The size in pixels.
+     */
+    void set_game_view_size(const usize32_t& size);
+
+    /**
+     * @brief Gets the size of the view the game is shown in.
+     * @return The size in pixels, or zero until a host has shown the game.
+     */
+    auto get_game_view_size() const -> const usize32_t&;
+
 private:
     /**
      * @brief Renders particles to the specified framebuffer.
@@ -112,6 +128,8 @@ private:
     void render_debug(entt::handle camera_entity);
 
     std::vector<std::function<void(gfx::dd_raii& dd)>> debug_draw_callbacks_;
+    /// Size of the view the game is shown in; zero until a host sets it.
+    usize32_t game_view_size_{};
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
 

@@ -69,7 +69,6 @@ auto animation_system::init(rtti::context& ctx) -> bool
     ev.on_play_end.connect(sentinel_, -10, this, &animation_system::on_play_end);
     ev.on_pause.connect(sentinel_, 10, this, &animation_system::on_pause);
     ev.on_resume.connect(sentinel_, -10, this, &animation_system::on_resume);
-    ev.on_skip_next_frame.connect(sentinel_, 10, this, &animation_system::on_skip_next_frame);
 
     return true;
 }
@@ -137,16 +136,7 @@ void animation_system::on_resume(rtti::context& ctx)
 {
 }
 
-void animation_system::on_skip_next_frame(rtti::context& ctx)
-{
-    auto& ec = ctx.get_cached<ecs>();
-    auto& scn = ec.get_scene();
-
-    delta_t step(1.0f / 60.0f);
-    on_update(scn, step, true);
-}
-
-void animation_system::on_update(scene& scn, delta_t dt, bool force)
+void animation_system::on_update(scene& scn, delta_t dt)
 {
     APP_SCOPE_PERF("Animation/System Update");
 
@@ -226,7 +216,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                       auto speed = animation_comp.get_speed();
                       auto adjusted_dt = dt * speed;
 
-                      bool updated = player.update_time(adjusted_dt, force);
+                      bool updated = player.update_time(adjusted_dt);
 
                       if(updated && should_update_poses)
                       {
@@ -383,7 +373,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
 
 void animation_system::on_frame_update(scene& scn, delta_t dt)
 {
-    on_update(scn, dt, false);
+    on_update(scn, dt);
 }
 
 } // namespace unravel

@@ -108,12 +108,6 @@ private:
      */
     void on_resume(rtti::context& ctx);
 
-    /**
-     * @brief Skips the next frame update.
-     * @param ctx The context for the update.
-     */
-    void on_skip_next_frame(rtti::context& ctx);
-
     /// Sentinel value to manage shared resources.
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     /// The audio device used for playback.

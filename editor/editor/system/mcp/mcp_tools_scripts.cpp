@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -85,16 +86,40 @@ auto protocol_for_path(const fs::path& absolute) -> std::string
 }
 
 /**
+ * Whether the asset pipeline has imported the script. A build compiles the imported scripts, so one
+ * requested before a new file is imported runs without it - and fails on every use of its types.
+ * The asset watcher requests a build itself once it has imported a file, and that one includes it.
+ */
+auto is_script_imported(rtti::context& ctx, const fs::path& absolute) -> bool
+{
+    const auto key = fs::convert_to_protocol(absolute).generic_string();
+    return ctx.get_cached<asset_manager>().find_asset<script>(key).is_valid();
+}
+
+/// The build this tool requested: now, after the asset pipeline imports the new files, or none (the asset
+/// watcher still rebuilds the scripts it imports).
+auto describe_build(bool recompile, bool requested_now) -> const char*
+{
+    if(!recompile)
+    {
+        return "not_requested";
+    }
+    return requested_now ? "now" : "after_import";
+}
+
+/**
  * @brief Script sources written here that no finished build has compiled yet.
  *
- * A written file reaches a build only once the asset pipeline has registered it, which can be
- * after a build already queued has finished without it. So "no build pending" alone does not
- * mean the edit is built: the wait also needs the last build to have compiled these.
+ * Builds this tool does not start (recompile:false, or the asset watcher's own rebuild) can end
+ * up compiling the edit later. So "no build pending" alone does not mean the edit is built: the
+ * wait also needs the last build to have compiled these.
  */
 struct unbuilt_sources
 {
     std::mutex mutex;
-    std::set<std::string> paths;
+    /// Normalized path, the comparison key -> the path as written, which the existence check needs:
+    /// the normalized one is lowercased and names no file on a case-sensitive filesystem.
+    std::map<std::string, fs::path> paths;
 };
 
 auto get_unbuilt_sources() -> unbuilt_sources&
@@ -120,7 +145,7 @@ void note_written_source(const fs::path& absolute)
     }
     auto& sources = get_unbuilt_sources();
     std::lock_guard<std::mutex> lock(sources.mutex);
-    sources.paths.insert(normalize_source_path(absolute));
+    sources.paths.insert_or_assign(normalize_source_path(absolute), absolute);
 }
 
 /// Drops the noted sources the last build compiled, or that no longer exist; whether any are left.
@@ -134,10 +159,10 @@ auto has_unbuilt_sources(const asset_compiler::script_compilation_result& last) 
     auto& sources = get_unbuilt_sources();
     std::lock_guard<std::mutex> lock(sources.mutex);
     std::erase_if(sources.paths,
-                  [&](const std::string& path)
+                  [&](const auto& source)
                   {
                       fs::error_code ec;
-                      return built.contains(path) || !fs::exists(fs::path(path), ec);
+                      return built.contains(source.first) || !fs::exists(source.second, ec);
                   });
     return !sources.paths.empty();
 }
@@ -337,7 +362,9 @@ void register_script_tools(mcp_tool_registry& registry)
         {.name = "scripts_set_sources_batch",
          .description =
              "Write C# source files (batch) via asset_writer::atomic_write_file. Each item: code, "
-             "plus path/key or entity_id + type_name. Optional recompile (default true, once for batch).",
+             "plus path/key or entity_id + type_name. Optional recompile (default true, once for batch). "
+             "A batch that adds a new file builds once the asset pipeline has imported it (build: "
+             "after_import); scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"code":{"type":"string"},"path":{"type":"string"},"key":{"type":"string"},"entity_id":{"type":"string"},"type_name":{"type":"string"}},"required":["code"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
          .handler =
@@ -360,6 +387,7 @@ void register_script_tools(mcp_tool_registry& registry)
              size_t ok_count = 0;
              size_t requested = 0;
              std::string protocol;
+             bool all_imported = true;
              for(auto el : items_arr)
              {
                  ++requested;
@@ -433,6 +461,7 @@ void register_script_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  note_written_source(absolute);
+                 all_imported &= is_script_imported(ctx, absolute);
                  if(recompile && protocol.empty())
                  {
                      protocol = protocol_for_path(absolute);
@@ -447,15 +476,17 @@ void register_script_tools(mcp_tool_registry& registry)
                                         code.size());
              }
              results += "]";
-             if(recompile && ok_count > 0 && !protocol.empty())
+             const bool build_now = recompile && ok_count > 0 && !protocol.empty() && all_imported;
+             if(build_now)
              {
                  script_system::set_needs_recompile(protocol, true);
              }
-             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"recompile":{},"protocol":{}}})",
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"recompile":{},"build":"{}","protocol":{}}})",
                                          results,
                                          ok_count,
                                          requested,
                                          recompile ? "true" : "false",
+                                         describe_build(recompile, build_now),
                                          make_json_string(protocol)),
                      .is_error = ok_count == 0 && requested > 0};
          },
@@ -465,7 +496,9 @@ void register_script_tools(mcp_tool_registry& registry)
         {.name = "scripts_create_batch",
          .description =
              "Create many C# ScriptComponent .cs files from TemplateComponent.cs.in. Each item: name, "
-             "optional folder (default app:/data/scripts). Optional recompile (default true, once).",
+             "optional folder (default app:/data/scripts). Optional recompile (default true, once). New "
+             "files build once the asset pipeline has imported them (build: after_import); "
+             "scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"}},"required":["name"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
          .handler =
@@ -490,6 +523,7 @@ void register_script_tools(mcp_tool_registry& registry)
              size_t ok_count = 0;
              size_t requested = 0;
              std::string protocol;
+             bool all_imported = true;
              for(auto el : items_arr)
              {
                  ++requested;
@@ -532,6 +566,7 @@ void register_script_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  note_written_source(dst);
+                 all_imported &= is_script_imported(ctx, dst);
                  if(recompile && protocol.empty())
                  {
                      protocol = protocol_for_path(dst);
@@ -548,15 +583,17 @@ void register_script_tools(mcp_tool_registry& registry)
                                         make_json_string(dst.stem().string()));
              }
              results += "]";
-             if(recompile && ok_count > 0 && !protocol.empty())
+             const bool build_now = recompile && ok_count > 0 && !protocol.empty() && all_imported;
+             if(build_now)
              {
                  script_system::set_needs_recompile(protocol, true);
              }
-             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"recompile":{},"protocol":{}}})",
+             return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"recompile":{},"build":"{}","protocol":{}}})",
                                          results,
                                          ok_count,
                                          requested,
                                          recompile ? "true" : "false",
+                                         describe_build(recompile, build_now),
                                          make_json_string(protocol)),
                      .is_error = ok_count == 0 && requested > 0};
          },

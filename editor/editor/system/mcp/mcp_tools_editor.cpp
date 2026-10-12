@@ -186,7 +186,9 @@ void register_editor_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "play_skip_frame",
-         .description = "Advance one simulation frame while play mode is active and paused.",
+         .description = "Advance one frame while play mode is paused: scripts (Update, LateUpdate), physics, "
+                        "animation and particles run once over 1/60 s of game time (scaled by the time scale). "
+                        "Calls made together queue consecutive frames.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result

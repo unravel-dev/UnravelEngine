@@ -17,6 +17,10 @@ public:
     auto is_visible() const -> bool { return is_visible_; }
     void set_visible(bool visible) { is_visible_ = visible; }
 
+    /// Renders the panel's view on the next frame even while its tab is hidden (a camera preview,
+    /// a capture). Cleared once the panel has rendered.
+    void set_visible_force(bool visible) { is_visible_force_ = visible; }
+
     auto is_focused() const -> bool { return is_focused_; }
 
     auto is_fullscreen() const -> bool { return is_fullscreen_; }
@@ -43,6 +47,7 @@ protected:
     std::string name_;
     std::string name_fullscreen_;
     bool is_visible_{};
+    bool is_visible_force_{};
     bool is_focused_{};
     bool is_fullscreen_{};
     bool request_focus_{};

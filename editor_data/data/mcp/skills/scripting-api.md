@@ -27,7 +27,7 @@ scripts_get_source {"path":"engine:/data/scripts/input/Input.cs"}
 | `assets/` | `Assets`, `Asset` |
 | `audio/` | `Audio`, `AudioBus` |
 | `ui/` | `UIDocument`, `UIElement`, `UIEventManager`, and the event types |
-| `system/` | `Application`, `Attributes`, `Profiler`, `Object` |
+| `system/` | `Application`, `Screen`, `Attributes`, `Profiler`, `Object` |
 | `logger/`, `gizmos/`, `kinematics/` | `Logger`, `Gizmos`, `Kinematics` |
 
 ## Start from a sample, not a blank file

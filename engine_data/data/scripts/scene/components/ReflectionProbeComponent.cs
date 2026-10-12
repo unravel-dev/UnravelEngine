@@ -30,7 +30,10 @@ namespace Unravel.Core
     /// </summary>
     public enum ProbeUpdateMode : byte
     {
-        /// <summary>Refresh only when <see cref="ReflectionProbeComponent.MarkDirty"/> is called.</summary>
+        /// <summary>
+        /// Bake once on load, then refresh only when <see cref="ReflectionProbeComponent.MarkDirty"/> is called.
+        /// In play mode reactivating the entity does not rebake: the probe adds no reflections until marked dirty.
+        /// </summary>
         OnDemand = 0,
         /// <summary>Bake once on load or edit, then stop until marked dirty.</summary>
         Once = 1,

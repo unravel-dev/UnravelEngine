@@ -93,12 +93,34 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Size in pixels of the viewport this camera renders, in the same space as
+        /// <see cref="Input.mousePosition"/>. Each camera has its own; the host that shows the
+        /// game sizes its cameras to <see cref="Screen.width"/> x <see cref="Screen.height"/>.
+        /// Until then it holds the size saved with the scene. In the editor it follows the Game
+        /// panel one frame late.
+        /// </summary>
+        public Vector2 viewportSize
+        {
+            get => internal_m2n_camera_get_viewport_size(owner);
+        }
+
+        /// <summary>
+        /// Width divided by height of the camera's projection (perspective mode uses it for the
+        /// horizontal field of view). Follows <see cref="viewportSize"/>.
+        /// </summary>
+        public float aspect
+        {
+            get => internal_m2n_camera_get_aspect(owner);
+        }
+
+        /// <summary>
         /// Converts a position in screen space to a ray in 3D space.
         /// </summary>
         /// <param name="pos">The position in screen space, typically in pixel coordinates.</param>
         /// <param name="ray">When this method returns, contains the ray in 3D space corresponding to the screen space position.</param>
         /// <returns>
-        /// <c>true</c> if the ray was successfully calculated; otherwise, <c>false</c>.
+        /// <c>true</c> if the ray was successfully calculated; otherwise, <c>false</c>
+        /// (also while the camera has no viewport size yet).
         /// </returns>
         public bool ScreenPointToRay(Vector2 pos, out Ray ray)
         {
@@ -166,6 +188,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_camera_set_exclude_mask(Entity eid, int mask);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector2 internal_m2n_camera_get_viewport_size(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_camera_get_aspect(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_camera_screen_point_to_ray(Entity eid, Vector2 pos, out Ray ray);

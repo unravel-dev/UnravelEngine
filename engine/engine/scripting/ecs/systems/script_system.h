@@ -205,12 +205,6 @@ private:
      */
     void on_resume(rtti::context& ctx);
 
-    /**
-     * @brief Skips the next frame update.
-     * @param ctx The context for the update.
-     */
-    void on_skip_next_frame(rtti::context& ctx);
-
     auto bind_internal_calls(rtti::context& ctx) -> bool;
 
     void check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback);

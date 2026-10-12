@@ -67,6 +67,7 @@ void play_mode::set_paused(rtti::context& ctx, bool paused)
         return;
     }
     is_paused_ = paused;
+    pending_steps_ = 0;
     auto& ev = ctx.get_cached<events>();
     is_paused_ ? ev.on_pause(ctx) : ev.on_resume(ctx);
 }
@@ -81,7 +82,7 @@ void play_mode::toggle_pause(rtti::context& ctx)
     seq::queue(action, "play_mode");
 }
 
-void play_mode::skip_next_frame(rtti::context& ctx)
+void play_mode::skip_next_frame()
 {
     if(!is_active())
     {
@@ -91,7 +92,23 @@ void play_mode::skip_next_frame(rtti::context& ctx)
     {
         return;
     }
-    ctx.get_cached<events>().on_skip_next_frame(ctx);
+    ++pending_steps_;
+}
+
+auto play_mode::begin_frame_step() -> bool
+{
+    if(!is_paused_ || pending_steps_ == 0)
+    {
+        return false;
+    }
+    --pending_steps_;
+    is_stepping_ = true;
+    return true;
+}
+
+void play_mode::end_frame_step()
+{
+    is_stepping_ = false;
 }
 
 void play_mode::on_frame_update(rtti::context& ctx, delta_t dt)
@@ -155,6 +172,8 @@ void play_mode::end_play(rtti::context& ctx)
     }
     current_phase_ = phase::inactive;
     is_paused_ = false;
+    is_stepping_ = false;
+    pending_steps_ = 0;
     frames_running_ = 0;
     splash_scene::teardown(splash_state_);
     ev.on_play_after_end(ctx);

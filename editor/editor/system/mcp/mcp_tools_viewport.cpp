@@ -237,8 +237,9 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_capture_scene",
          .description =
-             "Capture Scene panel viewport as PNG (image content). Optional wait_ms (default 500), "
-             "scale (0-1, default 1; bimg linear resize). Prefer scale 0.5 to save tokens.",
+             "Capture Scene panel viewport as PNG (image content). Renders the panel for the capture, also when its "
+             "tab is hidden. Optional wait_ms (default 500), scale (0-1, default 1; bimg linear resize). Prefer "
+             "scale 0.5 to save tokens.",
          .input_schema_json =
              R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
          .handler =
@@ -252,6 +253,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  options.scale = scale;
              }
+             options.request_render = [](rtti::context& ctx)
+             {
+                 resolve_scene_panel(ctx).set_visible_force(true);
+             };
              return capture_fbo_screenshot(mcp, ctx, resolve_scene_obuffer, "scene", options);
          },
          .mutates_scene = false,
@@ -260,8 +265,9 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_capture_game",
          .description =
-             "Capture Game panel / active camera as PNG (image content). Optional wait_ms (default 500), "
-             "scale (0-1, default 1; bimg linear resize).",
+             "Capture Game panel / active camera as PNG (image content). Renders the game view for the capture, "
+             "also when the Game tab is hidden. Optional wait_ms (default 500), scale (0-1, default 1; bimg linear "
+             "resize).",
          .input_schema_json =
              R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
          .handler =
@@ -275,6 +281,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  options.scale = scale;
              }
+             options.request_render = [](rtti::context& ctx)
+             {
+                 ctx.get_cached<hub>().get_panels().get_game_panel().set_visible_force(true);
+             };
              return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
          },
          .mutates_scene = false,

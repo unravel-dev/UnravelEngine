@@ -14,17 +14,27 @@ namespace unravel
 namespace
 {
 
-auto get_bone_entity(const std::string& bone_id, const std::vector<entt::handle>& entities) -> entt::handle
+/**
+ * Finds the existing child entity an armature node binds to: the first child named @p name
+ * that no earlier sibling node claimed in this walk.
+ *
+ * Binding by name keeps the node entities a scene or prefab saved. The claim keeps sibling
+ * nodes that share a name (a kit model's eight "slice" nodes, each with its own transform) on
+ * separate entities: the Nth such node binds to the Nth such child, or gets a new one.
+ */
+auto find_unclaimed_child(const std::string& name,
+                          const std::vector<entt::handle>& children,
+                          const std::vector<entt::handle>& claimed) -> entt::handle
 {
-    for(const auto& e : entities)
+    for(const auto& e : children)
     {
-        if(e)
+        if(!e || e.get<tag_component>().name != name)
         {
-            const auto& tag = e.get<tag_component>();
-            if(tag.name == bone_id)
-            {
-                return e;
-            }
+            continue;
+        }
+        if(std::find(claimed.begin(), claimed.end(), e) == claimed.end())
+        {
+            return e;
         }
     }
 
@@ -32,27 +42,12 @@ auto get_bone_entity(const std::string& bone_id, const std::vector<entt::handle>
 }
 
 /**
- * Accumulated submesh indices per entity for one armature walk. Several armature nodes
- * can resolve to the same entity (duplicate node names collapse via get_bone_entity), so
- * indices are gathered across the whole walk and applied once per entity afterwards.
- */
-struct submesh_accum
-{
-    entt::handle entity;
-    std::vector<uint32_t> indices;
-};
-
-using submesh_accum_list = std::vector<submesh_accum>;
-
-/**
  * Rebuilds the submesh_component entries for a node from the current mesh asset.
  *
- * The mesh is the source of truth for which submesh indices the node references -
- * @p node_submeshes must be the FULL set for this entity (accumulated across all
- * armature nodes that map to it; duplicates are fine, they are dedup'd here). Any
- * previously authored per-submesh settings (shadow/enabled flags) are preserved by
- * matching on the import-stable submesh id first, then - for legacy data without ids -
- * on the raw index.
+ * The mesh is the source of truth for which submesh indices the node references
+ * (@p node_submeshes). Any previously authored per-submesh settings (shadow/enabled flags)
+ * are preserved by matching on the import-stable submesh id first, then - for legacy data
+ * without ids - on the raw index.
  */
 void rebuild_submesh_entries(submesh_component& comp,
                              const std::vector<uint32_t>& node_submeshes,
@@ -108,9 +103,9 @@ void rebuild_submesh_entries(submesh_component& comp,
 auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
                        const mesh& render_mesh,
                        entt::handle& parent,
+                       std::vector<entt::handle>& claimed_siblings,
                        std::vector<entt::handle>& nodes,
-                       animation_pose& ref_pose,
-                       submesh_accum_list& submesh_accums) -> entt::handle
+                       animation_pose& ref_pose) -> entt::handle
 {
     const auto& bind_data = render_mesh.get_skin_bind_data();
     auto entity_node = parent;
@@ -119,7 +114,7 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
     {
         auto& parent_trans_comp = parent.get<transform_component>();
         const auto& children = parent_trans_comp.get_children();
-        auto found_node = get_bone_entity(node->name, children);
+        auto found_node = find_unclaimed_child(node->name, children, claimed_siblings);
         if(found_node)
         {
             entity_node = found_node;
@@ -129,6 +124,8 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
             auto& reg = *entity_node.registry();
             entity_node = scene::create_entity(reg, node->name, parent);
         }
+        // A created entity is claimed too: it is now a child with this name a later sibling would find.
+        claimed_siblings.emplace_back(entity_node);
         auto& trans_comp = entity_node.get<transform_component>();
         trans_comp.set_transform_local(node->local_transform);
 
@@ -136,24 +133,8 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
 
         if(!node->submeshes.empty())
         {
-            // Don't rebuild entries here: several armature nodes can resolve to this same
-            // entity, each contributing its own submesh batch. Accumulate across the whole
-            // walk and rebuild once per entity afterwards (see process_armature), otherwise
-            // the last batch would clobber the earlier ones.
-            auto it = std::find_if(submesh_accums.begin(),
-                                   submesh_accums.end(),
-                                   [&](const submesh_accum& accum) -> bool
-                                   {
-                                       return accum.entity == entity_node;
-                                   });
-            if(it == submesh_accums.end())
-            {
-                submesh_accums.push_back({entity_node, node->submeshes});
-            }
-            else
-            {
-                it->indices.insert(it->indices.end(), node->submeshes.begin(), node->submeshes.end());
-            }
+            auto& comp = entity_node.get_or_emplace<submesh_component>();
+            rebuild_submesh_entries(comp, node->submeshes, render_mesh);
         }
 
         auto query = bind_data.find_bone_by_id(node->name);
@@ -177,19 +158,21 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
 void process_node(const std::unique_ptr<mesh::armature_node>& node,
                   const mesh& render_mesh,
                   entt::handle parent,
+                  std::vector<entt::handle>& claimed_siblings,
                   std::vector<entt::handle>& nodes,
-                  animation_pose& ref_pose,
-                  submesh_accum_list& submesh_accums)
+                  animation_pose& ref_pose)
 {
     if(!parent)
     {
         return;
     }
 
-    auto entity_node = process_node_impl(node, render_mesh, parent, nodes, ref_pose, submesh_accums);
+    auto entity_node = process_node_impl(node, render_mesh, parent, claimed_siblings, nodes, ref_pose);
+    // The child nodes bind among this entity's children, so only they can claim those.
+    std::vector<entt::handle> claimed_children;
     for(auto& child : node->children)
     {
-        process_node(child, render_mesh, entity_node, nodes, ref_pose, submesh_accums);
+        process_node(child, render_mesh, entity_node, claimed_children, nodes, ref_pose);
     }
 }
 
@@ -204,17 +187,8 @@ auto process_armature(const mesh& render_mesh,
         return false;
     }
 
-    submesh_accum_list submesh_accums;
-    process_node(root, render_mesh, parent, nodes, ref_pose, submesh_accums);
-
-    // Apply the accumulated per-entity submesh sets in one pass so entries reflect the
-    // union of every armature node that maps to the entity (authored settings are
-    // preserved inside rebuild_submesh_entries via stable-id/index matching).
-    for(auto& accum : submesh_accums)
-    {
-        auto& comp = accum.entity.get_or_emplace<submesh_component>();
-        rebuild_submesh_entries(comp, accum.indices, render_mesh);
-    }
+    std::vector<entt::handle> claimed_roots;
+    process_node(root, render_mesh, parent, claimed_roots, nodes, ref_pose);
 
     return true;
 }
@@ -541,7 +515,9 @@ auto model_component::init_armature(bool force) -> bool
     const auto& armature = mesh->get_armature();
 
     bool recreate_armature = force;
-    recreate_armature |= armature && submesh_pose_.submesh_to_transform_indices.empty();
+    // Built once its node entities exist. The pose is no proof: a model activated after this
+    // frame's update reaches update_armature first, which fills the pose from no entities.
+    recreate_armature |= armature && get_armature_entities().empty();
     recreate_armature |= skin_data.has_bones() && skinning_pose_.empty();
 
     if(recreate_armature)

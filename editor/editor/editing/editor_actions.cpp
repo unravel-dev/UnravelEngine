@@ -2627,7 +2627,7 @@ auto editor_actions::skip_play_frame(rtti::context& ctx, std::string* error) -> 
         }
         return false;
     }
-    play.skip_next_frame(ctx);
+    play.skip_next_frame();
     return true;
 }
 

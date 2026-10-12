@@ -99,7 +99,6 @@ private:
     void on_play_end(rtti::context& ctx);
     void on_pause(rtti::context& ctx);
     void on_resume(rtti::context& ctx);
-    void on_skip_next_frame(rtti::context& ctx);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     std::unique_ptr<physics_backend> backend_;

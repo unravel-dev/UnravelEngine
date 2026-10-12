@@ -554,7 +554,9 @@ auto engine::process() -> int
 
         if(play.is_paused())
         {
-            dt = {};
+            // A requested frame step runs this paused frame like a running one, so every system
+            // (scripts, late update, physics, animation, seq) advances once in its usual order.
+            dt = play.begin_frame_step() ? delta_t(play_mode::FRAME_STEP_SECONDS) * sim.get_time_scale() : delta_t{};
         }
 
         update_input_zone(rend, input);
@@ -629,6 +631,8 @@ auto engine::process() -> int
             APP_SCOPE_PERF("Frame End");
             ev.on_frame_end(ctx, dt);
         }
+
+        play.end_frame_step();
 
         if(play.is_simulation_running())
         {

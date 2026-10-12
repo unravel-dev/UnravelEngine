@@ -22,6 +22,9 @@ struct play_mode
         running,
     };
 
+    /// Game time one frame step advances while paused, before the time scale.
+    static constexpr float FRAME_STEP_SECONDS = 1.0f / 60.0f;
+
     auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 
@@ -29,7 +32,25 @@ struct play_mode
     void set_active(rtti::context& ctx, bool active, bool allow_splash = true);
     void set_paused(rtti::context& ctx, bool paused);
     void toggle_pause(rtti::context& ctx);
-    void skip_next_frame(rtti::context& ctx);
+
+    /**
+     * @brief Requests a frame step while paused: the next frame runs like an unpaused one.
+     *
+     * Requests made within one frame queue up and run on consecutive frames.
+     */
+    void skip_next_frame();
+
+    /**
+     * @brief Starts a requested frame step for the current frame. Called by the engine loop
+     * before it dispatches the frame.
+     * @return True when this paused frame runs as a step.
+     */
+    auto begin_frame_step() -> bool;
+
+    /**
+     * @brief Ends the frame step begin_frame_step started. Called by the engine loop at frame end.
+     */
+    void end_frame_step();
 
     void on_frame_update(rtti::context& ctx, delta_t dt);
 
@@ -53,6 +74,18 @@ struct play_mode
         return is_paused_;
     }
 
+    /// True while a frame step runs: the frame advances although play mode stays paused.
+    [[nodiscard]] auto is_stepping() const -> bool
+    {
+        return is_stepping_;
+    }
+
+    /// True when the simulation must hold still: paused and not running a frame step.
+    [[nodiscard]] auto is_simulation_paused() const -> bool
+    {
+        return is_paused_ && !is_stepping_;
+    }
+
     [[nodiscard]] auto frames_running() const -> uint64_t
     {
         return frames_running_;
@@ -73,6 +106,9 @@ private:
 
     phase current_phase_ = phase::inactive;
     bool is_paused_ = false;
+    bool is_stepping_ = false;
+    /// Frame steps requested and not yet run.
+    uint32_t pending_steps_ = 0;
     uint64_t frames_running_ = 0;
     splash_scene_state splash_state_{};
 

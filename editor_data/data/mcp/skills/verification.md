@@ -33,11 +33,14 @@ play, so choreograph:
    to frame the target - BEFORE entering play.
 2. play_set_active {"active":true}; wait 2-4s real time (the first frame is a
    splash screen - never capture immediately).
-3. panel_focus_game, then viewport_capture_game.
+3. viewport_capture_game (it renders the game view itself, even with the Game
+   tab hidden).
 4. play_set_active {"active":false} - edit state is restored, including
    everything physics moved.
 5. play_get_state answers "am I in play?" when unsure; play_set_paused +
-   play_skip_frame give deterministic frame stepping.
+   play_skip_frame give deterministic frame stepping: each step runs scripts,
+   physics and animation once over 1/60 s, so a capture after every step
+   films script-driven motion frame by frame.
 
 Two captures a few seconds apart prove motion (dominoes mid-fall, animation
 pose changes) better than one.

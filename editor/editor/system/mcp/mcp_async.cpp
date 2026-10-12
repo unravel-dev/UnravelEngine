@@ -44,6 +44,18 @@ struct fbo_capture_state
 /// bgfx's copy, which the render thread performs when it executes the frame the read was issued in.
 constexpr auto readback_guard_timeout = std::chrono::milliseconds(10000);
 
+/// How long a capture waits for the panel to render a requested frame however short the caller's wait_ms: the
+/// first render of a hidden view can build its whole pipeline.
+constexpr auto render_guard_timeout = std::chrono::milliseconds(5000);
+
+/// Outcome of one attempt to submit the capture blit on the main thread.
+enum class blit_status
+{
+    waiting_for_render,
+    submitted,
+    failed,
+};
+
 /// Keeps a capture whose readback never landed alive for the rest of the session: its pixel buffer and blit texture
 /// may still be the target of a pending copy, and freeing them would hand the render thread freed memory.
 auto abandon_capture_state(std::shared_ptr<fbo_capture_state> state) -> void
@@ -52,6 +64,57 @@ auto abandon_capture_state(std::shared_ptr<fbo_capture_state> state) -> void
     static std::vector<std::shared_ptr<fbo_capture_state>> abandoned;
     std::lock_guard<std::mutex> lock(abandoned_mutex);
     abandoned.push_back(std::move(state));
+}
+
+/// Blits the framebuffer's color into a READ_BACK texture and requests its readback. Main thread only.
+auto submit_fbo_blit(rtti::context& ctx,
+                     const std::function<gfx::frame_buffer::ptr(rtti::context&)>& resolve_fbo,
+                     fbo_capture_state& state) -> bool
+{
+    auto fbo = resolve_fbo(ctx);
+    if(!fbo || !fbo->is_valid())
+    {
+        state.error = "Viewport framebuffer is not available yet (panel may not have rendered)";
+        return false;
+    }
+
+    const auto& src_tex = fbo->get_texture(0);
+    if(!src_tex || !bgfx::isValid(src_tex->native_handle()))
+    {
+        state.error = "Viewport color texture is not available";
+        return false;
+    }
+
+    state.width = src_tex->info.width;
+    state.height = src_tex->info.height;
+    state.is_bottom_up = bgfx::getCaps()->originBottomLeft;
+    if(state.width == 0 || state.height == 0)
+    {
+        state.error = "Viewport framebuffer has zero size";
+        return false;
+    }
+
+    constexpr auto format = bgfx::TextureFormat::RGBA8;
+    const uint64_t flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_U_CLAMP |
+                           BGFX_SAMPLER_V_CLAMP;
+    state.blit_tex = bgfx::createTexture2D(state.width, state.height, false, 1, format, flags);
+    if(!bgfx::isValid(state.blit_tex))
+    {
+        state.error = "Failed to create readback texture";
+        return false;
+    }
+
+    bgfx::TextureInfo info{};
+    bgfx::calcTextureSize(info, state.width, state.height, 1, false, false, 1, format);
+    state.pixels.resize(info.storageSize);
+
+    gfx::render_pass pass("mcp_fbo_capture");
+    pass.touch();
+    bgfx::blit(pass.id,
+               bgfx::TextureRegion{.handle = state.blit_tex},
+               bgfx::TextureRegion{.handle = src_tex->native_handle()});
+    state.ready_frame = bgfx::read(bgfx::TextureRegion{.handle = state.blit_tex}, state.pixels.data());
+    return true;
 }
 
 auto bimg_allocator() -> bx::AllocatorI*
@@ -260,61 +323,60 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
     // OBUFFER targets are offscreen, so we blit into a READ_BACK texture instead.
     auto state = std::make_shared<fbo_capture_state>();
 
-    const auto submitted = mcp.invoke_on_main(
-        [&ctx, &resolve_fbo, state]() -> bool
-        {
-            auto fbo = resolve_fbo(ctx);
-            if(!fbo || !fbo->is_valid())
-            {
-                state->error = "Viewport framebuffer is not available yet (panel may not have rendered)";
-                return false;
-            }
-
-            const auto& src_tex = fbo->get_texture(0);
-            if(!src_tex || !bgfx::isValid(src_tex->native_handle()))
-            {
-                state->error = "Viewport color texture is not available";
-                return false;
-            }
-
-            state->width = src_tex->info.width;
-            state->height = src_tex->info.height;
-            state->is_bottom_up = bgfx::getCaps()->originBottomLeft;
-            if(state->width == 0 || state->height == 0)
-            {
-                state->error = "Viewport framebuffer has zero size";
-                return false;
-            }
-
-            constexpr auto format = bgfx::TextureFormat::RGBA8;
-            const uint64_t flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_U_CLAMP |
-                                   BGFX_SAMPLER_V_CLAMP;
-            state->blit_tex = bgfx::createTexture2D(state->width, state->height, false, 1, format, flags);
-            if(!bgfx::isValid(state->blit_tex))
-            {
-                state->error = "Failed to create readback texture";
-                return false;
-            }
-
-            bgfx::TextureInfo info{};
-            bgfx::calcTextureSize(info, state->width, state->height, 1, false, false, 1, format);
-            state->pixels.resize(info.storageSize);
-
-            gfx::render_pass pass("mcp_fbo_capture");
-            pass.touch();
-            bgfx::blit(pass.id,
-                       bgfx::TextureRegion{.handle = state->blit_tex},
-                       bgfx::TextureRegion{.handle = src_tex->native_handle()});
-            state->ready_frame = bgfx::read(bgfx::TextureRegion{.handle = state->blit_tex}, state->pixels.data());
-            return true;
-        },
-        std::chrono::milliseconds(10000));
-
-    if(!submitted)
+    // A panel whose tab is hidden releases its framebuffer every frame it does not render. The request makes it
+    // render; the blit waits for a frame rendered after the first request.
+    uint32_t requested_frame = 0;
+    if(options.request_render)
     {
-        return {.text = "Timed out requesting capture on main thread", .is_error = true};
+        const auto frame = mcp.invoke_on_main(
+            [&ctx, &options]() -> uint32_t
+            {
+                options.request_render(ctx);
+                return gfx::get_render_frame();
+            },
+            std::chrono::milliseconds(10000));
+        if(!frame)
+        {
+            return {.text = "Timed out requesting a render on main thread", .is_error = true};
+        }
+        requested_frame = *frame;
     }
-    if(!*submitted)
+
+    const auto submit_blit = [&ctx, &resolve_fbo, &options, state, requested_frame]() -> blit_status
+    {
+        if(options.request_render)
+        {
+            // Renewed every attempt: the panel also renders this frame, so the framebuffer outlives the blit.
+            options.request_render(ctx);
+            if(gfx::get_render_frame() <= requested_frame)
+            {
+                return blit_status::waiting_for_render;
+            }
+        }
+        const bool submitted = submit_fbo_blit(ctx, resolve_fbo, *state);
+        return submitted ? blit_status::submitted : blit_status::failed;
+    };
+
+    const auto render_deadline = std::chrono::steady_clock::now() + std::max(options.wait_timeout, render_guard_timeout);
+    blit_status status = blit_status::waiting_for_render;
+    while(status == blit_status::waiting_for_render)
+    {
+        const auto attempt = mcp.invoke_on_main(submit_blit, std::chrono::milliseconds(10000));
+        if(!attempt)
+        {
+            return {.text = "Timed out requesting capture on main thread", .is_error = true};
+        }
+        status = *attempt;
+        if(status == blit_status::waiting_for_render)
+        {
+            if(std::chrono::steady_clock::now() >= render_deadline)
+            {
+                return {.text = "Timed out waiting for the panel to render", .is_error = true};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+    }
+    if(status == blit_status::failed)
     {
         return {.text = state->error.empty() ? "Failed to request capture" : state->error, .is_error = true};
     }

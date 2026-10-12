@@ -312,7 +312,6 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
     ev.on_play_end.connect(sentinel_, 1000, this, &script_system::on_play_end);
     ev.on_pause.connect(sentinel_, 100, this, &script_system::on_pause);
     ev.on_resume.connect(sentinel_, -100, this, &script_system::on_resume);
-    ev.on_skip_next_frame.connect(sentinel_, -100, this, &script_system::on_skip_next_frame);
 
     auto mono_paths = find_dotnet_paths(ctx);
 
@@ -775,11 +774,6 @@ void script_system::on_resume(rtti::context& ctx)
 {
 }
 
-void script_system::on_skip_next_frame(rtti::context& ctx)
-{
-    delta_t step(1.0f / 60.0f);
-    on_frame_update(ctx, step);
-}
 void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Script/System Update");
@@ -814,7 +808,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
                 }
             });
 
-        if(play.is_simulation_running() && !play.is_paused() && cache_.update_invoker.valid())
+        if(play.is_simulation_running() && !play.is_simulation_paused() && cache_.update_invoker.valid())
         {
             // Mid-frame enter_running: process() could not zero dt. Start()
             // above still runs; skip integrating motion on this first frame.
@@ -1136,7 +1130,8 @@ void script_system::set_needs_recompile(const std::string& protocol, bool now)
     {
         return;
     }
-    needs_recompile = now ? recompile_command::compile_now : recompile_command::compile_at_schedule;
+    // Queue first, then raise the flag: check_for_recompile takes the queue once it sees the flag, so a
+    // flag raised first can be taken with the queue still empty, leaving the protocol queued unflagged.
     {
         std::lock_guard<std::mutex> lock(container_mutex);
         if(std::find(std::begin(needs_to_recompile), std::end(needs_to_recompile), protocol) ==
@@ -1145,6 +1140,7 @@ void script_system::set_needs_recompile(const std::string& protocol, bool now)
             needs_to_recompile.emplace_back(protocol);
         }
     }
+    needs_recompile = now ? recompile_command::compile_now : recompile_command::compile_at_schedule;
 }
 
 auto script_system::get_script_debug_mode() -> bool

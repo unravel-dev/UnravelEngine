@@ -121,6 +121,20 @@ public:
     auto is_bake_complete() const -> bool;
 
     /**
+     * @brief Returns true when the product cubemaps hold a finished bake.
+     *
+     * The capture lives only on the GPU: it is never serialized and is lost whenever the probe's
+     * resources are released (inactive entity, resolution change). Until a bake completes the
+     * product cubemaps are uninitialized memory, so the pipeline must not sample them.
+     */
+    auto has_capture() const -> bool;
+
+    /**
+     * @brief Records that a bake has written the product cubemaps. Called by the pipeline after the prefilter.
+     */
+    void mark_capture_ready();
+
+    /**
      * @brief Gets the number of faces generated per frame.
      * @return The number of faces generated per frame.
      */
@@ -229,9 +243,11 @@ private:
     /// Seconds accumulated since the last realtime refresh started.
     float time_since_last_refresh_ = 0.0f;
     /// Has a bake been requested but not yet fully completed.
-    /// Default is false so a freshly constructed component stays dormant until someone explicitly
-    /// requests a bake via set_probe() (for non-on_demand probes) or mark_dirty().
-    bool has_pending_bake_{false};
+    /// Default is true: the capture is never serialized, so every new or loaded probe needs one bake
+    /// whatever its update mode. The mode only governs the bakes after that.
+    bool has_pending_bake_{true};
+    /// True once a bake has written the product cubemaps; cleared when they are released or recreated.
+    bool has_capture_{false};
 
     /// When the probe should refresh its cubemap. "Once" is the default because it matches the
     /// typical use case (probes covering static environment): bake on load, then stop. Scripts that

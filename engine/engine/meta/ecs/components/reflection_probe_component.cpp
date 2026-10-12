@@ -39,7 +39,7 @@ REFLECT(reflection_probe_component)
             entt::attribute{"pretty_name", "Update Mode"},
             entt::attribute{"group", "Update"},
             entt::attribute{"tooltip",
-                "On Demand: never refreshes until explicitly requested (runtime default, cheapest)."
+                "On Demand: bakes once when loaded, then only when explicitly requested (runtime default, cheapest)."
                 "\nOnce: bakes a single time on load or after edits, then stops."
                 "\nRealtime: refreshes continuously, time-sliced by Faces Per Frame and Update Interval."},
         })

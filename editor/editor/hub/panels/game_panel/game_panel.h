@@ -24,7 +24,6 @@ public:
     void on_frame_before_render(rtti::context& ctx, delta_t dt);
     void on_frame_render(rtti::context& ctx, delta_t dt);
     void on_project_opened();
-    void set_visible_force(bool visible);
 
     void draw_ui(rtti::context& ctx) override;
     void on_after_render(rtti::context& ctx) override;
@@ -41,7 +40,6 @@ private:
     void draw_ui_debugger_toggle(rtti::context& ctx);
     auto begin_panel(const char* name, ImGuiWindowFlags flags) -> bool override;
 
-    bool is_visible_force_{};
     int visualize_passes_{-1};
     int m_skip_frames_{0};
 
