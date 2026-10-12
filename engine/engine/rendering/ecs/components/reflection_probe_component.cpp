@@ -348,6 +348,16 @@ auto reflection_probe_component::is_bake_complete() const -> bool
     return true;
 }
 
+auto reflection_probe_component::has_capture() const -> bool
+{
+    return has_capture_;
+}
+
+void reflection_probe_component::mark_capture_ready()
+{
+    has_capture_ = true;
+}
+
 void reflection_probe_component::set_resolution(probe_resolution resolution)
 {
     if(resolution_ == resolution)
