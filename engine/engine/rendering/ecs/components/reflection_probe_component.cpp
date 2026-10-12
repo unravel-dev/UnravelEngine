@@ -83,11 +83,7 @@ auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
                                .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT,
                                .has_mips = true,
                                .kind = gfx::texture_kind::tex_cube},
-                              
-                              [this](const gfx::texture::ptr&)
-                               {
-                                   has_capture_ = false;
-                               },
+                               {},
                               false);
 }
 
