@@ -499,7 +499,10 @@ struct editing_manager
     void execute_actions();
     /// Executes one action now: runs it, notifies, and moves it to the undo stack if undoable.
     void execute_action(std::shared_ptr<editing_action_t>& action);
-    
+    /// Rebuilds the armatures the just-executed @p action left pending (a mesh change) and
+    /// replaces @p action with one undo step holding it and the node changes.
+    void fold_armature_rebuilds(std::shared_ptr<editing_action_t>& action);
+
     // Undo/Redo operations
     auto undo() -> std::shared_ptr<editing_action_t>;
     auto redo() -> std::shared_ptr<editing_action_t>;

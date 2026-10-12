@@ -50,12 +50,40 @@ namespace Unravel.Core
 
         /// <summary>
         /// Gets a value indicating whether the UI document is currently enabled.
+        /// Same as <see cref="visible"/>.
         /// </summary>
         /// <value>True if the document is enabled; otherwise, false.</value>
         public bool enabled
         {
             get => internal_m2n_ui_document_is_enabled(owner);
             set => internal_m2n_ui_document_set_enabled(owner, value);
+        }
+
+        /// <summary>
+        /// Gets or sets whether the document is shown. A hidden document keeps its state, its
+        /// elements and its event subscriptions.
+        /// </summary>
+        public bool visible
+        {
+            get => internal_m2n_ui_document_is_enabled(owner);
+            set => internal_m2n_ui_document_set_enabled(owner, value);
+        }
+
+        /// <summary>
+        /// The loaded document, or null while none is loaded (or after <see cref="Close"/>).
+        /// </summary>
+        public UIDocument document => GetDocument();
+
+        /// <summary>
+        /// Raised at the start of a frame after a document is loaded: for the current document
+        /// right after subscribing, then after every reload (<see cref="Reload"/>, an edit of the
+        /// document asset). Element references from an earlier document are invalid by then;
+        /// fetch them again here. Ends with the subscribing script.
+        /// </summary>
+        public event Action<UIDocument> documentLoaded
+        {
+            add => UIEventManager.AddDocumentWatcher(this, value);
+            remove => UIEventManager.RemoveDocumentWatcher(this, value);
         }
 
         /// <summary>
@@ -69,14 +97,34 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Closes the UI document, unloading it from memory.
+        /// Closes the UI document: it disappears at once and stays closed until <see cref="Reload"/>.
         /// Invalidates cached wrappers and clears UI event subscriptions for this entity.
-        /// The document will need to be reloaded before it can be used again.
         /// </summary>
         public void Close()
         {
             UIEventManager.UnsubscribeAllForOwner(owner, invalidateWrappers: true);
             internal_m2n_ui_document_close(owner);
+        }
+
+        /// <summary>
+        /// The data model the document declares with <c>data-model="name"</c>. It exists before the
+        /// document loads and lives across reloads, so bind it once (in OnCreate or OnStart).
+        /// </summary>
+        /// <param name="name">The model name in the markup.</param>
+        public UIDataModel GetModel(string name)
+        {
+            return UIDataModels.GetOrCreate(owner, name);
+        }
+
+        /// <summary>
+        /// Loads the document again from its asset, now: a fresh document in its initial state.
+        /// Also opens a closed document. Wrappers and subscriptions of the old document end.
+        /// </summary>
+        /// <returns>True if the document loaded.</returns>
+        public bool Reload()
+        {
+            UIEventManager.UnsubscribeAllForOwner(owner, invalidateWrappers: true);
+            return internal_m2n_ui_document_reload(owner);
         }
 
         // ==== Wrapper Object Creation ====
@@ -92,8 +140,8 @@ namespace Unravel.Core
             {
                 return null;
             }
-            IntPtr documentPtr = internal_m2n_ui_document_get_wrapper(owner);
-            return UIDocument.GetOrCreate(documentPtr, owner);
+            IntPtr documentHandle = internal_m2n_ui_document_get_wrapper(owner);
+            return UIDocument.GetOrCreate(documentHandle, owner);
         }
 
         // ==== Internal Calls ====
@@ -115,6 +163,9 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_ui_document_close(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_ui_document_reload(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern string internal_m2n_ui_document_get_title(Entity eid);

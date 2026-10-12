@@ -391,6 +391,8 @@ struct particle_soa
     std::vector<float> life;
     std::vector<float> lifespan;
     std::vector<float> texsheet_seed;
+    /// Linear tint multiplied into the color over lifetime; 1 unless a burst set it.
+    std::vector<math::vec4> tint;
     std::vector<math::vec3> position;
     std::vector<math::color> color;
     std::vector<float> scale;
@@ -413,6 +415,7 @@ struct particle_soa
         life.resize(max_particles);
         lifespan.resize(max_particles);
         texsheet_seed.resize(max_particles);
+        tint.resize(max_particles, math::vec4(1.0f));
         position.resize(max_particles);
         color.resize(max_particles);
         scale.resize(max_particles);
@@ -438,6 +441,7 @@ struct particle_soa
         life[dst] = life[src];
         lifespan[dst] = lifespan[src];
         texsheet_seed[dst] = texsheet_seed[src];
+        tint[dst] = tint[src];
     }
 };
 
@@ -515,6 +519,7 @@ void update_particle_basic(particle_soa& particles,
     // Gradient keys are picker (sRGB) colors; particles render into the LINEAR HDR
     // scene buffer, so decode before the HDR intensity multiplies linear radiance.
     math::color sampled_color = desc.appearance.color_gradient.sample(life).to_linear();
+    sampled_color.value *= particles.tint[index];
     sampled_color.value.a *= constants.opacity;
     sampled_color.value.r *= constants.color_intensity;
     sampled_color.value.g *= constants.color_intensity;
@@ -563,6 +568,7 @@ void update_particle_full(particle_soa& particles,
         const math::color speed_color = desc.appearance.color_by_speed_gradient.sample(speed_factor).to_linear();
         sampled_color.value *= speed_color.value;
     }
+    sampled_color.value *= particles.tint[index];
     sampled_color.value.a *= constants.opacity;
     sampled_color.value.r *= constants.color_intensity;
     sampled_color.value.g *= constants.color_intensity;
@@ -703,6 +709,7 @@ struct emitter
     void reset()
     {
         sim.reset();
+        pending_bursts_.clear();
         particles_.clear_live();
         for(uint32_t i = 0; i < particles_.capacity; ++i)
         {
@@ -971,11 +978,11 @@ struct emitter
         dst.texsheet_seed = particles_.texsheet_seed[slot];
         dst.pad0 = 0.0f;
         dst.pad1 = 0.0f;
-        const math::quat rot = math::identity<math::quat>();
-        dst.rot_x = rot.x;
-        dst.rot_y = rot.y;
-        dst.rot_z = rot.z;
-        dst.rot_w = rot.w;
+        const math::vec4& tint = particles_.tint[slot];
+        dst.tint_r = tint.r;
+        dst.tint_g = tint.g;
+        dst.tint_b = tint.b;
+        dst.tint_a = tint.a;
     }
 
     /// Queues the slot's CPU state for the spawn scatter - the only path from the CPU into
@@ -1102,6 +1109,7 @@ struct emitter
                 spawn(desc, constants, transform, sim_dt, use_gpu);
             }
         }
+        emit_bursts(desc, constants, transform, use_gpu);
         particles_.count = math::min(particles_.count, particles_.capacity);
         if(use_gpu)
         {
@@ -1191,6 +1199,87 @@ struct emitter
         }
     }
 
+    /// What every particle spawned in one update shares: the emitter's pose and lifetime.
+    struct spawn_frame
+    {
+        math::vec3 emitter_position{};
+        math::vec3 previous_position{};
+        math::vec3 system_scale{1.0f};
+        math::mat3 rotation{1.0f};
+        float life_span = 1.0f;
+    };
+
+    /// A burst waiting for the next update.
+    struct pending_burst
+    {
+        uint32_t count = 0;
+        emit_params params{};
+    };
+
+    auto make_spawn_frame(const emitter_desc& desc,
+                          const emitter_sim_constants& constants,
+                          const emitter_transform_state& transform) const -> spawn_frame
+    {
+        spawn_frame frame;
+        frame.emitter_position = transform.current.get_position();
+        frame.system_scale = transform.current.get_scale();
+        const math::mat4 effective_transform = transform.current;
+        frame.rotation = math::mat3(effective_transform);
+        frame.previous_position = transform.previous.get_position();
+        if(sim.temporal_count >= 2)
+        {
+            frame.previous_position = sim.temporal_positions[sim.temporal_count - 2];
+        }
+        float lifetime_multiplier = 1.0f;
+        if(has_feature(constants.features, emitter_feature::lifetime_by_emitter_speed))
+        {
+            const float emitter_speed =
+                sim.calculate_smoothed_emitter_speed(desc.motion.lifetime_by_emitter_speed_range.max);
+            const float speed_factor = math::clamp(
+                (emitter_speed - desc.motion.lifetime_by_emitter_speed_range.min) /
+                    (desc.motion.lifetime_by_emitter_speed_range.max - desc.motion.lifetime_by_emitter_speed_range.min),
+                0.0f,
+                1.0f);
+            lifetime_multiplier = desc.motion.lifetime_by_emitter_speed_gradient.sample(speed_factor);
+        }
+        frame.life_span = math::max(desc.motion.lifetime * lifetime_multiplier, k_min_particle_lifespan);
+        return frame;
+    }
+
+    /// Gravity plus force over a whole lifetime of @p life_span seconds: the offset from the
+    /// particle's middle control point to its end one.
+    static auto compute_motion_offset(const emitter_desc& desc, const spawn_frame& frame, float life_span)
+        -> math::vec3
+    {
+        const float life_span_squared = life_span * life_span;
+        math::vec3 gravity_vector(0.0f, -9.81f * desc.motion.gravity_scale * life_span_squared, 0.0f);
+        math::vec3 force_vector = desc.motion.force_over_lifetime * life_span_squared;
+        if(desc.motion.space == simulation_space::world)
+        {
+            gravity_vector.y *= frame.system_scale.y;
+            force_vector *= frame.system_scale;
+        }
+        return gravity_vector + force_vector;
+    }
+
+    auto get_free_slot_count(bool skip_cpu_properties) const -> uint32_t
+    {
+        return skip_cpu_properties ? uint32_t(gpu_.free_list.size()) : (particles_.capacity - particles_.count);
+    }
+
+    void queue_burst(uint32_t count, const emit_params& params)
+    {
+        if(count > 0)
+        {
+            pending_bursts_.push_back({count, params});
+        }
+    }
+
+    auto has_pending_bursts() const -> bool
+    {
+        return !pending_bursts_.empty();
+    }
+
     void spawn(const emitter_desc& desc,
                const emitter_sim_constants& constants,
                const emitter_transform_state& transform,
@@ -1205,59 +1294,74 @@ struct emitter
         sim.emission_time_accum += dt;
         const uint32_t num_to_emit = uint32_t(sim.emission_time_accum / time_per_particle);
         sim.emission_time_accum -= float(num_to_emit) * time_per_particle;
-        const uint32_t max_emittable =
-            skip_cpu_properties ? uint32_t(gpu_.free_list.size()) : (particles_.capacity - particles_.count);
-        const uint32_t actual_emit_count = math::min(num_to_emit, max_emittable);
+        const uint32_t actual_emit_count = math::min(num_to_emit, get_free_slot_count(skip_cpu_properties));
         if(actual_emit_count == 0)
         {
             return;
         }
+        emit_particles(actual_emit_count,
+                       desc,
+                       constants,
+                       make_spawn_frame(desc, constants, transform),
+                       nullptr,
+                       skip_cpu_properties);
+        sim.total_particles_spawned += actual_emit_count;
+    }
+
+    /// Spawns the queued bursts. They do not count toward a one-shot emitter's total, so a burst
+    /// never ends its playback.
+    void emit_bursts(const emitter_desc& desc,
+                     const emitter_sim_constants& constants,
+                     const emitter_transform_state& transform,
+                     bool skip_cpu_properties)
+    {
+        if(pending_bursts_.empty())
+        {
+            return;
+        }
+        const spawn_frame frame = make_spawn_frame(desc, constants, transform);
+        for(const pending_burst& burst : pending_bursts_)
+        {
+            const uint32_t count = math::min(burst.count, get_free_slot_count(skip_cpu_properties));
+            if(count == 0)
+            {
+                break;
+            }
+            emit_particles(count, desc, constants, frame, &burst.params, skip_cpu_properties);
+        }
+        pending_bursts_.clear();
+    }
+
+    /// Spawns @p count particles; @p burst carries a burst's overrides, null for rate spawns.
+    void emit_particles(uint32_t count,
+                        const emitter_desc& desc,
+                        const emitter_sim_constants& constants,
+                        const spawn_frame& frame,
+                        const emit_params* burst,
+                        bool skip_cpu_properties)
+    {
         if(skip_cpu_properties && gpu_.ensure_capacity(particles_.capacity))
         {
             resync_gpu_slots_from_cpu();
         }
-        const math::vec3 effective_position = transform.current.get_position();
-        const math::vec3 system_scale = transform.current.get_scale();
         const math::vec3 emission_shape_scale = desc.emission.shape_scale;
-        const math::mat4 effective_transform = transform.current;
-        const math::mat3 rotation_matrix = math::mat3(effective_transform);
-        float lifetime_multiplier = 1.0f;
-        if(has_feature(constants.features, emitter_feature::lifetime_by_emitter_speed))
-        {
-            const float emitter_speed =
-                sim.calculate_smoothed_emitter_speed(desc.motion.lifetime_by_emitter_speed_range.max);
-            const float speed_factor = math::clamp(
-                (emitter_speed - desc.motion.lifetime_by_emitter_speed_range.min) /
-                    (desc.motion.lifetime_by_emitter_speed_range.max - desc.motion.lifetime_by_emitter_speed_range.min),
-                0.0f,
-                1.0f);
-            lifetime_multiplier = desc.motion.lifetime_by_emitter_speed_gradient.sample(speed_factor);
-        }
-        const float life_span = math::max(desc.motion.lifetime * lifetime_multiplier, k_min_particle_lifespan);
-        const float life_span_squared = life_span * life_span;
-        math::vec3 gravity_vector(0.0f, -9.81f * desc.motion.gravity_scale * life_span_squared, 0.0f);
-        math::vec3 force_vector = desc.motion.force_over_lifetime * life_span_squared;
-        if(desc.motion.space == simulation_space::world)
-        {
-            gravity_vector.y *= system_scale.y;
-            force_vector *= system_scale;
-        }
+        const math::vec3 default_motion_offset = compute_motion_offset(desc, frame, frame.life_span);
         const float velocity_damping_factor = (1.0f - desc.motion.velocity_damping);
-        math::vec3 prev_pos = transform.previous.get_position();
-        if(sim.temporal_count >= 2)
+        const uint32_t mask = burst ? burst->mask : 0u;
+        const auto has_override = [mask](uint32_t flag)
         {
-            prev_pos = sim.temporal_positions[sim.temporal_count - 2];
-        }
+            return (mask & flag) != 0u;
+        };
         const uint32_t base_index = skip_cpu_properties ? 0u : particles_.count;
         if(!skip_cpu_properties)
         {
-            particles_.count += actual_emit_count;
+            particles_.count += count;
         }
-        sim.total_particles_spawned += actual_emit_count;
         const auto emit_one = [&](uint32_t ii, bx::RngMwc& rng)
         {
-            const float base_emission_phase = float(ii) / float(actual_emit_count);
-            const float emission_phase = base_emission_phase * desc.motion.temporal_motion;
+            const float base_emission_phase = float(ii) / float(count);
+            // A burst appears where the emitter is now; rate spawns spread along the frame's path.
+            const float emission_phase = burst ? 1.0f : base_emission_phase * desc.motion.temporal_motion;
             uint32_t index = base_index + ii;
             if(skip_cpu_properties)
             {
@@ -1385,9 +1489,17 @@ struct emitter
                 std::swap(start, end);
                 dir *= -1.0f;
             }
+            float life_span = frame.life_span;
+            math::vec3 motion_offset = default_motion_offset;
+            if(has_override(emit_params::lifetime_flag))
+            {
+                life_span = math::max(burst->lifetime, k_min_particle_lifespan);
+                motion_offset = compute_motion_offset(desc, frame, life_span);
+            }
             particles_.lifespan[index] = life_span;
             particles_.life[index] = 0.0f;
-            const math::vec3 interpolated_emitter_pos = math::mix(prev_pos, effective_position, emission_phase);
+            const math::vec3 interpolated_emitter_pos =
+                math::mix(frame.previous_position, frame.emitter_position, emission_phase);
             if(desc.motion.space == simulation_space::local)
             {
                 particles_.start[index] = start;
@@ -1395,19 +1507,45 @@ struct emitter
             }
             else
             {
-                particles_.start[index] = rotation_matrix * start + interpolated_emitter_pos;
-                particles_.end0[index] = rotation_matrix * end + interpolated_emitter_pos;
+                particles_.start[index] = frame.rotation * start + interpolated_emitter_pos;
+                particles_.end0[index] = frame.rotation * end + interpolated_emitter_pos;
+            }
+            if(has_override(emit_params::position_flag))
+            {
+                const math::vec3 offset = burst->position - particles_.start[index];
+                particles_.start[index] += offset;
+                particles_.end0[index] += offset;
+            }
+            if(has_override(emit_params::velocity_flag))
+            {
+                // Positions follow a quadratic Bezier over the lifetime, whose start slope is
+                // 2 x (end0 - start) per lifetime.
+                particles_.end0[index] = particles_.start[index] + burst->velocity * (life_span * 0.5f);
             }
             if(desc.motion.velocity_damping > 0.0f)
             {
                 const math::vec3 velocity = particles_.end0[index] - particles_.start[index];
                 particles_.end0[index] = particles_.start[index] + velocity * velocity_damping_factor;
             }
-            particles_.end1[index] = particles_.end0[index] + gravity_vector + force_vector;
+            particles_.end1[index] = particles_.end0[index] + motion_offset;
             const frange_t start_scale_range = desc.appearance.scale_gradient.sample(0.0f);
             const frange_t end_scale_range = desc.appearance.scale_gradient.sample(1.0f);
-            particles_.scale_start[index] = math::mix(start_scale_range.min, start_scale_range.max, frand01(rng));
-            particles_.scale_end[index] = math::mix(end_scale_range.min, end_scale_range.max, frand01(rng));
+            float scale_start = math::mix(start_scale_range.min, start_scale_range.max, frand01(rng));
+            float scale_end = math::mix(end_scale_range.min, end_scale_range.max, frand01(rng));
+            if(has_override(emit_params::size_flag))
+            {
+                scale_end = scale_start > 0.0f ? burst->size * (scale_end / scale_start) : burst->size;
+                scale_start = burst->size;
+            }
+            particles_.scale_start[index] = scale_start;
+            particles_.scale_end[index] = scale_end;
+            math::vec4 tint(1.0f);
+            if(has_override(emit_params::color_flag))
+            {
+                const math::color linear = burst->color.to_linear();
+                tint = linear.value;
+            }
+            particles_.tint[index] = tint;
             particles_.texsheet_seed[index] = frand01(rng);
             if(!skip_cpu_properties)
             {
@@ -1421,16 +1559,16 @@ struct emitter
         APP_SCOPE_PERF("Particles/SOA Spawn");
         if(skip_cpu_properties)
         {
-            gpu_.spawn_particles.reserve(gpu_.spawn_particles.size() + actual_emit_count);
-            gpu_.spawn_slots.reserve(gpu_.spawn_slots.size() + actual_emit_count);
+            gpu_.spawn_particles.reserve(gpu_.spawn_particles.size() + count);
+            gpu_.spawn_slots.reserve(gpu_.spawn_slots.size() + count);
         }
-        for(uint32_t ii = 0; ii < actual_emit_count; ++ii)
+        for(uint32_t ii = 0; ii < count; ++ii)
         {
             emit_one(ii, rng_);
         }
         if(skip_cpu_properties)
         {
-            particles_.count += actual_emit_count;
+            particles_.count += count;
         }
     }
 
@@ -1438,6 +1576,7 @@ struct emitter
     emitter_direction direction_ = emitter_direction::up;
     particle_soa particles_;
     emitter_sim_state sim;
+    std::vector<pending_burst> pending_bursts_;
     bx::RngMwc rng_;
     emitter_sim_constants cached_constants_{};
     emitter_gpu_resources gpu_;
@@ -1945,6 +2084,18 @@ struct particle_system_soa
         BX_ASSERT(is_valid(handle), "update_emitter_bounds_only invalid handle");
         emitters_[handle.idx].update_bounds_only(desc, transform);
         bake_constants(desc, transform, emitters_[handle.idx].cached_constants_);
+    }
+
+    void emit(emitter_handle handle, uint32_t count, const emit_params& params)
+    {
+        BX_ASSERT(is_valid(handle), "emit invalid handle");
+        emitters_[handle.idx].queue_burst(count, params);
+    }
+
+    auto has_pending_bursts(emitter_handle handle) -> bool
+    {
+        BX_ASSERT(is_valid(handle), "has_pending_bursts invalid handle");
+        return emitters_[handle.idx].has_pending_bursts();
     }
 
     void sync_gpu_simulation()
@@ -2509,6 +2660,16 @@ void update_emitter_bounds_only(emitter_handle handle,
                                 emitter_transform_state& transform)
 {
     g_system.update_emitter_bounds_only(handle, desc, transform);
+}
+
+void emit(emitter_handle handle, uint32_t count, const emit_params& params)
+{
+    g_system.emit(handle, count, params);
+}
+
+auto has_pending_bursts(emitter_handle handle) -> bool
+{
+    return g_system.has_pending_bursts(handle);
 }
 
 void sync_gpu_simulation()

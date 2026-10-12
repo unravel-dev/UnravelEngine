@@ -23,6 +23,7 @@
 
 namespace unravel
 {
+class asset_manager;
 
 /**
  * @struct lod_data
@@ -406,6 +407,21 @@ public:
      */
     void set_materials(const std::vector<asset_handle<material>>& materials);
     void set_material_instances(const std::vector<material::sptr>& materials);
+
+    /**
+     * @brief Fills the slots that have no material with LOD 0's default (imported) materials.
+     * @param am Resolves the material assets.
+     * @param wait Waits for LOD 0 to finish loading when true; otherwise only a loaded LOD 0 counts.
+     * @return False when LOD 0 is not loaded (still loading, or not compiled yet): nothing changed.
+     */
+    auto apply_default_materials(asset_manager& am, bool wait) -> bool;
+
+    /**
+     * @brief Marks the model to take LOD 0's default materials once that mesh loads: a model made
+     * from a mesh that was still loading has none yet. Not saved.
+     */
+    void set_default_materials_pending(bool pending);
+    auto is_default_materials_pending() const -> bool;
 
     /**
      * @brief Gets the material for the specified index.
@@ -811,6 +827,9 @@ private:
 
     /// Collection of all materials for this model.
     std::vector<asset_handle<material>> materials_;
+
+    /// LOD 0's default materials still have to be applied (see set_default_materials_pending).
+    bool default_materials_pending_{false};
 
     std::vector<material::sptr> material_instances_;
 

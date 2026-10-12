@@ -14,7 +14,8 @@ order: 50
 - assets_get_batch resolves key <-> uid; assets_list_types lists importable
   extensions; assets_create_folder makes "app:/..." folders;
   assets_get_mesh_info returns a mesh's local AABB.
-- assets_reimport_batch re-runs import for changed sources or import settings.
+- assets_reimport_batch re-runs import for changed sources or import settings and
+  waits until each key has reloaded (state per key, wait_ms default 15000).
 
 ## Importing: always through assets_import_files
 
@@ -26,6 +27,10 @@ initial compile. Entries in paths may be:
 - directories, imported recursively - use one directory per multi-file model
   (a .gltf with its .bin and texture files) so relative references stay
   intact.
+
+A file imported over an existing one replaces it in place: the call reports it
+ready once the reloaded asset has replaced the old one, so scene and UI show the
+new content from then on.
 
 Never copy files into the project's data directory yourself; stage downloads
 outside the project and import them with the tool (it rejects paths already

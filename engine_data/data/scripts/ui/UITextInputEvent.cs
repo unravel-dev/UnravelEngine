@@ -32,5 +32,14 @@ namespace Unravel.Core
         /// Whether the Meta key (Windows/Cmd) was held during the event.
         /// </summary>
         public bool metaKey = false;
+
+        internal override void FillFrom(in UIEventPayload payload, string text)
+        {
+            this.text = text ?? "";
+            ctrlKey = payload.ctrlKey;
+            shiftKey = payload.shiftKey;
+            altKey = payload.altKey;
+            metaKey = payload.metaKey;
+        }
     }
 }

@@ -7,6 +7,7 @@
 #include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
+#include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
 #include <seq/seq.h>
 #include <simulation/simulation.h>
@@ -58,6 +59,16 @@ auto internal_m2n_screen_get_size() -> math::vec2
     auto& ctx = engine::context();
     const auto& size = ctx.get_cached<rendering_system>().get_game_view_size();
     return {float(size.width), float(size.height)};
+}
+
+/// The logical DPI Windows reports at 100 % display scaling; the content scale multiplies it.
+constexpr float BASE_SCREEN_DPI = 96.0f;
+
+auto internal_m2n_screen_get_dpi() -> float
+{
+    auto& ctx = engine::context();
+    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
+    return window ? window->get_window().get_content_scale() * BASE_SCREEN_DPI : BASE_SCREEN_DPI;
 }
 
 void internal_m2n_set_time_scale(float scale)
@@ -148,6 +159,7 @@ void register_core_runtime_script_bindings()
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Screen");
         reg.add_internal_call("internal_m2n_screen_get_size", dotnet_internal_call(internal_m2n_screen_get_size));
+        reg.add_internal_call("internal_m2n_screen_get_dpi", dotnet_internal_call(internal_m2n_screen_get_dpi));
 
     }
     {

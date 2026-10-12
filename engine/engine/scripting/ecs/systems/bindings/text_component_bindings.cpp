@@ -134,21 +134,22 @@ void internal_m2n_text_set_auto_size(entt::entity id, bool auto_size)
         comp->set_auto_size(auto_size);
     }
 }
-auto internal_m2n_text_get_auto_size_range(entt::entity id) -> urange32_t
+auto internal_m2n_text_get_auto_size_range(entt::entity id) -> dotnetpp_backend::managed_interface::uint_range
 {
     if(auto comp = safe_get_component<text_component>(id))
     {
-        return comp->get_auto_size_range();
+        const auto& range = comp->get_auto_size_range();
+        return {range.min, range.max};
     }
 
     return {};
 }
 
-void internal_m2n_text_set_auto_size_range(entt::entity id, urange32_t range)
+void internal_m2n_text_set_auto_size_range(entt::entity id, dotnetpp_backend::managed_interface::uint_range range)
 {
     if(auto comp = safe_get_component<text_component>(id))
     {
-        comp->set_auto_size_range(range);
+        comp->set_auto_size_range(urange32_t(range.min, range.max));
     }
 }
 

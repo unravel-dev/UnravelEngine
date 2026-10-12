@@ -2,6 +2,9 @@
 #include <engine/engine_export.h>
 
 #include <engine/audio/audio_bus.h>
+#include <engine/audio/audio_voice_pool.h>
+#include <engine/audio/volume_fade.h>
+#include <engine/assets/asset_handle.h>
 #include <audiopp/device.h>
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -66,10 +69,27 @@ public:
     auto get_effective_bus_gain(audio_bus bus) const -> float;
 
     /**
+     * @brief Ramps a bus gain to @p target over @p seconds of unscaled time. A later
+     * set_bus_volume or fade replaces it.
+     */
+    void fade_bus_volume(audio_bus bus, float target, float seconds);
+
+    /**
      * @brief Frees a voice if at the soft cap so a new OpenAL source can be created.
      * Steals the lowest-priority non-looping playing source when needed.
      */
     void ensure_voice_capacity(audio_source_component& requesting);
+
+    /**
+     * @brief Plays @p clip once on a pooled voice, without an entity.
+     * @return The voice id for the voice calls of get_voices(), or 0 when it did not play.
+     */
+    auto play_one_shot(const asset_handle<audio_clip>& clip, const one_shot_params& params) -> uint64_t;
+
+    /**
+     * @brief The one-shot voices: stop, fade, pitch and per-clip limits.
+     */
+    auto get_voices() -> audio_voice_pool&;
 
     /**
      * @brief Re-applies volume on all live sources after mixer gains change.
@@ -77,6 +97,27 @@ public:
     void refresh_source_volumes(rtti::context& ctx);
 
 private:
+    /**
+     * @brief Steals voices (component sources and one-shots) until a new one fits under the cap.
+     * @param requesting The component asking for a source, or null for a one-shot.
+     */
+    void make_room_for_voice(const audio_source_component* requesting);
+
+    /**
+     * @brief Stores a bus gain and re-applies the mixer to every source and voice.
+     */
+    void apply_bus_volume(audio_bus bus, float volume);
+
+    /**
+     * @brief Pushes the effective bus gains to the one-shot voices.
+     */
+    void refresh_voice_gains();
+
+    /**
+     * @brief Advances bus fades, source fades and one-shot voices by unscaled time.
+     */
+    void update_fades(rtti::context& ctx, float seconds);
+
     /**
      * @brief Updates the audio system for each frame.
      * @param ctx The context for the update.
@@ -112,8 +153,11 @@ private:
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     /// The audio device used for playback.
     std::unique_ptr<audio::device> device_;
+    /// After the device: the voices release their sources before the device closes.
+    audio_voice_pool voices_;
     float master_volume_ = 1.0f;
     float bus_volumes_[audio_bus_count] = {1.0f, 1.0f, 1.0f};
+    volume_fade bus_fades_[audio_bus_count] = {};
 };
 
 } // namespace unravel

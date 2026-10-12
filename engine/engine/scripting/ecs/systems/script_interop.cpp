@@ -77,13 +77,3 @@ auto converter::convert(const dotnetpp_backend::managed_interface::bbox& v) -> m
 }
 
 } // namespace managed_interface
-
-auto dotnet_converter<dotnetpp_backend::managed_interface::ui_event_base>::create_instance(const std::string& namespace_name,
-																				  const std::string& type_name)
-	-> dotnet::object
-{
-	auto& ctx = unravel::engine::context();
-	auto app_assembly = ctx.get_cached<unravel::script_system>().get_engine_assembly();
-	auto type = app_assembly.get_type(namespace_name, type_name);
-	return type.new_instance();
-}

@@ -4,11 +4,14 @@
 #include "../../rmlui/RmlUi_FileInterface.h"
 #include "../../rmlui/RmlUi_RenderInterface.h"
 #include "../components/ui_document_component.h"
+#include "../../ui_data_transforms.h"
+#include "../../ui_element_handles.h"
 #include "entt/entity/fwd.hpp"
 #include "filesystem/filesystem.h"
 #include "glm/ext/scalar_constants.hpp"
 #include "glm/gtc/epsilon.hpp"
 #include "hpp/small_vector.hpp"
+#include "hpp/string_view.hpp"
 
 #include <engine/events.h>
 #include <engine/play_mode.h>
@@ -50,6 +53,53 @@ namespace
 {
     uint64_t next_context_id = 0;
 
+    constexpr hpp::string_view DATA_MODEL_ATTRIBUTE = "data-model";
+    constexpr const char* WHITESPACE = " \t\r\n";
+    constexpr char APOSTROPHE = '\'';
+
+    /// The names in the document's data-model attributes, read from its markup.
+    auto collect_data_model_names(const std::string& rml) -> std::vector<std::string>
+    {
+        std::vector<std::string> names;
+        const auto find_attribute = [&](size_t from)
+        {
+            return rml.find(DATA_MODEL_ATTRIBUTE.data(), from, DATA_MODEL_ATTRIBUTE.size());
+        };
+        for(auto pos = find_attribute(0); pos != std::string::npos; pos = find_attribute(pos + DATA_MODEL_ATTRIBUTE.size()))
+        {
+            auto cursor = rml.find_first_not_of(WHITESPACE, pos + DATA_MODEL_ATTRIBUTE.size());
+            if(cursor == std::string::npos || rml[cursor] != '=')
+            {
+                continue;
+            }
+            cursor = rml.find_first_not_of(WHITESPACE, cursor + 1);
+            if(cursor == std::string::npos || (rml[cursor] != '"' && rml[cursor] != APOSTROPHE))
+            {
+                continue;
+            }
+            const auto end = rml.find(rml[cursor], cursor + 1);
+            if(end != std::string::npos && end > cursor + 1)
+            {
+                names.emplace_back(rml.substr(cursor + 1, end - cursor - 1));
+            }
+        }
+        return names;
+    }
+
+    /// Creates the data models the document names, before it loads: its views bind to them while
+    /// loading. Variables may be missing (scripts bind them later); views show defaults until then.
+    void create_document_data_models(Rml::Context& context, const std::string& rml)
+    {
+        const auto existing = context.GetDataModels();
+        for(const auto& name : collect_data_model_names(rml))
+        {
+            if(existing.find(name) == existing.end())
+            {
+                context.CreateDataModel(name, nullptr, true);
+            }
+        }
+    }
+
     auto remove_context(Rml::Context* context, Rml::Context*& debug_target_context) -> void
     {
         if(debug_target_context == context)
@@ -72,6 +122,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
     // Connect to engine events (UI update/render is done in rendering_system::render_scene)
     auto& ev = ctx.get_cached<events>();
     ev.on_os_event.connect(sentinel_, 100, this, &ui_system::on_os_event);
+    ev.on_frame_begin.connect(sentinel_, this, &ui_system::on_frame_begin);
 
     // Initialize RmlUi backend
     if(!RmlUi_Backend_Engine::initialize(ctx, "UnravelEngine UI"))
@@ -79,6 +130,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
         APPLOG_ERROR("Failed to initialize RmlUi backend");
         return false;
     }
+    register_ui_element_handles();
     
 
     // Create main UI context
@@ -151,6 +203,7 @@ auto ui_system::deinit(rtti::context& ctx) -> bool
         debug_context_ = nullptr;
     }
     Rml::Debugger::Shutdown();
+    unregister_ui_element_handles();
     RmlUi_Backend_Engine::shutdown();
     APPLOG_INFO("UI system deinitialized successfully");
     return true;
@@ -172,7 +225,7 @@ void ui_system::update_ui_document_common(entt::handle handle, ui_document_compo
             ui_comp.context = nullptr;
         }
     }
-    if(!ui_comp.is_loaded())
+    if(!ui_comp.is_loaded() && !ui_comp.closed)
     {
         load_ui_document(handle, ui_comp, false);
     }
@@ -570,10 +623,57 @@ void ui_system::release_resources()
     {
         return;
     }
-    Rml::ReleaseFontResources();
-    Rml::ReleaseRenderManagers();
+    // Render managers go last: RmlUi releases only managers no context uses, and a manager released
+    // first would take its textures and geometry with it unreleased.
     Rml::ReleaseTextures();
     Rml::ReleaseCompiledGeometry();
+    Rml::ReleaseFontResources();
+    Rml::ReleaseRenderManagers();
+}
+
+void ui_system::on_frame_begin(rtti::context& ctx, delta_t dt)
+{
+    refresh_changed_textures();
+    // Documents change outside scripts too (the image refresh above, resizes): the first layout
+    // read of each frame updates its document once.
+    mark_ui_layout_stale();
+}
+
+void ui_system::refresh_changed_textures()
+{
+    if(!RmlUi_Backend_Engine::is_initialized())
+    {
+        return;
+    }
+    auto* render_interface = static_cast<RmlUi_RenderInterface*>(RmlUi_Backend_Engine::get_render_interface());
+    const auto sources = render_interface->collect_changed_texture_sources();
+    if(sources.empty())
+    {
+        return;
+    }
+    for(const auto& source : sources)
+    {
+        Rml::ReleaseTexture(source);
+    }
+    // An image element is laid out again only when something changes it: setting its source again
+    // makes it load the released texture anew and take its new size.
+    Rml::ElementList images;
+    for(int context_index = 0; context_index < Rml::GetNumContexts(); ++context_index)
+    {
+        auto* context = Rml::GetContext(context_index);
+        for(int document_index = 0; document_index < context->GetNumDocuments(); ++document_index)
+        {
+            images.clear();
+            context->GetDocument(document_index)->GetElementsByTagName(images, "img");
+            for(auto* image : images)
+            {
+                if(const auto* src = image->GetAttribute("src"))
+                {
+                    image->SetAttribute("src", src->Get<Rml::String>());
+                }
+            }
+        }
+    }
 }
 
 auto ui_system::is_debugger_enabled() const -> bool
@@ -608,7 +708,7 @@ void ui_system::update_ui_documents(rtti::context& ctx, scene& scn)
                     ui_comp.context = nullptr;
                 }
             }
-            if(!ui_comp.is_loaded())
+            if(!ui_comp.is_loaded() && !ui_comp.closed)
             {
                 load_ui_document(handle, ui_comp, false);
             }
@@ -658,7 +758,8 @@ auto ui_system::load_ui_document(entt::handle handle, ui_document_component& com
 
     if(!component.context)
     {
-        Rml::String context_name = "doc_" + std::to_string(next_context_id++);
+        component.context_generation = ++next_context_id;
+        Rml::String context_name = "doc_" + std::to_string(component.context_generation);
         int w = (component.render_mode == ui_render_mode::screen_space_overlay) ? 1024 : static_cast<int>(component.size.width);
         int h = (component.render_mode == ui_render_mode::screen_space_overlay) ? 768 : static_cast<int>(component.size.height);
         component.context = Rml::CreateContext(context_name, Rml::Vector2i(w, h));
@@ -672,9 +773,16 @@ auto ui_system::load_ui_document(entt::handle handle, ui_document_component& com
         }
     }
 
+    // Forward slashes: RmlUi resolves a relative src or href against this URL and splits it on '/'
+    // only, so a Windows path would leave relative references without the document's folder.
     auto real = fs::resolve_protocol(component.asset.id());
-    Rml::String url_safe_path = Rml::StringUtilities::Replace(real.string(), ':', '|');
+    Rml::String url_safe_path = Rml::StringUtilities::Replace(real.generic_string(), ':', '|');
 
+    create_document_data_models(*component.context, asset->content);
+    for(const auto& transform : collect_ui_transform_names(asset->content))
+    {
+        ensure_ui_transform(*component.context, component.context_generation, handle.entity(), transform);
+    }
     auto raw_document = component.context->LoadDocumentFromMemory(asset->content, url_safe_path);
     if(!raw_document)
     {

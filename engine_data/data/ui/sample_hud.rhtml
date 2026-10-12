@@ -1,0 +1,41 @@
+<html>
+<head>
+    <title>Sample HUD</title>
+    <link type="text/rcss" href="engine:/data/ui/rml.rcss"/>
+    <style>
+        body { width: 100%; height: 100%; font-family: Inter; font-size: 16dp; color: #e8e8f0; }
+        #panel { position: absolute; left: 24dp; top: 24dp; width: 320dp; padding: 16dp; background-color: rgba(16,18,32,220); border-radius: 8dp; }
+        .row { display: flex; flex-direction: row; justify-content: space-between; margin: 4dp 0dp; }
+        .label { color: #9aa0c0; }
+        .value { font-weight: bold; }
+        .item { display: block; padding: 2dp 6dp; }
+        .item.rare { color: #ffcc44; }
+        progress { display: block; width: 100%; height: 10dp; margin: 6dp 0dp; background-color: #303450; }
+        progress fill { background-color: #4caf50; }
+        button { display: block; margin-top: 8dp; padding: 6dp; text-align: center; background-color: #3a4a8a; border-radius: 4dp; }
+        button:hover { background-color: #4a5ab0; }
+        #paused { display: block; margin-top: 8dp; text-align: center; color: #ff8866; font-weight: bold; }
+        input.range { width: 160dp; }
+    </style>
+</head>
+<body data-model="sample_hud">
+    <div id="panel">
+        <div class="row"><span class="label">Score</span><span class="value">{{ score | thousands }}</span></div>
+        <div class="row"><span class="label">Health</span><span class="value">{{ health }} / 100</span></div>
+        <progress max="100" data-attr-value="health"/>
+        <div class="item" data-for="item : inventory" data-class-rare="item.rare">{{ item.name }} x{{ item.count }}</div>
+        <div class="row"><span class="label">Volume</span><input type="range" min="0" max="1" step="0.05" data-value="volume"/></div>
+        <div class="row"><span class="label">Show FPS</span><input type="checkbox" data-checked="showFps"/></div>
+        <div class="row"><span class="label">Difficulty</span>
+            <select data-value="difficulty">
+                <option value="easy">Easy</option>
+                <option value="normal">Normal</option>
+                <option value="hard">Hard</option>
+            </select>
+        </div>
+        <button data-event-click="TogglePause()">{{ paused ? 'Resume' : 'Pause' }}</button>
+        <button id="heal" onclick="Heal">Heal</button>
+        <div id="paused" data-if="paused">PAUSED</div>
+    </div>
+</body>
+</html>

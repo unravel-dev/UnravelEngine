@@ -25,6 +25,7 @@ void register_ui_document_component_script_bindings();
 void register_ui_document_script_bindings();
 void register_ui_element_script_bindings();
 void register_ui_event_script_bindings();
+void register_ui_data_model_script_bindings();
 void register_assets_script_bindings();
 void register_input_script_bindings();
 void register_physics_script_bindings();

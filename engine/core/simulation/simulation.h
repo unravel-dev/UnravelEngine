@@ -108,6 +108,14 @@ struct simulation
     //-----------------------------------------------------------------------------
     auto get_delta_time() const -> delta_t;
 
+    //-----------------------------------------------------------------------------
+    //  Name : get_unscaled_delta_time ()
+    /// <summary>
+    /// Returns the delta time in seconds, not scaled by the time scale.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto get_unscaled_delta_time() const -> delta_t;
+
 
     void set_time_scale(float time_scale = 1.0f);
     auto get_time_scale() const -> float;

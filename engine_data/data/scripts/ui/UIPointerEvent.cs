@@ -9,12 +9,13 @@ namespace Unravel.Core
     public class UIPointerEvent : UIEventBase
     {
         /// <summary>
-        /// The X coordinate of the pointer relative to the element.
+        /// The X coordinate of the pointer in the document's pixels (for a screen-space document,
+        /// the same space as <see cref="Input.mousePosition"/>).
         /// </summary>
         public float x = 0.0f;
 
         /// <summary>
-        /// The Y coordinate of the pointer relative to the element.
+        /// The Y coordinate of the pointer in the document's pixels, down from the top.
         /// </summary>
         public float y = 0.0f;
 
@@ -55,5 +56,18 @@ namespace Unravel.Core
         /// Only available for scroll events.
         /// </summary>
         public float deltaY = 0.0f;
+
+        internal override void FillFrom(in UIEventPayload payload, string text)
+        {
+            x = payload.x;
+            y = payload.y;
+            button = payload.button;
+            ctrlKey = payload.ctrlKey;
+            shiftKey = payload.shiftKey;
+            altKey = payload.altKey;
+            metaKey = payload.metaKey;
+            deltaX = payload.deltaX;
+            deltaY = payload.deltaY;
+        }
     }
 }

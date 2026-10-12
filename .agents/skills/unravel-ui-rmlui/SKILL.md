@@ -61,3 +61,7 @@ Toggle in game panel menu bar:
 - Missing RCSS companion file
 - OS events not forwarded to ui_system
 - Document asset path/protocol incorrect
+- `focus: none` on a clickable element or its ancestor (focus is inherited): RmlUi sends
+  `click` to the nearest element that can take focus (`Context::FindFocusElement`), so the
+  listener never fires; `mousedown` / `mouseup` still do. `ui_bindings.cpp` warns when a
+  click listener is added to such an element

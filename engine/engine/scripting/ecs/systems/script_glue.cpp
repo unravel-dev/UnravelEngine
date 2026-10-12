@@ -39,6 +39,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     register_ui_document_script_bindings();
     register_ui_element_script_bindings();
     register_ui_event_script_bindings();
+    register_ui_data_model_script_bindings();
 
     return true;
 }

@@ -12,5 +12,10 @@ namespace Unravel.Core
         /// The string value that was changed.
         /// </summary>
         public string value;
+
+        internal override void FillFrom(in UIEventPayload payload, string text)
+        {
+            value = text ?? "";
+        }
     }
 }

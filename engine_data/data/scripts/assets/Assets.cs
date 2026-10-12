@@ -61,6 +61,70 @@ public class Texture : Asset<Texture>
 }
 
 /// <summary>
+/// A material field read or written on its own through a renderer, for example
+/// <see cref="ModelComponent.SetFloat"/>. Each field belongs to one setter family.
+/// </summary>
+public enum MaterialProperty
+{
+    /// <summary>Base (albedo) color. SetColor / GetColor.</summary>
+    BaseColor,
+    /// <summary>Emissive color. SetColor / GetColor.</summary>
+    EmissiveColor,
+    /// <summary>Subsurface color; alpha is the subsurface opacity. SetColor / GetColor.</summary>
+    SubsurfaceColor,
+    /// <summary>Multiplier of the emissive color. SetFloat / GetFloat.</summary>
+    EmissiveIntensity,
+    /// <summary>Surface roughness. SetFloat / GetFloat.</summary>
+    Roughness,
+    /// <summary>Surface metalness. SetFloat / GetFloat.</summary>
+    Metalness,
+    /// <summary>Normal-map bump intensity. SetFloat / GetFloat.</summary>
+    Bumpiness,
+    /// <summary>Alpha below which a masked surface is cut out. SetFloat / GetFloat.</summary>
+    AlphaCutoff,
+    /// <summary>UV tiling scale. SetVector / GetVector.</summary>
+    Tiling,
+    /// <summary>Base color texture. SetTexture / GetTexture.</summary>
+    ColorMap,
+    /// <summary>Normal map. SetTexture / GetTexture.</summary>
+    NormalMap,
+    /// <summary>Roughness texture. SetTexture / GetTexture.</summary>
+    RoughnessMap,
+    /// <summary>Metalness texture. SetTexture / GetTexture.</summary>
+    MetalnessMap,
+    /// <summary>Emissive texture. SetTexture / GetTexture.</summary>
+    EmissiveMap,
+    /// <summary>Ambient occlusion texture. SetTexture / GetTexture.</summary>
+    AoMap,
+}
+
+/// <summary>
+/// How a material treats alpha.
+/// </summary>
+public enum MaterialAlphaMode
+{
+    /// <summary>No alpha clip; casts solid shadows.</summary>
+    Opaque,
+    /// <summary>Hard cutoff at <see cref="MaterialProperty.AlphaCutoff"/>; casts cutout shadows.</summary>
+    Mask,
+    /// <summary>Transparent; does not cast shadows.</summary>
+    Blend,
+}
+
+/// <summary>
+/// Which triangle faces a material hides.
+/// </summary>
+public enum MaterialCullMode
+{
+    /// <summary>Both sides are drawn (double sided).</summary>
+    None,
+    /// <summary>Clockwise faces are hidden.</summary>
+    Clockwise,
+    /// <summary>Counter-clockwise faces are hidden (the default).</summary>
+    CounterClockwise,
+}
+
+/// <summary>
 /// Blittable material property block exchanged with native code.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -109,6 +173,11 @@ public struct MaterialProperties
     /// Normal-map bump intensity.
     /// </summary>
     public float bumpiness;
+
+    /// <summary>
+    /// Multiplier of the emissive color.
+    /// </summary>
+    public float emissiveIntensity;
 }
 
 /// <summary>
@@ -158,6 +227,7 @@ public class Material : Asset<Material>
         this.roughness = props.roughness;
         this.metalness = props.metalness;
         this.bumpiness = props.bumpiness;
+        this.emissiveIntensity = props.emissiveIntensity;
     }
 
     internal MaterialProperties GetProperties()
@@ -169,6 +239,7 @@ public class Material : Asset<Material>
         props.roughness = this.roughness;
         props.metalness = this.metalness;
         props.bumpiness = this.bumpiness;
+        props.emissiveIntensity = this.emissiveIntensity;
         props.valid = true;
         return props;
     }
@@ -189,9 +260,9 @@ public class Material : Asset<Material>
     public Vector2 tiling = Vector2.one;
 
     /// <summary>
-    /// Surface roughness.
+    /// Surface roughness. Defaults to the engine's material default.
     /// </summary>
-    public float roughness = 0.0f;
+    public float roughness = 0.3f;
 
     /// <summary>
     /// Surface metalness.
@@ -202,6 +273,11 @@ public class Material : Asset<Material>
     /// Normal-map bump intensity.
     /// </summary>
     public float bumpiness = 1.0f;
+
+    /// <summary>
+    /// Multiplier of the emissive color: emitted light = emissiveColor x emissiveIntensity.
+    /// </summary>
+    public float emissiveIntensity = 1.0f;
 }
 
 /// <summary>

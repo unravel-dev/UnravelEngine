@@ -41,6 +41,10 @@ namespace Unravel.Core
         public float timeScale;
         /// <summary>Number of update frames since play began.</summary>
         public long frameCount;
+        /// <summary>Seconds since the previous update frame, not scaled by the time scale.</summary>
+        public float unscaledDeltaTime;
+        /// <summary>Real seconds since the application started.</summary>
+        public float realtimeSinceStartup;
     }
 
     /// <summary>
@@ -67,6 +71,16 @@ namespace Unravel.Core
         /// Seconds since the previous update frame (scaled by <see cref="timeScale"/>).
         /// </summary>
         public static float deltaTime;
+
+        /// <summary>
+        /// Seconds since the previous update frame, not scaled by <see cref="timeScale"/>.
+        /// </summary>
+        public static float unscaledDeltaTime;
+
+        /// <summary>
+        /// Real seconds since the application started, whatever the time scale.
+        /// </summary>
+        public static float realtimeSinceStartup;
 
         internal static float _timeScale = 1.0f;
 
@@ -262,7 +276,19 @@ namespace Unravel.Core
                         // Fast path: skip HashSet lookup if no components were removed during invoke
                         if (!ReferenceEquals(comp, null) && (removedDuringInvoke.Count == 0 || !removedDuringInvoke.Contains(comp)))
                         {
-                            action(comp);
+                            // One failing script must not cost the others their update, nor leave
+                            // the deferred adds and removes below unprocessed.
+                            try
+                            {
+                                using (ScriptComponent.Run(comp))
+                                {
+                                    action(comp);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Error($"{comp.GetType().FullName}: {ex}");
+                            }
                         }
                     }
                 }
@@ -705,14 +731,37 @@ namespace Unravel.Core
         /// <param name="info">Per-frame timing values from the engine.</param>
         public static void internal_n2m_update(UpdateInfo info)
         {
-            Time.time = info.time;
-            Time.deltaTime = info.deltaTime;
-            Time._timeScale = info.timeScale;
-            Time.frameCount = info.frameCount;
+            SetTime(info);
+            Screen.Poll();
+            UIEventManager.ProcessDestroyedElements();
+            UIDataModels.Poll();
 
             // gcMonitor.Reset();
             ScriptManager.InvokeUpdate();
             // gcMonitor.CheckAndLog("Update");
+
+            CoroutineScheduler.Tick();
+            EntityPool.ProcessDelayedReleases();
+        }
+
+        /// <summary>
+        /// Native-to-managed frame begin: sets <see cref="Time"/> before scripts are created or
+        /// started this frame, so OnCreate and OnStart read the current frame's values.
+        /// </summary>
+        /// <param name="info">Per-frame timing values from the engine.</param>
+        public static void internal_n2m_begin_frame(UpdateInfo info)
+        {
+            SetTime(info);
+        }
+
+        private static void SetTime(in UpdateInfo info)
+        {
+            Time.time = info.time;
+            Time.deltaTime = info.deltaTime;
+            Time._timeScale = info.timeScale;
+            Time.frameCount = info.frameCount;
+            Time.unscaledDeltaTime = info.unscaledDeltaTime;
+            Time.realtimeSinceStartup = info.realtimeSinceStartup;
         }
 
         /// <summary>

@@ -20,6 +20,7 @@ $input v_texcoord0
  */
 
 #include "../common.sh"
+#include "bloom_common.sh"
 
 SAMPLER2D(s_tex, 0);
 
@@ -46,7 +47,7 @@ void main()
     sum += (1.0 / 16.0) * texture2D(s_tex, uv + vec2(halfpixel.x, halfpixel.y));
     sum += (4.0 / 16.0) * texture2D(s_tex, uv);
 
-    vec3 filtered = min(max(u_tint.rgb * sum.rgb, vec3_splat(0.0)), vec3_splat(65504.0));
+    vec3 filtered = bloom_safe_hdr(u_tint.rgb * sum.rgb);
     if (u_scatter_mode > 0.5)
     {
         gl_FragColor = vec4(filtered * u_hop_scatter, u_hop_scatter);

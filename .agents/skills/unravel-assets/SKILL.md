@@ -74,7 +74,7 @@ Context menu actions in `content_browser_panel.cpp`.
 | `assets_list_embedded_primitives` | Names for `scene_create_primitives_batch` |
 | `assets_create_folder` | Create folder under protocol path |
 | `assets_import_files` | Copy external files/folders into `app:/...` (content-browser Import); waits for copy + ready |
-| `assets_reimport_batch` | Reimport many keys (+ optional `wait_ms`) |
+| `assets_reimport_batch` | Reimport many keys; waits until each reloaded (`wait_ms`, default 15s, per-key state) |
 | `assets_wait_ready_batch` | Poll until keys ready; `timeout_ms` is a shared batch deadline (default 15s) |
 | `assets_get_mesh_info` | Mesh local AABB |
 | `prefabs_create_from_entities_batch` | Save entity hierarchies as `.pfb` |

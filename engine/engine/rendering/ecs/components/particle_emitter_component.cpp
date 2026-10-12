@@ -120,8 +120,9 @@ auto particle_emitter_component::get_gravity_scale() const -> float
 
 void particle_emitter_component::set_emission_rate(float emission_rate)
 {
+    // The rate is read at every spawn, so a change keeps the live particles: a script may drive it
+    // each frame.
     desc_.emission.particles_per_second = math::max(emission_rate, 0.0f);
-    reset_emitter();
 }
 
 auto particle_emitter_component::get_emission_rate() const -> float
@@ -619,7 +620,8 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
     }
     transform_state_.current = world_transform;
     bool should_simulate = true;
-    if(culling_mode_ == culling_mode::renderer_based && !was_used_last_frame())
+    if(culling_mode_ == culling_mode::renderer_based && !was_used_last_frame() &&
+       !ps_soa::has_pending_bursts(emitter_handle_))
     {
         should_simulate = false;
     }
@@ -632,6 +634,15 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
     {
         ps_soa::update_emitter_bounds_only(emitter_handle_, desc_, transform_state_);
     }
+}
+
+void particle_emitter_component::emit(uint32_t count, const ps_soa::emit_params& params)
+{
+    if(!enabled_ || !ps_soa::is_valid(emitter_handle_))
+    {
+        return;
+    }
+    ps_soa::emit(emitter_handle_, count, params);
 }
 
 auto particle_emitter_component::is_simulated() const noexcept -> bool

@@ -159,7 +159,9 @@ void main()
     float scale_start = s2.w;
     float scale_end = s3.x;
     float texsheet_seed = s3.y;
-    vec4 rotation = s4;
+    // Linear tint from a burst's color override (1 otherwise).
+    vec4 tint = s4;
+    vec4 rotation = vec4(0.0, 0.0, 0.0, 1.0);
 
     float tt = life;
     if((u_features & FEAT_EASE) != 0u)
@@ -185,15 +187,6 @@ void main()
         {
             rotation = quat_look_rotation(current_velocity);
         }
-        else
-        {
-            rotation = vec4(0.0, 0.0, 0.0, 1.0);
-        }
-    }
-    else
-    {
-        // Ignore any stale sim rotation so disable-align does not keep spinning.
-        rotation = vec4(0.0, 0.0, 0.0, 1.0);
     }
 
     vec4 color = sample_color_lut(life);
@@ -202,6 +195,7 @@ void main()
         float speed_factor = clamp((particle_speed - u_color_speed_min) * u_inv_color_span, 0.0, 1.0);
         color *= sample_color_speed_lut(speed_factor);
     }
+    color *= tint;
     color.a *= u_opacity;
     color.rgb *= u_color_intensity;
 

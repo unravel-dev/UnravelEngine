@@ -710,8 +710,9 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer
 
             generator.update(camera, light, world_transform, is_active);
 
-            // Camera independent: no view of this frame wants shadow maps from this light.
-            if(!is_active || !light.casts_shadows)
+            // Camera independent: no view of this frame wants shadow maps from this light. A disabled
+            // light keeps its maps allocated so switching it back on is cheap.
+            if(!is_active || !light_comp.is_enabled() || !light.casts_shadows)
             {
                 generator.mark_resolved();
                 return;
@@ -2160,6 +2161,10 @@ auto deferred::run_direct_lighting_pass(scene& scn,
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
+            if(!light_comp_ref.is_enabled())
+            {
+                return;
+            }
             const auto& light = light_comp_ref.get_light();
             const auto& generator = light_comp_ref.get_shadowmap_generator();
             auto world_transform = transform_comp_ref.get_transform_global();

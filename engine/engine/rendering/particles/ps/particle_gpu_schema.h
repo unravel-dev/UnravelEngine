@@ -32,7 +32,7 @@ constexpr uint32_t k_gpu_cs_threads = 64;
  *  [1] end0.xyz, lifespan
  *  [2] end1.xyz, scale_start
  *  [3] scale_end, texsheet_seed, pad, pad
- *  [4] rotation.xyzw (precomputed when align_to_direction)
+ *  [4] tint.rgba (linear; multiplies the color over lifetime, 1 unless a burst set it)
  */
 struct gpu_sim_particle
 {
@@ -40,7 +40,7 @@ struct gpu_sim_particle
     float end0_x, end0_y, end0_z, lifespan;
     float end1_x, end1_y, end1_z, scale_start;
     float scale_end, texsheet_seed, pad0, pad1;
-    float rot_x, rot_y, rot_z, rot_w;
+    float tint_r, tint_g, tint_b, tint_a;
 };
 
 static_assert(sizeof(gpu_sim_particle) == k_gpu_sim_floats_per_particle * sizeof(float),

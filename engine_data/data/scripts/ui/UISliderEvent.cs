@@ -14,18 +14,26 @@ namespace Unravel.Core
         public float value = 0;
 
         /// <summary>
-        /// Whether the Min value was held during the event.
+        /// The element's 'min' attribute.
         /// </summary>
         public float minValue = 0;
 
         /// <summary>
-        /// Whether the Max value was held during the event.
+        /// The element's 'max' attribute.
         /// </summary>
         public float maxValue = 0;
 
         /// <summary>
-        /// Whether the Step value was held during the event.
+        /// The element's 'step' attribute.
         /// </summary>
         public float step = 0;
+
+        internal override void FillFrom(in UIEventPayload payload, string text)
+        {
+            value = payload.value;
+            minValue = payload.minValue;
+            maxValue = payload.maxValue;
+            step = payload.step;
+        }
     }
 }

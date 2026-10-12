@@ -497,12 +497,17 @@ auto lumen_surface_cache::collect_direct_lighting_changes(const surface_cache_sy
         const math::vec3 range(light[7]);
         return math::bbox(position - range, position + range);
     };
+    // A disabled light keeps a zero-intensity record (gpu_light_buffer): it lights nothing.
+    const auto is_dark = [](const float* light)
+    {
+        return light[11] <= 0.0f;
+    };
     changes.all = changes.all || lights.size() != previous_lights_.size();
     for(size_t base = 0; base + record <= lights.size() && !changes.all; base += record)
     {
         const float* light = lights.data() + base;
         const float* previous = previous_lights_.data() + base;
-        if(std::equal(light, light + record, previous))
+        if(std::equal(light, light + record, previous) || (is_dark(light) && is_dark(previous)))
         {
             continue;
         }
@@ -517,6 +522,10 @@ auto lumen_surface_cache::collect_direct_lighting_changes(const surface_cache_sy
     for(size_t base = 0; base + record <= lights.size(); base += record)
     {
         const float* light = lights.data() + base;
+        if(is_dark(light))
+        {
+            continue;
+        }
         lumen_scene::light_reach reach;
         reach.is_directional = is_directional(light);
         reach.direction = -math::vec3(light[4], light[5], light[6]);

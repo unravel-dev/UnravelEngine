@@ -22,6 +22,17 @@ namespace Unravel.Core
     public class LightComponent : Component
     {
         /// <summary>
+        /// Whether the light shines. A disabled light renders no light and no shadows and adds
+        /// nothing to the global illumination, while its entity stays active. Intensity 0 is not
+        /// "off": the light still renders its shadow maps.
+        /// </summary>
+        public bool enabled
+        {
+            get => internal_m2n_light_get_enabled(owner);
+            set => internal_m2n_light_set_enabled(owner, value);
+        }
+
+        /// <summary>
         /// Color of the light.
         /// </summary>
         public Color color
@@ -136,6 +147,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_light_set_indirect_intensity(Entity eid, float indirectIntensity);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_light_get_enabled(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_light_set_enabled(Entity eid, bool enabled);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_light_get_casts_shadows(Entity eid);

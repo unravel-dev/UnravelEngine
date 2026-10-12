@@ -223,6 +223,16 @@ void rendering_system::set_game_view_size(const usize32_t& size)
     game_view_size_ = size;
 }
 
+void rendering_system::apply_game_view_size(scene& scn, const usize32_t& size)
+{
+    set_game_view_size(size);
+    scn.registry->view<camera_component>().each(
+        [&](auto e, auto&& camera_comp)
+        {
+            camera_comp.set_viewport_size(size);
+        });
+}
+
 auto rendering_system::get_game_view_size() const -> const usize32_t&
 {
     return game_view_size_;

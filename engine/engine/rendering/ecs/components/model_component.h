@@ -172,8 +172,38 @@ public:
 
     /**
      * @brief Updates the armature of the model.
+     * @param created_roots When not null, receives the roots of the node entities the build
+     * created (the nodes no existing child of the owner provided).
      */
-    auto init_armature(bool force) -> bool;
+    auto init_armature(bool force, std::vector<entt::handle>* created_roots = nullptr) -> bool;
+
+    /**
+     * @brief Gives the model its mesh's default materials once the mesh loads, when it was made
+     * while the mesh was still loading (model::set_default_materials_pending).
+     */
+    void resolve_pending_default_materials();
+
+    /**
+     * @brief Whether the mesh changed since the armature was built: the next init_armature
+     * rebuilds it and sorts the old mesh's node entities into kept and stale.
+     */
+    auto is_armature_rebuild_pending() const -> bool;
+
+    /**
+     * @brief Runs the rebuild a mesh change left pending now instead of in the next frame update.
+     * @return The roots of the node entities the rebuild created.
+     */
+    auto rebuild_armature() -> std::vector<entt::handle>;
+
+    /**
+     * @brief Takes the node entities only a previous mesh used: the roots of the subtrees the
+     * current mesh no longer binds. A subtree that also holds anything else, such as a child
+     * added under a node, is not among them.
+     *
+     * The caller removes them: the editor through an undoable delete, play mode directly.
+     * @return The valid stale roots; the list is empty afterwards.
+     */
+    auto take_stale_armature_entities() -> std::vector<entt::handle>;
 
     /**
      * @brief Refreshes pose-derived render data: submesh/bone poses, cached world-space
@@ -306,8 +336,12 @@ public:
     void cleanup_stale_lod_data(uint64_t current_frame, uint64_t max_frames_inactive = 120);
 
 private:
-    auto create_armature(bool force) -> bool;
-    
+    auto create_armature(bool force, std::vector<entt::handle>* created_roots = nullptr) -> bool;
+
+    /// Ends a pending rebuild: the previous mesh's nodes the current armature does not bind
+    /// again become stale.
+    void settle_previous_armature();
+
     /**
      * @brief Rebuilds the armature name-to-index cache.
      * Called automatically when armature entities are set.
@@ -341,7 +375,14 @@ private:
      * @brief Vector of handles to the armature entities.
      */
     std::vector<entt::handle> armature_entities_;
-    
+
+    /// The node entities the armature bound before a mesh change, until the rebuild sorts them.
+    std::vector<entt::handle> previous_armature_entities_;
+    /// Roots of the node subtrees only a previous mesh used; see take_stale_armature_entities.
+    std::vector<entt::handle> stale_armature_entities_;
+    /// Set by a mesh change, cleared once the armature was rebuilt for the new mesh.
+    bool armature_rebuild_pending_{false};
+
     /**
      * @brief Cached name-to-index mapping for fast armature lookup.
      * Rebuilt automatically when armature_entities_ changes.

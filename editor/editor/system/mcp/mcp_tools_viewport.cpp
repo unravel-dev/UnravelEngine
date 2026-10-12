@@ -118,36 +118,15 @@ auto resolve_scene_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
     return camera_comp->get_render_view().fbo_find("OBUFFER");
 }
 
+/// The output of the camera the Game panel shows.
 auto resolve_game_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
 {
-    // Prefer the active edit/play scene camera that owns an OBUFFER (same source as game_panel).
-    auto& em = ctx.get_cached<editing_manager>();
-    auto* scn = em.get_active_scene(ctx);
-    if(!scn || !scn->registry)
-    {
-        auto& ec = ctx.get_cached<ecs>();
-        scn = &ec.get_scene();
-    }
-    if(!scn || !scn->registry)
+    auto camera = ctx.get_cached<hub>().get_panels().get_game_panel().get_displayed_camera(ctx);
+    if(!camera)
     {
         return {};
     }
-
-    gfx::frame_buffer::ptr found;
-    scn->registry->view<camera_component>().each(
-        [&](auto, auto&& camera_comp)
-        {
-            if(found)
-            {
-                return;
-            }
-            auto obuffer = camera_comp.get_render_view().fbo_find("OBUFFER");
-            if(obuffer && obuffer->is_valid())
-            {
-                found = obuffer;
-            }
-        });
-    return found;
+    return camera.get<camera_component>().get_render_view().fbo_find("OBUFFER");
 }
 
 auto camera_to_json(entt::handle camera) -> std::string
@@ -196,38 +175,6 @@ auto resolve_focus_entities(rtti::context& ctx,
     }
 
     return resolve_entity_id_or_ids(*scn, args, out, error);
-}
-
-/// The pipeline of the Scene panel's editing camera, or - for @p game_camera - of the scene's
-/// active rendering camera (the only one that renders while the Game panel is focused).
-/// Main thread only: it walks the live registry.
-auto resolve_camera_pipeline(rtti::context& ctx, bool game_camera) -> rendering::pipeline*
-{
-    if(game_camera)
-    {
-        auto& em = ctx.get_cached<editing_manager>();
-        auto* scn = em.get_active_scene(ctx);
-        if(scn == nullptr)
-        {
-            return nullptr;
-        }
-        rendering::pipeline* found = nullptr;
-        scn->registry->view<camera_component, active_component>().each(
-            [&](auto, auto& cc, auto&)
-            {
-                if(found == nullptr && cc.get_pipeline_data().get_pipeline())
-                {
-                    found = cc.get_pipeline_data().get_pipeline().get();
-                }
-            });
-        return found;
-    }
-    auto camera_ent = resolve_scene_panel(ctx).get_camera();
-    if(!camera_ent || !camera_ent.all_of<camera_component>())
-    {
-        return nullptr;
-    }
-    return camera_ent.get<camera_component>().get_pipeline_data().get_pipeline().get();
 }
 
 } // namespace

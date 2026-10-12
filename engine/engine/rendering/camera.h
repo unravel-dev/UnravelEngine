@@ -369,6 +369,16 @@ public:
         -> bool;
 
     /**
+     * @brief Converts a screen position and a depth into a world space position.
+     *
+     * @param point The screen position.
+     * @param depth Distance in front of the camera along its view direction (see world_to_view_depth).
+     * @param position_out The output world space position.
+     * @return false while the camera has no viewport size.
+     */
+    auto viewport_to_world_at_depth(const math::vec2& point, float depth, math::vec3& position_out) const -> bool;
+
+    /**
      * @brief Raycasts from viewport point onto a quad plane and returns pixel coordinates.
      *
      * Projects the viewport point through the camera onto the quad's plane, then converts
@@ -430,10 +440,21 @@ public:
     /**
      * @brief Transforms a point from world space into screen space.
      *
+     * Uses the unjittered projection: screen positions of world points do not follow the TAA
+     * subpixel jitter. A point behind the camera projects mirrored; check world_to_view_depth.
+     *
      * @param pos The world space position.
-     * @return The screen space position.
+     * @return The screen space position (pixels) and the NDC depth in z.
      */
     auto world_to_viewport(const math::vec3& pos) const -> math::vec3;
+
+    /**
+     * @brief Distance of a world point in front of the camera along its view direction.
+     *
+     * @param pos The world space position.
+     * @return The view space depth; negative behind the camera.
+     */
+    auto world_to_view_depth(const math::vec3& pos) const -> float;
 
     /**
      * @brief Estimates the zoom factor based on the specified plane.

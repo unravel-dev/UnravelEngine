@@ -42,6 +42,18 @@ public static class ByteArrayExtensions
         return result;
     }
 
+    /// <summary>
+    /// Packs an array of blittable structs into bytes, the form native code reads a struct array in.
+    /// </summary>
+    public static byte[] ToByteArray<T>(this T[] items) where T : struct
+    {
+        if (items == null || items.Length == 0)
+        {
+            return Array.Empty<byte>();
+        }
+        return MemoryMarshal.AsBytes(items.AsSpan()).ToArray();
+    }
+
     // Private helper function to convert a byte array segment to a struct
     private static T ToStructImpl<T>(byte[] data, int offset, int size) where T : struct
     {

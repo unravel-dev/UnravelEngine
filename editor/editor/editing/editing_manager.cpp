@@ -1162,12 +1162,33 @@ void editing_manager::execute_action(std::shared_ptr<editing_action_t>& action)
     }
     action->execution_count++;
     action->do_action();
+    fold_armature_rebuilds(action);
     on_action_executed(action);
     // Moved to the undo stack if undoable; merging is handled there, now that it has run.
     if(action->is_undoable())
     {
         undo_stack.push_if_undoable(std::move(action));
     }
+}
+
+void editing_manager::fold_armature_rebuilds(std::shared_ptr<editing_action_t>& action)
+{
+    auto steps = editor_actions::rebuild_pending_armatures(engine::context());
+    if(steps.empty())
+    {
+        return;
+    }
+    // One undo step for the change and the node entities it replaced: undo puts the old nodes
+    // back before the old mesh rebinds them by name.
+    auto combined = std::make_shared<sequence_action_t>();
+    combined->name = action->name;
+    combined->undoable = action->undoable;
+    combined->merge_key = action->merge_key;
+    combined->execution_count = action->execution_count;
+    combined->first_run_done = true;
+    combined->sub_actions.push_back(std::move(action));
+    combined->sub_actions.insert(combined->sub_actions.end(), steps.begin(), steps.end());
+    action = std::move(combined);
 }
 
 void editing_manager::execute_actions()

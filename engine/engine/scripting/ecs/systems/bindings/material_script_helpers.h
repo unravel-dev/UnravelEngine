@@ -14,7 +14,8 @@ inline auto get_material_properties(const material::sptr& material)
 {
     using converter = dotnet::managed_interface::converter;
     dotnetpp_backend::managed_interface::material_properties props;
-    if(material->is<pbr_material>())
+    // An empty material slot has no material at all: it reads as invalid properties.
+    if(material && material->is<pbr_material>())
     {
         const auto pbr = std::static_pointer_cast<pbr_material>(material);
         props.base_color =
@@ -26,6 +27,7 @@ inline auto get_material_properties(const material::sptr& material)
         props.roughness = pbr->get_roughness();
         props.metalness = pbr->get_metalness();
         props.bumpiness = pbr->get_bumpiness();
+        props.emissive_intensity = pbr->get_emissive_intensity();
         props.valid = true;
     }
     return props;
@@ -35,7 +37,7 @@ inline void set_material_properties(const material::sptr& material,
                                     const dotnetpp_backend::managed_interface::material_properties& props)
 {
     using converter = dotnet::managed_interface::converter;
-    if(material->is<pbr_material>())
+    if(material && material->is<pbr_material>())
     {
         auto pbr = std::static_pointer_cast<pbr_material>(material);
         auto base_color =
@@ -50,6 +52,7 @@ inline void set_material_properties(const material::sptr& material,
         pbr->set_roughness(props.roughness);
         pbr->set_metalness(props.metalness);
         pbr->set_bumpiness(props.bumpiness);
+        pbr->set_emissive_intensity(props.emissive_intensity);
     }
 }
 

@@ -196,6 +196,56 @@ void register_script_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
+        {.name = "scripts_api_search",
+         .description =
+             "Search the C# scripting API - engine and project types - by words in type and member names "
+             "and their documentation (all words must match; 'camera screen ray', 'entity pool'). Returns "
+             "one line per result: Type.Member: C# signature -- summary. Use before writing gameplay code "
+             "to find what exists; scripts_api_get lists a whole type. Optional limit (default 20).",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200}},"required":["query"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             if(!ctx.has<script_system>())
+             {
+                 return {.text = "Script system unavailable", .is_error = true};
+             }
+             std::string query;
+             if(!read_string(args, "query", query) || query.empty())
+             {
+                 return {.text = "Missing query", .is_error = true};
+             }
+             const auto limit = static_cast<int>(read_int64_or(args, "limit", 0));
+             return {.text = ctx.get_cached<script_system>().search_api(query, limit), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "scripts_api_get",
+         .description =
+             "Describe one C# scripting API type (engine or project): its declaration, base type and "
+             "summary, then every public constructor, property, field, event and method with its C# "
+             "signature and summary. type: full name (Unravel.Core.CameraComponent) or short name.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"type":{"type":"string"}},"required":["type"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             if(!ctx.has<script_system>())
+             {
+                 return {.text = "Script system unavailable", .is_error = true};
+             }
+             std::string type_name;
+             if(!read_string(args, "type", type_name) || type_name.empty())
+             {
+                 return {.text = "Missing type", .is_error = true};
+             }
+             return {.text = ctx.get_cached<script_system>().describe_api_type(type_name), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
         {.name = "scripts_get_compile_status",
          .description =
              "Whether the project's scripts are building and, for the last build, its errors and "

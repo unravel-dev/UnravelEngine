@@ -17,6 +17,17 @@ class light_component : public component_crtp<light_component>
 {
 public:
     /**
+     * @brief Whether the light shines. A disabled light renders no light and no shadows and adds
+     * nothing to the global illumination, while its entity stays active.
+     */
+    auto is_enabled() const -> bool;
+
+    /**
+     * @brief Turns the light on or off without deactivating its entity.
+     */
+    void set_enabled(bool enabled);
+
+    /**
      * @brief Gets the light object.
      * @return A constant reference to the light object.
      */
@@ -81,6 +92,9 @@ private:
      * @brief The light object this component represents.
      */
     light light_;
+
+    /// Whether the light shines (see is_enabled).
+    bool enabled_ = true;
 
     /// Sunlight transmittance through the atmosphere for this frame; 1 for every other light.
     math::vec3 atmosphere_transmittance_{1.0f};

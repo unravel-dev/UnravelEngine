@@ -46,10 +46,16 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
     /// Per-document RmlUi context (owned by this component)
     Rml::Context* context = nullptr;
 
+    /// Unique to the current context: script bindings into its data models are made again when it changes.
+    uint64_t context_generation = 0;
+
     /// Loaded RmlUi document (owned by context)
     Rml::ElementDocument* document = nullptr;
 
     uint64_t version = 0;
+
+    /// Set when a script closed the document: it is not loaded again until a script reloads it.
+    bool closed = false;
 
     /// Rendering mode: screen or world
     ui_render_mode render_mode = ui_render_mode::screen_space_overlay;

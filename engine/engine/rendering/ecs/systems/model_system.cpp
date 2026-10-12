@@ -3,7 +3,9 @@
 #include <engine/rendering/ecs/components/model_component.h>
 
 #include <engine/ecs/ecs.h>
+#include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
 
 #include <logging/logging.h>
@@ -25,9 +27,33 @@ void process_armatures(scene& scn, bool recreate_armature)
                  [&](entt::entity entity)
                  {
                      auto& model_comp = view.template get<model_component>(entity);
+                     model_comp.resolve_pending_default_materials();
                      model_comp.init_armature(recreate_armature);
                  });
 }
+
+namespace
+{
+/// Destroys the node entities only a previous mesh of each model used.
+void destroy_stale_armature_entities(scene& scn)
+{
+    // Collected first: destroying a node subtree can remove model components the view walks.
+    std::vector<entt::handle> stale;
+    scn.registry->view<model_component>().each(
+        [&](auto entity, auto&& model_comp)
+        {
+            auto taken = model_comp.take_stale_armature_entities();
+            stale.insert(stale.end(), taken.begin(), taken.end());
+        });
+    for(auto& entity : stale)
+    {
+        if(entity.valid())
+        {
+            scene::destroy_entity(entity);
+        }
+    }
+}
+} // namespace
 
 
 auto model_system::init(rtti::context& ctx) -> bool
@@ -64,6 +90,13 @@ void model_system::on_frame_update(scene& scn, delta_t dt)
 
     constexpr bool recreate_armature = false;
     process_armatures<model_component, active_component>(scn, recreate_armature);
+
+    // A running game records nothing for undo, so a script's mesh change drops the old mesh's
+    // nodes at once. While editing, the editor removes them inside the change's undo step.
+    if(engine::context().get_cached<play_mode>().is_active())
+    {
+        destroy_stale_armature_entities(scn);
+    }
 }
 
 void model_system::on_frame_before_render(scene& scn, delta_t dt)

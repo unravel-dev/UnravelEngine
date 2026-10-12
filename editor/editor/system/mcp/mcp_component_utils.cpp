@@ -390,6 +390,10 @@ auto light_to_json(const light_component& comp, const std::unordered_set<std::st
     const auto& l = comp.get_light();
     std::string json = "{";
     bool first = true;
+    if(wants_key(filter, "enabled"))
+    {
+        append_prop(json, first, "enabled", comp.is_enabled() ? "true" : "false");
+    }
     if(wants_key(filter, "type"))
     {
         append_prop(json, first, "type", make_json_string(light_type_to_string(l.type)));
@@ -532,7 +536,19 @@ auto apply_light_properties(light_component& comp, const simdjson::dom::object& 
         const std::string key(field.key);
         const auto& value = field.value;
         std::string error;
-        if(key == "type")
+        if(key == "enabled")
+        {
+            bool enabled = comp.is_enabled();
+            if(!parse_bool(value, enabled, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_enabled(enabled);
+            result.applied.push_back(key);
+        }
+        else if(key == "type")
         {
             std::string s;
             if(!parse_string(value, s, error) || !light_type_from_string(s, light.type))
@@ -3909,6 +3925,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
         }
         json += "}";
     };
+    add("Light", "enabled", "boolean");
     add("Light", "type", "string", R"("enum":["spot","point","directional"])");
     add("Light", "intensity", "number");
     add("Light", "color", "array", R"("items":"number","minItems":3,"maxItems":4)");

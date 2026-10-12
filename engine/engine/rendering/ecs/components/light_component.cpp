@@ -1,6 +1,16 @@
 #include "light_component.h"
 namespace unravel
 {
+auto light_component::is_enabled() const -> bool
+{
+    return enabled_;
+}
+
+void light_component::set_enabled(bool enabled)
+{
+    enabled_ = enabled;
+}
+
 const light& light_component::get_light() const
 {
     return light_;

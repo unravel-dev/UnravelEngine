@@ -1247,14 +1247,16 @@ auto text_component::get_auto_size_range() const -> const urange32_t&
 
 auto text_component::get_bounds() const -> math::bbox
 {
+    // Centered on the entity like the drawn text (submit). The layout runs y-down and is drawn
+    // flipped, so its top edge is +height/2; min and max are still the box's low and high corners.
     const auto& area = get_area();
     math::bbox bbox;
     bbox.min.x = -area.width * 0.5f;
-    bbox.min.y = area.height * 0.5f;
+    bbox.min.y = -area.height * 0.5f;
     bbox.min.z = 0;
 
     bbox.max.x = area.width * 0.5f;
-    bbox.max.y = -area.height * 0.5f;
+    bbox.max.y = area.height * 0.5f;
     bbox.max.z = 0.001f;
 
     return bbox;
@@ -1262,14 +1264,16 @@ auto text_component::get_bounds() const -> math::bbox
 
 auto text_component::get_render_bounds() const -> math::bbox
 {
+    // Centered on the entity like the drawn text (submit). The layout runs y-down and is drawn
+    // flipped, so its top edge is +height/2; min and max are still the box's low and high corners.
     const auto& area = get_render_area();
     math::bbox bbox;
     bbox.min.x = -area.width * 0.5f;
-    bbox.min.y = area.height * 0.5f;
+    bbox.min.y = -area.height * 0.5f;
     bbox.min.z = 0;
 
     bbox.max.x = area.width * 0.5f;
-    bbox.max.y = -area.height * 0.5f;
+    bbox.max.y = area.height * 0.5f;
     bbox.max.z = 0.001f;
 
     return bbox;

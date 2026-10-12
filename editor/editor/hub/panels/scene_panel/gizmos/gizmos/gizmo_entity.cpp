@@ -747,6 +747,11 @@ void gizmo_entity::draw_billboard(rtti::context& ctx, entt::meta_any& var, const
         const auto& light_comp = e.get<light_component>();
         const auto& light = light_comp.get_light();
         col = light.color;
+        // A disabled light dims its icon like an inactive entity.
+        if(!light_comp.is_enabled())
+        {
+            tint *= 0.5f;
+        }
     }
 
     if(!cam.test_billboard(em.billboard_data.size, world_transform))

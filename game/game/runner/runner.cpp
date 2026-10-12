@@ -13,6 +13,19 @@
 
 namespace unravel
 {
+namespace
+{
+
+/// The size of the main window the player shows the game in.
+auto get_window_view_size(rtti::context& ctx) -> usize32_t
+{
+    auto& rend = ctx.get_cached<renderer>();
+    auto window = rend.get_main_window();
+    auto size = window->get_window().get_size();
+    return {size.w, size.h};
+}
+
+} // namespace
 
 runner::runner(rtti::context& ctx)
 {
@@ -50,20 +63,10 @@ auto runner::deinit(rtti::context& ctx) -> bool
 
 void runner::on_frame_update(rtti::context& ctx, delta_t dt)
 {
-    auto& rend = ctx.get_cached<renderer>();
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
-    auto window = rend.get_main_window();
-    auto size = window->get_window().get_size();
-    const usize32_t view_size{size.w, size.h};
-    path.set_game_view_size(view_size);
-
-    scene.registry->view<camera_component>().each(
-        [&](auto e, auto&& camera_comp)
-        {
-            camera_comp.set_viewport_size(view_size);
-        });
+    path.apply_game_view_size(scene, get_window_view_size(ctx));
     path.on_frame_update(scene, dt);
 }
 
@@ -98,11 +101,15 @@ void runner::on_play_begin(rtti::context& ctx)
         APPLOG_CRITICAL("Failed to load initial scene {}", scn.id());
         return;
     }
+    // Play begins before the first frame update: the scripts the load creates read the window size.
+    auto& path = ctx.get_cached<rendering_system>();
+    path.set_game_view_size(get_window_view_size(ctx));
     auto& ec = ctx.get_cached<ecs>();
     if(!ec.get_scene().load_from(scn))
     {
         return;
     }
+    path.apply_game_view_size(ec.get_scene(), path.get_game_view_size());
 }
 
 void runner::on_play_end(rtti::context& ctx)

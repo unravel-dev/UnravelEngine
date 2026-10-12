@@ -96,8 +96,7 @@ namespace Unravel.Core
         /// Size in pixels of the viewport this camera renders, in the same space as
         /// <see cref="Input.mousePosition"/>. Each camera has its own; the host that shows the
         /// game sizes its cameras to <see cref="Screen.width"/> x <see cref="Screen.height"/>.
-        /// Until then it holds the size saved with the scene. In the editor it follows the Game
-        /// panel one frame late.
+        /// Until then it holds the size saved with the scene.
         /// </summary>
         public Vector2 viewportSize
         {
@@ -138,13 +137,60 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Converts a screen-space position with depth (z) to a world-space point.
+        /// Converts a screen position with a depth to a world-space point; the inverse of
+        /// <see cref="WorldToScreenPoint"/>.
         /// </summary>
-        /// <param name="pos">The position in screen space; z is depth.</param>
+        /// <param name="pos">x, y in pixels (the space of <see cref="Input.mousePosition"/>); z is the
+        /// distance in front of the camera along its view direction, in world units.</param>
         /// <returns>The corresponding world-space position.</returns>
         public Vector3 ScreenPointToWorld(Vector3 pos)
         {
             return internal_m2n_camera_screen_point_to_world(owner, pos);
+        }
+
+        /// <summary>
+        /// Projects a world-space point onto the screen. Use it to place UI over world objects
+        /// (a screen-space UI document uses the same pixels) or to test what is on screen.
+        /// </summary>
+        /// <param name="world">The world-space position.</param>
+        /// <returns>x, y in pixels from the top left (the space of <see cref="Input.mousePosition"/>);
+        /// z is the distance in front of the camera in world units. When z is 0 or less the point is
+        /// behind the camera and x, y are meaningless.</returns>
+        public Vector3 WorldToScreenPoint(Vector3 world)
+        {
+            return internal_m2n_camera_world_to_screen_point(owner, world);
+        }
+
+        /// <summary>
+        /// Projects a world-space point into the viewport: (0, 0) top left, (1, 1) bottom right.
+        /// </summary>
+        /// <param name="world">The world-space position.</param>
+        /// <returns>x, y in viewport units; z is the distance in front of the camera in world units
+        /// (0 or less: behind the camera, x and y meaningless). The point is on screen when x and y
+        /// are within 0..1 and z is positive.</returns>
+        public Vector3 WorldToViewportPoint(Vector3 world)
+        {
+            return internal_m2n_camera_world_to_viewport_point(owner, world);
+        }
+
+        /// <summary>
+        /// Converts a viewport position with a depth to a world-space point; the inverse of
+        /// <see cref="WorldToViewportPoint"/>.
+        /// </summary>
+        /// <param name="viewport">x, y with (0, 0) top left and (1, 1) bottom right; z is the distance
+        /// in front of the camera in world units.</param>
+        public Vector3 ViewportToWorldPoint(Vector3 viewport)
+        {
+            return internal_m2n_camera_viewport_to_world_point(owner, viewport);
+        }
+
+        /// <summary>
+        /// A ray from the camera through a viewport position ((0, 0) top left, (1, 1) bottom right).
+        /// </summary>
+        /// <returns><c>false</c> while the camera has no viewport size yet.</returns>
+        public bool ViewportPointToRay(Vector2 viewport, out Ray ray)
+        {
+            return internal_m2n_camera_viewport_point_to_ray(owner, viewport, out ray);
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -203,5 +249,17 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Vector3 internal_m2n_camera_screen_point_to_world(Entity eid, Vector3 pos);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_camera_viewport_point_to_ray(Entity eid, Vector2 viewport, out Ray ray);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_camera_world_to_screen_point(Entity eid, Vector3 world);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_camera_world_to_viewport_point(Entity eid, Vector3 world);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_camera_viewport_to_world_point(Entity eid, Vector3 viewport);
     }
 }

@@ -127,6 +127,22 @@ auto print_assembly_info(const dotnet::assembly& assembly)
     APPLOG_TRACE("\n{}", ss.str());
 }
 
+/// The timing values the managed Time class reads for a frame that advances the play clock from
+/// @p elapsed by @p dt (already scaled by the time scale).
+auto make_frame_update_data(const simulation& sim, delta_t elapsed, delta_t dt) -> script_system::frame_update_data
+{
+    const float time_scale = sim.get_time_scale();
+    script_system::frame_update_data data;
+    data.time = elapsed.count();
+    data.delta_time = dt.count();
+    data.time_scale = time_scale;
+    data.frame_count = sim.get_frame();
+    // From dt rather than the simulation, so a zeroed first frame and a paused frame step agree.
+    data.unscaled_delta_time = time_scale > 0.0f ? dt.count() / time_scale : sim.get_unscaled_delta_time().count();
+    data.realtime_since_startup = std::chrono::duration_cast<delta_t>(sim.get_time_since_launch()).count();
+    return data;
+}
+
 } // namespace
 
 void script_system::log_exception(const dotnet::exception& e, const hpp::source_location& loc)
@@ -447,12 +463,14 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.ui_event_manager_type = assembly.get_type("Unravel.Core", "UIEventManager");
 
     // Cache methods once per engine domain (avoid per-call name lookup).
+    cache_.begin_frame_method = cache_.update_manager_type.get_method("internal_n2m_begin_frame", 1);
     cache_.update_method = cache_.update_manager_type.get_method("internal_n2m_update", 1);
     cache_.fixed_update_method = cache_.update_manager_type.get_method("internal_n2m_fixed_update", 1);
     cache_.late_update_method = cache_.update_manager_type.get_method("internal_n2m_late_update", 0);
 
     // Build the frame-hook invokers once: this runs the signature check here
     // instead of on every frame (each check costs bridge round-trips).
+    cache_.begin_frame_invoker = dotnet::make_method_invoker<void(frame_update_data)>(cache_.begin_frame_method);
     cache_.update_invoker = dotnet::make_method_invoker<void(frame_update_data)>(cache_.update_method);
     cache_.fixed_update_invoker =
         dotnet::make_method_invoker<void(fixed_update_data)>(cache_.fixed_update_method);
@@ -472,8 +490,25 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.on_collision_exit_method =
         cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 3);
 
-    cache_.ui_dispatch_event_method =
-        cache_.ui_event_manager_type.get_method("InternalDispatchEvent", 1);
+    cache_.ui_dispatch_method = cache_.ui_event_manager_type.get_method("InternalDispatchPayload", 5);
+    cache_.ui_dispatch_invoker = dotnet::make_method_invoker<ui_dispatch_signature>(cache_.ui_dispatch_method);
+
+    cache_.ui_data_models_type = assembly.get_type("Unravel.Core", "UIDataModels");
+    const auto& models = cache_.ui_data_models_type;
+    cache_.ui_model_get_invoker =
+        dotnet::make_method_invoker<std::string(int64_t)>(models.get_method("internal_n2m_get", 1));
+    cache_.ui_model_set_invoker =
+        dotnet::make_method_invoker<void(int64_t, std::string)>(models.get_method("internal_n2m_set", 2));
+    cache_.ui_model_size_invoker =
+        dotnet::make_method_invoker<int32_t(int64_t)>(models.get_method("internal_n2m_size", 1));
+    cache_.ui_model_child_invoker =
+        dotnet::make_method_invoker<int64_t(int64_t, std::string, int32_t)>(models.get_method("internal_n2m_child", 3));
+    cache_.ui_model_event_invoker =
+        dotnet::make_method_invoker<ui_model_event_signature>(models.get_method("internal_n2m_event", 9));
+    cache_.ui_model_transform_invoker = dotnet::make_method_invoker<std::string(entt::entity, std::string, std::string)>(
+        models.get_method("internal_n2m_transform", 3));
+    cache_.ui_inline_event_invoker =
+        dotnet::make_method_invoker<ui_inline_event_signature>(models.get_method("internal_n2m_inline_event", 7));
 
     return true;
 }
@@ -728,9 +763,22 @@ void script_system::on_play_begin(rtti::context& ctx)
     registry.on_construct<active_component>().connect<&on_create_active_component>();
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
 
-    on_play_begin(registry);
-
+    // The play clock starts at zero before any script is created, so OnCreate does not read the
+    // previous session's time.
     elapsed_time_ = {};
+    if(cache_.begin_frame_invoker.valid())
+    {
+        try
+        {
+            cache_.begin_frame_invoker(make_frame_update_data(ctx.get_cached<simulation>(), elapsed_time_, {}));
+        }
+        catch(const dotnet::exception& e)
+        {
+            log_exception(e);
+        }
+    }
+
+    on_play_begin(registry);
 }
 
 void script_system::on_play_end(rtti::context& ctx)
@@ -797,6 +845,20 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
         auto& scn = ec.get_scene();
         auto& registry = *scn.registry;
 
+        // Mid-frame enter_running: process() could not zero dt. Start() below still runs; skip
+        // integrating motion on this first frame.
+        if(play.frames_running() == 0)
+        {
+            dt = {};
+        }
+        const auto data = make_frame_update_data(ctx.get_cached<simulation>(), elapsed_time_, dt);
+
+        // Time first, so the scripts created or started below read this frame's values.
+        if(play.is_simulation_running() && cache_.begin_frame_invoker.valid())
+        {
+            cache_.begin_frame_invoker(data);
+        }
+
         registry.view<script_component>().each(
             [&](auto e, auto&& comp)
             {
@@ -810,22 +872,6 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
         if(play.is_simulation_running() && !play.is_simulation_paused() && cache_.update_invoker.valid())
         {
-            // Mid-frame enter_running: process() could not zero dt. Start()
-            // above still runs; skip integrating motion on this first frame.
-            if(play.frames_running() == 0)
-            {
-                dt = {};
-            }
-
-            auto& sim = ctx.get_cached<simulation>();
-            auto time_scale = sim.get_time_scale();
-
-            frame_update_data data;
-            data.time = elapsed_time_.count();
-            data.delta_time = dt.count();
-            data.time_scale = time_scale;
-            data.frame_count = sim.get_frame();
-
             {
                 APP_SCOPE_PERF("Script/System Update Managed");
                 cache_.update_invoker(data);
@@ -911,18 +957,8 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
         {
             log_exception(e);
         }
-    
-    }
-    
-    {
-        APP_SCOPE_PERF("Script/System Cleanup");
-        dt = std::max(delta_t::zero(), dt);
 
-        delta_t secs(dt);
-        seq::update(secs);
     }
-
-    
 }
 
 auto script_system::get_all_scriptable_components() const -> const std::vector<dotnet::type>&
@@ -945,6 +981,66 @@ auto script_system::get_app_assembly() const -> dotnet::assembly
 {
     auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
     return app_domain_->get_assembly(app_script_lib.string());
+}
+
+namespace
+{
+/// The XML documentation files of the engine and game script libraries, ';'-separated. A
+/// library that was never built simply has no file; the index skips it.
+auto get_api_doc_paths() -> std::string
+{
+    std::string paths;
+    for(const char* protocol : {"engine", "app"})
+    {
+        auto doc = fs::resolve_protocol(script_system::get_lib_compiled_key(protocol));
+        doc.replace_extension(".xml");
+        paths += (paths.empty() ? "" : ";") + doc.string();
+    }
+    return paths;
+}
+
+/// Calls a static method of the managed API index (Unravel.Core.ApiIndex).
+template<typename Signature, typename... Args>
+auto invoke_api_index(const dotnet::assembly& assembly, const std::string& method_name, Args&&... args) -> std::string
+{
+    try
+    {
+        auto type = assembly.get_type("Unravel.Core", "ApiIndex");
+        auto method = type.get_method(method_name, sizeof...(Args));
+        auto invoker = dotnet::make_method_invoker<Signature>(method);
+        return invoker(std::forward<Args>(args)...);
+    }
+    catch(const dotnet::exception& e)
+    {
+        script_system::log_exception(e);
+        return std::string("The API index failed: ") + e.what();
+    }
+}
+} // namespace
+
+auto script_system::search_api(const std::string& query, int limit) const -> std::string
+{
+    if(!domain_)
+    {
+        return "Scripting is not loaded.";
+    }
+    return invoke_api_index<std::string(std::string, int, std::string)>(get_engine_assembly(),
+                                                                        "internal_n2m_search",
+                                                                        query,
+                                                                        limit,
+                                                                        get_api_doc_paths());
+}
+
+auto script_system::describe_api_type(const std::string& type_name) const -> std::string
+{
+    if(!domain_)
+    {
+        return "Scripting is not loaded.";
+    }
+    return invoke_api_index<std::string(std::string, std::string)>(get_engine_assembly(),
+                                                                   "internal_n2m_describe_type",
+                                                                   type_name,
+                                                                   get_api_doc_paths());
 }
 
 auto script_system::get_type_by_fullname(const std::string& fullname) const -> dotnet::type

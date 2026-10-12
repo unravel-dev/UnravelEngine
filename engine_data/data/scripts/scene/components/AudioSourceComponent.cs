@@ -252,8 +252,19 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Ramps the volume to @p volume over @p seconds of unscaled time, then stops the source when
+        /// @p stopAtEnd. Setting volume ends a running fade.
+        /// </summary>
+        public void FadeTo(float volume, float seconds, bool stopAtEnd = false)
+        {
+            internal_m2n_audio_source_fade_to(owner, volume, seconds, stopAtEnd);
+        }
+
+        /// <summary>
         /// Plays a one-shot audio clip at the specified position with a specified volume.
         /// </summary>
+        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, Vector3, float, float, AudioBus)"/>
+        /// plays without one.</remarks>
         /// <param name="clip">The audio clip to play.</param>
         /// <param name="position">The world position where the audio will be played.</param>
         /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
@@ -275,6 +286,8 @@ namespace Unravel.Core
         /// <summary>
         /// Plays a one-shot audio clip as a 2D audio source.
         /// </summary>
+        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, float, float, AudioBus)"/>
+        /// plays without one.</remarks>
         /// <param name="clip">The audio clip to play.</param>
         /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
         public static AudioSourceComponent PlayClip(AudioClip clip, float volume = 1.0f, AudioBus bus = AudioBus.Sfx)
@@ -290,6 +303,9 @@ namespace Unravel.Core
             Scene.DestroyEntity(entity, (clip.length + 0.1f) * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
             return audioSource;
         }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_audio_source_fade_to(Entity eid, float volume, float seconds, bool stopAtEnd);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_audio_source_get_loop(Entity eid);

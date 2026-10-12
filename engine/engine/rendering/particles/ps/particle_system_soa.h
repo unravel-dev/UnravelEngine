@@ -16,6 +16,32 @@ namespace ps_soa
 {
 
 /**
+ * @brief Overrides for the particles of one burst (see emit). A field applies only when its flag
+ * is set in mask; the others come from the emitter as for any spawned particle.
+ */
+struct emit_params
+{
+    static constexpr uint32_t position_flag = 1u << 0;
+    static constexpr uint32_t velocity_flag = 1u << 1;
+    static constexpr uint32_t color_flag = 1u << 2;
+    static constexpr uint32_t size_flag = 1u << 3;
+    static constexpr uint32_t lifetime_flag = 1u << 4;
+
+    /// Spawn point in simulation space (world, or the emitter's local space); the shape's offset is
+    /// replaced, the direction it gives is kept.
+    math::vec3 position{};
+    /// Initial velocity in simulation-space units per second; gravity, force and damping still apply.
+    math::vec3 velocity{};
+    /// Picker (sRGB) tint multiplied into the color over lifetime.
+    math::color color{};
+    /// Start size; the end size keeps the size curve's end to start ratio.
+    float size = 1.0f;
+    /// Lifetime in seconds.
+    float lifetime = 1.0f;
+    uint32_t mask = 0;
+};
+
+/**
  * @brief Initialize the soa particle system.
  * @param max_emitters Maximum concurrent emitters.
  */
@@ -93,6 +119,15 @@ void update_emitter_bounds_only(emitter_handle handle,
                                 const emitter_desc& desc,
                                 emitter_transform_state& transform);
 
+/**
+ * @brief Queues a burst of @p count particles, spawned at the emitter's next update whatever its
+ * rate, start delay, loop or play state; capacity still caps it.
+ */
+void emit(emitter_handle handle, uint32_t count, const emit_params& params);
+/**
+ * @brief True while a burst waits for the emitter's next update.
+ */
+auto has_pending_bursts(emitter_handle handle) -> bool;
 /**
  * @brief Flush staged GPU spawns and advance resident GPU sim for awake emitters.
  * @note Call once per frame on the main/render thread after parallel update_emitter.

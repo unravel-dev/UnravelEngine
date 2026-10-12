@@ -85,13 +85,21 @@ struct ui_system
      */
     void on_os_event(rtti::context& ctx, os::event& event);
 
+    void on_frame_begin(rtti::context& ctx, delta_t dt);
+
     /**
      * @brief Load fonts
      */
     void load_fonts();
 
     void release_resources();
-    
+
+    /**
+     * @brief Releases the images whose texture asset was imported or reloaded since RmlUi loaded
+     * them, and lays the documents out again, so they show the new image at its new size.
+     */
+    void refresh_changed_textures();
+
     /**
      * @brief Register component creation/destruction callbacks with ECS
      * @param ctx Engine context

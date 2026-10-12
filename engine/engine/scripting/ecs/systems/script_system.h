@@ -57,6 +57,21 @@ struct script_system
     auto get_engine_assembly() const -> dotnet::assembly;
     auto get_app_assembly() const -> dotnet::assembly;
 
+    /**
+     * @brief Searches the public scripting API - the engine's types and the game's - for every word
+     * of @p query in type and member names and documentation.
+     * @param limit Maximum number of results, 0 for the default.
+     * @return A count line, then one result per line: the member, its C# signature and summary.
+     */
+    auto search_api(const std::string& query, int limit) const -> std::string;
+
+    /**
+     * @brief Describes one scripting API type: its declaration and every public member with its
+     * C# signature and summary.
+     * @param type_name Full or short type name, case-insensitive.
+     */
+    auto describe_api_type(const std::string& type_name) const -> std::string;
+
     /// Blittable frame payloads for the managed SystemManager hooks (layouts
     /// mirror the managed UpdateInfo structs).
     struct frame_update_data
@@ -65,12 +80,50 @@ struct script_system
         float delta_time{};
         float time_scale{};
         uint64_t frame_count{};
+        float unscaled_delta_time{};
+        float realtime_since_startup{};
     };
 
     struct fixed_update_data
     {
         float fixed_delta_time{};
     };
+
+    /// Blittable UI event payload for UIEventManager.InternalDispatchPayload (layout mirrors the
+    /// managed UIEventPayload). Strings travel as separate arguments.
+    struct ui_event_payload
+    {
+        int64_t native_event{};
+        int64_t target_handle{};
+        int64_t current_handle{};
+        /// Element an event refers to besides its target: the dragged element of drag events.
+        int64_t related_handle{};
+        int32_t kind{};
+        int32_t phase{};
+        int32_t is_capture_listener{};
+        int32_t button{-1};
+        int32_t key_code{};
+        /// Bits: 1 ctrl, 2 shift, 4 alt, 8 meta.
+        int32_t modifiers{};
+        int32_t click_count{};
+        float x{};
+        float y{};
+        float delta_x{};
+        float delta_y{};
+        float value{};
+        float min_value{};
+        float max_value{};
+        float step{};
+    };
+
+    using ui_dispatch_signature =
+        void(ui_event_payload, std::string, std::string, std::string, std::string);
+
+    // UIDataModels callbacks: a model node is a managed id; a child id carries its kind in the low bits.
+    using ui_model_event_signature = void(entt::entity, std::string, std::string, std::string, ui_event_payload,
+                                          std::string, std::string, std::string, std::string);
+    using ui_inline_event_signature =
+        void(entt::entity, std::string, ui_event_payload, std::string, std::string, std::string, std::string);
 
     /// Cached engine-assembly types/methods. Valid between load_engine_domain
     /// and unload_engine_domain.
@@ -83,6 +136,7 @@ struct script_system
         dotnet::type ui_event_manager_type;
 
         // SystemManager frame hooks
+        dotnet::method begin_frame_method;
         dotnet::method update_method;
         dotnet::method fixed_update_method;
         dotnet::method late_update_method;
@@ -91,6 +145,7 @@ struct script_system
         // engine domain load; building one per frame costs bridge round-trips
         // for the signature validation alone. Default-constructed instances
         // are invalid until load_engine_domain assigns them.
+        dotnet::method_invoker<void(frame_update_data)> begin_frame_invoker;
         dotnet::method_invoker<void(frame_update_data)> update_invoker;
         dotnet::method_invoker<void(fixed_update_data)> fixed_update_invoker;
         dotnet::method_invoker<void()> late_update_invoker;
@@ -107,8 +162,19 @@ struct script_system
         dotnet::method on_collision_enter_method;
         dotnet::method on_collision_exit_method;
 
-        // UIEventManager
-        dotnet::method ui_dispatch_event_method;
+        // UIEventManager.InternalDispatchPayload(payload, event type, target id, current id, text)
+        dotnet::method ui_dispatch_method;
+        dotnet::method_invoker<ui_dispatch_signature> ui_dispatch_invoker;
+
+        // UIDataModels: values of bound data model variables, model events, transforms, inline handlers
+        dotnet::type ui_data_models_type;
+        dotnet::method_invoker<std::string(int64_t)> ui_model_get_invoker;
+        dotnet::method_invoker<void(int64_t, std::string)> ui_model_set_invoker;
+        dotnet::method_invoker<int32_t(int64_t)> ui_model_size_invoker;
+        dotnet::method_invoker<int64_t(int64_t, std::string, int32_t)> ui_model_child_invoker;
+        dotnet::method_invoker<ui_model_event_signature> ui_model_event_invoker;
+        dotnet::method_invoker<std::string(entt::entity, std::string, std::string)> ui_model_transform_invoker;
+        dotnet::method_invoker<ui_inline_event_signature> ui_inline_event_invoker;
     };
 
     auto get_cache() const -> const engine_script_cache&

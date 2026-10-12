@@ -90,8 +90,28 @@ void audio_source_component::set_loop(bool on)
 
 void audio_source_component::set_volume(float volume)
 {
+    fade_.is_active = false;
     volume_ = math::clamp(volume, 0.0f, 1.0f);
     apply_mixer_volume();
+}
+
+void audio_source_component::fade_to(float volume, float seconds, bool stop_at_end)
+{
+    fade_.start(volume_, math::clamp(volume, 0.0f, 1.0f), seconds, stop_at_end);
+}
+
+void audio_source_component::update_fade(float seconds)
+{
+    if(!fade_.is_active)
+    {
+        return;
+    }
+    volume_ = math::clamp(fade_.advance(seconds), 0.0f, 1.0f);
+    apply_mixer_volume();
+    if(!fade_.is_active && fade_.stop_at_end)
+    {
+        stop();
+    }
 }
 
 void audio_source_component::set_pitch(float pitch)

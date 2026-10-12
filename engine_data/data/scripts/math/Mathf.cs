@@ -73,28 +73,47 @@ public struct Mathf
     public static readonly float Epsilon = (MathfInternal.IsFlushToZeroEnabled ? MathfInternal.FloatMinNormal : MathfInternal.FloatMinDenormal);
 
     /// <summary>
-    /// Returns the closest power of two value.
+    /// Returns the closest power of two value; the larger one when the value lies halfway.
     /// </summary>
-    /// <param name="value">The input value.</param>
+    /// <param name="value">The input value. Values below 1 give 1.</param>
     /// <returns>The closest power of two.</returns>
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    public static extern int ClosestPowerOfTwo(int value);
+    public static int ClosestPowerOfTwo(int value)
+    {
+        int next = NextPowerOfTwo(value);
+        int previous = Math.Max(next >> 1, 1);
+        return next - value <= value - previous ? next : previous;
+    }
 
     /// <summary>
     /// Returns true if the value is power of two.
     /// </summary>
     /// <param name="value">The input value.</param>
     /// <returns>True if the value is a power of two; otherwise, false.</returns>
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    public static extern bool IsPowerOfTwo(int value);
+    public static bool IsPowerOfTwo(int value)
+    {
+        return value > 0 && (value & (value - 1)) == 0;
+    }
 
     /// <summary>
     /// Returns the next power of two that is equal to, or greater than, the argument.
     /// </summary>
-    /// <param name="value">The input value.</param>
+    /// <param name="value">The input value. Values below 1 give 1.</param>
     /// <returns>The next power of two.</returns>
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    public static extern int NextPowerOfTwo(int value);
+    public static int NextPowerOfTwo(int value)
+    {
+        if (value <= 1)
+        {
+            return 1;
+        }
+        // Smear the highest set bit of value - 1 into every lower bit, then step up.
+        uint bits = (uint)value - 1;
+        bits |= bits >> 1;
+        bits |= bits >> 2;
+        bits |= bits >> 4;
+        bits |= bits >> 8;
+        bits |= bits >> 16;
+        return (int)(bits + 1);
+    }
 
     /// <summary>
     /// Returns the sine of angle f.

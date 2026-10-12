@@ -4,6 +4,7 @@
 #include "engine/ui/ui_tree.h"
 #include "threadpp/thread.h"
 
+#include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/hub.h>
@@ -29,6 +30,7 @@
 #include <engine/rendering/mesh.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
+#include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/rendering/renderer.h>
 #include <engine/ecs/scene.h>
@@ -300,7 +302,7 @@ void generate_workspace_file(const std::string& file_path,
     json_stream << "        }\n";
     json_stream << "    ],\n";
     json_stream << "    \"settings\": {\n";
-    json_stream << "        \"dotnet.preferCSharpExtension\": true,\n";
+    json_stream << "        \"dotnet.preferCSharpExtension\": false,\n";
     json_stream << "        \"files.exclude\": {\n";
     json_stream << "            \"**/.git\": true,\n";
     json_stream << "            \"**/.svn\": true";
@@ -359,7 +361,7 @@ void generate_workspace_file(const std::string& file_path,
     json_stream << "            {\n";
     json_stream << "                \"name\": \"Attach to " << EDITOR_NAME << "\",\n";
     json_stream << "                \"type\": \"coreclr\",\n";
-    json_stream << "                \"request\": \"attach\"\n";
+    json_stream << "                \"request\": \"attach\",\n";
     json_stream << "                \"processName\": \"" << EDITOR_NAME << "\"\n";
     json_stream << "            },\n";
     json_stream << "            {\n";
@@ -2884,6 +2886,54 @@ auto editor_actions::focus_game_panel(rtti::context& ctx, std::string* error) ->
     return true;
 }
 
+auto editor_actions::rebuild_pending_armatures(rtti::context& ctx) -> std::vector<std::shared_ptr<editing_action_t>>
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    auto& ec = ctx.get_cached<ecs>();
+    std::vector<scene*> scenes{&ec.get_scene()};
+    if(auto* active_scene = em.get_active_scene(ctx); active_scene != scenes.front())
+    {
+        scenes.push_back(active_scene);
+    }
+    std::vector<entt::handle> pending;
+    for(auto* scn : scenes)
+    {
+        scn->registry->view<model_component>().each(
+            [&](auto entity, auto&& model_comp)
+            {
+                if(model_comp.is_armature_rebuild_pending())
+                {
+                    pending.push_back(scn->create_handle(entity));
+                }
+            });
+    }
+    std::vector<std::shared_ptr<editing_action_t>> steps;
+    for(auto model_entity : pending)
+    {
+        auto& model_comp = model_entity.get<model_component>();
+        // The rebuild creates the nodes first; the step records them, so undo removes them.
+        auto created_roots = model_comp.rebuild_armature();
+        if(!created_roots.empty())
+        {
+            auto create_step = std::make_shared<create_entities_action_t>(
+                [created_roots]() -> std::vector<entt::handle>
+                {
+                    return created_roots;
+                });
+            create_step->do_action();
+            steps.push_back(std::move(create_step));
+        }
+        auto stale_roots = model_comp.take_stale_armature_entities();
+        if(!stale_roots.empty())
+        {
+            auto delete_step = std::make_shared<delete_entities_action_t>(std::move(stale_roots));
+            delete_step->do_action();
+            steps.push_back(std::move(delete_step));
+        }
+    }
+    return steps;
+}
+
 auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* error) -> bool
 {
     if(!ctx.has<renderer>())
@@ -2922,15 +2972,12 @@ auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* 
     return true;
 }
 
-auto editor_actions::import_files(rtti::context& ctx,
-                                  const std::vector<std::string>& paths,
-                                  const fs::path& target_path,
-                                  bool async) -> import_files_result
+auto editor_actions::resolve_import_items(const std::vector<std::string>& paths, const fs::path& target_path)
+    -> std::vector<import_files_item>
 {
-    import_files_result result;
-    result.items.reserve(paths.size());
+    std::vector<import_files_item> items;
+    items.reserve(paths.size());
     fs::error_code ec;
-    fs::create_directories(target_path, ec);
     for(const auto& path : paths)
     {
         import_files_item item{};
@@ -2945,8 +2992,20 @@ auto editor_actions::import_files(rtti::context& ctx,
         {
             item.dest_key = protocol.generic_string();
         }
-        result.items.push_back(std::move(item));
+        items.push_back(std::move(item));
     }
+    return items;
+}
+
+auto editor_actions::import_files(rtti::context& ctx,
+                                  const std::vector<std::string>& paths,
+                                  const fs::path& target_path,
+                                  bool async) -> import_files_result
+{
+    import_files_result result;
+    fs::error_code ec;
+    fs::create_directories(target_path, ec);
+    result.items = resolve_import_items(paths, target_path);
     auto copy_batch = [items = result.items]() -> bool
     {
         auto copy_one = [](const fs::path& source, const fs::path& dest, bool is_directory) -> bool

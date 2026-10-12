@@ -90,6 +90,11 @@ void log_missing_compiled_asset_for_key(const std::string& key)
                    key);
 }
 
+void log_uncompiled_asset_for_key(const std::string& key)
+{
+    APPLOG_WARNING("Compiled asset {0} does not exist yet; the asset stays empty until it is compiled.", key);
+}
+
 void log_missing_raw_asset_for_key(const std::string& key)
 {
     APPLOG_ERROR("Asset {0} does not exist!", key);
@@ -100,7 +105,19 @@ void log_unknown_protocol_for_key(const std::string& key)
     APPLOG_ERROR("Asset {0} has unknown protocol!", key);
 }
 
-auto validate(const std::string& key, const std::string& compiled_ext, std::string& out) -> bool
+/// Whether a loader can read an asset's source file when its compiled file is missing.
+enum class source_fallback
+{
+    /// The loader parses the source format too (textures, prefabs, fonts).
+    allowed,
+    /// The loader reads the compiled format only. Handing it the source would make a broken asset (a mesh with no
+    /// vertices) that a later reload has to replace, so the load fails and the compiled-asset watcher loads the asset
+    /// once the compiler writes it.
+    none,
+};
+
+auto validate(const std::string& key, const std::string& compiled_ext, source_fallback fallback, std::string& out)
+    -> bool
 {
     if(!fs::has_known_protocol(key))
     {
@@ -113,6 +130,11 @@ auto validate(const std::string& key, const std::string& compiled_ext, std::stri
     fs::error_code err;
     if(!fs::exists(compiled_absolute_path, err))
     {
+        if(fallback == source_fallback::none)
+        {
+            log_uncompiled_asset_for_key(compiled_absolute_path);
+            return false;
+        }
         log_missing_compiled_asset_for_key(compiled_absolute_path);
 
         compiled_absolute_path = resolve_path(key).string();
@@ -133,14 +155,15 @@ namespace detail
 
 template<typename T, typename CreateFromPathFn>
 auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::string& key,
-                   const std::string& compiled_ext, CreateFromPathFn create_fn, load_mode mode) -> bool
+                   const std::string& compiled_ext, source_fallback fallback, CreateFromPathFn create_fn,
+                   load_mode mode) -> bool
 {
     if(mode == load_mode::deferred)
     {
-        auto deferred_fn = [key, compiled_ext, create_fn]() -> std::shared_ptr<T>
+        auto deferred_fn = [key, compiled_ext, fallback, create_fn]() -> std::shared_ptr<T>
         {
             std::string path{};
-            if(!validate(key, compiled_ext, path))
+            if(!validate(key, compiled_ext, fallback, path))
             {
                 return nullptr;
             }
@@ -151,7 +174,7 @@ auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::s
     }
 
     std::string path{};
-    if(!validate(key, compiled_ext, path))
+    if(!validate(key, compiled_ext, fallback, path))
     {
         return false;
     }
@@ -169,7 +192,7 @@ template<>
 auto load_from_file<gfx::texture>(tpp::thread_pool& pool, asset_handle<gfx::texture>& output,
                                    const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<gfx::texture>(pool, output, key, {},
+    return detail::schedule_load<gfx::texture>(pool, output, key, {}, source_fallback::allowed,
         [](const std::string& path)
         {
             return std::make_shared<gfx::texture>(path.c_str());
@@ -181,7 +204,7 @@ auto load_from_file<gfx::shader>(tpp::thread_pool& pool, asset_handle<gfx::shade
                                   const std::string& key, load_mode mode) -> bool
 {
     return detail::schedule_load<gfx::shader>(pool, output, key,
-        gfx::get_current_renderer_filename_extension(),
+        gfx::get_current_renderer_filename_extension(), source_fallback::none,
         [key](const std::string& path)
         {
             return std::make_shared<gfx::shader>(path);
@@ -192,7 +215,7 @@ template<>
 auto load_from_file<material>(tpp::thread_pool& pool, asset_handle<material>& output,
                                const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<material>(pool, output, key, {},
+    return detail::schedule_load<material>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             std::shared_ptr<unravel::material> mat;
@@ -205,7 +228,7 @@ template<>
 auto load_from_file<mesh>(tpp::thread_pool& pool, asset_handle<mesh>& output,
                            const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<mesh>(pool, output, key, {},
+    return detail::schedule_load<mesh>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             mesh::load_data data;
@@ -221,7 +244,7 @@ template<>
 auto load_from_file<animation_clip>(tpp::thread_pool& pool, asset_handle<animation_clip>& output,
                                      const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<animation_clip>(pool, output, key, {},
+    return detail::schedule_load<animation_clip>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             auto anim = std::make_shared<animation_clip>();
@@ -234,7 +257,7 @@ template<>
 auto load_from_file<prefab>(tpp::thread_pool& pool, asset_handle<prefab>& output,
                              const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<prefab>(pool, output, key, {},
+    return detail::schedule_load<prefab>(pool, output, key, {}, source_fallback::allowed,
         [](const std::string& path)
         {
             auto pfb = std::make_shared<prefab>();
@@ -248,7 +271,7 @@ template<>
 auto load_from_file<scene_prefab>(tpp::thread_pool& pool, asset_handle<scene_prefab>& output,
                                    const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<scene_prefab>(pool, output, key, {},
+    return detail::schedule_load<scene_prefab>(pool, output, key, {}, source_fallback::allowed,
         [](const std::string& path)
         {
             auto pfb = std::make_shared<scene_prefab>();
@@ -262,7 +285,7 @@ template<>
 auto load_from_file<physics_material>(tpp::thread_pool& pool, asset_handle<physics_material>& output,
                                        const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<physics_material>(pool, output, key, {},
+    return detail::schedule_load<physics_material>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             auto mat = std::make_shared<physics_material>();
@@ -275,7 +298,7 @@ template<>
 auto load_from_file<audio_clip>(tpp::thread_pool& pool, asset_handle<audio_clip>& output,
                                  const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<audio_clip>(pool, output, key, {},
+    return detail::schedule_load<audio_clip>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             audio::sound_data data;
@@ -298,7 +321,7 @@ template<>
 auto load_from_file<font>(tpp::thread_pool& pool, asset_handle<font>& output,
                            const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<font>(pool, output, key, {},
+    return detail::schedule_load<font>(pool, output, key, {}, source_fallback::allowed,
         [](const std::string& path)
         {
             auto create_job = tpp::async(tpp::main_thread::get_id(),
@@ -316,7 +339,7 @@ template<>
 auto load_from_file<script>(tpp::thread_pool& pool, asset_handle<script>& output,
                              const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<script>(pool, output, key, {},
+    return detail::schedule_load<script>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             auto scr = std::make_shared<script>();
@@ -329,7 +352,7 @@ template<>
 auto load_from_file<ui_tree>(tpp::thread_pool& pool, asset_handle<ui_tree>& output,
                               const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<ui_tree>(pool, output, key, {},
+    return detail::schedule_load<ui_tree>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             auto tree = std::make_shared<ui_tree>();
@@ -342,7 +365,7 @@ template<>
 auto load_from_file<style_sheet>(tpp::thread_pool& pool, asset_handle<style_sheet>& output,
                                   const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<style_sheet>(pool, output, key, {},
+    return detail::schedule_load<style_sheet>(pool, output, key, {}, source_fallback::none,
         [](const std::string& path)
         {
             auto sheet = std::make_shared<style_sheet>();

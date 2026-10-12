@@ -6,6 +6,7 @@ $input v_texcoord0
  */
 
 #include "../common.sh"
+#include "bloom_common.sh"
 
 SAMPLER2D(s_scene, 0);
 SAMPLER2D(s_bloom, 1);
@@ -37,7 +38,7 @@ void main()
     // (unassigned) mask makes this an exact no-op.
     hdr_color += bloom_color * texture2D(s_dirt, v_texcoord0).rgb * u_dirt_intensity;
 
-    hdr_color = min(max(hdr_color, vec3_splat(0.0)), vec3_splat(65504.0));
+    hdr_color = bloom_safe_hdr(hdr_color);
 
     gl_FragColor = vec4(hdr_color, 1.0);
 }

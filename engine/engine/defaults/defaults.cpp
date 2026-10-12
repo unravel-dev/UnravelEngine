@@ -952,18 +952,10 @@ auto defaults::make_model_from_mesh(rtti::context& ctx, const std::string& key) 
 
     mdl.set_lod(asset, 0);
 
-    auto mesh_ptr = asset.get();
-    if(mesh_ptr)
+    // A mesh imported a moment ago may not be compiled yet: its materials follow once it loads.
+    if(!mdl.apply_default_materials(am, true))
     {
-        const auto& material_uids = mesh_ptr->get_default_material_uids();
-        for(size_t i = 0; i < material_uids.size(); ++i)
-        {
-            auto mat_asset = am.get_asset<material>(material_uids[i]);
-            if(mat_asset)
-            {
-                mdl.set_material(mat_asset, static_cast<uint32_t>(i));
-            }
-        }
+        mdl.set_default_materials_pending(true);
     }
     return mdl;
 }

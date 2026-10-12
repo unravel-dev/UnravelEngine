@@ -23,6 +23,12 @@ REFLECT(light_component)
         .func<&component_meta<light_component>::save>("component_save"_hs)
         .func<&component_meta<light_component>::load>("component_load"_hs)
         .func<&component_meta<light_component>::remove>("component_remove"_hs)
+        .data<&light_component::set_enabled, &light_component::is_enabled>("enabled"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enabled"},
+            entt::attribute{"pretty_name", "Enabled"},
+            entt::attribute{"tooltip", "Does the light shine? Off renders no light, no shadows and no global illumination from it, without deactivating the entity."},
+        })
         .data<&light_component::set_light, &light_component::get_light>("light"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light"},
@@ -32,6 +38,7 @@ REFLECT(light_component)
 
 SAVE(light_component)
 {
+    try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
     try_save(ar, ser20::make_nvp("light", obj.get_light()));
 }
 SAVE_INSTANTIATE(light_component, ser20::oarchive_associative_t);
@@ -43,6 +50,11 @@ LOAD(light_component)
     // may legitimately omit this: a suppressed prefab override, or a sparse instance diff
     // that only carries the properties the user changed. Loading into a default-constructed
     // local and applying it regardless turned "not mentioned" into "reset to default".
+    bool is_enabled = obj.is_enabled();
+    if(try_load(ar, ser20::make_nvp("enabled", is_enabled)))
+    {
+        obj.set_enabled(is_enabled);
+    }
     light l = obj.get_light();
     if(try_load(ar, ser20::make_nvp("light", l)))
     {

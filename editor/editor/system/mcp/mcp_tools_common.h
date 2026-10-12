@@ -555,6 +555,13 @@ inline auto play_phase_from_ctx(rtti::context& ctx) -> std::string
     return "inactive";
 }
 
+/// Number of live entities. The entity storage keeps released ids for reuse, so its size()
+/// overcounts; in its swap-only mode the free list position is the live count.
+inline auto count_live_entities(entt::registry& registry) -> size_t
+{
+    return registry.storage<entt::entity>().free_list();
+}
+
 inline auto active_scene_status_json(rtti::context& ctx) -> std::string
 {
     const auto phase = play_phase_from_ctx(ctx);
@@ -564,7 +571,7 @@ inline auto active_scene_status_json(rtti::context& ctx) -> std::string
     {
         return fmt::format(R"({{"has_scene":false,"play_phase":{}}})", make_json_string(phase));
     }
-    const auto entity_count = scn->registry->storage<entt::entity>().size();
+    const auto entity_count = count_live_entities(*scn->registry);
     const auto source = scn->source ? scn->source.id() : std::string{};
     return fmt::format(R"({{"has_scene":true,"tag":{},"source":{},"entity_count":{},"play_phase":{}}})",
                        make_json_string(scn->tag),

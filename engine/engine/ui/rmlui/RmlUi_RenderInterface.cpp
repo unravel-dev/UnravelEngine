@@ -3,6 +3,7 @@
  */
 
 #include "RmlUi_RenderInterface.h"
+#include "RmlUi_FileInterface.h"
 
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/DecorationTypes.h>
@@ -17,6 +18,7 @@
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/default_textures.h>
 #include <engine/rendering/render_window.h>
 #include <engine/rendering/renderer.h>
 
@@ -535,13 +537,18 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
                     bgfx::setUniform(requires_premultiplication_uniform, requires_premultiplication_data.data());
                 }
 
-                if(tex.asset.is_valid())
+                if(tex.loaded)
                 {
-                    bgfx::setTexture(0, texture_uniform, tex.asset.get()->native_handle());
+                    bgfx::setTexture(0, texture_uniform, tex.loaded->native_handle());
                 }
                 else if(tex.generated_texture_ptr && tex.generated_texture_ptr->is_valid())
                 {
                     bgfx::setTexture(0, texture_uniform, tex.generated_texture_ptr->native_handle());
+                }
+                else if(!tex.source.empty())
+                {
+                    // An image that is not there (yet) draws nothing until its asset arrives.
+                    bgfx::setTexture(0, texture_uniform, default_textures::get().transparent_texture()->native_handle());
                 }
                 else
                 {
@@ -609,21 +616,23 @@ auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
 
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
-    auto texture = am.get_asset<gfx::texture>(source);
-    if(!texture.is_valid())
+    auto texture = am.get_asset<gfx::texture>(RmlUi_FileInterface::ResolveAssetKey(source));
+    gfx::texture::ptr loaded;
+    if(texture.is_valid())
     {
-        APPLOG_ERROR("Failed to load texture: {}", source);
-        return 0;
+        loaded = texture.get();
+        if(asset_handle<gfx::texture>::is_empty(loaded))
+        {
+            loaded = nullptr;
+        }
     }
-
-    auto tex = texture.get();
-    if(!tex)
+    // A missing image still gets a handle: RmlUi never asks again for a source it got no handle
+    // for, and collect_changed_texture_sources() hands this one back once the asset arrives.
+    if(!loaded)
     {
-        APPLOG_ERROR("Failed to load texture: {}", source);
-        return 0;
+        APPLOG_WARNING("UI image is not available: {}", source);
     }
-
-    texture_dimensions = {tex->info.width, tex->info.height};
+    texture_dimensions = loaded ? Rml::Vector2i{loaded->info.width, loaded->info.height} : Rml::Vector2i{0, 0};
 
     // Allocate handle from texture manager
     uint16_t texture_idx = texture_manager_.alloc();
@@ -636,6 +645,8 @@ auto RmlUi_RenderInterface::LoadTexture(Rml::Vector2i& texture_dimensions,
     // Set up compiled texture
     CompiledTexture& compiled_texture = texture_manager_.get(texture_idx);
     compiled_texture.asset = texture;
+    compiled_texture.loaded = loaded;
+    compiled_texture.source = source;
     compiled_texture.requires_premultiplication = true;
 
     // Convert internal handle to RmlUi handle
@@ -708,6 +719,26 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
 
     // APPLOG_TRACE("Generated texture handle: {} ({}x{} RGBA8)", rml_handle, source_dimensions.x, source_dimensions.y);
     return rml_handle;
+}
+
+auto RmlUi_RenderInterface::collect_changed_texture_sources() -> std::vector<Rml::String>
+{
+    std::vector<Rml::String> sources;
+    texture_manager_.for_each(
+        [&](const CompiledTexture& texture)
+        {
+            if(texture.source.empty())
+            {
+                return;
+            }
+            // Without waiting: null while the asset is not imported or still loading.
+            auto current = texture.asset.try_get();
+            if(current && !asset_handle<gfx::texture>::is_empty(current) && current != texture.loaded)
+            {
+                sources.push_back(texture.source);
+            }
+        });
+    return sources;
 }
 
 void RmlUi_RenderInterface::ReleaseTexture(Rml::TextureHandle texture_handle)

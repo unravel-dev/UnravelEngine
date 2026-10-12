@@ -104,7 +104,7 @@ auto undo_redo_stack::redo() -> std::shared_ptr<editing_action_t>
         }
         current_index++;
     }
-    return nullptr;
+    return action;
 }
 
 void undo_redo_stack::clear()

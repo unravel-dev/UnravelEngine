@@ -25,6 +25,10 @@ writes go through the component's own setters.
 
 ## Light
 
+enabled false switches a light off without deactivating its entity: no direct
+light, no shadows, nothing in the global illumination. intensity 0 is not off -
+the light still renders its shadow maps.
+
 Spots aim along their forward axis: rotation_euler [90,0,0] points straight
 down. Point and spot intensity is luminous intensity with an inverse-square
 falloff: a surface at distance d receives intensity / d^2 (a directional

@@ -29,6 +29,24 @@ constexpr int GAME_TOOLBAR_FIRST_ROW_BARS = 1;
 // edge, and the fade takes this long.
 constexpr float GAME_TOOLBAR_REVEAL_ROWS = 2.0f;
 constexpr float GAME_TOOLBAR_FADE_SECONDS = 0.12f;
+
+/// The resolution preset the game view shows, or null without settings or presets.
+auto get_current_resolution(rtti::context& ctx) -> const settings::resolution_settings::resolution*
+{
+    if(!ctx.has<unravel::settings>())
+    {
+        return nullptr;
+    }
+    const auto& s = ctx.get<unravel::settings>();
+    return viewport_resolution::get_resolution(ctx, s.resolution.get_current_resolution_index());
+}
+
+/// Whether the camera rendered an output image the panel can show.
+auto has_output_image(const camera_component& camera_comp) -> bool
+{
+    const auto& obuffer = camera_comp.get_render_view().fbo_find("OBUFFER");
+    return obuffer && obuffer->is_valid();
+}
 } // namespace
 
 game_panel::game_panel(imgui_panels* parent, const char* name)
@@ -51,7 +69,38 @@ void game_panel::on_frame_update(rtti::context& ctx, delta_t dt)
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
 
+    apply_view_size(ctx, scene);
     path.on_frame_update(scene, dt);
+}
+
+void game_panel::apply_view_size(rtti::context& ctx, scene& scn) const
+{
+    const auto* resolution = get_current_resolution(ctx);
+    if(!resolution)
+    {
+        return;
+    }
+    const usize32_t view_size = viewport_resolution::compute_viewport_pixels(*resolution, view_area_size_);
+    if(view_size.width == 0 || view_size.height == 0)
+    {
+        return;
+    }
+    ctx.get_cached<rendering_system>().apply_game_view_size(scn, view_size);
+}
+
+auto game_panel::get_displayed_camera(rtti::context& ctx) const -> entt::handle
+{
+    auto& scn = ctx.get_cached<ecs>().get_scene();
+    entt::handle displayed;
+    scn.registry->view<camera_component>().each(
+        [&](auto e, auto&& camera_comp)
+        {
+            if(!displayed && has_output_image(camera_comp))
+            {
+                displayed = scn.create_handle(e);
+            }
+        });
+    return displayed;
 }
 
 void game_panel::on_frame_before_render(rtti::context& ctx, delta_t dt)
@@ -124,83 +173,31 @@ void game_panel::draw_ui(rtti::context& ctx)
         return;
     }
 
-    if(!ctx.has<unravel::settings>())
-    {
-        return;
-    }
-
-    const auto& s = ctx.get<unravel::settings>();
-    const auto* current_res = viewport_resolution::get_resolution(ctx, s.resolution.get_current_resolution_index());
-    if(!current_res)
-    {
-        return;
-    }
-
     auto& ec = ctx.get_cached<ecs>();
-    auto& play = ctx.get_cached<play_mode>();
     auto size = ImGui::GetContentRegionAvail();
     if(size.x > 0 && size.y > 0)
     {
+        view_area_size_ = size;
         const ImVec2 area_origin = ImGui::GetCursorScreenPos();
         const ImRect toolbar_area(area_origin, area_origin + size);
         update_toolbar_visibility(ctx, toolbar_area);
 
-        bool rendered = false;
+        // Every camera that rendered costs frame time, also those the panel does not show.
         rendering::pipeline_stats pstats;
-        ctx.get_cached<rendering_system>().set_game_view_size(viewport_resolution::compute_viewport_pixels(*current_res, size));
         ec.get_scene().registry->view<camera_component>().each(
             [&](auto e, auto&& camera_comp)
             {
-                viewport_resolution::apply_to_camera(camera_comp, *current_res, size);
-
-                const auto& camera = camera_comp.get_camera();
-                const auto& rview = camera_comp.get_render_view();
-                const auto& obuffer = rview.fbo_find("OBUFFER");
-
-                if(obuffer)
+                if(has_output_image(camera_comp))
                 {
-                    auto tex = obuffer->get_texture(0);
-                    auto tex_size = obuffer->get_size();
-                    ImVec2 tex_size_v(tex_size.width, tex_size.height);
-                    ImGui::ImageWithAspect(ImGui::ToId(tex), tex_size_v, size, ImVec2(0.5f, 0.5f));
-
-                    ImVec2 min = ImGui::GetItemRectMin();
-                    ImVec2 max = ImGui::GetItemRectMax();
-                    const auto lumen_visualize = visualization_menu::make_lumen_visualize(visualization_menu_state_,
-                                                                                          min,
-                                                                                          max,
-                                                                                          camera.get_viewport_size());
-
-                    input::zone work_zone{};
-                    work_zone.x = min.x;
-                    work_zone.y = min.y;
-                    work_zone.w = max.x - min.x;
-                    work_zone.h = max.y - min.y;
-                    
-               
-                    ctx.get_cached<input_system>().manager.set_work_zone(work_zone);
-                    ctx.get_cached<input_system>().manager.set_reference_size({tex_size_v.x, tex_size_v.y});
-
-                    if(play.is_active())
-                    {
-                        ImVec2 padding(2.0f, 2.0f);
-                        ImGui::RenderFocusFrame(ImGui::GetItemRectMin() - padding, ImGui::GetItemRectMax() + padding);
-                    }
-                    rendered = true;
-
-                    const auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
-                    pipeline->set_debug_pass(visualize_passes_);
-                    pipeline->set_lumen_visualize_settings(lumen_visualize);
-                    visualization_menu::draw_view_labels(visualize_passes_,
-                                                         visualization_menu_state_,
-                                                         pipeline->get_debug_view_labels(),
-                                                         min,
-                                                         max);
-                    pstats.add_stats(pipeline->get_stats());
+                    pstats.add_stats(camera_comp.get_pipeline_data().get_pipeline()->get_stats());
                 }
             });
 
-        if(!rendered)
+        if(const auto displayed_camera = get_displayed_camera(ctx))
+        {
+            draw_camera_image(ctx, displayed_camera, size);
+        }
+        else
         {
             static const auto text = "No cameras rendering";
             ImGui::SetCursorPosY(size.y * 0.5f);
@@ -226,6 +223,47 @@ void game_panel::draw_ui(rtti::context& ctx)
             parent_->get_profiler_timeline_panel().show(true);
         }
     }
+}
+
+void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, const ImVec2& area_size)
+{
+    auto& camera_comp = camera.get<camera_component>();
+    const auto& obuffer = camera_comp.get_render_view().fbo_find("OBUFFER");
+    auto tex = obuffer->get_texture(0);
+    auto tex_size = obuffer->get_size();
+    ImVec2 tex_size_v(tex_size.width, tex_size.height);
+    ImGui::ImageWithAspect(ImGui::ToId(tex), tex_size_v, area_size, ImVec2(0.5f, 0.5f));
+
+    ImVec2 min = ImGui::GetItemRectMin();
+    ImVec2 max = ImGui::GetItemRectMax();
+    const auto lumen_visualize = visualization_menu::make_lumen_visualize(visualization_menu_state_,
+                                                                          min,
+                                                                          max,
+                                                                          camera_comp.get_camera().get_viewport_size());
+
+    input::zone work_zone{};
+    work_zone.x = min.x;
+    work_zone.y = min.y;
+    work_zone.w = max.x - min.x;
+    work_zone.h = max.y - min.y;
+    auto& input = ctx.get_cached<input_system>();
+    input.manager.set_work_zone(work_zone);
+    input.manager.set_reference_size({tex_size_v.x, tex_size_v.y});
+
+    if(ctx.get_cached<play_mode>().is_active())
+    {
+        ImVec2 padding(2.0f, 2.0f);
+        ImGui::RenderFocusFrame(min - padding, max + padding);
+    }
+
+    const auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
+    pipeline->set_debug_pass(visualize_passes_);
+    pipeline->set_lumen_visualize_settings(lumen_visualize);
+    visualization_menu::draw_view_labels(visualize_passes_,
+                                         visualization_menu_state_,
+                                         pipeline->get_debug_view_labels(),
+                                         min,
+                                         max);
 }
 
 

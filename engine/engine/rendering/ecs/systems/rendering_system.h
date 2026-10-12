@@ -112,6 +112,16 @@ public:
     void set_game_view_size(const usize32_t& size);
 
     /**
+     * @brief Sets the size of the view the game is shown in and sizes every camera of @p scn to it.
+     *
+     * The host calls it in the frame update ahead of the scripts, so a frame's scripts read the
+     * size that frame renders at.
+     * @param scn The scene whose cameras show the game.
+     * @param size The size in pixels.
+     */
+    void apply_game_view_size(scene& scn, const usize32_t& size);
+
+    /**
      * @brief Gets the size of the view the game is shown in.
      * @return The size in pixels, or zero until a host has shown the game.
      */

@@ -165,7 +165,7 @@ namespace Unravel.Samples
                 Log.Info($"Text input changed to: {value}");
                 if (titleElement != null)
                 {
-                    titleElement.InnerRml = string.IsNullOrEmpty(value) ? "UI Wrapper Demo" : value;
+                    titleElement.SetText(string.IsNullOrEmpty(value) ? "UI Wrapper Demo" : value);
                 }
             }
         }
@@ -192,7 +192,7 @@ namespace Unravel.Samples
 
         public override void OnDestroy()
         {
-            // UIEventManager.UnsubscribeAllForOwner runs from ScriptComponent destroy
+            // UIEventManager.UnsubscribeAllForScript runs from ScriptComponent destroy
             // before OnDestroy, so UI callbacks do not pin this instance after teardown.
             Log.Info("UI wrapper controller destroyed");
         }

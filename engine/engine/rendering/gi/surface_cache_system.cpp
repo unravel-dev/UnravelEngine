@@ -986,8 +986,10 @@ void surface_cache_system::update_global_lighting_state(scene& scn)
         [&](auto /*entity*/, auto&& light_comp, auto&& /*active*/)
         {
             const auto& light = light_comp.get_light();
-            // The first directional light the GI sees (lights whose indirect lighting scale is 0 are skipped).
-            if(light.type == light_type::directional && light.indirect_intensity > 0.0f && sun <= 0.0f)
+            // The first directional light the GI sees (disabled lights and lights whose indirect lighting
+            // scale is 0 are skipped).
+            if(light.type == light_type::directional && light_comp.is_enabled() && light.indirect_intensity > 0.0f &&
+               sun <= 0.0f)
             {
                 const auto color = light_comp.get_linear_color();
                 sun = light.intensity * math::max(color.x, math::max(color.y, color.z));

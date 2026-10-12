@@ -127,6 +127,13 @@ public:
     auto is_paused() const -> bool;
     auto is_stopped() const -> bool;
 
+    /**
+     * @brief Queues a burst of @p count particles for the next update, whatever the emission rate,
+     * start delay, loop or play state (ps_soa::emit). A queued burst wakes an emitter that culling
+     * froze; a disabled emitter ignores it.
+     */
+    void emit(uint32_t count, const ps_soa::emit_params& params = {});
+
     void set_loop(bool loop);
     auto is_loop() const -> bool;
 

@@ -163,6 +163,11 @@ auto simulation::get_delta_time() const -> delta_t
     return dt;
 }
 
+auto simulation::get_unscaled_delta_time() const -> delta_t
+{
+    return std::chrono::duration_cast<delta_t>(timestep_);
+}
+
 void simulation::set_time_scale(float time_scale)
 {
     time_scale_ = time_scale;

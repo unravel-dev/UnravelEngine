@@ -1,4 +1,6 @@
 #include "model_component.h"
+#include <engine/assets/asset_manager.h>
+#include <engine/engine.h>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
@@ -100,11 +102,18 @@ void rebuild_submesh_entries(submesh_component& comp,
     }
 }
 
+/// The node entities a rebuild walk binds, and among them those it had to create.
+struct armature_walk
+{
+    std::vector<entt::handle> nodes;
+    std::vector<entt::handle> created_nodes;
+};
+
 auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
                        const mesh& render_mesh,
                        entt::handle& parent,
                        std::vector<entt::handle>& claimed_siblings,
-                       std::vector<entt::handle>& nodes,
+                       armature_walk& walk,
                        animation_pose& ref_pose) -> entt::handle
 {
     const auto& bind_data = render_mesh.get_skin_bind_data();
@@ -123,13 +132,14 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
         {
             auto& reg = *entity_node.registry();
             entity_node = scene::create_entity(reg, node->name, parent);
+            walk.created_nodes.emplace_back(entity_node);
         }
         // A created entity is claimed too: it is now a child with this name a later sibling would find.
         claimed_siblings.emplace_back(entity_node);
         auto& trans_comp = entity_node.get<transform_component>();
         trans_comp.set_transform_local(node->local_transform);
 
-        nodes.emplace_back(entity_node);
+        walk.nodes.emplace_back(entity_node);
 
         if(!node->submeshes.empty())
         {
@@ -159,7 +169,7 @@ void process_node(const std::unique_ptr<mesh::armature_node>& node,
                   const mesh& render_mesh,
                   entt::handle parent,
                   std::vector<entt::handle>& claimed_siblings,
-                  std::vector<entt::handle>& nodes,
+                  armature_walk& walk,
                   animation_pose& ref_pose)
 {
     if(!parent)
@@ -167,19 +177,17 @@ void process_node(const std::unique_ptr<mesh::armature_node>& node,
         return;
     }
 
-    auto entity_node = process_node_impl(node, render_mesh, parent, claimed_siblings, nodes, ref_pose);
+    auto entity_node = process_node_impl(node, render_mesh, parent, claimed_siblings, walk, ref_pose);
     // The child nodes bind among this entity's children, so only they can claim those.
     std::vector<entt::handle> claimed_children;
     for(auto& child : node->children)
     {
-        process_node(child, render_mesh, entity_node, claimed_children, nodes, ref_pose);
+        process_node(child, render_mesh, entity_node, claimed_children, walk, ref_pose);
     }
 }
 
-auto process_armature(const mesh& render_mesh,
-                      entt::handle parent,
-                      std::vector<entt::handle>& nodes,
-                      animation_pose& ref_pose) -> bool
+auto process_armature(const mesh& render_mesh, entt::handle parent, armature_walk& walk, animation_pose& ref_pose)
+    -> bool
 {
     const auto& root = render_mesh.get_armature();
     if(!root)
@@ -188,9 +196,65 @@ auto process_armature(const mesh& render_mesh,
     }
 
     std::vector<entt::handle> claimed_roots;
-    process_node(root, render_mesh, parent, claimed_roots, nodes, ref_pose);
+    process_node(root, render_mesh, parent, claimed_roots, walk, ref_pose);
 
     return true;
+}
+
+auto contains_entity(const std::vector<entt::handle>& entities, entt::handle entity) -> bool
+{
+    return std::find(entities.begin(), entities.end(), entity) != entities.end();
+}
+
+/// The parent of @p entity in the transform hierarchy, or an empty handle.
+auto get_parent_entity(entt::handle entity) -> entt::handle
+{
+    const auto* transform_comp = entity.try_get<transform_component>();
+    return transform_comp ? transform_comp->get_parent() : entt::handle{};
+}
+
+/// Whether @p entity and everything under it belongs to @p entities.
+auto is_whole_subtree_in(entt::handle entity, const std::vector<entt::handle>& entities) -> bool
+{
+    if(!contains_entity(entities, entity))
+    {
+        return false;
+    }
+    const auto* transform_comp = entity.try_get<transform_component>();
+    if(!transform_comp)
+    {
+        return true;
+    }
+    const auto& children = transform_comp->get_children();
+    return std::all_of(children.begin(),
+                       children.end(),
+                       [&](entt::handle child)
+                       {
+                           return is_whole_subtree_in(child, entities);
+                       });
+}
+
+/**
+ * The topmost entities of @p entities whose whole subtree belongs to @p entities: removing or
+ * restoring those covers the set, and an entity something else lives under (a child the user
+ * added under a node) stays with it.
+ */
+auto find_subtree_roots(const std::vector<entt::handle>& entities) -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> roots;
+    for(const auto& entity : entities)
+    {
+        if(!entity.valid() || !is_whole_subtree_in(entity, entities))
+        {
+            continue;
+        }
+        const auto parent = get_parent_entity(entity);
+        if(!parent || !is_whole_subtree_in(parent, entities))
+        {
+            roots.emplace_back(entity);
+        }
+    }
+    return roots;
 }
 
 /// Consumer slot in transform_component's indexed dirty flags owned by the model pose
@@ -344,7 +408,7 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
 
 } // namespace
 
-auto model_component::create_armature(bool force) -> bool
+auto model_component::create_armature(bool force, std::vector<entt::handle>* created_roots) -> bool
 {
     bool has_processed_armature = !get_armature_entities().empty();
 
@@ -359,10 +423,17 @@ auto model_component::create_armature(bool force) -> bool
 
         auto owner = get_owner();
 
-        std::vector<entt::handle> armature_entities;
-        if(process_armature(*mesh, owner, armature_entities, bind_pose_))
+        armature_walk walk;
+        // The walk appends every node to the reference pose, so it starts over.
+        bind_pose_ = {};
+        if(process_armature(*mesh, owner, walk, bind_pose_))
         {
-            set_armature_entities(armature_entities);
+            set_armature_entities(walk.nodes);
+            settle_previous_armature();
+            if(created_roots)
+            {
+                *created_roots = find_subtree_roots(walk.created_nodes);
+            }
 
             const auto& skin_data = mesh->get_skin_bind_data();
             // Has skinning data?
@@ -502,11 +573,13 @@ auto model_component::update_armature() -> bool
     return true;
 }
 
-auto model_component::init_armature(bool force) -> bool
+auto model_component::init_armature(bool force, std::vector<entt::handle>* created_roots) -> bool
 {
     auto lod = model_.get_lod(0);
     if(!lod)
     {
+        // No mesh binds any node: every node the previous mesh bound is stale.
+        settle_previous_armature();
         return false;
     }
 
@@ -522,13 +595,81 @@ auto model_component::init_armature(bool force) -> bool
 
     if(recreate_armature)
     {
-        if(create_armature(force))
+        if(create_armature(force, created_roots))
         {
             return update_armature();
         }
     }
+    if(!armature)
+    {
+        // A mesh without an armature binds no node: every node the previous mesh bound is stale.
+        settle_previous_armature();
+    }
 
     return false;
+}
+
+void model_component::resolve_pending_default_materials()
+{
+    if(!model_.is_default_materials_pending())
+    {
+        return;
+    }
+    auto& am = engine::context().get_cached<asset_manager>();
+    if(model_.apply_default_materials(am, false))
+    {
+        touch();
+    }
+}
+
+auto model_component::rebuild_armature() -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> created_roots;
+    if(is_armature_rebuild_pending())
+    {
+        init_armature(false, &created_roots);
+    }
+    return created_roots;
+}
+
+auto model_component::is_armature_rebuild_pending() const -> bool
+{
+    return armature_rebuild_pending_;
+}
+
+auto model_component::take_stale_armature_entities() -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> stale;
+    std::copy_if(stale_armature_entities_.begin(),
+                 stale_armature_entities_.end(),
+                 std::back_inserter(stale),
+                 [](entt::handle entity)
+                 {
+                     return entity.valid();
+                 });
+    stale_armature_entities_.clear();
+    return stale;
+}
+
+void model_component::settle_previous_armature()
+{
+    if(!armature_rebuild_pending_)
+    {
+        return;
+    }
+    // The nodes the current armature binds again are not stale.
+    std::vector<entt::handle> stale;
+    std::copy_if(previous_armature_entities_.begin(),
+                 previous_armature_entities_.end(),
+                 std::back_inserter(stale),
+                 [&](entt::handle entity)
+                 {
+                     return entity.valid() && !contains_entity(armature_entities_, entity);
+                 });
+    const auto roots = find_subtree_roots(stale);
+    stale_armature_entities_.insert(stale_armature_entities_.end(), roots.begin(), roots.end());
+    previous_armature_entities_.clear();
+    armature_rebuild_pending_ = false;
 }
 
 void model_component::update_world_bounds(const math::transform& world_transform)
@@ -784,7 +925,11 @@ void model_component::on_create_component(entt::registry& r, entt::entity e)
     auto& component = entity.get<model_component>();
     component.set_owner(entity);
 
+    // A copied component starts without the source's node bookkeeping: those are its entities.
     component.set_armature_entities({});
+    component.previous_armature_entities_.clear();
+    component.stale_armature_entities_.clear();
+    component.armature_rebuild_pending_ = false;
 }
 
 void model_component::on_destroy_component(entt::registry& r, entt::entity e)
@@ -884,7 +1029,18 @@ auto model_component::get_model() const -> const model&
 
 void model_component::set_model(const model& model)
 {
+    const bool is_mesh_changed = model_.get_lod(0).uid() != model.get_lod(0).uid();
     model_ = model;
+    if(is_mesh_changed && !armature_entities_.empty())
+    {
+        // The new mesh binds its own nodes: the armature is rebuilt, and the nodes of the old one
+        // it does not bind again become stale (take_stale_armature_entities).
+        previous_armature_entities_.insert(previous_armature_entities_.end(),
+                                           armature_entities_.begin(),
+                                           armature_entities_.end());
+        set_armature_entities({});
+        armature_rebuild_pending_ = true;
+    }
 
     // Different mesh asset - poses/proxies and captured bounds derived from the old one
     // are invalid.

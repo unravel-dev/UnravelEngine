@@ -16,6 +16,10 @@ namespace unravel
 
     public:
         static auto ResolveUrl(const Rml::String& url) -> Rml::String;
+
+        /// @p url as an asset key: the protocol path of a file under a protocol root, or @p url
+        /// unchanged. RmlUi joins a relative source onto its document's file path.
+        static auto ResolveAssetKey(const Rml::String& url) -> Rml::String;
     
         auto Open(const Rml::String& url) -> Rml::FileHandle override;
     

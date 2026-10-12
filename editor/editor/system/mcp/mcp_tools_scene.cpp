@@ -1106,15 +1106,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              }
 
              auto* scn = em.get_active_scene(ctx);
-             size_t entity_count = 0;
-             if(scn && scn->registry)
-             {
-                 for(auto entity : scn->registry->view<transform_component>())
-                 {
-                     (void)entity;
-                     ++entity_count;
-                 }
-             }
+             const size_t entity_count = scn && scn->registry ? count_live_entities(*scn->registry) : 0;
              return {.text = fmt::format(R"({{"ok":true,"key":{},"entity_count":{}}})",
                                          make_json_string(asset.id()),
                                          entity_count),
@@ -1162,15 +1154,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              editor_actions::new_scene_from_preset(ctx, preset);
 
              auto* scn = em.get_active_scene(ctx);
-             size_t entity_count = 0;
-             if(scn && scn->registry)
-             {
-                 for(auto entity : scn->registry->view<transform_component>())
-                 {
-                     (void)entity;
-                     ++entity_count;
-                 }
-             }
+             const size_t entity_count = scn && scn->registry ? count_live_entities(*scn->registry) : 0;
              return {.text = fmt::format(R"({{"ok":true,"preset":{},"entity_count":{}}})",
                                          make_json_string(defaults::scene_preset_to_string(preset)),
                                          entity_count),

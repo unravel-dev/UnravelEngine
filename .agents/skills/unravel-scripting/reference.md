@@ -12,7 +12,7 @@ Expose via: C# wrapper in `engine_data/data/scripts/scene/components/` +
 | `id_component` | `IdComponent` | Marker |
 | `model_component` | `ModelComponent` | enabled, mesh, shadows, static, LOD bias, materials |
 | `camera_component` | `CameraComponent` | FOV/clip/projection/masks + screen queries |
-| `light_component` | `LightComponent` | type, color, intensity, range, spot, shadows |
+| `light_component` | `LightComponent` | enabled, type, color, intensity, range, spot, shadows |
 | `skylight_component` | `SkylightComponent` | mode, turbidity, clouds, irradiance, cubemap |
 | `reflection_probe_component` | `ReflectionProbeComponent` | type/method/update/resolution + `MarkDirty` |
 | `physics_component` | `PhysicsComponent` | Strong |

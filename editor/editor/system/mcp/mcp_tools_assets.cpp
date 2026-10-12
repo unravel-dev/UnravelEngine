@@ -10,6 +10,7 @@
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/assets/impl/asset_reader.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
@@ -26,6 +27,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <map>
+#include <memory>
 #include <vector>
 
 namespace unravel::mcp
@@ -124,25 +127,54 @@ auto source_exists(const std::string& key) -> bool
     return fs::exists(fs::absolute(fs::resolve_protocol(key)), ec);
 }
 
+/**
+ * The assets that keys held before an import or reimport overwrote them, by key.
+ *
+ * A reimport reloads into the same handle, so until the reload is published the handle still
+ * returns the old asset and reads as ready. A wait compares against the asset kept here
+ * (the identity version() reports); holding it, rather than its address, keeps the reloaded
+ * asset from reusing the address and reading as unchanged.
+ */
+using asset_snapshot = std::map<std::string, std::shared_ptr<void>>;
+
 /// Polls with try_get(), the handle's own readiness test: unlike is_ready() it submits a deferred
 /// load, which nothing else would start while we wait. The handle is fetched again each round
-/// because right after an import the key may not be registered yet.
+/// because right after an import the key may not be registered yet. While the handle returns
+/// @p previous, the asset the key held before an overwrite, the reload is still on its way.
+///
+/// The handle is not touched before the compiler has written the asset: a load started earlier finds no compiled file
+/// and leaves the asset empty. An empty asset is not the answer either while time remains: the compiled-asset watcher
+/// reloads it once the compiler writes it, so only an asset still empty at the deadline failed.
 template<typename T>
-auto poll_handle_state(asset_manager& am, const std::string& key, std::chrono::milliseconds timeout)
-    -> asset_readiness
+auto poll_handle_state(asset_manager& am,
+                       const std::string& key,
+                       std::chrono::milliseconds timeout,
+                       const std::shared_ptr<void>& previous) -> asset_readiness
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
+    const auto compiled_path = asset_reader::resolve_compiled_path<T>(key);
+    bool is_empty = false;
     while(true)
     {
-        if(auto handle = am.get_asset<T>(key))
+        fs::error_code ec;
+        if(fs::exists(compiled_path, ec))
         {
-            if(auto asset = handle.try_get())
+            if(auto handle = am.get_asset<T>(key))
             {
-                return asset_handle<T>::is_empty(asset) ? asset_readiness::failed : asset_readiness::ready;
+                auto asset = handle.try_get();
+                is_empty = asset_handle<T>::is_empty(asset);
+                if(asset && asset != previous && !is_empty)
+                {
+                    return asset_readiness::ready;
+                }
             }
         }
         if(std::chrono::steady_clock::now() >= deadline)
         {
+            if(is_empty)
+            {
+                return asset_readiness::failed;
+            }
             return source_exists(key) ? asset_readiness::loading : asset_readiness::missing;
         }
         tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
@@ -154,49 +186,86 @@ struct asset_type_list
 {
 };
 
-/// Dispatches on the key's extension to the asset type that owns it.
-template<typename T, typename... Rest>
-auto poll_by_extension(asset_manager& am,
-                       const std::string& key,
-                       const std::string& ext,
-                       std::chrono::milliseconds timeout,
-                       asset_type_list<T, Rest...>,
-                       asset_readiness& out) -> bool
+/// The asset types with a loadable handle, in the order extensions are matched.
+using loadable_asset_types = asset_type_list<material,
+                                             mesh,
+                                             prefab,
+                                             scene_prefab,
+                                             gfx::texture,
+                                             audio_clip,
+                                             animation_clip,
+                                             physics_material,
+                                             ui_tree>;
+
+/// Calls @p visit with the asset type that owns extension @p ext; false when no type does.
+template<typename Visitor, typename T, typename... Rest>
+auto visit_asset_type(const std::string& ext, asset_type_list<T, Rest...>, Visitor&& visit) -> bool
 {
     if(matches_asset_extension<T>(ext))
     {
-        out = poll_handle_state<T>(am, key, timeout);
+        visit.template operator()<T>();
         return true;
     }
     if constexpr(sizeof...(Rest) > 0)
     {
-        return poll_by_extension(am, key, ext, timeout, asset_type_list<Rest...>{}, out);
+        return visit_asset_type(ext, asset_type_list<Rest...>{}, std::forward<Visitor>(visit));
     }
     return false;
 }
 
-auto wait_asset_state(rtti::context& ctx, const std::string& key, std::chrono::milliseconds timeout)
-    -> asset_readiness
+/// Loads and holds what each existing key of @p keys holds now. It is loaded, not just peeked: an
+/// asset nothing uses is not resident, and loading the stale compiled file later would read as new.
+auto take_asset_snapshot(rtti::context& ctx, const std::vector<std::string>& keys) -> asset_snapshot
+{
+    tpp::this_thread::register_this_thread();
+
+    auto& am = ctx.get_cached<asset_manager>();
+    asset_snapshot snapshot;
+    for(const auto& key : keys)
+    {
+        const auto ext = fs::path(key).extension().generic_string();
+        visit_asset_type(ext,
+                         loadable_asset_types{},
+                         [&]<typename T>()
+                         {
+                             auto handle = am.find_asset<T>(key);
+                             if(!handle)
+                             {
+                                 return;
+                             }
+                             if(auto asset = handle.get(); asset && !asset_handle<T>::is_empty(asset))
+                             {
+                                 snapshot.emplace(key, std::move(asset));
+                             }
+                         });
+    }
+    return snapshot;
+}
+
+auto find_snapshot_asset(const asset_snapshot& snapshot, const std::string& key) -> std::shared_ptr<void>
+{
+    auto it = snapshot.find(key);
+    return it != snapshot.end() ? it->second : nullptr;
+}
+
+/// Waits until @p key is loaded; with a @p previous asset (see asset_snapshot), until it is
+/// loaded as something else.
+auto wait_asset_state(rtti::context& ctx,
+                      const std::string& key,
+                      std::chrono::milliseconds timeout,
+                      const std::shared_ptr<void>& previous = nullptr) -> asset_readiness
 {
     tpp::this_thread::register_this_thread();
 
     auto& am = ctx.get_cached<asset_manager>();
     const auto ext = fs::path(key).extension().generic_string();
     asset_readiness state{};
-    if(poll_by_extension(am,
-                         key,
-                         ext,
-                         timeout,
-                         asset_type_list<material,
-                                         mesh,
-                                         prefab,
-                                         scene_prefab,
-                                         gfx::texture,
-                                         audio_clip,
-                                         animation_clip,
-                                         physics_material,
-                                         ui_tree>{},
-                         state))
+    if(visit_asset_type(ext,
+                        loadable_asset_types{},
+                        [&]<typename T>()
+                        {
+                            state = poll_handle_state<T>(am, key, timeout, previous);
+                        }))
     {
         return state;
     }
@@ -258,6 +327,47 @@ auto collect_imported_asset_keys(const import_files_item& item) -> std::vector<s
     if(keys.empty())
     {
         keys.push_back(item.dest_key);
+    }
+    return keys;
+}
+
+/// The keys of the existing files an import of @p items overwrites: a directory copies its whole
+/// tree onto its destination, so each of its files lands at the same relative path there.
+auto collect_overwritten_keys(const std::vector<import_files_item>& items) -> std::vector<std::string>
+{
+    std::vector<std::string> keys;
+    const auto meta_ext = ex::get_meta_format();
+    auto add_existing = [&](const fs::path& dest)
+    {
+        // An error code of its own: the directory walk below stops on any error in ec.
+        fs::error_code status_ec;
+        if(dest.extension().generic_string() == meta_ext || !fs::is_regular_file(dest, status_ec))
+        {
+            return;
+        }
+        auto key = fs::convert_to_protocol(dest).generic_string();
+        if(!key.empty())
+        {
+            keys.push_back(std::move(key));
+        }
+    };
+    for(const auto& item : items)
+    {
+        if(!item.is_directory)
+        {
+            add_existing(item.dest_path);
+            continue;
+        }
+        const fs::path source_root(item.source_path);
+        const fs::path dest_root(item.dest_path);
+        fs::error_code ec;
+        for(fs::recursive_directory_iterator it(source_root, ec), end; it != end && !ec; it.increment(ec))
+        {
+            if(it->is_regular_file(ec))
+            {
+                add_existing(dest_root / it->path().lexically_relative(source_root));
+            }
+        }
     }
     return keys;
 }
@@ -601,7 +711,8 @@ void register_asset_tools(mcp_tool_registry& registry)
              "Import absolute filesystem paths (outside project) into folder (app:/...). The single "
              "import path for all assets: paths may be files or directories (directories copy "
              "recursively - pass one directory per multi-file model, e.g. .gltf + .bin + textures). "
-             "Waits for copy+ready (wait_ms, default 15000).",
+             "Waits for copy+ready (wait_ms, default 15000); a file copied over an existing asset is ready "
+             "once the reloaded asset has replaced the old one.",
          .input_schema_json =
              R"json({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"folder":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["paths","folder"]})json",
          .handler =
@@ -662,6 +773,9 @@ void register_asset_tools(mcp_tool_registry& registry)
                  std::string focus_error;
                  editor_actions::request_main_window_focus(ctx, &focus_error);
              }
+             const auto overwritten =
+                 take_asset_snapshot(ctx,
+                                     collect_overwritten_keys(editor_actions::resolve_import_items(paths, target_path)));
              auto import_result = editor_actions::import_files(ctx, paths, target_path, true);
              const bool copied = editor_actions::wait_import_jobs(import_result, wait_ms);
              const auto ready_deadline = std::chrono::steady_clock::now() + wait_ms;
@@ -699,8 +813,8 @@ void register_asset_tools(mcp_tool_registry& registry)
                              ready_deadline - std::chrono::steady_clock::now());
                          ready = wait_asset_state(ctx,
                                                   key,
-                                                  remaining.count() > 0 ? remaining : std::chrono::milliseconds(0)) ==
-                                 asset_readiness::ready;
+                                                  remaining.count() > 0 ? remaining : std::chrono::milliseconds(0),
+                                                  find_snapshot_asset(overwritten, key)) == asset_readiness::ready;
                      }
                      if(ready)
                      {
@@ -846,14 +960,17 @@ void register_asset_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "assets_reimport_batch",
-         .description = "Reimport many assets by key. Optional wait_ms after the batch.",
+         .description =
+             "Reimport many assets by key and wait until each has reloaded (wait_ms, a shared deadline, "
+             "default 15000; 0 returns at once). Each reimported key reports a state: ready, loading (still "
+             "compiling or loading at the deadline) or failed (see logs_get_recent).",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             const auto wait_ms = read_wait_ms(args, 500);
+             const auto wait_ms = read_wait_ms(args, 15000);
              simdjson::dom::array items_arr;
              std::string error;
              if(!read_required_array(args, "items", items_arr, error))
@@ -879,55 +996,79 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  return {.text = "items array is empty", .is_error = true};
              }
-             auto result = mcp.invoke_on_main(
-                 [keys]() -> tool_result
+             const auto previous = take_asset_snapshot(ctx, keys);
+             // Per key: empty when the reimport was requested, otherwise why it was not.
+             auto errors = mcp.invoke_on_main(
+                 [keys]() -> std::vector<std::string>
                  {
-                     std::string results = "[";
-                     bool first = true;
-                     size_t ok_count = 0;
+                     std::vector<std::string> key_errors;
+                     key_errors.reserve(keys.size());
                      for(const auto& key : keys)
                      {
-                         if(!first)
-                         {
-                             results += ",";
-                         }
-                         first = false;
                          const auto source = asset_actions::resolve_asset_source_path(key);
                          fs::error_code ec;
                          if(source.empty() || !fs::exists(source, ec))
                          {
-                             results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
-                                                    make_json_string(key),
-                                                    make_json_string("Asset source not found"));
+                             key_errors.emplace_back("Asset source not found");
                              continue;
                          }
                          if(!asset_actions::can_reimport(source))
                          {
-                             results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
-                                                    make_json_string(key),
-                                                    make_json_string("Asset cannot be reimported"));
+                             key_errors.emplace_back("Asset cannot be reimported");
                              continue;
                          }
                          asset_actions::reimport_key(key);
-                         ++ok_count;
-                         results += fmt::format(R"({{"ok":true,"key":{},"reimported":true}})", make_json_string(key));
+                         key_errors.emplace_back();
                      }
-                     results += "]";
-                     return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{}}})",
-                                                 results,
-                                                 ok_count,
-                                                 keys.size()),
-                             .is_error = ok_count == 0};
+                     return key_errors;
                  });
-             if(!result)
+             if(!errors)
              {
                  return {.text = "Timed out reimporting on main thread", .is_error = true};
              }
-             if(!result->is_error)
+             const bool should_wait = wait_ms.count() > 0;
+             const auto deadline = std::chrono::steady_clock::now() + wait_ms;
+             std::string results = "[";
+             size_t ok_count = 0;
+             size_t ready_count = 0;
+             for(size_t i = 0; i < keys.size(); ++i)
              {
-                 sleep_worker(wait_ms);
+                 if(i > 0)
+                 {
+                     results += ",";
+                 }
+                 const auto& key_error = (*errors)[i];
+                 if(!key_error.empty())
+                 {
+                     results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
+                                            make_json_string(keys[i]),
+                                            make_json_string(key_error));
+                     continue;
+                 }
+                 ++ok_count;
+                 if(!should_wait)
+                 {
+                     results += fmt::format(R"({{"ok":true,"key":{},"reimported":true}})", make_json_string(keys[i]));
+                     continue;
+                 }
+                 const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                     deadline - std::chrono::steady_clock::now());
+                 const auto state = wait_asset_state(ctx,
+                                                     keys[i],
+                                                     (std::max)(remaining, std::chrono::milliseconds(0)),
+                                                     find_snapshot_asset(previous, keys[i]));
+                 ready_count += state == asset_readiness::ready ? 1 : 0;
+                 results += fmt::format(R"({{"ok":true,"key":{},"reimported":true,"state":{}}})",
+                                        make_json_string(keys[i]),
+                                        make_json_string(readiness_to_string(state)));
              }
-             return *result;
+             results += "]";
+             return {.text = fmt::format(R"({{"results":{},"count":{},"ready":{},"requested":{}}})",
+                                         results,
+                                         ok_count,
+                                         ready_count,
+                                         keys.size()),
+                     .is_error = ok_count == 0 || (should_wait && ready_count != ok_count)};
          },
          .mutates_scene = false,
          .requires_main_thread = false});

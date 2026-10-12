@@ -14,11 +14,14 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace unravel
 {
+
+struct editing_action_t;
 
 struct play_state_info
 {
@@ -265,6 +268,23 @@ struct editor_actions
      * work can run (e.g. after MCP creates materials while Cursor has focus).
      */
     static auto request_main_window_focus(rtti::context& ctx, std::string* error = nullptr) -> bool;
+
+    /**
+     * @brief Rebuilds the armatures that mesh changes left pending, as undo steps of the change.
+     *
+     * A model's new mesh binds its own node entities: the nodes it needs that no existing child
+     * provides are created, and the old mesh's nodes it does not bind again are deleted. Both
+     * steps record their entities, so undoing them puts back the old nodes with their ids.
+     * @return The executed steps, empty when no rebuild was pending.
+     */
+    static auto rebuild_pending_armatures(rtti::context& ctx) -> std::vector<std::shared_ptr<editing_action_t>>;
+
+    /**
+     * @brief Where import_files copies each of @p paths: target_path / the source's file name,
+     * a directory with its whole tree. Nothing is copied.
+     */
+    static auto resolve_import_items(const std::vector<std::string>& paths, const fs::path& target_path)
+        -> std::vector<import_files_item>;
 
     /**
      * @brief Copy external files/folders into target_path (content-browser Import parity).

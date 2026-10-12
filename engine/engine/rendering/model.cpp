@@ -8,6 +8,8 @@
 #include "camera.h"
 #include "batch_collector.h"
 
+#include <engine/assets/asset_manager.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -206,6 +208,45 @@ void model::set_material(asset_handle<material> material, uint32_t index)
     }
 
     materials_[index] = std::move(material);
+}
+
+auto model::apply_default_materials(asset_manager& am, bool wait) -> bool
+{
+    const auto lod = get_lod(0);
+    if(!lod)
+    {
+        return false;
+    }
+    const auto mesh_ptr = wait ? lod.get() : lod.try_get();
+    if(!mesh_ptr || asset_handle<mesh>::is_empty(mesh_ptr))
+    {
+        return false;
+    }
+    const auto& material_uids = mesh_ptr->get_default_material_uids();
+    for(size_t i = 0; i < material_uids.size(); ++i)
+    {
+        const auto index = static_cast<uint32_t>(i);
+        if(get_material(index))
+        {
+            continue;
+        }
+        if(auto mat_asset = am.get_asset<material>(material_uids[i]))
+        {
+            set_material(mat_asset, index);
+        }
+    }
+    default_materials_pending_ = false;
+    return true;
+}
+
+void model::set_default_materials_pending(bool pending)
+{
+    default_materials_pending_ = pending;
+}
+
+auto model::is_default_materials_pending() const -> bool
+{
+    return default_materials_pending_;
 }
 
 void model::set_material_instance(material::sptr material, uint32_t index)

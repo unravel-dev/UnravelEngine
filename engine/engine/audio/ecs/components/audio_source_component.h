@@ -4,6 +4,7 @@
 #include <audiopp/source.h>
 #include <engine/audio/audio_bus.h>
 #include <engine/audio/audio_clip.h>
+#include <engine/audio/volume_fade.h>
 #include <engine/ecs/components/basic_component.h>
 #include <math/math.h>
 
@@ -48,6 +49,17 @@ public:
      * @param volume The volume level. Valid range: [0.0, 1.0].
      */
     void set_volume(float volume);
+
+    /**
+     * @brief Ramps the volume to @p volume over @p seconds of unscaled time, then stops the
+     * source when @p stop_at_end. A later set_volume or fade replaces it.
+     */
+    void fade_to(float volume, float seconds, bool stop_at_end);
+
+    /**
+     * @brief Advances a running fade by @p seconds of unscaled time (the audio system calls it).
+     */
+    void update_fade(float seconds);
 
     /**
      * @brief Sets the pitch of the audio source.
@@ -277,6 +289,7 @@ private:
     frange_t range_ = {1.0f, 20.0f};        ///< The range of the audio source.
     std::shared_ptr<audio::source> source_; ///< The audio source object.
     asset_handle<audio_clip> sound_;        ///< The audio clip bound to the audio source.
+    volume_fade fade_{};                    ///< Volume ramp started by fade_to.
     uintptr_t bound_clip_version_{};        ///< Cached `sound_.version()` at last successful bind.
 
     bool auto_play_consumed_ = true;     ///< Indicates if the audio source should autoplay.

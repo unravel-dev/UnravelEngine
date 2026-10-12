@@ -150,20 +150,33 @@ public:
     }
 
     /**
+     * @brief Calls @p func with every allocated resource.
+     */
+    template<typename Func>
+    void for_each(Func func)
+    {
+        const uint16_t* handles = handle_allocator_.getHandles();
+        for(uint16_t i = 0; i < handle_allocator_.getNumHandles(); ++i)
+        {
+            func(compiled_resources_[handles[i]]);
+        }
+    }
+
+    /**
      * @brief Cleanup all resources
      * @param cleanup_func Function to call for each valid resource before freeing
      */
     template<typename CleanupFunc>
     void cleanup_all(CleanupFunc cleanup_func)
     {
-        auto handles_copy = handle_allocator_;
-        for(uint16_t i = 0; i < handles_copy.getNumHandles(); ++i)
+        // The allocated handles, copied: free() reorders the allocator's list, and once a handle
+        // has been freed the allocated ones are no longer 0 .. count - 1.
+        const uint16_t* handles = handle_allocator_.getHandles();
+        const std::vector<uint16_t> allocated(handles, handles + handle_allocator_.getNumHandles());
+        for(const uint16_t handle_idx : allocated)
         {
-            if(handles_copy.isValid(i))
-            {
-                cleanup_func(compiled_resources_[i]);
-                free(i);
-            }
+            cleanup_func(compiled_resources_[handle_idx]);
+            free(handle_idx);
         }
     }
 
@@ -302,7 +315,16 @@ public:
     
     auto get_transform() const -> const Rml::Matrix4f& { return transform_; }
     void reset_program();
-    
+
+    /**
+     * @brief The image sources whose texture asset changed since RmlUi loaded them: imported after
+     * a missing or failed load, or reloaded with new content.
+     *
+     * RmlUi keeps a loaded image, and its size, until the source is released. The caller releases
+     * these (Rml::ReleaseTexture), so RmlUi loads them again the next time it needs them.
+     */
+    auto collect_changed_texture_sources() -> std::vector<Rml::String>;
+
 
 private:
     enum class GeometryBufferType : uint8_t
@@ -335,6 +357,10 @@ private:
     struct CompiledTexture
     {
         asset_handle<gfx::texture> asset;
+        /// The asset's texture as RmlUi loaded it; null while the image is missing or failed to load.
+        gfx::texture::ptr loaded;
+        /// The source RmlUi loaded the image for; empty for generated textures.
+        Rml::String source;
         gfx::texture::ptr generated_texture_ptr; // For textures created directly (like SaveLayerAsTexture)
         gfx::frame_buffer::ptr generated_framebuffer_ptr; // Keep framebuffer alive when texture is render target
         bool requires_premultiplication = false; // Asset textures store straight alpha; generated RmlUi textures do not

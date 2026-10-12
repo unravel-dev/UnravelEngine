@@ -509,8 +509,7 @@ auto camera::test_billboard(float size, const math::transform& t) const -> bool
 
 auto camera::world_to_viewport(const math::vec3& pos) const -> math::vec3
 {
-    // Ensure we have an up-to-date projection and view matrix
-    auto view_proj = get_view_projection();
+    auto view_proj = get_view_projection_unjittered();
 
     // Transform the point into clip space
     math::vec4 clip = view_proj * math::vec4{pos.x, pos.y, pos.z, 1.0f};
@@ -529,6 +528,11 @@ auto camera::world_to_viewport(const math::vec3& pos) const -> math::vec3
 
     // Point on screen!
     return point;
+}
+
+auto camera::world_to_view_depth(const math::vec3& pos) const -> float
+{
+    return get_view().transform_coord(pos).z;
 }
 
 auto camera::viewport_to_ray(const math::vec2& point, math::vec3& vec_ray_start, math::vec3& vec_ray_dir) const -> bool
@@ -567,6 +571,26 @@ auto camera::viewport_to_ray(const math::vec2& point, math::vec3& vec_ray_start,
         vec_ray_dir = math::normalize(mtx_inv_view.transform_normal(cursor));
     }
 
+    return true;
+}
+
+auto camera::viewport_to_world_at_depth(const math::vec2& point, float depth, math::vec3& position_out) const -> bool
+{
+    math::vec3 ray_start;
+    math::vec3 ray_dir;
+    if(!viewport_to_ray(point, ray_start, ray_dir))
+    {
+        return false;
+    }
+    // The ray starts at the eye (perspective) or on a plane in front of it (orthographic), and off
+    // center it leans away from the view direction: walk it until the depth is reached.
+    const float start_depth = world_to_view_depth(ray_start);
+    const float depth_per_unit = get_view().transform_normal(ray_dir).z;
+    if(math::abs(depth_per_unit) < math::epsilon<float>())
+    {
+        return false;
+    }
+    position_out = ray_start + ray_dir * ((depth - start_depth) / depth_per_unit);
     return true;
 }
 

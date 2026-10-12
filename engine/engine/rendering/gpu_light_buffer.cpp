@@ -96,11 +96,10 @@ void gpu_light_buffer::update(scene& scn)
         [&](auto /*entity*/, auto&& transform_comp, auto&& light_comp, auto&& /*active*/)
         {
             const auto& light = light_comp.get_light();
-            // A light the GI leaves out (indirect intensity 0) takes no record.
-            if(light.indirect_intensity <= 0.0f)
-            {
-                return;
-            }
+            // A light that adds nothing to the GI (disabled, or indirect intensity 0) keeps a record
+            // with zero intensity and no shadows: the record order and count stay stable, so turning
+            // a light on or off relights only its own reach instead of the whole scene.
+            const bool contributes = light_comp.is_enabled() && light.indirect_intensity > 0.0f;
             // Scale must not leak into a light's transform: only its position and orientation
             // are meaningful, and a scaled parent would otherwise skew the direction axis.
             auto world_transform = transform_comp.get_transform_global();
@@ -140,13 +139,13 @@ void gpu_light_buffer::update(scene& scn)
             dst[8] = light_color_linear.x;
             dst[9] = light_color_linear.y;
             dst[10] = light_color_linear.z;
-            dst[11] = light.intensity * light.indirect_intensity;
+            dst[11] = contributes ? light.intensity * light.indirect_intensity : 0.0f;
             dst[12] = cos_inner;
             dst[13] = cos_outer;
             // The emitter, as the direct pass gets it in u_light_source.
             dst[14] = light.type == light_type::directional ? 0.0f : light.source_radius;
             // 1 when the light casts shadows: GI traces their visibility, as the direct lighting pass shadows them.
-            dst[15] = light.casts_shadows ? 1.0f : 0.0f;
+            dst[15] = contributes && light.casts_shadows ? 1.0f : 0.0f;
             dst[16] = source_axis.x;
             dst[17] = source_axis.y;
             dst[18] = source_axis.z;

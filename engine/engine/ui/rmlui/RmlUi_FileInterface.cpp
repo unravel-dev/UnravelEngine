@@ -32,6 +32,16 @@ auto RmlUi_FileInterface::ResolveUrl(const Rml::String& url) -> Rml::String
     return url;
 }
 
+auto RmlUi_FileInterface::ResolveAssetKey(const Rml::String& url) -> Rml::String
+{
+    if(fs::has_known_protocol(url))
+    {
+        return url;
+    }
+    const auto key = fs::convert_to_protocol(url);
+    return fs::has_known_protocol(key) ? key.generic_string() : url;
+}
+
 auto RmlUi_FileInterface::Open(const Rml::String& url) -> Rml::FileHandle
 {
     auto real = ResolveUrl(url);
