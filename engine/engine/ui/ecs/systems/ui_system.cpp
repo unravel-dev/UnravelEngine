@@ -811,10 +811,15 @@ void ui_system::ensure_document_framebuffer(ui_document_component& comp)
     {
         comp.framebuffer.reset();
 
-        uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+        // The document is sampled on a world-space quad that is often much smaller on screen than
+        // the document or seen at a grazing angle: without a mip chain and anisotropic filtering,
+        // text strokes fall between samples and break up. The frame buffer regenerates the mips
+        // after every render of the document.
+        uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                 BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC;
         auto color_texture = std::make_shared<gfx::texture>(static_cast<uint16_t>(comp.size.width),
                                                             static_cast<uint16_t>(comp.size.height),
-                                                            false,
+                                                            true,
                                                             1,
                                                             bgfx::TextureFormat::RGBA8,
                                                             texture_flags);

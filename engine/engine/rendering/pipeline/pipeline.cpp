@@ -506,7 +506,10 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     APP_SCOPE_PERF("Rendering/3D Text Pass");
 
     const auto& view = camera.get_view();
-    const auto& proj = camera.get_projection();
+    // This pass draws into the final image after temporal AA has resolved the frame, so
+    // nothing removes the subpixel jitter afterwards: a jittered projection would shift
+    // every document and text by up to half a pixel each frame.
+    const auto proj = camera.get_projection_unjittered();
     auto& fbo = rview.fbo_get("OBUFFER_DEPTH");
 
     gfx::render_pass pass("World UI/Elements Pass");
@@ -531,8 +534,11 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     // World-space UI documents: draw quad with framebuffer texture
     if(world_quad_program_ && world_quad_program_->begin())
     {
+        // Premultiplied blend: the document texture holds premultiplied alpha, and blending it
+        // by source alpha again would darken every partly transparent pixel.
         constexpr uint64_t world_ui_state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z |
-                                            BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_BLEND_NORMAL;
+                                            BGFX_STATE_DEPTH_TEST_LESS |
+                                            BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
 
         scn.registry->view<transform_component, ui_document_component, active_component>().each(
             [&](auto e, auto&& transform_comp, auto&& ui_comp, auto&&)
