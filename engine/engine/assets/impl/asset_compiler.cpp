@@ -122,6 +122,7 @@ struct input_texture_info
     bgfx::TextureFormat::Enum format{bgfx::TextureFormat::RGBA8};
     uint32_t width{};
     uint32_t height{};
+    uint32_t num_mips{1};
     bool fits_max_size{true};
 };
 
@@ -181,6 +182,7 @@ auto fill_input_texture_info_from_container(const bimg::ImageContainer& info, in
     out.format = static_cast<bgfx::TextureFormat::Enum>(info.m_format);
     out.width = info.m_width;
     out.height = info.m_height;
+    out.num_mips = info.m_numMips;
 }
 
 auto get_input_texture_info(const fs::path& input_path, texture_importer_meta::texture_size max_size) -> input_texture_info
@@ -559,8 +561,13 @@ auto compile_texture_to_file(const fs::path& input_path,
     // only the compiled KTX2 container carries the sRGB tag the runtime loader
     // turns into BGFX_TEXTURE_SRGB. A raw-copied PNG cannot express it.
     const bool needs_srgb_container = resolved_srgb;
+    // Raster sources (PNG, JPG, ...) parse with a single mip, so a raw copy would drop
+    // the requested chain. Containers that already carry mips are kept: texturec passes
+    // an authored chain through unchanged when -m is set, so running it adds nothing.
+    const bool needs_mip_generation = importer.generate_mipmaps && input_info.num_mips <= 1;
 
-    if(needs_format_conversion || needs_downscale || needs_equirect_projection || needs_srgb_container)
+    if(needs_format_conversion || needs_downscale || needs_equirect_projection || needs_srgb_container ||
+       needs_mip_generation)
     {
         if(needs_downscale && !needs_format_conversion)
         {
