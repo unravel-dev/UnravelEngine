@@ -22,6 +22,7 @@
 #include <seq/seq.h>
 #include <simulation/simulation.h>
 
+#include <algorithm>
 #include <array>
 
 namespace unravel
@@ -580,6 +581,15 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
             if(!has_compilation_errors_)
             {
                 app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
+                // An abstract base (a framework's controller) cannot be added to an entity.
+                auto& types = app_cache_.scriptable_component_types;
+                types.erase(std::remove_if(types.begin(),
+                                           types.end(),
+                                           [](const auto& type)
+                                           {
+                                               return type.is_abstract();
+                                           }),
+                            types.end());
 
                 // Same-named types in the engine and app assemblies are two
                 // distinct .NET types - name-based lookups resolve app-first,
