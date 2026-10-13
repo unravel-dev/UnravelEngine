@@ -55,9 +55,16 @@ auto find_meta_property(const entt::meta_type& type, std::string_view name) -> e
 
 /**
  * @brief Schema fields for one reflected property (no braces): "type", plus "enum", "minimum",
- *        "maximum", "readOnly" and "description" when the reflection carries them.
+ *        "maximum", "readOnly" and "description" when the reflection carries them; a nested
+ *        reflected struct also lists its own "properties".
  */
 auto meta_property_schema(const entt::meta_data& prop) -> std::string;
+
+/**
+ * @brief Schema fields for a reflected struct as a whole (no braces): "type":"object" and its
+ *        "properties", each described as meta_property_schema describes it.
+ */
+auto meta_object_schema(const entt::meta_type& type) -> std::string;
 
 /**
  * @brief True when the reflection exposes at least one property of `type` this bridge can

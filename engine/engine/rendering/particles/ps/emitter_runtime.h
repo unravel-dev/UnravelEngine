@@ -35,6 +35,8 @@ struct emitter_sim_state
     float start_delay_elapsed = 0.0f;
     uint32_t total_particles_spawned = 0;
     bool first_update = true;
+    /// Cleared when the emitter first plays after it is created or reset; a prewarm runs then.
+    bool prewarm_pending = true;
     bool playing = true;
     bool loop = true;
     emitter_feature features = emitter_feature::none;
@@ -81,6 +83,12 @@ struct emitter_sim_constants
     /// Emitter world rotation used for constrained billboards in local simulation.
     /// Stored with non-negative w so xyz can be packed into instance data.
     math::quat emitter_rotation{1.0f, 0.0f, 0.0f, 0.0f};
+    /// Start angle range and spin range of the particles, radians and radians per second.
+    frange_t rotation{0.0f, 0.0f};
+    frange_t rotation_speed{0.0f, 0.0f};
+    bool random_rotation_direction = false;
+    float soft_fade_distance = 0.0f;
+    bool frame_blending = false;
 };
 
 } // namespace ps_soa

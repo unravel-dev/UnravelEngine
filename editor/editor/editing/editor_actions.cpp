@@ -2292,6 +2292,11 @@ void editor_actions::recompile_shaders(const std::string& group)
         });
 }
 
+auto editor_actions::save_import_settings(const std::string& key, const asset_meta& meta) -> bool
+{
+    return asset_writer::atomic_save_to_file(asset_writer::resolve_meta_file_for_key(key).string(), meta);
+}
+
 void editor_actions::recompile_textures(const std::string& group)
 {
     auto& ctx = engine::context();
@@ -2555,6 +2560,7 @@ auto editor_actions::get_play_state(rtti::context& ctx) -> play_state_info
     info.is_splash = play.is_splash();
     info.is_simulation_running = play.is_simulation_running();
     info.frames_running = play.frames_running();
+    info.frames_simulated = play.frames_simulated();
     if(play.is_splash())
     {
         info.phase = "splash";

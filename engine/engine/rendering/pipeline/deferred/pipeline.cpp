@@ -944,7 +944,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(stages & pipeline_steps::particles_pass)
     {
-        run_particle_pass(scn, camera, rview, target, pre_exposure);
+        const gfx::texture::ptr hiz_depth = hiz_active ? rview.tex_find("HIZBUFFER") : gfx::texture::ptr{};
+        run_particle_pass(scn, camera, rview, target, pre_exposure, hiz_depth);
     }
 
     if(is_camera_run)

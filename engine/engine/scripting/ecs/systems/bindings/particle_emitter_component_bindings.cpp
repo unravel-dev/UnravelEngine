@@ -506,6 +506,144 @@ void internal_m2n_particle_emitter_set_initial_scale_3d(entt::entity id, const m
     }
 }
 
+auto internal_m2n_particle_emitter_get_rotation(entt::entity id) -> managed_range
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        const auto& range = comp->get_rotation();
+        return {range.min, range.max};
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_rotation(entt::entity id, managed_range value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_rotation(frange_t(value.min, value.max));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_rotation_speed(entt::entity id) -> managed_range
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        const auto& range = comp->get_rotation_speed();
+        return {range.min, range.max};
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_rotation_speed(entt::entity id, managed_range value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_rotation_speed(frange_t(value.min, value.max));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_random_rotation_direction(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_random_rotation_direction();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_random_rotation_direction(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_random_rotation_direction(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_soft_fade_distance(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_soft_fade_distance();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_soft_fade_distance(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_soft_fade_distance(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_prewarm(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_prewarm();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_prewarm(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_prewarm(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_auto_play(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_auto_play();
+    }
+    return true;
+}
+
+void internal_m2n_particle_emitter_set_auto_play(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_auto_play(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_sort_priority(entt::entity id) -> int32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_sort_priority();
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_sort_priority(entt::entity id, int32_t value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_sort_priority(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_frame_blending(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_frame_blending();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_frame_blending(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_frame_blending(value);
+    }
+}
+
 auto internal_m2n_particle_emitter_get_size_by_speed_range(entt::entity id) -> managed_range
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
@@ -1109,6 +1247,38 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_initial_scale_3d));
     reg.add_internal_call("internal_m2n_particle_emitter_set_initial_scale_3d",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_initial_scale_3d));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_rotation",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_rotation));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_rotation",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_rotation));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_rotation_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_rotation_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_rotation_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_rotation_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_random_rotation_direction",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_rotation_direction));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_random_rotation_direction",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_rotation_direction));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_soft_fade_distance",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_soft_fade_distance));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_soft_fade_distance",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_soft_fade_distance));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_prewarm",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_prewarm));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_prewarm",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_prewarm));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_auto_play",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_auto_play));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_auto_play",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_auto_play));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_sort_priority",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_sort_priority));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_sort_priority",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_sort_priority));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_frame_blending",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_frame_blending));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_frame_blending",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_frame_blending));
     reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_range",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_range",

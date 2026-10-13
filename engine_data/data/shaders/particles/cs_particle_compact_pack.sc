@@ -20,6 +20,10 @@ uniform vec4 u_pack2;
 uniform vec4 u_pack3;
 uniform vec4 u_pack4;
 uniform vec4 u_pack5;
+// Rotation range and rotation speed range, radians and radians per second.
+uniform vec4 u_pack6;
+// x = random rotation direction, y = soft fade distance, z = frame blending.
+uniform vec4 u_pack7;
 uniform mat4 u_localToWorld;
 // Emitter world rotation (xyzw). w >= 0 so VS can recover from xyz alone in i_data5.
 uniform vec4 u_emitterQuat;
@@ -42,6 +46,11 @@ uniform vec4 u_emitterQuat;
 #define u_inv_color_span    u_pack5.x
 #define u_color_speed_min   u_pack5.y
 #define u_dt                u_pack5.z
+#define u_rotation          u_pack6.xy
+#define u_rotation_speed    u_pack6.zw
+#define u_random_spin_dir   u_pack7.x
+#define u_soft_fade         u_pack7.y
+#define u_frame_blending    u_pack7.z
 
 #define FEAT_ALIGN      1u
 #define FEAT_TEXSHEET   2u
@@ -126,6 +135,12 @@ vec4 quat_look_rotation(vec3 direction)
         q.z = 0.25 * s;
     }
     return q;
+}
+
+/// A number in [0, 1) drawn from a particle's random seed; each use takes its own multiplier.
+float pick_from_seed(float seed, float multiplier)
+{
+    return fract(seed * multiplier);
 }
 
 NUM_THREADS(64, 1, 1)
@@ -218,6 +233,8 @@ void main()
 
     vec2 uv_offset = vec2_splat(0.0);
     vec2 uv_scale = vec2_splat(1.0);
+    vec2 next_uv_offset = vec2_splat(0.0);
+    float frame_blend = 0.0;
     if((u_features & FEAT_TEXSHEET) != 0u)
     {
         float uv_scale_x = 1.0 / max(u_tex_tiles.x, 1.0);
@@ -234,13 +251,32 @@ void main()
         uint tile_y = current_frame / uint(u_tex_tiles.x);
         uv_offset = vec2(float(tile_x) * uv_scale_x, float(tile_y) * uv_scale_y);
         uv_scale = vec2(uv_scale_x, uv_scale_y);
+        if(u_frame_blending > 0.5 && u_tex_cycles > 0.0)
+        {
+            // A sheet played once from its first frame stops on its last one instead of blending back.
+            float frames_progress = anim_progress * float(total_frames);
+            bool single_pass = u_tex_randomize < 0.5 && u_tex_cycles <= 1.0;
+            uint next_frame = single_pass ? min(current_frame + 1u, total_frames - 1u) : (current_frame + 1u) % total_frames;
+            next_uv_offset = vec2(float(next_frame % uint(u_tex_tiles.x)) * uv_scale_x,
+                                  float(next_frame / uint(u_tex_tiles.x)) * uv_scale_y);
+            frame_blend = fract(frames_progress);
+        }
     }
 
-    uint inst = dst * 6u;
+    float spin_speed = mix(u_rotation_speed.x, u_rotation_speed.y, pick_from_seed(texsheet_seed, 389.0));
+    if(u_random_spin_dir > 0.5 && pick_from_seed(texsheet_seed, 1543.0) < 0.5)
+    {
+        spin_speed = -spin_speed;
+    }
+    float angle = mix(u_rotation.x, u_rotation.y, pick_from_seed(texsheet_seed, 97.0)) + spin_speed * life * lifespan;
+
+    uint inst = dst * 8u;
     s_instances[inst + 0u] = vec4(world_pos, u_pivot_x);
     s_instances[inst + 1u] = rotation;
     s_instances[inst + 2u] = vec4(u_scale3d * scale, u_pivot_y);
     s_instances[inst + 3u] = vec4(uv_offset, uv_scale);
     s_instances[inst + 4u] = color;
     s_instances[inst + 5u] = vec4(u_render_mode, u_emitterQuat.xyz);
+    s_instances[inst + 6u] = vec4(angle, u_soft_fade, frame_blend, 0.0);
+    s_instances[inst + 7u] = vec4(next_uv_offset, 0.0, 0.0);
 }

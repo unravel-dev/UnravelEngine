@@ -26,21 +26,32 @@ order: 70
 
 ## Play mode testing (physics, animation, particles, scripts)
 
-Mutating tools refuse play mode and the Scene panel does not render during
-play, so choreograph:
+Mutating tools refuse play mode, so choreograph (the Scene panel still renders
+during play while its tab shows - panel_focus_scene, then viewport_look_at and
+viewport_capture_scene film a paused moment from any angle):
 
 1. Move the game's Main Camera entity (scene_set_transforms_batch, WORLD pose)
    to frame the target - BEFORE entering play.
 2. play_set_active {"active":true}; wait 2-4s real time (the first frame is a
    splash screen - never capture immediately).
 3. viewport_capture_game (it renders the game view itself, even with the Game
-   tab hidden).
+   tab hidden). width + height (e.g. 1280 x 720) capture at that resolution
+   and restore the previous size afterwards; viewport_set_render_size
+   {"panel":"game",...} keeps the game at one size (0 x 0 to undo).
 4. play_set_active {"active":false} - edit state is restored, including
    everything physics moved.
 5. play_get_state answers "am I in play?" when unsure; play_set_paused +
    play_skip_frame give deterministic frame stepping: each step runs scripts,
    physics and animation once over 1/60 s, so a capture after every step
-   films script-driven motion frame by frame.
+   films script-driven motion frame by frame. play_skip_frame {"count":30}
+   steps 30 frames in one call and returns once they ran.
+6. scripts_invoke calls a public method of a running script with arguments
+   (a spell's TryCast at [x,y,z], a door's Open()) - repeatable where clicks
+   and key presses depend on timing and screen position. Paused, then
+   play_skip_frame, it freezes the result at an exact frame.
+7. particles_control_batch plays, stops or emits an emitter (edit or play
+   mode) and reports num_particles and simulated: an emitter showing nothing
+   with simulated false is frozen by renderer-based culling (no camera saw it).
 
 Two captures a few seconds apart prove motion (dominoes mid-fall, animation
 pose changes) better than one.

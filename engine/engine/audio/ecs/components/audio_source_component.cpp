@@ -2,8 +2,6 @@
 
 #include <engine/audio/ecs/systems/audio_system.h>
 #include <engine/engine.h>
-#include <audiopp/exception.h>
-#include <logging/logging.h>
 #include <limits>
 
 namespace unravel
@@ -11,35 +9,31 @@ namespace unravel
 
 namespace
 {
-auto get_mixer_gain(audio_bus bus) -> float
+constexpr float max_volume_rolloff = 10.0f;
+
+auto find_voice_pool() -> audio_voice_pool*
 {
     auto& ctx = engine::context();
     if(!ctx.has<audio_system>())
     {
-        return 1.0f;
+        return nullptr;
     }
-    return ctx.get_cached<audio_system>().get_effective_bus_gain(bus);
+    return &ctx.get_cached<audio_system>().get_voices();
 }
 } // namespace
 
 void audio_source_component::on_play_begin()
 {
-    source_.reset();
-    clear_bound_clip();
+    voice_.reset();
     auto_play_consumed_ = false;
 }
 void audio_source_component::on_play_end()
 {
     auto_play_consumed_ = true;
-    if(source_)
-    {
-        source_->stop();
-        source_.reset();
-    }
-    clear_bound_clip();
+    voice_.reset();
 }
 
-void audio_source_component::update(const math::transform& t, delta_t dt)
+void audio_source_component::update(const math::transform& t)
 {
     if(get_autoplay() && !auto_play_consumed_)
     {
@@ -49,55 +43,43 @@ void audio_source_component::update(const math::transform& t, delta_t dt)
         }
     }
 
-    if(!source_)
+    auto source = get_source();
+    if(!source)
     {
         return;
     }
 
-
-    source_->update(std::chrono::milliseconds(16));
     if(spatial_)
     {
         auto pos = t.get_position();
         auto forward = t.z_unit_axis();
         auto up = t.y_unit_axis();
-        source_->set_position({{pos.x, pos.y, pos.z}});
-        source_->set_orientation({{forward.x, forward.y, forward.z}}, {{up.x, up.y, up.z}});
+        source->set_position({{pos.x, pos.y, pos.z}});
+        source->set_orientation({{forward.x, forward.y, forward.z}}, {{up.x, up.y, up.z}});
     }
     else
     {
         // Listener-relative at the listener origin = non-spatial / UI / music.
-        source_->set_position({{0.0f, 0.0f, 0.0f}});
-    }
-
-    if(source_->is_stopped())
-    {
-        source_.reset();
-        clear_bound_clip();
+        source->set_position({{0.0f, 0.0f, 0.0f}});
     }
 }
 
 void audio_source_component::set_loop(bool on)
 {
     loop_ = on;
-
-    if(!source_)
-    {
-        return;
-    }
-    source_->set_loop(on);
+    voice_.set_loop(on);
 }
 
 void audio_source_component::set_volume(float volume)
 {
     fade_.is_active = false;
-    volume_ = math::clamp(volume, 0.0f, 1.0f);
-    apply_mixer_volume();
+    volume_ = clamp_audio_gain(volume);
+    voice_.set_volume(volume_);
 }
 
 void audio_source_component::fade_to(float volume, float seconds, bool stop_at_end)
 {
-    fade_.start(volume_, math::clamp(volume, 0.0f, 1.0f), seconds, stop_at_end);
+    fade_.start(volume_, clamp_audio_gain(volume), seconds, stop_at_end);
 }
 
 void audio_source_component::update_fade(float seconds)
@@ -106,8 +88,8 @@ void audio_source_component::update_fade(float seconds)
     {
         return;
     }
-    volume_ = math::clamp(fade_.advance(seconds), 0.0f, 1.0f);
-    apply_mixer_volume();
+    volume_ = clamp_audio_gain(fade_.advance(seconds));
+    voice_.set_volume(volume_);
     if(!fade_.is_active && fade_.stop_at_end)
     {
         stop();
@@ -116,25 +98,22 @@ void audio_source_component::update_fade(float seconds)
 
 void audio_source_component::set_pitch(float pitch)
 {
-    pitch_ = math::clamp(pitch, 0.0f, 5.0f);
+    pitch_ = math::clamp(pitch, 0.0f, audio_max_pitch);
 
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
+        source->set_pitch(pitch_);
     }
-    source_->set_pitch(pitch_);
 }
 
 void audio_source_component::set_volume_rolloff(float rolloff)
 {
-    volume_rolloff_ = math::clamp(rolloff, 0.0f, 10.0f);
+    volume_rolloff_ = math::clamp(rolloff, 0.0f, max_volume_rolloff);
 
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
+        apply_voice_space(*source, spatial_, volume_rolloff_);
     }
-    // Non-spatial sources should not distance-attenuate.
-    source_->set_volume_rolloff(spatial_ ? volume_rolloff_ : 0.0f);
 }
 
 void audio_source_component::set_range(const frange_t& range)
@@ -143,12 +122,10 @@ void audio_source_component::set_range(const frange_t& range)
     range_.min = math::clamp(range_.min, 0.0f, range_.max);
     range_.max = math::clamp(range_.max, range_.min, std::numeric_limits<float>::max());
 
-
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
+        source->set_distance(range_.min, range_.max);
     }
-    source_->set_distance(range_.min, range_.max);
 }
 
 void audio_source_component::set_autoplay(bool on)
@@ -183,102 +160,87 @@ auto audio_source_component::get_range() const -> const frange_t&
 
 void audio_source_component::set_playback_position(audio::duration_t offset)
 {
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
+        source->set_playback_position(offset);
     }
-    source_->set_playback_position(offset);
 }
 
 auto audio_source_component::get_playback_position() const -> audio::duration_t
 {
-    if(!source_)
-    {
-        return {};
-    }
-    return source_->get_playback_position();
+    auto source = get_source();
+    return source ? source->get_playback_position() : audio::duration_t{};
 }
 
 auto audio_source_component::get_playback_duration() const -> audio::duration_t
 {
-    if(!source_)
-    {
-        return {};
-    }
-
-    return source_->get_playback_duration();
+    auto source = get_source();
+    return source ? source->get_playback_duration() : audio::duration_t{};
 }
 
 auto audio_source_component::play() -> bool
 {
-    if(!source_)
+    // Check the clip first: a source without a playable clip would hold a voice it never uses.
+    if(!sound_)
     {
-        if(!create_source())
-        {
-            return false;
-        }
+        return false;
     }
-
-    if(!source_ || !sound_)
+    // get() hands back the shared empty clip for a failed load.
+    auto clip = sound_.get();
+    if(!clip || !clip->is_valid())
     {
         return false;
     }
 
-    if(!bind_clip())
+    if(!voice_.is_alive() && !create_source())
     {
         return false;
     }
 
-    source_->play();
+    auto source = get_source();
+    source->bind(*clip);
+    source->play();
     return true;
 }
 
 void audio_source_component::stop()
 {
-    if(!source_)
-    {
-        clear_bound_clip();
-        return;
-    }
-    source_->stop();
-    source_.reset();
-    clear_bound_clip();
+    voice_.reset();
 }
 
 void audio_source_component::pause()
 {
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
+        source->pause();
     }
-    source_->pause();
 }
 
 void audio_source_component::resume()
 {
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
+        source->resume();
     }
-    source_->resume();
 }
 
 void audio_source_component::set_mute(bool mute)
 {
     muted_ = mute;
 
-    if(!source_)
+    auto source = get_source();
+    if(!source)
     {
         return;
     }
 
     if(mute)
     {
-        source_->mute();
+        source->mute();
     }
     else
     {
-        source_->unmute();
+        source->unmute();
     }
 }
 
@@ -289,20 +251,14 @@ auto audio_source_component::is_muted() const -> bool
 
 auto audio_source_component::is_playing() const -> bool
 {
-    if(!source_)
-    {
-        return false;
-    }
-    return source_->is_playing();
+    auto source = get_source();
+    return source && source->is_playing();
 }
 
 auto audio_source_component::is_paused() const -> bool
 {
-    if(!source_)
-    {
-        return false;
-    }
-    return source_->is_paused();
+    auto source = get_source();
+    return source && source->is_paused();
 }
 
 auto audio_source_component::is_looping() const -> bool
@@ -313,15 +269,9 @@ auto audio_source_component::is_looping() const -> bool
 void audio_source_component::set_spatial(bool spatial)
 {
     spatial_ = spatial;
-    if(!source_)
+    if(auto source = get_source())
     {
-        return;
-    }
-    source_->set_source_relative(!spatial_);
-    source_->set_volume_rolloff(spatial_ ? volume_rolloff_ : 0.0f);
-    if(!spatial_)
-    {
-        source_->set_position({{0.0f, 0.0f, 0.0f}});
+        apply_voice_space(*source, spatial_, volume_rolloff_);
     }
 }
 
@@ -333,7 +283,7 @@ auto audio_source_component::is_spatial() const -> bool
 void audio_source_component::set_bus(audio_bus bus)
 {
     bus_ = bus;
-    apply_mixer_volume();
+    voice_.set_bus(bus);
 }
 
 auto audio_source_component::get_bus() const -> audio_bus
@@ -344,6 +294,7 @@ auto audio_source_component::get_bus() const -> audio_bus
 void audio_source_component::set_priority(int priority)
 {
     priority_ = priority;
+    voice_.set_priority(priority);
 }
 
 auto audio_source_component::get_priority() const -> int
@@ -353,29 +304,7 @@ auto audio_source_component::get_priority() const -> int
 
 auto audio_source_component::has_source() const -> bool
 {
-    return static_cast<bool>(source_);
-}
-
-void audio_source_component::release_source()
-{
-    if(!source_)
-    {
-        clear_bound_clip();
-        return;
-    }
-    source_->force_stop();
-    source_.reset();
-    clear_bound_clip();
-}
-
-void audio_source_component::apply_mixer_volume()
-{
-    if(!source_)
-    {
-        return;
-    }
-    const float gain = volume_ * get_mixer_gain(bus_);
-    source_->set_volume(math::clamp(gain, 0.0f, 1.0f));
+    return voice_.is_alive();
 }
 
 void audio_source_component::set_clip(const asset_handle<audio_clip>& clip)
@@ -409,12 +338,8 @@ auto audio_source_component::get_clip() const -> const asset_handle<audio_clip>&
 
 auto audio_source_component::has_bound_sound() const -> bool
 {
-    if(!source_)
-    {
-        return false;
-    }
-
-    return source_->has_bound_sound();
+    auto source = get_source();
+    return source && source->has_bound_sound();
 }
 
 void audio_source_component::apply_all()
@@ -429,71 +354,25 @@ void audio_source_component::apply_all()
     set_mute(muted_);
 }
 
-auto audio_source_component::is_sound_valid() const -> bool
-{
-    return sound_;
-}
-
 auto audio_source_component::create_source() -> bool
 {
-    auto& ctx = engine::context();
-    if(ctx.has<audio_system>())
-    {
-        ctx.get_cached<audio_system>().ensure_voice_capacity(*this);
-    }
-
-    try
-    {
-        source_ = std::make_shared<audio::source>();
-        apply_all();
-        return true;
-    }
-    catch(const audio::exception& e)
-    {
-        // Retry once after forcing a steal — OpenAL hard-cap may still be hit.
-        if(ctx.has<audio_system>())
-        {
-            ctx.get_cached<audio_system>().ensure_voice_capacity(*this);
-            try
-            {
-                source_ = std::make_shared<audio::source>();
-                apply_all();
-                return true;
-            }
-            catch(const audio::exception& retry_error)
-            {
-                APPLOG_ERROR(retry_error.what());
-                return false;
-            }
-        }
-        APPLOG_ERROR(e.what());
-        return false;
-    }
-}
-
-auto audio_source_component::bind_clip() -> bool
-{
-    if(!source_ || !sound_)
+    auto pool = find_voice_pool();
+    if(!pool)
     {
         return false;
     }
-
-    auto clip = sound_.get();
-    if(!clip)
+    voice_ = pool->acquire({volume_, bus_, priority_, loop_});
+    if(!voice_.is_alive())
     {
-        clear_bound_clip();
         return false;
     }
-
-    bound_clip_version_ = sound_.version();
-    source_->bind(*clip);
+    apply_all();
     return true;
 }
 
-
-void audio_source_component::clear_bound_clip()
+auto audio_source_component::get_source() const -> audio::source*
 {
-    bound_clip_version_ = 0;
+    return voice_.get_source();
 }
 
 } // namespace unravel

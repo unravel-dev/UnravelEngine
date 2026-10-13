@@ -12,6 +12,7 @@ void emitter_emission_desc::reset()
     emission_lifetime = 2.0f;
     start_delay = 0.0f;
     loop = true;
+    prewarm = false;
     spawn_location = spawn_location::inside;
     shape_position = math::vec3(0.0f, 0.0f, 0.0f);
     shape_scale = math::vec3(1.0f, 1.0f, 1.0f);
@@ -72,12 +73,19 @@ void emitter_render_desc::reset()
     tex_sheet_tiles = math::vec2(1.0f, 1.0f);
     tex_sheet_cycles = 0.0f;
     tex_sheet_randomize = false;
+    frame_blending = false;
+    rotation = frange_t(0.0f, 0.0f);
+    rotation_speed = frange_t(0.0f, 0.0f);
+    random_rotation_direction = false;
+    soft_fade_distance = 0.0f;
+    sort_priority = 0;
 }
 
 void emitter_playback_desc::reset()
 {
     playing = true;
     paused = false;
+    auto_play = true;
 }
 
 void emitter_desc::reset()
@@ -96,7 +104,10 @@ auto emitter_desc::bake_features() const -> emitter_feature
     {
         features = features | emitter_feature::align_to_direction;
     }
-    if(render.tex_sheet_cycles > 0.0f && render.tex_sheet_tiles.x > 0.0f && render.tex_sheet_tiles.y > 0.0f)
+    // A sheet of more than one tile always draws one tile per particle; with no cycles a particle holds
+    // one (the first, or a random one with randomize) instead of showing the whole sheet.
+    if(render.tex_sheet_tiles.x >= 1.0f && render.tex_sheet_tiles.y >= 1.0f &&
+       render.tex_sheet_tiles.x * render.tex_sheet_tiles.y > 1.0f)
     {
         features = features | emitter_feature::texsheet;
     }
@@ -130,6 +141,7 @@ void emitter_sim_state::reset()
     start_delay_elapsed = 0.0f;
     total_particles_spawned = 0;
     first_update = true;
+    prewarm_pending = true;
     playing = true;
     loop = true;
     features = emitter_feature::none;

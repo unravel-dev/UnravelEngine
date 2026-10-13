@@ -49,10 +49,15 @@ struct defaults
      * @brief Creates an embedded mesh entity.
      * @param ctx The context for creation.
      * @param scn The scene to create the entity in.
-     * @param name The name of the entity.
-     * @return A handle to the created entity.
+     * @param name The embedded mesh's name ("Cube", "Capsule 2m", ...).
+     * @return A handle to the created entity; empty when no embedded mesh has that name.
      */
     static auto create_embedded_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
+
+    /**
+     * @brief Whether an embedded mesh is called @p name ("Cube", "Capsule 2m", ...).
+     */
+    static auto has_embedded_mesh(rtti::context& ctx, const std::string& name) -> bool;
 
     /**
      * @brief Creates a prefab entity at a specified position.

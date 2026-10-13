@@ -1,4 +1,5 @@
 #include "mcp_async.h"
+#include "mcp_input_utils.h"
 #include "mcp_tools_common.h"
 
 #include <editor/hub/hub.h>
@@ -177,6 +178,49 @@ auto resolve_focus_entities(rtti::context& ctx,
     return resolve_entity_id_or_ids(*scn, args, out, error);
 }
 
+/// Frames the editor runs after a game render size change before a capture: the panel applies the
+/// size in its frame update, which runs whether or not its tab is shown.
+constexpr uint64_t RESIZE_APPLY_FRAMES = 2;
+constexpr int64_t MAX_RENDER_SIZE = 8192;
+
+/// Sets the Game panel's forced render size on the main thread; returns the size it replaced.
+auto exchange_game_render_size(mcp_manager& mcp, rtti::context& ctx, std::pair<uint32_t, uint32_t> size)
+    -> std::optional<std::pair<uint32_t, uint32_t>>
+{
+    return mcp.invoke_on_main(
+        [&ctx, size]() -> std::pair<uint32_t, uint32_t>
+        {
+            auto& panel = ctx.get_cached<hub>().get_panels().get_game_panel();
+            const auto previous = panel.get_forced_render_size();
+            panel.set_forced_render_size(size.first, size.second);
+            return previous;
+        });
+}
+
+/// Reads "width" and "height" (0..MAX_RENDER_SIZE). With @p required false, both may be left out.
+auto read_render_size(const simdjson::dom::object& args, bool required, uint32_t& width, uint32_t& height, std::string& error)
+    -> bool
+{
+    int64_t w = 0;
+    int64_t h = 0;
+    const bool has_width = args["width"].get(w) == simdjson::SUCCESS;
+    const bool has_height = args["height"].get(h) == simdjson::SUCCESS;
+    if(!required && !has_width && !has_height)
+    {
+        width = 0;
+        height = 0;
+        return true;
+    }
+    if(!has_width || !has_height || w < 0 || h < 0 || w > MAX_RENDER_SIZE || h > MAX_RENDER_SIZE)
+    {
+        error = fmt::format("width and height must both be integers in 0..{}", MAX_RENDER_SIZE);
+        return false;
+    }
+    width = uint32_t(w);
+    height = uint32_t(h);
+    return true;
+}
+
 } // namespace
 
 void register_viewport_tools(mcp_tool_registry& registry)
@@ -214,9 +258,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .description =
              "Capture Game panel / active camera as PNG (image content). Renders the game view for the capture, "
              "also when the Game tab is hidden. Optional wait_ms (default 500), scale (0-1, default 1; bimg linear "
-             "resize).",
+             "resize), width + height: render the game at exactly that size for this capture (e.g. 1280 x 720, "
+             "for layouts at a known resolution) and go back to the previous size afterwards.",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
+             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1},"width":{"type":"integer","minimum":1,"maximum":8192},"height":{"type":"integer","minimum":1,"maximum":8192}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -228,11 +273,30 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  options.scale = scale;
              }
+             uint32_t width = 0;
+             uint32_t height = 0;
+             std::string error;
+             if(!read_render_size(args, false, width, height, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
              options.request_render = [](rtti::context& ctx)
              {
                  ctx.get_cached<hub>().get_panels().get_game_panel().set_visible_force(true);
              };
-             return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
+             if(width == 0 || height == 0)
+             {
+                 return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
+             }
+             const auto previous_size = exchange_game_render_size(mcp, ctx, {width, height});
+             if(!previous_size)
+             {
+                 return {.text = "Timed out setting the game view size on main thread", .is_error = true};
+             }
+             wait_input_frames(ctx, RESIZE_APPLY_FRAMES);
+             auto result = capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
+             exchange_game_render_size(mcp, ctx, *previous_size);
+             return result;
          },
          .mutates_scene = false,
          .requires_main_thread = false});
@@ -536,22 +600,41 @@ void register_viewport_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "viewport_set_render_size",
-         .description = "Render the Scene panel camera at exactly width x height pixels (e.g. 1920 x 1080 for cost "
-                        "measurements independent of the panel size) and show it scaled into the panel; 0 x 0 "
-                        "follows the panel again. Picking and gizmos assume the panel size while it is forced.",
-         .input_schema_json = R"({"type":"object","properties":{"width":{"type":"integer","minimum":0,"maximum":8192},"height":{"type":"integer","minimum":0,"maximum":8192}},"required":["width","height"]})",
+         .description = "Render a panel's camera at exactly width x height pixels and show it scaled into the panel; "
+                        "0 x 0 follows the panel again. panel: scene (default; e.g. 1920 x 1080 for cost measurements "
+                        "independent of the panel size - picking and gizmos assume the panel size while it is forced) "
+                        "or game (the game, its UI layout and its input see exactly that resolution, in place of the "
+                        "Game panel's resolution setting).",
+         .input_schema_json = R"({"type":"object","properties":{"width":{"type":"integer","minimum":0,"maximum":8192},"height":{"type":"integer","minimum":0,"maximum":8192},"panel":{"type":"string","enum":["scene","game"]}},"required":["width","height"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             int64_t width = 0;
-             int64_t height = 0;
-             if(args["width"].get(width) || args["height"].get(height) || width < 0 || height < 0 || width > 8192 ||
-                height > 8192)
+             uint32_t width = 0;
+             uint32_t height = 0;
+             std::string error;
+             if(!read_render_size(args, true, width, height, error))
              {
-                 return {.text = "width and height must be integers in 0..8192", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
-             resolve_scene_panel(ctx).set_forced_render_size(uint32_t(width), uint32_t(height));
-             return {.text = fmt::format(R"({{"ok":true,"width":{},"height":{}}})", width, height), .is_error = false};
+             std::string panel = "scene";
+             read_string(args, "panel", panel);
+             if(panel == "game")
+             {
+                 ctx.get_cached<hub>().get_panels().get_game_panel().set_forced_render_size(width, height);
+             }
+             else if(panel == "scene")
+             {
+                 resolve_scene_panel(ctx).set_forced_render_size(width, height);
+             }
+             else
+             {
+                 return {.text = "panel must be scene or game", .is_error = true};
+             }
+             return {.text = fmt::format(R"({{"ok":true,"panel":{},"width":{},"height":{}}})",
+                                         make_json_string(panel),
+                                         width,
+                                         height),
+                     .is_error = false};
          },
          .mutates_scene = false});
 

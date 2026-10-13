@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 namespace Unravel.Core
 {
     /// <summary>
-    /// A sound started by <see cref="Audio.PlayOneShot(AudioClip, float, float, AudioBus)"/>. Every
+    /// A sound started by <see cref="Audio.PlayOneShot(AudioClip, float, float, AudioBus, int)"/>. Every
     /// call on a voice that finished, was stolen or never started does nothing.
     /// </summary>
     public readonly struct AudioVoice : IEquatable<AudioVoice>
@@ -121,13 +121,15 @@ namespace Unravel.Core
         /// <param name="volume">Gain before the bus and master gains, 0..1.</param>
         /// <param name="pitch">Playback rate (1 = original pitch).</param>
         /// <param name="bus">Mixer bus.</param>
-        public static AudioVoice PlayOneShot(AudioClip clip, float volume = 1.0f, float pitch = 1.0f, AudioBus bus = AudioBus.Sfx)
+        /// <param name="priority">Voice-steal priority: at the voice cap, higher values are kept. A one-shot
+        /// goes before an audio source of the same priority.</param>
+        public static AudioVoice PlayOneShot(AudioClip clip, float volume = 1.0f, float pitch = 1.0f, AudioBus bus = AudioBus.Sfx, int priority = 0)
         {
             if (clip == null)
             {
                 return default;
             }
-            return new AudioVoice(internal_m2n_audio_play_one_shot(clip.uid, volume, pitch, (byte)bus, false, Vector3.zero));
+            return new AudioVoice(internal_m2n_audio_play_one_shot(clip.uid, volume, pitch, (byte)bus, priority, false, Vector3.zero));
         }
 
         /// <summary>
@@ -138,13 +140,15 @@ namespace Unravel.Core
         /// <param name="volume">Gain before the bus and master gains, 0..1.</param>
         /// <param name="pitch">Playback rate (1 = original pitch).</param>
         /// <param name="bus">Mixer bus.</param>
-        public static AudioVoice PlayOneShot(AudioClip clip, Vector3 position, float volume = 1.0f, float pitch = 1.0f, AudioBus bus = AudioBus.Sfx)
+        /// <param name="priority">Voice-steal priority: at the voice cap, higher values are kept. A one-shot
+        /// goes before an audio source of the same priority.</param>
+        public static AudioVoice PlayOneShot(AudioClip clip, Vector3 position, float volume = 1.0f, float pitch = 1.0f, AudioBus bus = AudioBus.Sfx, int priority = 0)
         {
             if (clip == null)
             {
                 return default;
             }
-            return new AudioVoice(internal_m2n_audio_play_one_shot(clip.uid, volume, pitch, (byte)bus, true, position));
+            return new AudioVoice(internal_m2n_audio_play_one_shot(clip.uid, volume, pitch, (byte)bus, priority, true, position));
         }
 
         /// <summary>
@@ -180,7 +184,7 @@ namespace Unravel.Core
         private static extern void internal_m2n_audio_fade_bus_volume(byte bus, float target, float seconds);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern ulong internal_m2n_audio_play_one_shot(Guid clip, float volume, float pitch, byte bus, bool spatial, Vector3 position);
+        private static extern ulong internal_m2n_audio_play_one_shot(Guid clip, float volume, float pitch, byte bus, int priority, bool spatial, Vector3 position);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_audio_set_clip_limit(Guid clip, int maxVoices, float minInterval);

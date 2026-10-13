@@ -13,6 +13,7 @@ description: >-
 | Purpose | Path |
 |---------|------|
 | Audio system | `engine/engine/audio/ecs/systems/audio_system.h` |
+| Voice pool | `engine/engine/audio/audio_voice_pool.h` |
 | Source component | `engine/engine/audio/ecs/components/audio_source_component.h` |
 | Listener component | `engine/engine/audio/ecs/components/audio_listener_component.h` |
 | Meta | `engine/engine/meta/ecs/components/audio_source_component.hpp`, `audio_listener_component.hpp` |
@@ -20,9 +21,16 @@ description: >-
 
 ## Architecture
 
-- **OpenAL Soft** via `audiopp` dependency
-- `audio_system` manages device, listener, source updates
-- `audio_source_component` - clip playback, 3D position, volume, loop
+- **OpenAL Soft** via `audiopp` dependency (ours; extend it only when the engine cannot do without)
+- `audio_system` owns the device, the mixer (master + bus gains and fades) and the play-mode hooks
+- `audio_voice_pool` (`audio_system::get_voices()`) owns EVERY live OpenAL source: one-shots
+  (`play`, addressed by slot + generation ids) and component voices (`acquire`, held through a
+  move-only `audio_voice_handle`; copies are empty). It applies the voice cap
+  (`audio_system::max_concurrent_voices`), pushes bus gains, streams, frees finished voices and
+  pauses / resumes / stops everything.
+- Voice cap rank (`is_freed_before`): non-looping first, then lower priority, then one-shots before
+  component voices, then the older voice. A one-shot refused by its clip limit frees nothing.
+- `audio_source_component` - settings (serialized) + a voice handle; it never owns a source itself
 - `audio_listener_component` - typically one per active camera
 
 ## Lifecycle
@@ -43,6 +51,7 @@ Audio clips loaded through `asset_manager` as typed assets. Follow asset pipelin
 - [ ] Play/end stops or resets sources appropriately
 - [ ] No OpenAL device errors on init
 - [ ] Volume/pitch properties serialize correctly
+- [ ] `unravel-tests --suite "audio voice pool"` passes (opens OpenAL's null backend itself)
 
 ## Common mistakes
 

@@ -16,8 +16,8 @@ enum class particle_sim_backend : uint8_t
     gpu = 1,
 };
 
-/// GPU instance row matches vs_particle_instanced i_data0..i_data5 (96 bytes).
-constexpr uint16_t k_gpu_instance_stride = 96;
+/// GPU instance row matches vs_particle_instanced i_data0..i_data7 (128 bytes).
+constexpr uint16_t k_gpu_instance_stride = 128;
 constexpr uint32_t k_gpu_instance_floats = k_gpu_instance_stride / sizeof(float);
 constexpr uint32_t k_gpu_sim_floats_per_particle = 20;
 constexpr uint32_t k_gpu_sim_vec4s_per_particle = 5;

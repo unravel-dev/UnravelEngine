@@ -12,6 +12,8 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/script.h>
 
+#include "script_value_encoding.h"
+
 
 #include <dotnetpp/dotnetpp.h>
 
@@ -490,6 +492,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         cache_.script_component_type.get_method("internal_n2m_on_collision_enter", 2);
     cache_.on_collision_exit_method =
         cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 3);
+    cache_.invoke_method = cache_.script_component_type.get_method("internal_n2m_invoke", 2);
 
     cache_.ui_dispatch_method = cache_.ui_event_manager_type.get_method("InternalDispatchPayload", 5);
     cache_.ui_dispatch_invoker = dotnet::make_method_invoker<ui_dispatch_signature>(cache_.ui_dispatch_method);
@@ -510,6 +513,8 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         models.get_method("internal_n2m_transform", 3));
     cache_.ui_inline_event_invoker =
         dotnet::make_method_invoker<ui_inline_event_signature>(models.get_method("internal_n2m_inline_event", 7));
+    cache_.ui_model_describe_invoker = dotnet::make_method_invoker<std::string(entt::entity, std::string, int32_t, int32_t)>(
+        models.get_method("internal_n2m_describe", 4));
 
     return true;
 }
@@ -995,6 +1000,44 @@ auto script_system::get_app_assembly() const -> dotnet::assembly
 
 namespace
 {
+/// One argument as ScriptComponent.internal_n2m_invoke decodes it; numbers for a vector cross as
+/// comma-separated text.
+auto encode_script_argument(const script_system::script_argument& argument) -> std::string
+{
+    using namespace script_value_encoding;
+    return std::visit(
+        [](const auto& value) -> std::string
+        {
+            using value_t = std::decay_t<decltype(value)>;
+            if constexpr(std::is_same_v<value_t, bool>)
+            {
+                return std::string(1, VALUE_BOOL) + (value ? "1" : "0");
+            }
+            else if constexpr(std::is_same_v<value_t, int64_t>)
+            {
+                return VALUE_INTEGER + std::to_string(value);
+            }
+            else if constexpr(std::is_same_v<value_t, double>)
+            {
+                return VALUE_NUMBER + fmt::format("{}", value);
+            }
+            else if constexpr(std::is_same_v<value_t, std::string>)
+            {
+                return VALUE_STRING + value;
+            }
+            else
+            {
+                std::string text(1, VALUE_STRING);
+                for(size_t i = 0; i < value.size(); ++i)
+                {
+                    text += (i > 0 ? "," : "") + fmt::format("{}", value[i]);
+                }
+                return text;
+            }
+        },
+        argument);
+}
+
 /// The XML documentation files of the engine and game script libraries, ';'-separated. A
 /// library that was never built simply has no file; the index skips it.
 auto get_api_doc_paths() -> std::string
@@ -1051,6 +1094,54 @@ auto script_system::describe_api_type(const std::string& type_name) const -> std
                                                                    "internal_n2m_describe_type",
                                                                    type_name,
                                                                    get_api_doc_paths());
+}
+
+auto script_system::describe_ui_models(entt::entity owner, const std::string& model, int max_depth, int max_items) const
+    -> std::string
+{
+    if(!domain_ || !cache_.ui_model_describe_invoker.valid())
+    {
+        return "null";
+    }
+    try
+    {
+        auto invoker = cache_.ui_model_describe_invoker;
+        return invoker(owner, model, max_depth, max_items);
+    }
+    catch(const dotnet::exception& e)
+    {
+        log_exception(e);
+        return "null";
+    }
+}
+
+auto script_system::invoke_script_method(const dotnet::object& script,
+                                         const std::string& method,
+                                         const std::vector<script_argument>& arguments) const -> std::string
+{
+    if(!domain_ || !cache_.invoke_method.valid())
+    {
+        return "null";
+    }
+    std::string encoded;
+    for(const auto& argument : arguments)
+    {
+        if(!encoded.empty())
+        {
+            encoded += script_value_encoding::VALUE_SEPARATOR;
+        }
+        encoded += encode_script_argument(argument);
+    }
+    try
+    {
+        auto invoker = dotnet::make_method_invoker<std::string(std::string, std::string)>(cache_.invoke_method);
+        return invoker(script, method, encoded);
+    }
+    catch(const dotnet::exception& e)
+    {
+        log_exception(e);
+        return "null";
+    }
 }
 
 auto script_system::get_type_by_fullname(const std::string& fullname) const -> dotnet::type

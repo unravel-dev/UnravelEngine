@@ -90,9 +90,11 @@ reset state there instead of in `OnStart`, which runs only once per instance.
 
 ## Sounds, lights, materials, particles
 
-- Sounds: `Audio.PlayOneShot(clip, volume, pitch, bus)` (or with a world position) plays
-  without an entity and returns an `AudioVoice` (`Stop`, `SetVolume`, `SetPitch`,
-  `FadeTo`). `Audio.SetClipLimit(clip, maxVoices, minInterval)` stops coin-spam stacking;
+- Sounds: `Audio.PlayOneShot(clip, volume, pitch, bus, priority)` (or with a world position)
+  plays without an entity and returns an `AudioVoice` (`Stop`, `SetVolume`, `SetPitch`,
+  `FadeTo`). One-shots and `AudioSourceComponent`s share one voice cap (`Audio.maxVoices`):
+  at the cap, non-looping voices go before looping ones, then lower `priority`, then
+  one-shots before sources, then the oldest. `Audio.SetClipLimit(clip, maxVoices, minInterval)` stops coin-spam stacking;
   `Audio.FadeBusVolume(bus, target, seconds)` and `AudioSourceComponent.FadeTo(volume,
   seconds, stopAtEnd)` ramp on unscaled time.
 - Lights: `LightComponent.enabled = false` is off (no light, shadows or GI); intensity 0
@@ -107,6 +109,10 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   Gradients are `Gradient` (color keys), `MinMaxCurve` (random between two) and `Curve`
   (`colorGradient`, `scaleGradient`, `velocityGradient`, ...). Setting `emissionRate` keeps
   the live particles; `simulationSpace`, `lifetime` and `startDelay` clear them.
+  `rotation` / `rotationSpeed` (`Range<float>`, degrees), `randomRotationDirection`,
+  `softFadeDistance`, `frameBlending` and `sortPriority` (lower draws first) are the
+  per-emitter look settings; `prewarm` starts a looping emitter full and
+  `autoPlay` false keeps one stopped until `Play()`.
 
 ## Random is the engine's
 

@@ -141,6 +141,60 @@ struct component_crtp : Base
 };
 
 
+/**
+ * @brief Opens the save context a component saved on its own needs, as a scene save opens one:
+ * serializers of entity references (a script's Entity fields) resolve them through the source's
+ * registry. Defined with the entity serializers; returns whether this call opened the context.
+ */
+auto begin_component_save(entt::const_handle source) -> bool;
+void end_component_save(bool began);
+
+/**
+ * @brief Opens the load context a component loaded on its own needs (see begin_component_save).
+ */
+auto begin_component_load(entt::handle target) -> bool;
+void end_component_load(bool began);
+
+/**
+ * @brief Keeps the component save context open for its lifetime.
+ */
+class component_save_scope
+{
+public:
+    explicit component_save_scope(entt::const_handle source) : began_(begin_component_save(source))
+    {
+    }
+    ~component_save_scope()
+    {
+        end_component_save(began_);
+    }
+    component_save_scope(const component_save_scope&) = delete;
+    auto operator=(const component_save_scope&) -> component_save_scope& = delete;
+
+private:
+    bool began_ = false;
+};
+
+/**
+ * @brief Keeps the component load context open for its lifetime.
+ */
+class component_load_scope
+{
+public:
+    explicit component_load_scope(entt::handle target) : began_(begin_component_load(target))
+    {
+    }
+    ~component_load_scope()
+    {
+        end_component_load(began_);
+    }
+    component_load_scope(const component_load_scope&) = delete;
+    auto operator=(const component_load_scope&) -> component_load_scope& = delete;
+
+private:
+    bool began_ = false;
+};
+
 template<typename T>
 struct component_meta
 {
@@ -168,6 +222,7 @@ struct component_meta
     
     static auto save(entt::handle entity, std::stringstream& stream) -> bool
     {
+        component_save_scope scope(entity);
         try
         {
             auto ar = ser20::create_oarchive_associative(stream);
@@ -183,6 +238,7 @@ struct component_meta
 
     static auto load(entt::handle entity, std::stringstream& stream) -> bool
     {
+        component_load_scope scope(entity);
         try
         {
         auto ar = ser20::create_iarchive_associative(stream);

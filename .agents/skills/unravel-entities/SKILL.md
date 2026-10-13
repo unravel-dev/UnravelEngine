@@ -72,7 +72,8 @@ Browse lean, then drill in:
 | `scene_open` / `scene_new_from_preset` / `scene_list_presets` | See `unravel-projects` |
 | `selection_get` / `selection_set_batch` / `selection_clear` | Editor entity selection |
 | `edit_undo` / `edit_redo` | Undo stack (Ctrl+Z / Ctrl+Y parity) |
-| `play_get_state` / `play_set_active` / `play_set_paused` / `play_skip_frame` | Play mode control |
+| `play_get_state` / `play_set_active` / `play_set_paused` / `play_skip_frame` | Play mode control (`play_skip_frame` `count` steps many frames and waits for them) |
+| `particles_control_batch` | Play / pause / stop / emit emitters (edit or play) and read `num_particles`, `simulated` |
 | `logs_get_recent` | Console log tail (`min_level`, `max_count`, `after_id`) |
 | `panel_focus_scene` / `panel_focus_game` | Focus Scene or Game ImGui panel tabs |
 
@@ -90,6 +91,7 @@ Component names: use `scene_get_entities_batch` with `detail:"summary"`. Patch f
 | `scripts_get_source` | Read `.cs` (`path`/`key` or `entity_id`+`type_name`) |
 | `scripts_set_sources_batch` | Atomic write many `.cs`; `recompile` default true |
 | `scripts_create_batch` | New files from `TemplateComponent.cs.in` under `folder` |
+| `scripts_invoke` | Call a public method of a running script (play mode) with JSON `arguments`; returns `{"result":...}` |
 
 File writes use `asset_writer::atomic_write_file`. Scene saves use `asset_writer::atomic_save_to_file`.
 

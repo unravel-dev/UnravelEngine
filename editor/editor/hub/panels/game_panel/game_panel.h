@@ -37,6 +37,14 @@ public:
      */
     auto get_displayed_camera(rtti::context& ctx) const -> entt::handle;
 
+    /**
+     * @brief Renders the game view at exactly @p width x @p height pixels, shown scaled into the
+     * panel; 0 x 0 follows the resolution setting and the panel again. Input maps to the rendered
+     * pixels either way.
+     */
+    void set_forced_render_size(uint32_t width, uint32_t height);
+    auto get_forced_render_size() const -> std::pair<uint32_t, uint32_t>;
+
 private:
     /**
      * @brief Sizes the game view and every camera of @p scn from the panel area of the last draw.
@@ -71,5 +79,8 @@ private:
     float toolbar_alpha_{1.0f};
     /// Content area of the panel at its last draw, the area the game view is sized against.
     ImVec2 view_area_size_{};
+    /// Render size set by set_forced_render_size; 0 x 0 when not forced.
+    uint32_t forced_render_width_{0};
+    uint32_t forced_render_height_{0};
 };
 } // namespace unravel

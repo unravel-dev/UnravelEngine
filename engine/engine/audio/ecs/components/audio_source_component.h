@@ -4,6 +4,7 @@
 #include <audiopp/source.h>
 #include <engine/audio/audio_bus.h>
 #include <engine/audio/audio_clip.h>
+#include <engine/audio/audio_voice_pool.h>
 #include <engine/audio/volume_fade.h>
 #include <engine/ecs/components/basic_component.h>
 #include <math/math.h>
@@ -22,11 +23,10 @@ class audio_source_component : public component_crtp<audio_source_component>
 {
 public:
     /**
-     * @brief Updates the audio source with the given transform and delta time.
-     * @param t The transform to update with.
-     * @param dt The delta time.
+     * @brief Starts a pending autoplay and moves the voice to the entity's transform.
+     * @param t The entity's world transform.
      */
-    void update(const math::transform& t, delta_t dt);
+    void update(const math::transform& t);
 
     /**
      * @brief Called when audio playback begins.
@@ -215,19 +215,9 @@ public:
     auto get_priority() const -> int;
 
     /**
-     * @brief True when an OpenAL source object is currently allocated.
+     * @brief True while the source holds a live voice in the audio system's voice pool.
      */
     auto has_source() const -> bool;
-
-    /**
-     * @brief Stops and releases the OpenAL source (used by the voice limiter).
-     */
-    void release_source();
-
-    /**
-     * @brief Recomputes OpenAL volume from component volume and mixer gains.
-     */
-    void apply_mixer_volume();
 
     /**
      * @brief Sets the audio clip for the audio source.
@@ -254,28 +244,15 @@ private:
     void apply_all();
 
     /**
-     * @brief Checks if the bound sound is valid.
-     * @return True if the sound is valid, false otherwise.
-     */
-    auto is_sound_valid() const -> bool;
-
-    /**
-     * @brief Creates the audio source.
-     * @return True if the source was created successfully, false otherwise.
+     * @brief Takes a voice from the audio system's voice pool and applies the settings to it.
+     * @return True if the voice was created successfully, false otherwise.
      */
     auto create_source() -> bool;
 
     /**
-     * @brief Binds the current clip instance and caches its identity.
-     * @return True if a clip was bound successfully.
+     * @brief The voice's OpenAL source, or null when the source holds no live voice.
      */
-    auto bind_clip() -> bool;
-
-
-    /**
-     * @brief Clears the retained clip instance and version cache.
-     */
-    void clear_bound_clip();
+    auto get_source() const -> audio::source*;
 
     bool auto_play_ = false;                ///< Indicates if the audio source should autoplay.
     bool loop_ = false;                     ///< Indicates if the audio source should loop.
@@ -284,13 +261,12 @@ private:
     audio_bus bus_ = audio_bus::sfx;        ///< Mixer bus for this source.
     int priority_ = 0;                      ///< Voice steal priority (higher is kept).
     float volume_ = 1.0f;                   ///< The volume level of the audio source. Range: [0.0, 1.0].
-    float pitch_ = 1.0f;                    ///< The pitch level of the audio source. Range: [0.5, 2.0].
+    float pitch_ = 1.0f;                    ///< The pitch level of the audio source. Range: [0.0, 5.0].
     float volume_rolloff_ = 1.0f;           ///< The volume rolloff factor of the audio source. Range: [0.0, 10.0].
-    frange_t range_ = {1.0f, 20.0f};        ///< The range of the audio source.
-    std::shared_ptr<audio::source> source_; ///< The audio source object.
+    frange_t range_ = {audio_default_min_distance, audio_default_max_distance}; ///< The range of the audio source.
+    audio_voice_handle voice_;              ///< The pooled voice playing the clip; empty while stopped.
     asset_handle<audio_clip> sound_;        ///< The audio clip bound to the audio source.
     volume_fade fade_{};                    ///< Volume ramp started by fade_to.
-    uintptr_t bound_clip_version_{};        ///< Cached `sound_.version()` at last successful bind.
 
     bool auto_play_consumed_ = true;     ///< Indicates if the audio source should autoplay.
 };

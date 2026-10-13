@@ -15,6 +15,7 @@
 
 #include <map>
 #include <set>
+#include <variant>
 
 namespace unravel
 {
@@ -161,6 +162,8 @@ struct script_system
         dotnet::method on_sensor_exit_method;
         dotnet::method on_collision_enter_method;
         dotnet::method on_collision_exit_method;
+        // ScriptComponent.internal_n2m_invoke(method name, encoded arguments) -> JSON, for tools
+        dotnet::method invoke_method;
 
         // UIEventManager.InternalDispatchPayload(payload, event type, target id, current id, text)
         dotnet::method ui_dispatch_method;
@@ -175,12 +178,39 @@ struct script_system
         dotnet::method_invoker<ui_model_event_signature> ui_model_event_invoker;
         dotnet::method_invoker<std::string(entt::entity, std::string, std::string)> ui_model_transform_invoker;
         dotnet::method_invoker<ui_inline_event_signature> ui_inline_event_invoker;
+        // UIDataModels.internal_n2m_describe(owner, model, max depth, max items) -> JSON
+        dotnet::method_invoker<std::string(entt::entity, std::string, int32_t, int32_t)> ui_model_describe_invoker;
     };
 
     auto get_cache() const -> const engine_script_cache&
     {
         return cache_;
     }
+
+    /**
+     * @brief The data models scripts bound for @p owner's UI document, as JSON: variables with their
+     * current values, event and transform names (see UIDataModels.internal_n2m_describe).
+     * @param model One model's name, or empty for all of them.
+     * @param max_depth Levels of nested objects and lists to expand.
+     * @param max_items Entries of a list to include.
+     * @return {"models":[...]}; an empty list when no script bound a model, null when scripts are not loaded.
+     */
+    auto describe_ui_models(entt::entity owner, const std::string& model, int max_depth, int max_items) const
+        -> std::string;
+
+    /// An argument for invoke_script_method: a flag, an integer, a number, text, or numbers that
+    /// fill a vector or colour parameter.
+    using script_argument = std::variant<bool, int64_t, double, std::string, std::vector<double>>;
+
+    /**
+     * @brief Runs a public instance method of a script by name, for tools. The arguments convert to
+     * the method's parameter types; missing trailing ones take their defaults (see
+     * ScriptComponent.internal_n2m_invoke).
+     * @return {"result":value} or {"error":"message"} as JSON; null when scripts are not loaded.
+     */
+    auto invoke_script_method(const dotnet::object& script,
+                              const std::string& method,
+                              const std::vector<script_argument>& arguments) const -> std::string;
 
     auto get_type_by_fullname(const std::string& fullname) const -> dotnet::type;
     auto get_type(const std::string& name_space, const std::string& name) const -> dotnet::type;

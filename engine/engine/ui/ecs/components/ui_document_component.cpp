@@ -14,16 +14,17 @@ auto ui_document_component::get_world_space_scale() const -> math::vec2
 }
 
 
+auto ui_document_component::get_world_space_quad(const math::transform& entity_world) const -> math::transform
+{
+    return entity_world * math::transform::scaling(get_world_space_scale());
+}
+
 auto ui_document_component::get_bounds() const -> math::bbox
 {
-    auto scale = get_world_space_scale();
+    const auto scale = get_world_space_scale();
     math::bbox bbox;
-    bbox.min.x = -scale.x * 0.5f;
-    bbox.min.y = scale.y * 0.5f;
-    bbox.min.z = 0;
-    bbox.max.x = scale.x * 0.5f;
-    bbox.max.y = -scale.y * 0.5f;
-    bbox.max.z = 0.001f;
+    bbox.min = math::vec3(-scale.x * 0.5f, -scale.y * 0.5f, 0.0f);
+    bbox.max = math::vec3(scale.x * 0.5f, scale.y * 0.5f, 0.001f);
     return bbox;
 }
 auto ui_document_component::is_loaded() const -> bool

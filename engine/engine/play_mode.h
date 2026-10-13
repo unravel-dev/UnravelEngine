@@ -91,6 +91,13 @@ struct play_mode
         return frames_running_;
     }
 
+    /// Frames the simulation advanced since play began running: unpaused frames and frame steps.
+    /// frames_running also counts the frames spent paused.
+    [[nodiscard]] auto frames_simulated() const -> uint64_t
+    {
+        return frames_simulated_;
+    }
+
     void on_simulation_frame();
 
     [[nodiscard]] auto current_phase() const -> phase
@@ -110,6 +117,7 @@ private:
     /// Frame steps requested and not yet run.
     uint32_t pending_steps_ = 0;
     uint64_t frames_running_ = 0;
+    uint64_t frames_simulated_ = 0;
     splash_scene_state splash_state_{};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);

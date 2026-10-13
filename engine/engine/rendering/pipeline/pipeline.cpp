@@ -43,6 +43,31 @@ namespace rendering
 {
 namespace
 {
+/// The opaque depth soft particles fade against: this frame's Hi-Z first mip when the pipeline
+/// built one, otherwise a copy of the depth buffer blitted in @p view, before the particles draw.
+/// The depth buffer itself is that view's depth target, so it cannot be sampled while they draw.
+auto resolve_particle_scene_depth(gfx::render_view& rview, const gfx::texture::ptr& hiz_depth, bgfx::ViewId view)
+    -> bgfx::TextureHandle
+{
+    if(hiz_depth)
+    {
+        return hiz_depth->native_handle();
+    }
+    const auto& depth = rview.tex_find("DEPTH");
+    if(!depth)
+    {
+        return BGFX_INVALID_HANDLE;
+    }
+    const auto& copy = rview.tex_acquire("PARTICLE_DEPTH",
+                                         {.size = depth->get_size(),
+                                          .format = bgfx::TextureFormat::D32F,
+                                          .flags = BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP});
+    bgfx::blit(view,
+               bgfx::TextureRegion{.handle = copy->native_handle()},
+               bgfx::TextureRegion{.handle = depth->native_handle()});
+    return copy->native_handle();
+}
+
 auto particle_blend_bgfx_state(ps_soa::blend_mode mode) -> uint64_t
 {
     switch(mode)
@@ -611,7 +636,8 @@ void pipeline::run_particle_pass(scene& scn,
                                  const camera& camera,
                                  gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
-                                 const pre_exposure_state& pre_exposure)
+                                 const pre_exposure_state& pre_exposure,
+                                 const gfx::texture::ptr& hiz_depth)
 {
     APP_SCOPE_PERF("Rendering/Particle Pass");
 
@@ -640,9 +666,11 @@ void pipeline::run_particle_pass(scene& scn,
         auto cam_view = camera.get_view();
     
 
-        // Primary: material key (blend / texture / texture mode) so same-material emitters coalesce.
-        // Secondary: distance (far → near) within a material — does not split batches. Per-particle
-        // depth sort for Normal still runs inside ps_soa::render_emitter_batch.
+        // Emitters draw by sort priority, then back to front by distance, whatever their blend mode:
+        // additive and alpha-blended layers only composite correctly against each other in depth
+        // order (fire in front of smoke adds over it, smoke in front of fire hides it). The material
+        // key only breaks ties, so neighbouring emitters of one material coalesce into a batch.
+        // Per-particle depth sort for Normal still runs inside ps_soa::render_emitter_batch.
         struct sort_key
         {
             particle_emitter_component* component;
@@ -650,22 +678,10 @@ void pipeline::run_particle_pass(scene& scn,
             ps_soa::texture_mode texture_mode;
             hpp::uuid texture_uid;
             float distance;
+            int32_t sort_priority;
         };
         hpp::small_vector<sort_key, 16> particle_emitters;
-
-        auto blend_draw_order = [](ps_soa::blend_mode mode) -> int
-        {
-            // Order-independent blends first; alpha (Normal) last so depth-sorted particles composite on top.
-            switch(mode)
-            {
-            case ps_soa::blend_mode::additive:
-                return 0;
-            case ps_soa::blend_mode::multiply:
-                return 1;
-            default:
-                return 2;
-            }
-        };
+        bool wants_scene_depth = false;
 
         {
             APP_SCOPE_PERF("Rendering/Particle Pass/Cull Emitters");
@@ -692,6 +708,7 @@ void pipeline::run_particle_pass(scene& scn,
 
                     // Renderer-based culling feedback (same as model_component).
                     particle_emitter_comp.set_last_render_frame(uint64_t(gfx::get_render_frame()));
+                    wants_scene_depth = wants_scene_depth || particle_emitter_comp.get_soft_fade_distance() > 0.0f;
 
                     const auto& tex = particle_emitter_comp.get_texture();
                     const float distance = math::distance2(bounds.get_center(), cam_pos);
@@ -699,32 +716,35 @@ void pipeline::run_particle_pass(scene& scn,
                                                             particle_emitter_comp.get_blend_mode(),
                                                             particle_emitter_comp.get_texture_mode(),
                                                             tex.uid(),
-                                                            distance});
+                                                            distance,
+                                                            particle_emitter_comp.get_sort_priority()});
             });
         }
 
         {
-            APP_SCOPE_PERF("Rendering/Particle Pass/Sort Emitters by Material");
+            APP_SCOPE_PERF("Rendering/Particle Pass/Sort Emitters");
             std::sort(particle_emitters.begin(),
                       particle_emitters.end(),
                       [&](const sort_key& a, const sort_key& b)
                       {
-                          const int ao = blend_draw_order(a.blend_mode);
-                          const int bo = blend_draw_order(b.blend_mode);
-                          if(ao != bo)
+                          if(a.sort_priority != b.sort_priority)
                           {
-                              return ao < bo;
+                              return a.sort_priority < b.sort_priority;
+                          }
+                          if(a.distance != b.distance)
+                          {
+                              // Back to front: farther first.
+                              return a.distance > b.distance;
+                          }
+                          if(a.blend_mode != b.blend_mode)
+                          {
+                              return a.blend_mode < b.blend_mode;
                           }
                           if(a.texture_uid != b.texture_uid)
                           {
                               return a.texture_uid < b.texture_uid;
                           }
-                          if(a.texture_mode != b.texture_mode)
-                          {
-                              return a.texture_mode < b.texture_mode;
-                          }
-                          // Same material: back-to-front (farther first).
-                          return a.distance > b.distance;
+                          return a.texture_mode < b.texture_mode;
                       });
         }
 
@@ -768,6 +788,8 @@ void pipeline::run_particle_pass(scene& scn,
                 batch_open = false;
             };
 
+            ps_soa::set_scene_depth(wants_scene_depth ? resolve_particle_scene_depth(rview, hiz_depth, pass.id)
+                                                      : bgfx::TextureHandle(BGFX_INVALID_HANDLE));
             for(const auto& particle_emitter : particle_emitters)
             {
                 auto* comp = particle_emitter.component;
@@ -795,6 +817,7 @@ void pipeline::run_particle_pass(scene& scn,
                 }
             }
             flush_particle_batch();
+            ps_soa::set_scene_depth(BGFX_INVALID_HANDLE);
         }
 
         particle_program_instanced_->end();

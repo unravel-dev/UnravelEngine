@@ -347,6 +347,7 @@ auto internal_m2n_audio_play_one_shot(const hpp::uuid& clip,
                                       float volume,
                                       float pitch,
                                       std::uint8_t bus,
+                                      int priority,
                                       bool spatial,
                                       const math::vec3& position) -> uint64_t
 {
@@ -360,6 +361,7 @@ auto internal_m2n_audio_play_one_shot(const hpp::uuid& clip,
     params.volume = volume;
     params.pitch = pitch;
     params.bus = bus < audio_bus_count ? static_cast<audio_bus>(bus) : audio_bus::sfx;
+    params.priority = priority;
     params.spatial = spatial;
     params.position = position;
     return system->play_one_shot(am.get_asset<audio_clip>(clip), params);

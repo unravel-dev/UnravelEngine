@@ -136,6 +136,7 @@ void play_mode::begin_play(rtti::context& ctx, bool allow_splash)
         current_phase_ = phase::splash;
         is_paused_ = false;
         frames_running_ = 0;
+        frames_simulated_ = 0;
         auto& ec = ctx.get_cached<ecs>();
         splash_scene::setup(ctx, ec.get_scene(), splash_state_);
     }
@@ -143,6 +144,7 @@ void play_mode::begin_play(rtti::context& ctx, bool allow_splash)
     {
         is_paused_ = false;
         frames_running_ = 0;
+        frames_simulated_ = 0;
         enter_running(ctx);
     }
 }
@@ -151,6 +153,7 @@ void play_mode::enter_running(rtti::context& ctx)
 {
     current_phase_ = phase::running;
     frames_running_ = 0;
+    frames_simulated_ = 0;
     // Domain reload / scene restore often ran just before this; discard that
     // hitch from the sim clock so the next measured frame is clean.
     ctx.get_cached<simulation>().reset_delta_clock();
@@ -175,6 +178,7 @@ void play_mode::end_play(rtti::context& ctx)
     is_stepping_ = false;
     pending_steps_ = 0;
     frames_running_ = 0;
+    frames_simulated_ = 0;
     splash_scene::teardown(splash_state_);
     ev.on_play_after_end(ctx);
 }
@@ -192,6 +196,10 @@ auto play_mode::should_show_splash(rtti::context& ctx) const -> bool
 void play_mode::on_simulation_frame()
 {
     ++frames_running_;
+    if(!is_simulation_paused())
+    {
+        ++frames_simulated_;
+    }
 }
 
 } // namespace unravel

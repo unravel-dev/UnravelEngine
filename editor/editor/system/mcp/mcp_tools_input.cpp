@@ -1,4 +1,5 @@
 #include "mcp_input_names.h"
+#include "mcp_input_utils.h"
 #include "mcp_tools_common.h"
 
 #include <editor/editing/editor_actions.h>
@@ -18,13 +19,13 @@
 
 namespace unravel::mcp
 {
+
 namespace
 {
-
-constexpr int64_t k_max_hold_frames = 600;
 constexpr auto k_frame_poll_interval = std::chrono::milliseconds(2);
 /// A frame that never arrives means the editor is not pumping; fail rather than hang.
 constexpr auto k_frame_wait_timeout = std::chrono::milliseconds(5000);
+} // namespace
 
 auto get_main_window_id(rtti::context& ctx, uint32_t& out, std::string& error) -> bool
 {
@@ -42,6 +43,88 @@ auto get_main_window_id(rtti::context& ctx, uint32_t& out, std::string& error) -
     out = window->get_window().get_id();
     return true;
 }
+
+/// The characters typing produces: key events carry no text, so a focused text field reads this.
+void push_text_input_event(uint32_t window_id, const std::string& text)
+{
+    os::event event{};
+    event.type = os::events::text_input;
+    event.text.window_id = window_id;
+    event.text.text = text;
+    os::push_event(event);
+}
+
+void push_mouse_button_event(uint32_t window_id, os::mouse::button button, bool down, input::coord position)
+{
+    os::event event{};
+    event.type = os::events::mouse_button;
+    event.button.window_id = window_id;
+    event.button.button = button;
+    event.button.state_id = down ? os::state::pressed : os::state::released;
+    event.button.x = position.x;
+    event.button.y = position.y;
+    event.button.raw_x = position.x;
+    event.button.raw_y = position.y;
+    os::push_event(event);
+}
+
+auto get_input_manager(rtti::context& ctx) -> input::os_input_manager*
+{
+    if(!ctx.has<input_system>())
+    {
+        return nullptr;
+    }
+    return &ctx.get_cached<input_system>().manager;
+}
+
+/// Waits on the calling (worker) thread until the editor has consumed `frames` input
+/// frames, so the pressed -> down -> released transitions a caller asked for actually
+/// happen. Returns false when the editor stops pumping frames.
+auto wait_input_frames(rtti::context& ctx, uint64_t frames) -> bool
+{
+    auto* manager = get_input_manager(ctx);
+    if(manager == nullptr)
+    {
+        return false;
+    }
+    const auto target = manager->get_input_frame() + frames;
+    const auto deadline = std::chrono::steady_clock::now() + k_frame_wait_timeout +
+                          std::chrono::milliseconds(frames * 34);
+    while(manager->get_input_frame() < target)
+    {
+        if(std::chrono::steady_clock::now() > deadline)
+        {
+            return false;
+        }
+        std::this_thread::sleep_for(k_frame_poll_interval);
+    }
+    return true;
+}
+
+/// Focuses the Game panel unless the caller opted out. Without focus the Game panel
+/// clears is_input_allowed every frame and nothing reaches the action map.
+auto ensure_game_input_allowed(rtti::context& ctx, const simdjson::dom::object& args, std::string& error)
+    -> bool
+{
+    bool focus_game_panel = true;
+    read_bool(args, "focus_game_panel", focus_game_panel);
+    if(!focus_game_panel)
+    {
+        return true;
+    }
+    return editor_actions::focus_game_panel(ctx, &error);
+}
+
+void set_game_pointer(input::os_input_manager& manager, input::coord game_position)
+{
+    manager.set_virtual_mouse_position(manager.remap_from_work_zone(game_position));
+}
+
+namespace
+{
+
+constexpr int64_t k_max_hold_frames = 600;
+
 
 auto parse_mouse_button(std::string_view name, os::mouse::button& out) -> bool
 {
@@ -100,19 +183,7 @@ void push_key_event(uint32_t window_id, const key_request& key, bool down)
     os::push_event(event);
 }
 
-void push_mouse_button_event(uint32_t window_id, os::mouse::button button, bool down, input::coord position)
-{
-    os::event event{};
-    event.type = os::events::mouse_button;
-    event.button.window_id = window_id;
-    event.button.button = button;
-    event.button.state_id = down ? os::state::pressed : os::state::released;
-    event.button.x = position.x;
-    event.button.y = position.y;
-    event.button.raw_x = position.x;
-    event.button.raw_y = position.y;
-    os::push_event(event);
-}
+
 
 auto read_key_requests(const simdjson::dom::object& args, std::vector<key_request>& out, std::string& error)
     -> bool
@@ -164,38 +235,7 @@ auto read_key_requests(const simdjson::dom::object& args, std::vector<key_reques
     return true;
 }
 
-auto get_input_manager(rtti::context& ctx) -> input::os_input_manager*
-{
-    if(!ctx.has<input_system>())
-    {
-        return nullptr;
-    }
-    return &ctx.get_cached<input_system>().manager;
-}
 
-/// Waits on the calling (worker) thread until the editor has consumed `frames` input
-/// frames, so the pressed -> down -> released transitions a caller asked for actually
-/// happen. Returns false when the editor stops pumping frames.
-auto wait_input_frames(rtti::context& ctx, uint64_t frames) -> bool
-{
-    auto* manager = get_input_manager(ctx);
-    if(manager == nullptr)
-    {
-        return false;
-    }
-    const auto target = manager->get_input_frame() + frames;
-    const auto deadline = std::chrono::steady_clock::now() + k_frame_wait_timeout +
-                          std::chrono::milliseconds(frames * 34);
-    while(manager->get_input_frame() < target)
-    {
-        if(std::chrono::steady_clock::now() > deadline)
-        {
-            return false;
-        }
-        std::this_thread::sleep_for(k_frame_poll_interval);
-    }
-    return true;
-}
 
 auto input_state_json(rtti::context& ctx) -> std::string
 {
@@ -232,19 +272,6 @@ auto input_state_json(rtti::context& ctx) -> std::string
         bool_to_json(real_cursor_in_view));
 }
 
-/// Focuses the Game panel unless the caller opted out. Without focus the Game panel
-/// clears is_input_allowed every frame and nothing reaches the action map.
-auto ensure_game_input_allowed(rtti::context& ctx, const simdjson::dom::object& args, std::string& error)
-    -> bool
-{
-    bool focus_game_panel = true;
-    read_bool(args, "focus_game_panel", focus_game_panel);
-    if(!focus_game_panel)
-    {
-        return true;
-    }
-    return editor_actions::focus_game_panel(ctx, &error);
-}
 
 } // namespace
 
@@ -274,21 +301,25 @@ void register_input_tools(mcp_tool_registry& registry)
              "\"press\" taps them for one frame, which is what Input.IsPressed sees. Key names are "
              "the platform's own, matched ignoring case, spaces and dashes (\"w\", \"space\", "
              "\"left shift\", \"lshift\", \"f1\"); an unknown name is rejected "
-             "with suggestions. Scripts only run in play mode, so enter play mode first. Focuses "
-             "the Game panel unless focus_game_panel is false, because input is dropped while it is "
-             "unfocused.",
+             "with suggestions. text types characters into the focused text field (a UI input): key "
+             "events carry no characters, so typing sends text as the OS does; pass keys, text or "
+             "both. Scripts only run in play mode, so enter play mode first. Focuses the Game panel "
+             "unless focus_game_panel is false, because input is dropped while it is unfocused.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"keys":{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"object","properties":{"key":{"type":"string"},"alt":{"type":"boolean"},"ctrl":{"type":"boolean"},"shift":{"type":"boolean"}},"required":["key"]}]},"description":"Key names, or objects with modifiers"},"state":{"type":"string","enum":["down","up","press"],"description":"Default press"},"focus_game_panel":{"type":"boolean","description":"Default true"}},"required":["keys"]})json",
+             R"json({"type":"object","properties":{"keys":{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"object","properties":{"key":{"type":"string"},"alt":{"type":"boolean"},"ctrl":{"type":"boolean"},"shift":{"type":"boolean"}},"required":["key"]}]},"description":"Key names, or objects with modifiers"},"text":{"type":"string","description":"Characters to type (UTF-8), sent after the key presses"},"state":{"type":"string","enum":["down","up","press"],"description":"Default press"},"focus_game_panel":{"type":"boolean","description":"Default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
 
+             std::string text;
+             read_string(args, "text", text);
              std::vector<key_request> keys;
              std::string error;
-             if(!read_key_requests(args, keys, error))
+             const bool has_keys = args["keys"].error() == simdjson::SUCCESS;
+             if((has_keys || text.empty()) && !read_key_requests(args, keys, error))
              {
-                 return {.text = error, .is_error = true};
+                 return {.text = text.empty() ? error + " (or pass text)" : error, .is_error = true};
              }
              std::string state = "press";
              read_string(args, "state", state);
@@ -299,7 +330,7 @@ void register_input_tools(mcp_tool_registry& registry)
 
              const bool wants_down = state == "down" || state == "press";
              auto pushed = mcp.invoke_on_main(
-                 [&ctx, &args, &keys, wants_down]() -> tool_result
+                 [&ctx, &args, &keys, &text, wants_down]() -> tool_result
                  {
                      std::string focus_error;
                      if(!ensure_game_input_allowed(ctx, args, focus_error))
@@ -315,6 +346,10 @@ void register_input_tools(mcp_tool_registry& registry)
                      for(const auto& key : keys)
                      {
                          push_key_event(window_id, key, wants_down);
+                     }
+                     if(wants_down && !text.empty())
+                     {
+                         push_text_input_event(window_id, text);
                      }
                      return {.text = fmt::format("{}", window_id), .is_error = false};
                  });
@@ -499,9 +534,13 @@ void register_input_tools(mcp_tool_registry& registry)
              input::coord position{static_cast<int>(x), static_cast<int>(y)};
              if(space == "game")
              {
-                 position = manager->remap_from_work_zone(position);
+                 set_game_pointer(*manager, position);
+                 position = *manager->get_virtual_mouse_position();
              }
-             manager->set_virtual_mouse_position(position);
+             else
+             {
+                 manager->set_virtual_mouse_position(position);
+             }
 
              return {.text = fmt::format(R"({{"ok":true,"screen":[{},{}],"state":{}}})",
                                          position.x,

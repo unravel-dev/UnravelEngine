@@ -137,6 +137,17 @@ public:
     void set_loop(bool loop);
     auto is_loop() const -> bool;
 
+    /// A looping emitter starts full, as if it had been running for a whole particle lifetime, when it
+    /// first plays after it is created or reset.
+    void set_prewarm(bool prewarm);
+    auto get_prewarm() const -> bool;
+
+    /// Whether the emitter plays from the moment it is created (scene load, play start, instantiation);
+    /// off leaves it stopped until it is played. Setting it after the emitter's first frame only
+    /// changes what the next created copy does.
+    void set_auto_play(bool auto_play);
+    auto get_auto_play() const -> bool;
+
     void set_start_delay(std::chrono::duration<float> delay);
     auto get_start_delay() const -> std::chrono::duration<float>;
 
@@ -185,6 +196,31 @@ public:
 
     void set_texture_sheet_randomize(bool randomize);
     auto get_texture_sheet_randomize() const -> bool;
+
+    /// Crossfade from each texture sheet frame into the next.
+    void set_frame_blending(bool blend);
+    auto get_frame_blending() const -> bool;
+
+    /// Start angle of each particle in its quad's plane, degrees, random between min and max.
+    void set_rotation(const frange_t& degrees);
+    auto get_rotation() const -> const frange_t&;
+
+    /// Spin in degrees per second, random between min and max.
+    void set_rotation_speed(const frange_t& degrees_per_second);
+    auto get_rotation_speed() const -> const frange_t&;
+
+    /// Half the particles spin the other way.
+    void set_random_rotation_direction(bool random);
+    auto get_random_rotation_direction() const -> bool;
+
+    /// Metres over which particles fade where they meet the scene behind them; 0 = hard edge.
+    void set_soft_fade_distance(float distance);
+    auto get_soft_fade_distance() const -> float;
+
+    /// Draw order against other emitters: lower draws first, higher composites on top. Equal
+    /// priorities draw back to front by distance.
+    void set_sort_priority(int32_t priority);
+    auto get_sort_priority() const -> int32_t;
 
     void update_emitter(const math::transform& world_transform, delta_t dt);
 

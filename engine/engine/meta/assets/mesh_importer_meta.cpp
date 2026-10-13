@@ -328,6 +328,16 @@ REFLECT(mesh_importer_meta)
             entt::attribute{"name", "model"},
             entt::attribute{"pretty_name", "Model"},
         })
+        .data<&mesh_importer_meta::sdf>("sdf"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sdf"},
+            entt::attribute{"pretty_name", "Sdf"},
+        })
+        .data<&mesh_importer_meta::cards>("cards"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cards"},
+            entt::attribute{"pretty_name", "Cards"},
+        })
         .data<&mesh_importer_meta::rig>("rig"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "rig"},

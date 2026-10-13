@@ -546,6 +546,83 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Start angle of each particle in its quad's plane, degrees, random between min and max.
+        /// </summary>
+        public Range<float> rotation
+        {
+            get => internal_m2n_particle_emitter_get_rotation(owner);
+            set => internal_m2n_particle_emitter_set_rotation(owner, value);
+        }
+
+        /// <summary>
+        /// Spin in degrees per second, random between min and max.
+        /// </summary>
+        public Range<float> rotationSpeed
+        {
+            get => internal_m2n_particle_emitter_get_rotation_speed(owner);
+            set => internal_m2n_particle_emitter_set_rotation_speed(owner, value);
+        }
+
+        /// <summary>
+        /// Whether half the particles spin the other way.
+        /// </summary>
+        public bool randomRotationDirection
+        {
+            get => internal_m2n_particle_emitter_get_random_rotation_direction(owner);
+            set => internal_m2n_particle_emitter_set_random_rotation_direction(owner, value);
+        }
+
+        /// <summary>
+        /// Soft particles: metres over which a particle fades where it meets the scene behind it.
+        /// 0 keeps the hard edge.
+        /// </summary>
+        public float softFadeDistance
+        {
+            get => internal_m2n_particle_emitter_get_soft_fade_distance(owner);
+            set => internal_m2n_particle_emitter_set_soft_fade_distance(owner, value);
+        }
+
+        /// <summary>
+        /// A looping emitter starts full, as if it had been running for a whole particle lifetime,
+        /// when it first plays after it is created or reset.
+        /// </summary>
+        public bool prewarm
+        {
+            get => internal_m2n_particle_emitter_get_prewarm(owner);
+            set => internal_m2n_particle_emitter_set_prewarm(owner, value);
+        }
+
+        /// <summary>
+        /// Whether the emitter plays from the moment it is created (scene load, play start,
+        /// instantiation); off leaves it stopped until Play(). Setting it on a running emitter only
+        /// changes what the next created copy does.
+        /// </summary>
+        public bool autoPlay
+        {
+            get => internal_m2n_particle_emitter_get_auto_play(owner);
+            set => internal_m2n_particle_emitter_set_auto_play(owner, value);
+        }
+
+        /// <summary>
+        /// Draw order against other emitters, whatever their blend mode: lower values draw first and
+        /// higher ones composite on top. Emitters of equal priority draw back to front by distance.
+        /// </summary>
+        public int sortPriority
+        {
+            get => internal_m2n_particle_emitter_get_sort_priority(owner);
+            set => internal_m2n_particle_emitter_set_sort_priority(owner, value);
+        }
+
+        /// <summary>
+        /// Whether texture sheet frames crossfade into each other instead of stepping.
+        /// </summary>
+        public bool frameBlending
+        {
+            get => internal_m2n_particle_emitter_get_frame_blending(owner);
+            set => internal_m2n_particle_emitter_set_frame_blending(owner, value);
+        }
+
+        /// <summary>
         /// Size multiplier at the slow and fast ends of sizeBySpeedVelocityRange.
         /// </summary>
         public Range<float> sizeBySpeedRange
@@ -600,7 +677,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Whether particles rotate to face their direction of motion.
+        /// Whether particles turn so the texture's top points along their motion:
+        /// draw directional art pointing up.
         /// </summary>
         public bool alignToDirection
         {
@@ -904,6 +982,54 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_set_initial_scale_3d(Entity eid, Vector3 value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Range<float> internal_m2n_particle_emitter_get_rotation(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_rotation(Entity eid, Range<float> value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Range<float> internal_m2n_particle_emitter_get_rotation_speed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_rotation_speed(Entity eid, Range<float> value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_random_rotation_direction(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_random_rotation_direction(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_soft_fade_distance(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_soft_fade_distance(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_prewarm(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_prewarm(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_auto_play(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_auto_play(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_sort_priority(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_sort_priority(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_frame_blending(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_frame_blending(Entity eid, bool value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Range<float> internal_m2n_particle_emitter_get_size_by_speed_range(Entity eid);

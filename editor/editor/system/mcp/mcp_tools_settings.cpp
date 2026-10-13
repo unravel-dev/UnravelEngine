@@ -48,6 +48,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"splash", "show_made_with"},
         {"splash", "fade_in_sec"},
         {"splash", "fade_out_sec"},
+        {"assets", "texture"},
     };
     return rows;
 }
@@ -271,7 +272,7 @@ void register_settings_tools(mcp_tool_registry& registry)
              "List the project settings this server exposes: dotted path, type, range, enum values, "
              "description (from the settings reflection the Project Settings window draws), whether "
              "it is read-only, and whether a change needs an editor restart (cold). Optional group "
-             "filter (standalone, app, graphics, physics, splash, resolution, layer).",
+             "filter (standalone, app, graphics, physics, splash, assets, resolution, layer).",
          .input_schema_json =
              R"json({"type":"object","properties":{"group":{"type":"string"},"groups":{"type":"array","items":{"type":"string"}}}})json",
          .handler =

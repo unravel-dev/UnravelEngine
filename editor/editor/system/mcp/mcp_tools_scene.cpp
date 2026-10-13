@@ -677,7 +677,8 @@ void register_scene_tools(mcp_tool_registry& registry)
                                             const std::string& component,
                                             const script_selector& script,
                                             const std::string& props_json,
-                                            std::string& apply_error) -> bool
+                                            std::string& apply_error,
+                                            std::vector<std::string>& warnings) -> bool
              {
                  simdjson::dom::parser parser;
                  simdjson::dom::element root;
@@ -698,9 +699,12 @@ void register_scene_tools(mcp_tool_registry& registry)
                      apply_error = component_apply_result_to_json(result);
                      return false;
                  }
+                 warnings.insert(warnings.end(), result.warnings.begin(), result.warnings.end());
                  return true;
              };
              std::vector<entry> entries;
+             std::vector<std::string> warnings;
+             std::vector<std::string> ignored_warnings;
              for(auto el : items)
              {
                  simdjson::dom::object obj;
@@ -755,13 +759,18 @@ void register_scene_tools(mcp_tool_registry& registry)
                  }
                  const std::string new_props = std::string(simdjson::minify(obj["properties"]));
                  std::string apply_error;
-                 if(!apply_props_json(entity, component, script, new_props, apply_error))
+                 std::vector<std::string> item_warnings;
+                 if(!apply_props_json(entity, component, script, new_props, apply_error, item_warnings))
                  {
-                     (void)apply_props_json(entity, component, script, old_props, apply_error);
+                     (void)apply_props_json(entity, component, script, old_props, apply_error, ignored_warnings);
                      return {.text = apply_error.empty() ? ("Failed to apply properties: " + component) : apply_error,
                              .is_error = true};
                  }
-                 (void)apply_props_json(entity, component, script, old_props, apply_error);
+                 (void)apply_props_json(entity, component, script, old_props, apply_error, ignored_warnings);
+                 for(const auto& warning : item_warnings)
+                 {
+                     warnings.push_back(fmt::format("{} {}: {}", entity_id, component, warning));
+                 }
                  entry e{};
                  e.entity = entity;
                  e.component_type = component_meta_type(component);
@@ -784,7 +793,8 @@ void register_scene_tools(mcp_tool_registry& registry)
                      {
                          const auto state = prefab_override_context::save_component_state(e.entity, e.component_type);
                          std::string apply_error;
-                         (void)apply_props_json(e.entity, e.component, e.script, e.new_props_json, apply_error);
+                         std::vector<std::string> ignored;
+                         (void)apply_props_json(e.entity, e.component, e.script, e.new_props_json, apply_error, ignored);
                          *e.overrides = prefab_override_context::mark_changed_properties(e.entity, e.component_type, state);
                      }
                  },
@@ -793,11 +803,14 @@ void register_scene_tools(mcp_tool_registry& registry)
                      for(auto it = entries.rbegin(); it != entries.rend(); ++it)
                      {
                          std::string apply_error;
-                         (void)apply_props_json(it->entity, it->component, it->script, it->old_props_json, apply_error);
+                         std::vector<std::string> ignored;
+                         (void)apply_props_json(it->entity, it->component, it->script, it->old_props_json, apply_error, ignored);
                          prefab_override_context::restore_overrides(*it->overrides);
                      }
                  });
-             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
+             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()),
+                     .is_error = false,
+                     .warnings = std::move(warnings)};
          },
          .mutates_scene = true});
 
@@ -994,8 +1007,8 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_save",
          .description =
-             "Save the active edit scene to .spfb. Omit key/path to overwrite source; else save-as. "
-             "Requires open project; refuses play/prefab mode.",
+             "Save the active edit scene to .spfb. Omit key/path to overwrite source; else save-as "
+             "(a missing folder is created). Requires open project; refuses play/prefab mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"key":{"type":"string","description":"Asset key e.g. app:/data/Village.spfb"},"path":{"type":"string","description":"Absolute filesystem path to a .spfb"}}})json",
          .handler =
@@ -1039,6 +1052,12 @@ void register_scene_tools(mcp_tool_registry& registry)
              }
 
              const auto absolute = fs::absolute(fs::resolve_protocol(key));
+             fs::error_code folder_error;
+             fs::create_directories(absolute.parent_path(), folder_error);
+             if(folder_error)
+             {
+                 return {.text = "Failed to create the scene's folder: " + folder_error.message(), .is_error = true};
+             }
              if(!editor_actions::save_scene_to_path(ctx, absolute, true, false))
              {
                  return {.text = "Failed to save scene: " + key, .is_error = true};

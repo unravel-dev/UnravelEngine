@@ -13,11 +13,13 @@
 #include <engine/rendering/mesh.h>
 #include <engine/settings/settings.h>
 #include <engine/ui/ui_tree.h>
+#include <base/basetypes.hpp>
 #include <graphics/texture.h>
 #include <math/color.h>
 #include <reflection/reflection.h>
 #include <uuid/uuid.h>
 
+#include <array>
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -94,6 +96,91 @@ auto make_number_codec(const char* schema_type) -> value_codec
             .as_double = [](const entt::meta_any& value) -> double
             {
                 return static_cast<double>(value.cast<T>());
+            }};
+}
+
+/// A range crosses as [min, max].
+template<typename T>
+auto make_range_codec() -> value_codec
+{
+    return {.schema_type = "array",
+            .schema_extra = R"("items":"number","minItems":2,"maxItems":2)",
+            .format_hint = "[min, max]",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                const auto& bounds = value.cast<const range<T>&>();
+                return fmt::format("[{:.6g},{:.6g}]", bounds.min, bounds.max);
+            },
+            .from_json = [](rtti::context& ctx, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::array items;
+                if(element.get_array().get(items) != simdjson::SUCCESS || items.size() != 2)
+                {
+                    error = "expected [min, max]";
+                    return false;
+                }
+                static const auto element_codec = make_number_codec<T>("number");
+                std::array<T, 2> values{};
+                std::size_t index = 0;
+                for(auto item : items)
+                {
+                    entt::meta_any converted;
+                    if(!element_codec.from_json(ctx, item, converted, error))
+                    {
+                        return false;
+                    }
+                    values[index++] = converted.cast<T>();
+                }
+                out = entt::meta_any{range<T>(values[0], values[1])};
+                return true;
+            }};
+}
+
+/// A size crosses as [width, height], each element checked as the number codec checks it.
+template<typename T>
+auto make_size_codec() -> value_codec
+{
+    constexpr bool is_float = std::is_floating_point_v<T>;
+    return {.schema_type = "array",
+            .schema_extra = is_float ? R"("items":"number","minItems":2,"maxItems":2)"
+                                     : R"("items":"integer","minItems":2,"maxItems":2)",
+            .format_hint = "[width, height]",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                const auto& extent = value.cast<const size<T>&>();
+                if constexpr(is_float)
+                {
+                    return fmt::format("[{:.6g},{:.6g}]", extent.width, extent.height);
+                }
+                else
+                {
+                    return fmt::format("[{},{}]", extent.width, extent.height);
+                }
+            },
+            .from_json = [](rtti::context& ctx, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::array items;
+                if(element.get_array().get(items) != simdjson::SUCCESS || items.size() != 2)
+                {
+                    error = "expected [width, height]";
+                    return false;
+                }
+                static const auto element_codec = make_number_codec<T>(is_float ? "number" : "integer");
+                std::array<T, 2> values{};
+                std::size_t index = 0;
+                for(auto item : items)
+                {
+                    entt::meta_any converted;
+                    if(!element_codec.from_json(ctx, item, converted, error))
+                    {
+                        return false;
+                    }
+                    values[index++] = converted.cast<T>();
+                }
+                out = entt::meta_any{size<T>(values[0], values[1])};
+                return true;
             }};
 }
 
@@ -194,6 +281,10 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
                  out = entt::meta_any{flag};
                  return true;
              }});
+        add(entt::type_id<size<float>>(), make_size_codec<float>());
+        add(entt::type_id<frange_t>(), make_range_codec<float>());
+        add(entt::type_id<size<int32_t>>(), make_size_codec<int32_t>());
+        add(entt::type_id<size<uint32_t>>(), make_size_codec<uint32_t>());
         add(entt::type_id<std::string>(),
             {.schema_type = "string",
              .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
@@ -656,6 +747,30 @@ auto find_meta_property(const entt::meta_type& type, std::string_view name) -> e
     return {};
 }
 
+namespace
+{
+/// "properties":{name:{schema},...} of a reflected struct, leaving out what the bridge cannot express.
+auto object_properties_schema(const entt::meta_type& type) -> std::string
+{
+    std::string properties;
+    for(auto [id, prop] : type.data())
+    {
+        const auto name = entt::get_name(prop);
+        if(name.empty() || std::string_view(schema_type_of(prop.type())) == "unsupported")
+        {
+            continue;
+        }
+        properties += (properties.empty() ? "" : ",") + make_json_string(name) + ":{" + meta_property_schema(prop) + "}";
+    }
+    return "\"properties\":{" + properties + "}";
+}
+} // namespace
+
+auto meta_object_schema(const entt::meta_type& type) -> std::string
+{
+    return "\"type\":\"object\"," + object_properties_schema(type);
+}
+
 auto meta_property_schema(const entt::meta_data& prop) -> std::string
 {
     const auto prop_type = prop.type();
@@ -668,6 +783,10 @@ auto meta_property_schema(const entt::meta_data& prop) -> std::string
     if(prop_type.is_enum())
     {
         fields += ",\"enum\":" + strings_to_json_array(enum_value_names(prop_type));
+    }
+    if(is_nested_object(prop_type))
+    {
+        fields += "," + object_properties_schema(prop_type);
     }
     if(entt::get_attribute(prop, "min"))
     {

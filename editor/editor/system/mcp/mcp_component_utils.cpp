@@ -1330,6 +1330,36 @@ auto apply_skylight_properties(rtti::context& ctx,
     }
 }
 
+template<typename Enum>
+auto enum_from_string(std::string_view value, const std::initializer_list<std::pair<const char*, Enum>>& table, Enum& out)
+    -> bool
+{
+    for(const auto& entry : table)
+    {
+        if(value == entry.first)
+        {
+            out = entry.second;
+            return true;
+        }
+    }
+    return false;
+}
+
+template<typename Enum>
+auto enum_to_string(Enum value, const std::initializer_list<std::pair<const char*, Enum>>& table) -> const char*
+{
+    for(const auto& entry : table)
+    {
+        if(value == entry.second)
+        {
+            return entry.first;
+        }
+    }
+    return "unknown";
+}
+
+#define MCP_AUDIO_BUS_TABLE {{"sfx", audio_bus::sfx}, {"music", audio_bus::music}, {"ui", audio_bus::ui}}
+
 auto audio_to_json(const audio_source_component& comp, const std::unordered_set<std::string>* filter) -> std::string
 {
     std::string json = "{";
@@ -1370,9 +1400,25 @@ auto audio_to_json(const audio_source_component& comp, const std::unordered_set<
     {
         append_prop(json, first, "mute", comp.is_muted() ? "true" : "false");
     }
+    if(wants_key(filter, "spatial"))
+    {
+        append_prop(json, first, "spatial", comp.is_spatial() ? "true" : "false");
+    }
+    if(wants_key(filter, "bus"))
+    {
+        append_prop(json, first, "bus", make_json_string(enum_to_string(comp.get_bus(), MCP_AUDIO_BUS_TABLE)));
+    }
+    if(wants_key(filter, "priority"))
+    {
+        append_prop(json, first, "priority", fmt::format("{}", comp.get_priority()));
+    }
     if(wants_key(filter, "clip"))
     {
         append_prop(json, first, "clip", asset_handle_key_json(comp.get_clip()));
+    }
+    if(wants_key(filter, "is_playing"))
+    {
+        append_prop(json, first, "is_playing", comp.is_playing() ? "true" : "false");
     }
     json += "}";
     return json;
@@ -1482,6 +1528,43 @@ auto apply_audio_properties(rtti::context& ctx,
                 continue;
             }
             comp.set_mute(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "spatial")
+        {
+            bool v = false;
+            if(!parse_bool(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_spatial(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "bus")
+        {
+            std::string s;
+            audio_bus v{};
+            if(!parse_string(value, s, error) || !enum_from_string<audio_bus>(s, MCP_AUDIO_BUS_TABLE, v))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + (error.empty() ? "expected sfx, music or ui" : error));
+                continue;
+            }
+            comp.set_bus(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "priority")
+        {
+            int v = 0;
+            if(!parse_int(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_priority(v);
             result.applied.push_back(key);
         }
         else if(key == "clip")
@@ -2053,34 +2136,6 @@ auto resolve_animation_clip(rtti::context& ctx, const std::string& key_or_uid, s
     return handle;
 }
 
-template<typename Enum>
-auto enum_from_string(std::string_view value, const std::initializer_list<std::pair<const char*, Enum>>& table, Enum& out)
-    -> bool
-{
-    for(const auto& entry : table)
-    {
-        if(value == entry.first)
-        {
-            out = entry.second;
-            return true;
-        }
-    }
-    return false;
-}
-
-template<typename Enum>
-auto enum_to_string(Enum value, const std::initializer_list<std::pair<const char*, Enum>>& table) -> const char*
-{
-    for(const auto& entry : table)
-    {
-        if(value == entry.second)
-        {
-            return entry.first;
-        }
-    }
-    return "unknown";
-}
-
 #define MCP_EMITTER_SHAPE_TABLE                                                                                        \
     {                                                                                                                  \
         {"sphere", ps_soa::emitter_shape::sphere}, {"hemisphere", ps_soa::emitter_shape::hemisphere},                  \
@@ -2222,6 +2277,46 @@ auto color_gradient_to_json(const math::gradient<math::color>& gradient) -> std:
     return json;
 }
 
+/// Largest difference between two gradient values that still counts as the same value.
+constexpr float k_gradient_value_tolerance = 1e-4f;
+
+/// The particle model reads few keys of a range gradient: size goes linearly from the value at
+/// progress 0 to the value at 1, and a particle travels the velocity value at 1 over its life.
+/// Reports the keys that would change the curve if every key counted.
+void warn_unread_gradient_keys(const std::string& key,
+                               const math::gradient<frange_t>& gradient,
+                               bool reads_start,
+                               component_apply_result& result)
+{
+    const frange_t start = gradient.sample(0.0f);
+    const frange_t end = gradient.sample(1.0f);
+    std::string unread;
+    for(const auto& point : gradient.get_points())
+    {
+        const frange_t expected = reads_start ? frange_t(math::mix(start.min, end.min, point.progress),
+                                                         math::mix(start.max, end.max, point.progress))
+                                              : end;
+        if(math::abs(point.element.min - expected.min) > k_gradient_value_tolerance ||
+           math::abs(point.element.max - expected.max) > k_gradient_value_tolerance)
+        {
+            unread += fmt::format("{}{:.3g}", unread.empty() ? "" : ", ", point.progress);
+        }
+    }
+    if(unread.empty())
+    {
+        return;
+    }
+    result.warnings.push_back(
+        reads_start ? fmt::format("{}: size goes linearly from the value at progress 0 to the value at 1; the keys "
+                                  "at {} change nothing",
+                                  key,
+                                  unread)
+                    : fmt::format("{}: a particle travels the value at progress 1 over its life; the keys at {} "
+                                  "change nothing",
+                                  key,
+                                  unread));
+}
+
 auto range_gradient_to_json(const math::gradient<frange_t>& gradient) -> std::string
 {
     std::string json = "[";
@@ -2318,6 +2413,67 @@ auto parse_range_gradient(const simdjson::dom::element& value, math::gradient<fr
     return true;
 }
 
+/// Applies the keys in @p delegated through the reflection, limited to @p allowed: the reflected
+/// extras of a component whose other properties are hand-written. Keys outside @p allowed are
+/// reported unknown.
+void apply_delegated_meta_properties(rtti::context& ctx,
+                                     entt::meta_any& object,
+                                     const simdjson::dom::object& properties,
+                                     const std::vector<std::string>& delegated,
+                                     const std::unordered_set<std::string>& allowed,
+                                     component_apply_result& result)
+{
+    if(delegated.empty())
+    {
+        return;
+    }
+    std::string delegated_json = "{";
+    bool first = true;
+    for(const auto& key : delegated)
+    {
+        simdjson::dom::element value;
+        (void)properties[key].get(value);
+        if(!first)
+        {
+            delegated_json += ",";
+        }
+        first = false;
+        delegated_json += make_json_string(key) + ":" + std::string(simdjson::minify(value));
+    }
+    delegated_json += "}";
+    simdjson::dom::parser parser;
+    simdjson::dom::object delegated_object;
+    if(parser.parse(delegated_json).get(delegated_object))
+    {
+        result.ok = false;
+        result.errors.push_back("Failed to re-parse the delegated properties");
+        return;
+    }
+    apply_meta_properties(ctx, object, delegated_object, result, &allowed);
+}
+
+/// Particle Emitter properties served by the reflection rather than the hand-written rows below.
+auto particle_reflected_keys() -> const std::unordered_set<std::string>&
+{
+    static const std::unordered_set<std::string> keys{"position_easing",
+                                                      "temporal_motion",
+                                                      "culling_mode",
+                                                      "simulation_backend",
+                                                      "size_by_speed_range",
+                                                      "size_by_speed_velocity_range",
+                                                      "color_by_speed_velocity_range",
+                                                      "lifetime_by_emitter_speed_range",
+                                                      "rotation",
+                                                      "rotation_speed",
+                                                      "random_rotation_direction",
+                                                      "soft_fade_distance",
+                                                      "sort_priority",
+                                                      "prewarm",
+                                                      "auto_play",
+                                                      "frame_blending"};
+    return keys;
+}
+
 auto particle_to_json(const particle_emitter_component& comp, const std::unordered_set<std::string>* filter)
     -> std::string
 {
@@ -2408,6 +2564,10 @@ auto particle_to_json(const particle_emitter_component& comp, const std::unorder
     {
         append_prop(json, first, "color_gradient", color_gradient_to_json(comp.get_color_gradient()));
     }
+    if(wants_key(filter, "color_by_speed_gradient"))
+    {
+        append_prop(json, first, "color_by_speed_gradient", color_gradient_to_json(comp.get_color_by_speed_gradient()));
+    }
     if(wants_key(filter, "velocity_gradient"))
     {
         append_prop(json, first, "velocity_gradient", range_gradient_to_json(comp.get_velocity_gradient()));
@@ -2474,6 +2634,7 @@ auto apply_particle_properties(rtti::context& ctx,
                                const simdjson::dom::object& properties,
                                component_apply_result& result) -> void
 {
+    std::vector<std::string> delegated;
     for(auto field : properties)
     {
         const std::string key(field.key);
@@ -2602,17 +2763,31 @@ auto apply_particle_properties(rtti::context& ctx,
             parse_color_gradient(value, gradient, error) ? (comp.set_color_gradient(gradient), applied())
                                                          : fail(error);
         }
-        else if(key == "velocity_gradient")
+        else if(key == "color_by_speed_gradient")
         {
-            math::gradient<frange_t> gradient;
-            parse_range_gradient(value, gradient, error) ? (comp.set_velocity_gradient(gradient), applied())
+            math::gradient<math::color> gradient;
+            parse_color_gradient(value, gradient, error) ? (comp.set_color_by_speed_gradient(gradient), applied())
                                                          : fail(error);
         }
-        else if(key == "scale_gradient")
+        else if(key == "velocity_gradient" || key == "scale_gradient")
         {
             math::gradient<frange_t> gradient;
-            parse_range_gradient(value, gradient, error) ? (comp.set_scale_gradient(gradient), applied())
-                                                         : fail(error);
+            if(!parse_range_gradient(value, gradient, error))
+            {
+                fail(error);
+                continue;
+            }
+            const bool is_scale = key == "scale_gradient";
+            if(is_scale)
+            {
+                comp.set_scale_gradient(gradient);
+            }
+            else
+            {
+                comp.set_velocity_gradient(gradient);
+            }
+            applied();
+            warn_unread_gradient_keys(key, gradient, is_scale, result);
         }
         else if(key == "texture")
         {
@@ -2681,9 +2856,13 @@ auto apply_particle_properties(rtti::context& ctx,
         }
         else
         {
-            result.unknown.push_back(key);
+            delegated.push_back(key);
         }
     }
+    // Easing, culling, backend and the speed ranges go through the reflection with the component's
+    // own setters.
+    auto object = entt::forward_as_meta(comp);
+    apply_delegated_meta_properties(ctx, object, properties, delegated, particle_reflected_keys(), result);
     comp.stop_and_reset();
     comp.play();
 }
@@ -2933,20 +3112,39 @@ auto join_json_objects(const std::string& lhs, const std::string& rhs) -> std::s
     return lhs.substr(0, lhs.size() - 1) + "," + rhs.substr(1);
 }
 
-auto physics_with_reflected_to_json(rtti::context& ctx,
-                                    physics_component& comp,
-                                    const std::unordered_set<std::string>* filter) -> std::string
+/// The reflected extras of a component with hand-written rows, as one JSON object.
+auto reflected_extras_to_json(rtti::context& ctx,
+                              entt::meta_any& object,
+                              const std::unordered_set<std::string>& keys,
+                              const std::unordered_set<std::string>* filter) -> std::string
 {
     std::unordered_set<std::string> reflected;
-    for(const auto& key : physics_reflected_keys())
+    for(const auto& key : keys)
     {
         if(wants_key(filter, key.c_str()))
         {
             reflected.insert(key);
         }
     }
+    return meta_properties_to_json(ctx, object, &reflected);
+}
+
+auto physics_with_reflected_to_json(rtti::context& ctx,
+                                    physics_component& comp,
+                                    const std::unordered_set<std::string>* filter) -> std::string
+{
     auto object = entt::forward_as_meta(comp);
-    return join_json_objects(physics_to_json(comp, filter), meta_properties_to_json(ctx, object, &reflected));
+    return join_json_objects(physics_to_json(comp, filter),
+                             reflected_extras_to_json(ctx, object, physics_reflected_keys(), filter));
+}
+
+auto particle_with_reflected_to_json(rtti::context& ctx,
+                                     particle_emitter_component& comp,
+                                     const std::unordered_set<std::string>* filter) -> std::string
+{
+    auto object = entt::forward_as_meta(comp);
+    return join_json_objects(particle_to_json(comp, filter),
+                             reflected_extras_to_json(ctx, object, particle_reflected_keys(), filter));
 }
 
 auto apply_physics_properties(rtti::context& ctx,
@@ -3017,36 +3215,10 @@ auto apply_physics_properties(rtti::context& ctx,
             delegated.push_back(key);
         }
     }
-    if(delegated.empty())
-    {
-        return;
-    }
     // The rest go through the reflection: the material handle, the contact event flags and the
     // read-only velocities are all reflected with the component's own setters.
-    std::string delegated_json = "{";
-    bool first = true;
-    for(const auto& key : delegated)
-    {
-        simdjson::dom::element value;
-        (void)properties[key].get(value);
-        if(!first)
-        {
-            delegated_json += ",";
-        }
-        first = false;
-        delegated_json += make_json_string(key) + ":" + std::string(simdjson::minify(value));
-    }
-    delegated_json += "}";
-    simdjson::dom::parser parser;
-    simdjson::dom::object delegated_object;
-    if(parser.parse(delegated_json).get(delegated_object))
-    {
-        result.ok = false;
-        result.errors.push_back("Failed to re-parse delegated physics properties");
-        return;
-    }
     auto object = entt::forward_as_meta(comp);
-    apply_meta_properties(ctx, object, delegated_object, result, &physics_reflected_keys());
+    apply_delegated_meta_properties(ctx, object, properties, delegated, physics_reflected_keys(), result);
 }
 
 auto animation_to_json(const animation_component& comp, const std::unordered_set<std::string>* filter) -> std::string
@@ -3989,7 +4161,11 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Audio Source", "range_min", "number");
     add("Audio Source", "range_max", "number");
     add("Audio Source", "mute", "boolean");
+    add("Audio Source", "spatial", "boolean", R"("description":"World-space attenuation; off plays 2D at the listener")");
+    add("Audio Source", "bus", "string", R"("enum":["sfx","music","ui"])");
+    add("Audio Source", "priority", "integer", R"("description":"Voice-steal priority; higher is kept at the voice cap")");
     add("Audio Source", "clip", "string", R"("description":"Audio clip asset key/uid or null")");
+    add("Audio Source", "is_playing", "boolean", R"("readOnly":true,"description":"Whether the source holds a playing voice, in play mode")");
     add("Camera", "fov", "number");
     add("Camera", "near_clip", "number");
     add("Camera", "far_clip", "number");
@@ -4021,6 +4197,10 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
         "color_gradient",
         "array",
         R"("description":"[{progress,color:[r,g,b,a]}] sorted by progress 0..1")");
+    add("Particle Emitter",
+        "color_by_speed_gradient",
+        "array",
+        R"("description":"[{progress,color:[r,g,b,a]}] colour multiplier over color_by_speed_velocity_range, progress 0 = slow end")");
     add("Particle Emitter",
         "velocity_gradient",
         "array",
@@ -4117,6 +4297,14 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     if(all || component_filter == "Physics")
     {
         append_meta_schema(addable_component_type("Physics"), "Physics", json, first, &physics_reflected_keys());
+    }
+    if(all || component_filter == "Particle Emitter")
+    {
+        append_meta_schema(addable_component_type("Particle Emitter"),
+                           "Particle Emitter",
+                           json,
+                           first,
+                           &particle_reflected_keys());
     }
     for(const auto& pretty : addable_component_pretty_names())
     {
@@ -4245,7 +4433,7 @@ auto component_properties_to_json(rtti::context& ctx,
             error = component_missing_error("Particle Emitter");
             return {};
         }
-        return particle_to_json(*comp, filter_ptr);
+        return particle_with_reflected_to_json(ctx, *comp, filter_ptr);
     }
     if(component_pretty_name == "Physics")
     {

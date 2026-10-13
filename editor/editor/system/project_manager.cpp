@@ -399,8 +399,8 @@ auto project_manager::create_project(rtti::context& ctx, const fs::path& project
         return fail(fmt::format("Failed to create project directory {}: {}", project_path.generic_string(), err.message()));
     }
 
-    fs::add_path_protocol("app", project_path);
-
+    // open_project points app:/ at the new folder only after closing the current project; pointing
+    // it earlier made that close save the old project's files (its project.cfg, so its guid) here.
     if(!open_project(ctx, project_path))
     {
         return fail(fmt::format("Created {} but could not open it", project_path.generic_string()));

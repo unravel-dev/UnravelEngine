@@ -568,6 +568,91 @@ auto particle_emitter_component::get_texture_sheet_cycles() const -> float
     return desc_.render.tex_sheet_cycles;
 }
 
+void particle_emitter_component::set_frame_blending(bool blend)
+{
+    desc_.render.frame_blending = blend;
+}
+
+auto particle_emitter_component::get_frame_blending() const -> bool
+{
+    return desc_.render.frame_blending;
+}
+
+void particle_emitter_component::set_rotation(const frange_t& degrees)
+{
+    desc_.render.rotation = degrees;
+}
+
+auto particle_emitter_component::get_rotation() const -> const frange_t&
+{
+    return desc_.render.rotation;
+}
+
+void particle_emitter_component::set_rotation_speed(const frange_t& degrees_per_second)
+{
+    desc_.render.rotation_speed = degrees_per_second;
+}
+
+auto particle_emitter_component::get_rotation_speed() const -> const frange_t&
+{
+    return desc_.render.rotation_speed;
+}
+
+void particle_emitter_component::set_random_rotation_direction(bool random)
+{
+    desc_.render.random_rotation_direction = random;
+}
+
+auto particle_emitter_component::get_random_rotation_direction() const -> bool
+{
+    return desc_.render.random_rotation_direction;
+}
+
+void particle_emitter_component::set_soft_fade_distance(float distance)
+{
+    desc_.render.soft_fade_distance = math::max(distance, 0.0f);
+}
+
+auto particle_emitter_component::get_soft_fade_distance() const -> float
+{
+    return desc_.render.soft_fade_distance;
+}
+
+void particle_emitter_component::set_prewarm(bool prewarm)
+{
+    desc_.emission.prewarm = prewarm;
+}
+
+auto particle_emitter_component::get_prewarm() const -> bool
+{
+    return desc_.emission.prewarm;
+}
+
+void particle_emitter_component::set_auto_play(bool auto_play)
+{
+    desc_.playback.auto_play = auto_play;
+    // Loading or instantiating sets it before the emitter's first frame, which is when it decides.
+    if(is_newly_created())
+    {
+        desc_.playback.playing = auto_play;
+    }
+}
+
+auto particle_emitter_component::get_auto_play() const -> bool
+{
+    return desc_.playback.auto_play;
+}
+
+void particle_emitter_component::set_sort_priority(int32_t priority)
+{
+    desc_.render.sort_priority = priority;
+}
+
+auto particle_emitter_component::get_sort_priority() const -> int32_t
+{
+    return desc_.render.sort_priority;
+}
+
 void particle_emitter_component::set_texture_sheet_randomize(bool randomize)
 {
     desc_.render.tex_sheet_randomize = randomize;

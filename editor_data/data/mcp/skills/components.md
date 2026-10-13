@@ -47,15 +47,57 @@ Field semantics:
   per loop (loop:true restarts it); emission_rate = particles per second.
 - shape + emission_shape_scale define the spawn region (circle + [1.3,0.1,1.3]
   is a flat disc); direction up | outward | inward gives initial direction.
-- velocity_gradient / scale_gradient are arrays of {progress,min,max} over the
-  particle's life; color_gradient is {progress,color:[r,g,b,a]}. Fade alpha in
-  from 0 at progress 0 and out to 0 at 1 to avoid popping.
+- velocity_gradient / scale_gradient are arrays of {progress,min,max}; only
+  their ends count: size goes linearly from the first key to the last, and the
+  last key of velocity_gradient is the distance travelled. color_gradient is
+  {progress,color:[r,g,b,a]} with every key used. Fade alpha in from 0 at
+  progress 0 and out to 0 at 1 to avoid popping. For a pop-in (spikes, pillars)
+  spawn under the floor and move up with OutExpo instead of a size curve.
 - Flipbook textures: texture_sheet_tiles [8,8] with texture_sheet_cycles 1
   plays an 8x8 sheet once per particle life.
 - blend_mode: additive for fire, sparks, magic; normal for smoke and dust.
   color_intensity above 1 (6-10) makes additive effects glow through bloom.
 - gravity_scale 1 makes particles fall (fountains); align_to_direction true
-  stretches sparks along their motion.
+  turns particles so the texture's top points along their motion, within the
+  quad's plane in every render mode (camera-facing sparks, arcs crawling flat
+  over the floor, upright streaks). Draw directional
+  art pointing up and stretch it with initial_scale_3d y (sparks [1,3,1]); a
+  rotation of [90,90] turns art drawn sideways.
+- Motion model: a particle travels velocity_gradient metres along its direction
+  over its whole life (not m/s); gravity and force_over_lifetime bend the end of
+  the path and grow with lifetime squared. position_easing (Linear, OutExpo,
+  OutCubic, ...) remaps that path's time: OutExpo bursts out and settles -
+  explosions, novas. temporal_motion 1 spreads a moving emitter's spawns along
+  its path (smooth trails).
+- emission_rate 0 makes a burst-only emitter that scripts fire with Emit(count).
+- prewarm true starts a looping emitter full (one particle lifetime of emission
+  already alive) when it first plays after it is created or reset: ambient fire,
+  smoke and mist do not build up at scene start.
+- auto_play false keeps an emitter stopped when the scene starts or it is
+  instantiated, until Play(); use it for one-shot effects scripts trigger.
+- size_by_speed_range / color_by_speed_gradient scale and tint by speed over
+  size_by_speed_velocity_range / color_by_speed_velocity_range ([min, max] m/s).
+- culling_mode renderer_based (default) freezes an emitter no camera sees;
+  always_simulate keeps it running. simulation_backend CPU | GPU.
+- Horizontal billboards follow the entity's rotation: spin the entity to spin a
+  ground rune; local simulation_space plus a spinning entity swirls particles.
+- rotation [min,max] is each particle's start angle in degrees (0-360 keeps smoke
+  and fire from repeating one orientation); rotation_speed [min,max] spins it in
+  degrees per second, and random_rotation_direction true spins half the other way.
+  A [35,35] rotation_speed turns a ground rune without turning its entity.
+- soft_fade_distance (metres, 0 = off) fades particles where they meet the scene
+  behind them: smoke, mist and glows near the floor stop cutting hard lines.
+- frame_blending true crossfades each flipbook frame into the next; use it when a
+  sheet plays slower than about 30 frames per second.
+- sort_priority (integer, default 0) sets the draw order against other emitters,
+  whatever their blend mode: lower draws first, higher composites on top; equal
+  priorities draw back to front by distance. Typical layers: ground decals,
+  scorch marks and floor rings -10, ground mist -5, fire 0, smoke over it 1,
+  sparks and debris 2, flashes 3.
+
+Preview and diagnose with particles_control_batch: emit a burst emitter's
+count, play / stop a looping one (with_children for a whole effect), and read
+num_particles and simulated per emitter.
 
 Starting recipes: fire (circle, up, rate 70, life 1.0, additive, 8x8 flipbook,
 intensity 8, scale shrinking 1.2 -> 0.35); smoke above it (rate 16, life 3,

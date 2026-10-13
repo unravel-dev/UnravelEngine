@@ -1,11 +1,10 @@
-$input a_position, a_texcoord0, i_data0, i_data1, i_data2, i_data3, i_data4, i_data5
-$output v_texcoord0, v_color0
+$input a_position, a_texcoord0, i_data0, i_data1, i_data2, i_data3, i_data4, i_data5, i_data6, i_data7
+$output v_texcoord0, v_texcoord1, v_color0, v_particle
 
 #include <bgfx_shader.sh>
 
 // View matrix (glm column-major upload). Billboard uses camera axes from the view matrix.
 uniform mat4 u_viewCamera;
-uniform vec4 u_eyePos; // xyz = camera / eye position (w unused)
 
 // Helper function to rotate a vector by a quaternion (xyzw)
 vec3 quatRotate(vec4 q, vec3 v)
@@ -72,71 +71,41 @@ void main()
 
     vec2 pivot = vec2(pivotX, pivotY);
 
-    float rotXYZLengthSq = dot(rotation.xyz, rotation.xyz);
-    float hasRotation = step(0.001, rotXYZLengthSq);
-
-    if(hasRotation > 0.001)
+    // align_to_direction: i_data1 turns +Z onto the particle's motion (identity when not aligned).
+    // The quad turns in its own plane - the camera's, the emitter's XZ plane or the upright one - so
+    // the texture's up axis (its top edge) follows the motion projected into that plane, in every
+    // render mode.
+    if(dot(rotation.xyz, rotation.xyz) > 1e-8)
     {
-        float fullRotLengthSq = dot(rotation, rotation);
-        vec4 normalizedRot = rotation * inversesqrt(max(fullRotLengthSq, 0.0001));
-
-        vec3 toEye = u_eyePos.xyz - worldPos;
-        float toEyeLen = length(toEye);
-        toEye = toEye * (1.0 / max(toEyeLen, 0.0001));
-
-        vec3 emitterRight = normalize(quatRotate(emitterQuat, vec3(1.0, 0.0, 0.0)));
-        vec3 emitterUp = normalize(quatRotate(emitterQuat, vec3(0.0, 1.0, 0.0)));
-
-        // Particle spin is applied relative to the emitter frame so local-space
-        // vertical/horizontal constraints keep following the emitter.
-        vec3 rotatedUpBasis = quatRotate(normalizedRot, emitterUp);
-        vec3 rotatedRightBasis = quatRotate(normalizedRot, emitterRight);
-
-        vec3 rotatedRightCPU = quatRotate(normalizedRot, right);
-        vec3 rotatedUpCPU = quatRotate(normalizedRot, up);
-
-        float isStandard = 1.0 - step(0.5, renderMode);
-        float isHorizontal = step(0.5, renderMode) * (1.0 - step(1.5, renderMode));
-        float isVertical = step(1.5, renderMode);
-
-        vec3 projectedUp = rotatedUpBasis - toEye * dot(rotatedUpBasis, toEye);
-        float projUpLen = length(projectedUp);
-        float useProjectedUp = step(0.001, projUpLen);
-        projectedUp = projectedUp * (1.0 / max(projUpLen, 0.0001));
-
-        vec3 projectedRight = rotatedRightBasis - toEye * dot(rotatedRightBasis, toEye);
-        float projRightLen = length(projectedRight);
-        projectedRight = projectedRight * (1.0 / max(projRightLen, 0.0001));
-
-        vec3 standardRight = mix(projectedRight, cross(toEye, projectedUp), useProjectedUp);
-        vec3 standardUp = mix(cross(toEye, projectedRight), projectedUp, useProjectedUp);
-        standardRight = normalize(standardRight);
-        standardUp = normalize(standardUp);
-
-        vec3 verticalRight = cross(toEye, rotatedUpBasis);
-        float vertRightLen = length(verticalRight);
-        verticalRight = mix(rotatedRightBasis, verticalRight * (1.0 / max(vertRightLen, 0.0001)), step(0.001, vertRightLen));
-        vec3 verticalUp = rotatedUpBasis;
-
-        vec3 horizontalRight = rotatedRightCPU;
-        vec3 horizontalUp = rotatedUpCPU;
-
-        vec3 rotatedRightFinal = standardRight * isStandard + verticalRight * isVertical + horizontalRight * isHorizontal;
-        vec3 rotatedUpFinal = standardUp * isStandard + verticalUp * isVertical + horizontalUp * isHorizontal;
-
-        right = mix(right, rotatedRightFinal, hasRotation);
-        up = mix(up, rotatedUpFinal, hasRotation);
+        vec4 motionRotation = rotation * inversesqrt(max(dot(rotation, rotation), 1e-8));
+        vec3 motion = quatRotate(motionRotation, vec3(0.0, 0.0, 1.0));
+        vec2 inPlane = vec2(dot(motion, right), dot(motion, up));
+        float inPlaneLengthSq = dot(inPlane, inPlane);
+        if(inPlaneLengthSq > 1e-6)
+        {
+            inPlane *= inversesqrt(inPlaneLengthSq);
+            vec3 alignedUp = right * inPlane.x + up * inPlane.y;
+            vec3 alignedRight = right * inPlane.y - up * inPlane.x;
+            right = alignedRight;
+            up = alignedUp;
+        }
     }
 
-    vec3 scaledRight = right * scale3d.x;
-    vec3 scaledUp = up * scale3d.y;
-
+    // i_data6 = spin angle (radians), soft fade distance, frame blend; i_data7.xy = next frame's uv offset.
+    // The spin turns the corner around the particle position in the quad's own plane.
     vec2 pivotOffset = pivot - vec2(0.5, 0.5);
-    vec3 localVertexPos = scaledRight * (a_position.x + pivotOffset.x) + scaledUp * (a_position.y + pivotOffset.y);
+    vec2 corner = (a_position.xy + pivotOffset) * scale3d.xy;
+    float spinSin = sin(i_data6.x);
+    float spinCos = cos(i_data6.x);
+    corner = vec2(corner.x * spinCos - corner.y * spinSin, corner.x * spinSin + corner.y * spinCos);
+    vec3 localVertexPos = right * corner.x + up * corner.y;
     vec3 vertexWorldPos = worldPos + localVertexPos;
 
     gl_Position = mul(u_modelViewProj, vec4(vertexWorldPos, 1.0));
 
     v_texcoord0 = a_texcoord0.xy * uvScale + uvOffset;
+    v_texcoord1 = a_texcoord0.xy * uvScale + i_data7.xy;
+    // Clip w is the view depth for a perspective projection; the soft fade compares it with the scene's.
+    v_particle = vec3(i_data6.z, i_data6.y, gl_Position.w);
     v_color0 = color;
 }

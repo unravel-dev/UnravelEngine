@@ -1,3 +1,4 @@
+#include "mcp_component_utils.h"
 #include "mcp_tools_common.h"
 
 #include <editor/assets/asset_actions.h>
@@ -8,6 +9,7 @@
 #include <engine/assets/impl/asset_compiler.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
+#include <engine/play_mode.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/scripting/script.h>
@@ -167,6 +169,63 @@ auto has_unbuilt_sources(const asset_compiler::script_compilation_result& last) 
     return !sources.paths.empty();
 }
 
+/// scripts_invoke's "arguments": numbers, booleans, strings, and number arrays for vector parameters.
+auto read_script_arguments(const simdjson::dom::object& args,
+                           std::vector<script_system::script_argument>& out,
+                           std::string& error) -> bool
+{
+    simdjson::dom::array list;
+    if(args["arguments"].get(list))
+    {
+        return true;
+    }
+    for(auto value : list)
+    {
+        bool flag = false;
+        int64_t integer = 0;
+        double number = 0.0;
+        std::string_view text;
+        simdjson::dom::array components;
+        if(!value.get(flag))
+        {
+            out.emplace_back(flag);
+        }
+        else if(!value.get(integer))
+        {
+            out.emplace_back(integer);
+        }
+        else if(!value.get(number))
+        {
+            out.emplace_back(number);
+        }
+        else if(!value.get(text))
+        {
+            out.emplace_back(std::string(text));
+        }
+        else if(!value.get(components))
+        {
+            std::vector<double> numbers;
+            for(auto component : components)
+            {
+                float component_value = 0.0f;
+                if(!parse_number(component, component_value, error))
+                {
+                    error = "An array argument holds numbers only";
+                    return false;
+                }
+                numbers.push_back(component_value);
+            }
+            out.emplace_back(std::move(numbers));
+        }
+        else
+        {
+            error = "Arguments are numbers, booleans, strings or arrays of numbers";
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 void register_script_tools(mcp_tool_registry& registry)
@@ -242,6 +301,59 @@ void register_script_tools(mcp_tool_registry& registry)
                  return {.text = "Missing type", .is_error = true};
              }
              return {.text = ctx.get_cached<script_system>().describe_api_type(type_name), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "scripts_invoke",
+         .description =
+             "Call a public method of a running script (play mode) and return its result as JSON: a "
+             "repeatable way to trigger gameplay, e.g. a spell's TryCast at an exact world point instead "
+             "of clicking the screen. Identify the script by entity_id, script_type (full or short name) "
+             "and optional script_index. arguments convert to the parameter types: numbers, booleans, "
+             "strings, enum names, and number arrays for Vector2/3/4, Color or Quaternion; missing "
+             "trailing arguments take their defaults.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"script_type":{"type":"string"},"script_index":{"type":"integer","minimum":0},"method":{"type":"string"},"arguments":{"type":"array"}},"required":["entity_id","script_type","method"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             if(!ctx.has<script_system>() || !ctx.has<play_mode>() || !ctx.get_cached<play_mode>().is_simulation_running())
+             {
+                 return {.text = "Scripts run in play mode only (play_set_active)", .is_error = true};
+             }
+             scene* scn = nullptr;
+             std::string error;
+             std::string entity_id;
+             std::string method;
+             script_selector selector;
+             std::vector<script_system::script_argument> arguments;
+             if(!require_active_scene(ctx, scn, error) || !read_script_selector(args, selector, error) ||
+                !read_script_arguments(args, arguments, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             if(!read_string(args, "entity_id", entity_id) || !read_string(args, "method", method) ||
+                selector.type.empty() || method.empty())
+             {
+                 return {.text = "Needs entity_id, script_type and method", .is_error = true};
+             }
+             auto entity = resolve_entity(*scn, entity_id, error);
+             if(!entity)
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const auto position = find_script_position(entity, selector);
+             if(!position)
+             {
+                 return {.text = "No such script on the entity; it has " + scripts_summary_json(entity),
+                         .is_error = true};
+             }
+             const auto& script = entity.get<script_component>().get_script_components()[position->index];
+             auto result =
+                 ctx.get_cached<script_system>().invoke_script_method(script.pinned->get_object(), method, arguments);
+             const bool failed = result == "null" || starts_with(result, R"({"error")");
+             return {.text = std::move(result), .is_error = failed};
          },
          .mutates_scene = false});
 

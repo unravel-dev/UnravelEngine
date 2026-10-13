@@ -150,6 +150,12 @@ void get_aabb(emitter_handle handle, math::bbox& out_aabb);
 auto get_num_particles(emitter_handle handle) -> uint32_t;
 
 /**
+ * @brief The view's opaque depth (device depth in .x, the size of the render target) that soft
+ *        particles fade against, for the batches submitted next; an invalid handle turns the fade off.
+ */
+void set_scene_depth(bgfx::TextureHandle depth);
+
+/**
  * @brief Submit a homogeneous material batch (same texture / texture_mode / blend).
  * @param sort_by_depth When true, back-to-front sort (Normal blend). When false, emission order.
  * @return Number of instances submitted.

@@ -231,8 +231,8 @@ void register_ui_tools(mcp_tool_registry& registry)
          .description =
              "Write UI source files (.rhtml documents, .rcss style sheets) in the project, atomically, "
              "with the same writer the editor uses for every source file. Write whole files. The asset "
-             "watcher reimports them and documents on screen reload. RCSS differs from CSS: see the "
-             "ui skill.",
+             "watcher reimports them and documents on screen reload in edit mode; during play a document "
+             "keeps what it loaded, so stop play first. RCSS differs from CSS: see the ui skill.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"source":{"type":"string"}},"required":["key","source"]}}},"required":["items"]})json",
          .handler =

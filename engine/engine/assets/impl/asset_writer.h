@@ -38,11 +38,12 @@ auto cleanup_stale_temp_files(const fs::path& dir,
                               bool recursive,
                               std::chrono::seconds min_age = std::chrono::seconds(60)) noexcept -> std::size_t;
 
-template<typename T>
-auto resolve_meta_file(const asset_handle<T>& asset) -> fs::path
+/**
+ * @brief The absolute path of the .meta file of the asset @p key names (its import settings).
+ */
+inline auto resolve_meta_file_for_key(const std::string& key) -> fs::path
 {
-    const fs::path& key = asset.id();
-    fs::path absolute_path = fs::convert_to_protocol(key);
+    fs::path absolute_path = fs::convert_to_protocol(fs::path(key));
     absolute_path =
         fs::resolve_protocol(fs::replace(absolute_path, ex::get_data_directory(), ex::get_meta_directory()));
     if(absolute_path.extension() != ".meta")
@@ -50,6 +51,12 @@ auto resolve_meta_file(const asset_handle<T>& asset) -> fs::path
         absolute_path += ".meta";
     }
     return absolute_path;
+}
+
+template<typename T>
+auto resolve_meta_file(const asset_handle<T>& asset) -> fs::path
+{
+    return resolve_meta_file_for_key(asset.id());
 }
 
 template<typename T>

@@ -464,11 +464,20 @@ inline auto asset_handle_key_json(const asset_handle<T>& handle) -> std::string
 template<typename Result>
 inline auto apply_result_to_json(const Result& result) -> std::string
 {
-    return fmt::format(R"({{"ok":{},"applied":{},"unknown":{},"errors":{}}})",
+    std::string warnings;
+    if constexpr(requires { result.warnings; })
+    {
+        if(!result.warnings.empty())
+        {
+            warnings = R"(,"warnings":)" + strings_to_json_array(result.warnings);
+        }
+    }
+    return fmt::format(R"({{"ok":{},"applied":{},"unknown":{},"errors":{}{}}})",
                        bool_to_json(result.ok),
                        strings_to_json_array(result.applied),
                        strings_to_json_array(result.unknown),
-                       strings_to_json_array(result.errors));
+                       strings_to_json_array(result.errors),
+                       warnings);
 }
 
 inline auto read_int64_or(const simdjson::dom::object& args, const char* key, int64_t default_val) -> int64_t

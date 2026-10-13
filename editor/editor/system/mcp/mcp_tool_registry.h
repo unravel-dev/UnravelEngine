@@ -31,6 +31,8 @@ struct tool_result
 {
     std::string text;
     bool is_error{false};
+    /// Input the call ignored (unknown arguments, values with no effect); reported with the result.
+    std::vector<std::string> warnings;
     /// Optional PNG (or other) payload returned as an MCP image content block.
     std::string image_base64;
     std::string image_mime{"image/png"};
@@ -89,10 +91,17 @@ void register_input_tools(mcp_tool_registry& registry);
 void register_input_action_tools(mcp_tool_registry& registry);
 void register_physics_tools(mcp_tool_registry& registry);
 void register_ui_tools(mcp_tool_registry& registry);
+void register_ui_inspect_tools(mcp_tool_registry& registry);
 void register_prefab_tools(mcp_tool_registry& registry);
 void register_script_tools(mcp_tool_registry& registry);
 void register_editor_tools(mcp_tool_registry& registry);
 void register_skill_tools(mcp_tool_registry& registry);
+
+/**
+ * @brief The arguments a call passed that the tool's input schema does not declare, one message each.
+ *        Objects whose schema lists no "properties", or allows additional ones, are not checked.
+ */
+auto find_unknown_arguments(const mcp_tool& tool, const simdjson::dom::element& args) -> std::vector<std::string>;
 
 /// Server usage rules injected into clients via the MCP initialize "instructions" field.
 auto get_server_instructions() -> const std::string&;

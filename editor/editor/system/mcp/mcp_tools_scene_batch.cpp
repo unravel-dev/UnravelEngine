@@ -161,6 +161,12 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item missing primitive", .is_error = true};
                  }
+                 if(!defaults::has_embedded_mesh(ctx, item.primitive))
+                 {
+                     return {.text = "Unknown primitive '" + item.primitive +
+                                     "'; nothing was created (names: assets_list_embedded_primitives)",
+                             .is_error = true};
+                 }
                  read_string(obj, "name", item.name);
                  read_string(obj, "parent_id", item.parent_id);
                  read_string(obj, "material_key", item.material_key);

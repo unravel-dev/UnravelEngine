@@ -31,7 +31,7 @@ void main()
         rawStoreFloat(s_keys, i, 1.0e30);
         return;
     }
-    vec3 pos = s_instances[i * 6u].xyz;
+    vec3 pos = s_instances[i * 8u].xyz;
     vec3 d = u_eye - pos;
     rawStoreFloat(s_keys, i, -dot(d, d));
 }

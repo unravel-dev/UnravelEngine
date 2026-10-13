@@ -73,8 +73,24 @@ void game_panel::on_frame_update(rtti::context& ctx, delta_t dt)
     path.on_frame_update(scene, dt);
 }
 
+void game_panel::set_forced_render_size(uint32_t width, uint32_t height)
+{
+    forced_render_width_ = width;
+    forced_render_height_ = height;
+}
+
+auto game_panel::get_forced_render_size() const -> std::pair<uint32_t, uint32_t>
+{
+    return {forced_render_width_, forced_render_height_};
+}
+
 void game_panel::apply_view_size(rtti::context& ctx, scene& scn) const
 {
+    if(forced_render_width_ > 0 && forced_render_height_ > 0)
+    {
+        ctx.get_cached<rendering_system>().apply_game_view_size(scn, {forced_render_width_, forced_render_height_});
+        return;
+    }
     const auto* resolution = get_current_resolution(ctx);
     if(!resolution)
     {

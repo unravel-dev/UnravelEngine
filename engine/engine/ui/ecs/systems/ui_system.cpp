@@ -90,12 +90,13 @@ namespace
     /// loading. Variables may be missing (scripts bind them later); views show defaults until then.
     void create_document_data_models(Rml::Context& context, const std::string& rml)
     {
-        const auto existing = context.GetDataModels();
+        auto existing = context.GetDataModels();
         for(const auto& name : collect_data_model_names(rml))
         {
+            // A name can appear more than once (a comment quoting the attribute): create it once.
             if(existing.find(name) == existing.end())
             {
-                context.CreateDataModel(name, nullptr, true);
+                existing.emplace(name, context.CreateDataModel(name, nullptr, true));
             }
         }
     }
@@ -273,8 +274,7 @@ void ui_system::update_world_space_document(rtti::context& ctx, scene& scn, entt
     if(!hit_found)
     {
         auto& transform = handle.get<transform_component>();
-        const auto scale = comp.get_world_space_scale();
-        const auto quad_transform = transform.get_transform_global() * math::transform::scaling(scale);
+        const auto quad_transform = comp.get_world_space_quad(transform.get_transform_global());
         math::vec2 pixel;
         auto mouse_x = input.manager.get_mouse().get_position().x;
         auto mouse_y = input.manager.get_mouse().get_position().y;

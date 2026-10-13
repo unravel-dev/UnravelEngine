@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 
 namespace Unravel.Core
 {
@@ -382,6 +383,220 @@ namespace Unravel.Core
         }
 
         // ==== Nodes ====
+
+        // ==== Description for tools ====
+
+        /// <summary>
+        /// The owner's data models as JSON, for tools that inspect a running UI: every model (or the
+        /// one named), its bound variables with their current values, and its event and transform
+        /// names. Objects nest to @p maxDepth levels; lists show their first @p maxItems entries.
+        /// </summary>
+        internal static string internal_n2m_describe(Entity owner, string modelName, int maxDepth, int maxItems)
+        {
+            var json = new StringBuilder();
+            json.Append("{\"models\":[");
+            bool firstModel = true;
+            foreach (UIDataModel model in models.Values)
+            {
+                if (model.owner != owner || (!string.IsNullOrEmpty(modelName) && model.name != modelName))
+                {
+                    continue;
+                }
+                if (!firstModel)
+                {
+                    json.Append(',');
+                }
+                firstModel = false;
+                DescribeModel(model, maxDepth, maxItems, json);
+            }
+            json.Append("]}");
+            return json.ToString();
+        }
+
+        private static void DescribeModel(UIDataModel model, int maxDepth, int maxItems, StringBuilder json)
+        {
+            json.Append("{\"name\":");
+            AppendJsonString(json, model.name);
+            json.Append(",\"in_document\":").Append(model.Exists() ? "true" : "false");
+            json.Append(",\"auto_dirty\":").Append(model.autoDirty ? "true" : "false");
+            json.Append(",\"variables\":{");
+            bool first = true;
+            foreach (KeyValuePair<string, Node> variable in model.variables)
+            {
+                if (variable.Value.rootGetter == null)
+                {
+                    continue;
+                }
+                if (!first)
+                {
+                    json.Append(',');
+                }
+                first = false;
+                AppendJsonString(json, variable.Key);
+                json.Append(':');
+                object value;
+                try
+                {
+                    value = Resolve(variable.Value);
+                }
+                catch (Exception e)
+                {
+                    AppendJsonString(json, "<error: " + e.Message + ">");
+                    continue;
+                }
+                AppendJsonValue(json, value, maxDepth, maxItems);
+            }
+            json.Append("},\"events\":[");
+            first = true;
+            foreach (string eventName in model.events.Keys)
+            {
+                if (!first)
+                {
+                    json.Append(',');
+                }
+                first = false;
+                AppendJsonString(json, eventName);
+            }
+            json.Append("],\"transforms\":[");
+            first = true;
+            foreach ((Entity owner, string name) key in transforms.Keys)
+            {
+                if (key.owner != model.owner)
+                {
+                    continue;
+                }
+                if (!first)
+                {
+                    json.Append(',');
+                }
+                first = false;
+                AppendJsonString(json, key.name);
+            }
+            json.Append("]}");
+        }
+
+        /// <summary>
+        /// A value as the markup sees it: enums by name, colours as RCSS, objects by their bindable
+        /// members, lists as arrays.
+        /// </summary>
+        internal static void AppendJsonValue(StringBuilder json, object value, int depth, int maxItems)
+        {
+            switch (value)
+            {
+                case null:
+                    json.Append("null");
+                    return;
+                case bool flag:
+                    json.Append(flag ? "true" : "false");
+                    return;
+                case string text:
+                    AppendJsonString(json, text);
+                    return;
+                case Enum enumValue:
+                    AppendJsonString(json, enumValue.ToString());
+                    return;
+                case Color color:
+                    AppendJsonString(json, FormatColor(color));
+                    return;
+                case float _:
+                case double _:
+                case decimal _:
+                    double number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                    json.Append(double.IsNaN(number) || double.IsInfinity(number)
+                                    ? "null"
+                                    : number.ToString("R", CultureInfo.InvariantCulture));
+                    return;
+            }
+            Type type = value.GetType();
+            if (type.IsPrimitive)
+            {
+                json.Append(Convert.ToString(value, CultureInfo.InvariantCulture));
+                return;
+            }
+            if (depth <= 0)
+            {
+                AppendJsonString(json, "<" + type.Name + ">");
+                return;
+            }
+            if (value is IList list)
+            {
+                json.Append('[');
+                int count = Math.Min(list.Count, maxItems);
+                for (int i = 0; i < count; ++i)
+                {
+                    if (i > 0)
+                    {
+                        json.Append(',');
+                    }
+                    AppendJsonValue(json, list[i], depth - 1, maxItems);
+                }
+                if (list.Count > count)
+                {
+                    json.Append(',');
+                    AppendJsonString(json, "<" + (list.Count - count) + " more>");
+                }
+                json.Append(']');
+                return;
+            }
+            json.Append('{');
+            bool first = true;
+            foreach (MemberAccessor member in GetBindableMembers(type))
+            {
+                if (!first)
+                {
+                    json.Append(',');
+                }
+                first = false;
+                AppendJsonString(json, member.name);
+                json.Append(':');
+                try
+                {
+                    AppendJsonValue(json, member.Get(value), depth - 1, maxItems);
+                }
+                catch (Exception e)
+                {
+                    AppendJsonString(json, "<error: " + e.Message + ">");
+                }
+            }
+            json.Append('}');
+        }
+
+        internal static void AppendJsonString(StringBuilder json, string text)
+        {
+            json.Append('"');
+            foreach (char c in text ?? "")
+            {
+                switch (c)
+                {
+                    case '"':
+                        json.Append("\\\"");
+                        break;
+                    case '\\':
+                        json.Append("\\\\");
+                        break;
+                    case '\n':
+                        json.Append("\\n");
+                        break;
+                    case '\r':
+                        json.Append("\\r");
+                        break;
+                    case '\t':
+                        json.Append("\\t");
+                        break;
+                    default:
+                        if (c < ' ')
+                        {
+                            json.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            json.Append(c);
+                        }
+                        break;
+                }
+            }
+            json.Append('"');
+        }
 
         private static Node Register(Node node)
         {
@@ -832,7 +1047,7 @@ namespace Unravel.Core
             }
         }
 
-        private static object[] DecodeList(string text)
+        internal static object[] DecodeList(string text)
         {
             if (string.IsNullOrEmpty(text))
             {

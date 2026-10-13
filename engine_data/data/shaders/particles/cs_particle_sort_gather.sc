@@ -22,9 +22,10 @@ void main()
         return;
     }
     uint src = s_indices[i];
-    uint dst_base = i * 6u;
-    uint src_base = src * 6u;
-    for(uint k = 0u; k < 6u; ++k)
+    // Instance rows are 8 vec4s (vs_particle_instanced i_data0..i_data7).
+    uint dst_base = i * 8u;
+    uint src_base = src * 8u;
+    for(uint k = 0u; k < 8u; ++k)
     {
         s_sorted[dst_base + k] = s_instances[src_base + k];
     }

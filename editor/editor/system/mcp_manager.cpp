@@ -157,6 +157,7 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     mcp::register_input_action_tools(registry_);
     mcp::register_physics_tools(registry_);
     mcp::register_ui_tools(registry_);
+    mcp::register_ui_inspect_tools(registry_);
     mcp::register_prefab_tools(registry_);
     mcp::register_script_tools(registry_);
     mcp::register_editor_tools(registry_);
@@ -558,6 +559,8 @@ auto mcp_manager::execute_tool_call(const std::string& tool_name,
     const bool opens_undo_scope = tool->mutates_scene && tool->requires_main_thread && ctx_->has<editing_manager>();
     const undo_scope scope(opens_undo_scope ? &ctx_->get_cached<editing_manager>() : nullptr);
     auto result = tool->handler(*ctx_, args);
+    auto unknown_arguments = mcp::find_unknown_arguments(*tool, args_root);
+    result.warnings.insert(result.warnings.begin(), unknown_arguments.begin(), unknown_arguments.end());
     if(result.is_error)
     {
         error_count_.fetch_add(1);

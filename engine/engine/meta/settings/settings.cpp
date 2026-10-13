@@ -79,6 +79,22 @@ REFLECT_INLINE(settings::asset_settings::texture_importer_settings)
         });
 }
 
+REFLECT_INLINE(settings::asset_settings)
+{
+    entt::meta_factory<settings::asset_settings>{}
+        .type("asset_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "asset_settings"},
+            entt::attribute{"pretty_name", "Assets"},
+        })
+        .data<&settings::asset_settings::texture>("texture"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture"},
+            entt::attribute{"pretty_name", "Textures"},
+            entt::attribute{"tooltip", "Import settings a texture uses while its own are 'project_default'."},
+        });
+}
+
 SAVE_INLINE(settings::asset_settings::texture_importer_settings)
 {
     try_save(ar, ser20::make_nvp("default_max_size", obj.default_max_size));
@@ -954,6 +970,12 @@ REFLECT(settings)
             entt::attribute{"name", "resolution"},
             entt::attribute{"pretty_name", "Resolution"},
             entt::attribute{"tooltip", "Resolution settings for the project"},
+        })
+        .data<&settings::assets>("assets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "assets"},
+            entt::attribute{"pretty_name", "Assets"},
+            entt::attribute{"tooltip", "Import defaults for the project's assets"},
         });
 }
 

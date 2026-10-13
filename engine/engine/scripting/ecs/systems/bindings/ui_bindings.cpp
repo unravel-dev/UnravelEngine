@@ -12,6 +12,7 @@
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/ui/rmlui/RmlUi_SystemInterface.h>
 #include <engine/ui/ui_element_handles.h>
+#include <engine/ui/ui_element_queries.h>
 #include <hpp/finally.hpp>
 #include <RmlUi/Core/Box.h>
 #include <RmlUi/Core/ComputedValues.h>
@@ -530,19 +531,6 @@ auto resolve_ui_document(std::intptr_t document_handle, entt::entity owner_entit
     return comp->document;
 }
 
-/// Brings @p document's layout up to date when scripts changed something since it was last read.
-void update_layout_if_stale(Rml::ElementDocument& document)
-{
-    static std::unordered_map<ui_element_handle, uint64_t> updated_at_serial;
-    auto& updated_at = updated_at_serial[get_ui_element_handle(&document)];
-    const auto serial = get_ui_layout_serial();
-    if(updated_at != serial)
-    {
-        document.UpdateDocument();
-        updated_at = serial;
-    }
-}
-
 /// Resolves an element whose layout a call reads, with that layout current.
 auto resolve_for_layout(std::intptr_t element_handle) -> Rml::Element*
 {
@@ -551,7 +539,7 @@ auto resolve_for_layout(std::intptr_t element_handle) -> Rml::Element*
     {
         if(auto* document = element->GetOwnerDocument())
         {
-            update_layout_if_stale(*document);
+            update_ui_layout_if_stale(*document);
         }
     }
     return element;
@@ -571,16 +559,6 @@ auto to_handles(const Rml::ElementList& elements) -> handle_list
 auto is_document(Rml::Element& element) -> bool
 {
     return rmlui_dynamic_cast<Rml::ElementDocument*>(&element) != nullptr;
-}
-
-/// Whether @p element is shown by its own style: display not 'none' and visibility 'visible'.
-auto is_element_styled_visible(Rml::Element& element) -> bool
-{
-    const auto* display = element.GetProperty(Rml::PropertyId::Display);
-    const auto* visibility = element.GetProperty(Rml::PropertyId::Visibility);
-    const bool is_displayed = !display || display->Get<int>() != static_cast<int>(Rml::Style::Display::None);
-    const bool is_visible = !visibility || visibility->Get<int>() == static_cast<int>(Rml::Style::Visibility::Visible);
-    return is_displayed && is_visible;
 }
 
 //-------------------------------------------------------------------------
@@ -684,14 +662,7 @@ auto internal_m2n_ui_document_wrapper_create_element(std::intptr_t document_hand
 auto internal_m2n_ui_document_wrapper_element_at(std::intptr_t document_handle, entt::entity owner_entity, const math::vec2& point) -> std::intptr_t
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
-    if(!document || !document->GetContext())
-    {
-        return 0;
-    }
-    update_layout_if_stale(*document);
-    auto* element = document->GetContext()->GetElementAtPoint({point.x, point.y});
-    // The context's root, or an element of another document of the same context, is not in this document.
-    return element && element->GetOwnerDocument() == document ? get_ui_element_handle(element) : 0;
+    return document ? get_ui_element_handle(get_ui_element_at(*document, point)) : 0;
 }
 
 auto internal_m2n_ui_document_wrapper_get_dp_ratio(std::intptr_t document_handle, entt::entity owner_entity) -> float
@@ -752,36 +723,16 @@ void internal_m2n_ui_element_wrapper_set_text(std::intptr_t element_handle, cons
     internal_m2n_ui_element_wrapper_set_inner_rml(element_handle, Rml::StringUtilities::EncodeRml(text));
 }
 
-void append_text_content(const Rml::Element& element, std::string& text)
-{
-    for(int i = 0; i < element.GetNumChildren(); ++i)
-    {
-        auto* child = element.GetChild(i);
-        if(auto* text_node = rmlui_dynamic_cast<Rml::ElementText*>(child))
-        {
-            text += text_node->GetText();
-        }
-        else
-        {
-            append_text_content(*child, text);
-        }
-    }
-}
-
 auto internal_m2n_ui_element_wrapper_get_text(std::intptr_t element_handle) -> std::string
 {
-    std::string text;
-    if(auto* element = resolve_ui_element_handle(element_handle))
-    {
-        append_text_content(*element, text);
-    }
-    return text;
+    auto* element = resolve_ui_element_handle(element_handle);
+    return element ? get_ui_element_text(*element) : std::string();
 }
 
 auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_handle) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
-    return element && is_element_styled_visible(*element);
+    return element && is_ui_element_styled_visible(*element);
 }
 
 void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_handle, bool visible)
@@ -1522,10 +1473,7 @@ auto internal_m2n_ui_element_wrapper_get_rect(std::intptr_t element_handle, int3
     {
         return math::vec4(0.0f);
     }
-    const auto rml_area = to_rml_box_area(area);
-    const auto offset = element->GetAbsoluteOffset(rml_area);
-    const auto size = element->GetBox().GetSize(rml_area);
-    return {offset.x, offset.y, size.x, size.y};
+    return get_ui_element_rect(*element, to_rml_box_area(area));
 }
 
 /// Scroll position (x, y) and scrollable size (z, w) of the element's content.

@@ -1,17 +1,27 @@
+#include "mcp_input_utils.h"
 #include "mcp_tools_common.h"
 
 #include <editor/editing/editor_actions.h>
+#include <editor/editing/entity_inspect.h>
 #include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
+#include <engine/ecs/ecs_utils.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <graphics/graphics.h>
 
 #include <algorithm>
+#include <array>
 #include <logging/logging.h>
 
 namespace unravel::mcp
 {
 namespace
 {
+
+/// Most frames one play_skip_frame call steps: ten seconds of game time.
+constexpr int64_t k_max_skip_frames = 600;
+/// Largest burst one particles_control_batch emit queues.
+constexpr int64_t k_max_emit_count = 100000;
 
 auto level_to_string(level::level_enum level) -> const char*
 {
@@ -84,16 +94,138 @@ auto mcp_status_json(rtti::context& ctx) -> std::string
                        manager.get_tool_count());
 }
 
+/// An emitter's playback and simulation state, as JSON fields without the braces.
+auto emitter_state_fields(const particle_emitter_component& emitter) -> std::string
+{
+    const bool always_simulate =
+        emitter.get_culling_mode() == particle_emitter_component::culling_mode::always_simulate;
+    return fmt::format(R"("num_particles":{},"playing":{},"paused":{},"simulated":{},"culling_mode":"{}")",
+                       emitter.get_num_particles(),
+                       bool_to_json(emitter.is_playing()),
+                       bool_to_json(emitter.is_paused()),
+                       bool_to_json(emitter.is_simulated()),
+                       always_simulate ? "always_simulate" : "renderer_based");
+}
+
+/// A playback action the inspector's buttons offer, and its counterpart for the emitters below.
+struct playback_action
+{
+    const char* name;
+    void (particle_emitter_component::*apply)();
+    void (particle_emitter_component::*apply_to_children)();
+};
+
+const std::array<playback_action, 5> k_playback_actions{{
+    {"play", &particle_emitter_component::play, &particle_emitter_component::play_sub_emitters},
+    {"pause", &particle_emitter_component::pause, &particle_emitter_component::pause_sub_emitters},
+    {"resume", &particle_emitter_component::resume, &particle_emitter_component::resume_sub_emitters},
+    {"stop", &particle_emitter_component::stop, &particle_emitter_component::stop_sub_emitters},
+    {"stop_and_reset",
+     &particle_emitter_component::stop_and_reset,
+     &particle_emitter_component::stop_and_reset_sub_emitters},
+}};
+
+/// Runs one action: status changes nothing, emit queues a burst of @p count for the next update, and
+/// the playback actions run as the inspector's buttons do, with_children reaching the emitters below.
+auto apply_emitter_action(particle_emitter_component& emitter,
+                          const std::string& action,
+                          uint32_t count,
+                          bool with_children,
+                          std::string& error) -> bool
+{
+    if(action == "status")
+    {
+        return true;
+    }
+    if(action == "emit")
+    {
+        emitter.emit(count);
+        return true;
+    }
+    for(const auto& playback : k_playback_actions)
+    {
+        if(action == playback.name)
+        {
+            (emitter.*playback.apply)();
+            if(with_children)
+            {
+                (emitter.*playback.apply_to_children)();
+            }
+            return true;
+        }
+    }
+    error = "action must be status, emit, play, pause, resume, stop or stop_and_reset";
+    return false;
+}
+
+/// One particles_control_batch item: runs its action and reports the emitter's state.
+auto control_emitter_item(scene& scn, const simdjson::dom::element& value, size_t& failed) -> std::string
+{
+    const auto fail = [&failed](const std::string& entity_id, const std::string& error) -> std::string
+    {
+        ++failed;
+        return fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})",
+                           make_json_string(entity_id),
+                           make_json_string(error));
+    };
+    std::string error;
+    simdjson::dom::object item;
+    std::string entity_id;
+    if(!read_object(value, item, error) || !read_string(item, "entity_id", entity_id))
+    {
+        return fail(entity_id, error.empty() ? "Each item needs entity_id" : error);
+    }
+    auto entity = resolve_entity(scn, entity_id, error);
+    if(!entity)
+    {
+        return fail(entity_id, error);
+    }
+    auto* emitter = entity.try_get<particle_emitter_component>();
+    if(emitter == nullptr)
+    {
+        return fail(entity_id, "Entity has no Particle Emitter");
+    }
+    std::string action = "status";
+    read_string(item, "action", action);
+    bool with_children = false;
+    read_bool(item, "with_children", with_children);
+    const auto count = std::clamp<int64_t>(read_int64_or(item, "count", 1), 1, k_max_emit_count);
+    if(!apply_emitter_action(*emitter, action, static_cast<uint32_t>(count), with_children, error))
+    {
+        return fail(entity_id, error);
+    }
+    std::string json = fmt::format(R"({{"ok":true,"entity":{},"action":{},{})",
+                                   entity_to_lean_json(entity, false),
+                                   make_json_string(action),
+                                   emitter_state_fields(*emitter));
+    if(with_children)
+    {
+        std::string children;
+        for_each_component_in_children<particle_emitter_component>(
+            entity,
+            [&children](particle_emitter_component& child)
+            {
+                children += (children.empty() ? "" : ",") +
+                            fmt::format(R"({{"entity":{},{}}})",
+                                        entity_to_lean_json(child.get_owner(), false),
+                                        emitter_state_fields(child));
+            });
+        json += R"(,"children":[)" + children + "]";
+    }
+    return json + "}";
+}
+
 auto play_state_to_json(const play_state_info& info) -> std::string
 {
     return fmt::format(
-        R"({{"phase":{},"is_active":{},"is_paused":{},"is_splash":{},"is_simulation_running":{},"frames_running":{}}})",
+        R"({{"phase":{},"is_active":{},"is_paused":{},"is_splash":{},"is_simulation_running":{},"frames_running":{},"frames_simulated":{}}})",
         make_json_string(info.phase),
         bool_to_json(info.is_active),
         bool_to_json(info.is_paused),
         bool_to_json(info.is_splash),
         bool_to_json(info.is_simulation_running),
-        info.frames_running);
+        info.frames_running,
+        info.frames_simulated);
 }
 
 } // namespace
@@ -126,7 +258,9 @@ void register_editor_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "play_get_state",
-         .description = "Get editor play mode state: phase, active, paused, splash, frames_running.",
+         .description = "Get editor play mode state: phase, active, paused, splash, frames_running (every frame "
+                        "since play began running, paused ones too) and frames_simulated (frames the game "
+                        "advanced: unpaused frames and play_skip_frame steps).",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -186,19 +320,83 @@ void register_editor_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "play_skip_frame",
-         .description = "Advance one frame while play mode is paused: scripts (Update, LateUpdate), physics, "
-                        "animation and particles run once over 1/60 s of game time (scaled by the time scale). "
-                        "Calls made together queue consecutive frames.",
-         .input_schema_json = empty_object_schema(),
+         .description = "Advance frames while play mode is paused: scripts (Update, LateUpdate), physics, "
+                        "animation and particles run once per frame over 1/60 s of game time (scaled by the "
+                        "time scale). count (default 1, up to 600) steps that many frames; the call returns "
+                        "once they have run, so a capture right after shows the last one.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":600,"description":"Default 1"}}})json",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
+                 auto& mcp = ctx.get_cached<mcp_manager>();
+                 const auto count = std::clamp<int64_t>(read_int64_or(args, "count", 1), 1, k_max_skip_frames);
+                 auto queued = mcp.invoke_on_main(
+                     [&ctx, count]() -> tool_result
+                     {
+                         std::string error;
+                         for(int64_t step = 0; step < count; ++step)
+                         {
+                             if(!editor_actions::skip_play_frame(ctx, &error))
+                             {
+                                 return {.text = error, .is_error = true};
+                             }
+                         }
+                         return {.text = "ok", .is_error = false};
+                     });
+                 if(!queued)
+                 {
+                     return {.text = "Timed out reaching the editor main thread", .is_error = true};
+                 }
+                 if(queued->is_error)
+                 {
+                     return *queued;
+                 }
+                 // The steps run one per frame; one more frame lets the last one finish.
+                 if(!wait_input_frames(ctx, static_cast<uint64_t>(count) + 1))
+                 {
+                     return {.text = "The editor did not advance the requested frames", .is_error = true};
+                 }
+                 return {.text = fmt::format(R"({{"ok":true,"frames":{}}})", count), .is_error = false};
+             },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "particles_control_batch",
+         .description =
+             "Play, pause, resume, stop, stop_and_reset or emit particle emitters, in edit or play mode, "
+             "as the inspector's playback buttons do, and read their state. Each item: entity_id, action "
+             "(default status), count for emit (a burst, whatever the emission rate), with_children to "
+             "reach the emitters below the entity as well. Every item reports num_particles, playing, "
+             "paused, simulated (false while renderer-based culling freezes an emitter no camera sees) "
+             "and culling_mode, as of this frame: an emitted burst shows up on the next one. "
+             "with_children also lists the child emitters' state.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"action":{"type":"string","enum":["status","play","pause","resume","stop","stop_and_reset","emit"]},"count":{"type":"integer","minimum":1,"maximum":100000},"with_children":{"type":"boolean"}},"required":["entity_id"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 scene* scn = nullptr;
                  std::string error;
-                 if(!editor_actions::skip_play_frame(ctx, &error))
+                 simdjson::dom::array items;
+                 if(!require_active_scene(ctx, scn, error) || !read_required_array(args, "items", items, error))
                  {
                      return {.text = error, .is_error = true};
                  }
-                 return {.text = R"({"ok":true})", .is_error = false};
+                 std::string results;
+                 size_t count = 0;
+                 size_t failed = 0;
+                 for(auto item : items)
+                 {
+                     results += (count++ > 0 ? "," : "") + control_emitter_item(*scn, item, failed);
+                 }
+                 if(count == 0)
+                 {
+                     return {.text = "items array is empty", .is_error = true};
+                 }
+                 return {.text = fmt::format(R"({{"results":[{}],"count":{},"failed":{}}})", results, count, failed),
+                         .is_error = failed == count};
              },
          .mutates_scene = false});
 

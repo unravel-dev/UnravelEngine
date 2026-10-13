@@ -1,8 +1,10 @@
 using System;
 using System.Collections;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Reflection;
+using System.Text;
 
 namespace Unravel.Core
 {
@@ -29,6 +31,10 @@ namespace Unravel.Core
     /// </summary>
     public abstract class ScriptComponent : Component
     {
+        /// <summary>Levels of nested objects and entries of a list a tool sees in an invoked method's result.</summary>
+        private const int InvokeResultDepth = 2;
+        private const int InvokeResultItems = 32;
+
         private bool m_started = false;
 
         /// <summary>
@@ -394,6 +400,112 @@ namespace Unravel.Core
             {
                 OnCollisionExit(collision);
             }
+        }
+
+        /// <summary>
+        /// Internal method invoked by editor tools to call a public instance method of this script by
+        /// name. The arguments arrive encoded and separated as UIDataModels encodes values; a number
+        /// list ("x,y,z") fills a vector or colour parameter. Missing trailing arguments take their
+        /// defaults, and the first overload whose parameters the arguments convert to runs.
+        /// </summary>
+        /// <returns>{"result":value} (null for a void method) or {"error":"message"} as JSON.</returns>
+        private string internal_n2m_invoke(string name, string arguments)
+        {
+            object[] values = UIDataModels.DecodeList(arguments);
+            foreach (MethodInfo method in GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (method.Name != name || method.IsGenericMethodDefinition ||
+                    !TryBuildInvokeArguments(method.GetParameters(), values, out object[] parameters))
+                {
+                    continue;
+                }
+                object result;
+                using (Run(this))
+                {
+                    try
+                    {
+                        result = method.Invoke(this, parameters);
+                    }
+                    catch (TargetInvocationException ex)
+                    {
+                        Exception inner = ex.InnerException ?? ex;
+                        return MakeInvokeError($"{name} threw {inner.GetType().Name}: {inner.Message}");
+                    }
+                }
+                var json = new StringBuilder("{\"result\":");
+                UIDataModels.AppendJsonValue(json, result, InvokeResultDepth, InvokeResultItems);
+                return json.Append('}').ToString();
+            }
+            return MakeInvokeError($"{GetType().FullName} has no public method {name} taking {values.Length} " +
+                                   "argument(s) of types they convert to");
+        }
+
+        /// <summary>
+        /// The arguments for @p parameters from the decoded @p values, or false when they do not fit.
+        /// </summary>
+        private static bool TryBuildInvokeArguments(ParameterInfo[] parameters, object[] values, out object[] arguments)
+        {
+            arguments = null;
+            if (values.Length > parameters.Length)
+            {
+                return false;
+            }
+            var converted = new object[parameters.Length];
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                if (i >= values.Length)
+                {
+                    if (!parameters[i].HasDefaultValue)
+                    {
+                        return false;
+                    }
+                    converted[i] = parameters[i].DefaultValue;
+                    continue;
+                }
+                try
+                {
+                    converted[i] = ConvertInvokeArgument(values[i], parameters[i].ParameterType);
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+            arguments = converted;
+            return true;
+        }
+
+        /// <summary>
+        /// A value for a parameter of @p type: a "x,y,..." number list fills a struct through its
+        /// constructor taking that many floats (Vector2, Vector3, Vector4, Color, Quaternion); anything
+        /// else converts as a UI event argument does.
+        /// </summary>
+        private static object ConvertInvokeArgument(object value, Type type)
+        {
+            if (value is string text && type.IsValueType && !type.IsPrimitive && !type.IsEnum)
+            {
+                string[] parts = text.Split(',');
+                var components = new object[parts.Length];
+                var componentTypes = new Type[parts.Length];
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    components[i] = float.Parse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture);
+                    componentTypes[i] = typeof(float);
+                }
+                ConstructorInfo constructor = type.GetConstructor(componentTypes);
+                if (constructor != null)
+                {
+                    return constructor.Invoke(components);
+                }
+            }
+            return UIDataModels.ConvertTo(value, type);
+        }
+
+        private static string MakeInvokeError(string message)
+        {
+            var json = new StringBuilder("{\"error\":");
+            UIDataModels.AppendJsonString(json, message);
+            return json.Append('}').ToString();
         }
     }
 }

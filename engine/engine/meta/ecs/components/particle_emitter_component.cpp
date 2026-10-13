@@ -641,7 +641,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "align_to_direction"},
             entt::attribute{"pretty_name", "Align To Direction"},
-            entt::attribute{"tooltip", "If enabled, particles rotate to align with their velocity direction. Useful for directional particles like arrows or sparks."},
+            entt::attribute{"tooltip", "If enabled, particles turn so the texture's top points along their motion: draw directional art (sparks, streaks, arrows) pointing up. Start Rotation turns art drawn another way."},
             entt::attribute{"group", "Rendering"},
         })
         .data<&particle_emitter_component::set_pivot, &particle_emitter_component::get_pivot>("pivot"_hs)
@@ -694,6 +694,66 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Randomize Start Frame"},
             entt::attribute{"tooltip", "When enabled, each particle starts at a random frame in the texture sheet animation instead of frame 0. Creates visual variety."},
             entt::attribute{"group", "Texture"},
+        })
+        .data<&particle_emitter_component::set_frame_blending, &particle_emitter_component::get_frame_blending>("frame_blending"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "frame_blending"},
+            entt::attribute{"pretty_name", "Frame Blending"},
+            entt::attribute{"tooltip", "Crossfades from each texture sheet frame into the next instead of stepping between them. Smooths flipbooks that play slowly."},
+            entt::attribute{"group", "Texture"},
+        })
+
+        // -- Rotation --
+        .data<&particle_emitter_component::set_rotation, &particle_emitter_component::get_rotation>("rotation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation"},
+            entt::attribute{"pretty_name", "Start Rotation"},
+            entt::attribute{"tooltip", "Angle of each particle in its quad's plane when it is born, degrees, random between min and max. 0-360 keeps smoke and fire from repeating one orientation."},
+            entt::attribute{"group", "Rotation"},
+        })
+        .data<&particle_emitter_component::set_rotation_speed, &particle_emitter_component::get_rotation_speed>("rotation_speed"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation_speed"},
+            entt::attribute{"pretty_name", "Rotation Speed"},
+            entt::attribute{"tooltip", "Spin in degrees per second, random between min and max."},
+            entt::attribute{"group", "Rotation"},
+        })
+        .data<&particle_emitter_component::set_random_rotation_direction, &particle_emitter_component::get_random_rotation_direction>("random_rotation_direction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "random_rotation_direction"},
+            entt::attribute{"pretty_name", "Random Direction"},
+            entt::attribute{"tooltip", "Half the particles spin the other way."},
+            entt::attribute{"group", "Rotation"},
+        })
+        .data<&particle_emitter_component::set_soft_fade_distance, &particle_emitter_component::get_soft_fade_distance>("soft_fade_distance"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "soft_fade_distance"},
+            entt::attribute{"pretty_name", "Soft Fade Distance"},
+            entt::attribute{"tooltip", "Soft particles: metres over which a particle fades out where it meets the scene behind it, so smoke and glows do not cut hard lines into the ground. 0 keeps the hard edge."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"group", "Rendering"},
+        })
+        .data<&particle_emitter_component::set_prewarm, &particle_emitter_component::get_prewarm>("prewarm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "prewarm"},
+            entt::attribute{"pretty_name", "Prewarm"},
+            entt::attribute{"tooltip", "A looping emitter starts full, as if it had been running for a whole particle lifetime, when it first plays after it is created or reset - ambient fire, smoke and mist do not build up from nothing when the scene starts."},
+            entt::attribute{"group", "Emission"},
+        })
+        .data<&particle_emitter_component::set_auto_play, &particle_emitter_component::get_auto_play>("auto_play"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto_play"},
+            entt::attribute{"pretty_name", "Auto Play"},
+            entt::attribute{"tooltip", "Whether the emitter plays from the moment it is created (scene load, play start, instantiation). Off leaves it stopped until a script or the inspector plays it; bursts (Emit) work either way."},
+            entt::attribute{"group", "Emission"},
+        })
+        .data<&particle_emitter_component::set_sort_priority, &particle_emitter_component::get_sort_priority>("sort_priority"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sort_priority"},
+            entt::attribute{"pretty_name", "Sort Priority"},
+            entt::attribute{"tooltip", "Draw order against other emitters, whatever their blend mode: lower values draw first and higher ones composite on top. Emitters of equal priority draw back to front by distance. Use it to keep a ground decal under the fire standing on it, or smoke over the fire inside it."},
+            entt::attribute{"group", "Rendering"},
         })
 
         ;
@@ -760,6 +820,15 @@ SAVE(particle_emitter_component)
     
     // Pivot
     try_save(ar, ser20::make_nvp("pivot", obj.get_pivot()));
+
+    try_save(ar, ser20::make_nvp("frame_blending", obj.get_frame_blending()));
+    try_save(ar, ser20::make_nvp("rotation", obj.get_rotation()));
+    try_save(ar, ser20::make_nvp("rotation_speed", obj.get_rotation_speed()));
+    try_save(ar, ser20::make_nvp("random_rotation_direction", obj.get_random_rotation_direction()));
+    try_save(ar, ser20::make_nvp("soft_fade_distance", obj.get_soft_fade_distance()));
+    try_save(ar, ser20::make_nvp("sort_priority", obj.get_sort_priority()));
+    try_save(ar, ser20::make_nvp("prewarm", obj.get_prewarm()));
+    try_save(ar, ser20::make_nvp("auto_play", obj.get_auto_play()));
 }
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_binary_t);
@@ -1049,6 +1118,47 @@ LOAD(particle_emitter_component)
     if(try_load(ar, ser20::make_nvp("pivot", pivot)))
     {
         obj.set_pivot(pivot);
+    }
+
+    bool frame_blending{false};
+    if(try_load(ar, ser20::make_nvp("frame_blending", frame_blending)))
+    {
+        obj.set_frame_blending(frame_blending);
+    }
+    frange_t rotation{0.0f, 0.0f};
+    if(try_load(ar, ser20::make_nvp("rotation", rotation)))
+    {
+        obj.set_rotation(rotation);
+    }
+    frange_t rotation_speed{0.0f, 0.0f};
+    if(try_load(ar, ser20::make_nvp("rotation_speed", rotation_speed)))
+    {
+        obj.set_rotation_speed(rotation_speed);
+    }
+    bool random_rotation_direction{false};
+    if(try_load(ar, ser20::make_nvp("random_rotation_direction", random_rotation_direction)))
+    {
+        obj.set_random_rotation_direction(random_rotation_direction);
+    }
+    float soft_fade_distance{0.0f};
+    if(try_load(ar, ser20::make_nvp("soft_fade_distance", soft_fade_distance)))
+    {
+        obj.set_soft_fade_distance(soft_fade_distance);
+    }
+    int32_t sort_priority{0};
+    if(try_load(ar, ser20::make_nvp("sort_priority", sort_priority)))
+    {
+        obj.set_sort_priority(sort_priority);
+    }
+    bool prewarm{false};
+    if(try_load(ar, ser20::make_nvp("prewarm", prewarm)))
+    {
+        obj.set_prewarm(prewarm);
+    }
+    bool auto_play{true};
+    if(try_load(ar, ser20::make_nvp("auto_play", auto_play)))
+    {
+        obj.set_auto_play(auto_play);
     }
 }
 LOAD_INSTANTIATE(particle_emitter_component, ser20::iarchive_associative_t);

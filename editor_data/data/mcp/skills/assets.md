@@ -1,7 +1,7 @@
 ---
 name: assets
 title: Assets and materials
-description: Browsing and resolving assets, importing everything through assets_import_files (files or whole model directories), the glTF-vs-GLB texture rule, readiness caveats, and shared material assets vs per-entity material instances.
+description: Browsing and resolving assets, importing everything through assets_import_files (files or whole model directories), import settings (texture compression, color space, mesh options), the glTF-vs-GLB texture rule, readiness caveats, and shared material assets vs per-entity material instances.
 order: 50
 ---
 # Assets and materials
@@ -30,11 +30,32 @@ initial compile. Entries in paths may be:
 
 A file imported over an existing one replaces it in place: the call reports it
 ready once the reloaded asset has replaced the old one, so scene and UI show the
-new content from then on.
+new content from then on. Files no asset type imports (a glTF's .bin, a license
+.txt) are copied too and listed with asset:false; they are not waited for.
 
 Never copy files into the project's data directory yourself; stage downloads
 outside the project and import them with the tool (it rejects paths already
 inside the project).
+
+## Import settings
+
+- assets_get_import_settings {"keys":[...]} reads what the inspector's Import tab
+  edits: textures (type, colorspace, generate_mipmaps, invert_normal_y,
+  quality.max_size, quality.compression), meshes (model, sdf, cards, animations,
+  materials), animations (root_motion), audio (force_to_mono). "schemas" gives the
+  enum names and ranges; a loaded texture also reports "texture": its compiled
+  format, size and mips - the proof a change took.
+- assets_set_import_settings {"items":[{"key":"app:/data/UI/atlas.png",
+  "settings":{"quality":{"compression":"none"}}}]} writes the .meta and waits until
+  the asset has been imported again. Partial objects merge into the current
+  settings; an item with any rejected entry writes nothing.
+- "project_default" follows the project's settings assets.texture
+  (default_compression, default_max_size; settings_get {"group":"assets"}).
+  Changing them recompiles nothing by itself: run assets_recompile_textures
+  (prefix, default app:/; wait_ms to wait for each).
+- Only app:/ textures are compressed. Use compression "none" for UI atlases and
+  pixel art that must stay exact, colorspace "srgb" for color maps, "linear" for
+  data maps.
 
 ## Import gotchas
 

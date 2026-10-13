@@ -290,11 +290,17 @@ public:
                          gfx::render_view& rview,
                          const gfx::frame_buffer::ptr& output);
 
+    /**
+     * @brief Draws the particles over the lit scene.
+     * @param hiz_depth This frame's Hi-Z buffer when the pipeline built one: soft particles read its
+     *        first mip. Without it they read a copy of the depth buffer made for them.
+     */
     virtual void run_particle_pass(scene& scn,
                                const camera& camera,
                                gfx::render_view& rview,
                                const gfx::frame_buffer::ptr& output,
-                               const pre_exposure_state& pre_exposure);
+                               const pre_exposure_state& pre_exposure,
+                               const gfx::texture::ptr& hiz_depth);
 
     virtual auto create_run_params(entt::handle camera_ent) const -> rendering::pipeline::run_params;
     virtual auto create_run_params(entt::handle camera_ent, scene* scn, const camera* cam) const -> rendering::pipeline::run_params;

@@ -30,6 +30,7 @@
 
 #include <editor/assets/asset_actions.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
 
 // must be below all
@@ -529,8 +530,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                     *importer = *importer_;
                 }
 
-                auto meta_absolute_path = asset_writer::resolve_meta_file(data);
-                asset_writer::atomic_save_to_file(meta_absolute_path.string(), meta.meta);
+                editor_actions::save_import_settings(data.id(), meta.meta);
             }
             ImGui::EndTabItem();
         }
@@ -773,8 +773,7 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                     *importer = *importer_;
                 }
 
-                auto meta_absolute_path = asset_writer::resolve_meta_file(data);
-                asset_writer::atomic_save_to_file(meta_absolute_path.string(), meta.meta);
+                editor_actions::save_import_settings(data.id(), meta.meta);
             }
 
             ImGui::EndTabItem();
@@ -881,8 +880,7 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                     *importer = *importer_;
                 }
 
-                auto meta_absolute_path = asset_writer::resolve_meta_file(data);
-                asset_writer::atomic_save_to_file(meta_absolute_path.string(), meta.meta);
+                editor_actions::save_import_settings(data.id(), meta.meta);
             }
 
             ImGui::EndTabItem();
@@ -1240,8 +1238,7 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
                     *importer = *importer_;
                 }
 
-                auto meta_absolute_path = asset_writer::resolve_meta_file(data);
-                asset_writer::atomic_save_to_file(meta_absolute_path.string(), meta.meta);
+                editor_actions::save_import_settings(data.id(), meta.meta);
             }
 
             ImGui::EndTabItem();

@@ -19,6 +19,8 @@ struct component_apply_result
     std::vector<std::string> applied;
     std::vector<std::string> unknown;
     std::vector<std::string> errors;
+    /// Values that were applied but change nothing (e.g. gradient keys the particle model never reads).
+    std::vector<std::string> warnings;
     bool ok{true};
 };
 

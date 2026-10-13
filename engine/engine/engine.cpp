@@ -632,12 +632,13 @@ auto engine::process() -> int
             ev.on_frame_end(ctx, dt);
         }
 
-        play.end_frame_step();
-
+        // Before the step ends, so a stepped frame counts as simulated.
         if(play.is_simulation_running())
         {
             play.on_simulation_frame();
         }
+
+        play.end_frame_step();
     }
 
     get_app_profiler()->swap();

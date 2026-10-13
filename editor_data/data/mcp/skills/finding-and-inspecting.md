@@ -25,8 +25,8 @@ the top source of broken scenes.
 - scene_get_children_batch: immediate children only, cheaper than a deep
   hierarchy walk.
 - scene_get_transforms_batch: many poses; per item space "world" or "local".
-- scene_get_bounds_batch: world AABBs - overlap, containment and floor-height
-  checks without a screenshot.
+- scene_get_bounds_batch: world AABBs (meshes, particles, world-space UI
+  documents) - overlap, containment and floor-height checks without a screenshot.
 - selection_get: the user's current selection (active entity + list).
 - scene_get_info / editor_get_status: scene identity, entity count, play phase.
 

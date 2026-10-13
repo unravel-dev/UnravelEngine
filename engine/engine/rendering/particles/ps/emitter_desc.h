@@ -27,6 +27,9 @@ struct emitter_emission_desc
     float emission_lifetime = 2.0f;
     float start_delay = 0.0f;
     bool loop = true;
+    /// A looping emitter starts full, as if it had been running for a whole particle lifetime, when it
+    /// first plays after it is created or reset.
+    bool prewarm = false;
     spawn_location spawn_location = spawn_location::inside;
     math::vec3 shape_position{0.0f, 0.0f, 0.0f};
     math::vec3 shape_scale{1.0f, 1.0f, 1.0f};
@@ -79,11 +82,26 @@ struct emitter_render_desc
     texture_mode texture_mode = texture_mode::multi_channel;
     render_mode render_mode = render_mode::billboard;
     blend_mode blend_mode = blend_mode::normal;
+    /// Particles turn so the texture's top points along their motion.
     bool align_to_direction = false;
     math::vec2 pivot{0.5f, 0.5f};
     math::vec2 tex_sheet_tiles{1.0f, 1.0f};
     float tex_sheet_cycles = 0.0f;
     bool tex_sheet_randomize = false;
+    /// Crossfade from each texture sheet frame into the next instead of stepping between them.
+    bool frame_blending = false;
+    /// Start angle of a particle in its quad's plane, degrees, random between min and max.
+    frange_t rotation{0.0f, 0.0f};
+    /// Spin in degrees per second, random between min and max.
+    frange_t rotation_speed{0.0f, 0.0f};
+    /// Half the particles spin the other way.
+    bool random_rotation_direction = false;
+    /// Metres over which a particle fades out where it meets the scene behind it (soft particles);
+    /// 0 keeps the hard edge.
+    float soft_fade_distance = 0.0f;
+    /// Draw order against other emitters, whatever their blend mode: lower values draw first and
+    /// higher ones composite on top. Emitters of equal priority draw back to front by distance.
+    int32_t sort_priority = 0;
 
     void reset();
 };
@@ -95,6 +113,9 @@ struct emitter_playback_desc
 {
     bool playing = true;
     bool paused = false;
+    /// Whether the emitter plays from the moment it is created (scene load, play start, instantiation);
+    /// off leaves it stopped until it is played.
+    bool auto_play = true;
 
     void reset();
 };

@@ -12,6 +12,7 @@
  *   - a callback that throws fails the write instead of terminating the process, keeps the old destination and
  *     removes its temp file;
  *   - an empty write is rejected and its temp file removed;
+ *   - a write or copy into a folder that does not exist reports an error instead of success;
  *   - the stale sweep removes old `.<uuid>.temp` files, recursively and below folder names the narrow code page
  *     cannot represent, and keeps fresh temp files and user files that only resemble the pattern.
  *
@@ -155,6 +156,27 @@ void test_empty_write(const fs::path& run_root)
     check(count_temp_files(dir) == 0, "an empty write leaves no temp file");
 }
 
+void test_missing_folder(const fs::path& run_root)
+{
+    const fs::path destination = run_root / "missing" / "nested" / "settings.cfg";
+    fs::error_code ec;
+    asset_writer::atomic_write_file(
+        destination,
+        [](const fs::path& temp)
+        {
+            write_text(temp, "new");
+        },
+        ec);
+    fs::error_code err;
+    check(static_cast<bool>(ec), "a write into a missing folder reports an error");
+    check(!fs::exists(destination, err), "a write into a missing folder creates nothing");
+    const fs::path source = run_root / "copy_source.cfg";
+    write_text(source, "data");
+    fs::error_code copy_ec;
+    const bool copied = asset_writer::atomic_copy_file(source, destination, copy_ec);
+    check(!copied && static_cast<bool>(copy_ec), "a copy into a missing folder reports an error");
+}
+
 void test_stale_sweep(const fs::path& run_root)
 {
     const fs::path dir = run_root / "sweep";
@@ -194,6 +216,7 @@ auto run_asset_writer_suite(rtti::context& /*ctx*/) -> int
     test_successful_write(run_root);
     test_throwing_callback(run_root);
     test_empty_write(run_root);
+    test_missing_folder(run_root);
     test_stale_sweep(run_root);
     std::printf("asset writer: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

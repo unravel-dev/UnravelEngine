@@ -152,6 +152,31 @@ auto try_get_save_context() -> save_context*
     return save_ctx_ptr;
 }
 
+auto begin_component_save(entt::const_handle source) -> bool
+{
+    const bool pushed = push_save_context();
+    if(pushed)
+    {
+        get_save_context().save_source = source;
+    }
+    return pushed;
+}
+
+void end_component_save(bool began)
+{
+    pop_save_context(began);
+}
+
+auto begin_component_load(entt::handle target) -> bool
+{
+    return target.registry() != nullptr && push_load_context(*target.registry());
+}
+
+void end_component_load(bool began)
+{
+    pop_load_context(began);
+}
+
 auto try_get_load_context() -> load_context*
 {
     return load_ctx_ptr;

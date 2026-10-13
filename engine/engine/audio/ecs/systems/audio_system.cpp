@@ -11,8 +11,6 @@
 #include <logging/logging.h>
 #include <simulation/simulation.h>
 
-#include <climits>
-#include <cmath>
 
 namespace unravel
 {
@@ -48,11 +46,6 @@ void on_destroy_active_component(entt::registry& r, entt::entity e)
     {
         comp->on_play_end();
     }
-}
-
-auto clamp_gain(float volume) -> float
-{
-    return std::fmin(1.0f, std::fmax(0.0f, volume));
 }
 
 /// This frame's time without the time scale: fades keep running while the game is slowed or
@@ -115,8 +108,7 @@ auto audio_system::deinit(rtti::context& ctx) -> bool
 
 void audio_system::set_master_volume(float volume)
 {
-    master_volume_ = clamp_gain(volume);
-    refresh_source_volumes(engine::context());
+    master_volume_ = clamp_audio_gain(volume);
     refresh_voice_gains();
 }
 
@@ -138,8 +130,7 @@ void audio_system::set_bus_volume(audio_bus bus, float volume)
 
 void audio_system::apply_bus_volume(audio_bus bus, float volume)
 {
-    bus_volumes_[static_cast<std::uint8_t>(bus)] = clamp_gain(volume);
-    refresh_source_volumes(engine::context());
+    bus_volumes_[static_cast<std::uint8_t>(bus)] = clamp_audio_gain(volume);
     refresh_voice_gains();
 }
 
@@ -150,7 +141,7 @@ void audio_system::fade_bus_volume(audio_bus bus, float target, float seconds)
     {
         return;
     }
-    bus_fades_[index].start(bus_volumes_[index], clamp_gain(target), seconds, false);
+    bus_fades_[index].start(bus_volumes_[index], clamp_audio_gain(target), seconds, false);
 }
 
 void audio_system::refresh_voice_gains()
@@ -170,7 +161,6 @@ auto audio_system::play_one_shot(const asset_handle<audio_clip>& clip, const one
     {
         return 0;
     }
-    make_room_for_voice(nullptr);
     return voices_.play(sound, clip.uid(), params);
 }
 
@@ -192,88 +182,6 @@ auto audio_system::get_bus_volume(audio_bus bus) const -> float
 auto audio_system::get_effective_bus_gain(audio_bus bus) const -> float
 {
     return master_volume_ * get_bus_volume(bus);
-}
-
-void audio_system::ensure_voice_capacity(audio_source_component& requesting)
-{
-    make_room_for_voice(&requesting);
-}
-
-void audio_system::make_room_for_voice(const audio_source_component* requesting)
-{
-    auto& ctx = engine::context();
-    entt::registry* registry = ctx.has<ecs>() ? ctx.get_cached<ecs>().get_scene().registry.get() : nullptr;
-
-    while(true)
-    {
-        std::size_t live_count = voices_.get_live_count();
-        audio_source_component* steal_candidate = nullptr;
-        int steal_priority = INT_MAX;
-        bool steal_is_looping = true;
-
-        if(registry)
-        {
-            registry->view<audio_source_component>().each(
-                [&](auto /*e*/, audio_source_component& comp)
-                {
-                    if(!comp.has_source() || &comp == requesting)
-                    {
-                        return;
-                    }
-                    ++live_count;
-                    const bool is_looping = comp.is_looping();
-                    const int priority = comp.get_priority();
-                    // Prefer stealing non-looping, then lower priority.
-                    const bool better =
-                        (steal_candidate == nullptr) || (!is_looping && steal_is_looping) ||
-                        (is_looping == steal_is_looping && priority < steal_priority);
-                    if(better)
-                    {
-                        steal_candidate = &comp;
-                        steal_priority = priority;
-                        steal_is_looping = is_looping;
-                    }
-                });
-        }
-
-        if(live_count < max_concurrent_voices)
-        {
-            return;
-        }
-        // One-shots never loop: one goes before a looping source, and before a one-shot source
-        // of the same or higher priority.
-        const auto one_shot = voices_.find_steal_candidate();
-        const bool steal_one_shot =
-            one_shot.voice != 0 &&
-            (steal_candidate == nullptr || steal_is_looping || one_shot.priority <= steal_priority);
-        if(steal_one_shot)
-        {
-            voices_.stop(one_shot.voice);
-        }
-        else if(steal_candidate)
-        {
-            steal_candidate->release_source();
-        }
-        else
-        {
-            return;
-        }
-    }
-}
-
-void audio_system::refresh_source_volumes(rtti::context& ctx)
-{
-    if(!ctx.has<ecs>())
-    {
-        return;
-    }
-    auto& ec = ctx.get_cached<ecs>();
-    auto& registry = *ec.get_scene().registry;
-    registry.view<audio_source_component>().each(
-        [&](auto /*e*/, audio_source_component& comp)
-        {
-            comp.apply_mixer_volume();
-        });
 }
 
 void audio_system::on_play_begin(rtti::context& ctx)
@@ -328,31 +236,14 @@ void audio_system::on_play_end(rtti::context& ctx)
     registry.on_destroy<audio_source_component>().disconnect<&on_destroy_component>();
 }
 
-void audio_system::on_pause(rtti::context& ctx)
+void audio_system::on_pause(rtti::context& /*ctx*/)
 {
-    auto& ec = ctx.get_cached<ecs>();
-    auto& scn = ec.get_scene();
-    auto& registry = *scn.registry;
-
-    registry.view<audio_source_component>().each(
-        [&](auto e, auto&& comp)
-        {
-            comp.pause();
-        });
+    // Component sources live in the pool too.
     voices_.pause_all();
 }
 
-void audio_system::on_resume(rtti::context& ctx)
+void audio_system::on_resume(rtti::context& /*ctx*/)
 {
-    auto& ec = ctx.get_cached<ecs>();
-    auto& scn = ec.get_scene();
-    auto& registry = *scn.registry;
-
-    registry.view<audio_source_component>().each(
-        [&](auto e, auto&& comp)
-        {
-            comp.resume();
-        });
     voices_.resume_all();
 }
 
@@ -393,7 +284,7 @@ void audio_system::on_frame_update(rtti::context& ctx, delta_t dt)
     registry.view<transform_component, audio_source_component, active_component>().each(
         [&](auto e, auto&& transform, auto&& comp, auto&& active)
         {
-            comp.update(transform.get_transform_global(), dt);
+            comp.update(transform.get_transform_global());
         });
 
     update_fades(ctx, get_unscaled_seconds(ctx, dt));

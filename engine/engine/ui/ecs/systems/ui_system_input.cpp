@@ -359,8 +359,7 @@ void ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn)
 
             auto handle = scn.create_handle(entity);
             auto& transform = handle.get<transform_component>();
-            const auto scale = ui_comp.get_world_space_scale();
-            const auto quad_transform = transform.get_transform_global() * math::transform::scaling(scale);
+            const auto quad_transform = ui_comp.get_world_space_quad(transform.get_transform_global());
             math::vec2 pixel;
             if(scene_camera->project_to_quad(math::vec2(static_cast<float>(mouse_x), static_cast<float>(mouse_y)),
                                              quad_transform, ui_comp.size.width, ui_comp.size.height, pixel))

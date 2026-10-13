@@ -2,6 +2,8 @@
 #include "engine/scripting/script.h"
 #include <engine/engine_export.h>
 #include <filesystem/filesystem.h>
+#include <algorithm>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -165,6 +167,23 @@ inline auto get_all_formats() -> const std::vector<std::vector<std::string>>&
                                                                 ex::get_suported_formats<unravel::style_sheet>()};
 
     return types;
+}
+
+/**
+ * @brief Whether @p extension (with its dot, any case) is a format some asset type imports.
+ */
+inline auto is_known_format(const std::string& extension) -> bool
+{
+    std::string lower = extension;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    for(const auto& formats : get_all_formats())
+    {
+        if(std::find(formats.begin(), formats.end(), lower) != formats.end())
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 template<typename T>

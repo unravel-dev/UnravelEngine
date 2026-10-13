@@ -5,6 +5,7 @@
 #include "ui_event_payload.h"
 
 #include "../script_system.h"
+#include "../script_value_encoding.h"
 
 #include <engine/play_mode.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
@@ -45,14 +46,7 @@ enum class model_node_kind : int64_t
 constexpr int64_t NODE_KIND_BITS = 2;
 constexpr int64_t NODE_KIND_MASK = (int64_t(1) << NODE_KIND_BITS) - 1;
 
-/// Values cross as text: a tag character, then the value. The tags mirror UIDataModels.
-constexpr char VALUE_MISSING = 'n';
-constexpr char VALUE_BOOL = 'b';
-constexpr char VALUE_INTEGER = 'i';
-constexpr char VALUE_NUMBER = 'd';
-constexpr char VALUE_STRING = 's';
-/// Separates encoded values in an argument list.
-constexpr char VALUE_SEPARATOR = '\x1e';
+using namespace script_value_encoding;
 
 /// Name of the element count of an array variable in data expressions ("rows.size").
 constexpr const char* ARRAY_SIZE_NAME = "size";

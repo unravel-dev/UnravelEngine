@@ -82,8 +82,31 @@ auto make_tool_result(const std::string& text, bool is_error) -> std::string
 
 auto make_tool_result(const tool_result& result) -> std::string
 {
+    // Warnings join a JSON object result as its "warnings" field and follow any other text as a
+    // block of their own, so a client parsing the result as JSON still can.
+    std::string text = result.text;
+    std::string warnings_block;
+    if(!result.warnings.empty())
+    {
+        std::string warnings = "[";
+        for(size_t i = 0; i < result.warnings.size(); ++i)
+        {
+            warnings += (i > 0 ? "," : "") + make_json_string(result.warnings[i]);
+        }
+        warnings += "]";
+        if(text.size() >= 2 && text.front() == '{' && text.back() == '}')
+        {
+            text.insert(text.size() - 1, (text.size() > 2 ? R"(,"warnings":)" : R"("warnings":)") + warnings);
+        }
+        else
+        {
+            warnings_block = fmt::format(R"(,{{"type":"text","text":{}}})",
+                                         make_json_string(R"({"warnings":)" + warnings + "}"));
+        }
+    }
     std::string content = "[";
-    content += fmt::format(R"({{"type":"text","text":{}}})", make_json_string(result.text));
+    content += fmt::format(R"({{"type":"text","text":{}}})", make_json_string(text));
+    content += warnings_block;
     if(!result.image_base64.empty())
     {
         content += fmt::format(R"(,{{"type":"image","data":{},"mimeType":{}}})",

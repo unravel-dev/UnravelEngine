@@ -1,7 +1,7 @@
 ---
 name: ui
 title: In-game UI - documents, data models, controls, events
-description: HUDs and menus with RmlUi - create .rhtml/.rcss, show a document with a UI Document component, bind it to C# data models ({{ }}, data-for, data-event-*), use elements and typed controls (UISlider, UIToggle, UISelect...), events, styling, geometry and animation from C#, the ways RCSS differs from CSS, and how to verify it in play mode.
+description: HUDs and menus with RmlUi - create .rhtml/.rcss, show a document with a UI Document component, bind it to C# data models ({{ }}, data-for, data-event-*), use elements and typed controls (UISlider, UIToggle, UISelect...), events, styling, sprite skins, geometry and animation from C#, the ways RCSS differs from CSS, and how to verify it (ui_query_elements, ui_click_element, ui_get_model).
 order: 58
 ---
 # In-game UI
@@ -24,8 +24,29 @@ engine:/data/scripts/samples/SampleHudController.cs.
   a starter style sheet. Point the second link at your own .rcss key:
   <link type="text/rcss" href="app:/data/UI/Hud.rcss"/>
 - Write whole files with ui_set_sources_batch. The asset watcher reimports them and
-  a document already on screen reloads. ui_get_sources_batch reads them back, and
-  reads engine files such as rml.rcss.
+  a document already on screen reloads - in edit mode only: during play a document
+  keeps the markup and style sheets it started with, so stop play before pushing UI
+  changes (a changed texture still swaps in, against the old sprite rectangles).
+  ui_get_sources_batch reads them back, and reads engine files such as rml.rcss.
+
+## Skinning with sprites
+
+- Pack the art into one atlas texture (import it with assets_import_files) and name its
+  rectangles in a style sheet the documents link:
+  @spritesheet ui { src: app:/data/UI/atlas.png; panel: 0px 0px 100px 100px;
+  panel-inner: 10px 10px 80px 80px; }
+- decorator: ninepatch(panel, panel-inner) stretches a frame (corners keep their size);
+  tiled-horizontal(left, middle, right) for bars and slider tracks; image(sprite) for one
+  sprite; <img sprite="name"/> or data-attr-sprite="expr" in markup.
+- image-color multiplies an element's decorators: tint one white sprite many ways, dim a
+  button and brighten it on :hover. In the UISample a two-decorator list on a checked
+  checkbox (frame + tick) showed no tick; one sprite per state (box, box with tick) did.
+- Textures compile block-compressed: put sprites on 4 px boundaries with 4 px gaps, and
+  store pixel art at a whole multiple (4x) so it stays crisp - or turn compression off
+  for the atlas: assets_set_import_settings {"items":[{"key":"app:/data/UI/atlas.png",
+  "settings":{"quality":{"compression":"none"}}}]} (see the assets skill).
+- Fonts: @font-face { font-family: "Name"; src: "app:/data/Fonts/File.ttf"; }. Prefer static
+  TTFs; variable fonts can render squished on Windows.
 
 ## RCSS is not CSS
 
@@ -81,9 +102,10 @@ Reload() also resets a document to its initial markup.
   rows[2]). Expressions: == != < > && || ! ?: + - * / and | transforms.
 - Views: {{ }}, data-if, data-visible, data-class-x, data-style-prop, data-attr-x,
   data-value, data-checked, data-event-click (any event).
-- After changing bound values call Dirty(name) or DirtyAll(). Controls bound with
-  data-value / data-checked write back and update by themselves; after a model event
-  method runs the model updates too. model.autoDirty = true compares the top-level
+- After changing bound values call Dirty(name) or DirtyAll(). After a model event
+  method runs the whole model updates. A control bound with data-value / data-checked
+  writes back and updates only the variable it wrote: a property setter that changes
+  other values too must Dirty them (keep the UIDataModel in a non-public field). model.autoDirty = true compares the top-level
   scalars every frame instead (prototypes, small models).
 - data-event-click="Spin(3, 'gold')" calls the bound object's public Spin; a first
   parameter of an event class (UIClickEvent e) receives the event. BindEvent(name,
@@ -158,10 +180,27 @@ Reload() also resets a document to its initial markup.
 
 ## Verifying
 
-- viewport_capture_game in play mode shows the overlay over the game.
-- Prove behaviour with a Log.Warning in the callback and logs_get_recent, not only
-  a screenshot.
-- Clicking from MCP: input_set_mouse_position (game space) then input_send_mouse
-  click. The game, its UI and the editor all follow the virtual pointer, so the
-  press lands on the element under it. Clear it (or stop play) when done - while it
-  is set the user's own mouse does not reach the editor.
+- Find elements with ui_query_elements, never by reading pixels off a screenshot:
+  {"selector":"#start"} (any RCSS selector) or {"point":[x, y]} (game pixels; the
+  element a click there reaches). It reports path, text, visibility, pseudo-classes
+  (hover, checked, disabled...), form value, rect_document, and rect_game /
+  center_game in game pixels - world-space documents projected through the Game
+  panel's camera. Add "properties":["decorator","display"] to read computed values.
+  Works in edit mode too.
+- Click with ui_click_element {"selector":"#buy", "index":0} (play mode): it moves the
+  virtual pointer to the element, waits for hover, clicks, and reports covered_by when
+  another element sits over it (that one takes the click - a z-order bug). "text"
+  types after the click, for a text field.
+- Read the data a document shows with ui_get_model {"entity_id":...}: every bound
+  variable's current value (objects and lists expanded), the event and transform
+  names. Use it to check what a click changed, and whether a value the view shows
+  stale is stale in C# too (then the script forgot Dirty) or only in the view.
+- viewport_capture_game in play mode shows the overlay over the game; logs_get_recent
+  shows script errors and RmlUi warnings. Pass width + height to check a layout at a
+  given resolution (1280 x 720, 3840 x 2160); viewport_set_render_size
+  {"panel":"game"} holds one while you click and query (element rects follow it).
+- Lower level: input_set_mouse_position (game space) + input_send_mouse click, and
+  input_send_keys {"text":"hello"} after a field has focus (key presses alone carry no
+  characters). The game, its UI and the editor all follow the virtual pointer; clear
+  it (or stop play) when done - while it is set the user's own mouse does not reach
+  the editor.

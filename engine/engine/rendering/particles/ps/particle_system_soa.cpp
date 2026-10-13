@@ -31,7 +31,7 @@ namespace
 constexpr float k_min_particle_lifespan = 1.0e-4f;
 constexpr float k_emit_dir_zero_len_sq = 1.0e-12f;
 // pos+pivotX | rotation | scale3d+pivotY | uv | color | renderMode
-constexpr uint16_t k_instance_stride = 96;
+constexpr uint16_t k_instance_stride = k_gpu_instance_stride;
 // Emitter updates already run under for_each_par_if in particle_system.
 // Do not nest a parallel range inside update - it oversubscribes the pool and
 // inflates both wall time and summed "Update Emitter" thread time.
@@ -54,6 +54,8 @@ bgfx::UniformHandle g_u_pack2 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack3 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack4 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_pack5 = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_pack6 = BGFX_INVALID_HANDLE;
+bgfx::UniformHandle g_u_pack7 = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_local_to_world = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_emitter_quat = BGFX_INVALID_HANDLE;
 bgfx::UniformHandle g_u_spawn0 = BGFX_INVALID_HANDLE;
@@ -101,6 +103,8 @@ void ensure_gpu_layouts()
         .add(bgfx::Attrib::TexCoord3, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord4, 4, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord5, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord6, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord7, 4, bgfx::AttribType::Float)
         .end();
     g_gpu_layouts_ready = true;
 }
@@ -494,6 +498,63 @@ void bake_constants(const emitter_desc& desc,
     {
         out_constants.emitter_rotation = -out_constants.emitter_rotation;
     }
+    const float to_radians = math::pi<float>() / 180.0f;
+    out_constants.rotation = frange_t(desc.render.rotation.min * to_radians, desc.render.rotation.max * to_radians);
+    out_constants.rotation_speed =
+        frange_t(desc.render.rotation_speed.min * to_radians, desc.render.rotation_speed.max * to_radians);
+    out_constants.random_rotation_direction = desc.render.random_rotation_direction;
+    out_constants.soft_fade_distance = math::max(desc.render.soft_fade_distance, 0.0f);
+    out_constants.frame_blending = desc.render.frame_blending;
+}
+
+/// A number in [0, 1) drawn from a particle's random seed. Each use takes its own multiplier, so a
+/// particle's start angle, spin speed and spin direction do not move together.
+auto pick_from_seed(float seed, float multiplier) -> float
+{
+    const float value = seed * multiplier;
+    return value - std::floor(value);
+}
+
+/// The angle of a particle in its quad's plane: a random start in the rotation range plus a random
+/// speed in the rotation speed range times its age, in radians.
+auto compute_particle_angle(const emitter_sim_constants& constants, float life, float lifespan, float seed) -> float
+{
+    float speed = math::mix(constants.rotation_speed.min, constants.rotation_speed.max, pick_from_seed(seed, 389.0f));
+    if(constants.random_rotation_direction && pick_from_seed(seed, 1543.0f) < 0.5f)
+    {
+        speed = -speed;
+    }
+    return math::mix(constants.rotation.min, constants.rotation.max, pick_from_seed(seed, 97.0f)) + speed * life * lifespan;
+}
+
+/// The texture sheet frame a particle blends into, and how far it is into that blend.
+struct sheet_frame_blend
+{
+    math::vec2 next_offset{0.0f, 0.0f};
+    float amount = 0.0f;
+};
+
+/// Picks the frame the properties update picks, then the one after it. A sheet played once from its
+/// first frame stops on its last one instead of blending back into the first.
+auto compute_sheet_frame_blend(const emitter_sim_constants& constants, float life, float seed) -> sheet_frame_blend
+{
+    sheet_frame_blend blend;
+    if(!constants.frame_blending || !has_feature(constants.features, emitter_feature::texsheet) ||
+       constants.tex_sheet_cycles <= 0.0f)
+    {
+        return blend;
+    }
+    const uint32_t tiles_x = uint32_t(constants.tex_sheet_tiles.x);
+    const uint32_t total_frames = tiles_x * uint32_t(constants.tex_sheet_tiles.y);
+    float progress = life * constants.tex_sheet_cycles + (constants.tex_sheet_randomize ? seed : 0.0f);
+    progress = (progress - std::floor(progress)) * float(total_frames);
+    const uint32_t frame = uint32_t(progress) % total_frames;
+    const bool is_single_pass = !constants.tex_sheet_randomize && constants.tex_sheet_cycles <= 1.0f;
+    const uint32_t next = is_single_pass ? math::min(frame + 1u, total_frames - 1u) : (frame + 1u) % total_frames;
+    blend.amount = progress - std::floor(progress);
+    blend.next_offset = math::vec2(float(next % tiles_x) / constants.tex_sheet_tiles.x,
+                                   float(next / tiles_x) / constants.tex_sheet_tiles.y);
+    return blend;
 }
 
 float calculate_particle_speed(const math::vec3& start,
@@ -1100,6 +1161,14 @@ struct emitter
             APP_SCOPE_PERF("Particles/SOA Update Properties");
             update_particles_range(particles_, 0, particles_.count, desc, constants);
         }
+        if(sim.prewarm_pending && playback.playing && !playback.paused)
+        {
+            sim.prewarm_pending = false;
+            if(desc.emission.prewarm && desc.emission.loop)
+            {
+                prewarm(desc, constants, transform, use_gpu);
+            }
+        }
         if(desc.emission.emission_lifetime > 0.0f && playback.playing)
         {
             const bool start_delay_elapsed = sim.start_delay_elapsed >= desc.emission.start_delay;
@@ -1207,6 +1276,9 @@ struct emitter
         math::vec3 system_scale{1.0f};
         math::mat3 rotation{1.0f};
         float life_span = 1.0f;
+        /// Fraction of their life the spawned particles start at, spread evenly over [0, age_spread):
+        /// 0 spawns them new, 1 spreads them over their whole life (prewarm).
+        float age_spread = 0.0f;
     };
 
     /// A burst waiting for the next update.
@@ -1306,6 +1378,25 @@ struct emitter
                        nullptr,
                        skip_cpu_properties);
         sim.total_particles_spawned += actual_emit_count;
+    }
+
+    /// Fills a looping emitter with the particles one particle lifetime of emission leaves alive, their
+    /// ages spread evenly, so it starts in its steady state instead of building up from nothing. A
+    /// particle's path depends only on its age, so for an emitter that holds still this is exact.
+    void prewarm(const emitter_desc& desc,
+                 const emitter_sim_constants& constants,
+                 const emitter_transform_state& transform,
+                 bool skip_cpu_properties)
+    {
+        spawn_frame frame = make_spawn_frame(desc, constants, transform);
+        frame.previous_position = frame.emitter_position;
+        frame.age_spread = 1.0f;
+        const float alive = desc.emission.particles_per_second * frame.life_span;
+        const uint32_t count = math::min(uint32_t(alive), get_free_slot_count(skip_cpu_properties));
+        if(count > 0)
+        {
+            emit_particles(count, desc, constants, frame, nullptr, skip_cpu_properties);
+        }
     }
 
     /// Spawns the queued bursts. They do not count toward a one-shot emitter's total, so a burst
@@ -1497,7 +1588,7 @@ struct emitter
                 motion_offset = compute_motion_offset(desc, frame, life_span);
             }
             particles_.lifespan[index] = life_span;
-            particles_.life[index] = 0.0f;
+            particles_.life[index] = frame.age_spread * (float(ii) + 0.5f) / float(count);
             const math::vec3 interpolated_emitter_pos =
                 math::mix(frame.previous_position, frame.emitter_position, emission_phase);
             if(desc.motion.space == simulation_space::local)
@@ -1650,7 +1741,25 @@ struct particle_system_soa
         quad_ibh_ = bgfx::createIndexBuffer(bgfx::makeRef(s_quad_indices, sizeof(s_quad_indices)));
         tex_color_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
         view_camera_ = bgfx::createUniform("u_viewCamera", bgfx::UniformType::Mat4);
-        eye_pos_ = bgfx::createUniform("u_eyePos", bgfx::UniformType::Vec4);
+        scene_depth_ = bgfx::createUniform("s_sceneDepth", bgfx::UniformType::Sampler);
+        particle_params_ = bgfx::createUniform("u_particleParams", bgfx::UniformType::Vec4);
+    }
+
+    void set_scene_depth(bgfx::TextureHandle depth)
+    {
+        scene_depth_texture_ = depth;
+    }
+
+    /// Binds the scene depth soft particles fade against; without one the shader skips the fade.
+    void bind_scene_depth()
+    {
+        const bool has_depth = bgfx::isValid(scene_depth_texture_);
+        const float params[4] = {has_depth ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+        if(has_depth)
+        {
+            bgfx::setTexture(1, scene_depth_, scene_depth_texture_);
+        }
+        bgfx::setUniform(particle_params_, params);
     }
 
     void shutdown()
@@ -1689,6 +1798,16 @@ struct particle_system_soa
             bgfx::destroy(g_u_pack5);
             g_u_pack5 = BGFX_INVALID_HANDLE;
         }
+        if(bgfx::isValid(g_u_pack6))
+        {
+            bgfx::destroy(g_u_pack6);
+            g_u_pack6 = BGFX_INVALID_HANDLE;
+        }
+        if(bgfx::isValid(g_u_pack7))
+        {
+            bgfx::destroy(g_u_pack7);
+            g_u_pack7 = BGFX_INVALID_HANDLE;
+        }
         if(bgfx::isValid(g_u_local_to_world))
         {
             bgfx::destroy(g_u_local_to_world);
@@ -1723,7 +1842,8 @@ struct particle_system_soa
         g_default_sim_backend = particle_sim_backend::cpu;
         bgfx::destroy(tex_color_);
         bgfx::destroy(view_camera_);
-        bgfx::destroy(eye_pos_);
+        bgfx::destroy(scene_depth_);
+        bgfx::destroy(particle_params_);
         bgfx::destroy(quad_vbh_);
         bgfx::destroy(quad_ibh_);
         bx::destroyHandleAlloc(allocator_, emitter_alloc_);
@@ -1754,6 +1874,8 @@ struct particle_system_soa
         g_u_pack3 = bgfx::createUniform("u_pack3", bgfx::UniformType::Vec4);
         g_u_pack4 = bgfx::createUniform("u_pack4", bgfx::UniformType::Vec4);
         g_u_pack5 = bgfx::createUniform("u_pack5", bgfx::UniformType::Vec4);
+        g_u_pack6 = bgfx::createUniform("u_pack6", bgfx::UniformType::Vec4);
+        g_u_pack7 = bgfx::createUniform("u_pack7", bgfx::UniformType::Vec4);
         g_u_local_to_world = bgfx::createUniform("u_localToWorld", bgfx::UniformType::Mat4);
         g_u_emitter_quat = bgfx::createUniform("u_emitterQuat", bgfx::UniformType::Vec4);
         g_u_spawn0 = bgfx::createUniform("u_spawn0", bgfx::UniformType::Vec4);
@@ -1908,6 +2030,11 @@ struct particle_system_soa
                           c.color_by_speed_velocity_range.min,
                           em.gpu_.sim_dt,
                           0.0f};
+        float pack6[4] = {c.rotation.min, c.rotation.max, c.rotation_speed.min, c.rotation_speed.max};
+        float pack7[4] = {c.random_rotation_direction ? 1.0f : 0.0f,
+                          c.soft_fade_distance,
+                          c.frame_blending ? 1.0f : 0.0f,
+                          0.0f};
         if(!g_compact_pack_program->begin())
         {
             return false;
@@ -1924,6 +2051,8 @@ struct particle_system_soa
         bgfx::setUniform(g_u_pack3, pack3);
         bgfx::setUniform(g_u_pack4, pack4);
         bgfx::setUniform(g_u_pack5, pack5);
+        bgfx::setUniform(g_u_pack6, pack6);
+        bgfx::setUniform(g_u_pack7, pack7);
         bgfx::setUniform(g_u_local_to_world, &c.local_to_world[0][0]);
         // xyzw matching VS pack (imaginary + real); w kept >= 0 in bake_constants.
         const float emitter_quat[4] = {c.emitter_rotation.x,
@@ -2013,7 +2142,6 @@ struct particle_system_soa
                           bgfx::ViewId view,
                           bgfx::ProgramHandle program,
                           const float* view_camera,
-                          const float* eye_pos_vec4,
                           bgfx::TextureHandle texture,
                           uint64_t blend_state,
                           bool use_sorted_instances) -> uint32_t
@@ -2036,8 +2164,8 @@ struct particle_system_soa
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
                        blend_state);
         bgfx::setTexture(0, tex_color_, texture);
+        bind_scene_depth();
         bgfx::setUniform(view_camera_, view_camera);
-        bgfx::setUniform(eye_pos_, eye_pos_vec4);
         bgfx::setInstanceDataBuffer(instance_handle, 0, draw_count);
         bgfx::submit(view, program);
         return draw_count;
@@ -2214,6 +2342,21 @@ struct particle_system_soa
         facing[1] = em.cached_constants_.emitter_rotation.x;
         facing[2] = em.cached_constants_.emitter_rotation.y;
         facing[3] = em.cached_constants_.emitter_rotation.z;
+        // i_data6 = angle, soft fade distance, frame blend; i_data7.xy = the next frame's uv offset.
+        const auto& constants = em.cached_constants_;
+        const float seed = p.texsheet_seed[particle_idx];
+        const float life = p.life[particle_idx];
+        const sheet_frame_blend blend = compute_sheet_frame_blend(constants, life, seed);
+        float* extra = reinterpret_cast<float*>(row + 96);
+        extra[0] = compute_particle_angle(constants, life, p.lifespan[particle_idx], seed);
+        extra[1] = constants.soft_fade_distance;
+        extra[2] = blend.amount;
+        extra[3] = 0.0f;
+        float* next_uv = reinterpret_cast<float*>(row + 112);
+        next_uv[0] = blend.next_offset.x;
+        next_uv[1] = blend.next_offset.y;
+        next_uv[2] = 0.0f;
+        next_uv[3] = 0.0f;
     }
 
     auto build_prefixes(const emitter_handle* handles, uint32_t count) -> uint32_t
@@ -2416,7 +2559,6 @@ struct particle_system_soa
                           bgfx::ViewId view,
                           bgfx::ProgramHandle program,
                           const float* view_camera,
-                          const float* eye_pos_vec4,
                           const math::vec3& eye,
                           bgfx::TextureHandle texture,
                           uint64_t blend_state,
@@ -2436,8 +2578,8 @@ struct particle_system_soa
         bgfx::setState(0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW |
                        blend_state);
         bgfx::setTexture(0, tex_color_, texture);
+        bind_scene_depth();
         bgfx::setUniform(view_camera_, view_camera);
-        bgfx::setUniform(eye_pos_, eye_pos_vec4);
         const auto write_chunk = [&](uint8_t* data, uint32_t start, uint32_t chunk_count)
         {
             if(sort_by_depth)
@@ -2513,7 +2655,6 @@ struct particle_system_soa
         view_camera[13] = 0.0f;
         view_camera[14] = 0.0f;
         view_camera[15] = 1.0f;
-        float eye_pos_vec4[4] = {eye.x, eye.y, eye.z, 0.0f};
         gpu_emitters_scratch_.clear();
         cpu_handles_scratch_.clear();
         for(uint32_t i = 0; i < count; ++i)
@@ -2547,7 +2688,6 @@ struct particle_system_soa
                                         view,
                                         program,
                                         view_camera,
-                                        eye_pos_vec4,
                                         eye,
                                         texture,
                                         blend_state,
@@ -2566,7 +2706,7 @@ struct particle_system_soa
                     use_sorted = dispatch_gpu_depth_sort(em, eye, view);
                 }
                 rendered +=
-                    draw_gpu_emitter(em, view, program, view_camera, eye_pos_vec4, texture, blend_state, use_sorted);
+                    draw_gpu_emitter(em, view, program, view_camera, texture, blend_state, use_sorted);
             }
         }
         return rendered;
@@ -2584,7 +2724,9 @@ struct particle_system_soa
     bgfx::IndexBufferHandle quad_ibh_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle tex_color_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle view_camera_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle eye_pos_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle scene_depth_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle particle_params_ = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle scene_depth_texture_ = BGFX_INVALID_HANDLE;
 };
 
 particle_system_soa g_system;
@@ -2690,6 +2832,11 @@ void get_aabb(emitter_handle handle, math::bbox& out_aabb)
 auto get_num_particles(emitter_handle handle) -> uint32_t
 {
     return g_system.get_num_particles(handle);
+}
+
+void set_scene_depth(bgfx::TextureHandle depth)
+{
+    g_system.set_scene_depth(depth);
 }
 
 auto render_emitter_batch(const emitter_handle* handles,

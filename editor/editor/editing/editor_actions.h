@@ -22,6 +22,7 @@ namespace unravel
 {
 
 struct editing_action_t;
+struct asset_meta;
 
 struct play_state_info
 {
@@ -31,6 +32,7 @@ struct play_state_info
     bool is_splash{false};
     bool is_simulation_running{false};
     uint64_t frames_running{0};
+    uint64_t frames_simulated{0};
 };
 
 struct selection_info
@@ -192,6 +194,9 @@ struct editor_actions
 
     static void recompile_shaders(const std::string& group = "");
     static void recompile_textures(const std::string& group = "");
+    /// Writes an asset's import settings (@p meta, the asset database's entry) to the .meta file beside
+    /// the asset @p key names; the asset watcher then imports the asset again with them.
+    static auto save_import_settings(const std::string& key, const asset_meta& meta) -> bool;
     /// One-time migration: tags textures referenced by material slots with their
     /// authored color space (base color/emissive = sRGB, data maps = linear) and
     /// recompiles the changed ones. Metas with an explicit (non-automatic) color

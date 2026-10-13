@@ -263,7 +263,7 @@ namespace Unravel.Core
         /// <summary>
         /// Plays a one-shot audio clip at the specified position with a specified volume.
         /// </summary>
-        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, Vector3, float, float, AudioBus)"/>
+        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, Vector3, float, float, AudioBus, int)"/>
         /// plays without one.</remarks>
         /// <param name="clip">The audio clip to play.</param>
         /// <param name="position">The world position where the audio will be played.</param>
@@ -286,7 +286,7 @@ namespace Unravel.Core
         /// <summary>
         /// Plays a one-shot audio clip as a 2D audio source.
         /// </summary>
-        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, float, float, AudioBus)"/>
+        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, float, float, AudioBus, int)"/>
         /// plays without one.</remarks>
         /// <param name="clip">The audio clip to play.</param>
         /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>

@@ -9,6 +9,80 @@
 namespace unravel::mcp
 {
 
+namespace
+{
+
+/// Walks @p value along @p schema and reports every object key the schema does not declare.
+void collect_unknown_arguments(const simdjson::dom::element& schema,
+                               const simdjson::dom::element& value,
+                               const std::string& path,
+                               std::vector<std::string>& out)
+{
+    simdjson::dom::object schema_object;
+    if(schema.get(schema_object))
+    {
+        return;
+    }
+    simdjson::dom::object properties;
+    simdjson::dom::object value_object;
+    if(!schema_object["properties"].get(properties) && !value.get(value_object))
+    {
+        bool closed = true;
+        simdjson::dom::element additional;
+        if(!schema_object["additionalProperties"].get(additional))
+        {
+            bool allowed = true;
+            closed = !additional.get(allowed) && !allowed;
+        }
+        std::string accepted;
+        for(auto property : properties)
+        {
+            accepted += (accepted.empty() ? "" : ", ") + std::string(property.key);
+        }
+        for(auto field : value_object)
+        {
+            const std::string field_path = (path.empty() ? "" : path + ".") + std::string(field.key);
+            simdjson::dom::element field_schema;
+            if(!properties[field.key].get(field_schema))
+            {
+                collect_unknown_arguments(field_schema, field.value, field_path, out);
+            }
+            else if(closed)
+            {
+                auto message = fmt::format("Unknown argument {} was ignored (accepted here: {})", field_path, accepted);
+                if(std::find(out.begin(), out.end(), message) == out.end())
+                {
+                    out.push_back(std::move(message));
+                }
+            }
+        }
+        return;
+    }
+    simdjson::dom::element items;
+    simdjson::dom::array value_array;
+    if(!schema_object["items"].get(items) && !value.get(value_array))
+    {
+        for(auto element : value_array)
+        {
+            collect_unknown_arguments(items, element, path + "[]", out);
+        }
+    }
+}
+
+} // namespace
+
+auto find_unknown_arguments(const mcp_tool& tool, const simdjson::dom::element& args) -> std::vector<std::string>
+{
+    std::vector<std::string> unknown;
+    simdjson::dom::parser parser;
+    simdjson::dom::element schema;
+    if(!parser.parse(tool.input_schema_json).get(schema))
+    {
+        collect_unknown_arguments(schema, args, {}, unknown);
+    }
+    return unknown;
+}
+
 auto to_string(mcp_profile profile) -> const char*
 {
     return profile == mcp_profile::developer ? "developer" : "user";

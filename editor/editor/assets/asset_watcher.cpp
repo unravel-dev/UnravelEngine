@@ -633,10 +633,12 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         {
             asset_meta meta;
             fs::error_code err;
-            if(fs::exists(synced_path, err))
+            const bool has_meta_file = fs::exists(synced_path, err);
+            if(has_meta_file)
             {
                 load_from_file(synced_path.string(), meta);
             }
+            const auto loaded_uid = meta.uid;
 
             bool recreate_meta_file = false;
             {
@@ -672,12 +674,14 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
             }
             meta.uid = am.add_asset_info_for_path(ref_path, meta, true);
 
-            // asset_writer::atomic_write_file(synced_path.string(), [&](const fs::path& temp) -> void
-            // {
-            //     save_to_file(temp.string(), meta);
-            // }, err);
-
-            save_to_file(synced_path.string(), meta);
+            // Writing the .meta is what recompiles the asset (the compiled-asset syncer watches it), so
+            // a changed source always rewrites it. The first listing writes only what is missing or
+            // changed: rewriting every unchanged .meta would recompile the whole project on every open.
+            const bool is_meta_changed = !has_meta_file || recreate_meta_file || meta.uid != loaded_uid;
+            if(!is_initial_listing || is_meta_changed)
+            {
+                save_to_file(synced_path.string(), meta);
+            }
         }
     };
 

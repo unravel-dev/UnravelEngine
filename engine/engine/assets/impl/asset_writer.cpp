@@ -570,12 +570,21 @@ private:
 auto make_temp_path(const fs::path& dir, fs::path& out, fs::error_code& ec) noexcept -> bool
 {
     ec.clear();
+    // Every failure sets ec: the writers report success when it stays clear.
     if(!fs::exists(dir, ec) || ec)
     {
+        if(!ec)
+        {
+            ec = std::make_error_code(std::errc::no_such_file_or_directory);
+        }
         return false;
     }
     if(!fs::is_directory(dir, ec) || ec)
     {
+        if(!ec)
+        {
+            ec = std::make_error_code(std::errc::not_a_directory);
+        }
         return false;
     }
 

@@ -339,6 +339,14 @@ void accumulate_obb_local(math::bbox& local_bounds, entt::handle entity, const m
         }
     }
 
+    if(auto* ui = entity.try_get<ui_document_component>(); ui && ui->render_mode == ui_render_mode::world_space)
+    {
+        for(const auto& corner : ui->get_bounds().get_corners())
+        {
+            local_bounds.add_point(to_root.transform_coord(corner));
+        }
+    }
+
     if(depth != 0)
     {
         for(auto child : tc.get_children())
@@ -581,6 +589,15 @@ void calc_bounds_global_impl(math::bbox& bounds, entt::handle entity, int depth)
         for(const auto& corner : b.get_corners())
         {
             bounds.add_point(corner);
+        }
+    }
+
+    // A screen-space document has no place in the world; a world-space one is a quad at the entity.
+    if(auto* ui = entity.try_get<ui_document_component>(); ui && ui->render_mode == ui_render_mode::world_space)
+    {
+        for(const auto& corner : ui->get_bounds().get_corners())
+        {
+            bounds.add_point(world_xform.transform_coord(corner));
         }
     }
 
@@ -896,10 +913,27 @@ void defaults::focus_camera_on_bounds(entt::handle camera, const math::bbox& bou
     const float radius = math::length(bounds.get_dimensions()) / 2.0f;
     run_camera_focus_transition(camera, center, radius, /*keep_rotation=*/true, duration);
 }
+namespace
+{
+auto get_embedded_mesh_key(const std::string& name) -> std::string
+{
+    return "engine:/embedded/" + string_utils::replace(string_utils::to_lower(name), " ", "_");
+}
+} // namespace
+
+auto defaults::has_embedded_mesh(rtti::context& ctx, const std::string& name) -> bool
+{
+    return static_cast<bool>(ctx.get_cached<asset_manager>().find_asset<mesh>(get_embedded_mesh_key(name)));
+}
+
 auto defaults::create_embedded_mesh_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle
 {
+    if(!has_embedded_mesh(ctx, name))
+    {
+        return {};
+    }
     auto& am = ctx.get_cached<asset_manager>();
-    const auto id = "engine:/embedded/" + string_utils::replace(string_utils::to_lower(name), " ", "_");
+    const auto id = get_embedded_mesh_key(name);
     auto asset = am.get_asset<mesh>(id);
     auto mesh_asset = asset.get();
     auto bounds = mesh_asset->get_bounds();

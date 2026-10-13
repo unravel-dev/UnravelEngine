@@ -93,7 +93,7 @@ REFLECT(audio_source_component)
             entt::attribute{"pretty_name", "Pitch"},
             entt::attribute{"tooltip", "A multiplier for the frequency (sample rate) of the source's buffer."},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 5.0f},
+            entt::attribute{"max", audio_max_pitch},
         })
         .data<&audio_source_component::set_volume_rolloff, &audio_source_component::get_volume_rolloff>("volume_rolloff"_hs)
         .custom<entt::attributes>(entt::attributes{

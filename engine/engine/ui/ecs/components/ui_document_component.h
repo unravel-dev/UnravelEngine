@@ -76,11 +76,18 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
 
     auto get_world_space_scale() const -> math::vec2;
 
-        /**
-     * @brief Gets the bounding box of the document
-     * @return The bounding box in local space
+    /**
+     * @brief The world transform of the quad a world-space document is drawn on: @p entity_world
+     * scaled to the document's size in world units. The quad spans -0.5..0.5 in its local x and y,
+     * with document pixel (0, 0) at local (-0.5, 0.5).
      */
-     auto get_bounds() const -> math::bbox;
+    auto get_world_space_quad(const math::transform& entity_world) const -> math::transform;
+
+    /**
+     * @brief The quad a world-space document is drawn on, in the entity's local space: centred on the
+     * entity, the document's size in world units in x and y, flat in z.
+     */
+    auto get_bounds() const -> math::bbox;
     /**
      * @brief Check if document is currently loaded
      * @return True if document is loaded and valid
