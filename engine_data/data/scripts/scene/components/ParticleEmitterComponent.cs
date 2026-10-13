@@ -180,7 +180,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Start size; the end size keeps the scale gradient's end to start ratio.
+        /// Size at birth: the scale gradient is scaled to start at it, or to peak at it when the
+        /// gradient starts at 0.
         /// </summary>
         public float size
         {
@@ -769,8 +770,9 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Particle size, random between min and max at time 0 (birth) and at time 1 (death), with
-        /// the size interpolated in between.
+        /// Particle size over its lifetime, random between the min and max curves; every key counts,
+        /// so a size can pop in, or grow then shrink. A particle picks its place between min and max
+        /// at birth and at death and drifts from one to the other.
         /// </summary>
         public MinMaxCurve scaleGradient
         {

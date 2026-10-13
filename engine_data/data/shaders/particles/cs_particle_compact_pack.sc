@@ -12,7 +12,8 @@ BUFFER_WO(s_instances, vec4, 1);
 BUFFER_RO(s_live_slots, uint, 2);
 BUFFER_RO(s_color_lut, vec4, 3);
 BUFFER_RO(s_color_speed_lut, vec4, 4);
-BUFFER_RO(s_ease_lut, vec4, 5);
+// Curves read at a particle's life: x = position easing, y/z = size range (min, max).
+BUFFER_RO(s_lifetime_lut, vec4, 5);
 
 uniform vec4 u_pack0;
 uniform vec4 u_pack1;
@@ -22,7 +23,8 @@ uniform vec4 u_pack4;
 uniform vec4 u_pack5;
 // Rotation range and rotation speed range, radians and radians per second.
 uniform vec4 u_pack6;
-// x = random rotation direction, y = soft fade distance, z = frame blending.
+// x = random rotation direction, y = soft fade distance, z = frame blending, w = size range width
+// at death.
 uniform vec4 u_pack7;
 uniform mat4 u_localToWorld;
 // Emitter world rotation (xyzw). w >= 0 so VS can recover from xyz alone in i_data5.
@@ -46,11 +48,13 @@ uniform vec4 u_emitterQuat;
 #define u_inv_color_span    u_pack5.x
 #define u_color_speed_min   u_pack5.y
 #define u_dt                u_pack5.z
+#define u_scale_width_start u_pack5.w
 #define u_rotation          u_pack6.xy
 #define u_rotation_speed    u_pack6.zw
 #define u_random_spin_dir   u_pack7.x
 #define u_soft_fade         u_pack7.y
 #define u_frame_blending    u_pack7.z
+#define u_scale_width_end   u_pack7.w
 
 #define FEAT_ALIGN      1u
 #define FEAT_TEXSHEET   2u
@@ -79,14 +83,25 @@ vec4 sample_color_speed_lut(float t)
     return mix(s_color_speed_lut[i0], s_color_speed_lut[i1], f);
 }
 
-float sample_ease(float t)
+vec4 sample_lifetime_lut(float t)
 {
     float u = clamp(t, 0.0, 1.0);
     float idx_f = u * 255.0;
     uint i0 = uint(idx_f);
     uint i1 = min(i0 + 1u, 255u);
     float f = fract(idx_f);
-    return mix(s_ease_lut[i0].x, s_ease_lut[i1].x, f);
+    return mix(s_lifetime_lut[i0], s_lifetime_lut[i1], f);
+}
+
+/// How far a particle's place in the size range has moved from its birth pick toward its death
+/// pick, weighted by the range widths so that two linear keys give mix(start size, end size, life).
+/// Matches get_scale_pick_blend on the CPU.
+float get_scale_pick_blend(float life)
+{
+    float start_weight = (1.0 - life) * u_scale_width_start;
+    float end_weight = life * u_scale_width_end;
+    float total_weight = start_weight + end_weight;
+    return total_weight > 1e-6 ? end_weight / total_weight : life;
 }
 
 vec4 quat_look_rotation(vec3 direction)
@@ -171,17 +186,21 @@ void main()
     vec3 start = s0.xyz;
     vec3 end0 = s1.xyz;
     vec3 end1 = s2.xyz;
-    float scale_start = s2.w;
-    float scale_end = s3.x;
+    // The particle's places in the size range at birth and death, and a burst's size override.
+    float scale_pick_start = s2.w;
+    float scale_pick_end = s3.x;
     float texsheet_seed = s3.y;
+    float scale_factor = s3.z;
+    float scale_offset = s3.w;
     // Linear tint from a burst's color override (1 otherwise).
     vec4 tint = s4;
     vec4 rotation = vec4(0.0, 0.0, 0.0, 1.0);
 
+    vec4 lifetime_curves = sample_lifetime_lut(life);
     float tt = life;
     if((u_features & FEAT_EASE) != 0u)
     {
-        tt = sample_ease(life);
+        tt = lifetime_curves.x;
     }
 
     bool need_speed = ((u_features & (FEAT_COLOR_SPD | FEAT_SIZE_SPD | FEAT_ALIGN)) != 0u);
@@ -214,7 +233,8 @@ void main()
     color.a *= u_opacity;
     color.rgb *= u_color_intensity;
 
-    float scale = mix(scale_start, scale_end, life) * u_avg_scale;
+    float scale_place = mix(scale_pick_start, scale_pick_end, get_scale_pick_blend(life));
+    float scale = (mix(lifetime_curves.y, lifetime_curves.z, scale_place) * scale_factor + scale_offset) * u_avg_scale;
     if((u_features & FEAT_SIZE_SPD) != 0u)
     {
         float speed_factor = clamp((particle_speed - u_size_speed_min) * u_inv_size_span, 0.0, 1.0);

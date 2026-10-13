@@ -114,12 +114,9 @@ struct emitter_gpu_resources
     bool pending_pack = false;
     particle_sim_backend backend_override = particle_sim_backend::gpu;
     bool has_backend_override = false;
-    bool luts_valid = false;
     bool luts_gpu_dirty = true;
     bool cached_need_color_speed = false;
-    bool cached_need_ease = false;
     emitter_feature cached_features = emitter_feature::none;
-    bx::EaseFn cached_ease_pos = nullptr;
     uint32_t gpu_capacity = 0;
     float sim_dt = 0.0f;
     bgfx::DynamicVertexBufferHandle sim_vb = BGFX_INVALID_HANDLE;
@@ -136,7 +133,8 @@ struct emitter_gpu_resources
     bgfx::DynamicIndexBufferHandle live_slots_ib = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_speed_lut_vb = BGFX_INVALID_HANDLE;
-    bgfx::DynamicVertexBufferHandle ease_lut_vb = BGFX_INVALID_HANDLE;
+    /// Curves read at a particle's life: x = position easing, y/z = size range (min, max).
+    bgfx::DynamicVertexBufferHandle lifetime_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle spawn_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicIndexBufferHandle spawn_slots_ib = BGFX_INVALID_HANDLE;
     uint32_t spawn_upload_capacity = 0;
@@ -146,7 +144,7 @@ struct emitter_gpu_resources
     std::vector<uint32_t> spawn_slots;
     std::vector<math::vec4> color_lut;
     std::vector<math::vec4> color_speed_lut;
-    std::vector<math::vec4> ease_lut;
+    std::vector<math::vec4> lifetime_lut;
     emitter_sim_constants constants{};
 
     void destroy_buffers()
@@ -192,10 +190,10 @@ struct emitter_gpu_resources
             bgfx::destroy(color_speed_lut_vb);
             color_speed_lut_vb = BGFX_INVALID_HANDLE;
         }
-        if(bgfx::isValid(ease_lut_vb))
+        if(bgfx::isValid(lifetime_lut_vb))
         {
-            bgfx::destroy(ease_lut_vb);
-            ease_lut_vb = BGFX_INVALID_HANDLE;
+            bgfx::destroy(lifetime_lut_vb);
+            lifetime_lut_vb = BGFX_INVALID_HANDLE;
         }
         if(bgfx::isValid(spawn_vb))
         {
@@ -293,7 +291,7 @@ struct emitter_gpu_resources
         live_slots_ib = bgfx::createDynamicIndexBuffer(max_particles, live_slot_flags);
         color_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
         color_speed_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
-        ease_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
+        lifetime_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
         // sim_vb needs no clear: the pack reads only listed slots, and a slot is listed only
         // after the spawn scatter has written it.
         reset_freelist(max_particles);
@@ -390,8 +388,7 @@ struct particle_soa
     std::vector<math::vec3> start;
     std::vector<math::vec3> end0;
     std::vector<math::vec3> end1;
-    std::vector<float> scale_start;
-    std::vector<float> scale_end;
+    std::vector<particle_scale_pick> scale_pick;
     std::vector<float> life;
     std::vector<float> lifespan;
     std::vector<float> texsheet_seed;
@@ -414,8 +411,7 @@ struct particle_soa
         start.resize(max_particles);
         end0.resize(max_particles);
         end1.resize(max_particles);
-        scale_start.resize(max_particles);
-        scale_end.resize(max_particles);
+        scale_pick.resize(max_particles);
         life.resize(max_particles);
         lifespan.resize(max_particles);
         texsheet_seed.resize(max_particles);
@@ -440,8 +436,7 @@ struct particle_soa
         start[dst] = start[src];
         end0[dst] = end0[src];
         end1[dst] = end1[src];
-        scale_start[dst] = scale_start[src];
-        scale_end[dst] = scale_end[src];
+        scale_pick[dst] = scale_pick[src];
         life[dst] = life[src];
         lifespan[dst] = lifespan[src];
         texsheet_seed[dst] = texsheet_seed[src];
@@ -466,6 +461,8 @@ void bake_constants(const emitter_desc& desc,
     out_constants.opacity = desc.appearance.opacity;
     out_constants.color_intensity = desc.appearance.color_intensity;
     out_constants.avg_system_scale = (scale.x + scale.y + scale.z) / 3.0f;
+    out_constants.scale_widths = get_scale_curve_widths(desc.appearance.scale_gradient);
+    out_constants.scale_peak = get_scale_curve_peak(desc.appearance.scale_gradient);
     out_constants.particle_scale_3d = desc.appearance.initial_scale_3d;
     out_constants.pivot = desc.render.pivot;
     out_constants.render_mode = desc.render.render_mode;
@@ -587,7 +584,8 @@ void update_particle_basic(particle_soa& particles,
     sampled_color.value.b *= constants.color_intensity;
     particles.color[index] = sampled_color;
     particles.scale[index] =
-        math::mix(particles.scale_start[index], particles.scale_end[index], life) * constants.avg_system_scale;
+        sample_particle_scale(desc.appearance.scale_gradient, constants.scale_widths, particles.scale_pick[index], life) *
+        constants.avg_system_scale;
     const math::vec3 p0 = math::mix(particles.start[index], particles.end0[index], life);
     const math::vec3 p1 = math::mix(particles.end0[index], particles.end1[index], life);
     particles.position[index] = math::mix(p0, p1, life);
@@ -635,7 +633,9 @@ void update_particle_full(particle_soa& particles,
     sampled_color.value.g *= constants.color_intensity;
     sampled_color.value.b *= constants.color_intensity;
     particles.color[index] = sampled_color;
-    float scale = math::mix(particles.scale_start[index], particles.scale_end[index], life) * constants.avg_system_scale;
+    float scale =
+        sample_particle_scale(desc.appearance.scale_gradient, constants.scale_widths, particles.scale_pick[index], life) *
+        constants.avg_system_scale;
     if(has_feature(constants.features, emitter_feature::size_by_speed))
     {
         const float speed_factor = math::clamp(
@@ -779,7 +779,6 @@ struct emitter
         }
         rng_.reset();
         gpu_.pending_pack = false;
-        gpu_.luts_valid = false;
         gpu_.active_slots.clear();
         gpu_.spawn_particles.clear();
         gpu_.spawn_slots.clear();
@@ -837,32 +836,24 @@ struct emitter
         {
             gpu_.color_speed_lut.assign(k_gpu_lut_size, math::vec4(1.0f));
         }
-        const bool ease_changed = !gpu_.luts_valid || gpu_.cached_ease_pos != constants.ease_pos ||
-                                  gpu_.cached_need_ease != need_ease;
-        if(ease_changed)
+        // The size curve changes as freely as the color gradient, so it is resampled the same way.
+        gpu_.lifetime_lut.resize(k_gpu_lut_size);
+        for(uint32_t i = 0; i < k_gpu_lut_size; ++i)
         {
-            gpu_.ease_lut.resize(k_gpu_lut_size);
-            for(uint32_t i = 0; i < k_gpu_lut_size; ++i)
-            {
-                const float t = float(i) / float(k_gpu_lut_size - 1);
-                const float eased = (need_ease && constants.ease_pos) ? constants.ease_pos(t) : t;
-                gpu_.ease_lut[i] = math::vec4(eased, 0.0f, 0.0f, 0.0f);
-            }
+            const float t = float(i) / float(k_gpu_lut_size - 1);
+            const float eased = (need_ease && constants.ease_pos) ? constants.ease_pos(t) : t;
+            const frange_t scale_range = desc.appearance.scale_gradient.sample(t);
+            gpu_.lifetime_lut[i] = math::vec4(eased, scale_range.min, scale_range.max, 0.0f);
         }
-        gpu_.cached_ease_pos = constants.ease_pos;
         gpu_.cached_need_color_speed = need_color_speed;
-        gpu_.cached_need_ease = need_ease;
         gpu_.cached_features = constants.features;
-        gpu_.luts_valid = true;
         gpu_.luts_gpu_dirty = true;
     }
 
-    auto compute_gpu_particle_radius(const emitter_desc& desc, const emitter_sim_constants& constants) const -> float
+    auto compute_gpu_particle_radius(const emitter_sim_constants& constants) const -> float
     {
-        const frange_t start_scale_range = desc.appearance.scale_gradient.sample(0.0f);
-        const frange_t end_scale_range = desc.appearance.scale_gradient.sample(1.0f);
-        const float max_author_scale = math::max(math::max(start_scale_range.min, start_scale_range.max),
-                                                 math::max(end_scale_range.min, end_scale_range.max));
+        // The peak, not the ends: a curve that grows then shrinks is largest in mid-life.
+        const float max_author_scale = constants.scale_peak;
         float size_speed_mul = 1.0f;
         if(has_feature(constants.features, emitter_feature::size_by_speed))
         {
@@ -915,7 +906,7 @@ struct emitter
         const math::vec3 corner_b = (desc.emission.shape_position + unit.max) * desc.emission.shape_scale;
         const math::vec3 local_min = math::min(corner_a, corner_b);
         const math::vec3 local_max = math::max(corner_a, corner_b);
-        const float particle_radius = compute_gpu_particle_radius(desc, constants);
+        const float particle_radius = compute_gpu_particle_radius(constants);
         for(int corner = 0; corner < 8; ++corner)
         {
             const math::vec3 local((corner & 1) != 0 ? local_max.x : local_min.x,
@@ -926,7 +917,7 @@ struct emitter
         }
     }
 
-    void accumulate_gpu_live_bounds(math::bbox& aabb, const emitter_sim_constants& constants)
+    void accumulate_gpu_live_bounds(math::bbox& aabb, const emitter_desc& desc, const emitter_sim_constants& constants)
     {
         if(gpu_.active_slots.empty())
         {
@@ -953,8 +944,11 @@ struct emitter
                 const math::vec4 wp = constants.local_to_world * math::vec4(world_pos, 1.0f);
                 world_pos = math::vec3(wp.x, wp.y, wp.z);
             }
-            float scale =
-                math::mix(particles_.scale_start[slot], particles_.scale_end[slot], life) * constants.avg_system_scale;
+            float scale = sample_particle_scale(desc.appearance.scale_gradient,
+                                                constants.scale_widths,
+                                                particles_.scale_pick[slot],
+                                                life) *
+                          constants.avg_system_scale;
             if(use_size_speed)
             {
                 const float particle_speed = calculate_particle_speed(particles_.start[slot],
@@ -1034,11 +1028,12 @@ struct emitter
         dst.end1_x = particles_.end1[slot].x;
         dst.end1_y = particles_.end1[slot].y;
         dst.end1_z = particles_.end1[slot].z;
-        dst.scale_start = particles_.scale_start[slot];
-        dst.scale_end = particles_.scale_end[slot];
+        const particle_scale_pick& scale_pick = particles_.scale_pick[slot];
+        dst.scale_pick_start = scale_pick.start;
+        dst.scale_pick_end = scale_pick.end;
         dst.texsheet_seed = particles_.texsheet_seed[slot];
-        dst.pad0 = 0.0f;
-        dst.pad1 = 0.0f;
+        dst.scale_factor = scale_pick.factor;
+        dst.scale_offset = scale_pick.offset;
         const math::vec4& tint = particles_.tint[slot];
         dst.tint_r = tint.r;
         dst.tint_g = tint.g;
@@ -1090,7 +1085,7 @@ struct emitter
         // region new ones appear in. update_bounds_only() unions the same two while frozen, so an
         // emitter cannot flip in and out of a camera as it freezes and wakes.
         aabb.reset();
-        accumulate_gpu_live_bounds(aabb, constants);
+        accumulate_gpu_live_bounds(aabb, desc, constants);
         sim.particle_bounds = aabb;
         accumulate_spawn_region_bounds(aabb, desc, constants);
         gpu_.pending_pack = particles_.count > 0;
@@ -1619,17 +1614,14 @@ struct emitter
                 particles_.end0[index] = particles_.start[index] + velocity * velocity_damping_factor;
             }
             particles_.end1[index] = particles_.end0[index] + motion_offset;
-            const frange_t start_scale_range = desc.appearance.scale_gradient.sample(0.0f);
-            const frange_t end_scale_range = desc.appearance.scale_gradient.sample(1.0f);
-            float scale_start = math::mix(start_scale_range.min, start_scale_range.max, frand01(rng));
-            float scale_end = math::mix(end_scale_range.min, end_scale_range.max, frand01(rng));
+            particle_scale_pick scale_pick;
+            scale_pick.start = frand01(rng);
+            scale_pick.end = frand01(rng);
             if(has_override(emit_params::size_flag))
             {
-                scale_end = scale_start > 0.0f ? burst->size * (scale_end / scale_start) : burst->size;
-                scale_start = burst->size;
+                fit_scale_pick_to_size(desc.appearance.scale_gradient, constants.scale_widths, burst->size, scale_pick);
             }
-            particles_.scale_start[index] = scale_start;
-            particles_.scale_end[index] = scale_end;
+            particles_.scale_pick[index] = scale_pick;
             math::vec4 tint(1.0f);
             if(has_override(emit_params::color_flag))
             {
@@ -1999,9 +1991,9 @@ struct particle_system_soa
             bgfx::update(em.gpu_.color_speed_lut_vb,
                          0,
                          bgfx::copy(em.gpu_.color_speed_lut.data(), uint32_t(sizeof(math::vec4) * k_gpu_lut_size)));
-            bgfx::update(em.gpu_.ease_lut_vb,
+            bgfx::update(em.gpu_.lifetime_lut_vb,
                          0,
-                         bgfx::copy(em.gpu_.ease_lut.data(), uint32_t(sizeof(math::vec4) * k_gpu_lut_size)));
+                         bgfx::copy(em.gpu_.lifetime_lut.data(), uint32_t(sizeof(math::vec4) * k_gpu_lut_size)));
             em.gpu_.luts_gpu_dirty = false;
         }
         // The pack writes instance row i for live_slots[i], so the rows match particles_.count
@@ -2029,12 +2021,12 @@ struct particle_system_soa
         float pack5[4] = {c.inv_color_by_speed_velocity_span,
                           c.color_by_speed_velocity_range.min,
                           em.gpu_.sim_dt,
-                          0.0f};
+                          c.scale_widths.start};
         float pack6[4] = {c.rotation.min, c.rotation.max, c.rotation_speed.min, c.rotation_speed.max};
         float pack7[4] = {c.random_rotation_direction ? 1.0f : 0.0f,
                           c.soft_fade_distance,
                           c.frame_blending ? 1.0f : 0.0f,
-                          0.0f};
+                          c.scale_widths.end};
         if(!g_compact_pack_program->begin())
         {
             return false;
@@ -2044,7 +2036,7 @@ struct particle_system_soa
         bgfx::setBuffer(2, em.gpu_.live_slots_ib, bgfx::Access::Read);
         bgfx::setBuffer(3, em.gpu_.color_lut_vb, bgfx::Access::Read);
         bgfx::setBuffer(4, em.gpu_.color_speed_lut_vb, bgfx::Access::Read);
-        bgfx::setBuffer(5, em.gpu_.ease_lut_vb, bgfx::Access::Read);
+        bgfx::setBuffer(5, em.gpu_.lifetime_lut_vb, bgfx::Access::Read);
         bgfx::setUniform(g_u_pack0, pack0);
         bgfx::setUniform(g_u_pack1, pack1);
         bgfx::setUniform(g_u_pack2, pack2);

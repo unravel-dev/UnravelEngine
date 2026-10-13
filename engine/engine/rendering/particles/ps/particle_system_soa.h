@@ -34,7 +34,8 @@ struct emit_params
     math::vec3 velocity{};
     /// Picker (sRGB) tint multiplied into the color over lifetime.
     math::color color{};
-    /// Start size; the end size keeps the size curve's end to start ratio.
+    /// Size at birth: the size curve is scaled to start at it, or to peak at it when the curve
+    /// starts at 0.
     float size = 1.0f;
     /// Lifetime in seconds.
     float lifetime = 1.0f;

@@ -9,18 +9,23 @@
  * particle holds one tile (the first, or a random one with randomize) rather than showing the whole sheet.
  * Pins prewarm: a looping emitter that prewarms starts with one particle lifetime of emission alive, the
  * first time it plays after it is created or reset. Pins auto play: it decides whether an emitter
- * plays only until the emitter's first frame.
+ * plays only until the emitter's first frame. Pins the size curve: every key counts, a curve with two
+ * keys gives exactly the linear blend between the birth and death sizes, and a burst's size scales
+ * the curve.
  */
 
 #include "../tests.h"
 
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/particles/ps/emitter_desc.h>
+#include <engine/rendering/particles/ps/particle_scale_curve.h>
 #include <engine/rendering/particles/ps/particle_system_soa.h>
 #include <graphics/graphics.h>
 
 #include <cstdio>
 #include <string>
+#include <utility>
+#include <vector>
 
 using namespace unravel;
 
@@ -132,11 +137,107 @@ void test_auto_play()
     particle_emitter_component::on_destroy_component(registry, entity);
 }
 
+/// Largest difference between two sizes that still counts as the same size.
+constexpr float k_size_tolerance = 1.0e-5f;
+
+auto make_size_curve(const std::vector<std::pair<float, frange_t>>& keys) -> math::gradient<frange_t>
+{
+    math::gradient<frange_t> curve;
+    for(const auto& key : keys)
+    {
+        curve.add_point(key.second, key.first);
+    }
+    return curve;
+}
+
+auto is_same_size(float actual, float expected) -> bool
+{
+    return math::abs(actual - expected) <= k_size_tolerance;
+}
+
+auto get_size_at(const math::gradient<frange_t>& curve, const ps_soa::particle_scale_pick& pick, float life) -> float
+{
+    return ps_soa::sample_particle_scale(curve, ps_soa::get_scale_curve_widths(curve), pick, life);
+}
+
+auto make_pick(float start, float end) -> ps_soa::particle_scale_pick
+{
+    ps_soa::particle_scale_pick pick;
+    pick.start = start;
+    pick.end = end;
+    return pick;
+}
+
+void test_two_key_size_is_linear()
+{
+    // The range is wider at death than at birth, so the drift between the two picks is weighted.
+    const auto curve = make_size_curve({{0.0f, frange_t(0.1f, 0.2f)}, {1.0f, frange_t(0.3f, 0.7f)}});
+    bool is_linear = true;
+    for(float start_pick : {0.0f, 0.3f, 0.9f})
+    {
+        for(float end_pick : {0.1f, 0.6f, 1.0f})
+        {
+            for(float life : {0.0f, 0.2f, 0.5f, 0.85f, 1.0f})
+            {
+                const float birth_size = math::mix(0.1f, 0.2f, start_pick);
+                const float death_size = math::mix(0.3f, 0.7f, end_pick);
+                const float expected = math::mix(birth_size, death_size, life);
+                is_linear = is_linear && is_same_size(get_size_at(curve, make_pick(start_pick, end_pick), life), expected);
+            }
+        }
+    }
+    check(is_linear, "a two-key size curve gives mix(size at birth, size at death, life)");
+}
+
+void test_every_size_key_counts()
+{
+    const auto pick = make_pick(0.0f, 0.0f);
+    const auto pop_in = make_size_curve(
+        {{0.0f, frange_t(0.0f, 0.0f)}, {0.1f, frange_t(1.0f, 1.0f)}, {1.0f, frange_t(1.0f, 1.0f)}});
+    check(is_same_size(get_size_at(pop_in, pick, 0.0f), 0.0f) && is_same_size(get_size_at(pop_in, pick, 0.05f), 0.5f) &&
+              is_same_size(get_size_at(pop_in, pick, 0.1f), 1.0f) && is_same_size(get_size_at(pop_in, pick, 0.6f), 1.0f),
+          "a size pops in: 0 at birth, full at 10% of the life, full to the end");
+    const auto grow_shrink = make_size_curve(
+        {{0.0f, frange_t(0.0f, 0.0f)}, {0.5f, frange_t(2.0f, 2.0f)}, {1.0f, frange_t(0.0f, 0.0f)}});
+    check(is_same_size(get_size_at(grow_shrink, pick, 0.25f), 1.0f) &&
+              is_same_size(get_size_at(grow_shrink, pick, 0.5f), 2.0f) &&
+              is_same_size(get_size_at(grow_shrink, pick, 1.0f), 0.0f),
+          "a size grows then shrinks");
+    check(is_same_size(ps_soa::get_scale_curve_peak(grow_shrink), 2.0f),
+          "culling sizes a grow-then-shrink curve by its mid-life peak, not its ends");
+    const auto ranged = make_size_curve(
+        {{0.0f, frange_t(1.0f, 2.0f)}, {0.5f, frange_t(4.0f, 6.0f)}, {1.0f, frange_t(1.0f, 2.0f)}});
+    check(is_same_size(get_size_at(ranged, make_pick(1.0f, 1.0f), 0.5f), 6.0f),
+          "a particle that picks the max follows the max curve through a middle key");
+}
+
+void test_burst_size_scales_the_curve()
+{
+    const auto growing = make_size_curve({{0.0f, frange_t(1.0f, 1.0f)}, {1.0f, frange_t(3.0f, 3.0f)}});
+    auto pick = make_pick(0.0f, 0.0f);
+    ps_soa::fit_scale_pick_to_size(growing, ps_soa::get_scale_curve_widths(growing), 2.0f, pick);
+    check(is_same_size(get_size_at(growing, pick, 0.0f), 2.0f) && is_same_size(get_size_at(growing, pick, 1.0f), 6.0f),
+          "a burst size starts the curve at that size and keeps its end to start ratio");
+    const auto pop_in = make_size_curve(
+        {{0.0f, frange_t(0.0f, 0.0f)}, {0.1f, frange_t(1.0f, 1.0f)}, {1.0f, frange_t(1.0f, 1.0f)}});
+    pick = make_pick(0.0f, 0.0f);
+    ps_soa::fit_scale_pick_to_size(pop_in, ps_soa::get_scale_curve_widths(pop_in), 2.0f, pick);
+    check(is_same_size(get_size_at(pop_in, pick, 0.0f), 0.0f) && is_same_size(get_size_at(pop_in, pick, 0.6f), 2.0f),
+          "a curve that starts at 0 is scaled to peak at the burst size, keeping its pop-in");
+    const auto zero = make_size_curve({{0.0f, frange_t(0.0f, 0.0f)}, {1.0f, frange_t(0.0f, 0.0f)}});
+    pick = make_pick(0.0f, 0.0f);
+    ps_soa::fit_scale_pick_to_size(zero, ps_soa::get_scale_curve_widths(zero), 2.0f, pick);
+    check(is_same_size(get_size_at(zero, pick, 0.3f), 2.0f), "a curve that is 0 throughout holds the burst size");
+}
+
 auto run_particle_emitter_desc_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
     g_failures = 0;
     test_texture_sheet_feature();
+    test_two_key_size_is_linear();
+    test_every_size_key_counts();
+    test_burst_size_scales_the_curve();
     bgfx::Init init;
     init.type = bgfx::RendererType::Noop;
     if(!gfx::init(init))

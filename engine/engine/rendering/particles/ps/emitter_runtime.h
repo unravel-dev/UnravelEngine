@@ -1,5 +1,6 @@
 #pragma once
 
+#include "particle_scale_curve.h"
 #include "particle_types.h"
 
 #include <bx/easing.h>
@@ -65,6 +66,10 @@ struct emitter_sim_constants
     float opacity = 1.0f;
     float color_intensity = 1.0f;
     float avg_system_scale = 1.0f;
+    /// Size range widths at birth and death, which weigh each particle's drift between its picks.
+    scale_curve_widths scale_widths{};
+    /// Largest size the size curve reaches over a life, before the system scale.
+    float scale_peak = 0.0f;
     math::vec3 particle_scale_3d{1.0f, 1.0f, 1.0f};
     math::vec2 pivot{0.5f, 0.5f};
     render_mode render_mode = render_mode::billboard;

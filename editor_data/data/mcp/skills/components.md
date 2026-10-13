@@ -47,12 +47,14 @@ Field semantics:
   per loop (loop:true restarts it); emission_rate = particles per second.
 - shape + emission_shape_scale define the spawn region (circle + [1.3,0.1,1.3]
   is a flat disc); direction up | outward | inward gives initial direction.
-- velocity_gradient / scale_gradient are arrays of {progress,min,max}; only
-  their ends count: size goes linearly from the first key to the last, and the
-  last key of velocity_gradient is the distance travelled. color_gradient is
+- velocity_gradient / scale_gradient are arrays of {progress,min,max}.
+  scale_gradient is the size over the particle's life and every key counts:
+  [0 at 0, full at 0.07, full at 1] pops in, [0, full at 0.5, 0] grows then
+  shrinks. Each particle picks its place in the min..max range at birth and at
+  death and drifts between the two. velocity_gradient reads only its last key:
+  the distance travelled (see Motion model). color_gradient is
   {progress,color:[r,g,b,a]} with every key used. Fade alpha in from 0 at
-  progress 0 and out to 0 at 1 to avoid popping. For a pop-in (spikes, pillars)
-  spawn under the floor and move up with OutExpo instead of a size curve.
+  progress 0 and out to 0 at 1 to avoid popping.
 - Flipbook textures: texture_sheet_tiles [8,8] with texture_sheet_cycles 1
   plays an 8x8 sheet once per particle life.
 - blend_mode: additive for fire, sparks, magic; normal for smoke and dust.

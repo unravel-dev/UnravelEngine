@@ -481,7 +481,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "velocity_gradient"},
             entt::attribute{"pretty_name", "Velocity Gradient"},
-            entt::attribute{"tooltip", "Velocity range gradient over particle lifetime. Controls how particle speed changes from spawn to death."},
+            entt::attribute{"tooltip", "Distance a particle travels along its direction over its lifetime, random between min and max. Only the value at the end (time 1) is used; Position Easing shapes how that distance is covered."},
             entt::attribute{"group", "Motion over lifetime"},
             entt::attribute{"step", 0.05f},
         })
@@ -525,7 +525,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "scale_gradient"},
             entt::attribute{"pretty_name", "Scale Gradient"},
-            entt::attribute{"tooltip", "Scale range gradient over particle lifetime. Controls how particle size changes from spawn to death."},
+            entt::attribute{"tooltip", "Particle size over its lifetime, random between the min and max curves. Every key counts: a size can pop in, or grow then shrink. A particle picks its place between min and max at birth and at death and drifts from one to the other."},
             entt::attribute{"group", "Size over lifetime"},
         })
         .data<&particle_emitter_component::set_initial_scale_3d, &particle_emitter_component::get_initial_scale_3d>("initial_scale_3d"_hs)

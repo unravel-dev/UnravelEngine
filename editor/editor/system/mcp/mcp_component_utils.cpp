@@ -2280,24 +2280,18 @@ auto color_gradient_to_json(const math::gradient<math::color>& gradient) -> std:
 /// Largest difference between two gradient values that still counts as the same value.
 constexpr float k_gradient_value_tolerance = 1e-4f;
 
-/// The particle model reads few keys of a range gradient: size goes linearly from the value at
-/// progress 0 to the value at 1, and a particle travels the velocity value at 1 over its life.
-/// Reports the keys that would change the curve if every key counted.
-void warn_unread_gradient_keys(const std::string& key,
+/// A particle travels the velocity value at progress 1 over its life and no other key is read.
+/// Reports the keys that differ from that value, which would change the motion if they counted.
+void warn_unread_velocity_keys(const std::string& key,
                                const math::gradient<frange_t>& gradient,
-                               bool reads_start,
                                component_apply_result& result)
 {
-    const frange_t start = gradient.sample(0.0f);
     const frange_t end = gradient.sample(1.0f);
     std::string unread;
     for(const auto& point : gradient.get_points())
     {
-        const frange_t expected = reads_start ? frange_t(math::mix(start.min, end.min, point.progress),
-                                                         math::mix(start.max, end.max, point.progress))
-                                              : end;
-        if(math::abs(point.element.min - expected.min) > k_gradient_value_tolerance ||
-           math::abs(point.element.max - expected.max) > k_gradient_value_tolerance)
+        if(math::abs(point.element.min - end.min) > k_gradient_value_tolerance ||
+           math::abs(point.element.max - end.max) > k_gradient_value_tolerance)
         {
             unread += fmt::format("{}{:.3g}", unread.empty() ? "" : ", ", point.progress);
         }
@@ -2306,15 +2300,10 @@ void warn_unread_gradient_keys(const std::string& key,
     {
         return;
     }
-    result.warnings.push_back(
-        reads_start ? fmt::format("{}: size goes linearly from the value at progress 0 to the value at 1; the keys "
-                                  "at {} change nothing",
-                                  key,
-                                  unread)
-                    : fmt::format("{}: a particle travels the value at progress 1 over its life; the keys at {} "
-                                  "change nothing",
-                                  key,
-                                  unread));
+    result.warnings.push_back(fmt::format("{}: a particle travels the value at progress 1 over its life; the keys at "
+                                          "{} change nothing",
+                                          key,
+                                          unread));
 }
 
 auto range_gradient_to_json(const math::gradient<frange_t>& gradient) -> std::string
@@ -2777,17 +2766,16 @@ auto apply_particle_properties(rtti::context& ctx,
                 fail(error);
                 continue;
             }
-            const bool is_scale = key == "scale_gradient";
-            if(is_scale)
+            if(key == "scale_gradient")
             {
                 comp.set_scale_gradient(gradient);
             }
             else
             {
                 comp.set_velocity_gradient(gradient);
+                warn_unread_velocity_keys(key, gradient, result);
             }
             applied();
-            warn_unread_gradient_keys(key, gradient, is_scale, result);
         }
         else if(key == "texture")
         {

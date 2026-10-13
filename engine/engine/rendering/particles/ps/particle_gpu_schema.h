@@ -30,16 +30,19 @@ constexpr uint32_t k_gpu_cs_threads = 64;
  * Layout:
  *  [0] start.xyz, life
  *  [1] end0.xyz, lifespan
- *  [2] end1.xyz, scale_start
- *  [3] scale_end, texsheet_seed, pad, pad
+ *  [2] end1.xyz, scale_pick_start
+ *  [3] scale_pick_end, texsheet_seed, scale_factor, scale_offset
  *  [4] tint.rgba (linear; multiplies the color over lifetime, 1 unless a burst set it)
+ *
+ * The scale fields are the particle's particle_scale_pick: its places in the size range at birth
+ * and death, and a burst's size override.
  */
 struct gpu_sim_particle
 {
     float start_x, start_y, start_z, life;
     float end0_x, end0_y, end0_z, lifespan;
-    float end1_x, end1_y, end1_z, scale_start;
-    float scale_end, texsheet_seed, pad0, pad1;
+    float end1_x, end1_y, end1_z, scale_pick_start;
+    float scale_pick_end, texsheet_seed, scale_factor, scale_offset;
     float tint_r, tint_g, tint_b, tint_a;
 };
 
