@@ -52,7 +52,7 @@ struct script_selector
 };
 
 /**
- * @brief Reads an item's script_type and optional script_index.
+ * @brief Reads an item's type_name and optional script_index.
  * @return False with `error` set when script_index is not a whole number of 0 or more
  */
 auto read_script_selector(const simdjson::dom::object& item, script_selector& out, std::string& error) -> bool;

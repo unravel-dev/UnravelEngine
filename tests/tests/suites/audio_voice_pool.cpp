@@ -245,6 +245,32 @@ void test_handles()
     check(pool.get_live_count() == 0, "the live count is unchanged");
 }
 
+void test_distance_range()
+{
+    std::printf("test_distance_range\n");
+    const auto kept = clamp_audio_range({2.0f, 50.0f});
+    check(kept.min == 2.0f && kept.max == 50.0f, "an ordered range is kept");
+    const auto negative = clamp_audio_range({-3.0f, 10.0f});
+    check(negative.min == 0.0f && negative.max == 10.0f, "a negative min becomes 0");
+    const auto inverted = clamp_audio_range({30.0f, 10.0f});
+    check(inverted.min == 10.0f && inverted.max == 10.0f, "a min past max comes down to max");
+}
+
+void test_set_distance(const std::shared_ptr<audio_clip>& clip)
+{
+    std::printf("test_set_distance\n");
+    audio_voice_pool pool(2);
+    auto params = one_shot(0);
+    params.spatial = true;
+    const auto id = pool.play(clip, generate_uuid(), params);
+    check(id != 0, "a spatial one-shot starts");
+    pool.set_distance(id, {1.0f, 100.0f});
+    check(pool.is_playing(id), "a voice keeps playing after its range changes");
+    pool.stop(id);
+    pool.set_distance(id, {1.0f, 100.0f});
+    check(pool.get_live_count() == 0, "a range set on a finished voice does nothing");
+}
+
 void test_update_frees_finished(const std::shared_ptr<audio_clip>& short_clip)
 {
     std::printf("test_update_frees_finished\n");
@@ -307,6 +333,7 @@ auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
     g_checks = 0;
     g_failures = 0;
     test_rank_order();
+    test_distance_range();
     use_silent_audio_backend();
     std::unique_ptr<audio::device> device;
     try
@@ -327,6 +354,7 @@ auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
         test_refused_one_shot_frees_nothing(clip);
         test_clip_limit_frees_only_its_own(clip);
         test_handles();
+        test_set_distance(clip);
         test_update_frees_finished(short_clip);
         test_component_voices(ctx, clip);
         ctx.get_cached<audio_system>().get_voices().stop_all();

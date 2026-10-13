@@ -30,6 +30,9 @@ description: >-
   pauses / resumes / stops everything.
 - Voice cap rank (`is_freed_before`): non-looping first, then lower priority, then one-shots before
   component voices, then the older voice. A one-shot refused by its clip limit frees nothing.
+- Spatial falloff is linear (`AL_LINEAR_DISTANCE`): full volume up to the range's min, silent at its
+  max. One-shots start at 1..20 m (`set_distance`, C# `AudioVoice.SetDistance`); a component uses
+  its own range. Scripts play one-shots with `Audio.PlayOneShot`, never through a temporary entity.
 - `audio_source_component` - settings (serialized) + a voice handle; it never owns a source itself
 - `audio_listener_component` - typically one per active camera
 

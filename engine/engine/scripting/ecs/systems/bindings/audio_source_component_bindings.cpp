@@ -397,6 +397,14 @@ void internal_m2n_audio_voice_set_pitch(uint64_t voice, float pitch)
     }
 }
 
+void internal_m2n_audio_voice_set_distance(uint64_t voice, float min_distance, float max_distance)
+{
+    if(auto system = find_audio_system())
+    {
+        system->get_voices().set_distance(voice, {min_distance, max_distance});
+    }
+}
+
 void internal_m2n_audio_voice_fade_to(uint64_t voice, float volume, float seconds, bool stop_at_end)
 {
     if(auto system = find_audio_system())
@@ -511,6 +519,8 @@ void register_audio_source_component_script_bindings()
                                 dotnet_internal_call(internal_m2n_audio_voice_set_volume));
     audio_reg.add_internal_call("internal_m2n_audio_voice_set_pitch",
                                 dotnet_internal_call(internal_m2n_audio_voice_set_pitch));
+    audio_reg.add_internal_call("internal_m2n_audio_voice_set_distance",
+                                dotnet_internal_call(internal_m2n_audio_voice_set_distance));
     audio_reg.add_internal_call("internal_m2n_audio_voice_fade_to",
                                 dotnet_internal_call(internal_m2n_audio_voice_fade_to));
     audio_reg.add_internal_call("internal_m2n_audio_set_clip_limit",

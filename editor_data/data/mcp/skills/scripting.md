@@ -31,7 +31,7 @@ script from memory of another engine's API.
 5. Attach with scene_add_scripts_batch (type_name per entity); inspect with
    scene_list_scripts_batch; detach with scene_remove_scripts_batch.
 6. Configure public fields through the typed component API: component
-   "Script" with script_type set to the full type name -
+   "Script" with type_name set to the full type name -
    scene_get/set_component_properties_batch read and write public instance
    fields by name.
 7. An entity can carry several scripts of one type. script_index (from 0, as

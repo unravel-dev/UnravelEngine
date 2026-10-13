@@ -34,6 +34,14 @@ auto clamp_audio_gain(float gain) -> float
     return std::fmin(1.0f, std::fmax(0.0f, gain));
 }
 
+auto clamp_audio_range(const frange_t& range) -> frange_t
+{
+    frange_t result = range;
+    result.min = math::clamp(result.min, 0.0f, result.max);
+    result.max = math::clamp(result.max, result.min, std::numeric_limits<float>::max());
+    return result;
+}
+
 void apply_voice_space(audio::source& source, bool spatial, float rolloff)
 {
     source.set_source_relative(!spatial);
@@ -435,6 +443,15 @@ void audio_voice_pool::set_pitch(uint64_t id, float pitch)
     if(auto v = find_voice(id))
     {
         v->source->set_pitch(clamp_pitch(pitch));
+    }
+}
+
+void audio_voice_pool::set_distance(uint64_t id, const frange_t& range)
+{
+    if(auto v = find_voice(id))
+    {
+        const auto clamped = clamp_audio_range(range);
+        v->source->set_distance(clamped.min, clamped.max);
     }
 }
 

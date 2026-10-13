@@ -118,10 +118,7 @@ void audio_source_component::set_volume_rolloff(float rolloff)
 
 void audio_source_component::set_range(const frange_t& range)
 {
-    range_ = range;
-    range_.min = math::clamp(range_.min, 0.0f, range_.max);
-    range_.max = math::clamp(range_.max, range_.min, std::numeric_limits<float>::max());
-
+    range_ = clamp_audio_range(range);
     if(auto source = get_source())
     {
         source->set_distance(range_.min, range_.max);

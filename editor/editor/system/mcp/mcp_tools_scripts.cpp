@@ -309,12 +309,12 @@ void register_script_tools(mcp_tool_registry& registry)
          .description =
              "Call a public method of a running script (play mode) and return its result as JSON: a "
              "repeatable way to trigger gameplay, e.g. a spell's TryCast at an exact world point instead "
-             "of clicking the screen. Identify the script by entity_id, script_type (full or short name) "
+             "of clicking the screen. Identify the script by entity_id, type_name (full or short name) "
              "and optional script_index. arguments convert to the parameter types: numbers, booleans, "
              "strings, enum names, and number arrays for Vector2/3/4, Color or Quaternion; missing "
              "trailing arguments take their defaults.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"script_type":{"type":"string"},"script_index":{"type":"integer","minimum":0},"method":{"type":"string"},"arguments":{"type":"array"}},"required":["entity_id","script_type","method"]})json",
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0},"method":{"type":"string"},"arguments":{"type":"array"}},"required":["entity_id","type_name","method"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -336,7 +336,7 @@ void register_script_tools(mcp_tool_registry& registry)
              if(!read_string(args, "entity_id", entity_id) || !read_string(args, "method", method) ||
                 selector.type.empty() || method.empty())
              {
-                 return {.text = "Needs entity_id, script_type and method", .is_error = true};
+                 return {.text = "Needs entity_id, type_name and method", .is_error = true};
              }
              auto entity = resolve_entity(*scn, entity_id, error);
              if(!entity)

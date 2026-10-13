@@ -15,7 +15,7 @@ the top source of broken scenes.
   max_depth, limit; the response says "truncated" when the limit hit - narrow
   the scope rather than raising the limit blindly.
 - scene_find_entities_batch: by name_contains, name_exact, component_type
-  (pretty name like "Light"), script_type (C# full name). Filters AND
+  (pretty name like "Light"), type_name (C# full name). Filters AND
   together; optional parent_id scope; allowed in play mode.
 - scene_get_entities_batch detail levels:
   - "pose" (default): transforms only - cheapest.

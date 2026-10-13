@@ -5,6 +5,7 @@
 #include <engine/audio/audio_clip.h>
 #include <engine/audio/volume_fade.h>
 
+#include <base/basetypes.hpp>
 #include <hpp/optional.hpp>
 #include <math/math.h>
 #include <uuid/uuid.h>
@@ -36,6 +37,11 @@ inline constexpr float audio_default_max_distance = 20.0f;
  * @brief Clamps a gain to 0..1. NaN becomes 0, so it never reaches the device as an invalid gain.
  */
 auto clamp_audio_gain(float gain) -> float;
+
+/**
+ * @brief Orders a distance range: min is clamped to 0..max, max to at least min.
+ */
+auto clamp_audio_range(const frange_t& range) -> frange_t;
 
 /**
  * @brief Places @p source in the world (attenuated by @p rolloff) or on the listener, where it plays
@@ -178,6 +184,8 @@ public:
     /// Sets the gain before the bus and master gains; ends a running fade.
     void set_volume(uint64_t id, float volume);
     void set_pitch(uint64_t id, float pitch);
+    /// Sets a spatial voice's distance range: full volume within min, silent from max.
+    void set_distance(uint64_t id, const frange_t& range);
     void set_bus(uint64_t id, audio_bus bus);
     void set_priority(uint64_t id, int priority);
     void set_loop(uint64_t id, bool loop);

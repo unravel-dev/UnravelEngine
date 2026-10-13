@@ -260,50 +260,6 @@ namespace Unravel.Core
             internal_m2n_audio_source_fade_to(owner, volume, seconds, stopAtEnd);
         }
 
-        /// <summary>
-        /// Plays a one-shot audio clip at the specified position with a specified volume.
-        /// </summary>
-        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, Vector3, float, float, AudioBus, int)"/>
-        /// plays without one.</remarks>
-        /// <param name="clip">The audio clip to play.</param>
-        /// <param name="position">The world position where the audio will be played.</param>
-        /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
-        public static AudioSourceComponent PlayClipAtPoint(AudioClip clip, Vector3 position, float volume = 1.0f, AudioBus bus = AudioBus.Sfx)
-        {
-            var entity = Scene.CreateEntity("One shot audio 3D");
-            entity.transform.position = position;
-            var audioSource = entity.AddComponent<AudioSourceComponent>();
-            audioSource.clip = clip;
-            audioSource.volume = volume;
-            audioSource.spatial = true;
-            audioSource.bus = bus;
-            audioSource.priority = 0;
-            audioSource.Play();
-            Scene.DestroyEntity(entity, (clip.length + 0.1f) * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
-            return audioSource;
-        }
-
-        /// <summary>
-        /// Plays a one-shot audio clip as a 2D audio source.
-        /// </summary>
-        /// <remarks>Creates an entity per sound; <see cref="Audio.PlayOneShot(AudioClip, float, float, AudioBus, int)"/>
-        /// plays without one.</remarks>
-        /// <param name="clip">The audio clip to play.</param>
-        /// <param name="volume">The volume at which the audio will be played. Default is 1.0.</param>
-        public static AudioSourceComponent PlayClip(AudioClip clip, float volume = 1.0f, AudioBus bus = AudioBus.Sfx)
-        {
-            var entity = Scene.CreateEntity("One shot audio 2D");
-            var audioSource = entity.AddComponent<AudioSourceComponent>();
-            audioSource.clip = clip;
-            audioSource.volume = volume;
-            audioSource.spatial = false;
-            audioSource.bus = bus;
-            audioSource.priority = 0;
-            audioSource.Play();
-            Scene.DestroyEntity(entity, (clip.length + 0.1f) * ((Time.timeScale < 0.01f) ? 0.01f : Time.timeScale));
-            return audioSource;
-        }
-
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_audio_source_fade_to(Entity eid, float volume, float seconds, bool stopAtEnd);
 

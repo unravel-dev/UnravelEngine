@@ -51,6 +51,15 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Sets the distance range of a 3D sound: full volume within @p minDistance, fading linearly to
+        /// silence at @p maxDistance. A 2D sound ignores it.
+        /// </summary>
+        public void SetDistance(float minDistance, float maxDistance)
+        {
+            Audio.internal_m2n_audio_voice_set_distance(id, minDistance, maxDistance);
+        }
+
+        /// <summary>
         /// Ramps the volume to @p volume over @p seconds of unscaled time, then stops the sound when
         /// @p stopAtEnd.
         /// </summary>
@@ -133,7 +142,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Plays @p clip once at a world position (3D), without an entity.
+        /// Plays @p clip once at a world position (3D), without an entity. It is heard from 1 m (full
+        /// volume) to 20 m (silent); <see cref="AudioVoice.SetDistance"/> changes the range.
         /// </summary>
         /// <param name="clip">The clip to play.</param>
         /// <param name="position">World position of the sound.</param>
@@ -200,6 +210,9 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void internal_m2n_audio_voice_set_pitch(ulong voice, float pitch);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        internal static extern void internal_m2n_audio_voice_set_distance(ulong voice, float minDistance, float maxDistance);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         internal static extern void internal_m2n_audio_voice_fade_to(ulong voice, float volume, float seconds, bool stopAtEnd);

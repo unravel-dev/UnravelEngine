@@ -1795,7 +1795,7 @@ auto resolve_script_type(rtti::context& ctx, const std::string& script_type, std
 {
     if(script_type.empty())
     {
-        error = "script_type is required for Script component";
+        error = "type_name is required for Script component";
         return {};
     }
     if(!ctx.has<script_system>())
@@ -2026,7 +2026,7 @@ auto script_to_json(rtti::context& ctx,
     auto obj = script_obj.pinned->get_object();
     std::string json = "{";
     bool first = true;
-    append_prop(json, first, "script_type", make_json_string(type.get_fullname()));
+    append_prop(json, first, "type_name", make_json_string(type.get_fullname()));
     for(auto& field : type.get_fields(true))
     {
         if(field.get_visibility() != dotnet::visibility::vis_public || field.is_static() ||
@@ -2075,7 +2075,7 @@ auto apply_script_properties(rtti::context& ctx,
     for(auto field_el : properties)
     {
         const std::string key(field_el.key);
-        if(key == "script_type")
+        if(key == "type_name")
         {
             continue;
         }
@@ -4319,7 +4319,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
         {
             json += ",";
         }
-        json += R"({"component":"Script","name":"script_type","type":"string","description":"Required C# type full name or short name"},)";
+        json += R"({"component":"Script","name":"type_name","type":"string","description":"Required C# type full name or short name"},)";
         json += R"({"component":"Script","name":"script_index","type":"integer","description":"Which script of that type, counting from 0; default 0"},)";
         json += R"({"component":"Script","name":"*","type":"any","description":"Public instance fields: number, boolean, string, Vector2/3/4, Color"})";
         first = false;
@@ -4894,7 +4894,7 @@ auto component_apply_result_to_json(const component_apply_result& result) -> std
 auto read_script_selector(const simdjson::dom::object& item, script_selector& out, std::string& error) -> bool
 {
     std::string_view type;
-    if(!item["script_type"].get(type))
+    if(!item["type_name"].get(type))
     {
         out.type = std::string(type);
     }

@@ -487,10 +487,10 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
         {.name = "scene_find_entities_batch",
          .description =
              "Find entities by name_contains and/or name_exact and/or component_type (pretty name) "
-             "and/or script_type (C# full name). Filters AND together. Optional parent_id / limit "
+             "and/or type_name (C# full name). Filters AND together. Optional parent_id / limit "
              "(default 100). Allowed in play mode.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"component_type":{"type":"string"},"script_type":{"type":"string"},"parent_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
+             R"json({"type":"object","properties":{"name_contains":{"type":"string"},"name_exact":{"type":"string"},"component_type":{"type":"string"},"type_name":{"type":"string"},"parent_id":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":5000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -508,11 +508,11 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              read_string(args, "name_contains", name_contains);
              read_string(args, "name_exact", name_exact);
              read_string(args, "component_type", component_type);
-             read_string(args, "script_type", script_type);
+             read_string(args, "type_name", script_type);
              if(name_contains.empty() && name_exact.empty() && component_type.empty() && script_type.empty())
              {
                  return {.text =
-                             "Provide name_contains, name_exact, component_type, and/or script_type",
+                             "Provide name_contains, name_exact, component_type, and/or type_name",
                          .is_error = true};
              }
 

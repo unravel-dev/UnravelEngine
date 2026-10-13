@@ -92,7 +92,8 @@ reset state there instead of in `OnStart`, which runs only once per instance.
 
 - Sounds: `Audio.PlayOneShot(clip, volume, pitch, bus, priority)` (or with a world position)
   plays without an entity and returns an `AudioVoice` (`Stop`, `SetVolume`, `SetPitch`,
-  `FadeTo`). One-shots and `AudioSourceComponent`s share one voice cap (`Audio.maxVoices`):
+  `SetDistance`, `FadeTo`). A 3D one-shot fades linearly from 1 m to silence at 20 m;
+  `SetDistance(min, max)` widens it. UI and announcer sounds are 2D (no position). One-shots and `AudioSourceComponent`s share one voice cap (`Audio.maxVoices`):
   at the cap, non-looping voices go before looping ones, then lower `priority`, then
   one-shots before sources, then the oldest. `Audio.SetClipLimit(clip, maxVoices, minInterval)` stops coin-spam stacking;
   `Audio.FadeBusVolume(bus, target, seconds)` and `AudioSourceComponent.FadeTo(volume,
