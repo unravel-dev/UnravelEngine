@@ -67,6 +67,8 @@ enum class visualization_mode : int
     gi_screen_probe_frames = 59,
     gi_overview = 60,
     gi_performance_overview = 61,
+    /// The particle layers each pixel shaded, blended over the finished image.
+    particle_overdraw = 62,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.
@@ -84,6 +86,8 @@ enum class visualization_group : int
     motion,
     /// The GI scene representation: the global distance field and the surface cache of cards.
     gi,
+    /// What the particle draws cost.
+    particles,
     count,
 };
 

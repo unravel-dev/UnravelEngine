@@ -181,6 +181,59 @@ public sealed class MinMaxCurve
 }
 
 /// <summary>
+/// One key of a <see cref="Vector3Curve"/>: a vector at a time.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Vector3Key
+{
+    /// <summary>
+    /// Position of the key, usually 0 to 1.
+    /// </summary>
+    public float time;
+
+    /// <summary>
+    /// Value at the key.
+    /// </summary>
+    public Vector3 value;
+
+    /// <summary>
+    /// Creates a key.
+    /// </summary>
+    public Vector3Key(float time, Vector3 value)
+    {
+        this.time = time;
+        this.value = value;
+    }
+}
+
+/// <summary>
+/// Vectors keyed over time and interpolated linearly between the keys.
+/// </summary>
+public sealed class Vector3Curve
+{
+    /// <summary>
+    /// The keys, ordered by time.
+    /// </summary>
+    public Vector3Key[] keys;
+
+    /// <summary>
+    /// Creates a curve from its keys.
+    /// </summary>
+    public Vector3Curve(params Vector3Key[] keys)
+    {
+        this.keys = keys ?? Array.Empty<Vector3Key>();
+    }
+
+    /// <summary>
+    /// The vector at @p time; times outside the keys clamp to the first or last key.
+    /// </summary>
+    public Vector3 Evaluate(float time)
+    {
+        return CurveSampling.Evaluate(keys, time, k => k.time, k => k.value, Vector3.Lerp, Vector3.zero);
+    }
+}
+
+/// <summary>
 /// Linear sampling shared by the keyed curve types.
 /// </summary>
 internal static class CurveSampling

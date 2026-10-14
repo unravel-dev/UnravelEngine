@@ -23,6 +23,9 @@ order: 70
   "normals", "depth", "velocity", "gi_light_voxels", ...). Always restore
   "full" afterwards. viewport_list_debug_views lists every mode grouped, with
   what it shows and what its colors mean - call it instead of guessing a name.
+  "particle_overdraw" shows how many particle layers each pixel shades (blue 1,
+  green 4, yellow 8, red 16, white 32+): the view to judge an effect's fill
+  cost before reaching for half_resolution, octagon or max_screen_size.
 
 ## Play mode testing (physics, animation, particles, scripts)
 

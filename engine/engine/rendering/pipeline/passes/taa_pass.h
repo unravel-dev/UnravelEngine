@@ -52,6 +52,9 @@ public:
         /// place that fetches it from the render view). A valid texture IS the enable;
         /// null = camera-only depth reprojection.
         gfx::texture::ptr velocity;
+        /// The particles' reactive coverage this frame (R8): where it is high the history weight drops and the
+        /// clip tightens, since particles have no motion vectors. Null = no particle drew.
+        gfx::texture::ptr reactive;
         /// The view's scene-color pre-exposure; the history is corrected from last frame's.
         pre_exposure_state pre_exposure{};
         settings config{};
@@ -79,6 +82,7 @@ private:
             cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_prev_depth, "s_prev_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_velocity, "s_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_reactive, "s_reactive", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
             cache_uniform(program.get(), u_taa_params, "u_taa_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_taa_params2, "u_taa_params2", bgfx::UniformType::Vec4);
@@ -90,6 +94,7 @@ private:
         gfx::program::uniform_ptr s_depth;
         gfx::program::uniform_ptr s_prev_depth;
         gfx::program::uniform_ptr s_velocity;
+        gfx::program::uniform_ptr s_reactive;
         gfx::program::uniform_ptr u_prev_view_proj;
         gfx::program::uniform_ptr u_taa_params;
         gfx::program::uniform_ptr u_taa_params2;

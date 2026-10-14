@@ -107,6 +107,12 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                      4,
                      use_velocity ? params.velocity : params.g_buffer->get_texture(4),
                      k_taa_sampler_flags);
+    // The same placeholder holds the reactive slot when no particle drew this frame.
+    const bool use_reactive = params.reactive != nullptr;
+    gfx::set_texture(program_.s_reactive,
+                     5,
+                     use_reactive ? params.reactive : params.g_buffer->get_texture(4),
+                     k_taa_sampler_flags);
 
     const auto prev_vp = params.cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(program_.u_prev_view_proj, prev_vp.get_matrix());
@@ -117,9 +123,10 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                                  params.config.variance_clip_scale};
     gfx::set_uniform(program_.u_taa_params, taa_params);
 
-    // yz = the frame's jitter as the NDC offset the jittered projection carries (camera aa_data.zw).
+    // yz = the frame's jitter as the NDC offset the jittered projection carries (camera aa_data.zw), w = the
+    // particles' reactive coverage is bound.
     const auto& aa_data = params.cam->get_aa_data();
-    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, aa_data.z, aa_data.w, 0.0f};
+    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, aa_data.z, aa_data.w, use_reactive ? 1.0f : 0.0f};
     gfx::set_uniform(program_.u_taa_params2, taa_params2);
     gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
 

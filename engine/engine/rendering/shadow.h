@@ -19,6 +19,8 @@
 
 namespace unravel
 {
+class particle_emitter_component;
+
 namespace shadow
 {
 struct LightType
@@ -698,6 +700,8 @@ struct shadow_visibility_data
     /// The caster's world AABB, captured when the list was built so the per-light culling
     /// walks this list alone instead of looking the model component up again for every light.
     math::bbox world_bounds;
+    /// Set for a mesh particle emitter: its particles cast instead of the entity's model.
+    const particle_emitter_component* particles = nullptr;
 };
 using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
 

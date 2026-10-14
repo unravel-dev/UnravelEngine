@@ -7,6 +7,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/perez_luminance.h>
 #include <engine/rendering/ecs/components/model_component.h>
@@ -87,6 +88,8 @@ auto make_geometry_clip_planes(const camera& view_camera) -> math::vec4
 }
 /// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
 constexpr int contact_shadow_dither_frames = 16;
+/// Most particle lights one view draws (the brightest of every emitter's, emitter_render_desc::light_count).
+constexpr size_t max_particle_lights_per_view = 64;
 /// RBUFFER's clear, packed RGBA8 (bgfx converts it for float targets): black with alpha 1 - no
 /// traced reflection yet, and the whole pixel left to the probe layer.
 constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
@@ -407,6 +410,7 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
 /// once warmed up this allocates nothing, and it reads nothing but the contiguous list.
 void cull_shadow_casters(const shadow::shadow_map_models_t& static_casters,
                          const shadow::shadow_map_models_t& dynamic_casters,
+                         const shadow::shadow_map_models_t& particle_casters,
                          const math::bsphere& light_sphere,
                          shadow::shadow_map_models_t& light_casters)
 {
@@ -427,6 +431,7 @@ void cull_shadow_casters(const shadow::shadow_map_models_t& static_casters,
     };
     keep_casters_in_range(static_casters);
     keep_casters_in_range(dynamic_casters);
+    keep_casters_in_range(particle_casters);
 }
 
 auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
@@ -743,11 +748,18 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer
                 shadow_light_casters_.insert(shadow_light_casters_.end(),
                                              shadow_dynamic_casters_.begin(),
                                              shadow_dynamic_casters_.end());
+                shadow_light_casters_.insert(shadow_light_casters_.end(),
+                                             mesh_particle_casters_.begin(),
+                                             mesh_particle_casters_.end());
                 light_casters = &shadow_light_casters_;
             }
             else
             {
-                cull_shadow_casters(shadow_static_casters_, shadow_dynamic_casters_, light_sphere, shadow_light_casters_);
+                cull_shadow_casters(shadow_static_casters_,
+                                    shadow_dynamic_casters_,
+                                    mesh_particle_casters_,
+                                    light_sphere,
+                                    shadow_light_casters_);
                 light_casters = &shadow_light_casters_;
             }
 
@@ -761,6 +773,56 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer
             APP_SCOPE_PERF("Rendering/Shadow Generation Pass Per Light After Cull");
 
             generator.generate_shadowmaps(*light_casters, camera, &stats_);
+        });
+}
+
+void deferred::gather_mesh_particles(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask)
+{
+    mesh_particle_emitters_.clear();
+    mesh_particle_casters_.clear();
+    if(!is_camera_run)
+    {
+        return;
+    }
+    APP_SCOPE_PERF("Rendering/Gather Mesh Particles");
+    const math::vec3 eye = camera.get_position();
+    const ps_soa::particle_quality& quality = ps_soa::get_quality();
+    scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
+        [&](auto entity, auto&& transform_comp, auto&& emitter, auto&& active)
+        {
+            if(!emitter.is_enabled() || !emitter.is_mesh_render() || !is_on_rendered_layer(*scn.registry, entity, render_mask))
+            {
+                return;
+            }
+            const math::bbox& bounds = emitter.get_mesh_bounds();
+            const math::bbox emitter_bounds = emitter.get_world_bounds();
+            // The same gates as the billboards: beyond the draw distance or smaller on screen than the project
+            // allows, the emitter is not drawn (and renderer-based culling freezes it).
+            const float max_draw_distance = emitter.get_max_draw_distance();
+            if(max_draw_distance > 0.0f &&
+               math::distance(eye, math::clamp(eye, emitter_bounds.min, emitter_bounds.max)) > max_draw_distance)
+            {
+                return;
+            }
+            if(quality.min_screen_size > 0.0f && get_particle_screen_size(camera, emitter_bounds, eye) < quality.min_screen_size)
+            {
+                return;
+            }
+            const bool has_particles = bounds.is_populated() && !emitter.get_mesh_transforms().empty();
+            const bool is_visible = has_particles && camera.test_aabb(bounds);
+            if(is_visible || camera.test_aabb(emitter_bounds))
+            {
+                emitter.set_last_render_frame(uint64_t(gfx::get_render_frame()));
+            }
+            if(is_visible)
+            {
+                mesh_particle_emitters_.push_back(&emitter);
+            }
+            if(has_particles && emitter.get_mesh_cast_shadows())
+            {
+                mesh_particle_casters_.push_back(
+                    shadow::shadow_visibility_data{entt::handle(*scn.registry, entity), bounds, &emitter});
+            }
         });
 }
 
@@ -795,6 +857,7 @@ void deferred::run_pipeline(const gfx::frame_buffer::ptr& output,
 void deferred::set_debug_pass(int pass)
 {
     debug_pass_ = pass;
+    is_particle_overdraw_view_ = pass == debug_pass_particle_overdraw;
 }
 
 void deferred::set_debug_view_scale(float scale)
@@ -847,6 +910,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         build_reflections(scn, camera, dt);
     }
+
+    is_camera_run_ = is_camera_run;
+    render_mask_ = render_mask;
+    gather_mesh_particles(scn, camera, is_camera_run, render_mask);
 
     if(build_shadowmaps)
     {
@@ -942,10 +1009,13 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         target = run_atmospherics_pass(target, scn, camera, rview, dt);
     }
 
+    gfx::texture::ptr particle_reactive;
     if(stages & pipeline_steps::particles_pass)
     {
         const gfx::texture::ptr hiz_depth = hiz_active ? rview.tex_find("HIZBUFFER") : gfx::texture::ptr{};
-        run_particle_pass(scn, camera, rview, target, pre_exposure, hiz_depth);
+        const bool wants_reactive = static_cast<bool>(params.fill_taa_params);
+        particle_reactive =
+            run_particle_pass(scn, camera, rview, target, pre_exposure, hiz_depth, build_shadowmaps, wants_reactive, dt, render_mask);
     }
 
     if(is_camera_run)
@@ -961,7 +1031,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         return;
     }
 
-    target = run_taa_pass(camera, rview, target, output, params);
+    target = run_taa_pass(camera, rview, target, output, params, particle_reactive);
 
     // Scene-referred history for next frame's SSR trace and GI far-field. Taken after TAA
     // (temporally stable) and before bloom/tonemap/UI (still linear HDR, no display encode,
@@ -1092,6 +1162,10 @@ void deferred::run_debug_passes(const camera& camera,
         // An overlay over the finished image, so it runs after the UI pass like the others
         // but keeps what is underneath.
         run_exposure_debug_pass(rview, output, rparams);
+    }
+    else if(debug_pass_ == debug_pass_particle_overdraw)
+    {
+        run_particle_overdraw_debug_pass(rview, output);
     }
     else if(debug_pass_ == debug_pass_ao_bent_normals)
     {
@@ -1343,8 +1417,16 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         }
     }
 
+    // Mesh particles: an instance per particle and submesh, drawn with the batches whatever the batching setting.
+    has_mesh_particle_instances_ = false;
+    for(const auto* emitter : mesh_particle_emitters_)
+    {
+        emitter->collect_mesh_instances(batch_collector_, velocity_run_active_);
+        has_mesh_particle_instances_ = true;
+    }
+
     // Submit all collected batches
-    if (batch_collector::is_static_mesh_batching_enabled())
+    if (batch_collector::is_static_mesh_batching_enabled() || has_mesh_particle_instances_)
     {
         submit_batched_geometry(pass, camera);
     }
@@ -1648,8 +1730,12 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         }
 
         // Batched movers: instanced over the SAME prepared batches the G-buffer drew,
-        // with the doubled per-instance stream (current + previous world matrix).
-        if(batch_collector::is_static_mesh_batching_enabled())
+        // with the doubled per-instance stream (current + previous world matrix). Mesh particles are movers too.
+        if(has_mesh_particle_instances_)
+        {
+            velocity_movers_frame_ = gfx::get_render_frame();
+        }
+        if(batch_collector::is_static_mesh_batching_enabled() || has_mesh_particle_instances_)
         {
             submit_batched_velocity(pass, prev_vp);
         }
@@ -1728,6 +1814,27 @@ void deferred::run_velocity_debug_pass(const camera& camera,
     bgfx::setState(BGFX_STATE_DEFAULT);
     velocity_debug_program_.program->end();
 
+    bgfx::discard();
+}
+
+void deferred::run_particle_overdraw_debug_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
+{
+    const auto& overdraw = rview.tex_find("PARTICLE_OVERDRAW");
+    if(!output || !overdraw || !particle_overdraw_debug_program_.program ||
+       !particle_overdraw_debug_program_.program->is_valid())
+    {
+        return;
+    }
+    gfx::render_pass pass("Debug/Particle Overdraw Pass");
+    pass.bind(output.get());
+    const auto output_size = output->get_size();
+    particle_overdraw_debug_program_.program->begin();
+    gfx::set_texture(particle_overdraw_debug_program_.s_overdraw, 0, overdraw);
+    bgfx::setScissor(0, 0, uint16_t(output_size.width), uint16_t(output_size.height));
+    bgfx::setState(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    bgfx::submit(pass.id, particle_overdraw_debug_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
+    particle_overdraw_debug_program_.program->end();
     bgfx::discard();
 }
 
@@ -2159,6 +2266,12 @@ auto deferred::run_direct_lighting_pass(scene& scn,
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
+    light_submit_context context;
+    context.view = pass.id;
+    context.cam = &camera;
+    context.gbuffer = gbuffer;
+    context.buffer_size = buffer_size;
+    context.pre_exposure = get_pre_exposure(rview).value;
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
@@ -2167,130 +2280,211 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                 return;
             }
             const auto& light = light_comp_ref.get_light();
-            const auto& generator = light_comp_ref.get_shadowmap_generator();
             auto world_transform = transform_comp_ref.get_transform_global();
             world_transform.reset_scale();
-            const auto& light_position = world_transform.get_position();
-            const auto& light_direction = world_transform.z_unit_axis();
-
-            if(!camera.get_frustum().test_sphere(light_comp_ref.get_world_bounds_sphere(world_transform)))
-            {
-                return;
-            }
-
-            irect32_t rect(0, 0, irect32_t::value_type(buffer_size.width), irect32_t::value_type(buffer_size.height));
-            if(light_comp_ref
-                   .compute_projected_sphere_rect(rect, light_position, light_direction, camera_pos, view, proj) == 0)
-                return;
-
-            
-            APP_SCOPE_PERF("Rendering/Direct Lighting Pass/Per Light");
-
-            bool has_shadows = light.casts_shadows && apply_shadows;
-
-            stats_.drawn_lights++;
-            stats_.drawn_lights_casting_shadows += uint32_t(has_shadows);
-
-            const auto& lprogram = has_shadows ? get_light_program(light) : get_light_program_no_shadows(light);
-
-            lprogram.program->begin();
-
-            const float contact_shadow_distance = light.contact_shadow.enabled
-                                                   ? light.contact_shadow.ray_length
-                                                   : 0.0f;
-            // The dither advances only while TAA integrates it (aa_data.x is the temporal frame
-            // index, 0 without TAA); wrapped so the noise offsets stay in float range.
-            const float contact_frame = std::fmod(camera.get_aa_data().x, float(ANONYMOUS::contact_shadow_dither_frames));
-            const float contact_shadow_uniform[4] = {light.contact_shadow.thickness,
-                                                     light.contact_shadow.max_distance,
-                                                     light.contact_shadow.opacity,
-                                                     contact_frame};
-
-            if(light.type == light_type::directional)
-            {
-                float light_data[4] = {0.0f, 0.0f, 0.0f, contact_shadow_distance};
-
-                gfx::set_uniform(lprogram.u_light_direction, light_direction);
-                gfx::set_uniform(lprogram.u_light_data, light_data);
-            }
-            if(light.type == light_type::point)
-            {
-                float light_data[4] = {light.point_data.range, 0.0f, 0.0f, contact_shadow_distance};
-
-                gfx::set_uniform(lprogram.u_light_position, light_position);
-                gfx::set_uniform(lprogram.u_light_data, light_data);
-            }
-
-            if(light.type == light_type::spot)
-            {
-                float light_data[4] = {light.spot_data.get_range(),
-                                       math::cos(math::radians(light.spot_data.get_inner_angle() * 0.5f)),
-                                       math::cos(math::radians(light.spot_data.get_outer_angle() * 0.5f)),
-                                       contact_shadow_distance};
-
-                gfx::set_uniform(lprogram.u_light_direction, light_direction);
-                gfx::set_uniform(lprogram.u_light_position, light_position);
-                gfx::set_uniform(lprogram.u_light_data, light_data);
-            }
-
-            if(light.type != light_type::directional)
-            {
-                const auto source_axis = light.compute_source_axis(world_transform.y_unit_axis());
-                const float light_source[4] = {source_axis.x, source_axis.y, source_axis.z, light.source_radius};
-                gfx::set_uniform(lprogram.u_light_source, light_source);
-            }
-
-            gfx::set_uniform(lprogram.u_contact_shadow, contact_shadow_uniform);
-
-            // Linear color, atmosphere transmittance included for the sky's sun.
-            const auto light_color_linear = light_comp_ref.get_linear_color();
-            // Written with the view's pre-exposure, like every pass that lights the HDR buffers.
-            float light_color_intensity[4] = {light_color_linear.x,
-                                              light_color_linear.y,
-                                              light_color_linear.z,
-                                              light.intensity * get_pre_exposure(rview).value};
-
-            gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
-
-            gfx::set_uniform(lprogram.u_camera_position, camera_pos);
-
-            size_t i = 0;
-            for(; i < gbuffer->get_attachment_count(); ++i)
-            {
-                gfx::set_texture(lprogram.s_tex[i], i, gbuffer->get_texture(i));
-            }
-            // Skip s_tex5 (RBUFFER) and s_tex6 (BRDF LUT) - not used by per-light direct shaders.
-            // Shadow maps start at slot 7.
-            i = 7;
-
-            if(has_shadows)
-            {
-                generator.submit_uniforms(i);
-            }
-
-            if(light.type == light_type::directional)
-            {
-                // Cloud shadow map at slot 11 (after the 4 cascades). A white fallback keeps the
-                // sampler bound when there is no layer; the enable flag skips the read.
-                const auto cloud_shadow = ANONYMOUS::make_cloud_shadow_uniforms(cloud_shadow_);
-                gfx::set_uniform(lprogram.u_cloudShadow, cloud_shadow.placement);
-                gfx::set_uniform(lprogram.u_cloudShadow2, cloud_shadow.layer);
-                gfx::set_texture(lprogram.s_cloudShadow,
-                                 11,
-                                 cloud_shadow.is_applied ? cloud_shadow_.map : default_textures::get().white_texture());
-            }
-            bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
-            auto topology = gfx::clip_quad(1.0f);
-            bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
-            bgfx::submit(pass.id, lprogram.program->native_handle());
-            bgfx::setState(BGFX_STATE_DEFAULT);
-
-            lprogram.program->end();
+            const bool has_shadows = light.casts_shadows && apply_shadows;
+            submit_light(light,
+                         world_transform,
+                         light_comp_ref.get_linear_color(),
+                         has_shadows ? &light_comp_ref.get_shadowmap_generator() : nullptr,
+                         context);
         });
+    submit_particle_lights(scn, context);
 
     bgfx::discard();
 
     return lbuffer;
+}
+
+void deferred::submit_light(const light& light,
+                            const math::transform& world_transform,
+                            const math::vec3& linear_color,
+                            const shadow::shadowmap_generator* shadows,
+                            const light_submit_context& context)
+{
+    const camera& camera = *context.cam;
+    const auto& view = camera.get_view();
+    const auto& proj = camera.get_projection();
+    const auto& camera_pos = camera.get_position();
+    const auto& light_position = world_transform.get_position();
+    const auto& light_direction = world_transform.z_unit_axis();
+    const math::bsphere reach = light.compute_world_bounds_sphere(light_position, light_direction);
+    if(!camera.get_frustum().test_sphere(reach))
+    {
+        return;
+    }
+    irect32_t rect(0,
+                   0,
+                   irect32_t::value_type(context.buffer_size.width),
+                   irect32_t::value_type(context.buffer_size.height));
+    if(light.type != light_type::directional &&
+       math::compute_projected_sphere_rect(rect.left,
+                                           rect.right,
+                                           rect.top,
+                                           rect.bottom,
+                                           reach.position,
+                                           reach.radius,
+                                           camera_pos,
+                                           view,
+                                           proj) == 0)
+    {
+        return;
+    }
+
+    APP_SCOPE_PERF("Rendering/Direct Lighting Pass/Per Light");
+
+    const bool has_shadows = shadows != nullptr;
+
+    stats_.drawn_lights++;
+    stats_.drawn_lights_casting_shadows += uint32_t(has_shadows);
+
+    const auto& lprogram = has_shadows ? get_light_program(light) : get_light_program_no_shadows(light);
+
+    lprogram.program->begin();
+
+    const float contact_shadow_distance = light.contact_shadow.enabled
+                                           ? light.contact_shadow.ray_length
+                                           : 0.0f;
+    // The dither advances only while TAA integrates it (aa_data.x is the temporal frame
+    // index, 0 without TAA); wrapped so the noise offsets stay in float range.
+    const float contact_frame = std::fmod(camera.get_aa_data().x, float(ANONYMOUS::contact_shadow_dither_frames));
+    const float contact_shadow_uniform[4] = {light.contact_shadow.thickness,
+                                             light.contact_shadow.max_distance,
+                                             light.contact_shadow.opacity,
+                                             contact_frame};
+
+    if(light.type == light_type::directional)
+    {
+        float light_data[4] = {0.0f, 0.0f, 0.0f, contact_shadow_distance};
+
+        gfx::set_uniform(lprogram.u_light_direction, light_direction);
+        gfx::set_uniform(lprogram.u_light_data, light_data);
+    }
+    if(light.type == light_type::point)
+    {
+        float light_data[4] = {light.point_data.range, 0.0f, 0.0f, contact_shadow_distance};
+
+        gfx::set_uniform(lprogram.u_light_position, light_position);
+        gfx::set_uniform(lprogram.u_light_data, light_data);
+    }
+
+    if(light.type == light_type::spot)
+    {
+        float light_data[4] = {light.spot_data.get_range(),
+                               math::cos(math::radians(light.spot_data.get_inner_angle() * 0.5f)),
+                               math::cos(math::radians(light.spot_data.get_outer_angle() * 0.5f)),
+                               contact_shadow_distance};
+
+        gfx::set_uniform(lprogram.u_light_direction, light_direction);
+        gfx::set_uniform(lprogram.u_light_position, light_position);
+        gfx::set_uniform(lprogram.u_light_data, light_data);
+    }
+
+    if(light.type != light_type::directional)
+    {
+        const auto source_axis = light.compute_source_axis(world_transform.y_unit_axis());
+        const float light_source[4] = {source_axis.x, source_axis.y, source_axis.z, light.source_radius};
+        gfx::set_uniform(lprogram.u_light_source, light_source);
+    }
+
+    gfx::set_uniform(lprogram.u_contact_shadow, contact_shadow_uniform);
+
+    // Written with the view's pre-exposure, like every pass that lights the HDR buffers.
+    float light_color_intensity[4] = {linear_color.x,
+                                      linear_color.y,
+                                      linear_color.z,
+                                      light.intensity * context.pre_exposure};
+
+    gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
+
+    gfx::set_uniform(lprogram.u_camera_position, camera_pos);
+
+    size_t i = 0;
+    for(; i < context.gbuffer->get_attachment_count(); ++i)
+    {
+        gfx::set_texture(lprogram.s_tex[i], i, context.gbuffer->get_texture(i));
+    }
+    // Skip s_tex5 (RBUFFER) and s_tex6 (BRDF LUT) - not used by per-light direct shaders.
+    // Shadow maps start at slot 7.
+    i = 7;
+
+    if(has_shadows)
+    {
+        shadows->submit_uniforms(i);
+    }
+
+    if(light.type == light_type::directional)
+    {
+        // Cloud shadow map at slot 11 (after the 4 cascades). A white fallback keeps the
+        // sampler bound when there is no layer; the enable flag skips the read.
+        const auto cloud_shadow = ANONYMOUS::make_cloud_shadow_uniforms(cloud_shadow_);
+        gfx::set_uniform(lprogram.u_cloudShadow, cloud_shadow.placement);
+        gfx::set_uniform(lprogram.u_cloudShadow2, cloud_shadow.layer);
+        gfx::set_texture(lprogram.s_cloudShadow,
+                         11,
+                         cloud_shadow.is_applied ? cloud_shadow_.map : default_textures::get().white_texture());
+    }
+    bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
+    auto topology = gfx::clip_quad(1.0f);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
+    bgfx::submit(context.view, lprogram.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
+
+    lprogram.program->end();
+}
+
+void deferred::submit_particle_lights(scene& scn, const light_submit_context& context)
+{
+    particle_lights_.clear();
+    // Probes and captures leave particle lights out, as they do the particles: a passing flash is not baked.
+    if(!is_camera_run_ || context.cam == nullptr)
+    {
+        return;
+    }
+    // Only emitters the views draw (billboards are marked by last frame's particle pass) light the scene.
+    scn.registry->view<particle_emitter_component, active_component>().each(
+        [&](auto e, auto&& emitter, auto&& active)
+        {
+            if(emitter.is_enabled() && emitter.get_light_count() > 0 && ps_soa::is_valid(emitter.get_emitter_handle()) &&
+               emitter.was_used_last_frame() && is_on_rendered_layer(*scn.registry, e, render_mask_))
+            {
+                ps_soa::collect_particle_lights(emitter.get_emitter_handle(), particle_lights_);
+            }
+        });
+    // Lights that reach nothing in view do not take a place in the budget.
+    const camera& view_camera = *context.cam;
+    particle_lights_.erase(std::remove_if(particle_lights_.begin(),
+                                          particle_lights_.end(),
+                                          [&](const ps_soa::particle_light& particle)
+                                          {
+                                              const math::vec3 reach(particle.range);
+                                              return !view_camera.test_aabb(
+                                                  math::bbox(particle.position - reach, particle.position + reach));
+                                          }),
+                           particle_lights_.end());
+    // The brightest within the view's budget.
+    const size_t count = math::min(particle_lights_.size(), ANONYMOUS::max_particle_lights_per_view);
+    std::partial_sort(particle_lights_.begin(),
+                      particle_lights_.begin() + std::ptrdiff_t(count),
+                      particle_lights_.end(),
+                      [](const ps_soa::particle_light& a, const ps_soa::particle_light& b)
+                      {
+                          return a.intensity > b.intensity;
+                      });
+    light point;
+    point.type = light_type::point;
+    point.casts_shadows = false;
+    point.source_radius = 0.0f;
+    point.source_length = 0.0f;
+    for(size_t index = 0; index < count; ++index)
+    {
+        const auto& particle = particle_lights_[index];
+        point.intensity = particle.intensity;
+        point.point_data.range = particle.range;
+        math::transform place;
+        place.set_position(particle.position);
+        submit_light(point, place, particle.color, nullptr, context);
+    }
 }
 
 auto deferred::run_indirect_lighting_pass(const camera& camera,
@@ -2893,7 +3087,8 @@ auto deferred::run_taa_pass(const camera& camera,
                             gfx::render_view& rview,
                             const gfx::frame_buffer::ptr& input,
                             const gfx::frame_buffer::ptr& output,
-                            const run_params& rparams) -> gfx::frame_buffer::ptr
+                            const run_params& rparams,
+                            const gfx::texture::ptr& particle_reactive) -> gfx::frame_buffer::ptr
 {
     if(!rparams.fill_taa_params)
     {
@@ -2916,6 +3111,7 @@ auto deferred::run_taa_pass(const camera& camera,
     // THIS frame's velocity buffer (produced right after the G-buffer pass); null when the
     // velocity pass is off, which drops the resolve back to camera-only depth reprojection.
     p.velocity = rview.tex_find("VELOCITY");
+    p.reactive = particle_reactive;
     rparams.fill_taa_params(p);
     p.pre_exposure = get_pre_exposure(rview);
     return taa_pass_.run(rview, p);
@@ -3582,6 +3778,9 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     velocity_debug_program_.cache_uniforms();
     velocity_debug_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_debug");
+
+    particle_overdraw_debug_program_.cache_uniforms();
+    particle_overdraw_debug_program_.program = load_program("vs_clip_quad", "particles/fs_particle_overdraw_debug");
 
     exposure_debug_program_.cache_uniforms();
     exposure_debug_program_.program = load_program("vs_clip_quad", "exposure/fs_exposure_debug");

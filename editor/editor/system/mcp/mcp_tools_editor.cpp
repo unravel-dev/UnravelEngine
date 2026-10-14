@@ -116,13 +116,13 @@ struct playback_action
 };
 
 const std::array<playback_action, 5> k_playback_actions{{
-    {"play", &particle_emitter_component::play, &particle_emitter_component::play_sub_emitters},
-    {"pause", &particle_emitter_component::pause, &particle_emitter_component::pause_sub_emitters},
-    {"resume", &particle_emitter_component::resume, &particle_emitter_component::resume_sub_emitters},
-    {"stop", &particle_emitter_component::stop, &particle_emitter_component::stop_sub_emitters},
+    {"play", &particle_emitter_component::play, &particle_emitter_component::play_child_emitters},
+    {"pause", &particle_emitter_component::pause, &particle_emitter_component::pause_child_emitters},
+    {"resume", &particle_emitter_component::resume, &particle_emitter_component::resume_child_emitters},
+    {"stop", &particle_emitter_component::stop, &particle_emitter_component::stop_child_emitters},
     {"stop_and_reset",
      &particle_emitter_component::stop_and_reset,
-     &particle_emitter_component::stop_and_reset_sub_emitters},
+     &particle_emitter_component::stop_and_reset_child_emitters},
 }};
 
 /// Runs one action: status changes nothing, emit queues a burst of @p count for the next update, and

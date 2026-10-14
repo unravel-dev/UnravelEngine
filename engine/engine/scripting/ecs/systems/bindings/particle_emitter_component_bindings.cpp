@@ -5,6 +5,8 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <hpp/optional.hpp>
+#include <reflection/reflection.h>
 
 #include <algorithm>
 #include <vector>
@@ -13,6 +15,27 @@ namespace unravel
 {
 namespace
 {
+
+using managed_range = dotnetpp_backend::managed_interface::float_range;
+
+/// @p value as an @p Enum when the reflection lists it among the enum's values. Scripts pass enums as plain ints,
+/// and a cast int could name no value at all, or one that is not an authoring choice; those are refused with a
+/// warning naming @p property.
+template<typename Enum>
+auto to_reflected_enum(int value, const char* property) -> hpp::optional<Enum>
+{
+    for(auto [id, data] : entt::resolve<Enum>().data())
+    {
+        const auto candidate = data.get({});
+        const auto* as_enum = candidate.template try_cast<Enum>();
+        if(as_enum != nullptr && static_cast<int>(*as_enum) == value)
+        {
+            return *as_enum;
+        }
+    }
+    APPLOG_WARNING("ParticleEmitterComponent.{}: {} is not one of its values; ignored.", property, value);
+    return hpp::nullopt;
+}
 
 //------------------------------
 
@@ -63,7 +86,10 @@ void internal_m2n_particle_emitter_set_shape(entt::entity id, int shape)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_shape(static_cast<ps_soa::emitter_shape>(shape));
+        if(const auto valid = to_reflected_enum<ps_soa::emitter_shape>(shape, "shape"))
+        {
+            comp->set_shape(*valid);
+        }
     }
 }
 
@@ -80,7 +106,10 @@ void internal_m2n_particle_emitter_set_direction(entt::entity id, int direction)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_direction(static_cast<ps_soa::emitter_direction>(direction));
+        if(const auto valid = to_reflected_enum<ps_soa::emitter_direction>(direction, "direction"))
+        {
+            comp->set_direction(*valid);
+        }
     }
 }
 
@@ -118,37 +147,807 @@ void internal_m2n_particle_emitter_set_emission_rate(entt::entity id, float rate
     }
 }
 
-auto internal_m2n_particle_emitter_get_temporal_motion(entt::entity id) -> float
+auto internal_m2n_particle_emitter_get_spawn_along_path(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_temporal_motion();
+        return comp->get_spawn_along_path();
     }
     return 0.0f;
 }
 
-void internal_m2n_particle_emitter_set_temporal_motion(entt::entity id, float motion)
+void internal_m2n_particle_emitter_set_spawn_along_path(entt::entity id, float motion)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_temporal_motion(motion);
+        comp->set_spawn_along_path(motion);
     }
 }
 
-auto internal_m2n_particle_emitter_get_velocity_damping(entt::entity id) -> float
+auto internal_m2n_particle_emitter_get_drag(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_velocity_damping();
+        return comp->get_drag();
     }
     return 0.0f;
 }
 
-void internal_m2n_particle_emitter_set_velocity_damping(entt::entity id, float damping)
+void internal_m2n_particle_emitter_set_drag(entt::entity id, float drag)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_velocity_damping(damping);
+        comp->set_drag(drag);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_inherit_velocity(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_inherit_velocity();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_inherit_velocity(entt::entity id, float fraction)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_inherit_velocity(fraction);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_direction_spread(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_direction_spread();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_direction_spread(entt::entity id, float degrees)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_direction_spread(degrees);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_use_fixed_seed(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_use_fixed_seed();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_use_fixed_seed(entt::entity id, bool use_fixed_seed)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_use_fixed_seed(use_fixed_seed);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_random_seed(entt::entity id) -> uint32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_random_seed();
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_random_seed(entt::entity id, uint32_t seed)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_random_seed(seed);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_sort_mode(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_sort_mode());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_sort_mode(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::sort_mode>(value, "sortMode"))
+        {
+            comp->set_sort_mode(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_primitive(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_primitive());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_primitive(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::particle_primitive>(value, "primitive"))
+        {
+            comp->set_primitive(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_half_resolution(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_half_resolution();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_half_resolution(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_half_resolution(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_write_velocity(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_write_velocity();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_write_velocity(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_write_velocity(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_velocity_alpha_threshold(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_velocity_alpha_threshold();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_velocity_alpha_threshold(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_velocity_alpha_threshold(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_random_between_gradients(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_random_between_gradients();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_random_between_gradients(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_random_between_gradients(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_texture_sheet_use_frame_curve();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_texture_sheet_use_frame_curve(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_texture_sheet_random_row(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_texture_sheet_random_row();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_texture_sheet_random_row(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_texture_sheet_random_row(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_rate_over_distance(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_rate_over_distance();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_rate_over_distance(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_rate_over_distance(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_cone_angle(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_cone_angle();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_cone_angle(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_cone_angle(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_torus_thickness(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_torus_thickness();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_torus_thickness(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_torus_thickness(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_shape_mesh(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_shape_mesh().uid();
+    }
+    return hpp::uuid{};
+}
+
+void internal_m2n_particle_emitter_set_shape_mesh(entt::entity id, const hpp::uuid& uid)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        auto& am = engine::context().get_cached<asset_manager>();
+        comp->set_shape_mesh(am.get_asset<mesh>(uid));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_render_mesh(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_render_mesh().uid();
+    }
+    return hpp::uuid{};
+}
+
+void internal_m2n_particle_emitter_set_render_mesh(entt::entity id, const hpp::uuid& uid)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        auto& am = engine::context().get_cached<asset_manager>();
+        comp->set_render_mesh(am.get_asset<mesh>(uid));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_render_material(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_render_material().uid();
+    }
+    return hpp::uuid{};
+}
+
+void internal_m2n_particle_emitter_set_render_material(entt::entity id, const hpp::uuid& uid)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        auto& am = engine::context().get_cached<asset_manager>();
+        comp->set_render_material(am.get_asset<material>(uid));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_mesh_cast_shadows(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_mesh_cast_shadows();
+    }
+    return true;
+}
+
+void internal_m2n_particle_emitter_set_mesh_cast_shadows(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_mesh_cast_shadows(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_mesh_spawn_mode(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_shape_mesh_mode());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_mesh_spawn_mode(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::mesh_spawn_mode>(value, "shapeMeshMode"))
+        {
+            comp->set_shape_mesh_mode(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_turbulence_strength(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_turbulence_strength();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_turbulence_strength(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_turbulence_strength(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_turbulence_frequency(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_turbulence_frequency();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_turbulence_frequency(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_turbulence_frequency(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_turbulence_speed(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_turbulence_speed();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_turbulence_speed(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_turbulence_speed(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_max_draw_distance(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_max_draw_distance();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_max_draw_distance(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_max_draw_distance(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_draw_distance_fade(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_draw_distance_fade();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_draw_distance_fade(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_draw_distance_fade(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_normal_texture(entt::entity id) -> hpp::uuid
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_normal_texture().uid();
+    }
+    return hpp::uuid{};
+}
+
+void internal_m2n_particle_emitter_set_normal_texture(entt::entity id, const hpp::uuid& uid)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        auto& am = engine::context().get_cached<asset_manager>();
+        comp->set_normal_texture(am.get_asset<gfx::texture>(uid));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_cutout_alpha_threshold(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_cutout_alpha_threshold();
+    }
+    return 0.05f;
+}
+
+void internal_m2n_particle_emitter_set_cutout_alpha_threshold(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_cutout_alpha_threshold(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_lighting_wrap(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_lighting_wrap();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_lighting_wrap(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_lighting_wrap(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_receive_shadows(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_receive_shadows();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_receive_shadows(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_receive_shadows(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_lighting(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_lighting());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_lighting(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::particle_lighting>(value, "lighting"))
+        {
+            comp->set_lighting(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_light_count(entt::entity id) -> uint32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_light_count();
+    }
+    return 0u;
+}
+
+void internal_m2n_particle_emitter_set_light_count(entt::entity id, uint32_t value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_light_count(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_light_intensity(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_light_intensity();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_light_intensity(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_light_intensity(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_light_range(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_light_range();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_light_range(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_light_range(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_light_color_from_particle(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_light_color_from_particle();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_light_color_from_particle(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_light_color_from_particle(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_restitution(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_restitution();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_restitution(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_restitution(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_friction(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_friction();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_friction(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_friction(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_collision_radius_scale(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_collision_radius_scale();
+    }
+    return 1.0f;
+}
+
+void internal_m2n_particle_emitter_set_collision_radius_scale(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_collision_radius_scale(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_max_bounces(entt::entity id) -> uint32_t
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_max_bounces();
+    }
+    return 0u;
+}
+
+void internal_m2n_particle_emitter_set_max_bounces(entt::entity id, uint32_t value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_max_bounces(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_trail_length(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_trail_length();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_trail_length(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_trail_length(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_ribbon_texture_mode(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_ribbon_texture_mode());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_ribbon_texture_mode(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::ribbon_texture_mode>(value, "ribbonTextureMode"))
+        {
+            comp->set_ribbon_texture_mode(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_ribbon_tile_time(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_ribbon_tile_time();
+    }
+    return 0.25f;
+}
+
+void internal_m2n_particle_emitter_set_ribbon_tile_time(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_ribbon_tile_time(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_trail_width_end(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_trail_width_end();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_trail_width_end(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_trail_width_end(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_bounds_mode(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_bounds_mode());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_bounds_mode(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::bounds_mode>(value, "boundsMode"))
+        {
+            comp->set_bounds_mode(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_fixed_bounds(entt::entity id) -> math::bbox
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_fixed_bounds();
+    }
+    return math::bbox::empty;
+}
+
+void internal_m2n_particle_emitter_set_fixed_bounds(entt::entity id, const math::bbox& bounds)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_fixed_bounds(bounds);
     }
 }
 
@@ -169,88 +968,110 @@ void internal_m2n_particle_emitter_set_opacity(entt::entity id, float opacity)
     }
 }
 
-auto internal_m2n_particle_emitter_get_force_over_lifetime(entt::entity id) -> math::vec3
+auto internal_m2n_particle_emitter_get_acceleration(entt::entity id) -> math::vec3
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_force_over_lifetime();
+        return comp->get_acceleration();
     }
     return math::vec3{0.0f, 0.0f, 0.0f};
 }
 
-void internal_m2n_particle_emitter_set_force_over_lifetime(entt::entity id, const math::vec3& force)
+void internal_m2n_particle_emitter_set_acceleration(entt::entity id, const math::vec3& force)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_force_over_lifetime(force);
+        comp->set_acceleration(force);
     }
 }
 
-auto internal_m2n_particle_emitter_get_emission_shape_scale(entt::entity id) -> math::vec3
+auto internal_m2n_particle_emitter_get_shape_scale(entt::entity id) -> math::vec3
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_emission_shape_scale();
+        return comp->get_shape_scale();
     }
     return math::vec3{1.0f, 1.0f, 1.0f};
 }
 
-void internal_m2n_particle_emitter_set_emission_shape_scale(entt::entity id, const math::vec3& scale)
+void internal_m2n_particle_emitter_set_shape_scale(entt::entity id, const math::vec3& scale)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_emission_shape_scale(scale);
+        comp->set_shape_scale(scale);
     }
 }
 
-auto internal_m2n_particle_emitter_get_emission_lifetime(entt::entity id) -> float
+auto internal_m2n_particle_emitter_get_duration(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_emission_lifetime().count();
-    }
-    return 0.0f;
-}
-
-void internal_m2n_particle_emitter_set_emission_lifetime(entt::entity id, float lifetime)
-{
-    if(auto comp = safe_get_component<particle_emitter_component>(id))
-    {
-        comp->set_emission_lifetime(std::chrono::duration<float>(lifetime));
-    }
-}
-
-auto internal_m2n_particle_emitter_get_lifetime(entt::entity id) -> float
-{
-    if(auto comp = safe_get_component<particle_emitter_component>(id))
-    {
-        return comp->get_lifetime().count();
+        return comp->get_duration().count();
     }
     return 0.0f;
 }
 
-void internal_m2n_particle_emitter_set_lifetime(entt::entity id, float lifetime)
+void internal_m2n_particle_emitter_set_duration(entt::entity id, float duration)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_lifetime(std::chrono::duration<float>(lifetime));
+        comp->set_duration(std::chrono::duration<float>(duration));
     }
 }
 
-auto internal_m2n_particle_emitter_get_position_easing(entt::entity id) -> int
+auto internal_m2n_particle_emitter_get_lifetime_range(entt::entity id) -> managed_range
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return static_cast<int>(comp->get_position_easing());
+        const auto& range = comp->get_lifetime();
+        return {range.min, range.max};
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_lifetime_range(entt::entity id, managed_range value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_lifetime(frange_t(value.min, value.max));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_start_speed(entt::entity id) -> managed_range
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        const auto& range = comp->get_start_speed();
+        return {range.min, range.max};
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_start_speed(entt::entity id, managed_range value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_start_speed(frange_t(value.min, value.max));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_motion_easing(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_motion_easing());
     }
     return 0;
 }
 
-void internal_m2n_particle_emitter_set_position_easing(entt::entity id, int easing)
+void internal_m2n_particle_emitter_set_motion_easing(entt::entity id, int easing)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_position_easing(static_cast<bx::Easing::Enum>(easing));
+        if(const auto valid = to_reflected_enum<bx::Easing::Enum>(easing, "motionEasing"))
+        {
+            comp->set_motion_easing(*valid);
+        }
     }
 }
 
@@ -379,30 +1200,35 @@ void internal_m2n_particle_emitter_set_blend_mode(entt::entity id, int mode)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_blend_mode(static_cast<ps_soa::blend_mode>(mode));
+        if(const auto valid = to_reflected_enum<ps_soa::blend_mode>(mode, "blendMode"))
+        {
+            comp->set_blend_mode(*valid);
+        }
     }
 }
 
-auto internal_m2n_particle_emitter_get_simulation_backend(entt::entity id) -> int
+auto internal_m2n_particle_emitter_get_sort_backend(entt::entity id) -> int
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return static_cast<int>(comp->get_simulation_backend());
+        return static_cast<int>(comp->get_sort_backend());
     }
-    return static_cast<int>(ps_soa::particle_sim_backend::cpu);
+    return static_cast<int>(ps_soa::particle_sort_backend::cpu);
 }
 
-void internal_m2n_particle_emitter_set_simulation_backend(entt::entity id, int backend)
+void internal_m2n_particle_emitter_set_sort_backend(entt::entity id, int backend)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_simulation_backend(static_cast<ps_soa::particle_sim_backend>(backend));
+        if(const auto valid = to_reflected_enum<ps_soa::particle_sort_backend>(backend, "sortBackend"))
+        {
+            comp->set_sort_backend(*valid);
+        }
     }
 }
 
 //------------------------------
 
-using managed_range = dotnetpp_backend::managed_interface::float_range;
 
 auto internal_m2n_particle_emitter_get_culling_mode(entt::entity id) -> int
 {
@@ -417,7 +1243,10 @@ void internal_m2n_particle_emitter_set_culling_mode(entt::entity id, int value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_culling_mode(static_cast<particle_emitter_component::culling_mode>(value));
+        if(const auto valid = to_reflected_enum<particle_emitter_component::culling_mode>(value, "cullingMode"))
+        {
+            comp->set_culling_mode(*valid);
+        }
     }
 }
 
@@ -434,7 +1263,10 @@ void internal_m2n_particle_emitter_set_simulation_space(entt::entity id, int val
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_simulation_space(static_cast<ps_soa::simulation_space>(value));
+        if(const auto valid = to_reflected_enum<ps_soa::simulation_space>(value, "simulationSpace"))
+        {
+            comp->set_simulation_space(*valid);
+        }
     }
 }
 
@@ -468,41 +1300,44 @@ void internal_m2n_particle_emitter_set_spawn_location(entt::entity id, int value
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_spawn_location(static_cast<ps_soa::spawn_location>(value));
+        if(const auto valid = to_reflected_enum<ps_soa::spawn_location>(value, "spawnLocation"))
+        {
+            comp->set_spawn_location(*valid);
+        }
     }
 }
 
-auto internal_m2n_particle_emitter_get_emission_shape_position(entt::entity id) -> math::vec3
+auto internal_m2n_particle_emitter_get_shape_position(entt::entity id) -> math::vec3
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_emission_shape_position();
-    }
-    return {};
-}
-
-void internal_m2n_particle_emitter_set_emission_shape_position(entt::entity id, const math::vec3& value)
-{
-    if(auto comp = safe_get_component<particle_emitter_component>(id))
-    {
-        comp->set_emission_shape_position(value);
-    }
-}
-
-auto internal_m2n_particle_emitter_get_initial_scale_3d(entt::entity id) -> math::vec3
-{
-    if(auto comp = safe_get_component<particle_emitter_component>(id))
-    {
-        return comp->get_initial_scale_3d();
+        return comp->get_shape_position();
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_initial_scale_3d(entt::entity id, const math::vec3& value)
+void internal_m2n_particle_emitter_set_shape_position(entt::entity id, const math::vec3& value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_initial_scale_3d(value);
+        comp->set_shape_position(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_size_axes(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_size_axes();
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_size_axes(entt::entity id, const math::vec3& value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_size_axes(value);
     }
 }
 
@@ -510,7 +1345,7 @@ auto internal_m2n_particle_emitter_get_rotation(entt::entity id) -> managed_rang
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        const auto& range = comp->get_rotation();
+        const auto& range = comp->get_start_rotation();
         return {range.min, range.max};
     }
     return {};
@@ -520,42 +1355,42 @@ void internal_m2n_particle_emitter_set_rotation(entt::entity id, managed_range v
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_rotation(frange_t(value.min, value.max));
+        comp->set_start_rotation(frange_t(value.min, value.max));
     }
 }
 
-auto internal_m2n_particle_emitter_get_rotation_speed(entt::entity id) -> managed_range
+auto internal_m2n_particle_emitter_get_spin_speed(entt::entity id) -> managed_range
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        const auto& range = comp->get_rotation_speed();
+        const auto& range = comp->get_spin_speed();
         return {range.min, range.max};
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_rotation_speed(entt::entity id, managed_range value)
+void internal_m2n_particle_emitter_set_spin_speed(entt::entity id, managed_range value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_rotation_speed(frange_t(value.min, value.max));
+        comp->set_spin_speed(frange_t(value.min, value.max));
     }
 }
 
-auto internal_m2n_particle_emitter_get_random_rotation_direction(entt::entity id) -> bool
+auto internal_m2n_particle_emitter_get_random_spin_direction(entt::entity id) -> bool
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return comp->get_random_rotation_direction();
+        return comp->get_random_spin_direction();
     }
     return false;
 }
 
-void internal_m2n_particle_emitter_set_random_rotation_direction(entt::entity id, bool value)
+void internal_m2n_particle_emitter_set_random_spin_direction(entt::entity id, bool value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_random_rotation_direction(value);
+        comp->set_random_spin_direction(value);
     }
 }
 
@@ -644,39 +1479,39 @@ void internal_m2n_particle_emitter_set_frame_blending(entt::entity id, bool valu
     }
 }
 
-auto internal_m2n_particle_emitter_get_size_by_speed_range(entt::entity id) -> managed_range
+auto internal_m2n_particle_emitter_get_size_by_speed_multiplier(entt::entity id) -> managed_range
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        const auto& range = comp->get_size_by_speed_range();
+        const auto& range = comp->get_size_by_speed_multiplier();
         return {range.min, range.max};
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_size_by_speed_range(entt::entity id, managed_range value)
+void internal_m2n_particle_emitter_set_size_by_speed_multiplier(entt::entity id, managed_range value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_size_by_speed_range(frange_t(value.min, value.max));
+        comp->set_size_by_speed_multiplier(frange_t(value.min, value.max));
     }
 }
 
-auto internal_m2n_particle_emitter_get_size_by_speed_velocity_range(entt::entity id) -> managed_range
+auto internal_m2n_particle_emitter_get_size_by_speed_speed_range(entt::entity id) -> managed_range
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        const auto& range = comp->get_size_by_speed_velocity_range();
+        const auto& range = comp->get_size_by_speed_speed_range();
         return {range.min, range.max};
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_size_by_speed_velocity_range(entt::entity id, managed_range value)
+void internal_m2n_particle_emitter_set_size_by_speed_speed_range(entt::entity id, managed_range value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_size_by_speed_velocity_range(frange_t(value.min, value.max));
+        comp->set_size_by_speed_speed_range(frange_t(value.min, value.max));
     }
 }
 
@@ -697,21 +1532,21 @@ void internal_m2n_particle_emitter_set_color_intensity(entt::entity id, float va
     }
 }
 
-auto internal_m2n_particle_emitter_get_color_by_speed_velocity_range(entt::entity id) -> managed_range
+auto internal_m2n_particle_emitter_get_color_by_speed_speed_range(entt::entity id) -> managed_range
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        const auto& range = comp->get_color_by_speed_velocity_range();
+        const auto& range = comp->get_color_by_speed_speed_range();
         return {range.min, range.max};
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_color_by_speed_velocity_range(entt::entity id, managed_range value)
+void internal_m2n_particle_emitter_set_color_by_speed_speed_range(entt::entity id, managed_range value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_color_by_speed_velocity_range(frange_t(value.min, value.max));
+        comp->set_color_by_speed_speed_range(frange_t(value.min, value.max));
     }
 }
 
@@ -746,7 +1581,10 @@ void internal_m2n_particle_emitter_set_render_mode(entt::entity id, int value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_render_mode(static_cast<ps_soa::render_mode>(value));
+        if(const auto valid = to_reflected_enum<ps_soa::render_mode>(value, "renderMode"))
+        {
+            comp->set_render_mode(*valid);
+        }
     }
 }
 
@@ -797,7 +1635,10 @@ void internal_m2n_particle_emitter_set_texture_mode(entt::entity id, int value)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_texture_mode(static_cast<ps_soa::texture_mode>(value));
+        if(const auto valid = to_reflected_enum<ps_soa::texture_mode>(value, "textureMode"))
+        {
+            comp->set_texture_mode(*valid);
+        }
     }
 }
 
@@ -878,6 +1719,13 @@ struct curve_range_key
     float max{};
 };
 
+/// Managed Vector3Key.
+struct curve_vector3_key
+{
+    float time{};
+    dotnetpp_backend::managed_interface::vector3 value{};
+};
+
 /// Managed EmitParams (ps_soa::emit_params with managed vector and color types).
 struct managed_emit_params
 {
@@ -889,8 +1737,10 @@ struct managed_emit_params
     uint32_t mask{};
 };
 
+/// @p base with the points of @p keys: keys that stay where @p base has keys keep their interpolation and
+/// tangents, so a curve read by a script and written back is unchanged.
 template<typename T, typename Key, typename ToElement>
-auto make_gradient(const std::vector<Key>& keys, ToElement&& to_element) -> math::gradient<T>
+auto make_gradient(const std::vector<Key>& keys, ToElement&& to_element, const math::gradient<T>& base) -> math::gradient<T>
 {
     typename math::gradient<T>::points_t points;
     points.reserve(keys.size());
@@ -899,9 +1749,29 @@ auto make_gradient(const std::vector<Key>& keys, ToElement&& to_element) -> math
         points.push_back({key.time, to_element(key)});
     }
     std::sort(points.begin(), points.end());
-    math::gradient<T> gradient;
-    gradient.set_points(points);
+    math::gradient<T> gradient = base;
+    gradient.set_points_keeping_shape(points);
     return gradient;
+}
+
+auto to_value_keys(const math::gradient<float>& curve) -> std::vector<curve_value_key>
+{
+    std::vector<curve_value_key> keys;
+    for(const auto& point : curve.get_points())
+    {
+        keys.push_back({point.progress, point.element});
+    }
+    return keys;
+}
+
+auto to_value_curve(const std::vector<curve_value_key>& keys, const math::gradient<float>& base) -> math::gradient<float>
+{
+    return make_gradient<float>(keys,
+                                [](const curve_value_key& key)
+                                {
+                                    return key.value;
+                                },
+                                base);
 }
 
 auto to_color_keys(const math::gradient<math::color>& gradient) -> std::vector<gradient_key>
@@ -916,7 +1786,8 @@ auto to_color_keys(const math::gradient<math::color>& gradient) -> std::vector<g
     return keys;
 }
 
-auto to_color_gradient(const std::vector<gradient_key>& keys) -> math::gradient<math::color>
+auto to_color_gradient(const std::vector<gradient_key>& keys, const math::gradient<math::color>& base)
+    -> math::gradient<math::color>
 {
     using converter = dotnet::managed_interface::converter;
     return make_gradient<math::color>(keys,
@@ -924,7 +1795,8 @@ auto to_color_gradient(const std::vector<gradient_key>& keys) -> math::gradient<
                                       {
                                           return converter::convert<dotnetpp_backend::managed_interface::color,
                                                                     math::color>(key.color);
-                                      });
+                                      },
+                                      base);
 }
 
 auto to_range_keys(const math::gradient<frange_t>& gradient) -> std::vector<curve_range_key>
@@ -937,13 +1809,40 @@ auto to_range_keys(const math::gradient<frange_t>& gradient) -> std::vector<curv
     return keys;
 }
 
-auto to_range_gradient(const std::vector<curve_range_key>& keys) -> math::gradient<frange_t>
+auto to_range_gradient(const std::vector<curve_range_key>& keys, const math::gradient<frange_t>& base)
+    -> math::gradient<frange_t>
 {
     return make_gradient<frange_t>(keys,
                                    [](const curve_range_key& key)
                                    {
                                        return frange_t(key.min, key.max);
-                                   });
+                                   },
+                                   base);
+}
+
+auto to_vector3_keys(const math::gradient<math::vec3>& curve) -> std::vector<curve_vector3_key>
+{
+    using converter = dotnet::managed_interface::converter;
+    std::vector<curve_vector3_key> keys;
+    for(const auto& point : curve.get_points())
+    {
+        keys.push_back(
+            {point.progress, converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(point.element)});
+    }
+    return keys;
+}
+
+auto to_vector3_curve(const std::vector<curve_vector3_key>& keys, const math::gradient<math::vec3>& base)
+    -> math::gradient<math::vec3>
+{
+    using converter = dotnet::managed_interface::converter;
+    return make_gradient<math::vec3>(keys,
+                                     [](const curve_vector3_key& key)
+                                     {
+                                         return converter::convert<dotnetpp_backend::managed_interface::vector3,
+                                                                   math::vec3>(key.value);
+                                     },
+                                     base);
 }
 
 auto internal_m2n_particle_emitter_get_color_gradient(entt::entity id) -> std::vector<gradient_key>
@@ -959,7 +1858,7 @@ void internal_m2n_particle_emitter_set_color_gradient(entt::entity id, const std
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_color_gradient(to_color_gradient(keys));
+        comp->set_color_gradient(to_color_gradient(keys, comp->get_color_gradient()));
     }
 }
 
@@ -976,68 +1875,466 @@ void internal_m2n_particle_emitter_set_color_by_speed_gradient(entt::entity id, 
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_color_by_speed_gradient(to_color_gradient(keys));
+        comp->set_color_by_speed_gradient(to_color_gradient(keys, comp->get_color_by_speed_gradient()));
     }
 }
 
-auto internal_m2n_particle_emitter_get_velocity_gradient(entt::entity id) -> std::vector<curve_range_key>
+auto internal_m2n_particle_emitter_get_speed_over_life(entt::entity id) -> std::vector<curve_value_key>
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return to_range_keys(comp->get_velocity_gradient());
+        return to_value_keys(comp->get_speed_over_life());
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_velocity_gradient(entt::entity id, const std::vector<curve_range_key>& keys)
+void internal_m2n_particle_emitter_set_speed_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_velocity_gradient(to_range_gradient(keys));
+        comp->set_speed_over_life(to_value_curve(keys, comp->get_speed_over_life()));
     }
 }
 
-auto internal_m2n_particle_emitter_get_scale_gradient(entt::entity id) -> std::vector<curve_range_key>
+auto internal_m2n_particle_emitter_get_size_over_life(entt::entity id) -> std::vector<curve_range_key>
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        return to_range_keys(comp->get_scale_gradient());
+        return to_range_keys(comp->get_size_over_life());
     }
     return {};
 }
 
-void internal_m2n_particle_emitter_set_scale_gradient(entt::entity id, const std::vector<curve_range_key>& keys)
+void internal_m2n_particle_emitter_set_size_over_life(entt::entity id, const std::vector<curve_range_key>& keys)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_scale_gradient(to_range_gradient(keys));
+        comp->set_size_over_life(to_range_gradient(keys, comp->get_size_over_life()));
     }
 }
 
-auto internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_gradient(entt::entity id)
+auto internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve(entt::entity id)
     -> std::vector<curve_value_key>
 {
-    std::vector<curve_value_key> keys;
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        for(const auto& point : comp->get_lifetime_by_emitter_speed_gradient().get_points())
+        return to_value_keys(comp->get_lifetime_by_emitter_speed_curve());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve(entt::entity id,
+                                                                         const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_lifetime_by_emitter_speed_curve(to_value_curve(keys, comp->get_lifetime_by_emitter_speed_curve()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_stretch_length_scale(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_stretch_length_scale();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_stretch_length_scale(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_stretch_length_scale(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_stretch_camera_velocity_scale(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_stretch_camera_velocity_scale();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_stretch_camera_velocity_scale(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_stretch_camera_velocity_scale(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_facing_axis(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_facing_axis();
+    }
+    return math::vec3{0.0f, 1.0f, 0.0f};
+}
+
+void internal_m2n_particle_emitter_set_facing_axis(entt::entity id, const math::vec3& value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_facing_axis(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_stretch_speed_scale(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_stretch_speed_scale();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_stretch_speed_scale(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_stretch_speed_scale(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_camera_offset(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_camera_offset();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_camera_offset(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_camera_offset(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_max_screen_size(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_max_screen_size();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_max_screen_size(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_max_screen_size(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_taa_response(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_taa_response();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_particle_emitter_set_taa_response(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_taa_response(value);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_camera_fade_range(entt::entity id) -> managed_range
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        const auto& range = comp->get_camera_fade_range();
+        return {range.min, range.max};
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_camera_fade_range(entt::entity id, managed_range value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_camera_fade_range(frange_t(value.min, value.max));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_subpixel_fade(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_subpixel_fade();
+    }
+    return false;
+}
+
+void internal_m2n_particle_emitter_set_subpixel_fade(entt::entity id, bool fade)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_subpixel_fade(fade);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_size_axes_over_life(entt::entity id) -> std::vector<curve_vector3_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_vector3_keys(comp->get_size_axes_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_size_axes_over_life(entt::entity id, const std::vector<curve_vector3_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_size_axes_over_life(to_vector3_curve(keys, comp->get_size_axes_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_color_gradient_b(entt::entity id) -> std::vector<gradient_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_color_keys(comp->get_color_gradient_b());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_color_gradient_b(entt::entity id, const std::vector<gradient_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_color_gradient_b(to_color_gradient(keys, comp->get_color_gradient_b()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_intensity_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_intensity_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_intensity_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_intensity_over_life(to_value_curve(keys, comp->get_intensity_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_spin_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_spin_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_spin_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_spin_over_life(to_value_curve(keys, comp->get_spin_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_texture_sheet_frame_curve(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_texture_sheet_frame_curve());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_texture_sheet_frame_curve(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_texture_sheet_frame_curve(to_value_curve(keys, comp->get_texture_sheet_frame_curve()));
+    }
+}
+
+/// Managed ParticleBurst.
+struct burst_key
+{
+    float time{};
+    float count_min{};
+    float count_max{};
+    uint32_t cycles{};
+    float interval{};
+    float probability{};
+};
+
+auto internal_m2n_particle_emitter_get_bursts(entt::entity id) -> std::vector<burst_key>
+{
+    std::vector<burst_key> keys;
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        for(const auto& burst : comp->get_bursts())
         {
-            keys.push_back({point.progress, point.element});
+            keys.push_back({burst.time, burst.count.min, burst.count.max, burst.cycles, burst.interval, burst.probability});
         }
     }
     return keys;
 }
 
-void internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_gradient(entt::entity id,
-                                                                         const std::vector<curve_value_key>& keys)
+void internal_m2n_particle_emitter_set_bursts(entt::entity id, const std::vector<burst_key>& keys)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->set_lifetime_by_emitter_speed_gradient(make_gradient<float>(keys,
-                                                                          [](const curve_value_key& key)
-                                                                          {
-                                                                              return key.value;
-                                                                          }));
+        std::vector<ps_soa::emitter_burst> bursts;
+        for(const auto& key : keys)
+        {
+            bursts.push_back({key.time, frange_t(key.count_min, key.count_max), key.cycles, key.interval, key.probability});
+        }
+        comp->set_bursts(bursts);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_turbulence_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_turbulence_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_turbulence_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_turbulence_over_life(to_value_curve(keys, comp->get_turbulence_over_life()));
+    }
+}
+
+auto internal_m2n_particle_emitter_get_collision(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_collision());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_collision(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::collision_mode>(value, "collision"))
+        {
+            comp->set_collision(*valid);
+        }
+    }
+}
+
+auto internal_m2n_particle_emitter_get_collision_planes(entt::entity id) -> std::vector<math::vec4>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return comp->get_collision_planes();
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_collision_planes(entt::entity id, const std::vector<math::vec4>& planes)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_collision_planes(planes);
+    }
+}
+
+/// Managed ParticleSubEmitter (ints where C# would marshal a bool differently from its layout).
+struct sub_emitter_key
+{
+    int32_t trigger{};
+    entt::entity target{entt::null};
+    float count_min{};
+    float count_max{};
+    float probability{};
+    float inherit_velocity{};
+    int32_t inherit_color{};
+    int32_t inherit_size{};
+};
+
+auto internal_m2n_particle_emitter_get_sub_emitters(entt::entity id) -> std::vector<sub_emitter_key>
+{
+    std::vector<sub_emitter_key> keys;
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        for(const auto& sub_emitter : comp->get_sub_emitters())
+        {
+            keys.push_back({static_cast<int32_t>(sub_emitter.trigger),
+                            sub_emitter.target ? sub_emitter.target.entity() : entt::entity(entt::null),
+                            sub_emitter.count.min,
+                            sub_emitter.count.max,
+                            sub_emitter.probability,
+                            sub_emitter.inherit_velocity,
+                            sub_emitter.inherit_color ? 1 : 0,
+                            sub_emitter.inherit_size ? 1 : 0});
+        }
+    }
+    return keys;
+}
+
+void internal_m2n_particle_emitter_set_sub_emitters(entt::entity id, const std::vector<sub_emitter_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        std::vector<particle_sub_emitter> sub_emitters;
+        for(const auto& key : keys)
+        {
+            const auto trigger = to_reflected_enum<ps_soa::particle_event_type>(key.trigger, "subEmitters trigger");
+            if(!trigger)
+            {
+                continue;
+            }
+            particle_sub_emitter sub_emitter;
+            sub_emitter.trigger = *trigger;
+            sub_emitter.target = get_entity_from_id(key.target);
+            sub_emitter.count = frange_t(key.count_min, key.count_max);
+            sub_emitter.probability = key.probability;
+            sub_emitter.inherit_velocity = key.inherit_velocity;
+            sub_emitter.inherit_color = key.inherit_color != 0;
+            sub_emitter.inherit_size = key.inherit_size != 0;
+            sub_emitters.push_back(sub_emitter);
+        }
+        comp->set_sub_emitters(sub_emitters);
+    }
+}
+
+auto internal_m2n_particle_emitter_get_erosion_over_life(entt::entity id) -> std::vector<curve_value_key>
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return to_value_keys(comp->get_erosion_over_life());
+    }
+    return {};
+}
+
+void internal_m2n_particle_emitter_set_erosion_over_life(entt::entity id, const std::vector<curve_value_key>& keys)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        comp->set_erosion_over_life(to_value_curve(keys, comp->get_erosion_over_life()));
     }
 }
 
@@ -1070,43 +2367,43 @@ auto internal_m2n_particle_emitter_is_simulated(entt::entity id) -> bool
     return false;
 }
 
-void internal_m2n_particle_emitter_play_sub_emitters(entt::entity id)
+void internal_m2n_particle_emitter_play_child_emitters(entt::entity id)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->play_sub_emitters();
+        comp->play_child_emitters();
     }
 }
 
-void internal_m2n_particle_emitter_stop_sub_emitters(entt::entity id)
+void internal_m2n_particle_emitter_stop_child_emitters(entt::entity id)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->stop_sub_emitters();
+        comp->stop_child_emitters();
     }
 }
 
-void internal_m2n_particle_emitter_stop_and_reset_sub_emitters(entt::entity id)
+void internal_m2n_particle_emitter_stop_and_reset_child_emitters(entt::entity id)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->stop_and_reset_sub_emitters();
+        comp->stop_and_reset_child_emitters();
     }
 }
 
-void internal_m2n_particle_emitter_pause_sub_emitters(entt::entity id)
+void internal_m2n_particle_emitter_pause_child_emitters(entt::entity id)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->pause_sub_emitters();
+        comp->pause_child_emitters();
     }
 }
 
-void internal_m2n_particle_emitter_resume_sub_emitters(entt::entity id)
+void internal_m2n_particle_emitter_resume_child_emitters(entt::entity id)
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
     {
-        comp->resume_sub_emitters();
+        comp->resume_child_emitters();
     }
 }
 
@@ -1157,38 +2454,258 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_emission_rate));
     reg.add_internal_call("internal_m2n_particle_emitter_set_emission_rate", 
                             dotnet_internal_call(internal_m2n_particle_emitter_set_emission_rate));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_temporal_motion", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_temporal_motion));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_temporal_motion", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_temporal_motion));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_velocity_damping", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_velocity_damping));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_velocity_damping", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_velocity_damping));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_spawn_along_path", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_spawn_along_path));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_spawn_along_path", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_spawn_along_path));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_drag",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_drag));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_drag",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_drag));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_inherit_velocity",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_inherit_velocity));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_inherit_velocity",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_inherit_velocity));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_direction_spread",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_direction_spread));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_direction_spread",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_direction_spread));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_use_fixed_seed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_use_fixed_seed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_use_fixed_seed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_use_fixed_seed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_random_seed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_seed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_random_seed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_seed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_sort_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_sort_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_sort_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_sort_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_primitive",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_primitive));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_primitive",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_primitive));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_half_resolution",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_half_resolution));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_half_resolution",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_half_resolution));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_write_velocity",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_write_velocity));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_write_velocity",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_write_velocity));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_velocity_alpha_threshold",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_velocity_alpha_threshold));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_velocity_alpha_threshold",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_velocity_alpha_threshold));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_size_axes_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_axes_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_size_axes_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_axes_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_random_between_gradients",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_between_gradients));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_random_between_gradients",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_between_gradients));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_color_gradient_b",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_gradient_b));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_color_gradient_b",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_gradient_b));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_intensity_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_intensity_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_intensity_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_intensity_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_spin_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_spin_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_spin_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_spin_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_frame_curve",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_frame_curve));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_frame_curve",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_frame_curve));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_random_row",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_random_row));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_random_row",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_random_row));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_rate_over_distance",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_rate_over_distance));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_rate_over_distance",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_rate_over_distance));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_bursts",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_bursts));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_bursts",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_bursts));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_cone_angle",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_cone_angle));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_cone_angle",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_cone_angle));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_torus_thickness",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_torus_thickness));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_torus_thickness",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_torus_thickness));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_shape_mesh",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape_mesh));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_shape_mesh",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape_mesh));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_render_mesh",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_render_mesh));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_render_mesh",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_render_mesh));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_render_material",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_render_material));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_render_material",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_render_material));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_mesh_cast_shadows",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_mesh_cast_shadows));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_mesh_cast_shadows",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_mesh_cast_shadows));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_mesh_spawn_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_mesh_spawn_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_mesh_spawn_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_mesh_spawn_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_strength",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_strength));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_strength",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_strength));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_frequency",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_frequency));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_frequency",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_frequency));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_max_draw_distance",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_draw_distance));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_max_draw_distance",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_draw_distance));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_draw_distance_fade",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_draw_distance_fade));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_draw_distance_fade",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_draw_distance_fade));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_normal_texture",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_normal_texture));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_normal_texture",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_normal_texture));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_cutout_alpha_threshold",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_cutout_alpha_threshold));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_cutout_alpha_threshold",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_cutout_alpha_threshold));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_lighting_wrap",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_lighting_wrap));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_lighting_wrap",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_lighting_wrap));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_receive_shadows",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_receive_shadows));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_receive_shadows",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_receive_shadows));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_lighting",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_lighting));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_lighting",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_lighting));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_light_count",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_count));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_light_count",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_count));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_light_intensity",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_intensity));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_light_intensity",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_intensity));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_light_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_light_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_light_color_from_particle",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_color_from_particle));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_light_color_from_particle",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_color_from_particle));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_restitution",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_restitution));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_restitution",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_restitution));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_friction",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_friction));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_friction",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_friction));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision_radius_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_collision_radius_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collision_radius_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_collision_radius_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_max_bounces",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_bounces));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_max_bounces",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_bounces));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_collision));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collision",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_collision));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_collision_planes",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_collision_planes));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_collision_planes",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_collision_planes));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_sub_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_sub_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_sub_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_sub_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_trail_length",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_trail_length));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_trail_length",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_trail_length));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_texture_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_texture_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_texture_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_texture_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_tile_time",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_tile_time));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_tile_time",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_tile_time));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_trail_width_end",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_trail_width_end));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_trail_width_end",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_trail_width_end));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_bounds_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_bounds_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_bounds_mode",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_bounds_mode));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_fixed_bounds",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_fixed_bounds));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_fixed_bounds",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_fixed_bounds));
     reg.add_internal_call("internal_m2n_particle_emitter_get_opacity", 
                             dotnet_internal_call(internal_m2n_particle_emitter_get_opacity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_opacity", 
                             dotnet_internal_call(internal_m2n_particle_emitter_set_opacity));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_force_over_lifetime", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_force_over_lifetime));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_force_over_lifetime", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_force_over_lifetime));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_emission_shape_scale", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_emission_shape_scale));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_emission_shape_scale", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_emission_shape_scale));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_emission_lifetime", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_emission_lifetime));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_emission_lifetime", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_emission_lifetime));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_position_easing", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_position_easing));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_position_easing", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_position_easing));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_acceleration", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_acceleration));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_acceleration", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_acceleration));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_shape_scale", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_shape_scale", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_duration",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_duration));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_duration",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_duration));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_start_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_start_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_start_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_start_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_motion_easing", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_motion_easing));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_motion_easing", 
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_motion_easing));
     reg.add_internal_call("internal_m2n_particle_emitter_get_num_particles", 
                             dotnet_internal_call(internal_m2n_particle_emitter_get_num_particles));
     reg.add_internal_call("internal_m2n_particle_emitter_is_playing", 
@@ -1219,10 +2736,10 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_blend_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_blend_mode", 
                             dotnet_internal_call(internal_m2n_particle_emitter_set_blend_mode));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_simulation_backend",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_simulation_backend));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_simulation_backend",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_simulation_backend));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_sort_backend",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_sort_backend));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_sort_backend",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_sort_backend));
     reg.add_internal_call("internal_m2n_particle_emitter_get_culling_mode",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_culling_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_culling_mode",
@@ -1239,26 +2756,26 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_spawn_location));
     reg.add_internal_call("internal_m2n_particle_emitter_set_spawn_location",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_spawn_location));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_emission_shape_position",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_emission_shape_position));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_emission_shape_position",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_emission_shape_position));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_initial_scale_3d",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_initial_scale_3d));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_initial_scale_3d",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_initial_scale_3d));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_shape_position",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape_position));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_shape_position",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape_position));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_size_axes",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_axes));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_size_axes",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_axes));
     reg.add_internal_call("internal_m2n_particle_emitter_get_rotation",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_rotation));
     reg.add_internal_call("internal_m2n_particle_emitter_set_rotation",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_rotation));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_rotation_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_rotation_speed));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_rotation_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_rotation_speed));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_random_rotation_direction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_rotation_direction));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_random_rotation_direction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_rotation_direction));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_spin_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_spin_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_spin_speed",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_spin_speed));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_random_spin_direction",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_spin_direction));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_random_spin_direction",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_spin_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_get_soft_fade_distance",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_soft_fade_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_set_soft_fade_distance",
@@ -1279,22 +2796,22 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_frame_blending));
     reg.add_internal_call("internal_m2n_particle_emitter_set_frame_blending",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_frame_blending));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_range));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_by_speed_range));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_velocity_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_velocity_range));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_velocity_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_by_speed_velocity_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_multiplier",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_multiplier));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_multiplier",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_by_speed_multiplier));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_speed_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_speed_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_speed_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_by_speed_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_color_intensity",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_color_intensity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_intensity",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_color_intensity));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_color_by_speed_velocity_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_by_speed_velocity_range));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_color_by_speed_velocity_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_by_speed_velocity_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_color_by_speed_speed_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_by_speed_speed_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_color_by_speed_speed_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_by_speed_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_range",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_range",
@@ -1335,34 +2852,74 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_color_by_speed_gradient));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_by_speed_gradient",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_color_by_speed_gradient));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_velocity_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_velocity_gradient));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_velocity_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_velocity_gradient));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_scale_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_scale_gradient));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_scale_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_scale_gradient));
-    reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_gradient));
-    reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_gradient));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_stretch_length_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_stretch_length_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_stretch_length_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_stretch_length_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_stretch_camera_velocity_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_stretch_camera_velocity_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_stretch_camera_velocity_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_stretch_camera_velocity_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_facing_axis",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_facing_axis));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_facing_axis",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_facing_axis));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_stretch_speed_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_stretch_speed_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_stretch_speed_scale",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_stretch_speed_scale));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_camera_offset",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_camera_offset));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_camera_offset",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_camera_offset));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_max_screen_size",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_screen_size));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_max_screen_size",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_screen_size));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_taa_response",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_taa_response));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_taa_response",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_taa_response));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_camera_fade_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_camera_fade_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_camera_fade_range",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_camera_fade_range));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_subpixel_fade",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_subpixel_fade));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_subpixel_fade",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_subpixel_fade));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_erosion_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_erosion_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_erosion_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_erosion_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_speed_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_speed_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_speed_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_speed_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_size_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_size_over_life",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_over_life));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_get_world_bounds",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_world_bounds));
     reg.add_internal_call("internal_m2n_particle_emitter_is_stopped",
                             dotnet_internal_call(internal_m2n_particle_emitter_is_stopped));
     reg.add_internal_call("internal_m2n_particle_emitter_is_simulated",
                             dotnet_internal_call(internal_m2n_particle_emitter_is_simulated));
-    reg.add_internal_call("internal_m2n_particle_emitter_play_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_play_sub_emitters));
-    reg.add_internal_call("internal_m2n_particle_emitter_stop_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_stop_sub_emitters));
-    reg.add_internal_call("internal_m2n_particle_emitter_stop_and_reset_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_stop_and_reset_sub_emitters));
-    reg.add_internal_call("internal_m2n_particle_emitter_pause_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_pause_sub_emitters));
-    reg.add_internal_call("internal_m2n_particle_emitter_resume_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_resume_sub_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_play_child_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_play_child_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_stop_child_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_stop_child_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_stop_and_reset_child_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_stop_and_reset_child_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_pause_child_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_pause_child_emitters));
+    reg.add_internal_call("internal_m2n_particle_emitter_resume_child_emitters",
+                            dotnet_internal_call(internal_m2n_particle_emitter_resume_child_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_emit",
                             dotnet_internal_call(internal_m2n_particle_emitter_emit));
 }

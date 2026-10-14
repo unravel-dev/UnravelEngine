@@ -39,8 +39,11 @@ inline auto call(const std::vector<std::string>& args_array, const std::vector<s
     subprocess_s subprocess;
     std::memset(&subprocess, 0, sizeof(subprocess));
     {
+        // No window: a process started without a console (detached, or from a shortcut) would
+        // otherwise open a console window for every tool it runs; the output is read from pipes.
         int options = /*subprocess_option_enable_async |*/ subprocess_option_inherit_environment |
-                      subprocess_option_search_user_path | subprocess_option_combined_stdout_stderr;
+                      subprocess_option_search_user_path | subprocess_option_combined_stdout_stderr |
+                      subprocess_option_no_window;
         int op_code = -1;
         
         if(environment_array.empty())

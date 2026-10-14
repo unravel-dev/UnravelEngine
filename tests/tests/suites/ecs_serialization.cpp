@@ -31,7 +31,10 @@
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/test_component.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
+#include <engine/rendering/particles/ps/particle_system_soa.h>
+#include <graphics/graphics.h>
 #include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/ecs/prefab.h>
 #include <engine/ecs/scene.h>
@@ -1305,6 +1308,195 @@ void test_resync_honours_a_property_override()
                    {7.0f, 7.0f, 7.0f},
                    "a property that is NOT overridden still follows the prefab");
     }
+}
+
+auto make_flat_size_curve(float size) -> math::gradient<frange_t>
+{
+    math::gradient<frange_t> curve;
+    curve.add_point(frange_t(size, size), 0.0f);
+    curve.add_point(frange_t(size, size), 1.0f);
+    return curve;
+}
+
+/// The particle emitter's properties of every kind a prefab instance overrides: a range, a number, enums, a
+/// curve and lists of structs; the ones it leaves alone follow the prefab. Each override names the property as
+/// the inspector does (its reflected name), and the resync must skip exactly that load.
+void test_resync_honours_particle_emitter_overrides()
+{
+    begin_test("resync keeps a particle emitter's overridden properties and lets the rest follow the prefab");
+
+    // Emitters live in the particle system, which needs a device: the runner starts neither.
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    if(!gfx::init(init))
+    {
+        check(false, "bgfx initialises on the Noop renderer");
+        gfx::shutdown();
+        return;
+    }
+    ps_soa::init(16);
+    {
+        prefab_fixture fix;
+        fix.source = build_sample_tree(fix.authoring);
+        auto source_child = find_child_by_name(fix.source, "child_a");
+        source_child.emplace<particle_emitter_component>();
+        fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
+        fix.instance = fix.world.instantiate(fix.asset, false);
+        auto instance_child = fix.instance ? find_child_by_name(fix.instance, "child_a") : entt::handle{};
+        check(instance_child && instance_child.all_of<particle_emitter_component>(), "the instance has the emitter");
+        if(instance_child && instance_child.all_of<particle_emitter_component>())
+        {
+            const auto child_prefab_uid = prefab_uid_of(instance_child);
+            auto& instance_emitter = instance_child.get<particle_emitter_component>();
+            auto& instance_prefab = fix.instance.get<prefab_component>();
+            const auto override_property = [&](const char* property)
+            {
+                instance_prefab.add_override(child_prefab_uid, std::string("particle_emitter_component/") + property);
+            };
+
+            instance_emitter.set_lifetime(frange_t(4.0f, 5.0f));
+            override_property("lifetime");
+            instance_emitter.set_emission_rate(7.0f);
+            override_property("emission_rate");
+            instance_emitter.set_shape(ps_soa::emitter_shape::torus);
+            override_property("shape");
+            instance_emitter.set_render_mode(ps_soa::render_mode::mesh);
+            override_property("render_mode");
+            instance_emitter.set_size_over_life(make_flat_size_curve(3.0f));
+            override_property("size_over_life");
+            ps_soa::emitter_burst burst;
+            burst.time = 0.5f;
+            burst.count = frange_t(9.0f, 9.0f);
+            burst.cycles = 2;
+            instance_emitter.set_bursts({burst});
+            override_property("bursts");
+            instance_emitter.set_collision_planes({math::vec4(0.0f, 1.0f, 0.0f, -2.0f)});
+            override_property("collision_planes");
+            particle_sub_emitter sub_emitter;
+            sub_emitter.trigger = ps_soa::particle_event_type::collision;
+            sub_emitter.count = frange_t(3.0f, 3.0f);
+            instance_emitter.set_sub_emitters({sub_emitter});
+            override_property("sub_emitters");
+
+            // Meanwhile the prefab's author changes those and three more.
+            auto& source_emitter = source_child.get<particle_emitter_component>();
+            source_emitter.set_lifetime(frange_t(1.5f, 1.5f));
+            source_emitter.set_emission_rate(99.0f);
+            source_emitter.set_shape(ps_soa::emitter_shape::cone);
+            source_emitter.set_render_mode(ps_soa::render_mode::trail);
+            source_emitter.set_size_over_life(make_flat_size_curve(0.25f));
+            burst.count = frange_t(1.0f, 1.0f);
+            source_emitter.set_bursts({burst, burst});
+            source_emitter.set_collision_planes({math::vec4(1.0f, 0.0f, 0.0f, 0.0f)});
+            source_emitter.set_sub_emitters({});
+            source_emitter.set_gravity_scale(0.25f);
+            source_emitter.set_turbulence_strength(0.75f);
+            source_emitter.set_mesh_cast_shadows(false);
+
+            fix.republish_and_sync();
+
+            auto after = find_child_by_name(fix.instance, "child_a");
+            check(after && after.all_of<particle_emitter_component>(), "the emitter is still there after the resync");
+            if(after && after.all_of<particle_emitter_component>())
+            {
+                const auto& emitter = after.get<particle_emitter_component>();
+                const float tolerance = 1.0e-5f;
+                check(std::abs(emitter.get_lifetime().min - 4.0f) < tolerance &&
+                          std::abs(emitter.get_lifetime().max - 5.0f) < tolerance,
+                      "an overridden range (the lifetime) survives");
+                check(std::abs(emitter.get_emission_rate() - 7.0f) < tolerance, "an overridden number survives");
+                check(emitter.get_shape() == ps_soa::emitter_shape::torus &&
+                          emitter.get_render_mode() == ps_soa::render_mode::mesh,
+                      "overridden enums survive");
+                check(std::abs(emitter.get_size_over_life().sample(0.5f).min - 3.0f) < tolerance,
+                      "an overridden curve survives");
+                check(emitter.get_bursts().size() == 1 && std::abs(emitter.get_bursts()[0].count.min - 9.0f) < tolerance &&
+                          emitter.get_bursts()[0].cycles == 2,
+                      "overridden bursts survive");
+                check(emitter.get_collision_planes().size() == 1 &&
+                          std::abs(emitter.get_collision_planes()[0].y - 1.0f) < tolerance &&
+                          std::abs(emitter.get_collision_planes()[0].w + 2.0f) < tolerance,
+                      "overridden collision planes survive");
+                check(emitter.get_sub_emitters().size() == 1 &&
+                          emitter.get_sub_emitters()[0].trigger == ps_soa::particle_event_type::collision &&
+                          std::abs(emitter.get_sub_emitters()[0].count.min - 3.0f) < tolerance,
+                      "overridden sub-emitters survive");
+                check(std::abs(emitter.get_gravity_scale() - 0.25f) < tolerance &&
+                          std::abs(emitter.get_turbulence_strength() - 0.75f) < tolerance && !emitter.get_mesh_cast_shadows(),
+                      "the properties that are not overridden follow the prefab");
+            }
+        }
+    }
+    ps_soa::shutdown();
+    gfx::shutdown();
+}
+
+/// Overrides below a particle emitter property, as the inspector records an edit of one field: one end of a
+/// range, one field of one list element. The field keeps the instance's value; its siblings follow the prefab.
+void test_resync_honours_particle_emitter_field_overrides()
+{
+    begin_test("resync keeps an overridden field of a particle emitter property and updates its siblings");
+
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    if(!gfx::init(init))
+    {
+        check(false, "bgfx initialises on the Noop renderer");
+        gfx::shutdown();
+        return;
+    }
+    ps_soa::init(16);
+    {
+        prefab_fixture fix;
+        fix.source = build_sample_tree(fix.authoring);
+        auto source_child = find_child_by_name(fix.source, "child_a");
+        source_child.emplace<particle_emitter_component>();
+        fix.asset = make_prefab_from(fix.source, "test:/tree.pfb");
+        fix.instance = fix.world.instantiate(fix.asset, false);
+        auto instance_child = fix.instance ? find_child_by_name(fix.instance, "child_a") : entt::handle{};
+        check(instance_child && instance_child.all_of<particle_emitter_component>(), "the instance has the emitter");
+        if(instance_child && instance_child.all_of<particle_emitter_component>())
+        {
+            const auto child_prefab_uid = prefab_uid_of(instance_child);
+            auto& instance_emitter = instance_child.get<particle_emitter_component>();
+            auto& instance_prefab = fix.instance.get<prefab_component>();
+            instance_emitter.set_lifetime(frange_t(4.0f, 5.0f));
+            instance_prefab.add_override(child_prefab_uid, "particle_emitter_component/lifetime/min");
+            ps_soa::emitter_burst burst;
+            burst.time = 0.5f;
+            burst.count = frange_t(9.0f, 9.0f);
+            instance_emitter.set_bursts({burst});
+            instance_prefab.add_override(child_prefab_uid, "particle_emitter_component/bursts[0]/count");
+
+            auto& source_emitter = source_child.get<particle_emitter_component>();
+            source_emitter.set_lifetime(frange_t(1.5f, 6.0f));
+            burst.time = 1.0f;
+            burst.count = frange_t(1.0f, 1.0f);
+            source_emitter.set_bursts({burst});
+
+            fix.republish_and_sync();
+
+            auto after = find_child_by_name(fix.instance, "child_a");
+            if(after && after.all_of<particle_emitter_component>())
+            {
+                const auto& emitter = after.get<particle_emitter_component>();
+                const float tolerance = 1.0e-5f;
+                check(std::abs(emitter.get_lifetime().min - 4.0f) < tolerance, "the overridden end of a range stays");
+                check(std::abs(emitter.get_lifetime().max - 6.0f) < tolerance, "the other end follows the prefab");
+                const bool has_burst = emitter.get_bursts().size() == 1;
+                check(has_burst && std::abs(emitter.get_bursts()[0].count.min - 9.0f) < tolerance,
+                      "the overridden field of a list element stays");
+                check(has_burst && std::abs(emitter.get_bursts()[0].time - 1.0f) < tolerance,
+                      "the element's other fields follow the prefab");
+            }
+            else
+            {
+                check(false, "the emitter is still there after the resync");
+            }
+        }
+    }
+    ps_soa::shutdown();
+    gfx::shutdown();
 }
 
 void test_resync_root_position_and_rotation_are_implicit_overrides()
@@ -5635,6 +5827,8 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_resync_picks_up_prefab_changes();
         test_resync_keeps_the_same_entities();
         test_resync_honours_a_property_override();
+        test_resync_honours_particle_emitter_overrides();
+        test_resync_honours_particle_emitter_field_overrides();
         test_resync_root_position_and_rotation_are_implicit_overrides();
         test_resync_root_scale_follows_the_prefab();
         test_resync_root_scale_survives_when_overridden();

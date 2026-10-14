@@ -433,6 +433,18 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                 aabb.max = vec3_to_bx(bounds.max);
                 dd.encoder.draw(aabb);
             }
+            // Mesh particles cull by the box their meshes fill.
+            const auto& mesh_bounds = particle_emitter_comp.get_mesh_bounds();
+            if(particle_emitter_comp.is_mesh_render() && mesh_bounds.is_populated() && frustum.test_aabb(mesh_bounds))
+            {
+                DebugDrawEncoderScopePush scope(dd.encoder);
+                dd.encoder.setColor(0xff80ff80);
+                dd.encoder.setWireframe(true);
+                bx::Aabb aabb;
+                aabb.min = vec3_to_bx(mesh_bounds.min);
+                aabb.max = vec3_to_bx(mesh_bounds.max);
+                dd.encoder.draw(aabb);
+            }
         }
 
         // Draw emission shape
@@ -444,8 +456,8 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             dd.encoder.pushTransform((const float*)world_transform);
             
             const auto shape = particle_emitter_comp.get_shape();
-            const auto scale = particle_emitter_comp.get_emission_shape_scale();
-            const auto position = particle_emitter_comp.get_emission_shape_position();
+            const auto scale = particle_emitter_comp.get_shape_scale();
+            const auto position = particle_emitter_comp.get_shape_position();
             const auto direction = particle_emitter_comp.get_direction();
             const float shape_size = 1.0f; // Base size for visualization
             
@@ -561,6 +573,74 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
                     rect_aabb.min = {-half_size * scale.x + position.x, -0.01f, -half_size * scale.z + position.z};
                     rect_aabb.max = {half_size * scale.x + position.x, 0.01f, half_size * scale.z + position.z};
                     dd.encoder.draw(rect_aabb);
+                    break;
+                }
+                case ps_soa::emitter_shape::cone:
+                {
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+                    // The base disc, and the slant its rim launches along (the cone angle from straight up).
+                    const float angle = math::radians(math::clamp(particle_emitter_comp.get_cone_angle(), 0.0f, 90.0f));
+                    const float rim = shape_size + math::sin(angle) * shape_size;
+                    const float height = math::cos(angle) * shape_size;
+                    dd.encoder.drawCircle(Axis::Y, 0.0f, 0.0f, 0.0f, shape_size);
+                    dd.encoder.drawCircle(Axis::Y, 0.0f, height, 0.0f, rim);
+                    constexpr int slant_lines = 4;
+                    for(int i = 0; i < slant_lines; ++i)
+                    {
+                        const float turn = math::two_pi<float>() * float(i) / float(slant_lines);
+                        dd.encoder.moveTo(math::cos(turn) * shape_size, 0.0f, math::sin(turn) * shape_size);
+                        dd.encoder.lineTo(math::cos(turn) * rim, height, math::sin(turn) * rim);
+                    }
+                    dd.encoder.popTransform();
+                    break;
+                }
+                case ps_soa::emitter_shape::line:
+                {
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+                    dd.encoder.moveTo(-shape_size, 0.0f, 0.0f);
+                    dd.encoder.lineTo(shape_size, 0.0f, 0.0f);
+                    dd.encoder.popTransform();
+                    break;
+                }
+                case ps_soa::emitter_shape::torus:
+                {
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+                    // The ring, its inner and outer edges, and the tube's cross-sections on the axes.
+                    const float tube = math::max(particle_emitter_comp.get_torus_thickness(), 0.0f) * shape_size;
+                    dd.encoder.drawCircle(Axis::Y, 0.0f, 0.0f, 0.0f, shape_size);
+                    dd.encoder.drawCircle(Axis::Y, 0.0f, 0.0f, 0.0f, shape_size + tube);
+                    if(tube < shape_size)
+                    {
+                        dd.encoder.drawCircle(Axis::Y, 0.0f, 0.0f, 0.0f, shape_size - tube);
+                    }
+                    if(tube > 0.0f)
+                    {
+                        dd.encoder.drawCircle(Axis::Z, shape_size, 0.0f, 0.0f, tube);
+                        dd.encoder.drawCircle(Axis::Z, -shape_size, 0.0f, 0.0f, tube);
+                        dd.encoder.drawCircle(Axis::X, 0.0f, 0.0f, shape_size, tube);
+                        dd.encoder.drawCircle(Axis::X, 0.0f, 0.0f, -shape_size, tube);
+                    }
+                    dd.encoder.popTransform();
+                    break;
+                }
+                case ps_soa::emitter_shape::mesh:
+                {
+                    // The spawn mesh's box, once its mesh has loaded.
+                    const auto& mesh_data = particle_emitter_comp.get_desc().emission.mesh;
+                    if(!mesh_data)
+                    {
+                        break;
+                    }
+                    auto transform = math::translate(math::mat4(1.0f), position) * math::scale(math::mat4(1.0f), scale);
+                    dd.encoder.pushTransform(math::value_ptr(transform));
+                    bx::Aabb mesh_aabb;
+                    mesh_aabb.min = vec3_to_bx(mesh_data->bounds.min);
+                    mesh_aabb.max = vec3_to_bx(mesh_data->bounds.max);
+                    dd.encoder.draw(mesh_aabb);
+                    dd.encoder.popTransform();
                     break;
                 }
                 default:

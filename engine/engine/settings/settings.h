@@ -10,6 +10,7 @@
 #include <engine/physics/physics_types.h>
 #include <engine/rendering/eviction_settings.h>
 #include <engine/rendering/gi/gi_project_settings.h>
+#include <engine/rendering/particles/ps/particle_types.h>
 #include <engine/settings/boot_config.h>
 #include <graphics/texture.h>
 
@@ -88,6 +89,29 @@ struct settings
         /// GPU resource eviction/paging policy. Persisted with the project so paging behaves the same
         /// in standalone builds; the renderer drives it every frame from this configuration.
         eviction_settings eviction;
+
+        /// Project-wide particle quality and budgets. The renderer applies them every frame.
+        struct particle_settings
+        {
+            /// Multiplier of every emitter's rates and bursts (0..1): fewer particles on smaller targets.
+            float spawn_scale{1.0f};
+            /// Sort particles where their emitters ask for it; off draws them in spawn order (cheaper; alpha-
+            /// blended layers may then show order errors).
+            bool sorting{true};
+            /// Draw every emitter that can (all but multiply blend) at half resolution.
+            bool force_half_resolution{false};
+            /// Emitters smaller on screen than this fraction of the view's height are not drawn, and freeze with
+            /// renderer-based culling. 0 = off.
+            float min_screen_size{0.0f};
+            /// Most particles one view draws: past it the emitters smallest on screen are skipped. 0 = no limit.
+            uint32_t max_drawn_particles{0};
+            /// Multiplier of every emitter's Max Particles (0..1): spawns past the scaled capacity are dropped.
+            float max_particles_scale{1.0f};
+            /// The most expensive lighting mode particles use: lower modes stand in for higher ones.
+            ps_soa::particle_lighting max_lighting{ps_soa::particle_lighting::surface};
+
+            friend auto operator==(const particle_settings& lhs, const particle_settings& rhs) -> bool = default;
+        } particles;
 
         friend auto operator==(const graphics_settings& lhs, const graphics_settings& rhs) -> bool = default;
     } graphics;

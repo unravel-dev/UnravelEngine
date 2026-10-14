@@ -82,6 +82,11 @@ REFLECTION_EXPORT auto get_pretty_name(const meta_data& prop) -> std::string;
 REFLECTION_EXPORT auto get_name(const meta_data& prop) -> std::string;
 REFLECTION_EXPORT auto get_pretty_name(const meta_custom& prop) -> std::string;
 REFLECTION_EXPORT auto get_name(const meta_custom& prop) -> std::string;
+/// The name a renamed property had before (its "former_name" attribute): older files and tools may still use it.
+/// Empty for a property that was never renamed.
+REFLECTION_EXPORT auto get_former_name(const meta_data& prop) -> std::string;
+/// The property of @p type whose former name is @p former_name; empty when no property was renamed from it.
+REFLECTION_EXPORT auto find_renamed_property(const meta_type& type, const std::string& former_name) -> meta_data;
 
 template<typename T>
 using property_predicate_t = std::function<T(const meta_any&)>;

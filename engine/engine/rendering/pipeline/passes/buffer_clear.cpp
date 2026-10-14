@@ -40,6 +40,12 @@ auto buffer_clear::init(rtti::context& ctx) -> bool
     return is_ready();
 }
 
+void buffer_clear::release()
+{
+    program_.program.reset();
+    program_.u_clear_uints.reset();
+}
+
 auto buffer_clear::is_ready() const -> bool
 {
     return program_.program != nullptr && program_.program->is_valid();

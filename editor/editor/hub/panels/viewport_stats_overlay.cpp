@@ -661,9 +661,20 @@ void draw_particles_section(const rendering::pipeline_stats& pstats)
                    pstats.drawn_particle_emitters,
                    pstats.drawn_particles,
                    "Emitters this camera drew, and the particles it submitted."});
+    draw_pair_row({"Skipped",
+                   pstats.skipped_particle_emitters,
+                   pstats.skipped_particles,
+                   "Emitters in view this camera did not draw, and their particles: beyond their\n"
+                   "max draw distance, smaller on screen than the project's min screen size, or\n"
+                   "past its max drawn particles. Renderer-based culling freezes them."});
     draw_row({"Batches",
               fmt::format("{}", pstats.drawn_particles_batches),
               "Draw batches of the particles. Different textures or blend modes split them."});
+    draw_row({"Sort Keys",
+              fmt::format("{}", pstats.sorted_particle_keys),
+              "Particles sorted for this camera's draws, every pass included (the GPU sorts a\n"
+              "power-of-two range). Additive and multiply emitters on Auto, and the sort mode\n"
+              "None, need no sort."});
 }
 
 /// Batching statistics, under a header whose switch turns the project's static mesh batching on

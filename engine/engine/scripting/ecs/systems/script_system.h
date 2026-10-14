@@ -50,6 +50,8 @@ struct script_system
     auto load_engine_domain(rtti::context& ctx, bool recompile) -> bool;
     void unload_engine_domain();
 
+    /// Loads the app scripts' domain. With @p recompile the library is built first, unless this
+    /// process already built it from the sources as they are now.
     auto load_app_domain(rtti::context& ctx, bool recompile) -> bool;
     void unload_app_domain();
 
@@ -306,6 +308,10 @@ private:
     void check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback);
 
     auto create_compilation_job(rtti::context& ctx, const std::string& protocol, bool debug) -> tpp::job_future<bool>;
+
+    /// True when the last build of @p protocol's library succeeded, in @p debug mode, from sources
+    /// with no change queued or saved since it read them, and the library is still there.
+    static auto is_library_current(rtti::context& ctx, const std::string& protocol, bool debug) -> bool;
 
     /// True until the last build scheduled for the protocol's library has finished.
     auto is_compiling(const std::string& protocol) const -> bool;

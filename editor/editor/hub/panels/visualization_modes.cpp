@@ -19,6 +19,7 @@ namespace
 //   engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.sc   (G-Buffer / lighting / GTAO)
 //   engine_data/data/shaders/velocity/fs_velocity_debug.sc     (motion vectors)
 //   engine_data/data/shaders/gi/fs_gi_scene_debug.sc           (GI views)
+//   engine_data/data/shaders/particles/fs_particle_overdraw_debug.sc (particle overdraw)
 // Continuous readouts (roughness, depth, ...) carry no legend; their range is stated in the
 // description instead.
 // -----------------------------------------------------------------------------
@@ -43,6 +44,17 @@ constexpr std::array<visualization_swatch, 4> k_legend_normals = {{
 constexpr std::array<visualization_swatch, 2> k_legend_velocity = {{
     {{0.0f, 0.0f, 0.0f}, "Still - no screen motion this frame"},
     {{1.0f, 0.0f, 1.0f}, "NaN or infinite velocity - a broken previous transform"},
+}};
+
+constexpr std::array<visualization_swatch, 8> k_legend_particle_overdraw = {{
+    {{0.0f, 0.05f, 0.3f}, "A quarter layer: one half-resolution particle"},
+    {{0.0f, 0.25f, 1.0f}, "1 layer"},
+    {{0.0f, 0.8f, 0.8f}, "2 layers"},
+    {{0.2f, 0.9f, 0.1f}, "4 layers"},
+    {{1.0f, 0.85f, 0.0f}, "8 layers"},
+    {{1.0f, 0.15f, 0.0f}, "16 layers"},
+    {{1.0f, 1.0f, 1.0f}, "32 layers or more"},
+    {{0.0f, 0.0f, 0.0f}, "No particle: the image darkened to a fifth"},
 }};
 
 constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
@@ -126,7 +138,7 @@ constexpr std::array<visualization_swatch, 7> k_legend_gi_card_coverage = {{
 // Groups
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_group_entry, 5> k_visualization_groups = {{
+constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
     {visualization_group::surface,
      "surface",
      ICON_MDI_LAYERS,
@@ -158,6 +170,11 @@ constexpr std::array<visualization_group_entry, 5> k_visualization_groups = {{
      "The scene as the global illumination traces it: the global distance field its rays march, and the surface "
      "cache of mesh cards that shades their hits. These views need global illumination enabled on the camera or a "
      "volume, because the surface cache updates only while it runs."},
+    {visualization_group::particles,
+     "particles",
+     ICON_MDI_CREATION,
+     "Particles",
+     "What the particle draws cost, counted by the particle pass of the frame."},
 }};
 
 // -----------------------------------------------------------------------------
@@ -458,6 +475,17 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "covering it with their cards. A hit that Card Coverage shows as covered but this view does not points "
      "to an object missing from the grid.",
      k_legend_gi_object_grid},
+
+    // -- Particles ------------------------------------------------------------
+    {visualization_mode::particle_overdraw,
+     visualization_group::particles,
+     "particle_overdraw",
+     "Overdraw",
+     "How many particle layers each pixel shaded this frame, over the darkened image: every fragment a particle "
+     "rasterizes counts, including the texels its texture leaves transparent, a half-resolution particle as a "
+     "quarter and a Write Velocity emitter's motion draw as one more. Octagon primitives, a smaller Max Screen Size "
+     "and half resolution bring it down.",
+     k_legend_particle_overdraw},
 });
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -524,6 +552,9 @@ static_assert(static_cast<int>(visualization_mode::gi_overview) == rendering::de
 static_assert(static_cast<int>(visualization_mode::gi_performance_overview) ==
                   rendering::deferred::debug_pass_gi_performance_overview,
               "visualization_mode drifted from deferred::debug_pass_gi_performance_overview");
+static_assert(static_cast<int>(visualization_mode::particle_overdraw) ==
+                  rendering::deferred::debug_pass_particle_overdraw,
+              "visualization_mode drifted from deferred::debug_pass_particle_overdraw");
 
 } // namespace
 

@@ -10,6 +10,8 @@ SAMPLER2D(s_history, 1);
 SAMPLER2D(s_depth, 2);
 SAMPLER2D(s_prev_depth, 3);
 SAMPLER2D(s_velocity, 4);
+// The particles' reactive coverage (R8) when u_use_reactive is 1.
+SAMPLER2D(s_reactive, 5);
 
 uniform mat4 u_prev_view_proj;
 
@@ -24,6 +26,8 @@ uniform vec4 u_taa_params2;
 #define u_use_velocity         u_taa_params2.x
 // This frame's sub-pixel jitter as the NDC offset the projection carries (camera aa_data.zw): scene content moved by it.
 #define u_jitter_ndc           u_taa_params2.yz
+// 1 = s_reactive holds this frame's particle coverage.
+#define u_use_reactive         u_taa_params2.w
 
 // Reprojection motion, in pixels, below which a pixel counts as STILL for the depth-edge damping. The output lives on
 // the unjittered pixel grid, so a parked camera reprojects by exactly 0; this absorbs slow drift.
@@ -56,6 +60,11 @@ uniform vec4 u_taa_params2;
 #define TAA_MOVER_MEMORY_DECAY 0.8
 #define TAA_MOVER_MEMORY_STILL_START 0.05
 #define TAA_MOVER_MEMORY_STILL_END 0.25
+// History weight and variance clip box multiple a fully reactive pixel (an opaque particle at TAA response 1) uses
+// at most: particles have no motion vectors, so a long, loosely clipped history smears them. Reactive pixels also
+// feed the mover memory, which keeps the trail a particle leaves out of the still path.
+#define TAA_REACTIVE_HISTORY_BLEND 0.25
+#define TAA_REACTIVE_CLIP_SCALE 1.0
 
 
 // YCoCg: chroma bounds are much tighter than RGB's, so a variance box built there
@@ -305,11 +314,13 @@ void main()
     vec2 hist_uv = clamp(prev_uv, half_texel, vec2(1.0, 1.0) - half_texel);
     // A pixel a moving object covered or bordered is not still while the object's trace fades from it: the still
     // weight and clip held its anti-aliased edge and the lighting it left behind as trails behind every mover.
-    float mover_memory = max(mover_nearby, saturate(texture2DLod(s_history, hist_uv, 0.0).a) * TAA_MOVER_MEMORY_DECAY);
+    float reactive = saturate(texture2DLod(s_reactive, uv, 0.0).r) * step(0.5, u_use_reactive);
+    float mover_memory = max(max(mover_nearby, reactive), saturate(texture2DLod(s_history, hist_uv, 0.0).a) * TAA_MOVER_MEMORY_DECAY);
     still *= 1.0 - smoothstep(TAA_MOVER_MEMORY_STILL_START, TAA_MOVER_MEMORY_STILL_END, mover_memory);
     float edge_blend = mix(mix(0.6, 1.0, silhouette), 1.0, max(object_motion_w, still));
 
     float k = max(0.75, u_variance_clip_scale) * mix(1.0, TAA_STILL_CLIP_SCALE, still);
+    k = mix(k, min(k, TAA_REACTIVE_CLIP_SCALE), reactive);
     // RGB mean/min/max feed the sharpen path below; the variance box for history
     // rejection is built in YCoCg where chroma bounds are tight.
     vec3 m1_rgb = vec3_splat(0.0);
@@ -358,6 +369,7 @@ void main()
     float motion_w = smoothstep(TAA_MOTION_START_PX, TAA_MOTION_FULL_PX, reprojection_px);
     float history_weight = mix(u_history_blend, max(u_history_blend, TAA_STILL_HISTORY_BLEND), still);
     history_weight = mix(history_weight, min(history_weight, TAA_MOTION_HISTORY_BLEND), motion_w);
+    history_weight = mix(history_weight, min(history_weight, TAA_REACTIVE_HISTORY_BLEND), reactive);
     history_weight = 1.0 - (1.0 - history_weight) * sample_alignment;
     float blend = history_weight * edge_fade * depth_ok * edge_blend * screen_border_w * history_border_w;
     // Inverse-luma weighted resolve: weighting both terms by 1/(1+luma) evaluates the blend in

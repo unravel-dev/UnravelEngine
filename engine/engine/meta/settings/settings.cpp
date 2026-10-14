@@ -298,6 +298,86 @@ LOAD_INLINE(platform_renderer_settings)
     try_load(ar, ser20::make_nvp("macos", obj.macos));
 }
 
+REFLECT_INLINE(settings::graphics_settings::particle_settings)
+{
+    entt::meta_factory<settings::graphics_settings::particle_settings>{}
+        .type("particle_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "particle_settings"},
+            entt::attribute{"pretty_name", "Particles"},
+        })
+        .data<&settings::graphics_settings::particle_settings::spawn_scale>("spawn_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "spawn_scale"},
+            entt::attribute{"pretty_name", "Spawn Scale"},
+            entt::attribute{"tooltip", "Multiplier of every emitter's rates and bursts: fewer particles on smaller targets without touching the effects."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
+        .data<&settings::graphics_settings::particle_settings::sorting>("sorting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sorting"},
+            entt::attribute{"pretty_name", "Sorting"},
+            entt::attribute{"tooltip", "Sort particles where their emitters ask for it. Off draws them in spawn order: cheaper, but alpha-blended layers may show order errors."},
+        })
+        .data<&settings::graphics_settings::particle_settings::force_half_resolution>("force_half_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "force_half_resolution"},
+            entt::attribute{"pretty_name", "Force Half Resolution"},
+            entt::attribute{"tooltip", "Draw every emitter that can (all but multiply blend) at half resolution: a quarter of the particles' fill cost."},
+        })
+        .data<&settings::graphics_settings::particle_settings::min_screen_size>("min_screen_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_screen_size"},
+            entt::attribute{"pretty_name", "Min Screen Size"},
+            entt::attribute{"tooltip", "Emitters smaller on screen than this fraction of the view's height are not drawn, and freeze with renderer-based culling. 0 = off."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
+        .data<&settings::graphics_settings::particle_settings::max_drawn_particles>("max_drawn_particles"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_drawn_particles"},
+            entt::attribute{"pretty_name", "Max Drawn Particles"},
+            entt::attribute{"tooltip", "Most particles one view draws: past it the emitters smallest on screen are skipped (and freeze with renderer-based culling). 0 = no limit."},
+        })
+        .data<&settings::graphics_settings::particle_settings::max_particles_scale>("max_particles_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_particles_scale"},
+            entt::attribute{"pretty_name", "Max Particles Scale"},
+            entt::attribute{"tooltip", "Multiplier of every emitter's Max Particles: spawns past the scaled capacity are dropped, so dense effects thin out on smaller targets."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
+        .data<&settings::graphics_settings::particle_settings::max_lighting>("max_lighting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_lighting"},
+            entt::attribute{"pretty_name", "Max Lighting"},
+            entt::attribute{"tooltip", "The most expensive lighting mode particles use. Volumetric: surface-lit particles light as volumetric (no per-pixel sun). Unlit: lit particles draw unlit."},
+        });
+}
+
+SAVE_INLINE(settings::graphics_settings::particle_settings)
+{
+    try_save(ar, ser20::make_nvp("spawn_scale", obj.spawn_scale));
+    try_save(ar, ser20::make_nvp("sorting", obj.sorting));
+    try_save(ar, ser20::make_nvp("force_half_resolution", obj.force_half_resolution));
+    try_save(ar, ser20::make_nvp("min_screen_size", obj.min_screen_size));
+    try_save(ar, ser20::make_nvp("max_drawn_particles", obj.max_drawn_particles));
+    try_save(ar, ser20::make_nvp("max_particles_scale", obj.max_particles_scale));
+    try_save(ar, ser20::make_nvp("max_lighting", obj.max_lighting));
+}
+
+LOAD_INLINE(settings::graphics_settings::particle_settings)
+{
+    try_load(ar, ser20::make_nvp("spawn_scale", obj.spawn_scale));
+    try_load(ar, ser20::make_nvp("sorting", obj.sorting));
+    try_load(ar, ser20::make_nvp("force_half_resolution", obj.force_half_resolution));
+    try_load(ar, ser20::make_nvp("min_screen_size", obj.min_screen_size));
+    try_load(ar, ser20::make_nvp("max_drawn_particles", obj.max_drawn_particles));
+    try_load(ar, ser20::make_nvp("max_particles_scale", obj.max_particles_scale));
+    try_load(ar, ser20::make_nvp("max_lighting", obj.max_lighting));
+}
+
 REFLECT_INLINE(settings::graphics_settings)
 {
     entt::meta_factory<settings::graphics_settings>{}
@@ -326,6 +406,12 @@ REFLECT_INLINE(settings::graphics_settings)
             entt::attribute{"name", "eviction"},
             entt::attribute{"pretty_name", "GPU Eviction / Paging"},
             entt::attribute{"tooltip", "Controls automatic eviction/paging of GPU resources to stay under budget."},
+        })
+        .data<&settings::graphics_settings::particles>("particles"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "particles"},
+            entt::attribute{"pretty_name", "Particles"},
+            entt::attribute{"tooltip", "Project-wide particle quality and budgets."},
         });
 }
 
@@ -334,6 +420,7 @@ SAVE_INLINE(settings::graphics_settings)
     try_save(ar, ser20::make_nvp("renderer", obj.renderer));
     try_save(ar, ser20::make_nvp("static_mesh_batching", obj.static_mesh_batching));
     try_save(ar, ser20::make_nvp("eviction", obj.eviction));
+    try_save(ar, ser20::make_nvp("particles", obj.particles));
 }
 
 LOAD_INLINE(settings::graphics_settings)
@@ -341,6 +428,7 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("renderer", obj.renderer));
     try_load(ar, ser20::make_nvp("static_mesh_batching", obj.static_mesh_batching));
     try_load(ar, ser20::make_nvp("eviction", obj.eviction));
+    try_load(ar, ser20::make_nvp("particles", obj.particles));
 }
 
 REFLECT_INLINE(gi_project_settings::atlas_size)

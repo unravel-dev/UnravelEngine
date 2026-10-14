@@ -19,13 +19,15 @@ namespace unravel::mcp
  *
  * Reads through the reflected getters, the same ones the inspector shows, so a property that
  * is reflected is reachable without a hand-written accessor. Properties the reflection hides
- * are left out, as are value types this bridge cannot express in JSON.
+ * (their predicate: a setting of another mode) are left out unless @p include_hidden, as are
+ * value types this bridge cannot express in JSON.
  *
  * @param only When set, only these names are read.
  */
 auto meta_properties_to_json(rtti::context& ctx,
                              entt::meta_any& object,
-                             const std::unordered_set<std::string>* only = nullptr) -> std::string;
+                             const std::unordered_set<std::string>* only = nullptr,
+                             bool include_hidden = false) -> std::string;
 
 /**
  * @brief Writes `properties` through the reflected setters.

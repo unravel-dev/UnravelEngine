@@ -1,5 +1,6 @@
 #include "prefab_component.hpp"
 #include <engine/meta/assets/asset_handle.hpp>
+#include <hpp/string_view.hpp>
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -45,6 +46,30 @@ SAVE_INLINE(prefab_property_override_data)
     try_save(ar, ser20::make_nvp("pretty_component_path", obj.pretty_component_path));
 }
 
+namespace
+{
+/// "component/property..." with a property recorded under its former name renamed to its current one.
+auto get_current_component_path(const std::string& component_path) -> std::string
+{
+    const auto component_end = component_path.find('/');
+    if(component_end == std::string::npos)
+    {
+        return component_path;
+    }
+    const auto property_end = component_path.find_first_of("/[", component_end + 1);
+    const auto component = hpp::string_view(component_path).substr(0, component_end);
+    const auto property = hpp::string_view(component_path).substr(component_end + 1, property_end - component_end - 1);
+    const auto type = entt::resolve(entt::hashed_string::value(component.data(), component.size()));
+    const auto renamed = type ? entt::find_renamed_property(type, std::string(property)) : entt::meta_data{};
+    if(!renamed)
+    {
+        return component_path;
+    }
+    const auto rest = property_end == std::string::npos ? std::string() : component_path.substr(property_end);
+    return std::string(component) + "/" + entt::get_name(renamed) + rest;
+}
+} // namespace
+
 LOAD_INLINE(prefab_property_override_data)
 {
     // Absent in a record from before statements carried a path: about direct content.
@@ -52,6 +77,7 @@ LOAD_INLINE(prefab_property_override_data)
     try_load(ar, ser20::make_nvp("entity_uuid", obj.entity_uuid));
     try_load(ar, ser20::make_nvp("component_path", obj.component_path));
     try_load(ar, ser20::make_nvp("pretty_component_path", obj.pretty_component_path));
+    obj.component_path = get_current_component_path(obj.component_path);
 }
 
 SAVE_INLINE(prefab_statement_target)

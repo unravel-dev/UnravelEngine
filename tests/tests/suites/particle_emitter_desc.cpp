@@ -11,7 +11,8 @@
  * first time it plays after it is created or reset. Pins auto play: it decides whether an emitter
  * plays only until the emitter's first frame. Pins the size curve: every key counts, a curve with two
  * keys gives exactly the linear blend between the birth and death sizes, and a burst's size scales
- * the curve.
+ * the curve. Pins the curve features: a curve turns its feature on exactly when it leaves its neutral value,
+ * also between equal keys through a smooth segment's tangents.
  */
 
 #include "../tests.h"
@@ -76,7 +77,7 @@ auto make_prewarm_desc(bool prewarm, bool loop) -> ps_soa::emitter_desc
     ps_soa::emitter_desc desc;
     desc.reset();
     desc.emission.particles_per_second = k_prewarm_rate;
-    desc.motion.lifetime = k_prewarm_lifetime;
+    desc.motion.lifetime = frange_t(k_prewarm_lifetime, k_prewarm_lifetime);
     desc.emission.loop = loop;
     desc.emission.prewarm = prewarm;
     return desc;
@@ -85,9 +86,8 @@ auto make_prewarm_desc(bool prewarm, bool loop) -> ps_soa::emitter_desc
 /// Particles alive after one frame of an emitter made from @p desc, simulated on the CPU.
 auto count_after_first_frame(ps_soa::emitter_desc desc) -> uint32_t
 {
-    const auto handle =
-        ps_soa::create_emitter(ps_soa::emitter_shape::sphere, ps_soa::emitter_direction::up, 256);
-    ps_soa::set_emitter_sim_backend(handle, ps_soa::particle_sim_backend::cpu);
+    const auto handle = ps_soa::create_emitter(256);
+    ps_soa::set_emitter_sort_backend(handle, ps_soa::particle_sort_backend::cpu);
     ps_soa::emitter_transform_state transform{};
     ps_soa::update_emitter(handle, k_frame_seconds, desc, transform, desc.playback);
     const uint32_t count = ps_soa::get_num_particles(handle);
@@ -104,9 +104,8 @@ void test_prewarm()
     check(count_after_first_frame(make_prewarm_desc(true, false)) < 2, "a one-shot emitter never prewarms");
 
     auto desc = make_prewarm_desc(true, true);
-    const auto handle =
-        ps_soa::create_emitter(ps_soa::emitter_shape::sphere, ps_soa::emitter_direction::up, 256);
-    ps_soa::set_emitter_sim_backend(handle, ps_soa::particle_sim_backend::cpu);
+    const auto handle = ps_soa::create_emitter(256);
+    ps_soa::set_emitter_sort_backend(handle, ps_soa::particle_sort_backend::cpu);
     ps_soa::emitter_transform_state transform{};
     desc.playback.playing = false;
     ps_soa::update_emitter(handle, k_frame_seconds, desc, transform, desc.playback);
@@ -230,11 +229,64 @@ void test_burst_size_scales_the_curve()
     check(is_same_size(get_size_at(zero, pick, 0.3f), 2.0f), "a curve that is 0 throughout holds the burst size");
 }
 
+/// A speed curve of keys at @p values (positions spread over 0..1), each with @p interpolation and @p tangent.
+auto make_speed_curve(const std::vector<float>& values, math::curve_interpolation interpolation, float tangent)
+    -> math::gradient<float>
+{
+    math::gradient<float> curve;
+    math::curve_channel::keys_t keys;
+    for(size_t i = 0; i < values.size(); ++i)
+    {
+        math::curve_key key;
+        key.position = values.size() > 1 ? float(i) / float(values.size() - 1) : 0.0f;
+        key.value = values[i];
+        key.in_tangent = tangent;
+        key.out_tangent = tangent;
+        key.interpolation = interpolation;
+        key.tangent_mode = math::curve_tangent_mode::free;
+        keys.push_back(key);
+    }
+    curve.get_channel(0).set_keys(keys);
+    return curve;
+}
+
+auto has_speed_curve(const math::gradient<float>& curve) -> bool
+{
+    ps_soa::emitter_desc desc;
+    desc.reset();
+    desc.motion.speed_over_life = curve;
+    return ps_soa::has_feature(desc.bake_features(), ps_soa::emitter_feature::speed_curve);
+}
+
+void test_curve_features()
+{
+    ps_soa::emitter_desc defaults;
+    defaults.reset();
+    const ps_soa::emitter_feature features = defaults.bake_features();
+    check(!ps_soa::has_feature(features, ps_soa::emitter_feature::speed_curve) &&
+              !ps_soa::has_feature(features, ps_soa::emitter_feature::size_axis_curve) &&
+              !ps_soa::has_feature(features, ps_soa::emitter_feature::spin_curve) &&
+              !ps_soa::has_feature(features, ps_soa::emitter_feature::intensity_curve) &&
+              !ps_soa::has_feature(features, ps_soa::emitter_feature::erosion),
+          "default curves turn no curve feature on");
+    check(!has_speed_curve(make_speed_curve({1.0f, 1.0f, 1.0f}, math::curve_interpolation::linear, 0.0f)),
+          "keys all at 1 joined by lines are no speed curve");
+    check(!has_speed_curve(make_speed_curve({1.0f, 1.0f}, math::curve_interpolation::smooth, 0.0f)),
+          "smooth keys at 1 with level tangents are no speed curve");
+    check(!has_speed_curve(make_speed_curve({1.0f, 1.0f}, math::curve_interpolation::constant, 3.0f)),
+          "stepping keys at 1 are no speed curve whatever their tangents");
+    check(has_speed_curve(make_speed_curve({1.0f, 1.0f}, math::curve_interpolation::smooth, 3.0f)),
+          "smooth keys at 1 bulging through their tangents are a speed curve");
+    check(has_speed_curve(make_speed_curve({1.0f, 0.5f}, math::curve_interpolation::linear, 0.0f)),
+          "a key off 1 makes a speed curve");
+}
+
 auto run_particle_emitter_desc_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
     g_failures = 0;
     test_texture_sheet_feature();
+    test_curve_features();
     test_two_key_size_is_linear();
     test_every_size_key_counts();
     test_burst_size_scales_the_curve();

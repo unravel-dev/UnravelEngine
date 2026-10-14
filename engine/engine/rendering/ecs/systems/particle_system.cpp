@@ -77,7 +77,18 @@ void particle_system::on_frame_before_render(scene& scn, delta_t dt)
         emitter_comp.update_emitter(world_transform, dt);
     });
 
-    // Awake GPU emitters only — renderer-based freeze clears pending_pack.
+    // Sub-emitters queue bursts on other emitters, and mesh emitters resolve their mesh's materials: one
+    // thread, after every emitter updated.
+    view.each(
+        [](auto entity, auto&& transform_comp, auto&& emitter_comp, auto&& active)
+        {
+            emitter_comp.fire_sub_emitters();
+            emitter_comp.refresh_emission_mesh();
+            emitter_comp.refresh_render_mesh();
+            emitter_comp.refresh_cutout();
+        });
+
+    // Every emitter uploads the particles it spawned this frame (and the table rows that changed) to the GPU pool.
     ps_soa::sync_gpu_simulation();
 }
 

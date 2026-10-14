@@ -367,6 +367,12 @@ public:
     void remove_point(int index);
     void set_points(const points_t& points);
     /**
+     * @brief set_points that keeps the shape of the keys it keeps: a key left at the position of one of the curve's
+     * keys keeps that key's interpolation and tangents, so writing back the points get_points read changes nothing.
+     * Keys at new positions are linear with automatic tangents.
+     */
+    void set_points_keeping_shape(const points_t& points);
+    /**
      * @brief The keys as one list.
      *
      * By value: the channels hold the keys, so there is no single list to lend out. Binding the

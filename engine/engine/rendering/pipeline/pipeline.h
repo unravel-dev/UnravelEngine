@@ -5,6 +5,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/particles/ps/particle_types.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 
@@ -19,6 +20,7 @@
 #include "passes/blit_pass.h"
 #include "passes/fxaa_pass.h"
 #include "passes/hiz_pass.h"
+#include "passes/particle_half_res_pass.h"
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
 #include "passes/gi_clipmap_compose_pass.h"
@@ -50,6 +52,11 @@
 
 namespace unravel
 {
+namespace ps_soa
+{
+struct render_batch;
+} // namespace ps_soa
+
 namespace rendering
 {
 struct visibility_data
@@ -83,6 +90,12 @@ struct pipeline_stats
     uint32_t simulated_particles = 0;
     uint32_t drawn_particles = 0;
     uint32_t drawn_particles_batches = 0;
+    /// Emitters in the camera's frustum it did not draw, and their particles: beyond their max draw
+    /// distance, smaller on screen than the project's min screen size, or past its particle budget.
+    uint32_t skipped_particle_emitters = 0;
+    uint32_t skipped_particles = 0;
+    /// Particle sort keys this camera sorted (on the GPU, the sorted range rounded up to a power of two).
+    uint32_t sorted_particle_keys = 0;
 
     // Static mesh batching statistics
     batch_stats batching_stats;
@@ -106,6 +119,9 @@ struct pipeline_stats
  * @class rendering_pipeline
  * @brief Base class for different rendering paths in the ACE framework.
  */
+/// What lit particles read from the scene for one view (pipeline.cpp).
+struct particle_scene_lighting;
+
 class pipeline
 {
 public:
@@ -294,13 +310,33 @@ public:
      * @brief Draws the particles over the lit scene.
      * @param hiz_depth This frame's Hi-Z buffer when the pipeline built one: soft particles read its
      *        first mip. Without it they read a copy of the depth buffer made for them.
+     * @param use_shadow_maps The run built this camera's shadow maps: lit particles may read the sun's.
+     * @param wants_reactive The view's TAA runs and reads the particles' reactive coverage; without it the
+     *        particles write only the light buffer.
+     * @param dt The frame's time step: the camera's velocity over it stretches the particles that stretch against
+     *        it.
+     * @return The particles' TAA reactive coverage (R8: the largest coverage x taa_response over each pixel)
+     *         when particles drew into it this frame; null otherwise.
      */
-    virtual void run_particle_pass(scene& scn,
-                               const camera& camera,
-                               gfx::render_view& rview,
-                               const gfx::frame_buffer::ptr& output,
-                               const pre_exposure_state& pre_exposure,
-                               const gfx::texture::ptr& hiz_depth);
+    virtual auto run_particle_pass(scene& scn,
+                                   const camera& camera,
+                                   gfx::render_view& rview,
+                                   const gfx::frame_buffer::ptr& output,
+                                   const pre_exposure_state& pre_exposure,
+                                   const gfx::texture::ptr& hiz_depth,
+                                   bool use_shadow_maps,
+                                   bool wants_reactive,
+                                   delta_t dt,
+                                   layer_mask render_mask) -> gfx::texture::ptr;
+
+    /// Whether @p entity is on a layer @p render_mask draws (an entity without layers is drawn).
+    static auto is_on_rendered_layer(const entt::registry& registry, entt::entity entity, const layer_mask& render_mask)
+        -> bool;
+    /// The share of the view's height @p bounds cover from @p eye (the particle budget's measure).
+    static auto get_particle_screen_size(const camera& camera, const math::bbox& bounds, const math::vec3& eye) -> float;
+
+    /// Binds what a lit particle batch reads: the sky, the sun and its shadow, the brightest nearby lights.
+    void bind_particle_lighting(const particle_scene_lighting& lighting, const ps_soa::render_batch& batch);
 
     virtual auto create_run_params(entt::handle camera_ent) const -> rendering::pipeline::run_params;
     virtual auto create_run_params(entt::handle camera_ent, scene* scn, const camera* cam) const -> rendering::pipeline::run_params;
@@ -340,9 +376,32 @@ protected:
     gi_visualize_pass gi_visualize_pass_{}; ///< The GI debug views
     shader_print shader_print_{};                 ///< The view's shader print text
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
+    particle_half_res_pass particle_half_res_pass_{}; ///< Half-resolution particles and their composite
 
-    std::unique_ptr<gpu_program> particle_program_instanced_{};
-    std::unique_ptr<gpu_program> particle_program_instanced_mask_{};
+    std::unique_ptr<gpu_program> particle_program_{};
+    std::unique_ptr<gpu_program> particle_program_mask_{};
+    /// Lit particles (particle_lighting.sh): their programs, the light they read per draw, and the stand-ins for a
+    /// missing sky (zero SH) or sun shadow (far depth).
+    std::unique_ptr<gpu_program> particle_program_lit_{};
+    std::unique_ptr<gpu_program> particle_program_lit_mask_{};
+    gfx::program::uniform_ptr particle_sun_direction_uniform_{};
+    gfx::program::uniform_ptr particle_sun_color_uniform_{};
+    gfx::program::uniform_ptr particle_lighting_uniform_{};
+    gfx::program::uniform_ptr particle_lights_uniform_{};
+    gfx::program::uniform_ptr particle_irradiance_sampler_{};
+    gfx::program::uniform_ptr particle_normal_sampler_{};
+    std::array<gfx::program::uniform_ptr, 4> particle_shadow_samplers_{};
+    std::shared_ptr<gfx::texture> particle_no_sky_{};
+    std::shared_ptr<gfx::texture> particle_no_shadow_{};
+    /// Motion vectors of the particles that write them; u_prev_view_proj is last frame's view-projection.
+    std::unique_ptr<gpu_program> particle_velocity_program_{};
+    gfx::program::uniform_ptr particle_prev_view_proj_uniform_{};
+    /// The particle overdraw debug view: when set, the particle pass also counts the layers each pixel shades
+    /// into PARTICLE_OVERDRAW (R16F, cleared every frame), with its own program.
+    bool is_particle_overdraw_view_{false};
+    std::unique_ptr<gpu_program> particle_overdraw_program_{};
+    /// Emitter handles of a view's particle draws (run_particle_pass scratch).
+    std::vector<ps_soa::emitter_handle> particle_handles_scratch_{};
     /// u_pre_exposure of both particle programs: particles are scene lighting.
     gfx::program::uniform_ptr particle_pre_exposure_uniform_{};
     std::unique_ptr<gpu_program> world_quad_program_{};

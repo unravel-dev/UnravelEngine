@@ -47,6 +47,75 @@ std::mutex container_mutex;
 std::vector<std::string> needs_to_recompile;
 std::atomic<uint64_t> compilation_version{};
 
+/// What a protocol's library was last built from. Every change queued for its sources bumps
+/// source_generation and a build records the generation it read, so the library is current when
+/// its last build succeeded from the latest generation. The sources' stamp also catches a file
+/// saved that the watcher has not reported yet.
+struct library_build
+{
+    uint64_t source_generation{};
+    uint64_t built_generation{};
+    uint64_t sources_stamp{};
+    bool is_built{};
+    bool is_debug{};
+};
+
+/// Guarded by container_mutex.
+std::map<std::string, library_build> library_builds;
+
+/// Caller holds container_mutex.
+void mark_sources_changed(const std::string& protocol)
+{
+    ++library_builds[protocol].source_generation;
+    // App scripts are built against the engine library: a new engine library needs a new app build.
+    if(protocol == "engine")
+    {
+        ++library_builds["app"].source_generation;
+    }
+}
+
+auto get_source_generation(const std::string& protocol) -> uint64_t
+{
+    std::lock_guard<std::mutex> lock(container_mutex);
+    return library_builds[protocol].source_generation;
+}
+
+void record_library_build(const std::string& protocol,
+                          uint64_t generation,
+                          uint64_t sources_stamp,
+                          bool debug,
+                          bool is_built)
+{
+    std::lock_guard<std::mutex> lock(container_mutex);
+    auto& build = library_builds[protocol];
+    build.built_generation = generation;
+    build.sources_stamp = sources_stamp;
+    build.is_debug = debug;
+    build.is_built = is_built;
+}
+
+/// A digest of the protocol's script sources as they are on disk, their paths and write times; it
+/// does not depend on the order the asset manager lists them in.
+auto get_sources_stamp(asset_manager& am, const std::string& protocol) -> uint64_t
+{
+    constexpr uint64_t mix = 0x9E3779B97F4A7C15ull;
+    uint64_t stamp = 0;
+    for(const auto& asset : am.get_assets<script>(protocol))
+    {
+        if(!asset)
+        {
+            continue;
+        }
+        const auto path = fs::resolve_protocol(asset.id());
+        fs::error_code ec;
+        const auto write_time = uint64_t(fs::last_write_time(path, ec).time_since_epoch().count());
+        uint64_t entry = uint64_t(std::hash<std::string>{}(path.string()));
+        entry ^= write_time + mix + (entry << 6) + (entry >> 2);
+        stamp ^= entry * mix;
+    }
+    return stamp;
+}
+
 // Guards the files every build of a script library writes: the compiler output at a fixed
 // temp path (the pdb stays there, so the dll's debug entry keeps pointing at it) and the temp
 // compiled key it is copied to, which domain loads copy into place. A build holds it for its
@@ -436,7 +505,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         debug = get_script_debug_mode();
 #endif
 
-        if(!create_compilation_job(ctx, "engine", debug).get())
+        if(!is_library_current(ctx, "engine", debug) && !create_compilation_job(ctx, "engine", debug).get())
         {
             return false;
         }
@@ -544,7 +613,12 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 
     if(!is_deploy_mode && recompile)
     {
-        result &= create_compilation_job(ctx, "app", get_script_debug_mode()).get();
+        // Entering play mode builds every queued change first (wait_for_jobs_to_finish), so the
+        // library is usually current already: reload it instead of compiling the same sources again.
+        if(!is_library_current(ctx, "app", get_script_debug_mode()))
+        {
+            result &= create_compilation_job(ctx, "app", get_script_debug_mode()).get();
+        }
 
         has_compilation_errors_ = !result;
     }
@@ -1312,15 +1386,45 @@ auto script_system::create_compilation_job(rtti::context& ctx,
 
     return thr.pool->schedule(
         "Compiling " + ex::get_type<script_library>(),
-        [&am, flags, protocol]()
+        [&am, flags, protocol, debug]()
         {
             auto key = get_lib_data_key(protocol);
             auto output = get_lib_temp_compiled_key(protocol);
 
             std::lock_guard<std::mutex> lock(library_files_mutex);
-            return asset_compiler::compile<script_library>(am, key, fs::resolve_protocol(output), flags);
+            // Taken once the build owns the files, just before it reads the sources: a change
+            // queued or saved after this point leaves the library out of date.
+            const uint64_t generation = get_source_generation(protocol);
+            const uint64_t sources_stamp = get_sources_stamp(am, protocol);
+            const bool is_built = asset_compiler::compile<script_library>(am, key, fs::resolve_protocol(output), flags);
+            record_library_build(protocol, generation, sources_stamp, debug, is_built);
+            return is_built;
         });
 }
+
+auto script_system::is_library_current(rtti::context& ctx, const std::string& protocol, bool debug) -> bool
+{
+    uint64_t sources_stamp = 0;
+    {
+        std::lock_guard<std::mutex> lock(container_mutex);
+        const auto it = library_builds.find(protocol);
+        if(it == library_builds.end() || !it->second.is_built || it->second.is_debug != debug ||
+           it->second.built_generation != it->second.source_generation)
+        {
+            return false;
+        }
+        sources_stamp = it->second.sources_stamp;
+    }
+    if(get_sources_stamp(ctx.get_cached<asset_manager>(), protocol) != sources_stamp)
+    {
+        return false;
+    }
+    // A build waits at its temp key until a domain load moves it to the compiled key.
+    fs::error_code ec;
+    return fs::exists(fs::resolve_protocol(get_lib_temp_compiled_key(protocol)), ec) ||
+           fs::exists(fs::resolve_protocol(get_lib_compiled_key(protocol)), ec);
+}
+
 void script_system::set_needs_recompile(const std::string& protocol, bool now)
 {
     if(!initted)
@@ -1331,6 +1435,7 @@ void script_system::set_needs_recompile(const std::string& protocol, bool now)
     // flag raised first can be taken with the queue still empty, leaving the protocol queued unflagged.
     {
         std::lock_guard<std::mutex> lock(container_mutex);
+        mark_sources_changed(protocol);
         if(std::find(std::begin(needs_to_recompile), std::end(needs_to_recompile), protocol) ==
            std::end(needs_to_recompile))
         {

@@ -26,6 +26,9 @@ public:
     /// Loads the clear program; false, with a warning, when it failed to load.
     auto init(rtti::context& ctx) -> bool;
 
+    /// Releases the clear program; an owner that outlives the renderer calls it before the renderer shuts down.
+    void release();
+
     /// Whether the clear program can dispatch.
     auto is_ready() const -> bool;
 

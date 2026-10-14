@@ -1,4 +1,5 @@
 #pragma once
+#include <engine/rendering/particles/ps/particle_system_soa.h>
 #include "../pipeline.h"
 
 #include <engine/ecs/components/transform_component.h>
@@ -103,6 +104,10 @@ public:
                                  gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output);
 
+    /// Renders the particle overdraw (debug view @c debug_pass_particle_overdraw): the particle layers each
+    /// pixel shaded as a heat ramp over the darkened image.
+    void run_particle_overdraw_debug_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& output);
+
     void run_assao_pass(const camera& camera,
                         gfx::render_view& rview,
                         delta_t dt,
@@ -149,11 +154,13 @@ public:
     /// Ground Truth Ambient Occlusion into the "GTAO" texture. @return true when it ran.
     auto run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
 
+    /// @param particle_reactive The particle pass's reactive coverage this frame, or null.
     auto run_taa_pass(const camera& camera,
                       gfx::render_view& rview,
                       const gfx::frame_buffer::ptr& input,
                       const gfx::frame_buffer::ptr& output,
-                      const run_params& rparams) -> gfx::frame_buffer::ptr;
+                      const run_params& rparams,
+                      const gfx::texture::ptr& particle_reactive) -> gfx::frame_buffer::ptr;
 
     auto run_fxaa_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output,
                        const run_params& rparams)
@@ -243,6 +250,9 @@ public:
     static constexpr int debug_pass_gi_screen_probe_frames = 59;
     static constexpr int debug_pass_gi_overview = 60;
     static constexpr int debug_pass_gi_performance_overview = 61;
+    /// The particle layers each pixel shaded (the particle pass counts them, fs_particle_overdraw_debug.sc
+    /// draws them blended over the finished image).
+    static constexpr int debug_pass_particle_overdraw = 62;
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
@@ -292,6 +302,11 @@ public:
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
     void build_shadows(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
+
+    /// Lists this run's mesh particle emitters (camera runs only: a probe capture would keep one moment of
+    /// their motion): the ones the G-buffer draws and the ones casting shadows. Keeps the ones in view simulating
+    /// (renderer-based culling).
+    void gather_mesh_particles(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask);
 
     /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
     auto run_hiz_pass(const camera& camera,
@@ -451,6 +466,19 @@ private:
 
         std::unique_ptr<gpu_program> program;
     } velocity_debug_program_;
+
+    /// The particle overdraw view (particles/fs_particle_overdraw_debug.sc).
+    struct particle_overdraw_debug_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_overdraw, "s_overdraw", bgfx::UniformType::Sampler);
+        }
+
+        gfx::program::uniform_ptr s_overdraw;
+
+        std::unique_ptr<gpu_program> program;
+    } particle_overdraw_debug_program_;
 
     /// The exposure overlay (exposure/fs_exposure_debug.sc): the adaptation trace and this
     /// frame's metering histogram, drawn blended over the lit image.
@@ -639,6 +667,34 @@ private:
 
     auto get_light_program(const light& l) const -> const color_lighting&;
     auto get_light_program_no_shadows(const light& l) const -> const color_lighting&;
+
+    /// What every light the direct lighting pass draws reads.
+    struct light_submit_context
+    {
+        bgfx::ViewId view = 0;
+        const camera* cam = nullptr;
+        gfx::frame_buffer::ptr gbuffer;
+        usize32_t buffer_size{};
+        float pre_exposure = 1.0f;
+    };
+
+    /**
+     * @brief Draws one light into the light buffer over its screen rectangle (nothing when it is out of view).
+     * @param world_transform The light's place, its scale reset.
+     * @param linear_color The light's linear color (the atmosphere's transmittance included for the sky's sun).
+     * @param shadows The light's shadow maps, or null to draw it without a shadow.
+     */
+    void submit_light(const light& light,
+                      const math::transform& world_transform,
+                      const math::vec3& linear_color,
+                      const shadow::shadowmap_generator* shadows,
+                      const light_submit_context& context);
+
+    /// Lights the brightest particles of the emitters that ask for it (emitter_render_desc::light_count) give off.
+    void submit_particle_lights(scene& scn, const light_submit_context& context);
+
+    /// Scratch of submit_particle_lights.
+    std::vector<ps_soa::particle_light> particle_lights_;
     void submit_pbr_material(geom_program& program, const pbr_material& mat);
     void submit_batched_geometry(gfx::render_pass& pass, const camera& camera);
     /// Velocity for batched movers: draws the mover instances of this frame's prepared
@@ -672,6 +728,11 @@ private:
     uint64_t shadow_casters_frame_{~0ULL};
     /// The subset of the two lists reaching into the range of the local light being generated.
     shadow::shadow_map_models_t shadow_light_casters_;
+    /// This run's mesh particle emitters the camera sees, and the ones casting shadows (gather_mesh_particles).
+    std::vector<const particle_emitter_component*> mesh_particle_emitters_;
+    shadow::shadow_map_models_t mesh_particle_casters_;
+    /// The G-buffer collected mesh particles this run: the instanced submits run whatever the batching setting.
+    bool has_mesh_particle_instances_{false};
 
     /// Brings the cached caster lists up to date for this frame: a wholesale rebuild when the
     /// revision or the layer mask changed, then a per-frame refresh of the movers' bounds and
@@ -751,6 +812,10 @@ private:
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
+    /// This run draws for a camera (not a probe or a capture): particle lights and mesh particles take part.
+    bool is_camera_run_{false};
+    /// The layers this run draws.
+    layer_mask render_mask_{layer_reserved::everything_layer};
     /// The GI reflections wrote RBUFFER and PBUFFER in this run (run_gi_pass), so RBUFFER needs no clear.
     bool gi_reflections_written_{false};
     /// Render frame of the last velocity pass that drew ANY mover (individual or batched),

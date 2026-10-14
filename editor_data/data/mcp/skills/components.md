@@ -42,69 +42,175 @@ size the emitter in metres: wider, softer highlights at the same total light.
 
 ## Particle Emitter
 
-Field semantics:
-- lifetime = particle life in seconds; emission_lifetime = emitter run seconds
-  per loop (loop:true restarts it); emission_rate = particles per second.
-- shape + emission_shape_scale define the spawn region (circle + [1.3,0.1,1.3]
-  is a flat disc); direction up | outward | inward gives initial direction.
-- velocity_gradient / scale_gradient are arrays of {progress,min,max}.
-  scale_gradient is the size over the particle's life and every key counts:
-  [0 at 0, full at 0.07, full at 1] pops in, [0, full at 0.5, 0] grows then
-  shrinks. Each particle picks its place in the min..max range at birth and at
-  death and drifts between the two. velocity_gradient reads only its last key:
-  the distance travelled (see Motion model). color_gradient is
-  {progress,color:[r,g,b,a]} with every key used. Fade alpha in from 0 at
-  progress 0 and out to 0 at 1 to avoid popping.
-- Flipbook textures: texture_sheet_tiles [8,8] with texture_sheet_cycles 1
-  plays an 8x8 sheet once per particle life.
-- blend_mode: additive for fire, sparks, magic; normal for smoke and dust.
-  color_intensity above 1 (6-10) makes additive effects glow through bloom.
-- gravity_scale 1 makes particles fall (fountains); align_to_direction true
-  turns particles so the texture's top points along their motion, within the
-  quad's plane in every render mode (camera-facing sparks, arcs crawling flat
-  over the floor, upright streaks). Draw directional
-  art pointing up and stretch it with initial_scale_3d y (sparks [1,3,1]); a
-  rotation of [90,90] turns art drawn sideways.
-- Motion model: a particle travels velocity_gradient metres along its direction
-  over its whole life (not m/s); gravity and force_over_lifetime bend the end of
-  the path and grow with lifetime squared. position_easing (Linear, OutExpo,
-  OutCubic, ...) remaps that path's time: OutExpo bursts out and settles -
-  explosions, novas. temporal_motion 1 spreads a moving emitter's spawns along
-  its path (smooth trails).
-- emission_rate 0 makes a burst-only emitter that scripts fire with Emit(count).
+Every key below is a reflected property, named as the inspector's tooltips
+describe it; enum values are snake_case (older spellings such as "OutExpo"
+are accepted). A get without a property filter leaves out the settings of
+other modes (hidden in the inspector too); name them to read them anyway. A
+renamed key is rejected with its new name.
+
+Emission:
+- lifetime [min,max] = particle life in seconds; duration = seconds of one
+  emission cycle (loop:true repeats it, a one-shot stops once its last particle
+  is gone); emission_rate = particles per second; rate_over_distance =
+  particles per metre the emitter moves (trails and footprints stay evenly
+  spaced at any speed and frame rate).
+- bursts [{time,count:[min,max],cycles,interval,probability}] fire on top of
+  the rates in every cycle: an explosion's flash at 0 s and its debris at
+  0.05 s; cycles 0 repeats every interval until the cycle ends. emission_rate 0
+  with bursts is a one-shot; with neither, scripts fire it with Emit(count).
+- shape sphere | hemisphere | circle | box | rect | cone | line | torus | mesh,
+  sized by shape_scale and offset by shape_position (circle + [1.3,0.1,1.3] is
+  a flat disc). cone_angle (degrees) slants a cone's rim, torus_thickness is the
+  tube's radius as a share of the ring's, shape_mesh (a mesh asset) with
+  shape_mesh_mode surface | vertices spawns over a model.
+  direction up | outward | inward (outward follows the normals of cone, torus
+  and mesh); direction_spread (degrees) widens it.
 - prewarm true starts a looping emitter full (one particle lifetime of emission
   already alive) when it first plays after it is created or reset: ambient fire,
   smoke and mist do not build up at scene start.
 - auto_play false keeps an emitter stopped when the scene starts or it is
   instantiated, until Play(); use it for one-shot effects scripts trigger.
-- size_by_speed_range / color_by_speed_gradient scale and tint by speed over
-  size_by_speed_velocity_range / color_by_speed_velocity_range ([min, max] m/s).
-- culling_mode renderer_based (default) freezes an emitter no camera sees;
-  always_simulate keeps it running. simulation_backend CPU | GPU.
+
+Motion (exact at any frame rate; there is no per-frame integration):
+- start_speed [min,max] m/s; speed_over_life [{progress,value}] multiplies that
+  launch velocity; drag (per second) decays it so gravity and acceleration
+  reach a terminal speed; gravity_scale 1 falls (fountains); acceleration
+  [x,y,z] m/s^2 is wind or buoyancy; inherit_velocity carries the emitter's own
+  motion. The old keys velocity_gradient, velocity_damping and
+  emission_lifetime are rejected with what replaced them.
+- motion_easing (linear, out_expo, out_cubic, ...) remaps a particle's time:
+  out_expo bursts out and settles - explosions, novas. spawn_along_path 1
+  spreads a moving emitter's spawns along its path (smooth trails).
+- turbulence_strength (metres, 0 = off) swirls particles through a curl-noise
+  field: smoke billows, embers wander, magic churns. turbulence_frequency
+  (swirls per metre), turbulence_speed (swirls per second, 0 freezes the field),
+  turbulence_over_life multiplies the strength over life.
+- collision kill | bounce with collision_planes [[nx,ny,nz,offset]] (world
+  normal and offset from the emitter along it; [[0,1,0,0]] is the ground at the
+  emitter's height); restitution, friction and max_bounces shape the bounce.
+  World simulation space only. collision_radius_scale (default 1) makes a
+  particle touch with its edge, half its size from the plane, so sprites and
+  meshes rest on the floor; 0 = its centre.
+- sub_emitters [{trigger:birth|death|collision,target:<entity id>,count,
+  probability,inherit_velocity,inherit_color,inherit_size}] burst another
+  entity's emitter at each event: sparks where embers land, smoke where a
+  rocket dies. Give the target emission_rate 0 and auto_play false. A target
+  of null is a slot not assigned yet.
+
+Look:
+- size_over_life [{progress,min,max}] is the size over the particle's life and
+  every key counts: [0 at 0, full at 0.07, full at 1] pops in, [0, full at 0.5,
+  0] grows then shrinks. Each particle picks its place in the min..max range at
+  birth and at death and drifts between the two. size_axes [x,y,z] multiplies
+  it per axis, and size_axes_over_life [{progress,value:[x,y,z]}] squashes and
+  stretches it over life (raindrops, shockwaves, flattening smoke); z is the
+  depth of mesh particles.
+- color_gradient [{progress,color:[r,g,b,a]}] uses every key. Fade alpha in
+  from 0 at progress 0 and out to 0 at 1 to avoid popping.
+  random_between_gradients true mixes it with color_gradient_b by a random
+  amount per particle (sparks from yellow to red). intensity_over_life
+  multiplies color_intensity over life (embers that flare and cool).
+- blend_mode: additive for fire, sparks, magic; normal for smoke and dust.
+  color_intensity above 1 (6-10) makes additive effects glow through bloom.
+- Flipbook textures: texture_sheet_tiles [8,8] with texture_sheet_cycles 1
+  plays an 8x8 sheet once per particle life. texture_sheet_use_frame_curve
+  with texture_sheet_frame_curve (0 = first frame, 1 = last) holds, speeds up
+  or reverses it; texture_sheet_random_row plays one random row per particle
+  (several animations in one sheet). frame_blending true crossfades frames of
+  a sheet that plays slower than about 30 frames per second.
+  erosion_over_life (0..1) dissolves texels below that alpha.
+- align_to_direction true turns particles so the texture's top points along
+  their motion, within the quad's plane in every render mode (camera-facing
+  sparks, arcs crawling flat over the floor, upright streaks). Draw
+  directional art pointing up and stretch it with size_axes y (sparks
+  [1,3,1]); a start_rotation of [90,90] turns art drawn sideways.
+- render_mode billboard | horizontal_billboard | vertical_billboard |
+  camera_facing | stretched | trail | ribbon | mesh | fixed_axis. trail draws
+  each particle's own past path over trail_length seconds (it curves with
+  gravity, drag and turbulence), narrowing to trail_width_end (share of the
+  size) and fading toward its tail. ribbon joins the emitter's live particles,
+  oldest to youngest, into one strip: a moving emitter with a high rate (or
+  rate_over_distance) leaves a ribbon behind it; ribbon_texture_mode age (the
+  texture flows with the particles' age) | stretch (once head to tail) | tile
+  (repeated every ribbon_tile_time seconds of age). fixed_axis stands each
+  quad along facing_axis (emitter space, [0,1,0] = vertical billboard) turning
+  about it toward the camera: beams, grass, streaks along a slope.
+- stretched: stretch_camera_velocity_scale 1 stretches particles by their
+  motion as the camera sees it (rain and snow streak when the camera moves
+  through them); 0 = their own motion only.
+- render_mode mesh draws render_mesh (a mesh asset key, e.g.
+  "engine:/embedded/cube" or "engine:/embedded/sphere") per particle with
+  render_material (unset = the mesh's own materials), drawn, lit, shadowed
+  (mesh_cast_shadows) and with motion vectors like the scene's models: debris,
+  rocks, shells, leaves. Size 1 is the mesh's own size, times size_axes (and
+  size_axes_over_life, z included); start_rotation / spin_speed tumble each
+  mesh about an axis of its own, align_to_direction points its +Y along the
+  motion. The color
+  gradient's alpha (and opacity) fades meshes out by dithering, as LOD
+  transitions do (they stop casting shadows below half); its color, the blend
+  mode and the texture do not apply to meshes.
 - Horizontal billboards follow the entity's rotation: spin the entity to spin a
   ground rune; local simulation_space plus a spinning entity swirls particles.
-- rotation [min,max] is each particle's start angle in degrees (0-360 keeps smoke
-  and fire from repeating one orientation); rotation_speed [min,max] spins it in
-  degrees per second, and random_rotation_direction true spins half the other way.
-  A [35,35] rotation_speed turns a ground rune without turning its entity.
+- start_rotation [min,max] is each particle's start angle in degrees (0-360
+  keeps smoke and fire from repeating one orientation); spin_speed [min,max]
+  spins it in degrees per second, spin_over_life multiplies the spin over life
+  (debris that settles), and random_spin_direction true spins half the other
+  way. A [35,35] spin_speed turns a ground rune without turning its entity.
+- size_by_speed_multiplier / color_by_speed_gradient scale and tint by speed
+  over size_by_speed_speed_range / color_by_speed_speed_range ([min, max] m/s);
+  lifetime_by_emitter_speed_curve scales the lifetime over
+  lifetime_by_emitter_speed_range (the emitter's own speed, m/s).
 - soft_fade_distance (metres, 0 = off) fades particles where they meet the scene
   behind them: smoke, mist and glows near the floor stop cutting hard lines.
-- frame_blending true crossfades each flipbook frame into the next; use it when a
-  sheet plays slower than about 30 frames per second.
+- lighting unlit (default: the colour is emitted light - fire, magic, sparks) |
+  volumetric (lit once per particle by the sky, the sun with its shadow and up
+  to 4 nearby lights, the same from every side - smoke, dust, steam) | surface
+  (lit like a small sphere; lighting_wrap 0..1 softens the terminator;
+  normal_texture, a tangent-space normal map laid out like the texture with
+  green up, replaces the sphere so smoke and debris show their shapes).
+  receive_shadows false ignores the sun's shadow.
+- light_count > 0 turns the emitter's brightest particles into point lights
+  without shadows (light_intensity candela at full brightness, light_range
+  metres, light_color_from_particle): embers and sparks light the floor and
+  walls around them. A view draws at most 64 particle lights.
 - sort_priority (integer, default 0) sets the draw order against other emitters,
   whatever their blend mode: lower draws first, higher composites on top; equal
   priorities draw back to front by distance. Typical layers: ground decals,
   scorch marks and floor rings -10, ground mist -5, fire 0, smoke over it 1,
-  sparks and debris 2, flashes 3.
+  sparks and debris 2, flashes 3. sort_mode orders an emitter's own particles
+  (automatic, oldest_first for trails of smoke, ...); sort_backend gpu | cpu
+  picks where they are culled and sorted.
+
+Cost:
+- primitive octagon draws round textures (soft dots, smoke puffs) with about
+  17% fewer pixels; primitive cutout draws an 8-sided polygon around each sheet
+  frame's texels above cutout_alpha_threshold, baked from the texture (the
+  same image, often half the fill for sparks, flames and debris);
+  half_resolution draws large soft effects (smoke, fog, dust)
+  at a quarter of the fill cost; write_velocity gives fast debris and sparks
+  motion vectors so anti-aliasing keeps them crisp (one more draw).
+- max_draw_distance (metres, 0 = no limit) culls a distant emitter, fading over
+  draw_distance_fade; max_screen_size caps a particle's size next to the camera.
+- culling_mode renderer_based (default) freezes an emitter no camera sees;
+  always_simulate keeps it running.
+- Project-wide quality: settings_set {"graphics.particles":{"spawn_scale":0.5,
+  "sorting":true,"force_half_resolution":false,"min_screen_size":0,
+  "max_drawn_particles":0,"max_particles_scale":1,"max_lighting":"surface"}}
+  scales every rate and burst and every emitter's capacity, can skip the
+  emitters smallest on screen, and caps the lighting (volumetric: surface
+  lights as volumetric; unlit: lit particles draw unlit).
 
 Preview and diagnose with particles_control_batch: emit a burst emitter's
 count, play / stop a looping one (with_children for a whole effect), and read
 num_particles and simulated per emitter.
 
 Starting recipes: fire (circle, up, rate 70, life 1.0, additive, 8x8 flipbook,
-intensity 8, scale shrinking 1.2 -> 0.35); smoke above it (rate 16, life 3,
-normal blend, scale growing 1 -> 2.6, gray fading alpha); sparks (sphere, up,
-velocity 5-7, gravity_scale 1, small shrinking quads, additive, intensity 10).
+intensity 8, scale shrinking 1.2 -> 0.35, light_count 1 for its glow); smoke
+above it (rate 16, life 3, normal blend, lighting volumetric, half_resolution,
+turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
+(sphere, up, start_speed 5-7, gravity_scale 1, collision bounce on
+[[0,1,0,0]], small shrinking quads, additive, intensity 10); magic trail
+(rate_over_distance 20 or render_mode ribbon on a moving entity).
 
 ## Physics
 

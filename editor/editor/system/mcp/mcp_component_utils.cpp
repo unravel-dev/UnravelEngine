@@ -2136,40 +2136,6 @@ auto resolve_animation_clip(rtti::context& ctx, const std::string& key_or_uid, s
     return handle;
 }
 
-#define MCP_EMITTER_SHAPE_TABLE                                                                                        \
-    {                                                                                                                  \
-        {"sphere", ps_soa::emitter_shape::sphere}, {"hemisphere", ps_soa::emitter_shape::hemisphere},                  \
-        {"circle", ps_soa::emitter_shape::circle}, {"box", ps_soa::emitter_shape::box},                                \
-        {"rect", ps_soa::emitter_shape::rect}                                                                          \
-    }
-#define MCP_EMITTER_DIRECTION_TABLE                                                                                    \
-    {                                                                                                                  \
-        {"up", ps_soa::emitter_direction::up}, {"outward", ps_soa::emitter_direction::outward},                        \
-        {"inward", ps_soa::emitter_direction::inward}                                                                  \
-    }
-#define MCP_SPAWN_LOCATION_TABLE                                                                                       \
-    {                                                                                                                  \
-        {"inside", ps_soa::spawn_location::inside}, {"surface", ps_soa::spawn_location::surface}                       \
-    }
-#define MCP_SIMULATION_SPACE_TABLE                                                                                     \
-    {                                                                                                                  \
-        {"world", ps_soa::simulation_space::world}, {"local", ps_soa::simulation_space::local}                         \
-    }
-#define MCP_TEXTURE_MODE_TABLE                                                                                         \
-    {                                                                                                                  \
-        {"multi_channel", ps_soa::texture_mode::multi_channel}, {"mask", ps_soa::texture_mode::mask}                   \
-    }
-#define MCP_RENDER_MODE_TABLE                                                                                          \
-    {                                                                                                                  \
-        {"billboard", ps_soa::render_mode::billboard},                                                                 \
-        {"horizontal_billboard", ps_soa::render_mode::horizontal_billboard},                                           \
-        {"vertical_billboard", ps_soa::render_mode::vertical_billboard}                                                \
-    }
-#define MCP_BLEND_MODE_TABLE                                                                                           \
-    {                                                                                                                  \
-        {"normal", ps_soa::blend_mode::normal}, {"additive", ps_soa::blend_mode::additive},                            \
-        {"multiply", ps_soa::blend_mode::multiply}                                                                     \
-    }
 #define MCP_BODY_TYPE_TABLE                                                                                            \
     {                                                                                                                  \
         {"static", rigidbody_type::static_body}, {"kinematic", rigidbody_type::kinematic},                             \
@@ -2260,156 +2226,298 @@ auto alignment_from_string(std::string_view value, alignment& out) -> bool
     return true;
 }
 
-auto color_gradient_to_json(const math::gradient<math::color>& gradient) -> std::string
+auto bursts_to_json(const std::vector<ps_soa::emitter_burst>& bursts) -> std::string
 {
     std::string json = "[";
-    bool first = true;
-    for(const auto& point : gradient.get_points())
+    for(size_t i = 0; i < bursts.size(); ++i)
     {
-        if(!first)
-        {
-            json += ",";
-        }
-        first = false;
-        json += fmt::format(R"({{"progress":{:.6g},"color":{}}})", point.progress, color_to_json(point.element));
+        const auto& burst = bursts[i];
+        json += fmt::format(R"({}{{"time":{:.6g},"count":[{:.6g},{:.6g}],"cycles":{},"interval":{:.6g},"probability":{:.6g}}})",
+                            i > 0 ? "," : "",
+                            burst.time,
+                            burst.count.min,
+                            burst.count.max,
+                            burst.cycles,
+                            burst.interval,
+                            burst.probability);
     }
     json += "]";
     return json;
 }
 
-/// Largest difference between two gradient values that still counts as the same value.
-constexpr float k_gradient_value_tolerance = 1e-4f;
-
-/// A particle travels the velocity value at progress 1 over its life and no other key is read.
-/// Reports the keys that differ from that value, which would change the motion if they counted.
-void warn_unread_velocity_keys(const std::string& key,
-                               const math::gradient<frange_t>& gradient,
-                               component_apply_result& result)
+/// [{time, count: n | [min, max], cycles, interval, probability}]; every field but time is optional.
+auto parse_bursts(const simdjson::dom::element& value, std::vector<ps_soa::emitter_burst>& out, std::string& error)
+    -> bool
 {
-    const frange_t end = gradient.sample(1.0f);
-    std::string unread;
-    for(const auto& point : gradient.get_points())
+    simdjson::dom::array arr;
+    if(value.get_array().get(arr) != simdjson::SUCCESS)
     {
-        if(math::abs(point.element.min - end.min) > k_gradient_value_tolerance ||
-           math::abs(point.element.max - end.max) > k_gradient_value_tolerance)
+        error = "expected array of {time,count,cycles,interval,probability} bursts";
+        return false;
+    }
+    for(auto el : arr)
+    {
+        simdjson::dom::object obj;
+        double time{};
+        if(el.get_object().get(obj) != simdjson::SUCCESS || obj["time"].get_double().get(time) != simdjson::SUCCESS)
         {
-            unread += fmt::format("{}{:.3g}", unread.empty() ? "" : ", ", point.progress);
+            error = "burst needs a numeric time";
+            return false;
         }
+        ps_soa::emitter_burst burst;
+        burst.time = static_cast<float>(time);
+        simdjson::dom::element count;
+        if(obj["count"].get(count) == simdjson::SUCCESS)
+        {
+            double single{};
+            simdjson::dom::array range;
+            if(count.get_double().get(single) == simdjson::SUCCESS)
+            {
+                burst.count = frange_t(static_cast<float>(single), static_cast<float>(single));
+            }
+            else if(count.get_array().get(range) == simdjson::SUCCESS && range.size() == 2)
+            {
+                double low{};
+                double high{};
+                if(range.at(0).get_double().get(low) != simdjson::SUCCESS || range.at(1).get_double().get(high) != simdjson::SUCCESS)
+                {
+                    error = "burst count must be a number or [min,max]";
+                    return false;
+                }
+                burst.count = frange_t(static_cast<float>(low), static_cast<float>(high));
+            }
+            else
+            {
+                error = "burst count must be a number or [min,max]";
+                return false;
+            }
+        }
+        int64_t cycles{};
+        if(obj["cycles"].get_int64().get(cycles) == simdjson::SUCCESS)
+        {
+            burst.cycles = static_cast<uint32_t>(std::max<int64_t>(cycles, 0));
+        }
+        double number{};
+        if(obj["interval"].get_double().get(number) == simdjson::SUCCESS)
+        {
+            burst.interval = static_cast<float>(number);
+        }
+        if(obj["probability"].get_double().get(number) == simdjson::SUCCESS)
+        {
+            burst.probability = static_cast<float>(number);
+        }
+        out.push_back(burst);
     }
-    if(unread.empty())
-    {
-        return;
-    }
-    result.warnings.push_back(fmt::format("{}: a particle travels the value at progress 1 over its life; the keys at "
-                                          "{} change nothing",
-                                          key,
-                                          unread));
+    return true;
 }
 
-auto range_gradient_to_json(const math::gradient<frange_t>& gradient) -> std::string
+auto planes_to_json(const std::vector<math::vec4>& planes) -> std::string
 {
     std::string json = "[";
-    bool first = true;
-    for(const auto& point : gradient.get_points())
+    for(size_t i = 0; i < planes.size(); ++i)
     {
-        if(!first)
-        {
-            json += ",";
-        }
-        first = false;
-        json += fmt::format(R"({{"progress":{:.6g},"min":{:.6g},"max":{:.6g}}})",
-                            point.progress,
-                            point.element.min,
-                            point.element.max);
+        json += fmt::format("{}[{:.6g},{:.6g},{:.6g},{:.6g}]", i > 0 ? "," : "", planes[i].x, planes[i].y, planes[i].z, planes[i].w);
     }
-    json += "]";
-    return json;
+    return json + "]";
 }
 
-auto parse_color_gradient(const simdjson::dom::element& value, math::gradient<math::color>& out, std::string& error)
-    -> bool
+/// [[nx, ny, nz, offset], ...]
+auto parse_planes(const simdjson::dom::element& value, std::vector<math::vec4>& out, std::string& error) -> bool
 {
     simdjson::dom::array arr;
     if(value.get_array().get(arr) != simdjson::SUCCESS)
     {
-        error = "expected array of {progress,color} points";
+        error = "expected array of [nx,ny,nz,offset] planes";
         return false;
     }
-    math::gradient<math::color>::points_t points;
     for(auto el : arr)
     {
-        simdjson::dom::object obj;
-        if(el.get_object().get(obj) != simdjson::SUCCESS)
+        simdjson::dom::array plane;
+        if(el.get_array().get(plane) != simdjson::SUCCESS || plane.size() != 4)
         {
-            error = "expected object point";
+            error = "a plane is [nx,ny,nz,offset]";
             return false;
         }
-        math::gradient_point<math::color> point;
-        double progress{};
-        if(obj["progress"].get_double().get(progress) != simdjson::SUCCESS)
+        double numbers[4]{};
+        for(size_t i = 0; i < 4; ++i)
         {
-            error = "point missing numeric progress";
-            return false;
+            if(plane.at(i).get_double().get(numbers[i]) != simdjson::SUCCESS)
+            {
+                error = "a plane is four numbers [nx,ny,nz,offset]";
+                return false;
+            }
         }
-        point.progress = static_cast<float>(progress);
-        simdjson::dom::element color_el;
-        if(obj["color"].get(color_el) != simdjson::SUCCESS || !parse_color(color_el, point.element, error))
-        {
-            error = error.empty() ? "point missing color" : error;
-            return false;
-        }
-        points.push_back(point);
+        out.emplace_back(float(numbers[0]), float(numbers[1]), float(numbers[2]), float(numbers[3]));
     }
-    out.set_points(points);
     return true;
 }
 
-auto parse_range_gradient(const simdjson::dom::element& value, math::gradient<frange_t>& out, std::string& error)
-    -> bool
+auto event_type_name(ps_soa::particle_event_type type) -> const char*
+{
+    switch(type)
+    {
+        case ps_soa::particle_event_type::birth:
+            return "birth";
+        case ps_soa::particle_event_type::collision:
+            return "collision";
+        default:
+            return "death";
+    }
+}
+
+auto sub_emitters_to_json(const std::vector<particle_sub_emitter>& sub_emitters) -> std::string
+{
+    std::string json = "[";
+    for(size_t i = 0; i < sub_emitters.size(); ++i)
+    {
+        const auto& sub_emitter = sub_emitters[i];
+        const std::string target = sub_emitter.target ? mcp::entity_id_string(sub_emitter.target) : std::string();
+        json += fmt::format(
+            R"({}{{"trigger":"{}","target":{},"count":[{:.6g},{:.6g}],"probability":{:.6g},"inherit_velocity":{:.6g},"inherit_color":{},"inherit_size":{}}})",
+            i > 0 ? "," : "",
+            event_type_name(sub_emitter.trigger),
+            target.empty() ? std::string("null") : make_json_string(target),
+            sub_emitter.count.min,
+            sub_emitter.count.max,
+            sub_emitter.probability,
+            sub_emitter.inherit_velocity,
+            sub_emitter.inherit_color ? "true" : "false",
+            sub_emitter.inherit_size ? "true" : "false");
+    }
+    return json + "]";
+}
+
+/// [{trigger, target (entity id), count: n | [min, max], probability, inherit_velocity, inherit_color, inherit_size}]
+auto parse_sub_emitters(rtti::context& ctx,
+                        const simdjson::dom::element& value,
+                        std::vector<particle_sub_emitter>& out,
+                        std::string& error) -> bool
 {
     simdjson::dom::array arr;
     if(value.get_array().get(arr) != simdjson::SUCCESS)
     {
-        error = "expected array of {progress,min,max} points";
+        error = "expected array of sub-emitters";
         return false;
     }
-    math::gradient<frange_t>::points_t points;
+    scene* scn = nullptr;
+    if(!mcp::require_active_scene(ctx, scn, error))
+    {
+        return false;
+    }
     for(auto el : arr)
     {
         simdjson::dom::object obj;
-        if(el.get_object().get(obj) != simdjson::SUCCESS)
+        std::string_view trigger;
+        simdjson::dom::element target_value;
+        if(el.get_object().get(obj) != simdjson::SUCCESS || obj["trigger"].get(trigger) != simdjson::SUCCESS ||
+           obj["target"].get(target_value) != simdjson::SUCCESS)
         {
-            error = "expected object point";
+            error = "a sub-emitter needs trigger (birth|death|collision) and target (entity id, or null for an unassigned slot)";
             return false;
         }
-        math::gradient_point<frange_t> point;
-        double progress{};
-        double minv{};
-        double maxv{};
-        if(obj["progress"].get_double().get(progress) != simdjson::SUCCESS ||
-           obj["min"].get_double().get(minv) != simdjson::SUCCESS ||
-           obj["max"].get_double().get(maxv) != simdjson::SUCCESS)
+        particle_sub_emitter sub_emitter;
+        if(trigger == "birth")
         {
-            error = "point needs numeric progress/min/max";
+            sub_emitter.trigger = ps_soa::particle_event_type::birth;
+        }
+        else if(trigger == "death")
+        {
+            sub_emitter.trigger = ps_soa::particle_event_type::death;
+        }
+        else if(trigger == "collision")
+        {
+            sub_emitter.trigger = ps_soa::particle_event_type::collision;
+        }
+        else
+        {
+            error = "trigger must be birth, death or collision";
             return false;
         }
-        point.progress = static_cast<float>(progress);
-        point.element.min = static_cast<float>(minv);
-        point.element.max = static_cast<float>(maxv);
-        points.push_back(point);
+        // A null target is a slot not assigned yet: a get writes it that way, so a set takes it back.
+        std::string_view target;
+        if(!target_value.is_null())
+        {
+            if(target_value.get(target) != simdjson::SUCCESS)
+            {
+                error = "a sub-emitter target must be an entity id or null";
+                return false;
+            }
+            sub_emitter.target = mcp::find_entity(*scn, std::string(target));
+            if(!sub_emitter.target || !sub_emitter.target.all_of<particle_emitter_component>())
+            {
+                error = "the target must be an entity with a Particle Emitter: " + std::string(target);
+                return false;
+            }
+        }
+        simdjson::dom::element count;
+        if(obj["count"].get(count) == simdjson::SUCCESS)
+        {
+            double single{};
+            simdjson::dom::array range;
+            double low{};
+            double high{};
+            if(count.get_double().get(single) == simdjson::SUCCESS)
+            {
+                sub_emitter.count = frange_t(float(single), float(single));
+            }
+            else if(count.get_array().get(range) == simdjson::SUCCESS && range.size() == 2 &&
+                    range.at(0).get_double().get(low) == simdjson::SUCCESS &&
+                    range.at(1).get_double().get(high) == simdjson::SUCCESS)
+            {
+                sub_emitter.count = frange_t(float(low), float(high));
+            }
+            else
+            {
+                error = "sub-emitter count must be a number or [min,max]";
+                return false;
+            }
+        }
+        double number{};
+        if(obj["probability"].get_double().get(number) == simdjson::SUCCESS)
+        {
+            sub_emitter.probability = float(number);
+        }
+        if(obj["inherit_velocity"].get_double().get(number) == simdjson::SUCCESS)
+        {
+            sub_emitter.inherit_velocity = float(number);
+        }
+        bool flag{};
+        if(obj["inherit_color"].get_bool().get(flag) == simdjson::SUCCESS)
+        {
+            sub_emitter.inherit_color = flag;
+        }
+        if(obj["inherit_size"].get_bool().get(flag) == simdjson::SUCCESS)
+        {
+            sub_emitter.inherit_size = flag;
+        }
+        out.push_back(sub_emitter);
     }
-    out.set_points(points);
     return true;
 }
 
-/// Applies the keys in @p delegated through the reflection, limited to @p allowed: the reflected
-/// extras of a component whose other properties are hand-written. Keys outside @p allowed are
-/// reported unknown.
+/// Keys an older particle model had, with what replaced them.
+auto replaced_particle_key(const std::string& key) -> const char*
+{
+    // A plain rename is the reflection's former_name; these changed shape.
+    static const std::unordered_map<std::string, const char*> replaced{
+        {"velocity_gradient",
+         "replaced by start_speed ([min,max] launch speed, m/s) and speed_over_life ([{progress,value}] multiplier)"},
+        {"velocity_damping", "replaced by drag (1/s: velocity decays by exp(-drag t))"},
+        {"emission_lifetime", "renamed duration (seconds of one emission cycle)"},
+        {"size_x_over_life", "replaced by size_axes_over_life ([{progress,value:[x,y,z]}])"},
+        {"size_y_over_life", "replaced by size_axes_over_life ([{progress,value:[x,y,z]}])"},
+    };
+    const auto found = replaced.find(key);
+    return found == replaced.end() ? nullptr : found->second;
+}
+
+/// Applies the keys in @p delegated through the reflection: the reflected properties of a component with
+/// hand-written ones. With @p allowed, keys outside it are reported unknown.
 void apply_delegated_meta_properties(rtti::context& ctx,
                                      entt::meta_any& object,
                                      const simdjson::dom::object& properties,
                                      const std::vector<std::string>& delegated,
-                                     const std::unordered_set<std::string>& allowed,
+                                     const std::unordered_set<std::string>* allowed,
                                      component_apply_result& result)
 {
     if(delegated.empty())
@@ -2438,184 +2546,29 @@ void apply_delegated_meta_properties(rtti::context& ctx,
         result.errors.push_back("Failed to re-parse the delegated properties");
         return;
     }
-    apply_meta_properties(ctx, object, delegated_object, result, &allowed);
+    apply_meta_properties(ctx, object, delegated_object, result, allowed);
 }
 
-/// Particle Emitter properties served by the reflection rather than the hand-written rows below.
-auto particle_reflected_keys() -> const std::unordered_set<std::string>&
-{
-    static const std::unordered_set<std::string> keys{"position_easing",
-                                                      "temporal_motion",
-                                                      "culling_mode",
-                                                      "simulation_backend",
-                                                      "size_by_speed_range",
-                                                      "size_by_speed_velocity_range",
-                                                      "color_by_speed_velocity_range",
-                                                      "lifetime_by_emitter_speed_range",
-                                                      "rotation",
-                                                      "rotation_speed",
-                                                      "random_rotation_direction",
-                                                      "soft_fade_distance",
-                                                      "sort_priority",
-                                                      "prewarm",
-                                                      "auto_play",
-                                                      "frame_blending"};
-    return keys;
-}
-
-auto particle_to_json(const particle_emitter_component& comp, const std::unordered_set<std::string>* filter)
+/// The Particle Emitter's lists of structs, which the reflection bridge does not carry: bursts, collision planes and
+/// sub-emitters (entity references). Every other key is a reflected property.
+auto particle_lists_to_json(const particle_emitter_component& comp, const std::unordered_set<std::string>* filter)
     -> std::string
 {
     std::string json = "{";
     bool first = true;
-    if(wants_key(filter, "enabled"))
+    if(wants_key(filter, "bursts"))
     {
-        append_prop(json, first, "enabled", comp.is_enabled() ? "true" : "false");
+        append_prop(json, first, "bursts", bursts_to_json(comp.get_bursts()));
     }
-    if(wants_key(filter, "shape"))
+    if(wants_key(filter, "collision_planes"))
     {
-        append_prop(json, first, "shape", make_json_string(enum_to_string(comp.get_shape(), MCP_EMITTER_SHAPE_TABLE)));
+        append_prop(json, first, "collision_planes", planes_to_json(comp.get_collision_planes()));
     }
-    if(wants_key(filter, "direction"))
+    if(wants_key(filter, "sub_emitters"))
     {
-        append_prop(json,
-                    first,
-                    "direction",
-                    make_json_string(enum_to_string(comp.get_direction(), MCP_EMITTER_DIRECTION_TABLE)));
+        append_prop(json, first, "sub_emitters", sub_emitters_to_json(comp.get_sub_emitters()));
     }
-    if(wants_key(filter, "spawn_location"))
-    {
-        append_prop(json,
-                    first,
-                    "spawn_location",
-                    make_json_string(enum_to_string(comp.get_spawn_location(), MCP_SPAWN_LOCATION_TABLE)));
-    }
-    if(wants_key(filter, "simulation_space"))
-    {
-        append_prop(json,
-                    first,
-                    "simulation_space",
-                    make_json_string(enum_to_string(comp.get_simulation_space(), MCP_SIMULATION_SPACE_TABLE)));
-    }
-    if(wants_key(filter, "max_particles"))
-    {
-        append_prop(json, first, "max_particles", fmt::format("{}", comp.get_max_particles()));
-    }
-    if(wants_key(filter, "emission_rate"))
-    {
-        append_prop(json, first, "emission_rate", fmt::format("{:.6g}", comp.get_emission_rate()));
-    }
-    if(wants_key(filter, "lifetime"))
-    {
-        append_prop(json, first, "lifetime", fmt::format("{:.6g}", comp.get_lifetime().count()));
-    }
-    if(wants_key(filter, "emission_lifetime"))
-    {
-        append_prop(json, first, "emission_lifetime", fmt::format("{:.6g}", comp.get_emission_lifetime().count()));
-    }
-    if(wants_key(filter, "start_delay"))
-    {
-        append_prop(json, first, "start_delay", fmt::format("{:.6g}", comp.get_start_delay().count()));
-    }
-    if(wants_key(filter, "gravity_scale"))
-    {
-        append_prop(json, first, "gravity_scale", fmt::format("{:.6g}", comp.get_gravity_scale()));
-    }
-    if(wants_key(filter, "velocity_damping"))
-    {
-        append_prop(json, first, "velocity_damping", fmt::format("{:.6g}", comp.get_velocity_damping()));
-    }
-    if(wants_key(filter, "force_over_lifetime"))
-    {
-        append_prop(json, first, "force_over_lifetime", vec3_to_json(comp.get_force_over_lifetime()));
-    }
-    if(wants_key(filter, "emission_shape_position"))
-    {
-        append_prop(json, first, "emission_shape_position", vec3_to_json(comp.get_emission_shape_position()));
-    }
-    if(wants_key(filter, "emission_shape_scale"))
-    {
-        append_prop(json, first, "emission_shape_scale", vec3_to_json(comp.get_emission_shape_scale()));
-    }
-    if(wants_key(filter, "initial_scale_3d"))
-    {
-        append_prop(json, first, "initial_scale_3d", vec3_to_json(comp.get_initial_scale_3d()));
-    }
-    if(wants_key(filter, "opacity"))
-    {
-        append_prop(json, first, "opacity", fmt::format("{:.6g}", comp.get_opacity()));
-    }
-    if(wants_key(filter, "color_intensity"))
-    {
-        append_prop(json, first, "color_intensity", fmt::format("{:.6g}", comp.get_color_intensity()));
-    }
-    if(wants_key(filter, "color_gradient"))
-    {
-        append_prop(json, first, "color_gradient", color_gradient_to_json(comp.get_color_gradient()));
-    }
-    if(wants_key(filter, "color_by_speed_gradient"))
-    {
-        append_prop(json, first, "color_by_speed_gradient", color_gradient_to_json(comp.get_color_by_speed_gradient()));
-    }
-    if(wants_key(filter, "velocity_gradient"))
-    {
-        append_prop(json, first, "velocity_gradient", range_gradient_to_json(comp.get_velocity_gradient()));
-    }
-    if(wants_key(filter, "scale_gradient"))
-    {
-        append_prop(json, first, "scale_gradient", range_gradient_to_json(comp.get_scale_gradient()));
-    }
-    if(wants_key(filter, "texture"))
-    {
-        append_prop(json, first, "texture", asset_handle_key_json(comp.get_texture()));
-    }
-    if(wants_key(filter, "texture_mode"))
-    {
-        append_prop(json,
-                    first,
-                    "texture_mode",
-                    make_json_string(enum_to_string(comp.get_texture_mode(), MCP_TEXTURE_MODE_TABLE)));
-    }
-    if(wants_key(filter, "render_mode"))
-    {
-        append_prop(json,
-                    first,
-                    "render_mode",
-                    make_json_string(enum_to_string(comp.get_render_mode(), MCP_RENDER_MODE_TABLE)));
-    }
-    if(wants_key(filter, "blend_mode"))
-    {
-        append_prop(json,
-                    first,
-                    "blend_mode",
-                    make_json_string(enum_to_string(comp.get_blend_mode(), MCP_BLEND_MODE_TABLE)));
-    }
-    if(wants_key(filter, "texture_sheet_tiles"))
-    {
-        append_prop(json, first, "texture_sheet_tiles", vec2_to_json(comp.get_texture_sheet_tiles()));
-    }
-    if(wants_key(filter, "texture_sheet_cycles"))
-    {
-        append_prop(json, first, "texture_sheet_cycles", fmt::format("{:.6g}", comp.get_texture_sheet_cycles()));
-    }
-    if(wants_key(filter, "texture_sheet_randomize"))
-    {
-        append_prop(json, first, "texture_sheet_randomize", comp.get_texture_sheet_randomize() ? "true" : "false");
-    }
-    if(wants_key(filter, "loop"))
-    {
-        append_prop(json, first, "loop", comp.is_loop() ? "true" : "false");
-    }
-    if(wants_key(filter, "align_to_direction"))
-    {
-        append_prop(json, first, "align_to_direction", comp.get_align_to_direction() ? "true" : "false");
-    }
-    if(wants_key(filter, "pivot"))
-    {
-        append_prop(json, first, "pivot", vec2_to_json(comp.get_pivot()));
-    }
-    json += "}";
-    return json;
+    return json + "}";
 }
 
 auto apply_particle_properties(rtti::context& ctx,
@@ -2623,11 +2576,13 @@ auto apply_particle_properties(rtti::context& ctx,
                                const simdjson::dom::object& properties,
                                component_apply_result& result) -> void
 {
+    // A playing emitter restarts with the new settings; a stopped one (auto play off, stopped by a script) stays
+    // stopped.
+    const bool was_playing = comp.is_playing();
     std::vector<std::string> delegated;
     for(auto field : properties)
     {
         const std::string key(field.key);
-        const auto& value = field.value;
         std::string error;
         auto fail = [&](const std::string& message)
         {
@@ -2638,221 +2593,38 @@ auto apply_particle_properties(rtti::context& ctx,
         {
             result.applied.push_back(key);
         };
-        if(key == "enabled")
+        if(const char* replacement = replaced_particle_key(key))
         {
-            bool v{};
-            parse_bool(value, v, error) ? (comp.set_enabled(v), applied()) : fail(error);
+            fail(replacement);
         }
-        else if(key == "shape")
+        else if(key == "bursts")
         {
-            std::string s;
-            ps_soa::emitter_shape v{};
-            (parse_string(value, s, error) && enum_from_string<ps_soa::emitter_shape>(s, MCP_EMITTER_SHAPE_TABLE, v))
-                ? (comp.set_shape(v), applied())
-                : fail("expected sphere|hemisphere|circle|box|rect");
+            std::vector<ps_soa::emitter_burst> bursts;
+            parse_bursts(field.value, bursts, error) ? (comp.set_bursts(bursts), applied()) : fail(error);
         }
-        else if(key == "direction")
+        else if(key == "collision_planes")
         {
-            std::string s;
-            ps_soa::emitter_direction v{};
-            (parse_string(value, s, error) &&
-             enum_from_string<ps_soa::emitter_direction>(s, MCP_EMITTER_DIRECTION_TABLE, v))
-                ? (comp.set_direction(v), applied())
-                : fail("expected up|outward|inward");
+            std::vector<math::vec4> planes;
+            parse_planes(field.value, planes, error) ? (comp.set_collision_planes(planes), applied()) : fail(error);
         }
-        else if(key == "spawn_location")
+        else if(key == "sub_emitters")
         {
-            std::string s;
-            ps_soa::spawn_location v{};
-            (parse_string(value, s, error) && enum_from_string<ps_soa::spawn_location>(s, MCP_SPAWN_LOCATION_TABLE, v))
-                ? (comp.set_spawn_location(v), applied())
-                : fail("expected inside|surface");
-        }
-        else if(key == "simulation_space")
-        {
-            std::string s;
-            ps_soa::simulation_space v{};
-            (parse_string(value, s, error) &&
-             enum_from_string<ps_soa::simulation_space>(s, MCP_SIMULATION_SPACE_TABLE, v))
-                ? (comp.set_simulation_space(v), applied())
-                : fail("expected world|local");
-        }
-        else if(key == "max_particles")
-        {
-            int v{};
-            parse_int(value, v, error) ? (comp.set_max_particles(static_cast<uint32_t>(std::max(v, 1))), applied())
-                                       : fail(error);
-        }
-        else if(key == "emission_rate")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_emission_rate(v), applied()) : fail(error);
-        }
-        else if(key == "lifetime")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_lifetime(std::chrono::duration<float>(v)), applied())
-                                          : fail(error);
-        }
-        else if(key == "emission_lifetime")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_emission_lifetime(std::chrono::duration<float>(v)), applied())
-                                          : fail(error);
-        }
-        else if(key == "start_delay")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_start_delay(std::chrono::duration<float>(v)), applied())
-                                          : fail(error);
-        }
-        else if(key == "gravity_scale")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_gravity_scale(v), applied()) : fail(error);
-        }
-        else if(key == "velocity_damping")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_velocity_damping(v), applied()) : fail(error);
-        }
-        else if(key == "force_over_lifetime")
-        {
-            math::vec3 v{};
-            parse_vec3(value, v, error) ? (comp.set_force_over_lifetime(v), applied()) : fail(error);
-        }
-        else if(key == "emission_shape_position")
-        {
-            math::vec3 v{};
-            parse_vec3(value, v, error) ? (comp.set_emission_shape_position(v), applied()) : fail(error);
-        }
-        else if(key == "emission_shape_scale")
-        {
-            math::vec3 v{};
-            parse_vec3(value, v, error) ? (comp.set_emission_shape_scale(v), applied()) : fail(error);
-        }
-        else if(key == "initial_scale_3d")
-        {
-            math::vec3 v{};
-            parse_vec3(value, v, error) ? (comp.set_initial_scale_3d(v), applied()) : fail(error);
-        }
-        else if(key == "opacity")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_opacity(v), applied()) : fail(error);
-        }
-        else if(key == "color_intensity")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_color_intensity(v), applied()) : fail(error);
-        }
-        else if(key == "color_gradient")
-        {
-            math::gradient<math::color> gradient;
-            parse_color_gradient(value, gradient, error) ? (comp.set_color_gradient(gradient), applied())
-                                                         : fail(error);
-        }
-        else if(key == "color_by_speed_gradient")
-        {
-            math::gradient<math::color> gradient;
-            parse_color_gradient(value, gradient, error) ? (comp.set_color_by_speed_gradient(gradient), applied())
-                                                         : fail(error);
-        }
-        else if(key == "velocity_gradient" || key == "scale_gradient")
-        {
-            math::gradient<frange_t> gradient;
-            if(!parse_range_gradient(value, gradient, error))
-            {
-                fail(error);
-                continue;
-            }
-            if(key == "scale_gradient")
-            {
-                comp.set_scale_gradient(gradient);
-            }
-            else
-            {
-                comp.set_velocity_gradient(gradient);
-                warn_unread_velocity_keys(key, gradient, result);
-            }
-            applied();
-        }
-        else if(key == "texture")
-        {
-            std::string s;
-            if(!parse_string(value, s, error))
-            {
-                fail(error);
-                continue;
-            }
-            auto handle = resolve_texture(ctx, s, error);
-            (!s.empty() && !handle) ? fail(error) : (comp.set_texture(handle), applied());
-        }
-        else if(key == "texture_mode")
-        {
-            std::string s;
-            ps_soa::texture_mode v{};
-            (parse_string(value, s, error) && enum_from_string<ps_soa::texture_mode>(s, MCP_TEXTURE_MODE_TABLE, v))
-                ? (comp.set_texture_mode(v), applied())
-                : fail("expected multi_channel|mask");
-        }
-        else if(key == "render_mode")
-        {
-            std::string s;
-            ps_soa::render_mode v{};
-            (parse_string(value, s, error) && enum_from_string<ps_soa::render_mode>(s, MCP_RENDER_MODE_TABLE, v))
-                ? (comp.set_render_mode(v), applied())
-                : fail("expected billboard|horizontal_billboard|vertical_billboard");
-        }
-        else if(key == "blend_mode")
-        {
-            std::string s;
-            ps_soa::blend_mode v{};
-            (parse_string(value, s, error) && enum_from_string<ps_soa::blend_mode>(s, MCP_BLEND_MODE_TABLE, v))
-                ? (comp.set_blend_mode(v), applied())
-                : fail("expected normal|additive|multiply");
-        }
-        else if(key == "texture_sheet_tiles")
-        {
-            math::vec2 v{};
-            parse_vec2(value, v, error) ? (comp.set_texture_sheet_tiles(v), applied()) : fail(error);
-        }
-        else if(key == "texture_sheet_cycles")
-        {
-            float v{};
-            parse_number(value, v, error) ? (comp.set_texture_sheet_cycles(v), applied()) : fail(error);
-        }
-        else if(key == "texture_sheet_randomize")
-        {
-            bool v{};
-            parse_bool(value, v, error) ? (comp.set_texture_sheet_randomize(v), applied()) : fail(error);
-        }
-        else if(key == "loop")
-        {
-            bool v{};
-            parse_bool(value, v, error) ? (comp.set_loop(v), applied()) : fail(error);
-        }
-        else if(key == "align_to_direction")
-        {
-            bool v{};
-            parse_bool(value, v, error) ? (comp.set_align_to_direction(v), applied()) : fail(error);
-        }
-        else if(key == "pivot")
-        {
-            math::vec2 v{};
-            parse_vec2(value, v, error) ? (comp.set_pivot(v), applied()) : fail(error);
+            std::vector<particle_sub_emitter> sub_emitters;
+            parse_sub_emitters(ctx, field.value, sub_emitters, error) ? (comp.set_sub_emitters(sub_emitters), applied())
+                                                                      : fail(error);
         }
         else
         {
             delegated.push_back(key);
         }
     }
-    // Easing, culling, backend and the speed ranges go through the reflection with the component's
-    // own setters.
     auto object = entt::forward_as_meta(comp);
-    apply_delegated_meta_properties(ctx, object, properties, delegated, particle_reflected_keys(), result);
-    comp.stop_and_reset();
-    comp.play();
+    apply_delegated_meta_properties(ctx, object, properties, delegated, nullptr, result);
+    if(was_playing)
+    {
+        comp.stop_and_reset();
+        comp.play();
+    }
 }
 
 auto physics_shapes_to_json(const physics_component& comp) -> std::string
@@ -3131,8 +2903,9 @@ auto particle_with_reflected_to_json(rtti::context& ctx,
                                      const std::unordered_set<std::string>* filter) -> std::string
 {
     auto object = entt::forward_as_meta(comp);
-    return join_json_objects(particle_to_json(comp, filter),
-                             reflected_extras_to_json(ctx, object, particle_reflected_keys(), filter));
+    // Asked for by name, a setting of another mode (hidden in the inspector) is reported too.
+    return join_json_objects(particle_lists_to_json(comp, filter),
+                             meta_properties_to_json(ctx, object, filter, filter != nullptr));
 }
 
 auto apply_physics_properties(rtti::context& ctx,
@@ -3206,7 +2979,7 @@ auto apply_physics_properties(rtti::context& ctx,
     // The rest go through the reflection: the material handle, the contact event flags and the
     // read-only velocities are all reflected with the component's own setters.
     auto object = entt::forward_as_meta(comp);
-    apply_delegated_meta_properties(ctx, object, properties, delegated, physics_reflected_keys(), result);
+    apply_delegated_meta_properties(ctx, object, properties, delegated, &physics_reflected_keys(), result);
 }
 
 auto animation_to_json(const animation_component& comp, const std::unordered_set<std::string>* filter) -> std::string
@@ -4163,53 +3936,18 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Volume", "weight", "number");
     add("Volume", "blend_distance", "number");
     add("Volume", "extents", "array", R"("items":"number","minItems":3,"maxItems":3)");
-    add("Particle Emitter", "enabled", "boolean");
-    add("Particle Emitter", "shape", "string", R"("enum":["sphere","hemisphere","circle","box","rect"])");
-    add("Particle Emitter", "direction", "string", R"("enum":["up","outward","inward"])");
-    add("Particle Emitter", "spawn_location", "string", R"("enum":["inside","surface"])");
-    add("Particle Emitter", "simulation_space", "string", R"("enum":["world","local"])");
-    add("Particle Emitter", "max_particles", "integer");
-    add("Particle Emitter", "emission_rate", "number");
-    add("Particle Emitter", "lifetime", "number", R"("description":"Particle lifetime seconds")");
-    add("Particle Emitter", "emission_lifetime", "number", R"("description":"Emitter run seconds per loop")");
-    add("Particle Emitter", "start_delay", "number");
-    add("Particle Emitter", "gravity_scale", "number");
-    add("Particle Emitter", "velocity_damping", "number");
-    add("Particle Emitter", "force_over_lifetime", "array", R"("items":"number","minItems":3,"maxItems":3)");
-    add("Particle Emitter", "emission_shape_position", "array", R"("items":"number","minItems":3,"maxItems":3)");
-    add("Particle Emitter", "emission_shape_scale", "array", R"("items":"number","minItems":3,"maxItems":3)");
-    add("Particle Emitter", "initial_scale_3d", "array", R"("items":"number","minItems":3,"maxItems":3)");
-    add("Particle Emitter", "opacity", "number");
-    add("Particle Emitter", "color_intensity", "number");
     add("Particle Emitter",
-        "color_gradient",
+        "bursts",
         "array",
-        R"("description":"[{progress,color:[r,g,b,a]}] sorted by progress 0..1")");
+        R"("description":"[{time,count:[min,max],cycles,interval,probability}] bursts per emission cycle: first firing at time s, cycles firings (0 = until the cycle ends) every interval s, each with the given probability")");
     add("Particle Emitter",
-        "color_by_speed_gradient",
+        "collision_planes",
         "array",
-        R"("description":"[{progress,color:[r,g,b,a]}] colour multiplier over color_by_speed_velocity_range, progress 0 = slow end")");
+        R"("description":"[[nx,ny,nz,offset]] collision planes: world normal and offset from the emitter's origin along it (normal side open); [[0,1,0,0]] = ground at the emitter's height")");
     add("Particle Emitter",
-        "velocity_gradient",
+        "sub_emitters",
         "array",
-        R"("description":"[{progress,min,max}] speed range over lifetime")");
-    add("Particle Emitter",
-        "scale_gradient",
-        "array",
-        R"("description":"[{progress,min,max}] size range over lifetime")");
-    add("Particle Emitter", "texture", "string", R"("description":"Texture asset key/uid or null")");
-    add("Particle Emitter", "texture_mode", "string", R"("enum":["multi_channel","mask"])");
-    add("Particle Emitter",
-        "render_mode",
-        "string",
-        R"("enum":["billboard","horizontal_billboard","vertical_billboard"])");
-    add("Particle Emitter", "blend_mode", "string", R"("enum":["normal","additive","multiply"])");
-    add("Particle Emitter", "texture_sheet_tiles", "array", R"("items":"number","minItems":2,"maxItems":2)");
-    add("Particle Emitter", "texture_sheet_cycles", "number");
-    add("Particle Emitter", "texture_sheet_randomize", "boolean");
-    add("Particle Emitter", "loop", "boolean");
-    add("Particle Emitter", "align_to_direction", "boolean");
-    add("Particle Emitter", "pivot", "array", R"("items":"number","minItems":2,"maxItems":2)");
+        R"("description":"[{trigger:birth|death|collision,target:<entity id>|null,count:n|[min,max],probability,inherit_velocity,inherit_color,inherit_size}] bursts the target entity's Particle Emitter fires at each event")");
     add("Physics", "body_type", "string", R"("enum":["static","kinematic","dynamic"])");
     add("Physics", "is_using_gravity", "boolean");
     add("Physics", "is_autoscaled", "boolean");
@@ -4288,11 +4026,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     }
     if(all || component_filter == "Particle Emitter")
     {
-        append_meta_schema(addable_component_type("Particle Emitter"),
-                           "Particle Emitter",
-                           json,
-                           first,
-                           &particle_reflected_keys());
+        append_meta_schema(addable_component_type("Particle Emitter"), "Particle Emitter", json, first);
     }
     for(const auto& pretty : addable_component_pretty_names())
     {

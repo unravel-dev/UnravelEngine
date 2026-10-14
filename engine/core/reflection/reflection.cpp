@@ -154,6 +154,23 @@ auto get_name(const meta_data& prop) -> std::string
     return get_attribute_as<std::string>(prop, "name");
 }
 
+auto get_former_name(const meta_data& prop) -> std::string
+{
+    return get_attribute_as<std::string>(prop, "former_name");
+}
+
+auto find_renamed_property(const meta_type& type, const std::string& former_name) -> meta_data
+{
+    for(auto [id, prop] : type.data())
+    {
+        if(!former_name.empty() && get_former_name(prop) == former_name)
+        {
+            return prop;
+        }
+    }
+    return {};
+}
+
 auto get_pretty_name(const meta_data& prop) -> std::string
 {
     auto name = get_attribute_as<std::string>(prop, "pretty_name");

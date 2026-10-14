@@ -5,6 +5,49 @@ using System.Runtime.InteropServices;
 namespace Unravel.Core
 {
     /// <summary>
+    /// A burst of particles at set times of the emission cycle. Matches C++ ps_soa::emitter_burst.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ParticleBurst
+    {
+        /// <summary>Seconds into the emission cycle of the first firing.</summary>
+        public float time;
+        /// <summary>Fewest particles per firing.</summary>
+        public float countMin;
+        /// <summary>Most particles per firing.</summary>
+        public float countMax;
+        /// <summary>Firings per cycle: 1 = once, 0 = every interval until the cycle ends.</summary>
+        public uint cycles;
+        /// <summary>Seconds between the firings of this burst (at least 0.01).</summary>
+        public float interval;
+        /// <summary>Chance (0..1) that each firing happens.</summary>
+        public float probability;
+
+        /// <summary>
+        /// A burst of @p count particles at @p time, once per cycle, always (probability 1). Build bursts with it: a
+        /// struct left at its defaults has probability 0 and never fires.
+        /// </summary>
+        public ParticleBurst(float time, float count)
+            : this(time, count, 1, 0.1f)
+        {
+        }
+
+        /// <summary>
+        /// A burst of @p count particles first at @p time, then @p cycles firings in all (0 = until the cycle ends)
+        /// every @p interval seconds.
+        /// </summary>
+        public ParticleBurst(float time, float count, uint cycles, float interval)
+        {
+            this.time = time;
+            countMin = count;
+            countMax = count;
+            this.cycles = cycles;
+            this.interval = interval;
+            probability = 1.0f;
+        }
+    }
+
+    /// <summary>
     /// Emitter shape enumeration that matches the C++ EmitterShape::Enum
     /// </summary>
     public enum EmitterShape
@@ -13,7 +56,119 @@ namespace Unravel.Core
         Hemisphere = 1,
         Circle = 2,
         Box = 3,
-        Rect = 4
+        Rect = 4,
+        /// <summary>Base disc of a cone; particles launch along its slant (coneAngle).</summary>
+        Cone = 5,
+        /// <summary>A segment along X.</summary>
+        Line = 6,
+        /// <summary>A ring in the XZ plane with a round tube (torusThickness).</summary>
+        Torus = 7,
+        /// <summary>The surface or the vertices of shapeMesh.</summary>
+        Mesh = 8
+    }
+
+    /// <summary>
+    /// What a particle does where its path first crosses a collision plane. Matches C++ ps_soa::collision_mode.
+    /// </summary>
+    public enum ParticleCollisionMode
+    {
+        /// <summary>No collision.</summary>
+        None = 0,
+        /// <summary>It dies there.</summary>
+        Kill = 1,
+        /// <summary>It bounces off (restitution, friction), up to maxBounces times.</summary>
+        Bounce = 2
+    }
+
+    /// <summary>
+    /// What fires a sub-emitter. Matches C++ ps_soa::particle_event_type.
+    /// </summary>
+    public enum ParticleEventType
+    {
+        /// <summary>A particle is born.</summary>
+        Birth = 1,
+        /// <summary>A particle dies.</summary>
+        Death = 2,
+        /// <summary>A particle reaches a collision plane.</summary>
+        Collision = 4
+    }
+
+    /// <summary>
+    /// A burst another emitter fires where this emitter's particles are born, die or collide.
+    /// Matches C++ particle_sub_emitter.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ParticleSubEmitter
+    {
+        /// <summary>What fires the burst.</summary>
+        public ParticleEventType trigger;
+        /// <summary>The entity whose Particle Emitter bursts.</summary>
+        public Entity target;
+        /// <summary>Fewest particles per event.</summary>
+        public float countMin;
+        /// <summary>Most particles per event.</summary>
+        public float countMax;
+        /// <summary>Chance (0..1) that an event fires the burst.</summary>
+        public float probability;
+        /// <summary>Share of the particle's velocity the burst's particles add to their own launch.</summary>
+        public float inheritVelocity;
+        /// <summary>1: the burst's particles take the particle's color.</summary>
+        public int inheritColor;
+        /// <summary>1: the burst's particles start at the particle's size.</summary>
+        public int inheritSize;
+
+        /// <summary>
+        /// A sub-emitter firing @p count particles on @p target at every @p trigger, always (probability 1).
+        /// Build sub-emitters with it: a struct left at its defaults has probability 0 and never fires.
+        /// </summary>
+        public ParticleSubEmitter(ParticleEventType trigger, Entity target, float count)
+        {
+            this.trigger = trigger;
+            this.target = target;
+            countMin = count;
+            countMax = count;
+            probability = 1.0f;
+            inheritVelocity = 0.0f;
+            inheritColor = 0;
+            inheritSize = 0;
+        }
+    }
+
+    /// <summary>
+    /// How particles are lit. Matches C++ ps_soa::particle_lighting.
+    /// </summary>
+    public enum ParticleLighting
+    {
+        /// <summary>The color is the light the particle gives off (fire, magic, sparks).</summary>
+        Unlit = 0,
+        /// <summary>Lit once per particle like a small cloud: sky, sun (with its shadow), nearby lights.</summary>
+        Volumetric = 1,
+        /// <summary>Lit like a small sphere facing the camera: the sun per pixel with lightingWrap.</summary>
+        Surface = 2
+    }
+
+    /// <summary>
+    /// How a ribbon's texture runs along it. Matches C++ ps_soa::ribbon_texture_mode.
+    /// </summary>
+    public enum ParticleRibbonTextureMode
+    {
+        /// <summary>With each particle's age, flowing with the particles.</summary>
+        Age = 0,
+        /// <summary>Once over the whole ribbon, head to tail.</summary>
+        Stretch = 1,
+        /// <summary>Repeated every ribbonTileTime seconds of the particles' age.</summary>
+        Tile = 2
+    }
+
+    /// <summary>
+    /// Where a mesh shape spawns. Matches C++ ps_soa::mesh_spawn_mode.
+    /// </summary>
+    public enum ParticleMeshSpawnMode
+    {
+        /// <summary>Anywhere on the surface, evenly by area.</summary>
+        Surface = 0,
+        /// <summary>On the vertices.</summary>
+        Vertices = 1
     }
 
     /// <summary>
@@ -27,9 +182,9 @@ namespace Unravel.Core
     }
 
     /// <summary>
-    /// Particle simulation/pack backend. Matches C++ ps_soa::particle_sim_backend.
+    /// Where an emitter's particles are culled and sorted. Matches C++ ps_soa::particle_sort_backend.
     /// </summary>
-    public enum ParticleSimBackend
+    public enum ParticleSortBackend
     {
         CPU = 0,
         GPU = 1
@@ -42,8 +197,54 @@ namespace Unravel.Core
     {
         /// <summary>Simulates every frame.</summary>
         AlwaysSimulate = 0,
-        /// <summary>Freezes while no camera sees the emitter's bounds.</summary>
-        RendererBased = 1
+        /// <summary>Freezes while no camera sees the emitter's bounds, then catches up on the time it
+        /// missed, so it wakes as if it had kept running.</summary>
+        RendererBased = 1,
+        /// <summary>Freezes while no camera sees the emitter's bounds and resumes where it froze.</summary>
+        Pause = 2
+    }
+
+    /// <summary>
+    /// Order an emitter's own particles draw in. Matches C++ ps_soa::sort_mode.
+    /// </summary>
+    public enum ParticleSortMode
+    {
+        /// <summary>Back to front for Normal and Premultiplied blend; unsorted for Additive and Multiply.</summary>
+        Auto = 0,
+        /// <summary>A stable order, no sort.</summary>
+        None = 1,
+        /// <summary>Back to front by distance to the camera.</summary>
+        ViewDistance = 2,
+        /// <summary>Back to front along the camera's forward axis.</summary>
+        ViewDepth = 3,
+        /// <summary>The oldest particles draw first, the youngest on top.</summary>
+        OldestFirst = 4,
+        /// <summary>The youngest particles draw first, the oldest on top.</summary>
+        YoungestFirst = 5
+    }
+
+    /// <summary>
+    /// Geometry each particle draws. Matches C++ ps_soa::particle_primitive.
+    /// </summary>
+    public enum ParticlePrimitive
+    {
+        /// <summary>The whole texture.</summary>
+        Quad = 0,
+        /// <summary>The regular octagon around the texture's inscribed circle; the corners are cut off.</summary>
+        Octagon = 1,
+        /// <summary>An 8-sided polygon around each sheet frame's texels above cutoutAlphaThreshold.</summary>
+        Cutout = 4
+    }
+
+    /// <summary>
+    /// How an emitter's culling bounds are found. Matches C++ ps_soa::bounds_mode.
+    /// </summary>
+    public enum ParticleBoundsMode
+    {
+        /// <summary>Worked out every frame from the emitter's settings.</summary>
+        Automatic = 0,
+        /// <summary>The fixedBounds box, in the emitter's local space.</summary>
+        Fixed = 1
     }
 
     /// <summary>
@@ -76,7 +277,19 @@ namespace Unravel.Core
         /// <summary>Lies flat, facing up.</summary>
         HorizontalBillboard = 1,
         /// <summary>Stands upright, turning around the vertical axis.</summary>
-        VerticalBillboard = 2
+        VerticalBillboard = 2,
+        /// <summary>Turned toward the camera's position: no stretch at the screen edges.</summary>
+        CameraFacing = 3,
+        /// <summary>Stretched along its motion (stretchLengthScale, stretchSpeedScale).</summary>
+        Stretched = 4,
+        /// <summary>A ribbon along the particle's own path over the last trailLength seconds.</summary>
+        Trail = 5,
+        /// <summary>One ribbon through all of the emitter's particles in birth order.</summary>
+        Ribbon = 6,
+        /// <summary>renderMesh with its material, drawn, lit and shadowed with the scene's models.</summary>
+        Mesh = 7,
+        /// <summary>Upright along facingAxis (in the emitter's space), turning about it toward the camera.</summary>
+        FixedAxis = 8
     }
 
     /// <summary>
@@ -86,7 +299,9 @@ namespace Unravel.Core
     {
         Normal = 0,
         Additive = 1,
-        Multiply = 2
+        Multiply = 2,
+        /// <summary>Normal blending of a texture whose color is already multiplied by its alpha.</summary>
+        Premultiplied = 3
     }
 
     /// <summary>
@@ -96,7 +311,7 @@ namespace Unravel.Core
     {
         /// <summary>The texture's color and alpha.</summary>
         MultiChannel = 0,
-        /// <summary>The texture's red channel as alpha.</summary>
+        /// <summary>The texture's luminance is the opacity; the particle's color tints it.</summary>
         Mask = 1
     }
 
@@ -162,7 +377,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Initial velocity in units per second, in simulation space. Gravity, force and damping still apply.
+        /// Launch velocity, m/s, in simulation space. Gravity, acceleration and drag still apply.
         /// </summary>
         public Vector3 velocity
         {
@@ -180,8 +395,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Size at birth: the scale gradient is scaled to start at it, or to peak at it when the
-        /// gradient starts at 0.
+        /// Size at birth: sizeOverLife is scaled to start at it, or to peak at it when the curve
+        /// starts at 0.
         /// </summary>
         public float size
         {
@@ -235,17 +450,18 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets or sets the particle simulation backend (CPU batched gather vs GPU compute pack).
+        /// Where the particles are culled and sorted for each view: GPU (one compute pass for every emitter) or CPU
+        /// (the main thread). They look the same either way.
         /// </summary>
-        public ParticleSimBackend simulationBackend
+        public ParticleSortBackend sortBackend
         {
             get
             {
-                return (ParticleSimBackend)internal_m2n_particle_emitter_get_simulation_backend(owner);
+                return (ParticleSortBackend)internal_m2n_particle_emitter_get_sort_backend(owner);
             }
             set
             {
-                internal_m2n_particle_emitter_set_simulation_backend(owner, (int)value);
+                internal_m2n_particle_emitter_set_sort_backend(owner, (int)value);
             }
         }
 
@@ -310,33 +526,536 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets or sets the temporal motion interpolation factor.
+        /// Where a moving emitter's particles appear: 1 = spread along the path it moved this frame, 0 = all at its
+        /// current place.
         /// </summary>
-        public float temporalMotion
+        public float spawnAlongPath
         {
             get
             {
-                return internal_m2n_particle_emitter_get_temporal_motion(owner);
+                return internal_m2n_particle_emitter_get_spawn_along_path(owner);
             }
             set
             {
-                internal_m2n_particle_emitter_set_temporal_motion(owner, value);
+                internal_m2n_particle_emitter_set_spawn_along_path(owner, value);
             }
         }
 
         /// <summary>
-        /// Gets or sets the velocity damping factor.
+        /// Linear drag, per second: velocity decays by exp(-drag t), so gravity and acceleration reach a
+        /// terminal speed.
         /// </summary>
-        public float velocityDamping
+        public float drag
+        {
+            get => internal_m2n_particle_emitter_get_drag(owner);
+            set => internal_m2n_particle_emitter_set_drag(owner, value);
+        }
+
+        /// <summary>
+        /// Fraction of the emitter's own velocity new particles inherit (world simulation space).
+        /// </summary>
+        public float inheritVelocity
+        {
+            get => internal_m2n_particle_emitter_get_inherit_velocity(owner);
+            set => internal_m2n_particle_emitter_set_inherit_velocity(owner, value);
+        }
+
+        /// <summary>
+        /// Half angle, degrees, of the cone around the launch direction particles spread over.
+        /// </summary>
+        public float directionSpread
+        {
+            get => internal_m2n_particle_emitter_get_direction_spread(owner);
+            set => internal_m2n_particle_emitter_set_direction_spread(owner, value);
+        }
+
+        /// <summary>
+        /// Replay the same particles every time from randomSeed instead of a fresh sequence per emitter.
+        /// </summary>
+        public bool useFixedSeed
+        {
+            get => internal_m2n_particle_emitter_get_use_fixed_seed(owner);
+            set => internal_m2n_particle_emitter_set_use_fixed_seed(owner, value);
+        }
+
+        /// <summary>
+        /// Seed of the replayed sequence when useFixedSeed is on.
+        /// </summary>
+        public uint randomSeed
+        {
+            get => internal_m2n_particle_emitter_get_random_seed(owner);
+            set => internal_m2n_particle_emitter_set_random_seed(owner, value);
+        }
+
+        /// <summary>
+        /// Order of this emitter's own particles.
+        /// </summary>
+        public ParticleSortMode sortMode
+        {
+            get => (ParticleSortMode)internal_m2n_particle_emitter_get_sort_mode(owner);
+            set => internal_m2n_particle_emitter_set_sort_mode(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Geometry each particle draws: the full quad, or an octagon that skips the texture's corners
+        /// (fewer pixels for round textures).
+        /// </summary>
+        public ParticlePrimitive primitive
+        {
+            get => (ParticlePrimitive)internal_m2n_particle_emitter_get_primitive(owner);
+            set => internal_m2n_particle_emitter_set_primitive(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Draw at half the view's resolution (a quarter of the fill cost) and blend over the
+        /// full-resolution particles. Suits large, soft effects; ignored for Multiply blend.
+        /// </summary>
+        public bool halfResolution
+        {
+            get => internal_m2n_particle_emitter_get_half_resolution(owner);
+            set => internal_m2n_particle_emitter_set_half_resolution(owner, value);
+        }
+
+        /// <summary>
+        /// Write motion vectors where the particles are at least velocityAlphaThreshold opaque, so the
+        /// temporal anti-aliasing reprojects them like moving objects (debris, sparks, embers).
+        /// </summary>
+        public bool writeVelocity
+        {
+            get => internal_m2n_particle_emitter_get_write_velocity(owner);
+            set => internal_m2n_particle_emitter_set_write_velocity(owner, value);
+        }
+
+        /// <summary>
+        /// Opacity (0..1) from which a particle texel writes its motion (writeVelocity).
+        /// </summary>
+        public float velocityAlphaThreshold
+        {
+            get => internal_m2n_particle_emitter_get_velocity_alpha_threshold(owner);
+            set => internal_m2n_particle_emitter_set_velocity_alpha_threshold(owner, value);
+        }
+
+        /// <summary>
+        /// Multipliers of sizeAxes over the particle's life (1 throughout = constant): x and y squash and stretch
+        /// quads and meshes, z is the depth of mesh particles.
+        /// </summary>
+        public Vector3Curve sizeAxesOverLife
+        {
+            get => new Vector3Curve(internal_m2n_particle_emitter_get_size_axes_over_life(owner).ToStructArray<Vector3Key>());
+            set => internal_m2n_particle_emitter_set_size_axes_over_life(owner, RequireKeys(value?.keys, nameof(sizeAxesOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Each particle takes its own random mix of colorGradient and colorGradientB.
+        /// </summary>
+        public bool randomBetweenGradients
+        {
+            get => internal_m2n_particle_emitter_get_random_between_gradients(owner);
+            set => internal_m2n_particle_emitter_set_random_between_gradients(owner, value);
+        }
+
+        /// <summary>
+        /// The second color over life, used with randomBetweenGradients.
+        /// </summary>
+        public Gradient colorGradientB
+        {
+            get => new Gradient(internal_m2n_particle_emitter_get_color_gradient_b(owner).ToStructArray<GradientKey>());
+            set => internal_m2n_particle_emitter_set_color_gradient_b(owner, RequireKeys(value?.keys, nameof(colorGradientB)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Multiplier of the color's intensity over life (1 throughout = off).
+        /// </summary>
+        public Curve intensityOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_intensity_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_intensity_over_life(owner, RequireKeys(value?.keys, nameof(intensityOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Multiplier of spinSpeed over life (1 throughout = constant spin).
+        /// </summary>
+        public Curve spinOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_spin_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_spin_over_life(owner, RequireKeys(value?.keys, nameof(spinOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// The texture sheet frame follows textureSheetFrameCurve instead of textureSheetCycles.
+        /// </summary>
+        public bool textureSheetUseFrameCurve
+        {
+            get => internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve(owner);
+            set => internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve(owner, value);
+        }
+
+        /// <summary>
+        /// Texture sheet frame over life, 0 = first frame, 1 = last (textureSheetUseFrameCurve).
+        /// </summary>
+        public Curve textureSheetFrameCurve
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_texture_sheet_frame_curve(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_texture_sheet_frame_curve(owner, RequireKeys(value?.keys, nameof(textureSheetFrameCurve)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Each particle plays one random row of the texture sheet.
+        /// </summary>
+        public bool textureSheetRandomRow
+        {
+            get => internal_m2n_particle_emitter_get_texture_sheet_random_row(owner);
+            set => internal_m2n_particle_emitter_set_texture_sheet_random_row(owner, value);
+        }
+
+        /// <summary>
+        /// Particles per metre the emitter moves, spaced along its path (trails). 0 = off.
+        /// </summary>
+        public float rateOverDistance
+        {
+            get => internal_m2n_particle_emitter_get_rate_over_distance(owner);
+            set => internal_m2n_particle_emitter_set_rate_over_distance(owner, value);
+        }
+
+        /// <summary>
+        /// Bursts at set times of each emission cycle, on top of the rates. A one-shot emitter with an
+        /// emission rate of 0 emits only its bursts.
+        /// </summary>
+        public ParticleBurst[] bursts
+        {
+            get => internal_m2n_particle_emitter_get_bursts(owner).ToStructArray<ParticleBurst>();
+            set => internal_m2n_particle_emitter_set_bursts(owner, (value ?? Array.Empty<ParticleBurst>()).ToByteArray());
+        }
+
+        /// <summary>
+        /// Cone shape: angle, degrees, between the axis and the slant the rim launches along.
+        /// </summary>
+        public float coneAngle
+        {
+            get => internal_m2n_particle_emitter_get_cone_angle(owner);
+            set => internal_m2n_particle_emitter_set_cone_angle(owner, value);
+        }
+
+        /// <summary>
+        /// Torus shape: the tube's radius as a fraction of the ring's.
+        /// </summary>
+        public float torusThickness
+        {
+            get => internal_m2n_particle_emitter_get_torus_thickness(owner);
+            set => internal_m2n_particle_emitter_set_torus_thickness(owner, value);
+        }
+
+        /// <summary>
+        /// Mesh render mode: the mesh each particle draws, at its size times sizeAxes (null: nothing draws).
+        /// </summary>
+        public Mesh renderMesh
         {
             get
             {
-                return internal_m2n_particle_emitter_get_velocity_damping(owner);
+                var uid = internal_m2n_particle_emitter_get_render_mesh(owner);
+                return uid == Guid.Empty ? null : new Mesh { uid = uid };
             }
-            set
+            set => internal_m2n_particle_emitter_set_render_mesh(owner, value?.uid ?? Guid.Empty);
+        }
+
+        /// <summary>
+        /// Mesh render mode: the material of every part of the mesh (null: the mesh keeps its own materials).
+        /// </summary>
+        public Material renderMaterial
+        {
+            get
             {
-                internal_m2n_particle_emitter_set_velocity_damping(owner, value);
+                var uid = internal_m2n_particle_emitter_get_render_material(owner);
+                return uid == Guid.Empty ? null : new Material { uid = uid };
             }
+            set => internal_m2n_particle_emitter_set_render_material(owner, value?.uid ?? Guid.Empty);
+        }
+
+        /// <summary>
+        /// Mesh render mode: the particles cast shadows (when their material does).
+        /// </summary>
+        public bool meshCastShadows
+        {
+            get => internal_m2n_particle_emitter_get_mesh_cast_shadows(owner);
+            set => internal_m2n_particle_emitter_set_mesh_cast_shadows(owner, value);
+        }
+
+        /// <summary>
+        /// Mesh shape: the mesh particles spawn on (null: they spawn at the shape's origin).
+        /// </summary>
+        public Mesh shapeMesh
+        {
+            get
+            {
+                var uid = internal_m2n_particle_emitter_get_shape_mesh(owner);
+                return uid == Guid.Empty ? null : new Mesh { uid = uid };
+            }
+            set => internal_m2n_particle_emitter_set_shape_mesh(owner, value?.uid ?? Guid.Empty);
+        }
+
+        /// <summary>
+        /// Mesh shape: anywhere on the surface by area, or on the vertices.
+        /// </summary>
+        public ParticleMeshSpawnMode shapeMeshMode
+        {
+            get => (ParticleMeshSpawnMode)internal_m2n_particle_emitter_get_mesh_spawn_mode(owner);
+            set => internal_m2n_particle_emitter_set_mesh_spawn_mode(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Metres a swirling curl-noise field displaces the particles by (0 = off).
+        /// </summary>
+        public float turbulenceStrength
+        {
+            get => internal_m2n_particle_emitter_get_turbulence_strength(owner);
+            set => internal_m2n_particle_emitter_set_turbulence_strength(owner, value);
+        }
+
+        /// <summary>
+        /// Turbulence swirls per metre: higher = smaller, busier swirls.
+        /// </summary>
+        public float turbulenceFrequency
+        {
+            get => internal_m2n_particle_emitter_get_turbulence_frequency(owner);
+            set => internal_m2n_particle_emitter_set_turbulence_frequency(owner, value);
+        }
+
+        /// <summary>
+        /// How fast the turbulence field evolves, in swirls per second.
+        /// </summary>
+        public float turbulenceSpeed
+        {
+            get => internal_m2n_particle_emitter_get_turbulence_speed(owner);
+            set => internal_m2n_particle_emitter_set_turbulence_speed(owner, value);
+        }
+
+        /// <summary>
+        /// Multiplier of the turbulence strength over life (1 throughout = constant).
+        /// </summary>
+        public Curve turbulenceOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_turbulence_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_turbulence_over_life(owner, RequireKeys(value?.keys, nameof(turbulenceOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Metres from the camera beyond which the emitter is not drawn (0 = no limit).
+        /// </summary>
+        public float maxDrawDistance
+        {
+            get => internal_m2n_particle_emitter_get_max_draw_distance(owner);
+            set => internal_m2n_particle_emitter_set_max_draw_distance(owner, value);
+        }
+
+        /// <summary>
+        /// Metres before maxDrawDistance over which particles fade out.
+        /// </summary>
+        public float drawDistanceFade
+        {
+            get => internal_m2n_particle_emitter_get_draw_distance_fade(owner);
+            set => internal_m2n_particle_emitter_set_draw_distance_fade(owner, value);
+        }
+
+        /// <summary>
+        /// Cutout primitive: texels whose alpha is above this stay inside each sheet frame's polygon.
+        /// </summary>
+        public float cutoutAlphaThreshold
+        {
+            get => internal_m2n_particle_emitter_get_cutout_alpha_threshold(owner);
+            set => internal_m2n_particle_emitter_set_cutout_alpha_threshold(owner, value);
+        }
+
+        /// <summary>
+        /// Surface lighting: how far the sun wraps past the lit half (0 = hard terminator, 1 = lit all round).
+        /// </summary>
+        public float lightingWrap
+        {
+            get => internal_m2n_particle_emitter_get_lighting_wrap(owner);
+            set => internal_m2n_particle_emitter_set_lighting_wrap(owner, value);
+        }
+
+        /// <summary>
+        /// Surface lighting: a tangent-space normal map (green up) laid out like the texture (null: spheres).
+        /// </summary>
+        public Texture normalTexture
+        {
+            get
+            {
+                var uid = internal_m2n_particle_emitter_get_normal_texture(owner);
+                return uid == Guid.Empty ? null : new Texture { uid = uid };
+            }
+            set => internal_m2n_particle_emitter_set_normal_texture(owner, value?.uid ?? Guid.Empty);
+        }
+
+        /// <summary>
+        /// Lit particles darken in the sun's shadow.
+        /// </summary>
+        public bool receiveShadows
+        {
+            get => internal_m2n_particle_emitter_get_receive_shadows(owner);
+            set => internal_m2n_particle_emitter_set_receive_shadows(owner, value);
+        }
+
+        /// <summary>
+        /// How the particles are lit; lit particles take their color as albedo (multiply blend stays unlit).
+        /// </summary>
+        public ParticleLighting lighting
+        {
+            get => (ParticleLighting)internal_m2n_particle_emitter_get_lighting(owner);
+            set => internal_m2n_particle_emitter_set_lighting(owner, (int)value);
+        }
+
+        /// <summary>
+        /// How many of the brightest particles light the scene as point lights (0 = off).
+        /// </summary>
+        public uint lightCount
+        {
+            get => internal_m2n_particle_emitter_get_light_count(owner);
+            set => internal_m2n_particle_emitter_set_light_count(owner, value);
+        }
+
+        /// <summary>
+        /// Candela of a particle light at full particle brightness.
+        /// </summary>
+        public float lightIntensity
+        {
+            get => internal_m2n_particle_emitter_get_light_intensity(owner);
+            set => internal_m2n_particle_emitter_set_light_intensity(owner, value);
+        }
+
+        /// <summary>
+        /// Metres a particle light reaches.
+        /// </summary>
+        public float lightRange
+        {
+            get => internal_m2n_particle_emitter_get_light_range(owner);
+            set => internal_m2n_particle_emitter_set_light_range(owner, value);
+        }
+
+        /// <summary>
+        /// Particle lights take their particle's color (off: white).
+        /// </summary>
+        public bool lightColorFromParticle
+        {
+            get => internal_m2n_particle_emitter_get_light_color_from_particle(owner);
+            set => internal_m2n_particle_emitter_set_light_color_from_particle(owner, value);
+        }
+
+        /// <summary>
+        /// Bounce collision: share of the speed into the plane a bounce keeps.
+        /// </summary>
+        public float restitution
+        {
+            get => internal_m2n_particle_emitter_get_restitution(owner);
+            set => internal_m2n_particle_emitter_set_restitution(owner, value);
+        }
+
+        /// <summary>
+        /// Bounce collision: share of the speed along the plane a bounce loses.
+        /// </summary>
+        public float friction
+        {
+            get => internal_m2n_particle_emitter_get_friction(owner);
+            set => internal_m2n_particle_emitter_set_friction(owner, value);
+        }
+
+        /// <summary>
+        /// Bounce collision: bounces before the particle dies at its next contact.
+        /// </summary>
+        public uint maxBounces
+        {
+            get => internal_m2n_particle_emitter_get_max_bounces(owner);
+            set => internal_m2n_particle_emitter_set_max_bounces(owner, value);
+        }
+
+        /// <summary>
+        /// Collision: how far from a plane a particle touches it, in halves of its size (1 = its edge, 0 = its centre).
+        /// </summary>
+        public float collisionRadiusScale
+        {
+            get => internal_m2n_particle_emitter_get_collision_radius_scale(owner);
+            set => internal_m2n_particle_emitter_set_collision_radius_scale(owner, value);
+        }
+
+        /// <summary>
+        /// What a particle does where its path first crosses one of collisionPlanes (world-space emitters).
+        /// </summary>
+        public ParticleCollisionMode collision
+        {
+            get => (ParticleCollisionMode)internal_m2n_particle_emitter_get_collision(owner);
+            set => internal_m2n_particle_emitter_set_collision(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Collision planes: a world normal (x, y, z) and an offset (w) from the emitter's origin along it.
+        /// </summary>
+        public Vector4[] collisionPlanes
+        {
+            get => internal_m2n_particle_emitter_get_collision_planes(owner).ToStructArray<Vector4>();
+            set => internal_m2n_particle_emitter_set_collision_planes(owner, (value ?? Array.Empty<Vector4>()).ToByteArray());
+        }
+
+        /// <summary>
+        /// Bursts other emitters fire where this emitter's particles are born, die or collide.
+        /// </summary>
+        public ParticleSubEmitter[] subEmitters
+        {
+            get => internal_m2n_particle_emitter_get_sub_emitters(owner).ToStructArray<ParticleSubEmitter>();
+            set => internal_m2n_particle_emitter_set_sub_emitters(owner, (value ?? Array.Empty<ParticleSubEmitter>()).ToByteArray());
+        }
+
+        /// <summary>
+        /// Trail render mode: seconds of the particle's path the trail covers.
+        /// </summary>
+        public float trailLength
+        {
+            get => internal_m2n_particle_emitter_get_trail_length(owner);
+            set => internal_m2n_particle_emitter_set_trail_length(owner, value);
+        }
+
+        /// <summary>
+        /// Trail render mode: the trail's width at the tail as a share of the particle's size.
+        /// </summary>
+        public float trailWidthEnd
+        {
+            get => internal_m2n_particle_emitter_get_trail_width_end(owner);
+            set => internal_m2n_particle_emitter_set_trail_width_end(owner, value);
+        }
+
+        /// <summary>
+        /// Ribbon render mode: how the texture runs along the ribbon.
+        /// </summary>
+        public ParticleRibbonTextureMode ribbonTextureMode
+        {
+            get => (ParticleRibbonTextureMode)internal_m2n_particle_emitter_get_ribbon_texture_mode(owner);
+            set => internal_m2n_particle_emitter_set_ribbon_texture_mode(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Ribbon render mode, tile texture mode: seconds of the particles' age one texture repeat spans.
+        /// </summary>
+        public float ribbonTileTime
+        {
+            get => internal_m2n_particle_emitter_get_ribbon_tile_time(owner);
+            set => internal_m2n_particle_emitter_set_ribbon_tile_time(owner, value);
+        }
+
+        /// <summary>
+        /// Whether the culling bounds are worked out from the settings or set by hand (fixedBounds).
+        /// </summary>
+        public ParticleBoundsMode boundsMode
+        {
+            get => (ParticleBoundsMode)internal_m2n_particle_emitter_get_bounds_mode(owner);
+            set => internal_m2n_particle_emitter_set_bounds_mode(owner, (int)value);
+        }
+
+        /// <summary>
+        /// Culling box in the emitter's local space when boundsMode is Fixed.
+        /// </summary>
+        public Bounds fixedBounds
+        {
+            get => internal_m2n_particle_emitter_get_fixed_bounds(owner);
+            set => internal_m2n_particle_emitter_set_fixed_bounds(owner, value);
         }
 
         /// <summary>
@@ -355,77 +1074,75 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets or sets the force applied over particle lifetime.
+        /// Constant acceleration, m/s^2, in simulation space, on top of gravity: wind, buoyancy, a pull.
         /// </summary>
-        public Vector3 forceOverLifetime
+        public Vector3 acceleration
         {
             get
             {
-                return internal_m2n_particle_emitter_get_force_over_lifetime(owner);
+                return internal_m2n_particle_emitter_get_acceleration(owner);
             }
             set
             {
-                internal_m2n_particle_emitter_set_force_over_lifetime(owner, value);
+                internal_m2n_particle_emitter_set_acceleration(owner, value);
             }
         }
 
         /// <summary>
-        /// Gets or sets the emission shape scale.
+        /// Size of the emission shape, metres per unit.
         /// </summary>
-        public Vector3 emissionShapeScale
+        public Vector3 shapeScale
         {
             get
             {
-                return internal_m2n_particle_emitter_get_emission_shape_scale(owner);
+                return internal_m2n_particle_emitter_get_shape_scale(owner);
             }
             set
             {
-                internal_m2n_particle_emitter_set_emission_shape_scale(owner, value);
+                internal_m2n_particle_emitter_set_shape_scale(owner, value);
             }
         }
 
         /// <summary>
-        /// Gets or sets the emission lifetime in seconds.
+        /// Length of one emission cycle, seconds: a looping emitter repeats it, a one-shot emitter emits
+        /// for one cycle and stops once its last particle is gone.
         /// </summary>
-        public float emissionLifetime
+        public float duration
         {
-            get
-            {
-                return internal_m2n_particle_emitter_get_emission_lifetime(owner);
-            }
-            set
-            {
-                internal_m2n_particle_emitter_set_emission_lifetime(owner, value);
-            }
+            get => internal_m2n_particle_emitter_get_duration(owner);
+            set => internal_m2n_particle_emitter_set_duration(owner, value);
         }
 
         /// <summary>
-        /// Gets or sets the particle lifetime in seconds.
+        /// Particle lifetime, seconds, random between min and max.
         /// </summary>
-        public float lifetime
+        public Range<float> lifetime
         {
-            get
-            {
-                return internal_m2n_particle_emitter_get_lifetime(owner);
-            }
-            set
-            {
-                internal_m2n_particle_emitter_set_lifetime(owner, value);
-            }
+            get => internal_m2n_particle_emitter_get_lifetime_range(owner);
+            set => internal_m2n_particle_emitter_set_lifetime_range(owner, value);
         }
 
         /// <summary>
-        /// Gets or sets the easing of particle positions over their lifetime.
+        /// Launch speed, metres per second, random between min and max.
         /// </summary>
-        public ParticleEasing positionEasing
+        public Range<float> startSpeed
+        {
+            get => internal_m2n_particle_emitter_get_start_speed(owner);
+            set => internal_m2n_particle_emitter_set_start_speed(owner, value);
+        }
+
+        /// <summary>
+        /// Remaps a particle's life before its motion is evaluated (Linear = physical timing).
+        /// </summary>
+        public ParticleEasing motionEasing
         {
             get
             {
-                return (ParticleEasing)internal_m2n_particle_emitter_get_position_easing(owner);
+                return (ParticleEasing)internal_m2n_particle_emitter_get_motion_easing(owner);
             }
             set
             {
-                internal_m2n_particle_emitter_set_position_easing(owner, (int)value);
+                internal_m2n_particle_emitter_set_motion_easing(owner, (int)value);
             }
         }
 
@@ -531,46 +1248,47 @@ namespace Unravel.Core
         /// <summary>
         /// Offset of the emission shape from the emitter, before the shape scale.
         /// </summary>
-        public Vector3 emissionShapePosition
+        public Vector3 shapePosition
         {
-            get => internal_m2n_particle_emitter_get_emission_shape_position(owner);
-            set => internal_m2n_particle_emitter_set_emission_shape_position(owner, value);
+            get => internal_m2n_particle_emitter_get_shape_position(owner);
+            set => internal_m2n_particle_emitter_set_shape_position(owner, value);
         }
 
         /// <summary>
-        /// Per-axis multiplier of the particle size.
+        /// Multipliers of the size along each particle's own axes: x and y stretch quads and meshes, z is the depth
+        /// of mesh particles.
         /// </summary>
-        public Vector3 initialScale3D
+        public Vector3 sizeAxes
         {
-            get => internal_m2n_particle_emitter_get_initial_scale_3d(owner);
-            set => internal_m2n_particle_emitter_set_initial_scale_3d(owner, value);
+            get => internal_m2n_particle_emitter_get_size_axes(owner);
+            set => internal_m2n_particle_emitter_set_size_axes(owner, value);
         }
 
         /// <summary>
         /// Start angle of each particle in its quad's plane, degrees, random between min and max.
         /// </summary>
-        public Range<float> rotation
+        public Range<float> startRotation
         {
-            get => internal_m2n_particle_emitter_get_rotation(owner);
-            set => internal_m2n_particle_emitter_set_rotation(owner, value);
+            get => internal_m2n_particle_emitter_get_start_rotation(owner);
+            set => internal_m2n_particle_emitter_set_start_rotation(owner, value);
         }
 
         /// <summary>
         /// Spin in degrees per second, random between min and max.
         /// </summary>
-        public Range<float> rotationSpeed
+        public Range<float> spinSpeed
         {
-            get => internal_m2n_particle_emitter_get_rotation_speed(owner);
-            set => internal_m2n_particle_emitter_set_rotation_speed(owner, value);
+            get => internal_m2n_particle_emitter_get_spin_speed(owner);
+            set => internal_m2n_particle_emitter_set_spin_speed(owner, value);
         }
 
         /// <summary>
         /// Whether half the particles spin the other way.
         /// </summary>
-        public bool randomRotationDirection
+        public bool randomSpinDirection
         {
-            get => internal_m2n_particle_emitter_get_random_rotation_direction(owner);
-            set => internal_m2n_particle_emitter_set_random_rotation_direction(owner, value);
+            get => internal_m2n_particle_emitter_get_random_spin_direction(owner);
+            set => internal_m2n_particle_emitter_set_random_spin_direction(owner, value);
         }
 
         /// <summary>
@@ -624,21 +1342,21 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Size multiplier at the slow and fast ends of sizeBySpeedVelocityRange.
+        /// Size multiplier at the slow (min) and fast (max) ends of sizeBySpeedSpeedRange; min = max turns it off.
         /// </summary>
-        public Range<float> sizeBySpeedRange
+        public Range<float> sizeBySpeedMultiplier
         {
-            get => internal_m2n_particle_emitter_get_size_by_speed_range(owner);
-            set => internal_m2n_particle_emitter_set_size_by_speed_range(owner, value);
+            get => internal_m2n_particle_emitter_get_size_by_speed_multiplier(owner);
+            set => internal_m2n_particle_emitter_set_size_by_speed_multiplier(owner, value);
         }
 
         /// <summary>
-        /// Particle speeds (units per second) that map to sizeBySpeedRange.
+        /// Particle speeds, m/s, sizeBySpeedMultiplier maps over.
         /// </summary>
-        public Range<float> sizeBySpeedVelocityRange
+        public Range<float> sizeBySpeedSpeedRange
         {
-            get => internal_m2n_particle_emitter_get_size_by_speed_velocity_range(owner);
-            set => internal_m2n_particle_emitter_set_size_by_speed_velocity_range(owner, value);
+            get => internal_m2n_particle_emitter_get_size_by_speed_speed_range(owner);
+            set => internal_m2n_particle_emitter_set_size_by_speed_speed_range(owner, value);
         }
 
         /// <summary>
@@ -651,16 +1369,16 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Particle speeds (units per second) that map to colorBySpeedGradient.
+        /// Particle speeds, m/s, colorBySpeedGradient maps over; min = max turns it off.
         /// </summary>
-        public Range<float> colorBySpeedVelocityRange
+        public Range<float> colorBySpeedSpeedRange
         {
-            get => internal_m2n_particle_emitter_get_color_by_speed_velocity_range(owner);
-            set => internal_m2n_particle_emitter_set_color_by_speed_velocity_range(owner, value);
+            get => internal_m2n_particle_emitter_get_color_by_speed_speed_range(owner);
+            set => internal_m2n_particle_emitter_set_color_by_speed_speed_range(owner, value);
         }
 
         /// <summary>
-        /// Emitter speeds (units per second) that map to lifetimeByEmitterSpeedGradient.
+        /// Emitter speeds (units per second) that map to lifetimeByEmitterSpeedCurve.
         /// </summary>
         public Range<float> lifetimeByEmitterSpeedRange
         {
@@ -751,7 +1469,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Color multiplier over colorBySpeedVelocityRange (time 0 = slow end, 1 = fast end).
+        /// Color multiplier over colorBySpeedSpeedRange (time 0 = slow end, 1 = fast end).
         /// </summary>
         public Gradient colorBySpeedGradient
         {
@@ -760,13 +1478,102 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Distance a particle travels along its direction over its lifetime, random between min and
-        /// max. Only the value at time 1 is used.
+        /// Stretched mode: quad length as a multiple of the particle size.
         /// </summary>
-        public MinMaxCurve velocityGradient
+        public float stretchLengthScale
         {
-            get => new MinMaxCurve(internal_m2n_particle_emitter_get_velocity_gradient(owner).ToStructArray<MinMaxKey>());
-            set => internal_m2n_particle_emitter_set_velocity_gradient(owner, RequireKeys(value?.keys, nameof(velocityGradient)).ToByteArray());
+            get => internal_m2n_particle_emitter_get_stretch_length_scale(owner);
+            set => internal_m2n_particle_emitter_set_stretch_length_scale(owner, value);
+        }
+
+        /// <summary>
+        /// Stretched mode: quad length added per metre per second of speed.
+        /// </summary>
+        public float stretchSpeedScale
+        {
+            get => internal_m2n_particle_emitter_get_stretch_speed_scale(owner);
+            set => internal_m2n_particle_emitter_set_stretch_speed_scale(owner, value);
+        }
+
+        /// <summary>
+        /// Stretched mode: the share of the camera's velocity taken off the particles' before they stretch.
+        /// </summary>
+        public float stretchCameraVelocityScale
+        {
+            get => internal_m2n_particle_emitter_get_stretch_camera_velocity_scale(owner);
+            set => internal_m2n_particle_emitter_set_stretch_camera_velocity_scale(owner, value);
+        }
+
+        /// <summary>
+        /// Fixed axis mode: the axis the quads stand along, in the emitter's space.
+        /// </summary>
+        public Vector3 facingAxis
+        {
+            get => internal_m2n_particle_emitter_get_facing_axis(owner);
+            set => internal_m2n_particle_emitter_set_facing_axis(owner, value);
+        }
+
+        /// <summary>
+        /// Metres each particle is pushed toward the camera.
+        /// </summary>
+        public float cameraOffset
+        {
+            get => internal_m2n_particle_emitter_get_camera_offset(owner);
+            set => internal_m2n_particle_emitter_set_camera_offset(owner, value);
+        }
+
+        /// <summary>
+        /// Largest size on screen as a fraction of the view's height (0 = no limit).
+        /// </summary>
+        public float maxScreenSize
+        {
+            get => internal_m2n_particle_emitter_get_max_screen_size(owner);
+            set => internal_m2n_particle_emitter_set_max_screen_size(owner, value);
+        }
+
+        /// <summary>
+        /// How much the particles tell the temporal anti-aliasing to trust the current frame (0..1).
+        /// </summary>
+        public float taaResponse
+        {
+            get => internal_m2n_particle_emitter_get_taa_response(owner);
+            set => internal_m2n_particle_emitter_set_taa_response(owner, value);
+        }
+
+        /// <summary>
+        /// Distances from the camera over which particles fade in: invisible at min, whole at max (0, 0 = off).
+        /// </summary>
+        public Range<float> cameraFadeRange
+        {
+            get => internal_m2n_particle_emitter_get_camera_fade_range(owner);
+            set => internal_m2n_particle_emitter_set_camera_fade_range(owner, value);
+        }
+
+        /// <summary>
+        /// Particles smaller than a pixel keep one pixel and fade by the area they lost.
+        /// </summary>
+        public bool subpixelFade
+        {
+            get => internal_m2n_particle_emitter_get_subpixel_fade(owner);
+            set => internal_m2n_particle_emitter_set_subpixel_fade(owner, value);
+        }
+
+        /// <summary>
+        /// Alpha erosion threshold over life (0..1): texels below it vanish. 0 throughout = off.
+        /// </summary>
+        public Curve erosionOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_erosion_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_erosion_over_life(owner, RequireKeys(value?.keys, nameof(erosionOverLife)).ToByteArray());
+        }
+
+        /// <summary>
+        /// Multiplier of the launch velocity over a particle's life (1 throughout = constant speed).
+        /// </summary>
+        public Curve speedOverLife
+        {
+            get => new Curve(internal_m2n_particle_emitter_get_speed_over_life(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_speed_over_life(owner, RequireKeys(value?.keys, nameof(speedOverLife)).ToByteArray());
         }
 
         /// <summary>
@@ -774,19 +1581,19 @@ namespace Unravel.Core
         /// so a size can pop in, or grow then shrink. A particle picks its place between min and max
         /// at birth and at death and drifts from one to the other.
         /// </summary>
-        public MinMaxCurve scaleGradient
+        public MinMaxCurve sizeOverLife
         {
-            get => new MinMaxCurve(internal_m2n_particle_emitter_get_scale_gradient(owner).ToStructArray<MinMaxKey>());
-            set => internal_m2n_particle_emitter_set_scale_gradient(owner, RequireKeys(value?.keys, nameof(scaleGradient)).ToByteArray());
+            get => new MinMaxCurve(internal_m2n_particle_emitter_get_size_over_life(owner).ToStructArray<MinMaxKey>());
+            set => internal_m2n_particle_emitter_set_size_over_life(owner, RequireKeys(value?.keys, nameof(sizeOverLife)).ToByteArray());
         }
 
         /// <summary>
         /// Lifetime multiplier over lifetimeByEmitterSpeedRange (time 0 = slow end, 1 = fast end).
         /// </summary>
-        public Curve lifetimeByEmitterSpeedGradient
+        public Curve lifetimeByEmitterSpeedCurve
         {
-            get => new Curve(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_gradient(owner).ToStructArray<CurveKey>());
-            set => internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_gradient(owner, RequireKeys(value?.keys, nameof(lifetimeByEmitterSpeedGradient)).ToByteArray());
+            get => new Curve(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve(owner).ToStructArray<CurveKey>());
+            set => internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve(owner, RequireKeys(value?.keys, nameof(lifetimeByEmitterSpeedCurve)).ToByteArray());
         }
 
         /// <summary>
@@ -865,7 +1672,7 @@ namespace Unravel.Core
             Play();
             if (withChildren)
             {
-                internal_m2n_particle_emitter_play_sub_emitters(owner);
+                internal_m2n_particle_emitter_play_child_emitters(owner);
             }
         }
 
@@ -877,7 +1684,7 @@ namespace Unravel.Core
             Stop();
             if (withChildren)
             {
-                internal_m2n_particle_emitter_stop_sub_emitters(owner);
+                internal_m2n_particle_emitter_stop_child_emitters(owner);
             }
         }
 
@@ -889,7 +1696,7 @@ namespace Unravel.Core
             StopAndReset();
             if (withChildren)
             {
-                internal_m2n_particle_emitter_stop_and_reset_sub_emitters(owner);
+                internal_m2n_particle_emitter_stop_and_reset_child_emitters(owner);
             }
         }
 
@@ -901,7 +1708,7 @@ namespace Unravel.Core
             Pause();
             if (withChildren)
             {
-                internal_m2n_particle_emitter_pause_sub_emitters(owner);
+                internal_m2n_particle_emitter_pause_child_emitters(owner);
             }
         }
 
@@ -913,7 +1720,7 @@ namespace Unravel.Core
             Resume();
             if (withChildren)
             {
-                internal_m2n_particle_emitter_resume_sub_emitters(owner);
+                internal_m2n_particle_emitter_resume_child_emitters(owner);
             }
         }
 
@@ -974,34 +1781,34 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_spawn_location(Entity eid, int value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector3 internal_m2n_particle_emitter_get_emission_shape_position(Entity eid);
+        private static extern Vector3 internal_m2n_particle_emitter_get_shape_position(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_emission_shape_position(Entity eid, Vector3 value);
+        private static extern void internal_m2n_particle_emitter_set_shape_position(Entity eid, Vector3 value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector3 internal_m2n_particle_emitter_get_initial_scale_3d(Entity eid);
+        private static extern Vector3 internal_m2n_particle_emitter_get_size_axes(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_initial_scale_3d(Entity eid, Vector3 value);
+        private static extern void internal_m2n_particle_emitter_set_size_axes(Entity eid, Vector3 value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Range<float> internal_m2n_particle_emitter_get_rotation(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_start_rotation(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_rotation(Entity eid, Range<float> value);
+        private static extern void internal_m2n_particle_emitter_set_start_rotation(Entity eid, Range<float> value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Range<float> internal_m2n_particle_emitter_get_rotation_speed(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_spin_speed(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_rotation_speed(Entity eid, Range<float> value);
+        private static extern void internal_m2n_particle_emitter_set_spin_speed(Entity eid, Range<float> value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_particle_emitter_get_random_rotation_direction(Entity eid);
+        private static extern bool internal_m2n_particle_emitter_get_random_spin_direction(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_random_rotation_direction(Entity eid, bool value);
+        private static extern void internal_m2n_particle_emitter_set_random_spin_direction(Entity eid, bool value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_soft_fade_distance(Entity eid);
@@ -1034,16 +1841,16 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_frame_blending(Entity eid, bool value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Range<float> internal_m2n_particle_emitter_get_size_by_speed_range(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_size_by_speed_multiplier(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_size_by_speed_range(Entity eid, Range<float> value);
+        private static extern void internal_m2n_particle_emitter_set_size_by_speed_multiplier(Entity eid, Range<float> value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Range<float> internal_m2n_particle_emitter_get_size_by_speed_velocity_range(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_size_by_speed_speed_range(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_size_by_speed_velocity_range(Entity eid, Range<float> value);
+        private static extern void internal_m2n_particle_emitter_set_size_by_speed_speed_range(Entity eid, Range<float> value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_color_intensity(Entity eid);
@@ -1052,10 +1859,10 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_color_intensity(Entity eid, float value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Range<float> internal_m2n_particle_emitter_get_color_by_speed_velocity_range(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_color_by_speed_speed_range(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_color_by_speed_velocity_range(Entity eid, Range<float> value);
+        private static extern void internal_m2n_particle_emitter_set_color_by_speed_speed_range(Entity eid, Range<float> value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Range<float> internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_range(Entity eid);
@@ -1124,22 +1931,82 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_color_by_speed_gradient(Entity eid, byte[] keys);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern byte[] internal_m2n_particle_emitter_get_velocity_gradient(Entity eid);
+        private static extern float internal_m2n_particle_emitter_get_stretch_length_scale(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_velocity_gradient(Entity eid, byte[] keys);
+        private static extern void internal_m2n_particle_emitter_set_stretch_length_scale(Entity eid, float value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern byte[] internal_m2n_particle_emitter_get_scale_gradient(Entity eid);
+        private static extern float internal_m2n_particle_emitter_get_stretch_camera_velocity_scale(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_scale_gradient(Entity eid, byte[] keys);
+        private static extern void internal_m2n_particle_emitter_set_stretch_camera_velocity_scale(Entity eid, float value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern byte[] internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_gradient(Entity eid);
+        private static extern Vector3 internal_m2n_particle_emitter_get_facing_axis(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_gradient(Entity eid, byte[] keys);
+        private static extern void internal_m2n_particle_emitter_set_facing_axis(Entity eid, Vector3 value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_stretch_speed_scale(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_stretch_speed_scale(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_camera_offset(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_camera_offset(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_max_screen_size(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_max_screen_size(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_taa_response(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_taa_response(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Range<float> internal_m2n_particle_emitter_get_camera_fade_range(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_camera_fade_range(Entity eid, Range<float> value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_subpixel_fade(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_subpixel_fade(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_erosion_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_erosion_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_speed_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_speed_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_size_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_size_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve(Entity eid, byte[] keys);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Bounds internal_m2n_particle_emitter_get_world_bounds(Entity eid);
@@ -1151,19 +2018,19 @@ namespace Unravel.Core
         private static extern bool internal_m2n_particle_emitter_is_simulated(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_play_sub_emitters(Entity eid);
+        private static extern void internal_m2n_particle_emitter_play_child_emitters(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_stop_sub_emitters(Entity eid);
+        private static extern void internal_m2n_particle_emitter_stop_child_emitters(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_stop_and_reset_sub_emitters(Entity eid);
+        private static extern void internal_m2n_particle_emitter_stop_and_reset_child_emitters(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_pause_sub_emitters(Entity eid);
+        private static extern void internal_m2n_particle_emitter_pause_child_emitters(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_resume_sub_emitters(Entity eid);
+        private static extern void internal_m2n_particle_emitter_resume_child_emitters(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_emit(Entity eid, uint count, EmitParams parameters);
@@ -1205,16 +2072,340 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_emission_rate(Entity eid, float rate);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_particle_emitter_get_temporal_motion(Entity eid);
+        private static extern float internal_m2n_particle_emitter_get_spawn_along_path(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_temporal_motion(Entity eid, float motion);
+        private static extern void internal_m2n_particle_emitter_set_spawn_along_path(Entity eid, float motion);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_particle_emitter_get_velocity_damping(Entity eid);
+        private static extern float internal_m2n_particle_emitter_get_drag(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_velocity_damping(Entity eid, float damping);
+        private static extern void internal_m2n_particle_emitter_set_drag(Entity eid, float drag);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_inherit_velocity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_inherit_velocity(Entity eid, float fraction);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_direction_spread(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_direction_spread(Entity eid, float degrees);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_use_fixed_seed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_use_fixed_seed(Entity eid, bool useFixedSeed);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_particle_emitter_get_random_seed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_random_seed(Entity eid, uint seed);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_sort_mode(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_sort_mode(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_primitive(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_primitive(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_half_resolution(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_half_resolution(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_write_velocity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_write_velocity(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_velocity_alpha_threshold(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_velocity_alpha_threshold(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_size_axes_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_size_axes_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_random_between_gradients(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_random_between_gradients(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_color_gradient_b(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_color_gradient_b(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_intensity_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_intensity_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_spin_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_spin_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_texture_sheet_frame_curve(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_texture_sheet_frame_curve(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_texture_sheet_random_row(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_texture_sheet_random_row(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_rate_over_distance(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_rate_over_distance(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_bursts(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_bursts(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_cone_angle(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_cone_angle(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_torus_thickness(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_torus_thickness(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_particle_emitter_get_render_mesh(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_render_mesh(Entity eid, Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_particle_emitter_get_render_material(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_render_material(Entity eid, Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_mesh_cast_shadows(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_mesh_cast_shadows(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_particle_emitter_get_shape_mesh(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_shape_mesh(Entity eid, Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_mesh_spawn_mode(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_mesh_spawn_mode(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_turbulence_strength(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_turbulence_strength(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_turbulence_frequency(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_turbulence_frequency(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_turbulence_speed(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_turbulence_speed(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_turbulence_over_life(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_turbulence_over_life(Entity eid, byte[] keys);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_max_draw_distance(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_max_draw_distance(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_draw_distance_fade(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_draw_distance_fade(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Guid internal_m2n_particle_emitter_get_normal_texture(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_normal_texture(Entity eid, Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_cutout_alpha_threshold(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_cutout_alpha_threshold(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_lighting_wrap(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_lighting_wrap(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_receive_shadows(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_receive_shadows(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_lighting(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_lighting(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_particle_emitter_get_light_count(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_light_count(Entity eid, uint value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_light_intensity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_light_intensity(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_light_range(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_light_range(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_particle_emitter_get_light_color_from_particle(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_light_color_from_particle(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_restitution(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_restitution(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_friction(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_friction(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_collision_radius_scale(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collision_radius_scale(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_particle_emitter_get_max_bounces(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_max_bounces(Entity eid, uint value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_collision(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collision(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_collision_planes(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_collision_planes(Entity eid, byte[] planes);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_particle_emitter_get_sub_emitters(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_sub_emitters(Entity eid, byte[] subEmitters);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_trail_length(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_trail_length(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_ribbon_texture_mode(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_ribbon_texture_mode(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_ribbon_tile_time(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_ribbon_tile_time(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_particle_emitter_get_trail_width_end(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_trail_width_end(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_bounds_mode(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_bounds_mode(Entity eid, int value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Bounds internal_m2n_particle_emitter_get_fixed_bounds(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_fixed_bounds(Entity eid, Bounds bounds);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_opacity(Entity eid);
@@ -1223,34 +2414,40 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_opacity(Entity eid, float opacity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector3 internal_m2n_particle_emitter_get_force_over_lifetime(Entity eid);
+        private static extern Vector3 internal_m2n_particle_emitter_get_acceleration(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_force_over_lifetime(Entity eid, Vector3 force);
+        private static extern void internal_m2n_particle_emitter_set_acceleration(Entity eid, Vector3 acceleration);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector3 internal_m2n_particle_emitter_get_emission_shape_scale(Entity eid);
+        private static extern Vector3 internal_m2n_particle_emitter_get_shape_scale(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_emission_shape_scale(Entity eid, Vector3 scale);
+        private static extern void internal_m2n_particle_emitter_set_shape_scale(Entity eid, Vector3 scale);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_particle_emitter_get_emission_lifetime(Entity eid);
+        private static extern float internal_m2n_particle_emitter_get_duration(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_emission_lifetime(Entity eid, float lifetime);
+        private static extern void internal_m2n_particle_emitter_set_duration(Entity eid, float duration);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_particle_emitter_get_lifetime(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_lifetime_range(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_lifetime(Entity eid, float lifetime);
+        private static extern void internal_m2n_particle_emitter_set_lifetime_range(Entity eid, Range<float> value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern int internal_m2n_particle_emitter_get_position_easing(Entity eid);
+        private static extern Range<float> internal_m2n_particle_emitter_get_start_speed(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_position_easing(Entity eid, int easing);
+        private static extern void internal_m2n_particle_emitter_set_start_speed(Entity eid, Range<float> value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_motion_easing(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_motion_easing(Entity eid, int easing);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern uint internal_m2n_particle_emitter_get_num_particles(Entity eid);
@@ -1292,9 +2489,9 @@ namespace Unravel.Core
         private static extern void internal_m2n_particle_emitter_set_loop(Entity eid, bool loop);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern int internal_m2n_particle_emitter_get_simulation_backend(Entity eid);
+        private static extern int internal_m2n_particle_emitter_get_sort_backend(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_particle_emitter_set_simulation_backend(Entity eid, int backend);
+        private static extern void internal_m2n_particle_emitter_set_sort_backend(Entity eid, int backend);
     }
 }

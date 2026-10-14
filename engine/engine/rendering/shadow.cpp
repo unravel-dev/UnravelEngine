@@ -10,6 +10,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
@@ -2271,6 +2272,8 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
     }
 
     bool static_batching_enabled = batch_collector::is_static_mesh_batching_enabled();
+    // Mesh particles are instanced whatever the project's batching setting: they have no other path.
+    bool has_particle_casters = false;
 
     // For CSM (directional lights) a caster fully inside a nearer cascade's light frustum
     // is not drawn into the farther (larger) cascades. This is exact ONLY because the
@@ -2312,6 +2315,19 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
             compute_shadow_view_mask(lightFrustums, drawNum, world_bounds, nested_cascades, reach);
         if(view_mask == 0u)
         {
+            continue;
+        }
+
+        if(element.particles != nullptr)
+        {
+            const bool collected = element.particles->collect_mesh_shadow_instances(cascade_batch_collectors_, view_mask);
+            if(collected)
+            {
+                // A shadow in view keeps renderer-based culling running the emitter, as it does for models.
+                element.entity.get<particle_emitter_component>().set_last_render_frame(gfx::get_render_frame());
+            }
+            has_particle_casters = has_particle_casters || collected;
+            any_rendered = any_rendered || collected;
             continue;
         }
 
@@ -2492,7 +2508,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
     }
     
     // Submit batched geometry for each cascade
-    if (static_batching_enabled)
+    if (static_batching_enabled || has_particle_casters)
     {
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {

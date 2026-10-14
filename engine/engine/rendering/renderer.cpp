@@ -8,6 +8,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/settings/boot_config.h>
 #include <engine/settings/settings.h>
+#include <engine/rendering/particles/ps/particle_system_soa.h>
 
 #include <base/assert.hpp>
 #include <filesystem/filesystem.h>
@@ -493,6 +494,14 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
         const settings::graphics_settings& graphics = ctx.get<settings>().graphics;
         update_eviction(graphics.eviction);
         batch_collector::set_static_mesh_batching_enabled(graphics.static_mesh_batching);
+        const auto& particles = graphics.particles;
+        ps_soa::set_quality({particles.spawn_scale,
+                             particles.sorting,
+                             particles.force_half_resolution,
+                             particles.min_screen_size,
+                             particles.max_drawn_particles,
+                             particles.max_particles_scale,
+                             particles.max_lighting});
     }
 
     auto window = get_main_window();

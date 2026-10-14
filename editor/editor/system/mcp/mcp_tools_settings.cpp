@@ -40,6 +40,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"app", "product"},
         {"app", "version"},
         {"graphics", "static_mesh_batching"},
+        {"graphics", "particles"},
         {"physics", "backend", true},
         {"physics", "fixed_timestep"},
         {"physics", "max_fixed_steps"},

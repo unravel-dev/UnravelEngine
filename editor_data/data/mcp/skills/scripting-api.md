@@ -107,13 +107,26 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   shared material; other renderers keep the asset.
 - Particles: `emitter.Emit(count)` or `Emit(count, new EmitParams { position = p, velocity = v,
   color = c, size = s, lifetime = t })` bursts regardless of rate or play state.
-  Gradients are `Gradient` (color keys), `MinMaxCurve` (random between two) and `Curve`
-  (`colorGradient`, `scaleGradient`, `velocityGradient`, ...). Setting `emissionRate` keeps
-  the live particles; `simulationSpace`, `lifetime` and `startDelay` clear them.
-  `rotation` / `rotationSpeed` (`Range<float>`, degrees), `randomRotationDirection`,
+  Gradients are `Gradient` (color keys), `MinMaxCurve` (random between two), `Curve` and
+  `Vector3Curve` (`colorGradient`, `sizeOverLife`, `sizeAxesOverLife`, `speedOverLife`,
+  `turbulenceOverLife`, ...). Setting `emissionRate` or `lifetime` keeps the live particles;
+  changing `simulationSpace` or `startDelay` clears them, and `maxParticles` rebuilds the emitter. `startSpeed` (`Range<float>`, m/s),
+  `drag`, `gravityScale` and `acceleration` (`Vector3`, m/s^2) set the motion;
+  `startRotation` / `spinSpeed` (`Range<float>`, degrees), `randomSpinDirection`, `sizeAxes`,
   `softFadeDistance`, `frameBlending` and `sortPriority` (lower draws first) are the
   per-emitter look settings; `prewarm` starts a looping emitter full and
-  `autoPlay` false keeps one stopped until `Play()`.
+  `autoPlay` false keeps one stopped until `Play()`. `Play(true)`, `Stop(true)`, ... drive the
+  emitters in the entity's children too. An enum set to a value it does not have is ignored
+  with a warning.
+- Particle bursts, collisions and events: `bursts = new[] { new ParticleBurst(0f, 40f) }`
+  (time, count; or `new ParticleBurst(time, count, cycles, interval)`), `rateOverDistance`,
+  `collision = ParticleCollisionMode.Bounce` with `collisionPlanes` (`Vector4` normal + offset),
+  and `subEmitters` (`new ParticleSubEmitter(ParticleEventType.Death, target, count)`, then
+  `inheritVelocity` / `countMax` as needed) burst another emitter where particles are born, die
+  or land. Build bursts and sub-emitters with their constructors: a struct left at its defaults
+  has probability 0 and never fires. `renderMode` `Trail` (`trailLength`, `trailWidthEnd`) or `Ribbon`,
+  `lighting` (`ParticleLighting.Volumetric` for smoke) and `lightCount` (brightest particles
+  become point lights) round out the look.
 
 ## Random is the engine's
 

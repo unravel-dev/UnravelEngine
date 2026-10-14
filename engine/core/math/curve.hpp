@@ -328,6 +328,39 @@ void curve<T>::set_points(const points_t& points)
 }
 
 template<typename T>
+void curve<T>::set_points_keeping_shape(const points_t& points)
+{
+    constexpr float same_position = 1.0e-5f;
+    const channels_t previous = channels_;
+    set_points(points);
+    for(size_t channel = 0; channel < channel_count; ++channel)
+    {
+        curve_channel::keys_t keys = channels_[channel].get_keys();
+        const auto& before = previous[channel].get_keys();
+        for(curve_key& key : keys)
+        {
+            const auto match = std::find_if(before.begin(),
+                                            before.end(),
+                                            [&](const curve_key& old)
+                                            {
+                                                return std::abs(old.position - key.position) <= same_position;
+                                            });
+            if(match == before.end())
+            {
+                continue;
+            }
+            key.interpolation = match->interpolation;
+            key.tangent_mode = match->tangent_mode;
+            key.in_tangent = match->in_tangent;
+            key.out_tangent = match->out_tangent;
+        }
+        channels_[channel].set_keys(std::move(keys));
+        channels_[channel].refresh_automatic_tangents();
+    }
+    mark_bake_dirty();
+}
+
+template<typename T>
 auto curve<T>::get_points() const -> points_t
 {
     const auto positions = collect_key_positions();

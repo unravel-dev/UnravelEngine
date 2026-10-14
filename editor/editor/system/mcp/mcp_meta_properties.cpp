@@ -15,11 +15,16 @@
 #include <engine/ui/ui_tree.h>
 #include <base/basetypes.hpp>
 #include <graphics/texture.h>
+#include <hpp/string_view.hpp>
+#include <math/bbox.h>
 #include <math/color.h>
+#include <math/curve.h>
 #include <reflection/reflection.h>
 #include <uuid/uuid.h>
 
 #include <array>
+#include <cctype>
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <unordered_map>
@@ -40,6 +45,8 @@ struct value_codec
     /// How a writable value is spelled in JSON, appended to the reflection's tooltip.
     const char* format_hint{};
     std::function<std::optional<std::string>(rtti::context&, const entt::meta_any&)> to_json;
+    /// On entry the meta_any holds the property's current value (empty when there is none), for a codec that
+    /// merges what it reads into it.
     std::function<bool(rtti::context&, const simdjson::dom::element&, entt::meta_any&, std::string&)> from_json;
     /// For numbers: the value as a double, so min / max attributes can be checked.
     std::function<double(const entt::meta_any&)> as_double;
@@ -182,6 +189,213 @@ auto make_size_codec() -> value_codec
                 out = entt::meta_any{size<T>(values[0], values[1])};
                 return true;
             }};
+}
+
+/// How one key of a curve of T spells its value: the fields after "progress".
+template<typename T>
+struct curve_key_json;
+
+template<>
+struct curve_key_json<float>
+{
+    static constexpr const char* format = "[{progress, value}]";
+
+    static auto to_fields(float value) -> std::string
+    {
+        return fmt::format(R"("value":{:.6g})", value);
+    }
+
+    static auto from_fields(const simdjson::dom::object& key, float& out, std::string& /*error*/) -> bool
+    {
+        double value{};
+        if(key["value"].get_double().get(value) != simdjson::SUCCESS)
+        {
+            return false;
+        }
+        out = static_cast<float>(value);
+        return true;
+    }
+};
+
+template<>
+struct curve_key_json<frange_t>
+{
+    static constexpr const char* format = "[{progress, min, max}]";
+
+    static auto to_fields(const frange_t& value) -> std::string
+    {
+        return fmt::format(R"("min":{:.6g},"max":{:.6g})", value.min, value.max);
+    }
+
+    static auto from_fields(const simdjson::dom::object& key, frange_t& out, std::string& /*error*/) -> bool
+    {
+        double low{};
+        double high{};
+        if(key["min"].get_double().get(low) != simdjson::SUCCESS || key["max"].get_double().get(high) != simdjson::SUCCESS)
+        {
+            return false;
+        }
+        out = frange_t(static_cast<float>(low), static_cast<float>(high));
+        return true;
+    }
+};
+
+template<>
+struct curve_key_json<math::color>
+{
+    static constexpr const char* format = "[{progress, color: [r, g, b, a]}]";
+
+    static auto to_fields(const math::color& value) -> std::string
+    {
+        return R"("color":)" + color_to_json(value);
+    }
+
+    static auto from_fields(const simdjson::dom::object& key, math::color& out, std::string& error) -> bool
+    {
+        simdjson::dom::element color;
+        return key["color"].get(color) == simdjson::SUCCESS && parse_color(color, out, error);
+    }
+};
+
+template<>
+struct curve_key_json<math::vec3>
+{
+    static constexpr const char* format = "[{progress, value: [x, y, z]}]";
+
+    static auto to_fields(const math::vec3& value) -> std::string
+    {
+        return R"("value":)" + vec3_to_json(value);
+    }
+
+    static auto from_fields(const simdjson::dom::object& key, math::vec3& out, std::string& error) -> bool
+    {
+        simdjson::dom::element value;
+        return key["value"].get(value) == simdjson::SUCCESS && parse_vec3(value, out, error);
+    }
+};
+
+/// A curve crosses as its keys, sorted by progress (usually 0..1). A write keeps the interpolation and tangents of
+/// the keys it leaves where they were, so writing back what a read gave changes nothing.
+template<typename T>
+auto make_curve_codec() -> value_codec
+{
+    return {.schema_type = "array",
+            .format_hint = curve_key_json<T>::format,
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                std::string json = "[";
+                for(const auto& point : value.cast<const math::curve<T>&>().get_points())
+                {
+                    json += fmt::format(R"({}{{"progress":{:.6g},{}}})",
+                                        json.size() > 1 ? "," : "",
+                                        point.progress,
+                                        curve_key_json<T>::to_fields(point.element));
+                }
+                return json + "]";
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                const std::string expected = std::string("expected ") + curve_key_json<T>::format;
+                simdjson::dom::array items;
+                if(element.get_array().get(items) != simdjson::SUCCESS)
+                {
+                    error = expected;
+                    return false;
+                }
+                typename math::curve<T>::points_t points;
+                for(auto item : items)
+                {
+                    simdjson::dom::object key;
+                    double progress{};
+                    typename math::curve<T>::point_t point;
+                    if(item.get_object().get(key) != simdjson::SUCCESS ||
+                       key["progress"].get_double().get(progress) != simdjson::SUCCESS ||
+                       !curve_key_json<T>::from_fields(key, point.element, error))
+                    {
+                        error = error.empty() ? expected : error;
+                        return false;
+                    }
+                    point.progress = static_cast<float>(progress);
+                    points.push_back(point);
+                }
+                const auto* current = out.try_cast<math::curve<T>>();
+                math::curve<T> curve = current != nullptr ? *current : math::curve<T>{};
+                curve.set_points_keeping_shape(points);
+                out = entt::meta_any{std::move(curve)};
+                return true;
+            }};
+}
+
+auto make_bbox_codec() -> value_codec
+{
+    return {.schema_type = "object",
+            .format_hint = "{min: [x, y, z], max: [x, y, z]}",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                return bbox_to_json(value.cast<const math::bbox&>());
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::object box;
+                simdjson::dom::element low;
+                simdjson::dom::element high;
+                math::bbox bounds;
+                if(element.get_object().get(box) != simdjson::SUCCESS || box["min"].get(low) != simdjson::SUCCESS ||
+                   box["max"].get(high) != simdjson::SUCCESS)
+                {
+                    error = "expected {min: [x, y, z], max: [x, y, z]}";
+                    return false;
+                }
+                if(!parse_vec3(low, bounds.min, error) || !parse_vec3(high, bounds.max, error))
+                {
+                    return false;
+                }
+                out = entt::meta_any{bounds};
+                return true;
+            }};
+}
+
+/// Seconds, as a number.
+auto make_seconds_codec() -> value_codec
+{
+    using seconds = std::chrono::duration<float>;
+    return {.schema_type = "number",
+            .format_hint = "seconds",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                return fmt::format("{:.6g}", value.cast<seconds>().count());
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                float value{};
+                if(!parse_number(element, value, error))
+                {
+                    return false;
+                }
+                out = entt::meta_any{seconds(value)};
+                return true;
+            },
+            .as_double = [](const entt::meta_any& value) -> double
+            {
+                return static_cast<double>(value.cast<seconds>().count());
+            }};
+}
+
+/// An enum value's spelling without case, spaces or underscores: "out_expo", "OutExpo" and "Out Expo" are one value.
+auto fold_enum_spelling(hpp::string_view text) -> std::string
+{
+    std::string folded;
+    for(const char c : text)
+    {
+        if(c != '_' && c != ' ')
+        {
+            folded.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+    }
+    return folded;
 }
 
 auto layer_names(rtti::context& ctx) -> const std::array<std::string, 32>&
@@ -384,6 +598,12 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<asset_handle<mesh>>(), make_handle_codec<mesh>());
         add(entt::type_id<asset_handle<prefab>>(), make_handle_codec<prefab>());
         add(entt::type_id<asset_handle<scene_prefab>>(), make_handle_codec<scene_prefab>());
+        add(entt::type_id<math::curve<float>>(), make_curve_codec<float>());
+        add(entt::type_id<math::curve<frange_t>>(), make_curve_codec<frange_t>());
+        add(entt::type_id<math::curve<math::color>>(), make_curve_codec<math::color>());
+        add(entt::type_id<math::curve<math::vec3>>(), make_curve_codec<math::vec3>());
+        add(entt::type_id<math::bbox>(), make_bbox_codec());
+        add(entt::type_id<std::chrono::duration<float>>(), make_seconds_codec());
         return result;
     }();
     return table;
@@ -448,9 +668,11 @@ auto enum_from_json(const simdjson::dom::element& element,
         error = "expected one of " + fmt::format("{}", fmt::join(enum_value_names(type), ", "));
         return false;
     }
+    const std::string wanted = fold_enum_spelling(name);
     for(auto [id, candidate] : type.data())
     {
-        if(entt::get_name(candidate) == name || entt::get_pretty_name(candidate) == name)
+        if(fold_enum_spelling(entt::get_name(candidate)) == wanted ||
+           fold_enum_spelling(entt::get_pretty_name(candidate)) == wanted)
         {
             out = candidate.get({});
             return true;
@@ -599,15 +821,18 @@ auto parse_layer_mask(rtti::context& ctx, const simdjson::dom::element& value, l
     return true;
 }
 
-auto meta_properties_to_json(rtti::context& ctx, entt::meta_any& object, const std::unordered_set<std::string>* only)
-    -> std::string
+auto meta_properties_to_json(rtti::context& ctx,
+                             entt::meta_any& object,
+                             const std::unordered_set<std::string>* only,
+                             bool include_hidden) -> std::string
 {
     std::string json = "{";
     bool first = true;
     for(auto [id, prop] : object.type().data())
     {
         const auto name = entt::get_name(prop);
-        if(name.empty() || (only != nullptr && only->count(name) == 0) || !entt::is_property_visible(object, prop))
+        if(name.empty() || (only != nullptr && only->count(name) == 0) ||
+           (!include_hidden && !entt::is_property_visible(object, prop)))
         {
             continue;
         }
@@ -650,6 +875,11 @@ void apply_meta_properties(rtti::context& ctx,
         const auto prop = find_meta_property(type, key);
         if(!prop || (only != nullptr && only->count(key) == 0))
         {
+            if(const auto renamed = entt::find_renamed_property(type, key))
+            {
+                fail("renamed " + entt::get_name(renamed));
+                continue;
+            }
             result.unknown.push_back(key);
             continue;
         }
@@ -687,6 +917,7 @@ void apply_meta_properties(rtti::context& ctx,
         std::string error;
         if(const auto* codec = find_codec(target))
         {
+            converted = prop.get(object);
             if(!codec->from_json(ctx, field.value, converted, error))
             {
                 fail(error);

@@ -1,9 +1,7 @@
 #pragma once
 
-#include "particle_scale_curve.h"
 #include "particle_types.h"
 
-#include <bx/easing.h>
 #include <math/bbox.h>
 #include <math/math.h>
 #include <math/transform.hpp>
@@ -26,20 +24,27 @@ struct emitter_transform_state
 };
 
 /**
- * @brief Mutable simulation bookkeeping owned by the soa emitter instance.
+ * @brief Mutable emission bookkeeping owned by the emitter instance.
  */
 struct emitter_sim_state
 {
     static constexpr size_t temporal_buffer_size = 8;
 
+    /// Time since the last rate-spawned particle, seconds (always below one particle interval).
     float emission_time_accum = 0.0f;
+    /// Metres the emitter moved since its last distance-spawned particle (always below one spacing).
+    float distance_accum = 0.0f;
     float start_delay_elapsed = 0.0f;
-    uint32_t total_particles_spawned = 0;
+    /// Time into the current emission cycle, seconds.
+    float cycle_time = 0.0f;
+    /// A one-shot emitter has emitted its whole cycle.
+    bool emission_finished = false;
     bool first_update = true;
     /// Cleared when the emitter first plays after it is created or reset; a prewarm runs then.
     bool prewarm_pending = true;
     bool playing = true;
-    bool loop = true;
+    /// Simulation time skipped while culling froze the emitter, caught up when it wakes.
+    float frozen_time = 0.0f;
     emitter_feature features = emitter_feature::none;
 
     std::array<math::vec3, temporal_buffer_size> temporal_positions{};
@@ -47,53 +52,10 @@ struct emitter_sim_state
     uint32_t temporal_count = 0;
 
     math::bbox world_bounds{math::vec3(-1.0f), math::vec3(1.0f)};
-    /// World-space bounds of the particles alive at the last simulation, without the spawn region.
-    /// The frozen refresh unions it with that region instead of growing world_bounds every frame.
-    math::bbox particle_bounds{};
 
     void reset();
     void push_temporal_sample(const math::vec3& position, float dt);
     auto calculate_smoothed_emitter_speed(float max_speed) const -> float;
-};
-
-/**
- * @brief Hot-loop constants baked from desc (CPU now, CB-shaped for GPU later).
- */
-struct emitter_sim_constants
-{
-    emitter_feature features = emitter_feature::none;
-    simulation_space space = simulation_space::world;
-    float opacity = 1.0f;
-    float color_intensity = 1.0f;
-    float avg_system_scale = 1.0f;
-    /// Size range widths at birth and death, which weigh each particle's drift between its picks.
-    scale_curve_widths scale_widths{};
-    /// Largest size the size curve reaches over a life, before the system scale.
-    float scale_peak = 0.0f;
-    math::vec3 particle_scale_3d{1.0f, 1.0f, 1.0f};
-    math::vec2 pivot{0.5f, 0.5f};
-    render_mode render_mode = render_mode::billboard;
-    blend_mode blend_mode = blend_mode::normal;
-    texture_mode texture_mode = texture_mode::multi_channel;
-    math::vec2 tex_sheet_tiles{1.0f, 1.0f};
-    float tex_sheet_cycles = 0.0f;
-    bool tex_sheet_randomize = false;
-    frange_t size_by_speed_range{1.0f, 1.0f};
-    frange_t size_by_speed_velocity_range{0.0f, 10.0f};
-    frange_t color_by_speed_velocity_range{0.0f, 10.0f};
-    float inv_size_by_speed_velocity_span = 0.0f;
-    float inv_color_by_speed_velocity_span = 0.0f;
-    bx::EaseFn ease_pos = nullptr;
-    math::mat4 local_to_world{1.0f};
-    /// Emitter world rotation used for constrained billboards in local simulation.
-    /// Stored with non-negative w so xyz can be packed into instance data.
-    math::quat emitter_rotation{1.0f, 0.0f, 0.0f, 0.0f};
-    /// Start angle range and spin range of the particles, radians and radians per second.
-    frange_t rotation{0.0f, 0.0f};
-    frange_t rotation_speed{0.0f, 0.0f};
-    bool random_rotation_direction = false;
-    float soft_fade_distance = 0.0f;
-    bool frame_blending = false;
 };
 
 } // namespace ps_soa
