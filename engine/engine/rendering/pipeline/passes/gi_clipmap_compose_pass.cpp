@@ -1,6 +1,6 @@
 #include "gi_clipmap_compose_pass.h"
 
-#include "lumen_pass_common.h"
+#include "gi_pass_common.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -27,7 +27,7 @@ constexpr uint32_t mip_propagation_passes = 5u;
 
 gi_clipmap_compose_pass::~gi_clipmap_compose_pass()
 {
-    lumen_pass::destroy_handle(brick_boxes_);
+    gi_pass::destroy_handle(brick_boxes_);
 }
 
 auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
@@ -120,7 +120,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         entry.box_count = uint32_t(table.size() / 2u) - entry.first_box;
         levels.push_back(entry);
     }
-    lumen_pass::upload_vec4_table(brick_boxes_, table);
+    gi_pass::upload_vec4_table(brick_boxes_, table);
     uint32_t composed = 0;
     for(const auto& entry : levels)
     {

@@ -46,12 +46,12 @@ public:
     void set_visualization_scale(float scale);
     auto get_visualization_scale() const -> float;
     /// The world-space GI visualizations the panel drives into the scene camera's pipeline every frame.
-    void set_lumen_visualize(const lumen_visualize_pass::world_settings& settings);
-    auto get_lumen_visualize() const -> const lumen_visualize_pass::world_settings&;
+    void set_gi_visualize(const gi_visualize_pass::world_settings& settings);
+    auto get_gi_visualize() const -> const gi_visualize_pass::world_settings&;
     /// A cursor the GI visualizations use instead of the mouse's (negative: the view's centre); empty follows the
     /// mouse again. An MCP hook for repeatable captures.
-    void set_lumen_cursor_override(const std::optional<math::vec2>& cursor);
-    auto get_lumen_cursor_override() const -> const std::optional<math::vec2>&;
+    void set_gi_cursor_override(const std::optional<math::vec2>& cursor);
+    auto get_gi_cursor_override() const -> const std::optional<math::vec2>&;
     /// Opens the debug view popover on @p tab, or closes it, on the next frame. An MCP hook for screenshots.
     void request_debug_popover(bool is_open, visualization_menu::popover_tab tab);
     /// Renders the Scene camera at exactly @p width x @p height and shows it scaled into the panel (aspect kept);

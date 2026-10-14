@@ -1,7 +1,7 @@
 #include "mesh.h"
 
 #include <engine/profiler/profiler.h>
-#include <engine/rendering/gi/lumen_scene.h>
+#include <engine/rendering/gi/gi_scene.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include "camera.h"
 #include "generator/generator.hpp"
@@ -868,7 +868,7 @@ auto mesh::load_mesh(load_data&& data) -> bool
     submesh_cards_.reserve(data.submesh_cards.size());
     for(auto& cards : data.submesh_cards)
     {
-        submesh_cards_.push_back(std::make_shared<const lumen_mesh_cards>(std::move(cards)));
+        submesh_cards_.push_back(std::make_shared<const gi_mesh_cards>(std::move(cards)));
     }
     are_cards_disabled_ = data.are_cards_disabled;
     cards_lod_index_ = data.cards_lod_index;
@@ -1773,17 +1773,17 @@ auto mesh::get_sdf_count() const -> uint32_t
     return uint32_t(submesh_sdfs_.size());
 }
 
-auto mesh::get_lumen_cards(uint32_t submesh_index) const -> std::shared_ptr<const lumen_mesh_cards>
+auto mesh::get_gi_cards(uint32_t submesh_index) const -> std::shared_ptr<const gi_mesh_cards>
 {
     return submesh_index < submesh_cards_.size() ? submesh_cards_[submesh_index] : nullptr;
 }
 
-auto mesh::are_lumen_cards_disabled() const -> bool
+auto mesh::are_gi_cards_disabled() const -> bool
 {
     return are_cards_disabled_;
 }
 
-auto mesh::get_lumen_cards_lod() const -> uint32_t
+auto mesh::get_gi_cards_lod() const -> uint32_t
 {
     return math::min<uint32_t>(cards_lod_index_, uint32_t(lods_.size()));
 }
@@ -1825,9 +1825,9 @@ auto mesh::get_gi_info() const -> gi_info
     result.field_memory = format_memory(field_bytes);
     result.finest_field_memory = format_memory(finest_field_bytes);
     result.card_source = are_cards_disabled_ ? "Disabled" : submesh_cards_.empty() ? "Built at runtime" : "Compiled";
-    result.card_memory = format_memory(uint64_t(result.cards) * sizeof(lumen_card));
+    result.card_memory = format_memory(uint64_t(result.cards) * sizeof(gi_card));
     result.card_table_memory =
-        format_memory(uint64_t(result.cards) * lumen_scene::card_stride * sizeof(math::vec4));
+        format_memory(uint64_t(result.cards) * gi_scene::card_stride * sizeof(math::vec4));
     return result;
 }
 

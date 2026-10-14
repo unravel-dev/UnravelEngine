@@ -1842,24 +1842,24 @@ auto scene_panel::get_visualization_mode() const -> int
     return visualize_passes_;
 }
 
-void scene_panel::set_lumen_visualize(const lumen_visualize_pass::world_settings& settings)
+void scene_panel::set_gi_visualize(const gi_visualize_pass::world_settings& settings)
 {
-    visualization_menu_state_.lumen = settings;
+    visualization_menu_state_.gi = settings;
 }
 
-auto scene_panel::get_lumen_visualize() const -> const lumen_visualize_pass::world_settings&
+auto scene_panel::get_gi_visualize() const -> const gi_visualize_pass::world_settings&
 {
-    return visualization_menu_state_.lumen;
+    return visualization_menu_state_.gi;
 }
 
-void scene_panel::set_lumen_cursor_override(const std::optional<math::vec2>& cursor)
+void scene_panel::set_gi_cursor_override(const std::optional<math::vec2>& cursor)
 {
-    visualization_menu_state_.lumen_cursor_override = cursor;
+    visualization_menu_state_.gi_cursor_override = cursor;
 }
 
-auto scene_panel::get_lumen_cursor_override() const -> const std::optional<math::vec2>&
+auto scene_panel::get_gi_cursor_override() const -> const std::optional<math::vec2>&
 {
-    return visualization_menu_state_.lumen_cursor_override;
+    return visualization_menu_state_.gi_cursor_override;
 }
 
 void scene_panel::request_debug_popover(bool is_open, visualization_menu::popover_tab tab)
@@ -2153,8 +2153,8 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     {
         ImGui::Dummy(size);
     }
-    const auto lumen_visualize =
-        visualization_menu::make_lumen_visualize(visualization_menu_state_, pos, pos + size, camera.get_viewport_size());
+    const auto gi_visualize =
+        visualization_menu::make_gi_visualize(visualization_menu_state_, pos, pos + size, camera.get_viewport_size());
 
     if(em.is_prefab_mode())
     {
@@ -2220,7 +2220,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
 
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_view_scale(visualize_scale_);
-    camera_comp.get_pipeline_data().get_pipeline()->set_lumen_visualize_settings(lumen_visualize);
+    camera_comp.get_pipeline_data().get_pipeline()->set_gi_visualize_settings(gi_visualize);
 
     auto window = ImGui::GetCurrentWindow();
     auto draw_list = window->DrawList;

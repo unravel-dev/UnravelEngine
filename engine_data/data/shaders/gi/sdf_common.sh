@@ -326,7 +326,7 @@ float SdfInstanceWorldRadius(SdfInstance inst)
  * Whether a GI cascade level of voxel size @p voxel holds the instance: an object whose bounding sphere is no larger
  * than max(@p min_radius, @p min_radius_voxels voxels) is left out, unless an emissive light source.
  */
-bool SdfLumenCascadeKeepsInstance(SdfInstance inst, float voxel, float min_radius, float min_radius_voxels)
+bool SdfGiCascadeKeepsInstance(SdfInstance inst, float voxel, float min_radius, float min_radius_voxels)
 {
 	return inst.is_emissive_light_source || SdfInstanceWorldRadius(inst) > max(min_radius, min_radius_voxels * voxel);
 }

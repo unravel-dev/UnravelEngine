@@ -18,12 +18,12 @@
 
 #include "bgfx_compute.sh"
 #include "gi/sdf_common.sh"
-#include "lumen/lumen_constants.sh"
+#include "gi/gi_pass_constants.sh"
 
 IMAGE3D_WO(s_clipmap_out, r8, 5);
 /// The GI coverage of a distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), written at the voxels
-/// whose coordinates are all multiples of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE when u_compose_lumen: 0 where the instances
-/// within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS are all two-sided, 1 elsewhere.
+/// whose coordinates are all multiples of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE when u_compose_gi: 0 where the instances
+/// within GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS are all two-sided, 1 elsewhere.
 IMAGE3D_WO(s_clipmap_coverage_out, r8, 6);
 
 /// x = level index, y = voxels per axis, z = this level's voxel size, w = reach in world units
@@ -36,9 +36,9 @@ uniform vec4 u_clipmap_compose_params;
 #define u_compose_reach      u_clipmap_compose_params.w
 
 /// xyz = this level's world-space origin (its minimum corner, already snapped), w > 0.5 when the dispatch composes a
-/// GI cascade: it writes the coverage too and leaves small objects out (SdfLumenCascadeKeepsInstance).
+/// GI cascade: it writes the coverage too and leaves small objects out (SdfGiCascadeKeepsInstance).
 uniform vec4 u_clipmap_compose_origin;
-#define u_compose_lumen (u_clipmap_compose_origin.w > 0.5)
+#define u_compose_gi (u_clipmap_compose_origin.w > 0.5)
 
 /// The voxel boxes this dispatch composes (gi/brick_dispatch.sh): a full recompose is one box over the whole level; a
 /// PARTIAL recompose (global_sdf_clipmap::level::is_partial) blits the overlap of the old and new windows into place
@@ -66,8 +66,8 @@ void main()
 	vec3 world_position =
 	    u_clipmap_compose_origin.xyz + (vec3(voxel) + vec3_splat(0.5)) * u_compose_voxel_size;
 	ivec3 coverage_texel = voxel / SDF_CLIPMAP_COVERAGE_DOWNSAMPLE;
-	bool writes_coverage = u_compose_lumen && all(equal(coverage_texel * SDF_CLIPMAP_COVERAGE_DOWNSAMPLE, voxel));
-	float coverage_band = LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS * u_compose_voxel_size;
+	bool writes_coverage = u_compose_gi && all(equal(coverage_texel * SDF_CLIPMAP_COVERAGE_DOWNSAMPLE, voxel));
+	float coverage_band = GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS * u_compose_voxel_size;
 	bool near_one_sided = false;
 	bool near_two_sided = false;
 
@@ -122,12 +122,12 @@ void main()
 						int index = int(b_sdf_grid[candidate]);
 						SdfInstance inst = SdfLoadInstance(index);
 						BRANCH
-						if(u_compose_lumen)
+						if(u_compose_gi)
 						{
-							if(!SdfLumenCascadeKeepsInstance(inst,
+							if(!SdfGiCascadeKeepsInstance(inst,
 							                                 u_compose_voxel_size,
-							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_clipmap_compose_scale.x,
-							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_clipmap_compose_scale.x))
+							                                 GI_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_clipmap_compose_scale.x,
+							                                 GI_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_clipmap_compose_scale.x))
 							{
 								continue;
 							}
@@ -159,7 +159,7 @@ void main()
 						// (SdfInstanceStandaloneDistance); y = the answering level's exact reach.
 						vec2 distance_and_reach = vec2(0.0, 0.0);
 						BRANCH
-						if(u_compose_lumen)
+						if(u_compose_gi)
 						{
 							distance_and_reach = SdfInstanceStandaloneDistance(inst, header, local_position, true);
 						}

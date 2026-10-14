@@ -5,7 +5,7 @@
  * The global SDF clipmap: the cascaded distance field every tracer and every cage reader
  * samples. Its sampler is stage 4 and its uniforms are filled by global_sdf_clipmap_gpu, the
  * single owner. sdf_common.sh includes this for the tracers; a consumer that only needs the
- * cascade (the GI global SDF march, lumen_global_sdf.sh) includes this alone and keeps
+ * cascade (the GI global SDF march, gi_global_sdf.sh) includes this alone and keeps
  * stages 0-3 for its own resources.
  */
 
@@ -32,7 +32,7 @@ SAMPLER3D(s_sdf_clipmap_mip, SDF_CLIPMAP_MIP_STAGE);
 
 #ifdef SDF_CLIPMAP_COVERAGE_STAGE
 /// The GI coverage of the distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), stacked like the
-/// distance: 0 where only two-sided meshes lie within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS of a voxel, 1 elsewhere.
+/// distance: 0 where only two-sided meshes lie within GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS of a voxel, 1 elsewhere.
 /// Texel c holds voxel 2c of its level.
 SAMPLER3D(s_sdf_clipmap_coverage, SDF_CLIPMAP_COVERAGE_STAGE);
 #endif

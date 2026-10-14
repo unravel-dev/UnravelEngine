@@ -1,7 +1,7 @@
 #pragma once
 #include "visualization_modes.h"
 
-#include <engine/rendering/pipeline/passes/lumen_visualize_pass.h>
+#include <engine/rendering/pipeline/passes/gi_visualize_pass.h>
 
 #include <optional>
 #include <vector>
@@ -43,10 +43,10 @@ struct state
     /// The placement view the screen probes overlay comes on with (world_settings::screen_probe_placement).
     int screen_probe_placement{1};
     /// The world-space visualizations of the global illumination, drawn over whichever view is active.
-    lumen_visualize_pass::world_settings lumen{};
+    gi_visualize_pass::world_settings gi{};
     /// The cursor those visualizations use in place of the mouse's (an MCP hook for repeatable captures);
     /// negative for the view's centre.
-    std::optional<math::vec2> lumen_cursor_override{};
+    std::optional<math::vec2> gi_cursor_override{};
 };
 
 //-----------------------------------------------------------------------------
@@ -104,9 +104,9 @@ void draw_view_labels(int mode,
 /// <param name="image_max">Bottom-right corner of the drawn image, in screen coordinates</param>
 /// <param name="render_size">The size the view renders at</param>
 //-----------------------------------------------------------------------------
-auto make_lumen_visualize(const state& menu_state,
-                          const ImVec2& image_min,
-                          const ImVec2& image_max,
-                          const usize32_t& render_size) -> lumen_visualize_pass::world_settings;
+auto make_gi_visualize(const state& menu_state,
+                       const ImVec2& image_min,
+                       const ImVec2& image_max,
+                       const usize32_t& render_size) -> gi_visualize_pass::world_settings;
 
 } // namespace unravel::visualization_menu

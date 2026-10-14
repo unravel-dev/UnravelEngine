@@ -662,7 +662,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& panel = resolve_scene_panel(ctx);
-             auto settings = panel.get_lumen_visualize();
+             auto settings = panel.get_gi_visualize();
              bool card_placement = settings.card_placement;
              if(args["card_placement"].get(card_placement) == simdjson::SUCCESS)
              {
@@ -763,7 +763,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  settings.card_placement_direction = static_cast<int>(std::clamp<int64_t>(card_direction, -1, 5));
              }
-             panel.set_lumen_visualize(settings);
+             panel.set_gi_visualize(settings);
              simdjson::dom::array cursor_args;
              std::string_view cursor_mode;
              if(args["cursor"].get(cursor_args) == simdjson::SUCCESS && cursor_args.size() == 2)
@@ -772,14 +772,14 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  double y = -1.0;
                  if(cursor_args.at(0).get(x) == simdjson::SUCCESS && cursor_args.at(1).get(y) == simdjson::SUCCESS)
                  {
-                     panel.set_lumen_cursor_override(math::vec2(static_cast<float>(x), static_cast<float>(y)));
+                     panel.set_gi_cursor_override(math::vec2(static_cast<float>(x), static_cast<float>(y)));
                  }
              }
              else if(args["cursor"].get(cursor_mode) == simdjson::SUCCESS && cursor_mode == "mouse")
              {
-                 panel.set_lumen_cursor_override(std::nullopt);
+                 panel.set_gi_cursor_override(std::nullopt);
              }
-             const auto& cursor = panel.get_lumen_cursor_override();
+             const auto& cursor = panel.get_gi_cursor_override();
              const std::string cursor_text =
                  cursor ? fmt::format("[{},{}]", cursor->x, cursor->y) : std::string(R"("mouse")");
              return {.text = fmt::format(
@@ -847,7 +847,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_set_debug_view",
          .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
-                        "(e.g. \"full\", \"base_color\", \"normals\", \"lumen_scene\") or as the "
+                        "(e.g. \"full\", \"base_color\", \"normals\", \"gi_scene\") or as the "
                         "raw integer id. \"full\" (-1) restores the normal render. Call "
                         "viewport_list_debug_views for every mode with its group, what it actually "
                         "shows and its color legend. Optional scale (default 1): an exposure "
@@ -1444,9 +1444,9 @@ void register_viewport_tools(mcp_tool_registry& registry)
         {.name = "gi_set_experiment_flags",
          .description =
              "Runtime experiment flags of the global illumination passes (surface_cache_system::get_experiment_flags): each bit "
-             "switches one stage for an in-session A/B - the gather's bits are listed in lumen_gather_pass.h, the "
-             "reflections' in lumen_reflection_pass.h, the surface cache's in lumen_surface_cache_pass.h, the global "
-             "distance field's in lumen_pass_common.h and the deferred pipeline. 0 is production. Returns the new and "
+             "switches one stage for an in-session A/B - the gather's bits are listed in gi_gather_pass.h, the "
+             "reflections' in gi_reflection_pass.h, the surface cache's in gi_surface_cache_pass.h, the global "
+             "distance field's in gi_pass_common.h and the deferred pipeline. 0 is production. Returns the new and "
              "previous flags.",
          .input_schema_json =
              R"({"type":"object","properties":{"flags":{"type":"integer","minimum":0}},"required":["flags"]})",

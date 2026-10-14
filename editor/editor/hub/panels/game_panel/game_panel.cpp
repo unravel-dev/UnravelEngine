@@ -252,10 +252,10 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
 
     ImVec2 min = ImGui::GetItemRectMin();
     ImVec2 max = ImGui::GetItemRectMax();
-    const auto lumen_visualize = visualization_menu::make_lumen_visualize(visualization_menu_state_,
-                                                                          min,
-                                                                          max,
-                                                                          camera_comp.get_camera().get_viewport_size());
+    const auto gi_visualize = visualization_menu::make_gi_visualize(visualization_menu_state_,
+                                                                    min,
+                                                                    max,
+                                                                    camera_comp.get_camera().get_viewport_size());
 
     input::zone work_zone{};
     work_zone.x = min.x;
@@ -274,7 +274,7 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
 
     const auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
     pipeline->set_debug_pass(visualize_passes_);
-    pipeline->set_lumen_visualize_settings(lumen_visualize);
+    pipeline->set_gi_visualize_settings(gi_visualize);
     visualization_menu::draw_view_labels(visualize_passes_,
                                          visualization_menu_state_,
                                          pipeline->get_debug_view_labels(),

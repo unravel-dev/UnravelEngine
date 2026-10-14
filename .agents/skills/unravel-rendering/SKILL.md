@@ -66,7 +66,7 @@ Use `unravel-shader-change` for step-by-step shader edits.
   is rebound to that sampler's last stage (unit 0 if never set) and reads / writes another
   texture. It happened twice: the auto exposure history ring wrote into the irradiance SH
   through unit 0 (GL-only blue SSIL flash every 256 frames), and the GI gather / radiance
-  cache images (`s_lumen_*`, sampled under the same names by the next pass) turned the
+  cache images (`s_gi_*`, sampled under the same names by the next pass) turned the
   gather and the reflections to garbage, so the GL lit image went black.
   `python tasks/scan_gl_image_names.py` finds these and the next trap.
 - **GL image units:** images bind at stages 0-7 only. Stage 8+ compiles offline and fails
@@ -76,7 +76,7 @@ Use `unravel-shader-change` for step-by-step shader edits.
   the bottom, and clip depth spans -1..1. A pass that rasterizes tiles and reads them back by
   texel (`texelFetch` / `imageLoad` at pixel coordinates) must mirror its rect or scissor and
   flip y (and map depth) in its projection on GL - see
-  `lumen_surface_cache_pass::compute_capture_view`. Screen passes sampled by UV need nothing.
+  `gi_surface_cache_pass::compute_capture_view`. Screen passes sampled by UV need nothing.
 - **GL depth range is not `gfx::is_homogeneous_depth()`:** that function is the engine's
   projection convention and always returns false - every projection is zero-to-one, so on GL
   a depth buffer holds 0.5 + 0.5 z and nothing in front of z = -w is clipped; shaders that
@@ -133,7 +133,7 @@ Each indirect term takes only the occlusion it has not resolved itself
   once, to the combined visibility, on the uncapped diffuse albedo (`MultiBounceAOGain`).
   Direct light takes no AO.
 - **The screen AO's range is the artist's** (GTAO / ASSAO radius and screen radius): never
-  derive or clamp it from another system's settings (e.g. the GI probe spacing, as Lumen's
+  derive or clamp it from another system's settings (e.g. the GI probe spacing, as the GI's
   short-range AO does) - document the trade-off on the setting instead.
 
 ## GI subsystem

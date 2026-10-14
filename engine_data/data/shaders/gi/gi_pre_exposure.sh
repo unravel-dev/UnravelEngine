@@ -16,7 +16,7 @@
  *     are in the VIEW's pre-exposed space: every value is multiplied by the view
  *     pre-exposure (pre_exposure.sh), which tracks the adapted exposure, so a dark scene's
  *     radiance lands near 1 instead of near the bottom of float16. The per-ray clamps
- *     (LUMEN_MAX_RAY_INTENSITY) then act on pre-exposed values.
+ *     (GI_MAX_RAY_INTENSITY) then act on pre-exposed values.
  *
  * Last frame's per-frame buffers were written under the PREVIOUS pre-exposure, so history
  * reads multiply by u_history_pre_exposure_correction (P / Pprev) instead.

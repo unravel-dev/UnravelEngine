@@ -7,7 +7,7 @@
  *   - derived:   follows arithmetically from another value here or from a documented argument;
  *   - tuned:     a chosen value; the entry states what it trades off;
  *   - setting:   deliberately exposed on gi_component instead of living here.
- * A constant that fits none of those is a defect. The lumen_* passes' own parameters live in lumen_constants.h.
+ * A constant that fits none of those is a defect. The gi_* passes' own parameters live in gi_pass_constants.h.
  *
  * The shader mirror is engine_data/data/shaders/gi/gi_constants.sh. shaderc cannot consume this
  * header, so the mirror is plain #defines - and the pair is kept honest by a TEST, not a comment:

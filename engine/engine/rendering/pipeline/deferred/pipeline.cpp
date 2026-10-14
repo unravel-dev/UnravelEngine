@@ -7,7 +7,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
-#include <engine/rendering/gi/lumen_constants.h>
+#include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/perez_luminance.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -92,30 +92,30 @@ constexpr int contact_shadow_dither_frames = 16;
 constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
 /// GI experiment flag (surface_cache_system::get_experiment_flags): the global SDF clipmap stays where it was when
 /// the bit was set (no camera re-snaps), to isolate re-snap transients in A/Bs.
-constexpr uint32_t lumen_experiment_freeze_clipmap_origin = 1u << 27u;
+constexpr uint32_t gi_experiment_freeze_clipmap_origin = 1u << 27u;
 /// The global distance field's level scale for the GI: each level doubles the previous one's extent.
-constexpr float lumen_clipmap_level_scale = 2.0f;
+constexpr float gi_clipmap_level_scale = 2.0f;
 /// The scene detail's range; 1 / detail scales the smallest object the distance field keeps.
-constexpr float lumen_clipmap_min_detail = 0.01f;
-constexpr float lumen_clipmap_max_detail = 100.0f;
+constexpr float gi_clipmap_min_detail = 0.01f;
+constexpr float gi_clipmap_max_detail = 100.0f;
 
-/// The global distance field the GI traces (its hits read the surface cache) in the GI's layout (lumen_constants.h),
+/// The global distance field the GI traces (its hits read the surface cache) in the GI's layout (gi_pass_constants.h),
 /// with the view's rebuild budget, level blend and the smallest object its scene detail keeps, partially updated
-/// unless @p experiments holds lumen_pass::experiment_no_sdf_partial_updates.
-auto make_lumen_clipmap_settings(const gi_settings& gi, bool compose_on_gpu, uint64_t experiments)
+/// unless @p experiments holds gi_pass::experiment_no_sdf_partial_updates.
+auto make_gi_clipmap_settings(const gi_settings& gi, bool compose_on_gpu, uint64_t experiments)
     -> global_sdf_clipmap::settings
 {
     const auto& field = gi.distance_field;
     global_sdf_clipmap::settings settings;
-    settings.resolution = uint32_t(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
-    settings.base_extent = gi::lumen::LUMEN_GLOBAL_SDF_EXTENT;
-    settings.level_scale = lumen_clipmap_level_scale;
+    settings.resolution = uint32_t(gi::GI_GLOBAL_SDF_RESOLUTION);
+    settings.base_extent = gi::GI_GLOBAL_SDF_EXTENT;
+    settings.level_scale = gi_clipmap_level_scale;
     settings.compose_on_gpu = compose_on_gpu;
     settings.max_levels_per_update = std::clamp(field.levels_per_update, 1u, global_sdf_clipmap::level_count);
     settings.blend_voxels = std::max(field.level_blend_band, 0.0f);
     settings.object_radius_scale =
-        1.0f / std::clamp(gi.scene.detail, lumen_clipmap_min_detail, lumen_clipmap_max_detail);
-    settings.partial_updates = (experiments & lumen_pass::experiment_no_sdf_partial_updates) == 0u;
+        1.0f / std::clamp(gi.scene.detail, gi_clipmap_min_detail, gi_clipmap_max_detail);
+    settings.partial_updates = (experiments & gi_pass::experiment_no_sdf_partial_updates) == 0u;
     return settings;
 }
 } // namespace ANONYMOUS
@@ -892,9 +892,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     run_screen_ao_pass(camera, rview, dt, params);
 
     // The GI reflections write every pixel of RBUFFER when they run, so only other views start it cleared.
-    const bool lumen_owns_reflections = is_camera_run && lumen_reflections_own_view(params);
-    lumen_reflections_written_ = false;
-    if(build_reflection_probes && !lumen_owns_reflections)
+    const bool gi_owns_reflections = is_camera_run && gi_reflections_own_view(params);
+    gi_reflections_written_ = false;
+    if(build_reflection_probes && !gi_owns_reflections)
     {
         clear_traced_reflections(rview);
     }
@@ -924,9 +924,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     bool gi_active = false;
     if(is_camera_run)
     {
-        gi_active = run_lumen_gi_pass(camera, rview, params);
+        gi_active = run_gi_pass(camera, rview, params);
     }
-    if(build_reflection_probes && lumen_owns_reflections && !lumen_reflections_written_)
+    if(build_reflection_probes && gi_owns_reflections && !gi_reflections_written_)
     {
         clear_traced_reflections(rview);
     }
@@ -950,8 +950,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(is_camera_run)
     {
-        run_lumen_visualize_scene_color(camera, rview, pre_exposure);
-        release_lumen_visualize_card_generation();
+        run_gi_visualize_scene_color(camera, rview, pre_exposure);
+        release_gi_visualize_card_generation();
     }
 
     if(is_probe_capture)
@@ -1044,36 +1044,36 @@ void deferred::blit_to_output(gfx::render_view& rview,
     blit_pass_.run(rview, pass_params);
 }
 
-void deferred::run_lumen_visualize_scene_color(const camera& camera,
-                                               gfx::render_view& rview,
-                                               const pre_exposure_state& pre_exposure)
+void deferred::run_gi_visualize_scene_color(const camera& camera,
+                                            gfx::render_view& rview,
+                                            const pre_exposure_state& pre_exposure)
 {
-    if(!lumen_visualize_settings_.is_any_in_scene_color())
+    if(!gi_visualize_settings_.is_any_in_scene_color())
     {
         return;
     }
-    lumen_visualize_pass::world_params world;
+    gi_visualize_pass::world_params world;
     const auto& lbuffer = rview.fbo_find("LBUFFER");
     const auto& gbuffer = rview.fbo_find("GBUFFER");
     world.scene_color = lbuffer ? lbuffer->get_texture(0) : nullptr;
     world.scene_depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
     world.rview = &rview;
     world.cam = &camera;
-    world.surface_cache = &lumen_surface_cache_pass_;
+    world.surface_cache = &gi_surface_cache_pass_;
     world.gi_scene = &engine::context().get_cached<surface_cache_system>();
-    world.radiance_cache = lumen_gather_pass_.get_radiance_cache();
+    world.radiance_cache = gi_gather_pass_.get_radiance_cache();
     world.pre_exposure = pre_exposure.value;
-    world.settings = lumen_visualize_settings_;
-    lumen_visualize_pass_.draw_world(world);
+    world.settings = gi_visualize_settings_;
+    gi_visualize_pass_.draw_world(world);
 }
 
-void deferred::release_lumen_visualize_card_generation()
+void deferred::release_gi_visualize_card_generation()
 {
-    if(lumen_visualize_settings_.is_card_generation())
+    if(gi_visualize_settings_.is_card_generation())
     {
         return;
     }
-    lumen_visualize_pass_.release_card_generation(engine::context().get_cached<surface_cache_system>());
+    gi_visualize_pass_.release_card_generation(engine::context().get_cached<surface_cache_system>());
 }
 
 void deferred::run_debug_passes(const camera& camera,
@@ -1097,18 +1097,18 @@ void deferred::run_debug_passes(const camera& camera,
     {
         run_debug_visualization_pass(camera, rview, output, rparams);
     }
-    else if(debug_pass_ >= debug_pass_lumen_scene && debug_pass_ <= debug_pass_lumen_performance_overview)
+    else if(debug_pass_ >= debug_pass_gi_scene && debug_pass_ <= debug_pass_gi_performance_overview)
     {
-        run_lumen_visualize_pass(camera, rview, output, rparams);
+        run_gi_visualize_pass(camera, rview, output, rparams);
     }
     else if(debug_pass_ >= 0 && debug_pass_ < debug_pass_gbuffer_modes)
     {
         run_debug_visualization_pass(camera, rview, output, rparams);
     }
 
-    if(lumen_visualize_settings_.is_any_overlay())
+    if(gi_visualize_settings_.is_any_overlay())
     {
-        run_lumen_visualize_overlays(camera, rview, output, rparams);
+        run_gi_visualize_overlays(camera, rview, output, rparams);
     }
 }
 
@@ -2687,7 +2687,7 @@ void deferred::run_ssr_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams)
 {
-    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params || lumen_reflections_own_view(rparams))
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params || gi_reflections_own_view(rparams))
     {
         ssr_pass_.release_resources(rview);
         return;
@@ -2734,7 +2734,7 @@ void deferred::run_ssr_pass(const camera& camera,
 
 void deferred::run_screen_ao_pass(const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& rparams)
 {
-    if(lumen_short_range_ao_owns_view(rparams))
+    if(gi_short_range_ao_owns_view(rparams))
     {
         gtao_pass_.release_resources(rview);
         rview.tex_remove("GTAO");
@@ -2782,7 +2782,7 @@ auto deferred::get_probe_layer_inputs(gfx::render_view& rview, const gfx::textur
 {
     probe_layer_inputs inputs;
     inputs.texture = pbuffer;
-    if(!lumen_reflections_written_ || !pbuffer)
+    if(!gi_reflections_written_ || !pbuffer)
     {
         return inputs;
     }
@@ -2803,14 +2803,14 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
     // visibility through the multi-bounce fit at the post-process intensity the gather
     // published with it (no bent normal: the ambient axis stays the normal), the untraced
     // specular the bent cone.
-    const auto& lumen_ao = rview.tex_find(lumen_gather_pass::screen_ao_texture);
-    using screen_ao_state = lumen_gather_pass::screen_ao_state;
-    const auto* lumen_ao_state = rview.data().try_get<screen_ao_state>(screen_ao_state::view_key);
-    if(lumen_ao && lumen_ao_state && lumen_ao_state->frame == uint32_t(gfx::get_render_frame()))
+    const auto& gi_ao = rview.tex_find(gi_gather_pass::screen_ao_texture);
+    using screen_ao_state = gi_gather_pass::screen_ao_state;
+    const auto* gi_ao_state = rview.data().try_get<screen_ao_state>(screen_ao_state::view_key);
+    if(gi_ao && gi_ao_state && gi_ao_state->frame == uint32_t(gfx::get_render_frame()))
     {
-        inputs.texture = lumen_ao;
-        inputs.params = {lumen_ao_state->intensity, 0.0f, 1.0f, 1.0f};
-        inputs.multi_bounce_albedo_cap = gi::lumen::LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO;
+        inputs.texture = gi_ao;
+        inputs.params = {gi_ao_state->intensity, 0.0f, 1.0f, 1.0f};
+        inputs.multi_bounce_albedo_cap = gi::GI_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO;
         return inputs;
     }
     const auto& gtao_tex = rview.tex_find("GTAO");
@@ -3079,19 +3079,19 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     // frame and it never settled.
     auto& view_cache = rview.data().get_or_emplace<surface_cache_view>(surface_cache_view::view_key);
     const bool freeze_origin =
-        (surface_cache.get_experiment_flags() & ANONYMOUS::lumen_experiment_freeze_clipmap_origin) != 0u;
+        (surface_cache.get_experiment_flags() & ANONYMOUS::gi_experiment_freeze_clipmap_origin) != 0u;
     if(!freeze_origin || !has_frozen_clipmap_camera_)
     {
         clipmap_camera_ = camera.get_position();
         has_frozen_clipmap_camera_ = freeze_origin;
     }
-    view_cache.set_march_experiments(lumen_pass::get_sdf_march_experiments(surface_cache.get_experiment_flags()));
+    view_cache.set_march_experiments(gi_pass::get_sdf_march_experiments(surface_cache.get_experiment_flags()));
     // The GPU composes the voxels when its program loaded; otherwise the CPU does, so the cascade is never left empty.
     view_cache.update(surface_cache.get_clipmap_instances(),
                       clipmap_camera_,
-                      ANONYMOUS::make_lumen_clipmap_settings(gi,
-                                                             gi_clipmap_compose_pass_.is_valid(),
-                                                             surface_cache.get_experiment_flags()),
+                      ANONYMOUS::make_gi_clipmap_settings(gi,
+                                                          gi_clipmap_compose_pass_.is_valid(),
+                                                          surface_cache.get_experiment_flags()),
                       surface_cache.get_content_revision());
     // The GPU composes the levels the update above marked dirty; without the program the CPU
     // composer already wrote and uploaded them.
@@ -3104,9 +3104,9 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     }
 }
 
-auto deferred::lumen_short_range_ao_owns_view(const run_params& rparams) -> bool
+auto deferred::gi_short_range_ao_owns_view(const run_params& rparams) -> bool
 {
-    if(!reflection_screen_stack_enabled(rparams) || !lumen_gather_pass_.has_short_range_ao())
+    if(!reflection_screen_stack_enabled(rparams) || !gi_gather_pass_.has_short_range_ao())
     {
         return false;
     }
@@ -3115,9 +3115,9 @@ auto deferred::lumen_short_range_ao_owns_view(const run_params& rparams) -> bool
     return resolve_gi_settings(rparams, gi) && gi.ambient_occlusion.enabled;
 }
 
-auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
+auto deferred::gi_reflections_own_view(const run_params& rparams) -> bool
 {
-    if(!reflection_screen_stack_enabled(rparams) || !wants_hdr_buffers(rparams) || !lumen_reflection_pass_.has_programs())
+    if(!reflection_screen_stack_enabled(rparams) || !wants_hdr_buffers(rparams) || !gi_reflection_pass_.has_programs())
     {
         return false;
     }
@@ -3125,7 +3125,7 @@ auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
     return resolve_gi_settings(rparams, gi) && gi.reflections.enabled;
 }
 
-auto deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params) -> bool
+auto deferred::run_gi_reflection_pass(gfx::render_view& rview, const gi_run_params& gather_params) -> bool
 {
     const auto rbuffer = rview.fbo_find("RBUFFER");
     const auto pbuffer = rview.fbo_find("PBUFFER");
@@ -3133,13 +3133,13 @@ auto deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_ru
     {
         return false;
     }
-    lumen_reflection_pass::run_params params;
+    gi_reflection_pass::run_params params;
     params.gather = &gather_params;
     params.rough_specular = rview.tex_find("GI_ROUGH_SPECULAR");
     params.rough_specular_scale = get_gi_resolve_scale(rview);
     params.traced_output = rbuffer->get_texture(0);
     params.probe_output = pbuffer->get_texture(0);
-    return lumen_reflection_pass_.run(rview, params);
+    return gi_reflection_pass_.run(rview, params);
 }
 
 auto deferred::get_gi_resolve_scale(gfx::render_view& rview) -> float
@@ -3160,35 +3160,35 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
     return true;
 }
 
-auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
+auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
     gfx::texture::ptr result;
     gi_settings gi;
     if(resolve_gi_settings(rparams, gi))
     {
-        auto params = make_lumen_run_params(camera, rview, gi);
+        auto params = make_gi_run_params(camera, rview, gi);
         params.is_being_edited = rparams.is_being_edited;
-        const auto& visualize = lumen_visualize_settings_;
+        const auto& visualize = gi_visualize_settings_;
         params.visualize_traces.enabled = visualize.screen_probe_traces;
         params.visualize_traces.freeze = visualize.screen_probe_traces_freeze;
         params.visualize_traces.cursor = visualize.cursor;
-        params.has_traced_reflections = lumen_reflections_own_view(rparams);
-        run_lumen_surface_cache(camera, rview, *params.surface_cache, gi.scene);
-        result = lumen_gather_pass_.run(rview, params);
+        params.has_traced_reflections = gi_reflections_own_view(rparams);
+        run_gi_surface_cache(camera, rview, *params.surface_cache, gi.scene);
+        result = gi_gather_pass_.run(rview, params);
         rview.data().get_or_emplace<float>(gi_resolve_scale, 1.0f) = std::max(gi.diffuse.intensity, 0.0f);
         // The GI reflections run after the screen probe gather, whose rough specular they composite under the
         // traced layer.
         if(result && params.has_traced_reflections)
         {
-            lumen_reflections_written_ = run_lumen_reflection_pass(rview, params);
+            gi_reflections_written_ = run_gi_reflection_pass(rview, params);
         }
     }
     else
     {
         // GI is off for this camera: its surface cache, radiance cache and global distance field go (GTAO, ASSAO and
         // SSIL release theirs the same way). They are rebuilt when GI comes back.
-        lumen_surface_cache_pass_.release_targets();
-        lumen_gather_pass_.release_resources();
+        gi_surface_cache_pass_.release_targets();
+        gi_gather_pass_.release_resources();
         rview.data().remove(surface_cache_view::view_key);
     }
     if(result)
@@ -3207,10 +3207,10 @@ auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, 
     return false;
 }
 
-auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
-    -> lumen_run_params
+auto deferred::make_gi_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
+    -> gi_run_params
 {
-    lumen_run_params params;
+    gi_run_params params;
     params.settings = gi;
     params.g_buffer = rview.fbo_find("GBUFFER");
     // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
@@ -3226,18 +3226,18 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
     // carries their fast update one frame): moving surfaces reproject from where they were. Without movers every
     // surface is static and the GI passes skip the velocity reads; a buffer from an earlier frame would move them by
     // stale motion.
-    constexpr uint64_t lumen_mover_frames = 1;
+    constexpr uint64_t gi_mover_frames = 1;
     const uint64_t render_frame = gfx::get_render_frame();
     const bool has_recent_movers = velocity_movers_frame_ != ~0ull && render_frame >= velocity_movers_frame_ &&
-                                   render_frame - velocity_movers_frame_ <= lumen_mover_frames;
+                                   render_frame - velocity_movers_frame_ <= gi_mover_frames;
     params.velocity = velocity_run_active_ && has_recent_movers ? rview.tex_find("VELOCITY") : nullptr;
     params.cam = &camera;
     // Every GI target, its history included, is in this run's pre-exposed space.
     params.pre_exposure = get_pre_exposure(rview);
     params.surface_cache = &engine::context().get_cached<surface_cache_system>();
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-    params.lumen_surface_cache = &lumen_surface_cache_pass_;
-    params.surface_cache_feedback = lumen_surface_cache_pass_.get_feedback();
+    params.gi_surface_cache = &gi_surface_cache_pass_;
+    params.surface_cache_feedback = gi_surface_cache_pass_.get_feedback();
     const auto& ctx = engine::context();
     if(ctx.has<settings>())
     {
@@ -3249,10 +3249,10 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
     return params;
 }
 
-void deferred::run_lumen_surface_cache(const camera& camera,
-                                       gfx::render_view& rview,
-                                       surface_cache_system& gi_scene,
-                                       const gi_settings::scene_settings& scene_settings)
+void deferred::run_gi_surface_cache(const camera& camera,
+                                    gfx::render_view& rview,
+                                    surface_cache_system& gi_scene,
+                                    const gi_settings::scene_settings& scene_settings)
 {
     APP_SCOPE_PERF("Rendering/Surface Cache");
     const auto& ctx = engine::context();
@@ -3261,48 +3261,48 @@ void deferred::run_lumen_surface_cache(const camera& camera,
     const auto* view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     // The cards' sunlight takes this run's cloud shadow as the deferred directional light does.
     const auto cloud_uniforms = ANONYMOUS::make_cloud_shadow_uniforms(cloud_shadow_);
-    lumen_surface_cache_pass::cloud_shadow card_cloud_shadow;
+    gi_surface_cache_pass::cloud_shadow card_cloud_shadow;
     card_cloud_shadow.map = cloud_uniforms.is_applied ? cloud_shadow_.map : nullptr;
     card_cloud_shadow.placement = cloud_uniforms.placement;
     card_cloud_shadow.layer = cloud_uniforms.layer;
     card_cloud_shadow.signature = cloud_uniforms.is_applied ? cloud_shadow_.signature : 0u;
-    lumen_surface_cache_pass_.set_cloud_shadow(card_cloud_shadow);
+    gi_surface_cache_pass_.set_cloud_shadow(card_cloud_shadow);
     // The surface cache is shared by every camera: the frame's first one updates it and captures the cards; each one
     // keeps its object grid on its own distance field and lights the pages nearest to it.
     const bool is_updating_camera =
-        lumen_surface_cache_pass_.update(gi_scene,
-                                         view_cache != nullptr ? &view_cache->get_clipmap() : nullptr,
-                                         camera.get_position(),
-                                         camera.get_frustum(),
-                                         scene_settings,
-                                         project_settings);
+        gi_surface_cache_pass_.update(gi_scene,
+                                      view_cache != nullptr ? &view_cache->get_clipmap() : nullptr,
+                                      camera.get_position(),
+                                      camera.get_frustum(),
+                                      scene_settings,
+                                      project_settings);
     if(view_cache != nullptr)
     {
-        lumen_surface_cache_pass_.update_object_grid(gi_scene, *view_cache);
+        gi_surface_cache_pass_.update_object_grid(gi_scene, *view_cache);
     }
     if(is_updating_camera)
     {
-        capture_lumen_cards(camera, gi_scene);
-        lumen_surface_cache_pass_.copy_captures();
+        capture_gi_cards(camera, gi_scene);
+        gi_surface_cache_pass_.copy_captures();
     }
-    lumen_surface_cache_pass::lighting_inputs inputs;
+    gi_surface_cache_pass::lighting_inputs inputs;
     inputs.gi_scene = &gi_scene;
     inputs.view_cache = view_cache;
     // Last frame's environment SH: the irradiance pass runs later in the frame.
     inputs.environment_sh = rview.tex_find("IRRADIANCE_SH");
     inputs.view_exposure = get_pre_exposure(rview).value;
-    lumen_surface_cache_pass_.light(inputs);
+    gi_surface_cache_pass_.light(inputs);
 }
 
-void deferred::capture_lumen_cards(const camera& camera, const surface_cache_system& gi_scene)
+void deferred::capture_gi_cards(const camera& camera, const surface_cache_system& gi_scene)
 {
-    const auto& captures = lumen_surface_cache_pass_.get_scene().get_captures();
+    const auto& captures = gi_surface_cache_pass_.get_scene().get_captures();
     auto& program = card_capture_program_;
     if(captures.empty() || !program.program || !program.program->is_valid())
     {
         return;
     }
-    const auto& sources = gi_scene.get_lumen_sources();
+    const auto& sources = gi_scene.get_gi_sources();
     // The camera's winding convention, which every capture's culling is matched against.
     const math::mat4 camera_view_proj = camera.get_projection() * camera.get_view();
     const float camera_orientation = math::determinant(math::mat3(camera_view_proj)) < 0.0f ? -1.0f : 1.0f;
@@ -3314,14 +3314,14 @@ void deferred::capture_lumen_cards(const camera& camera, const surface_cache_sys
     // the whole atlas serves them all - of its depth alone: the copy keeps a texel's colours only where the depth says
     // a surface was drawn.
     gfx::render_pass pass("GI/Card Capture");
-    pass.bind(lumen_surface_cache_pass_.get_capture_target().get());
+    pass.bind(gi_surface_cache_pass_.get_capture_target().get());
     pass.clear(BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
     for(const auto& cap : captures)
     {
         const auto& src = sources[cap.source_index];
         // The LOD the cards were built from (LOD 1 unless the asset sets one): the card planes sit on
         // that surface, and it costs a fraction of LOD 0.
-        uint32_t capture_lod = src.owner ? src.owner->get_lumen_cards_lod() : 0u;
+        uint32_t capture_lod = src.owner ? src.owner->get_gi_cards_lod() : 0u;
         const auto* submesh = src.owner ? src.owner->get_submesh(src.submesh_index, capture_lod) : nullptr;
         if(submesh == nullptr && src.owner)
         {
@@ -3332,7 +3332,7 @@ void deferred::capture_lumen_cards(const camera& camera, const surface_cache_sys
         {
             continue;
         }
-        const auto view = lumen_surface_cache_pass_.compute_capture_view(cap);
+        const auto view = gi_surface_cache_pass_.compute_capture_view(cap);
         program.program->begin();
         gfx::set_uniform(program.u_card_capture_view_proj, view.view_proj);
         // The camera sits far in front of the card so the shader's near-camera dither never fires.
@@ -3441,50 +3441,50 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     bgfx::discard();
 }
 
-static_assert(deferred::debug_pass_lumen_reflection_rays - deferred::debug_pass_lumen_scene ==
-                  int(lumen_visualize_pass::view::dedicated_reflection_rays),
-              "a GI debug pass id is debug_pass_lumen_scene + its lumen_visualize_pass::view");
-static_assert(deferred::debug_pass_lumen_performance_overview - deferred::debug_pass_lumen_scene + 1 ==
-                  int(lumen_visualize_pass::view::count),
-              "every lumen_visualize_pass::view has a debug pass id");
+static_assert(deferred::debug_pass_gi_reflection_rays - deferred::debug_pass_gi_scene ==
+                  int(gi_visualize_pass::view::dedicated_reflection_rays),
+              "a GI debug pass id is debug_pass_gi_scene + its gi_visualize_pass::view");
+static_assert(deferred::debug_pass_gi_performance_overview - deferred::debug_pass_gi_scene + 1 ==
+                  int(gi_visualize_pass::view::count),
+              "every gi_visualize_pass::view has a debug pass id");
 
-void deferred::run_lumen_visualize_pass(const camera& camera,
-                                        gfx::render_view& rview,
-                                        const gfx::frame_buffer::ptr& output,
-                                        const run_params& rparams)
+void deferred::run_gi_visualize_pass(const camera& camera,
+                                     gfx::render_view& rview,
+                                     const gfx::frame_buffer::ptr& output,
+                                     const run_params& rparams)
 {
-    lumen_visualize_pass::run_params params;
-    params.mode = lumen_visualize_pass::view(debug_pass_ - debug_pass_lumen_scene);
+    gi_visualize_pass::run_params params;
+    params.mode = gi_visualize_pass::view(debug_pass_ - debug_pass_gi_scene);
     params.output = output;
     params.cam = &camera;
     params.rview = &rview;
-    params.surface_cache = &lumen_surface_cache_pass_;
+    params.surface_cache = &gi_surface_cache_pass_;
     params.gi_scene = &engine::context().get_cached<surface_cache_system>();
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     resolve_gi_settings(rparams, params.gi);
     params.exposure = get_pre_exposure(rview).value;
     params.tonemapping = get_debug_tonemapping(rparams);
-    lumen_visualize_pass_.run(params, debug_view_labels_);
+    gi_visualize_pass_.run(params, debug_view_labels_);
 }
 
-void deferred::run_lumen_visualize_overlays(const camera& camera,
-                                            gfx::render_view& rview,
-                                            const gfx::frame_buffer::ptr& output,
-                                            const run_params& rparams)
+void deferred::run_gi_visualize_overlays(const camera& camera,
+                                         gfx::render_view& rview,
+                                         const gfx::frame_buffer::ptr& output,
+                                         const run_params& rparams)
 {
     const auto& gbuffer = rview.fbo_find("GBUFFER");
-    lumen_visualize_pass::overlay_params params;
+    gi_visualize_pass::overlay_params params;
     params.output = output;
     params.scene_depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
     params.cam = &camera;
     params.rview = &rview;
-    params.gather = &lumen_gather_pass_;
+    params.gather = &gi_gather_pass_;
     params.print = &shader_print_;
-    params.settings = lumen_visualize_settings_;
+    params.settings = gi_visualize_settings_;
     params.tonemapping = get_debug_tonemapping(rparams);
     // The overlays are the frame's printers: the buffer empties in a view ahead of theirs.
     shader_print_.begin_frame();
-    lumen_visualize_pass_.draw_overlays(params);
+    gi_visualize_pass_.draw_overlays(params);
 }
 
 auto deferred::run_hiz_pass(const camera& camera,

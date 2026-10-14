@@ -12,7 +12,7 @@ namespace unravel::visualization_overlays
 namespace
 {
 using visualization_menu::state;
-using world_settings = lumen_visualize_pass::world_settings;
+using world_settings = gi_visualize_pass::world_settings;
 
 /// The card distance range of the sliders, in metres.
 constexpr float card_min_distance = 1.0f;
@@ -71,18 +71,18 @@ void draw_card_index_option(world_settings& settings, const char* tooltip)
 
 auto is_card_placement_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.card_placement;
+    return menu_state.gi.card_placement;
 }
 
 void set_card_placement_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.card_placement = is_on;
+    menu_state.gi.card_placement = is_on;
 }
 
 void draw_card_placement_options(state& menu_state)
 {
-    draw_distance_option(menu_state.lumen, "Only objects whose bounds come within this distance of the camera.");
-    draw_card_index_option(menu_state.lumen,
+    draw_distance_option(menu_state.gi, "Only objects whose bounds come within this distance of the camera.");
+    draw_card_index_option(menu_state.gi,
                            "Only the card with this index among its mesh's cards. All shows every card.");
 }
 
@@ -90,18 +90,18 @@ void draw_card_placement_options(state& menu_state)
 
 auto is_card_generation_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.is_card_generation();
+    return menu_state.gi.is_card_generation();
 }
 
 void set_card_generation_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.card_generation_surfels = is_on && !menu_state.is_card_generation_cluster;
-    menu_state.lumen.card_generation_cluster = is_on && menu_state.is_card_generation_cluster;
+    menu_state.gi.card_generation_surfels = is_on && !menu_state.is_card_generation_cluster;
+    menu_state.gi.card_generation_cluster = is_on && menu_state.is_card_generation_cluster;
 }
 
 void draw_card_generation_options(state& menu_state)
 {
-    auto& settings = menu_state.lumen;
+    auto& settings = menu_state.gi;
     int kind = settings.card_generation_surfels ? 0 : 1;
     visualization_widgets::draw_option_label("Show",
                                              "Surfels: every surface sample of the build. Clusters: the samples "
@@ -147,17 +147,17 @@ void draw_card_generation_options(state& menu_state)
 
 auto is_radiosity_probes_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.radiosity_probes;
+    return menu_state.gi.radiosity_probes;
 }
 
 void set_radiosity_probes_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.radiosity_probes = is_on;
+    menu_state.gi.radiosity_probes = is_on;
 }
 
 void draw_radiosity_probe_options(state& menu_state)
 {
-    auto& settings = menu_state.lumen;
+    auto& settings = menu_state.gi;
     visualization_widgets::draw_option_label("Radius", "The spheres' radius.");
     ImGui::SliderFloat("##radius",
                        &settings.radiosity_probe_radius,
@@ -172,17 +172,17 @@ void draw_radiosity_probe_options(state& menu_state)
 
 auto is_radiance_cache_probes_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.radiance_cache_probes;
+    return menu_state.gi.radiance_cache_probes;
 }
 
 void set_radiance_cache_probes_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.radiance_cache_probes = is_on;
+    menu_state.gi.radiance_cache_probes = is_on;
 }
 
 void draw_radiance_cache_options(state& menu_state)
 {
-    auto& settings = menu_state.lumen;
+    auto& settings = menu_state.gi;
     visualization_widgets::draw_option_label("Radius Scale", "The spheres' radius, in 5% of their clipmap's cell size.");
     ImGui::SliderFloat("##radius_scale",
                        &settings.radiance_cache_radius_scale,
@@ -201,33 +201,33 @@ void draw_radiance_cache_options(state& menu_state)
 
 auto is_radiance_cache_stats_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.radiance_cache_stats;
+    return menu_state.gi.radiance_cache_stats;
 }
 
 void set_radiance_cache_stats_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.radiance_cache_stats = is_on;
+    menu_state.gi.radiance_cache_stats = is_on;
 }
 
 // -- Screen probes --------------------------------------------------------------
 
 auto is_screen_probes_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.screen_probe_gather_debug;
+    return menu_state.gi.screen_probe_gather_debug;
 }
 
 void set_screen_probes_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.screen_probe_gather_debug = is_on;
+    menu_state.gi.screen_probe_gather_debug = is_on;
     if(is_on)
     {
-        menu_state.lumen.screen_probe_placement = menu_state.screen_probe_placement;
+        menu_state.gi.screen_probe_placement = menu_state.screen_probe_placement;
     }
 }
 
 void draw_screen_probe_options(state& menu_state)
 {
-    auto& settings = menu_state.lumen;
+    auto& settings = menu_state.gi;
     visualization_widgets::draw_option_label("Placement",
                                              "Uniform + Adaptive marks every probe at its pixel, the uniform ones "
                                              "yellow and the adaptive ones magenta. Adaptive marks the adaptive ones "
@@ -243,30 +243,30 @@ void draw_screen_probe_options(state& menu_state)
 
 auto is_screen_probe_rays_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.screen_probe_traces;
+    return menu_state.gi.screen_probe_traces;
 }
 
 void set_screen_probe_rays_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.screen_probe_traces = is_on;
+    menu_state.gi.screen_probe_traces = is_on;
 }
 
 void draw_screen_probe_ray_options(state& menu_state)
 {
     visualization_widgets::draw_option_label("Freeze", "Keep the rays recorded last, to look at them from elsewhere.");
-    visualization_widgets::draw_switch("##freeze", menu_state.lumen.screen_probe_traces_freeze);
+    visualization_widgets::draw_switch("##freeze", menu_state.gi.screen_probe_traces_freeze);
 }
 
 // -- Reflection ray -------------------------------------------------------------
 
 auto is_reflection_ray_on(const state& menu_state) -> bool
 {
-    return menu_state.lumen.reflection_traces;
+    return menu_state.gi.reflection_traces;
 }
 
 void set_reflection_ray_on(state& menu_state, bool is_on)
 {
-    menu_state.lumen.reflection_traces = is_on;
+    menu_state.gi.reflection_traces = is_on;
 }
 
 constexpr std::array<overlay_entry, 2> surface_cache_overlays = {{

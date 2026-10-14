@@ -13,18 +13,18 @@
 
 #include "../tests.h"
 
-#include <engine/meta/rendering/gi/lumen_mesh_cards.hpp>
+#include <engine/meta/rendering/gi/gi_mesh_cards.hpp>
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/gi_constants.h>
-#include <engine/rendering/gi/lumen_constants.h>
-#include <engine/rendering/gi/lumen_mesh_cards.h>
-#include <engine/rendering/gi/lumen_scene.h>
+#include <engine/rendering/gi/gi_pass_constants.h>
+#include <engine/rendering/gi/gi_mesh_cards.h>
+#include <engine/rendering/gi/gi_scene.h>
 #include <engine/rendering/gi/mesh_ray_tracing.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
-#include <engine/rendering/pipeline/passes/lumen_pass_common.h>
+#include <engine/rendering/pipeline/passes/gi_pass_common.h>
 // The generator templates mesh::create_plane builds primitives from, so the plane test bakes the
 // exact geometry the embedded plane asset carries.
 #include <engine/rendering/generator/generator.hpp>
@@ -2454,8 +2454,8 @@ void test_engine_plane_composes_a_hittable_sheet()
     mesh_sdf sdf;
     check(bake_mesh_sdf(geometry, settings, sdf), "engine plane bakes");
     check(!sdf.is_two_sided, "the plane's GI sheet bakes signed, solid below");
-    lumen_mesh_cards cards;
-    check(build_lumen_mesh_cards(geometry, false, 12, cards), "the plane's GI sheet builds cards");
+    gi_mesh_cards cards;
+    check(build_gi_mesh_cards(geometry, false, 12, cards), "the plane's GI sheet builds cards");
     check(cards.cards.size() == 1 && cards.cards[0].direction == 3u, "the plane gets one card, facing up");
     check(!cards.cards.empty() && cards.cards[0].extent.x > 4.75f && cards.cards[0].extent.y > 4.75f,
           "the plane's card spans it");
@@ -2782,13 +2782,13 @@ void test_clipmap_full_edit_coalescing()
 void test_editing_scales_history_and_trace_budget()
 {
     std::printf("test_editing_scales_history_and_trace_budget\n");
-    const float max_frames = float(gi::lumen::LUMEN_TEMPORAL_MAX_FRAMES);
-    check(lumen_pass::get_temporal_max_frames(1.0f) == max_frames, "the default speed keeps every frame");
-    check(lumen_pass::get_temporal_max_frames(1.0f, true) == std::round(max_frames * 0.5f), "editing halves them");
-    check(lumen_pass::get_temporal_max_frames(4.0f, true) == std::round(max_frames / 2.0f * 0.5f),
+    const float max_frames = float(gi::GI_TEMPORAL_MAX_FRAMES);
+    check(gi_pass::get_temporal_max_frames(1.0f) == max_frames, "the default speed keeps every frame");
+    check(gi_pass::get_temporal_max_frames(1.0f, true) == std::round(max_frames * 0.5f), "editing halves them");
+    check(gi_pass::get_temporal_max_frames(4.0f, true) == std::round(max_frames / 2.0f * 0.5f),
           "after the update speed's square root, rounded to the nearest frame");
-    const uint32_t budget = lumen_pass::get_radiance_cache_trace_budget(1.0f);
-    check(lumen_pass::get_radiance_cache_trace_budget(1.0f, true) == budget * 10u, "editing traces ten times the probes");
+    const uint32_t budget = gi_pass::get_radiance_cache_trace_budget(1.0f);
+    check(gi_pass::get_radiance_cache_trace_budget(1.0f, true) == budget * 10u, "editing traces ten times the probes");
 }
 
 /**
@@ -4844,9 +4844,9 @@ auto make_slab_pair(const math::vec3& half_extents, float gap) -> sdf_source_geo
 /// than one of its voxels from the surface, and from the finest resident level nearer (SdfInstanceStandaloneDistance
 /// in gi/sdf_common.sh). The global SDF's coverage band reaches past the traced level's narrow band on a Sponza-scale
 /// mesh; this is the rule that keeps the distances in it exact.
-void test_coarsest_mip_answers_the_lumen_coverage_band()
+void test_coarsest_mip_answers_the_gi_coverage_band()
 {
-    std::printf("test_coarsest_mip_answers_the_lumen_coverage_band\n");
+    std::printf("test_coarsest_mip_answers_the_gi_coverage_band\n");
     // Sponza's walls trace at about 10 cm voxels, so their narrow band ends near 0.35 m.
     const math::vec3 half(5.0f, 3.0f, 0.15f);
     const float gap = 3.7f;
@@ -4859,8 +4859,8 @@ void test_coarsest_mip_answers_the_lumen_coverage_band()
     check(mips.size() == mesh_sdf::mip_count, "the chain has every level");
     const mesh_sdf& traced = mips.front();
     const mesh_sdf& coarsest = mips.back();
-    const float coverage_band = gi::lumen::LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS * gi::lumen::LUMEN_GLOBAL_SDF_EXTENT /
-                                float(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
+    const float coverage_band = gi::GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS * gi::GI_GLOBAL_SDF_EXTENT /
+                                float(gi::GI_GLOBAL_SDF_RESOLUTION);
     const float traced_reach = (mesh_sdf::encode_range - 0.5f) * traced.voxel_size;
     const float coarse_threshold = 0.25f * mesh_sdf::encode_range * coarsest.voxel_size;
     std::printf("  traced voxel %.3f m (exact to %.3f m), coarsest voxel %.3f m, coverage band %.3f m\n",
@@ -5575,29 +5575,29 @@ void test_parallel_submesh_bake_matches_serial()
     check(all_match, "the parallel submesh pass produces the same fields as the serial one");
 }
 
-auto count_cards_facing(const lumen_mesh_cards& cards, uint32_t direction) -> uint32_t
+auto count_cards_facing(const gi_mesh_cards& cards, uint32_t direction) -> uint32_t
 {
     return uint32_t(std::count_if(cards.cards.begin(),
                                   cards.cards.end(),
-                                  [&](const lumen_card& card)
+                                  [&](const gi_card& card)
                                   {
                                       return card.direction == direction;
                                   }));
 }
 
 /// A closed box gets one outer card per side, each facing its side and covering the face.
-void test_lumen_cards_box()
+void test_gi_cards_box()
 {
-    std::printf("test_lumen_cards_box\n");
+    std::printf("test_gi_cards_box\n");
     const sdf_source_geometry geometry = make_box(math::vec3(0.5f));
-    lumen_mesh_cards cards;
-    check(build_lumen_mesh_cards(geometry, false, 12, cards), "box cards build");
+    gi_mesh_cards cards;
+    check(build_gi_mesh_cards(geometry, false, 12, cards), "box cards build");
     check(cards.cards.size() == 6, "a box gets six cards");
     for(uint32_t direction = 0; direction < 6; ++direction)
     {
         check(count_cards_facing(cards, direction) == 1, "one card per side of a box");
     }
-    for(const lumen_card& card : cards.cards)
+    for(const gi_card& card : cards.cards)
     {
         math::vec3 normal(0.0f);
         normal[card.direction / 2] = (card.direction & 1) != 0 ? 1.0f : -1.0f;
@@ -5610,35 +5610,35 @@ void test_lumen_cards_box()
 }
 
 /// An open one-sided sheet is seen only from its front side; a two-sided one from both.
-void test_lumen_cards_sheet()
+void test_gi_cards_sheet()
 {
-    std::printf("test_lumen_cards_sheet\n");
+    std::printf("test_gi_cards_sheet\n");
     sdf_source_geometry geometry;
     add_quad(geometry, {-2.0f, 0.0f, 2.0f}, {2.0f, 0.0f, 2.0f}, {2.0f, 0.0f, -2.0f}, {-2.0f, 0.0f, -2.0f});
     recompute_bounds(geometry);
     const math::vec3 front = math::normalize(math::cross(geometry.positions[1] - geometry.positions[0],
                                                          geometry.positions[2] - geometry.positions[0]));
     const uint32_t front_direction = front.y > 0.0f ? 3u : 2u;
-    lumen_mesh_cards one_sided;
-    check(build_lumen_mesh_cards(geometry, false, 12, one_sided), "sheet cards build");
+    gi_mesh_cards one_sided;
+    check(build_gi_mesh_cards(geometry, false, 12, one_sided), "sheet cards build");
     check(one_sided.cards.size() == 1, "a one-sided sheet gets one card");
     check(count_cards_facing(one_sided, front_direction) == 1, "the one-sided sheet's card faces its front");
-    lumen_mesh_cards two_sided;
-    check(build_lumen_mesh_cards(geometry, true, 12, two_sided), "two-sided sheet cards build");
+    gi_mesh_cards two_sided;
+    check(build_gi_mesh_cards(geometry, true, 12, two_sided), "two-sided sheet cards build");
     check(two_sided.cards.size() == 2, "a two-sided sheet gets a card on each side");
     check(count_cards_facing(two_sided, 2u) == 1 && count_cards_facing(two_sided, 3u) == 1,
           "the two-sided sheet's cards face both sides");
 }
 
-void test_lumen_cards_doubled_sheet()
+void test_gi_cards_doubled_sheet()
 {
-    std::printf("test_lumen_cards_doubled_sheet\n");
+    std::printf("test_gi_cards_doubled_sheet\n");
     // A sheet modelled as two coincident, oppositely wound sheets (the engine plane's render geometry) with a
     // one-sided material: a ray returns either triangle first, so the build must read the front face from each side
     // or half of each side gets no card.
     const sdf_source_geometry geometry = make_engine_plane_geometry();
-    lumen_mesh_cards cards;
-    check(build_lumen_mesh_cards(geometry, false, 12, cards), "doubled sheet cards build");
+    gi_mesh_cards cards;
+    check(build_gi_mesh_cards(geometry, false, 12, cards), "doubled sheet cards build");
     const math::vec3 plane_extent = geometry.bounds.get_extents();
     std::printf("  plane extent (%.3f %.3f %.3f), %zu cards\n", plane_extent.x, plane_extent.y, plane_extent.z,
                 cards.cards.size());
@@ -5667,9 +5667,9 @@ void test_lumen_cards_doubled_sheet()
 
 /// Two boxes in a row along X: the far box's inner face is hidden from the outer near plane, so
 /// each X side gets an interior layer card; the other sides see both boxes in one layer.
-void test_lumen_cards_interior_layers()
+void test_gi_cards_interior_layers()
 {
-    std::printf("test_lumen_cards_interior_layers\n");
+    std::printf("test_gi_cards_interior_layers\n");
     sdf_source_geometry geometry = make_box(math::vec3(0.4f));
     sdf_source_geometry second = make_box(math::vec3(0.4f));
     const uint32_t base = uint32_t(geometry.positions.size());
@@ -5686,19 +5686,19 @@ void test_lumen_cards_interior_layers()
         geometry.indices.push_back(base + index);
     }
     recompute_bounds(geometry);
-    lumen_mesh_cards cards;
-    check(build_lumen_mesh_cards(geometry, false, 12, cards), "two-box cards build");
+    gi_mesh_cards cards;
+    check(build_gi_mesh_cards(geometry, false, 12, cards), "two-box cards build");
     check(count_cards_facing(cards, 0u) == 2 && count_cards_facing(cards, 1u) == 2,
           "each X side has an outer and an interior layer card");
     for(uint32_t direction = 2; direction < 6; ++direction)
     {
         check(count_cards_facing(cards, direction) == 1, "the sides that see both boxes at once have one card");
     }
-    lumen_mesh_cards limited;
-    check(build_lumen_mesh_cards(geometry, false, 6, limited), "two-box cards build with a budget");
+    gi_mesh_cards limited;
+    check(build_gi_mesh_cards(geometry, false, 6, limited), "two-box cards build with a budget");
     check(limited.cards.size() == 6, "the card budget is respected");
-    lumen_mesh_cards again;
-    build_lumen_mesh_cards(geometry, false, 12, again);
+    gi_mesh_cards again;
+    build_gi_mesh_cards(geometry, false, 12, again);
     bool same = again.cards.size() == cards.cards.size();
     for(size_t i = 0; same && i < cards.cards.size(); ++i)
     {
@@ -5709,18 +5709,18 @@ void test_lumen_cards_interior_layers()
 
 /// Cards are compiled into the mesh asset and read back at load time: every card and
 /// the sidedness they were built for survive the round trip.
-void test_lumen_cards_serialization_round_trip()
+void test_gi_cards_serialization_round_trip()
 {
-    std::printf("test_lumen_cards_serialization_round_trip\n");
-    lumen_mesh_cards original;
-    check(build_lumen_mesh_cards(make_box(math::vec3(0.5f, 1.0f, 2.0f)), true, 12, original), "box cards build");
+    std::printf("test_gi_cards_serialization_round_trip\n");
+    gi_mesh_cards original;
+    check(build_gi_mesh_cards(make_box(math::vec3(0.5f, 1.0f, 2.0f)), true, 12, original), "box cards build");
     original.is_mostly_two_sided = true;
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     {
         ser20::oarchive_binary_t archive(stream);
         try_save(archive, ser20::make_nvp("cards", original));
     }
-    lumen_mesh_cards restored;
+    gi_mesh_cards restored;
     {
         ser20::iarchive_binary_t archive(stream);
         try_load(archive, ser20::make_nvp("cards", restored));
@@ -5729,8 +5729,8 @@ void test_lumen_cards_serialization_round_trip()
     bool are_cards_equal = restored.cards.size() == original.cards.size();
     for(size_t i = 0; are_cards_equal && i < original.cards.size(); ++i)
     {
-        const lumen_card& a = original.cards[i];
-        const lumen_card& b = restored.cards[i];
+        const gi_card& a = original.cards[i];
+        const gi_card& b = restored.cards[i];
         are_cards_equal = a.origin == b.origin && a.extent == b.extent && a.axis_x == b.axis_x &&
                           a.axis_y == b.axis_y && a.axis_z == b.axis_z && a.direction == b.direction;
     }
@@ -5740,13 +5740,13 @@ void test_lumen_cards_serialization_round_trip()
 }
 
 /// A placement of one wall-sized card (16 m x 16 m face) for the surface cache scene tests.
-auto make_wall_card_source() -> lumen_scene::source
+auto make_wall_card_source() -> gi_scene::source
 {
-    auto cards = std::make_shared<lumen_mesh_cards>();
-    lumen_card card;
+    auto cards = std::make_shared<gi_mesh_cards>();
+    gi_card card;
     card.extent = math::vec3(8.0f, 8.0f, 0.1f);
     cards->cards.push_back(card);
-    lumen_scene::source source;
+    gi_scene::source source;
     source.identity = 1;
     source.instance_index = 0;
     source.cards = cards;
@@ -5754,12 +5754,12 @@ auto make_wall_card_source() -> lumen_scene::source
 }
 
 /// Wall cards stacked 4 m apart along -z, one placement each, the first 1 m in front of a viewer at (0, 0, 1).
-auto make_wall_card_stack(uint32_t card_count) -> std::vector<lumen_scene::source>
+auto make_wall_card_stack(uint32_t card_count) -> std::vector<gi_scene::source>
 {
-    std::vector<lumen_scene::source> sources;
+    std::vector<gi_scene::source> sources;
     for(uint32_t i = 0; i < card_count; ++i)
     {
-        lumen_scene::source source = make_wall_card_source();
+        gi_scene::source source = make_wall_card_source();
         source.identity = i + 1u;
         source.instance_index = i;
         source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -4.0f * float(i)));
@@ -5769,18 +5769,18 @@ auto make_wall_card_stack(uint32_t card_count) -> std::vector<lumen_scene::sourc
 }
 
 /// A card's new mip is mapped only with physical room beside everything resident and room for every page in this
-/// frame's capture atlas, and the new pages inherit the lighting of the previous allocation: lumen_scene lists that
+/// frame's capture atlas, and the new pages inherit the lighting of the previous allocation: gi_scene lists that
 /// allocation for the resample.
-void test_lumen_scene_reallocation_lists_the_previous_mip()
+void test_gi_scene_reallocation_lists_the_previous_mip()
 {
-    std::printf("test_lumen_scene_reallocation_lists_the_previous_mip\n");
-    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    std::printf("test_gi_scene_reallocation_lists_the_previous_mip\n");
+    const std::vector<gi_scene::source> sources{make_wall_card_source()};
     const math::vec3 far_view(0.0f, 0.0f, 40.0f);
     const math::vec3 near_view(0.0f, 0.0f, 1.0f);
-    lumen_scene scene;
-    scene.init(lumen_scene::settings{});
+    gi_scene scene;
+    scene.init(gi_scene::settings{});
     scene.update(sources, 1, far_view);
-    const std::vector<lumen_scene::capture> first = scene.get_captures();
+    const std::vector<gi_scene::capture> first = scene.get_captures();
     check(first.size() == 1 && first.front().resample_card < 0, "a first allocation has no lighting to inherit");
     check(scene.get_resample_table().empty(), "and lists nothing to resample");
     const math::vec4 first_mip = scene.get_card_table()[4];
@@ -5798,17 +5798,17 @@ void test_lumen_scene_reallocation_lists_the_previous_mip()
     check(second.size() == size_t(second_mip.x * second_mip.y), "every page of the new mip is captured at once");
     check(std::all_of(second.begin(),
                       second.end(),
-                      [](const lumen_scene::capture& cap)
+                      [](const gi_scene::capture& cap)
                       {
                           return cap.resample_card == 0;
                       }),
           "every new page inherits the previous allocation's lighting");
     const auto& table = scene.get_resample_table();
-    check(scene.get_resample_page_base() == lumen_scene::card_stride && table.size() == lumen_scene::card_stride + 1u,
+    check(scene.get_resample_page_base() == gi_scene::card_stride && table.size() == gi_scene::card_stride + 1u,
           "the resample table holds the previous card and its one page");
-    check(table.size() > lumen_scene::card_stride && table[4] == first_mip, "with the previous mip");
-    check(table.size() > lumen_scene::card_stride &&
-              math::vec2(table[lumen_scene::card_stride]) == math::vec2(first.front().atlas_offset),
+    check(table.size() > gi_scene::card_stride && table[4] == first_mip, "with the previous mip");
+    check(table.size() > gi_scene::card_stride &&
+              math::vec2(table[gi_scene::card_stride]) == math::vec2(first.front().atlas_offset),
           "and the previous page's atlas texels");
     const auto& pages = scene.get_page_table();
     check(std::all_of(pages.begin(),
@@ -5819,14 +5819,14 @@ void test_lumen_scene_reallocation_lists_the_previous_mip()
                       }),
           "every page of a resident card is mapped");
     scene.update(sources, 1, near_view);
-    // Settled, the card keeps its mip; its only captures are the refresh's (test_lumen_scene_refresh...).
+    // Settled, the card keeps its mip; its only captures are the refresh's (test_gi_scene_refresh...).
     check(scene.get_stats().reallocated == 0 && scene.get_card_table()[4] == second_mip,
           "a settled card is not reallocated");
     check(scene.get_stats().refreshed == scene.get_captures().size(), "its only captures are the refresh's");
     // A capture atlas of one page cannot take the near mip's pages: the card keeps its far allocation and waits.
-    lumen_scene::settings small_capture;
-    small_capture.capture_atlas_size = lumen_scene::physical_page_size;
-    lumen_scene waiting;
+    gi_scene::settings small_capture;
+    small_capture.capture_atlas_size = gi_scene::physical_page_size;
+    gi_scene waiting;
     waiting.init(small_capture);
     waiting.update(sources, 1, far_view);
     waiting.update(sources, 1, near_view);
@@ -5837,16 +5837,16 @@ void test_lumen_scene_reallocation_lists_the_previous_mip()
 
 /// A reset (GI off releases the surface cache) leaves nothing a card visualization can read: the placements and the
 /// list of active ones go together, so a reader between the reset and the next update finds no cards.
-void test_lumen_scene_reset_leaves_no_cards()
+void test_gi_scene_reset_leaves_no_cards()
 {
-    std::printf("test_lumen_scene_reset_leaves_no_cards\n");
-    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    std::printf("test_gi_scene_reset_leaves_no_cards\n");
+    const std::vector<gi_scene::source> sources{make_wall_card_source()};
     const math::vec3 view(0.0f, 0.0f, 1.0f);
     const math::frustum everything(math::bbox(math::vec3(-1000.0f), math::vec3(1000.0f)));
-    lumen_scene scene;
-    scene.init(lumen_scene::settings{});
+    gi_scene scene;
+    scene.init(gi_scene::settings{});
     scene.update(sources, 1, view);
-    std::vector<lumen_scene::visualized_card> cards;
+    std::vector<gi_scene::visualized_card> cards;
     scene.get_visualized_cards(sources, view, 100.0f, everything, cards);
     check(cards.size() == 1, "the resident card is visualized");
     scene.init(scene.get_settings());
@@ -5856,17 +5856,17 @@ void test_lumen_scene_reset_leaves_no_cards()
 }
 
 /// Cards are kept out to the global distance field's reach whatever the view distance (half the last clipmap's
-/// extent, lumen_scene::settings::max_card_distance): a ray that hits a surface within the field must find its cards.
-void test_lumen_scene_cards_reach_the_distance_field()
+/// extent, gi_scene::settings::max_card_distance): a ray that hits a surface within the field must find its cards.
+void test_gi_scene_cards_reach_the_distance_field()
 {
-    std::printf("test_lumen_scene_cards_reach_the_distance_field\n");
-    lumen_scene::source source = make_wall_card_source();
+    std::printf("test_gi_scene_cards_reach_the_distance_field\n");
+    gi_scene::source source = make_wall_card_source();
     source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -150.0f));
-    const std::vector<lumen_scene::source> sources{source};
+    const std::vector<gi_scene::source> sources{source};
     gi_settings::scene_settings view_settings;
     view_settings.view_distance = 50.0f;
-    lumen_scene scene;
-    scene.init(lumen_scene::settings{});
+    gi_scene scene;
+    scene.init(gi_scene::settings{});
     scene.set_view_settings(view_settings);
     scene.update(sources, 1, math::vec3(0.0f));
     check(scene.get_max_card_distance() == scene.get_settings().max_card_distance,
@@ -5880,16 +5880,16 @@ void test_lumen_scene_cards_reach_the_distance_field()
 /// Resident pages are captured again, the longest-uncaptured first, within card_capture_refresh_fraction of the frame's
 /// page and texel budgets, so material changes reach the surface cache; a recaptured page resamples its own card's
 /// lighting in place and the tables stay as they are.
-void test_lumen_scene_refresh_recaptures_the_oldest_pages()
+void test_gi_scene_refresh_recaptures_the_oldest_pages()
 {
-    std::printf("test_lumen_scene_refresh_recaptures_the_oldest_pages\n");
+    std::printf("test_gi_scene_refresh_recaptures_the_oldest_pages\n");
     constexpr uint32_t card_count = 12;
     constexpr uint32_t settle_frames = 16;
     using page_key = std::pair<uint32_t, uint32_t>;
-    const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
+    const std::vector<gi_scene::source> sources = make_wall_card_stack(card_count);
     const math::vec3 view(0.0f, 0.0f, 1.0f);
-    lumen_scene scene;
-    scene.init(lumen_scene::settings{});
+    gi_scene scene;
+    scene.init(gi_scene::settings{});
     // Every capture since the first frame, allocations included: the frame each atlas position was last captured.
     std::map<page_key, uint32_t> last_capture;
     uint32_t frame = 0;
@@ -5910,13 +5910,13 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
         update();
         record_captures();
     }
-    const lumen_scene::settings& s = scene.get_settings();
+    const gi_scene::settings& s = scene.get_settings();
     const uint32_t budget_pages = std::clamp(uint32_t(float(s.max_captures_per_frame) * s.card_capture_refresh_fraction),
                                              1u,
                                              s.max_captures_per_frame);
     const uint64_t budget_texels =
         std::max(uint64_t(float(s.capture_atlas_size) * float(s.capture_atlas_size) * s.card_capture_refresh_fraction),
-                 uint64_t(lumen_scene::physical_page_size) * lumen_scene::physical_page_size);
+                 uint64_t(gi_scene::physical_page_size) * gi_scene::physical_page_size);
     const size_t page_count = scene.get_resident_pages().size();
     const uint64_t revision = scene.get_tables_revision();
     // The settled pages by atlas position: how often each is refreshed.
@@ -5947,9 +5947,9 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
         {
             texels += uint64_t(cap.size.x) * cap.size.y;
             const auto& resample = scene.get_resample_table();
-            const size_t entry = size_t(std::max(cap.resample_card, 0)) * lumen_scene::card_stride + 4u;
+            const size_t entry = size_t(std::max(cap.resample_card, 0)) * gi_scene::card_stride + 4u;
             resamples_its_own_card = resamples_its_own_card && cap.resample_card >= 0 && entry < resample.size() &&
-                                     resample[entry] == scene.get_card_table()[cap.card_index * lumen_scene::card_stride + 4u];
+                                     resample[entry] == scene.get_card_table()[cap.card_index * gi_scene::card_stride + 4u];
             const page_key key{cap.atlas_offset.x, cap.atlas_offset.y};
             captured.push_back(key);
             auto it = refreshes.find(key);
@@ -5993,9 +5993,9 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
     check(resamples_its_own_card, "a refreshed page resamples its own card's allocation");
     check(scene.get_tables_revision() == revision, "and the tables stay as they are");
     // Fraction 0 turns the refresh off: no pages and no texels.
-    lumen_scene::settings no_refresh;
+    gi_scene::settings no_refresh;
     no_refresh.card_capture_refresh_fraction = 0.0f;
-    lumen_scene still;
+    gi_scene still;
     still.init(no_refresh);
     for(uint32_t i = 0; i < settle_frames; ++i)
     {
@@ -6006,32 +6006,32 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
 
 /// The card lighting scheduler: the per-frame tile budgets, the priority buckets, and a scene with more resident
 /// tiles than a frame's budget.
-void test_lumen_scene_lighting_schedule()
+void test_gi_scene_lighting_schedule()
 {
-    std::printf("test_lumen_scene_lighting_schedule\n");
-    check(lumen_scene::compute_lighting_tile_budget(4096, 32) == 8281, "a 4096 atlas relights 8281 direct tiles");
-    check(lumen_scene::compute_lighting_tile_budget(4096, 64) == 4096, "and 4096 radiosity tiles a frame");
-    check(lumen_scene::compute_lighting_tile_budget(2048, 32) == 2116, "a 2048 atlas 2116 direct tiles");
-    check(lumen_scene::compute_lighting_tile_budget(256, 1024) == 256, "never less than one full page");
-    check(lumen_scene::compute_lighting_bucket(2048, 2.0f) == 1, "a never-lit page in the frustum ranks 1");
-    check(lumen_scene::compute_lighting_bucket(2048, 1.0f) == 2, "out of it 2");
-    check(lumen_scene::compute_lighting_bucket(1, 2.0f) == 12, "a page lit last frame in the frustum ranks 12");
-    check(lumen_scene::compute_lighting_bucket(64, 2.0f) == 6, "64 frames later 6");
-    check(lumen_scene::compute_lighting_bucket(100000, 1.0f) == 0, "the most urgent bucket is 0");
+    std::printf("test_gi_scene_lighting_schedule\n");
+    check(gi_scene::compute_lighting_tile_budget(4096, 32) == 8281, "a 4096 atlas relights 8281 direct tiles");
+    check(gi_scene::compute_lighting_tile_budget(4096, 64) == 4096, "and 4096 radiosity tiles a frame");
+    check(gi_scene::compute_lighting_tile_budget(2048, 32) == 2116, "a 2048 atlas 2116 direct tiles");
+    check(gi_scene::compute_lighting_tile_budget(256, 1024) == 256, "never less than one full page");
+    check(gi_scene::compute_lighting_bucket(2048, 2.0f) == 1, "a never-lit page in the frustum ranks 1");
+    check(gi_scene::compute_lighting_bucket(2048, 1.0f) == 2, "out of it 2");
+    check(gi_scene::compute_lighting_bucket(1, 2.0f) == 12, "a page lit last frame in the frustum ranks 12");
+    check(gi_scene::compute_lighting_bucket(64, 2.0f) == 6, "64 frames later 6");
+    check(gi_scene::compute_lighting_bucket(100000, 1.0f) == 0, "the most urgent bucket is 0");
     // Twelve wall cards stacked away from the viewer: the near ones take 2 x 2 pages, more tiles than a frame's budget
     // in a 2048 atlas (the default 4096 atlas relights this scene whole every frame). The frustum is far away, so only
     // distance sets the speeds.
     constexpr uint32_t card_count = 12;
     constexpr uint32_t medium_atlas_size = 2048;
-    const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
+    const std::vector<gi_scene::source> sources = make_wall_card_stack(card_count);
     const math::vec3 view(0.0f, 0.0f, 1.0f);
     const math::frustum far_frustum(math::bbox(math::vec3(1000.0f), math::vec3(1001.0f)));
-    lumen_scene::settings medium;
+    gi_scene::settings medium;
     medium.atlas_size = medium_atlas_size;
-    lumen_scene scene;
+    gi_scene scene;
     scene.init(medium);
-    const uint32_t budget_direct = lumen_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 32);
-    const uint32_t budget_radiosity = lumen_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 64);
+    const uint32_t budget_direct = gi_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 32);
+    const uint32_t budget_radiosity = gi_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 64);
     constexpr uint32_t frame_count = 120;
     std::vector<uint32_t> updates(card_count, 0u);
     std::vector<uint32_t> pages_of_card(card_count, 0u);
@@ -6041,12 +6041,12 @@ void test_lumen_scene_lighting_schedule()
     {
         scene.update(sources, card_count, view);
         scene.schedule_lighting(view, far_frustum);
-        within_budget = within_budget && scene.get_stats().lit_tiles[lumen_scene::lighting_direct] <= budget_direct &&
-                        scene.get_stats().lit_tiles[lumen_scene::lighting_radiosity] <= budget_radiosity;
+        within_budget = within_budget && scene.get_stats().lit_tiles[gi_scene::lighting_direct] <= budget_direct &&
+                        scene.get_stats().lit_tiles[gi_scene::lighting_radiosity] <= budget_radiosity;
         const auto& pages = scene.get_resident_pages();
         if(frame == 0)
         {
-            first_frame_unlit = uint32_t(pages.size() - scene.get_lit_pages(lumen_scene::lighting_radiosity).size());
+            first_frame_unlit = uint32_t(pages.size() - scene.get_lit_pages(gi_scene::lighting_radiosity).size());
         }
         if(frame + 1u < frame_count / 2u)
         {
@@ -6058,7 +6058,7 @@ void test_lumen_scene_lighting_schedule()
         {
             ++pages_of_card[page.card_index];
         }
-        for(const auto& lit : scene.get_lit_pages(lumen_scene::lighting_radiosity))
+        for(const auto& lit : scene.get_lit_pages(gi_scene::lighting_radiosity))
         {
             ++updates[pages[lit.resident_page].card_index];
         }
@@ -6094,20 +6094,20 @@ void test_lumen_scene_lighting_schedule()
 }
 
 /// The radiosity's per-page update indices, which a neighbouring page's probes read
-/// (lumen_scene::get_page_radiosity_indices): -1 until the page's first radiosity update, then its last update's
+/// (gi_scene::get_page_radiosity_indices): -1 until the page's first radiosity update, then its last update's
 /// index, in the page table's order.
-void test_lumen_scene_page_radiosity_indices()
+void test_gi_scene_page_radiosity_indices()
 {
-    std::printf("test_lumen_scene_page_radiosity_indices\n");
+    std::printf("test_gi_scene_page_radiosity_indices\n");
     // The scheduler test's stack in a 2048 atlas: more tiles than one frame's radiosity budget.
     constexpr uint32_t card_count = 12;
     constexpr uint32_t medium_atlas_size = 2048;
-    const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
+    const std::vector<gi_scene::source> sources = make_wall_card_stack(card_count);
     const math::vec3 view(0.0f, 0.0f, 1.0f);
     const math::frustum far_frustum(math::bbox(math::vec3(1000.0f), math::vec3(1001.0f)));
-    lumen_scene::settings medium;
+    gi_scene::settings medium;
     medium.atlas_size = medium_atlas_size;
-    lumen_scene scene;
+    gi_scene scene;
     scene.init(medium);
     scene.update(sources, card_count, view);
     std::vector<float> indices;
@@ -6117,10 +6117,10 @@ void test_lumen_scene_page_radiosity_indices()
           "no page has a radiosity update before the first schedule");
     scene.schedule_lighting(view, far_frustum);
     scene.get_page_radiosity_indices(indices);
-    const auto& lit_pages = scene.get_lit_pages(lumen_scene::lighting_radiosity);
+    const auto& lit_pages = scene.get_lit_pages(gi_scene::lighting_radiosity);
     const bool reads_this_frame = std::all_of(lit_pages.begin(),
                                               lit_pages.end(),
-                                              [&](const lumen_scene::lit_page& lit)
+                                              [&](const gi_scene::lit_page& lit)
                                               { return indices[lit.resident_page] == float(lit.update_index); });
     check(!lit_pages.empty() && reads_this_frame, "a page updated this frame reads this frame's update index");
     check(std::count(indices.begin(), indices.end(), -1.0f) == std::ptrdiff_t(indices.size() - lit_pages.size()),
@@ -6128,9 +6128,9 @@ void test_lumen_scene_page_radiosity_indices()
 }
 
 /// The captures of an update that map new pages (not the refresh's recaptures in place).
-auto get_new_page_captures(const lumen_scene& scene) -> std::vector<lumen_scene::capture>
+auto get_new_page_captures(const gi_scene& scene) -> std::vector<gi_scene::capture>
 {
-    std::vector<lumen_scene::capture> out;
+    std::vector<gi_scene::capture> out;
     for(const auto& cap : scene.get_captures())
     {
         if(!cap.keeps_lighting)
@@ -6143,23 +6143,23 @@ auto get_new_page_captures(const lumen_scene& scene) -> std::vector<lumen_scene:
 
 /// The unlocked hi-res pages: the reflections' feedback maps one page of a finer mip, which inherits the locked mip's
 /// lighting; the reflections' page table points every unmapped page of that mip at the locked page covering it.
-void test_lumen_scene_hi_res_pages()
+void test_gi_scene_hi_res_pages()
 {
-    std::printf("test_lumen_scene_hi_res_pages\n");
+    std::printf("test_gi_scene_hi_res_pages\n");
     constexpr uint32_t min_hits = 16;
     constexpr uint32_t sample_count = 8160;
     constexpr uint32_t hi_res_level = 10;
-    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    const std::vector<gi_scene::source> sources{make_wall_card_source()};
     const math::vec3 view(0.0f, 0.0f, 1.0f);
-    lumen_scene scene;
-    scene.init(lumen_scene::settings{});
+    gi_scene scene;
+    scene.init(gi_scene::settings{});
     scene.update(sources, 1, view);
     const math::vec4 locked_mip = scene.get_card_table()[4];
     check(locked_mip == math::vec4(2.0f, 2.0f, 8.0f, 8.0f), "the wall's locked mip is 2 x 2 pages at level 8");
     check(scene.get_card_table()[5] == math::vec4(0.0f, 2.0f, 2.0f, 0.0f),
           "without hi-res pages the reflections read the locked mip");
     // Page (2, 4) of the 8 x 8 pages of level 10.
-    lumen_scene::feedback_element element{0u, hi_res_level, math::uvec2(2u, 4u), 100u};
+    gi_scene::feedback_element element{0u, hi_res_level, math::uvec2(2u, 4u), 100u};
     scene.set_feedback({element}, scene.get_card_index_revision() + 1u, min_hits, sample_count);
     scene.update(sources, 1, view);
     check(get_new_page_captures(scene).empty(), "feedback from other card indices is dropped");
@@ -6167,7 +6167,7 @@ void test_lumen_scene_hi_res_pages()
     scene.set_feedback({element}, scene.get_card_index_revision(), min_hits, sample_count);
     scene.update(sources, 1, view);
     check(get_new_page_captures(scene).empty(), "a page hit no more than the minimum is not asked for");
-    lumen_scene::feedback_element coarse = element;
+    gi_scene::feedback_element coarse = element;
     coarse.hits = 100u;
     coarse.res_level = 8u;
     scene.set_feedback({coarse}, scene.get_card_index_revision(), min_hits, sample_count);
@@ -6176,18 +6176,18 @@ void test_lumen_scene_hi_res_pages()
     element.hits = 100u;
     scene.set_feedback({element}, scene.get_card_index_revision(), min_hits, sample_count);
     scene.update(sources, 1, view);
-    const std::vector<lumen_scene::capture> mapped = get_new_page_captures(scene);
+    const std::vector<gi_scene::capture> mapped = get_new_page_captures(scene);
     check(mapped.size() == 1u, "a page hit often enough is mapped and captured");
     if(mapped.size() != 1u)
     {
         return;
     }
-    const lumen_scene::capture& cap = mapped.front();
-    const float border = 0.5f / 8.0f / float(lumen_scene::physical_page_size);
+    const gi_scene::capture& cap = mapped.front();
+    const float border = 0.5f / 8.0f / float(gi_scene::physical_page_size);
     const math::vec4 expected_rect(2.0f / 8.0f - border, 4.0f / 8.0f - border, 3.0f / 8.0f + border, 5.0f / 8.0f + border);
-    check(cap.size == math::uvec2(lumen_scene::physical_page_size) && math::all(math::epsilonEqual(cap.card_uv_rect,
-                                                                                                    expected_rect,
-                                                                                                    1e-6f)),
+    check(cap.size == math::uvec2(gi_scene::physical_page_size) && math::all(math::epsilonEqual(cap.card_uv_rect,
+                                                                                                 expected_rect,
+                                                                                                 1e-6f)),
           "the page the feedback names, one full page");
     check(cap.resample_card >= 0, "and it inherits the locked mip's lighting");
     const math::vec4 reflection_table = scene.get_card_table()[5];
@@ -6205,7 +6205,7 @@ void test_lumen_scene_hi_res_pages()
     const auto& pages = scene.get_resident_pages();
     const bool lists_page = std::any_of(pages.begin(),
                                         pages.end(),
-                                        [&](const lumen_scene::resident_page& page)
+                                        [&](const gi_scene::resident_page& page)
                                         {
                                             return page.atlas_offset == cap.atlas_offset && page.mip_page_table_offset == 4u &&
                                                    page.mip_size_in_pages == math::uvec2(8u);
@@ -6222,22 +6222,22 @@ void test_lumen_scene_hi_res_pages()
           "a mapped page asked for again stays as it is");
 }
 
-/// Eviction of the oldest hi-res page (lumen_scene::evict_oldest_hi_res_page): a locked allocation without room takes
+/// Eviction of the oldest hi-res page (gi_scene::evict_oldest_hi_res_page): a locked allocation without room takes
 /// the place of hi-res pages the feedback has not asked for in two frames, before it drops a level; a page asked for
 /// more recently stays.
-void test_lumen_scene_hi_res_pages_give_way_to_locked_mips()
+void test_gi_scene_hi_res_pages_give_way_to_locked_mips()
 {
-    std::printf("test_lumen_scene_hi_res_pages_give_way_to_locked_mips\n");
+    std::printf("test_gi_scene_hi_res_pages_give_way_to_locked_mips\n");
     constexpr uint32_t small_atlas_size = 256;
-    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    const std::vector<gi_scene::source> sources{make_wall_card_source()};
     const math::vec3 near_view(0.0f, 0.0f, 1.0f);
     const math::vec3 far_view(0.0f, 0.0f, 12.0f);
-    const lumen_scene::feedback_element element{0u, 10u, math::uvec2(2u, 4u), 100u};
+    const gi_scene::feedback_element element{0u, 10u, math::uvec2(2u, 4u), 100u};
     const auto run = [&](uint32_t idle_frames) -> uint32_t
     {
-        lumen_scene::settings settings;
+        gi_scene::settings settings;
         settings.atlas_size = small_atlas_size;
-        lumen_scene scene;
+        gi_scene scene;
         scene.init(settings);
         // Far, the wall takes one sub-allocated page of the atlas's four; the hi-res page takes another.
         scene.update(sources, 1, far_view);
@@ -6331,7 +6331,7 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_voxel_size_is_honoured_and_scale_free();
     test_mip_chain_is_coarser_cheaper_and_conservative();
     test_a_coarse_mip_is_resident_where_the_finest_does_not_fit();
-    test_coarsest_mip_answers_the_lumen_coverage_band();
+    test_coarsest_mip_answers_the_gi_coverage_band();
     test_mip_chain_bakes_one_solid();
     test_total_voxel_budget_bounds_a_field();
     test_lod_extraction_clamps_rather_than_failing();
@@ -6343,19 +6343,19 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_bake_cost_estimate_reads_the_baked_grid();
     test_parallel_submesh_bake_matches_serial();
     test_degenerate_inputs();
-    test_lumen_cards_box();
-    test_lumen_cards_sheet();
-    test_lumen_cards_doubled_sheet();
-    test_lumen_cards_interior_layers();
-    test_lumen_cards_serialization_round_trip();
-    test_lumen_scene_reallocation_lists_the_previous_mip();
-    test_lumen_scene_reset_leaves_no_cards();
-    test_lumen_scene_cards_reach_the_distance_field();
-    test_lumen_scene_refresh_recaptures_the_oldest_pages();
-    test_lumen_scene_lighting_schedule();
-    test_lumen_scene_page_radiosity_indices();
-    test_lumen_scene_hi_res_pages();
-    test_lumen_scene_hi_res_pages_give_way_to_locked_mips();
+    test_gi_cards_box();
+    test_gi_cards_sheet();
+    test_gi_cards_doubled_sheet();
+    test_gi_cards_interior_layers();
+    test_gi_cards_serialization_round_trip();
+    test_gi_scene_reallocation_lists_the_previous_mip();
+    test_gi_scene_reset_leaves_no_cards();
+    test_gi_scene_cards_reach_the_distance_field();
+    test_gi_scene_refresh_recaptures_the_oldest_pages();
+    test_gi_scene_lighting_schedule();
+    test_gi_scene_page_radiosity_indices();
+    test_gi_scene_hi_res_pages();
+    test_gi_scene_hi_res_pages_give_way_to_locked_mips();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

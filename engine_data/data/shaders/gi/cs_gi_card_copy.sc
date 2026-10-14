@@ -1,0 +1,125 @@
+/*
+ * Surface cache: card capture -> physical atlases, one 8x8 group per captured tile.
+ *
+ * The capture atlas holds the G-buffer encoding of each captured page (rt0 = sRGB base colour + AO, rt1 =
+ * octahedral world normal + metalness + roughness, rt2 = emissive, rt3 = subsurface colour + opacity, depth = the
+ * card's linear depth: 0 at its front plane, 1 at its back, cleared to 1). The surface cache stores per texel:
+ *  - albedo: sqrt of the diffuse colour, BaseColor (1 - Metallic) + 0.45 x lerp(0.04, BaseColor, Metallic)
+ *    (the share of the specular colour a fully rough surface scatters diffusely) + the subsurface colour (black for
+ *    a material without one), a = 1 where the card sees a surface;
+ *  - normal: the octahedral normal in the card's axes (GiEncodeCardNormal);
+ *  - emissive: linear emissive radiance;
+ *  - depth: the card depth, 1 where nothing was captured;
+ *  - lighting: a reallocated card's pages take the lighting resampled from its previous allocation
+ *    (cs_gi_card_resample.sc): direct, indirect, the radiosity update count and the final lighting combined
+ *    from them with the new material; a page refreshed in place (the tile record's flag) keeps its direct and
+ *    indirect lighting and update count where they are and only recombines the final lighting with the new
+ *    material; a card that was not resident starts unlit (direct and indirect 0, update count 0, final lighting = its
+ *    emissive). The final lighting carries the depth in alpha for the samplers.
+ */
+
+#include "bgfx_compute.sh"
+#include "gi/gi_image_formats.sh"
+#include "../common.sh"
+#include "../lighting.sh"
+
+IMAGE2D_WO(s_gi_albedo_out, rgba8, 0);
+IMAGE2D_WO(s_gi_normal_out, rg8, 1);
+IMAGE2D_WO(s_gi_emissive_out, rg11b10f, 2);
+IMAGE2D_WO(s_gi_depth_out, r16, 3);
+IMAGE2D_WO(s_gi_final_out, rgba16f, 4);
+IMAGE2D_RW(s_gi_indirect_out, rg11b10f, 5);
+IMAGE2D_WO(s_gi_radiosity_frames_out, r32f, 6);
+IMAGE2D_RW(s_gi_direct_out, rg11b10f, 7);
+SAMPLER2D(s_gi_capture_rt0, 8);
+SAMPLER2D(s_gi_capture_rt1, 9);
+SAMPLER2D(s_gi_capture_rt2, 10);
+SAMPLER2D(s_gi_capture_depth, 11);
+/// rgb = the resampled direct lighting, a = the tile's radiosity update count (cs_gi_card_resample.sc).
+SAMPLER2D(s_gi_resample_direct, 12);
+SAMPLER2D(s_gi_resample_indirect, 13);
+SAMPLER2D(s_gi_capture_rt3, 14);
+BUFFER_RO(b_gi_copy_tiles, vec4, 15);
+
+#include "gi/gi_surface_cache_lighting.sh"
+#define GI_TILE_RECORDS_COPY_TILES
+#include "gi/gi_tile_records.sh"
+
+/// x = tile count, y = the float4 the tile words start at (gi_tile_records.sh), z = the frame index.
+uniform vec4 u_gi_card_copy;
+
+/// The dielectric F0 at the default specular of 0.5: 0.08 x 0.5.
+#define GI_DIELECTRIC_F0 0.04
+/// The share of the specular colour a fully rough surface scatters diffusely.
+#define GI_FULLY_ROUGH_SPECULAR 0.45
+
+NUM_THREADS(8, 8, 1)
+void main()
+{
+	int tile_index = GiCopyTileIndex(ivec2(gl_WorkGroupID.xy));
+	if(float(tile_index) >= u_gi_card_copy.x)
+	{
+		return;
+	}
+	GiCopyTile copy_tile = GiLoadCopyTile(tile_index, int(u_gi_card_copy.y));
+	vec4 tile = copy_tile.texels;
+	float previous_card = copy_tile.card.x;
+	vec3 axis_x = copy_tile.card.yzw;
+	vec3 axis_y = copy_tile.axis_y.xyz;
+	bool keeps_lighting = copy_tile.axis_y.w > 0.5;
+	vec3 axis_z = copy_tile.axis_z.xyz;
+	ivec2 local = ivec2(gl_LocalInvocationID.xy);
+	ivec2 capture_texel = ivec2(tile.xy) + local;
+	ivec2 atlas_texel = ivec2(tile.zw) + local;
+	float depth = texelFetch(s_gi_capture_depth, capture_texel, 0).x;
+	bool covered = depth < 1.0;
+	vec4 rt0 = texelFetch(s_gi_capture_rt0, capture_texel, 0);
+	vec4 rt1 = texelFetch(s_gi_capture_rt1, capture_texel, 0);
+	vec3 emissive = texelFetch(s_gi_capture_rt2, capture_texel, 0).xyz;
+	vec3 base_color = srgb_to_linear(rt0.xyz);
+	float metalness = rt1.z;
+	vec3 specular_color = mix(vec3_splat(GI_DIELECTRIC_F0), base_color, metalness);
+	vec3 subsurface_color = texelFetch(s_gi_capture_rt3, capture_texel, 0).xyz;
+	vec3 diffuse_color = base_color * (1.0 - metalness) + GI_FULLY_ROUGH_SPECULAR * specular_color + subsurface_color;
+	float coverage = covered ? 1.0 : 0.0;
+	float card_depth = covered ? depth : 1.0;
+	// Selected, not multiplied: the capture atlas clears only its depth, so an uncovered texel's colour targets hold
+	// whatever an earlier capture left there.
+	vec3 albedo_encoded = covered ? sqrt(saturate(diffuse_color)) : vec3_splat(0.0);
+	emissive = covered ? emissive : vec3_splat(0.0);
+	vec3 direct = vec3_splat(0.0);
+	vec3 indirect = vec3_splat(0.0);
+	float frames = 0.0;
+	BRANCH
+	if(keeps_lighting)
+	{
+		// The page in place: its lighting stays where it is.
+		direct = imageLoad(s_gi_direct_out, atlas_texel).xyz;
+		indirect = imageLoad(s_gi_indirect_out, atlas_texel).xyz;
+	}
+	else if(previous_card >= 0.0)
+	{
+		vec4 resampled_direct = texelFetch(s_gi_resample_direct, capture_texel, 0);
+		direct = resampled_direct.xyz;
+		indirect = texelFetch(s_gi_resample_indirect, capture_texel, 0).xyz;
+		frames = resampled_direct.w;
+	}
+	imageStore(s_gi_albedo_out, atlas_texel, vec4(albedo_encoded, coverage));
+	vec2 card_normal = covered ? GiEncodeCardNormal(decodeNormalOctahedron(rt1.xy), axis_x, axis_y, axis_z) : vec2_splat(0.0);
+	imageStore(s_gi_normal_out, atlas_texel, vec4(card_normal, 0.0, 0.0));
+	imageStore(s_gi_emissive_out, atlas_texel, vec4(GiQuantizeCardLighting(emissive, atlas_texel, u_gi_card_copy.z), 0.0));
+	imageStore(s_gi_depth_out, atlas_texel, vec4(card_depth, 0.0, 0.0, 0.0));
+	imageStore(s_gi_final_out,
+	           atlas_texel,
+	           vec4(GiCombineFinalLighting(albedo_encoded, emissive, direct, indirect), card_depth));
+	BRANCH
+	if(!keeps_lighting)
+	{
+		imageStore(s_gi_direct_out, atlas_texel, vec4(GiQuantizeCardLighting(direct, atlas_texel, u_gi_card_copy.z), 0.0));
+		imageStore(s_gi_indirect_out, atlas_texel, vec4(GiQuantizeCardLighting(indirect, atlas_texel, u_gi_card_copy.z), 0.0));
+		if(local.x == 0 && local.y == 0)
+		{
+			imageStore(s_gi_radiosity_frames_out, ivec2(tile.zw) / GI_CARD_TILE_SIZE, vec4(frames, 0.0, 0.0, 0.0));
+		}
+	}
+}

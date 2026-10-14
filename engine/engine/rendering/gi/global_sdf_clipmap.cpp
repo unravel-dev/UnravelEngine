@@ -4,7 +4,7 @@
 
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/gi/gi_constants.h>
-#include <engine/rendering/gi/lumen_constants.h>
+#include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 
@@ -162,7 +162,7 @@ void global_sdf_clipmap::refresh_instance_entry_hashes(const std::vector<global_
 
 auto global_sdf_clipmap::compute_level_influence(uint32_t index) const -> float
 {
-    const float voxels = math::max(settings_.encode_range, float(gi::lumen::LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS));
+    const float voxels = math::max(settings_.encode_range, float(gi::GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS));
     return voxels * levels_[index].voxel_size;
 }
 

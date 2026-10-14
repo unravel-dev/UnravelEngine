@@ -18,7 +18,7 @@ namespace
 // swatch in the menu matches the pixel on screen. Sources:
 //   engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.sc   (G-Buffer / lighting / GTAO)
 //   engine_data/data/shaders/velocity/fs_velocity_debug.sc     (motion vectors)
-//   engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc     (GI views)
+//   engine_data/data/shaders/gi/fs_gi_scene_debug.sc           (GI views)
 // Continuous readouts (roughness, depth, ...) carry no legend; their range is stated in the
 // description instead.
 // -----------------------------------------------------------------------------
@@ -54,17 +54,17 @@ constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
     {{0.85f, 0.15f, 0.10f}, "The min / max EV100 clamps; the metered marker resting on one = held"},
 }};
 
-// GI views: engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc (the scene views) and
-// engine_data/data/shaders/lumen/fs_lumen_visualize_screen.sc (the dedicated reflection rays, the screen probe
+// GI views: engine_data/data/shaders/gi/fs_gi_scene_debug.sc (the scene views) and
+// engine_data/data/shaders/gi/fs_gi_visualize_screen.sc (the dedicated reflection rays, the screen probe
 // frames). The debug colours of the scene views go through the lit image's tone map, so on screen they
 // read slightly darker than these swatches. A colour the view's label in the viewport names
-// (lumen_visualize_pass.cpp get_view_label) leads its row with the label's words.
+// (gi_visualize_pass.cpp get_view_label) leads its row with the label's words.
 
-constexpr std::array<visualization_swatch, 1> k_legend_lumen_scene = {{
+constexpr std::array<visualization_swatch, 1> k_legend_gi_scene = {{
     {{0.0f, 0.0f, 0.0f}, "No card covers the hit: a ray that ends here finds nothing in the surface cache."},
 }};
 
-constexpr std::array<visualization_swatch, 2> k_legend_lumen_surface_cache = {{
+constexpr std::array<visualization_swatch, 2> k_legend_gi_surface_cache = {{
     {{1.0f, 0.0f, 1.0f},
      "Missing Surface Cache coverage: the objects at the hit have cards, but none of the cards covers this point."},
     {{1.0f, 1.0f, 0.0f},
@@ -72,7 +72,7 @@ constexpr std::array<visualization_swatch, 2> k_legend_lumen_surface_cache = {{
      "example because they are too small for the card resolution at their distance."},
 }};
 
-constexpr std::array<visualization_swatch, 6> k_legend_lumen_object_grid = {{
+constexpr std::array<visualization_swatch, 6> k_legend_gi_object_grid = {{
     {{0.0f, 1.0f, 0.0f}, "A card of a listed object covers the hit."},
     {{1.0f, 0.0f, 1.0f}, "A card's page is captured, but the card's depth disagrees with the hit."},
     {{0.0f, 1.0f, 1.0f}, "The hit lies inside a card's bounds, but the card's page is not captured yet."},
@@ -81,38 +81,38 @@ constexpr std::array<visualization_swatch, 6> k_legend_lumen_object_grid = {{
     {{0.3f, 0.3f, 0.3f}, "The object grid lists no object at this point."},
 }};
 
-constexpr std::array<visualization_swatch, 3> k_legend_lumen_reflection_rays = {{
+constexpr std::array<visualization_swatch, 3> k_legend_gi_reflection_rays = {{
     {{1.0f, 0.0f, 0.0f}, "Traced: the pixel traces dedicated reflection rays. Full red on a perfectly smooth surface."},
     {{0.68f, 0.0f, 0.0f}, "Traced, just below MaxRoughness: the red darkens as the roughness nears the limit."},
     {{0.5f, 0.5f, 0.5f},
      "Not traced: a rougher surface, shaded in grey. It takes its specular reflection from the screen probes."},
 }};
 
-constexpr std::array<visualization_swatch, 3> k_legend_lumen_direct_lighting_updates = {{
+constexpr std::array<visualization_swatch, 3> k_legend_gi_direct_lighting_updates = {{
     {{1.0f, 1.0f, 1.0f}, "The page's direct lighting was updated this frame."},
     {{1.0f, 0.0f, 0.0f}, "Updated last frame; the colour turns blue as the frames since pile up."},
     {{0.0f, 0.0f, 1.0f}, "Not updated for 8 frames or more."},
 }};
 
-constexpr std::array<visualization_swatch, 3> k_legend_lumen_indirect_lighting_updates = {{
+constexpr std::array<visualization_swatch, 3> k_legend_gi_indirect_lighting_updates = {{
     {{1.0f, 1.0f, 1.0f}, "The page's indirect lighting was updated this frame."},
     {{1.0f, 0.0f, 0.0f}, "Updated last frame; the colour turns blue as the frames since pile up."},
     {{0.0f, 0.0f, 1.0f}, "Not updated for 16 frames or more."},
 }};
 
-constexpr std::array<visualization_swatch, 4> k_legend_lumen_radiosity_frames = {{
+constexpr std::array<visualization_swatch, 4> k_legend_gi_radiosity_frames = {{
     {{1.0f, 1.0f, 1.0f}, "The tile's radiosity has accumulated 4 frames, the most it keeps."},
     {{0.0f, 0.0f, 0.0f}, "No frames yet, and the outline of every 8x8 tile."},
     {{1.0f, 0.0f, 1.0f}, "Missing Surface Cache coverage, as in the Surface Cache view."},
     {{1.0f, 1.0f, 0.0f}, "Culled Surface Cache, as in the Surface Cache view."},
 }};
 
-constexpr std::array<visualization_swatch, 2> k_legend_lumen_screen_probe_frames = {{
+constexpr std::array<visualization_swatch, 2> k_legend_gi_screen_probe_frames = {{
     {{1.0f, 0.0f, 0.0f}, "The gather's temporal filter accumulates its maximum number of frames here."},
     {{0.5f, 0.5f, 0.5f}, "Grey shows through where it accumulates fewer, down to none: a new or disoccluded pixel."},
 }};
 
-constexpr std::array<visualization_swatch, 7> k_legend_lumen_card_coverage = {{
+constexpr std::array<visualization_swatch, 7> k_legend_gi_card_coverage = {{
     {{0.0f, 1.0f, 0.0f}, "A captured card covers the hit and agrees with its depth."},
     {{1.0f, 0.0f, 1.0f}, "A card's page is captured, but the card's depth disagrees with the hit."},
     {{0.0f, 1.0f, 1.0f}, "The hit lies inside a card's bounds, but the card's page is not captured yet."},
@@ -151,8 +151,8 @@ constexpr std::array<visualization_group_entry, 5> k_visualization_groups = {{
      "Motion",
      "Screen-space motion. Selecting a view here forces the velocity buffer to be produced "
      "even when no other consumer (TAA) is active."},
-    {visualization_group::lumen,
-     "lumen",
+    {visualization_group::gi,
+     "gi",
      ICON_MDI_CARDS_OUTLINE,
      "Global Illumination",
      "The scene as the global illumination traces it: the global distance field its rays march, and the surface "
@@ -315,149 +315,149 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
     // -- Global Illumination --------------------------------------------------
     // The overviews and the main views first, then the GI Scene channels, the update and accumulation views,
     // and the card and object grid views. The overviews list the colours their tiles' labels name.
-    {visualization_mode::lumen_overview,
-     visualization_group::lumen,
-     "lumen_overview",
+    {visualization_mode::gi_overview,
+     visualization_group::gi,
+     "gi_overview",
      "Overview",
      "The lit image with three global illumination views tiled along its top and named in each tile: Geometry "
      "Normals, "
      "Reflection View and Surface Cache.",
-     k_legend_lumen_surface_cache},
-    {visualization_mode::lumen_performance_overview,
-     visualization_group::lumen,
-     "lumen_performance_overview",
+     k_legend_gi_surface_cache},
+    {visualization_mode::gi_performance_overview,
+     visualization_group::gi,
+     "gi_performance_overview",
      "Performance Overview",
      "The lit image with the Dedicated Reflection Rays view tiled in its top-left corner.",
-     k_legend_lumen_reflection_rays},
-    {visualization_mode::lumen_scene,
-     visualization_group::lumen,
-     "lumen_scene",
+     k_legend_gi_reflection_rays},
+    {visualization_mode::gi_scene,
+     visualization_group::gi,
+     "gi_scene",
      "GI Scene",
      "The scene as the global illumination's rays see it. The global distance field is traced from the camera, and "
      "each hit is "
      "shaded from the cards of the objects that the object grid lists there, exactly as the gather and "
      "reflection rays shade their own hits. A ray that hits nothing shows the sky.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_reflection_view,
-     visualization_group::lumen,
-     "lumen_reflection_view",
+     k_legend_gi_scene},
+    {visualization_mode::gi_reflection_view,
+     visualization_group::gi,
+     "gi_reflection_view",
      "Reflection View",
      "The GI Scene as the reflections see it: traced only as far as the reflection rays trace (the Global "
      "Illumination component's Max Trace Distance, 200 m by default).",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_surface_cache,
-     visualization_group::lumen,
-     "lumen_surface_cache",
+     k_legend_gi_scene},
+    {visualization_mode::gi_surface_cache,
+     visualization_group::gi,
+     "gi_surface_cache",
      "Surface Cache",
      "The GI Scene lighting, with every hit the surface cache cannot shade marked in a solid color, so "
      "that gaps in the card coverage stand out.",
-     k_legend_lumen_surface_cache},
-    {visualization_mode::lumen_geometry_normals,
-     visualization_group::lumen,
-     "lumen_geometry_normals",
+     k_legend_gi_surface_cache},
+    {visualization_mode::gi_geometry_normals,
+     visualization_group::gi,
+     "gi_geometry_normals",
      "Geometry Normals",
      "The normal of the global distance field at each GI Scene hit: the geometry as the rays see it, "
      "with x, y and z mapped from -1..1 to 0..1.",
      {}},
-    {visualization_mode::lumen_reflection_rays,
-     visualization_group::lumen,
-     "lumen_reflection_rays",
+    {visualization_mode::gi_reflection_rays,
+     visualization_group::gi,
+     "gi_reflection_rays",
      "Dedicated Reflection Rays",
      "Pixels tracing dedicated reflection rays: every surface smoother than MaxRoughness (the Global Illumination "
      "component's Max Roughness To Trace, 0.4 by default) is drawn in red, brighter the smoother it is; the sky "
      "shows behind the scene.",
-     k_legend_lumen_reflection_rays},
-    {visualization_mode::lumen_scene_albedo,
-     visualization_group::lumen,
-     "lumen_scene_albedo",
+     k_legend_gi_reflection_rays},
+    {visualization_mode::gi_scene_albedo,
+     visualization_group::gi,
+     "gi_scene_albedo",
      "GI Scene Albedo",
      "The albedo the surface cache stores at each GI Scene hit, in place of its lighting. Use it to check "
      "that the cards captured each material's color.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_scene_normals,
-     visualization_group::lumen,
-     "lumen_scene_normals",
+     k_legend_gi_scene},
+    {visualization_mode::gi_scene_normals,
+     visualization_group::gi,
+     "gi_scene_normals",
      "GI Scene Normals",
      "The normals the surface cache cards captured at each GI Scene hit, with x, y and z mapped from -1..1 "
      "to 0..1. Compare with Geometry Normals to see where a card's surface differs from the distance field's.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_scene_emissive,
-     visualization_group::lumen,
-     "lumen_scene_emissive",
+     k_legend_gi_scene},
+    {visualization_mode::gi_scene_emissive,
+     visualization_group::gi,
+     "gi_scene_emissive",
      "Emissive",
      "The emissive light the surface cache cards captured at each GI Scene hit.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_card_weights,
-     visualization_group::lumen,
-     "lumen_card_weights",
+     k_legend_gi_scene},
+    {visualization_mode::gi_card_weights,
+     visualization_group::gi,
+     "gi_card_weights",
      "Card Weights",
      "Which cards shade each GI Scene hit: one color per card, blended by each card's weight where several "
      "cover the hit, with dark lines through the centers of the card's 8x8 atlas tiles.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_scene_direct,
-     visualization_group::lumen,
-     "lumen_scene_direct",
+     k_legend_gi_scene},
+    {visualization_mode::gi_scene_direct,
+     visualization_group::gi,
+     "gi_scene_direct",
      "Direct Lighting",
      "The direct lighting the surface cache cards hold at each GI Scene hit: the light that reaches the "
      "surface straight from the sun and the local lights, with their shadows.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_scene_indirect,
-     visualization_group::lumen,
-     "lumen_scene_indirect",
+     k_legend_gi_scene},
+    {visualization_mode::gi_scene_indirect,
+     visualization_group::gi,
+     "gi_scene_indirect",
      "Indirect Lighting",
      "The indirect lighting the surface cache cards hold at each GI Scene hit: the light that has bounced "
      "between surfaces at least once.",
-     k_legend_lumen_scene},
-    {visualization_mode::lumen_direct_lighting_updates,
-     visualization_group::lumen,
-     "lumen_direct_lighting_updates",
+     k_legend_gi_scene},
+    {visualization_mode::gi_direct_lighting_updates,
+     visualization_group::gi,
+     "gi_direct_lighting_updates",
      "Direct Lighting Updates",
      "How recently each card page's direct lighting was updated. Pages near the camera and in view are updated "
      "most often; the frame's budget decides the rest.",
-     k_legend_lumen_direct_lighting_updates},
-    {visualization_mode::lumen_indirect_lighting_updates,
-     visualization_group::lumen,
-     "lumen_indirect_lighting_updates",
+     k_legend_gi_direct_lighting_updates},
+    {visualization_mode::gi_indirect_lighting_updates,
+     visualization_group::gi,
+     "gi_indirect_lighting_updates",
      "Indirect Lighting Updates",
      "How recently each card page's indirect lighting (radiosity) was updated, on twice the time scale of the "
      "direct lighting updates.",
-     k_legend_lumen_indirect_lighting_updates},
-    {visualization_mode::lumen_screen_probe_frames,
-     visualization_group::lumen,
-     "lumen_screen_probe_frames",
+     k_legend_gi_indirect_lighting_updates},
+    {visualization_mode::gi_screen_probe_frames,
+     visualization_group::gi,
+     "gi_screen_probe_frames",
      "Screen Probe Frames Accumulated",
      "How many frames the screen probe gather's temporal filter has accumulated at each pixel, in red over a "
      "grey copy of the image: full red at its maximum.",
-     k_legend_lumen_screen_probe_frames},
-    {visualization_mode::lumen_radiosity_frames,
-     visualization_group::lumen,
-     "lumen_radiosity_frames",
+     k_legend_gi_screen_probe_frames},
+    {visualization_mode::gi_radiosity_frames,
+     visualization_group::gi,
+     "gi_radiosity_frames",
      "Radiosity Num Frames Accumulated",
      "How many frames the radiosity of each 8x8 tile of the cards has accumulated, from black (none) to white "
      "(4, the most), with every tile outlined.",
-     k_legend_lumen_radiosity_frames},
-    {visualization_mode::lumen_card_atlas,
-     visualization_group::lumen,
-     "lumen_card_atlas",
+     k_legend_gi_radiosity_frames},
+    {visualization_mode::gi_card_atlas,
+     visualization_group::gi,
+     "gi_card_atlas",
      "Card Atlas",
      "The surface cache's physical atlas, fitted to the viewport: the albedo of every resident card page as "
      "it was captured.",
      {}},
-    {visualization_mode::lumen_card_coverage,
-     visualization_group::lumen,
-     "lumen_card_coverage",
+    {visualization_mode::gi_card_coverage,
+     visualization_group::gi,
+     "gi_card_coverage",
      "Card Coverage",
      "Each object's own mesh distance field, traced from the camera. Every hit is colored by how close that "
      "object's cards come to covering it, which shows where and why the cards miss a surface.",
-     k_legend_lumen_card_coverage},
-    {visualization_mode::lumen_object_grid,
-     visualization_group::lumen,
-     "lumen_object_grid",
+     k_legend_gi_card_coverage},
+    {visualization_mode::gi_object_grid,
+     visualization_group::gi,
+     "gi_object_grid",
      "Object Grid",
      "Each GI Scene hit, colored by how close the objects that the object grid lists there come to "
      "covering it with their cards. A hit that Card Coverage shows as covered but this view does not points "
      "to an object missing from the grid.",
-     k_legend_lumen_object_grid},
+     k_legend_gi_object_grid},
 });
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -467,63 +467,63 @@ static_assert(static_cast<int>(visualization_mode::ao_bent_normals) == rendering
               "visualization_mode drifted from deferred::debug_pass_ao_bent_normals");
 static_assert(static_cast<int>(visualization_mode::exposure) == rendering::deferred::debug_pass_exposure,
               "visualization_mode drifted from deferred::debug_pass_exposure");
-static_assert(static_cast<int>(visualization_mode::lumen_scene) == rendering::deferred::debug_pass_lumen_scene,
-              "visualization_mode drifted from deferred::debug_pass_lumen_scene");
-static_assert(static_cast<int>(visualization_mode::lumen_card_atlas) ==
-                  rendering::deferred::debug_pass_lumen_card_atlas,
-              "visualization_mode drifted from deferred::debug_pass_lumen_card_atlas");
-static_assert(static_cast<int>(visualization_mode::lumen_card_coverage) ==
-                  rendering::deferred::debug_pass_lumen_card_coverage,
-              "visualization_mode drifted from deferred::debug_pass_lumen_card_coverage");
-static_assert(static_cast<int>(visualization_mode::lumen_scene_albedo) ==
-                  rendering::deferred::debug_pass_lumen_scene_albedo,
-              "visualization_mode drifted from deferred::debug_pass_lumen_scene_albedo");
-static_assert(static_cast<int>(visualization_mode::lumen_object_grid) == rendering::deferred::debug_pass_lumen_object_grid,
-              "visualization_mode drifted from deferred::debug_pass_lumen_object_grid");
-static_assert(static_cast<int>(visualization_mode::lumen_surface_cache) ==
-                  rendering::deferred::debug_pass_lumen_surface_cache,
-              "visualization_mode drifted from deferred::debug_pass_lumen_surface_cache");
-static_assert(static_cast<int>(visualization_mode::lumen_scene_direct) ==
-                  rendering::deferred::debug_pass_lumen_scene_direct,
-              "visualization_mode drifted from deferred::debug_pass_lumen_scene_direct");
-static_assert(static_cast<int>(visualization_mode::lumen_scene_indirect) ==
-                  rendering::deferred::debug_pass_lumen_scene_indirect,
-              "visualization_mode drifted from deferred::debug_pass_lumen_scene_indirect");
-static_assert(static_cast<int>(visualization_mode::lumen_reflection_rays) ==
-                  rendering::deferred::debug_pass_lumen_reflection_rays,
-              "visualization_mode drifted from deferred::debug_pass_lumen_reflection_rays");
-static_assert(static_cast<int>(visualization_mode::lumen_reflection_view) ==
-                  rendering::deferred::debug_pass_lumen_reflection_view,
-              "visualization_mode drifted from deferred::debug_pass_lumen_reflection_view");
-static_assert(static_cast<int>(visualization_mode::lumen_geometry_normals) ==
-                  rendering::deferred::debug_pass_lumen_geometry_normals,
-              "visualization_mode drifted from deferred::debug_pass_lumen_geometry_normals");
-static_assert(static_cast<int>(visualization_mode::lumen_scene_normals) ==
-                  rendering::deferred::debug_pass_lumen_scene_normals,
-              "visualization_mode drifted from deferred::debug_pass_lumen_scene_normals");
-static_assert(static_cast<int>(visualization_mode::lumen_scene_emissive) ==
-                  rendering::deferred::debug_pass_lumen_scene_emissive,
-              "visualization_mode drifted from deferred::debug_pass_lumen_scene_emissive");
-static_assert(static_cast<int>(visualization_mode::lumen_card_weights) ==
-                  rendering::deferred::debug_pass_lumen_card_weights,
-              "visualization_mode drifted from deferred::debug_pass_lumen_card_weights");
-static_assert(static_cast<int>(visualization_mode::lumen_direct_lighting_updates) ==
-                  rendering::deferred::debug_pass_lumen_direct_lighting_updates,
-              "visualization_mode drifted from deferred::debug_pass_lumen_direct_lighting_updates");
-static_assert(static_cast<int>(visualization_mode::lumen_indirect_lighting_updates) ==
-                  rendering::deferred::debug_pass_lumen_indirect_lighting_updates,
-              "visualization_mode drifted from deferred::debug_pass_lumen_indirect_lighting_updates");
-static_assert(static_cast<int>(visualization_mode::lumen_radiosity_frames) ==
-                  rendering::deferred::debug_pass_lumen_radiosity_frames,
-              "visualization_mode drifted from deferred::debug_pass_lumen_radiosity_frames");
-static_assert(static_cast<int>(visualization_mode::lumen_screen_probe_frames) ==
-                  rendering::deferred::debug_pass_lumen_screen_probe_frames,
-              "visualization_mode drifted from deferred::debug_pass_lumen_screen_probe_frames");
-static_assert(static_cast<int>(visualization_mode::lumen_overview) == rendering::deferred::debug_pass_lumen_overview,
-              "visualization_mode drifted from deferred::debug_pass_lumen_overview");
-static_assert(static_cast<int>(visualization_mode::lumen_performance_overview) ==
-                  rendering::deferred::debug_pass_lumen_performance_overview,
-              "visualization_mode drifted from deferred::debug_pass_lumen_performance_overview");
+static_assert(static_cast<int>(visualization_mode::gi_scene) == rendering::deferred::debug_pass_gi_scene,
+              "visualization_mode drifted from deferred::debug_pass_gi_scene");
+static_assert(static_cast<int>(visualization_mode::gi_card_atlas) ==
+                  rendering::deferred::debug_pass_gi_card_atlas,
+              "visualization_mode drifted from deferred::debug_pass_gi_card_atlas");
+static_assert(static_cast<int>(visualization_mode::gi_card_coverage) ==
+                  rendering::deferred::debug_pass_gi_card_coverage,
+              "visualization_mode drifted from deferred::debug_pass_gi_card_coverage");
+static_assert(static_cast<int>(visualization_mode::gi_scene_albedo) ==
+                  rendering::deferred::debug_pass_gi_scene_albedo,
+              "visualization_mode drifted from deferred::debug_pass_gi_scene_albedo");
+static_assert(static_cast<int>(visualization_mode::gi_object_grid) == rendering::deferred::debug_pass_gi_object_grid,
+              "visualization_mode drifted from deferred::debug_pass_gi_object_grid");
+static_assert(static_cast<int>(visualization_mode::gi_surface_cache) ==
+                  rendering::deferred::debug_pass_gi_surface_cache,
+              "visualization_mode drifted from deferred::debug_pass_gi_surface_cache");
+static_assert(static_cast<int>(visualization_mode::gi_scene_direct) ==
+                  rendering::deferred::debug_pass_gi_scene_direct,
+              "visualization_mode drifted from deferred::debug_pass_gi_scene_direct");
+static_assert(static_cast<int>(visualization_mode::gi_scene_indirect) ==
+                  rendering::deferred::debug_pass_gi_scene_indirect,
+              "visualization_mode drifted from deferred::debug_pass_gi_scene_indirect");
+static_assert(static_cast<int>(visualization_mode::gi_reflection_rays) ==
+                  rendering::deferred::debug_pass_gi_reflection_rays,
+              "visualization_mode drifted from deferred::debug_pass_gi_reflection_rays");
+static_assert(static_cast<int>(visualization_mode::gi_reflection_view) ==
+                  rendering::deferred::debug_pass_gi_reflection_view,
+              "visualization_mode drifted from deferred::debug_pass_gi_reflection_view");
+static_assert(static_cast<int>(visualization_mode::gi_geometry_normals) ==
+                  rendering::deferred::debug_pass_gi_geometry_normals,
+              "visualization_mode drifted from deferred::debug_pass_gi_geometry_normals");
+static_assert(static_cast<int>(visualization_mode::gi_scene_normals) ==
+                  rendering::deferred::debug_pass_gi_scene_normals,
+              "visualization_mode drifted from deferred::debug_pass_gi_scene_normals");
+static_assert(static_cast<int>(visualization_mode::gi_scene_emissive) ==
+                  rendering::deferred::debug_pass_gi_scene_emissive,
+              "visualization_mode drifted from deferred::debug_pass_gi_scene_emissive");
+static_assert(static_cast<int>(visualization_mode::gi_card_weights) ==
+                  rendering::deferred::debug_pass_gi_card_weights,
+              "visualization_mode drifted from deferred::debug_pass_gi_card_weights");
+static_assert(static_cast<int>(visualization_mode::gi_direct_lighting_updates) ==
+                  rendering::deferred::debug_pass_gi_direct_lighting_updates,
+              "visualization_mode drifted from deferred::debug_pass_gi_direct_lighting_updates");
+static_assert(static_cast<int>(visualization_mode::gi_indirect_lighting_updates) ==
+                  rendering::deferred::debug_pass_gi_indirect_lighting_updates,
+              "visualization_mode drifted from deferred::debug_pass_gi_indirect_lighting_updates");
+static_assert(static_cast<int>(visualization_mode::gi_radiosity_frames) ==
+                  rendering::deferred::debug_pass_gi_radiosity_frames,
+              "visualization_mode drifted from deferred::debug_pass_gi_radiosity_frames");
+static_assert(static_cast<int>(visualization_mode::gi_screen_probe_frames) ==
+                  rendering::deferred::debug_pass_gi_screen_probe_frames,
+              "visualization_mode drifted from deferred::debug_pass_gi_screen_probe_frames");
+static_assert(static_cast<int>(visualization_mode::gi_overview) == rendering::deferred::debug_pass_gi_overview,
+              "visualization_mode drifted from deferred::debug_pass_gi_overview");
+static_assert(static_cast<int>(visualization_mode::gi_performance_overview) ==
+                  rendering::deferred::debug_pass_gi_performance_overview,
+              "visualization_mode drifted from deferred::debug_pass_gi_performance_overview");
 
 } // namespace
 

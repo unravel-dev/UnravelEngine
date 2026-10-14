@@ -1,7 +1,7 @@
 #pragma once
 #include <engine/engine_export.h>
 #include <engine/assets/asset_handle.h>
-#include <engine/rendering/gi/lumen_mesh_cards.h>
+#include <engine/rendering/gi/gi_mesh_cards.h>
 #include <engine/rendering/gi/mesh_sdf.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/material.h>
@@ -541,7 +541,7 @@ public:
         ///< Card sets built at compile time, ONE PER SUBMESH and in submesh order, each for the submesh's imported
         ///< material sidedness; a submesh without a field holds an empty set. Empty when the asset was compiled
         ///< without cards, which leaves them to the runtime card library.
-        std::vector<lumen_mesh_cards> submesh_cards;
+        std::vector<gi_mesh_cards> submesh_cards;
         ///< The import settings turned card generation off: no submesh gets cards, compiled or at runtime.
         bool are_cards_disabled = false;
         ///< The LOD the cards are built from, compiled and at runtime (clamped to the generated levels).
@@ -974,13 +974,13 @@ public:
      * @return The set, or null when the asset carries none (compiled without cards, or a procedurally created mesh):
      *         the runtime card library builds those.
      */
-    auto get_lumen_cards(uint32_t submesh_index) const -> std::shared_ptr<const lumen_mesh_cards>;
+    auto get_gi_cards(uint32_t submesh_index) const -> std::shared_ptr<const gi_mesh_cards>;
 
     /// @brief Whether the import settings turned card generation off for this mesh.
-    auto are_lumen_cards_disabled() const -> bool;
+    auto are_gi_cards_disabled() const -> bool;
 
     /// @brief The LOD the cards are built from: the asset's setting (1 when it has none), clamped to the LODs held.
-    auto get_lumen_cards_lod() const -> uint32_t;
+    auto get_gi_cards_lod() const -> uint32_t;
 
     /// @brief What global illumination keeps for this mesh (memory, fields, cards); see gi_info.
     auto get_gi_info() const -> gi_info;
@@ -1477,10 +1477,10 @@ protected:
     ///< Coarser levels per submesh; see load_data::submesh_sdf_coarse_mips.
     std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips_;
     ///< Compiled card sets per submesh, shared with the card library; see load_data::submesh_cards.
-    std::vector<std::shared_ptr<const lumen_mesh_cards>> submesh_cards_;
-    ///< See are_lumen_cards_disabled.
+    std::vector<std::shared_ptr<const gi_mesh_cards>> submesh_cards_;
+    ///< See are_gi_cards_disabled.
     bool are_cards_disabled_ = false;
-    ///< See get_lumen_cards_lod.
+    ///< See get_gi_cards_lod.
     uint32_t cards_lod_index_ = 1;
     ///< See get_gi_source_geometry.
     std::shared_ptr<const sdf_source_geometry> gi_source_geometry_;

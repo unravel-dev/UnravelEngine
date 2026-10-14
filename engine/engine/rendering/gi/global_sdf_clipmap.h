@@ -68,7 +68,7 @@ public:
         ///
         /// The STRUCT default stays 64 -- the value the CPU composer, the tests and any headless
         /// consumer can afford, since composition work is cubic in it. The runtime uses the GI's
-        /// layout (lumen_constants.h LUMEN_GLOBAL_SDF_RESOLUTION) with GPU composition.
+        /// layout (gi_pass_constants.h GI_GLOBAL_SDF_RESOLUTION) with GPU composition.
         uint32_t resolution = 64;
         ///< World-space extent covered by level 0.
         float base_extent = 16.0f;
@@ -121,7 +121,7 @@ public:
         ///< (level 0 has the smallest voxels, so its origin re-snaps most often).
         uint32_t max_levels_per_update = 1;
         ///< Scale of the smallest object the GPU's GI cascade composition keeps (cs_gi_clipmap_compose.sc,
-        ///< SdfLumenCascadeKeepsInstance): 1 / the scene detail. It is part of every level's fingerprint, so a
+        ///< SdfGiCascadeKeepsInstance): 1 / the scene detail. It is part of every level's fingerprint, so a
         ///< change recomposes the levels within the update budget.
         float object_radius_scale = 1.0f;
         ///< Levels that were composed before update PARTIALLY (level::is_partial).

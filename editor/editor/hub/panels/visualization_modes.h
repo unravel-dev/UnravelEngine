@@ -45,28 +45,28 @@ enum class visualization_mode : int
     /// Auto exposure's own state over the lit image: the adaptation trace and this frame's
     /// metering histogram.
     exposure = 41,
-    /// The GI's debug views (lumen_visualize_pass): the scene and screen-space views of the traces, the two
+    /// The GI's debug views (gi_visualize_pass): the scene and screen-space views of the traces, the two
     /// overviews, and the physical card atlas, the card coverage and the object grid.
-    lumen_scene = 42,
-    lumen_card_atlas = 43,
-    lumen_card_coverage = 44,
-    lumen_scene_albedo = 45,
-    lumen_surface_cache = 46,
-    lumen_object_grid = 47,
-    lumen_scene_direct = 48,
-    lumen_scene_indirect = 49,
-    lumen_reflection_rays = 50,
-    lumen_reflection_view = 51,
-    lumen_geometry_normals = 52,
-    lumen_scene_normals = 53,
-    lumen_scene_emissive = 54,
-    lumen_card_weights = 55,
-    lumen_direct_lighting_updates = 56,
-    lumen_indirect_lighting_updates = 57,
-    lumen_radiosity_frames = 58,
-    lumen_screen_probe_frames = 59,
-    lumen_overview = 60,
-    lumen_performance_overview = 61,
+    gi_scene = 42,
+    gi_card_atlas = 43,
+    gi_card_coverage = 44,
+    gi_scene_albedo = 45,
+    gi_surface_cache = 46,
+    gi_object_grid = 47,
+    gi_scene_direct = 48,
+    gi_scene_indirect = 49,
+    gi_reflection_rays = 50,
+    gi_reflection_view = 51,
+    gi_geometry_normals = 52,
+    gi_scene_normals = 53,
+    gi_scene_emissive = 54,
+    gi_card_weights = 55,
+    gi_direct_lighting_updates = 56,
+    gi_indirect_lighting_updates = 57,
+    gi_radiosity_frames = 58,
+    gi_screen_probe_frames = 59,
+    gi_overview = 60,
+    gi_performance_overview = 61,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.
@@ -83,7 +83,7 @@ enum class visualization_group : int
     /// Screen-space motion.
     motion,
     /// The GI scene representation: the global distance field and the surface cache of cards.
-    lumen,
+    gi,
     count,
 };
 

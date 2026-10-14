@@ -20,7 +20,7 @@
 #include "gi_reference_tracer.h"
 
 #include <engine/rendering/gi/gi_constants.h>
-#include <engine/rendering/gi/lumen_constants.h>
+#include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 
@@ -139,23 +139,23 @@ void test_shader_constants_match_cpp()
 #endif
 }
 
-/// The lumen_constants.h table: it owns the constants, lumen_constants.sh mirrors them,
+/// The gi_pass_constants.h table: it owns the constants, gi_pass_constants.sh mirrors them,
 /// checked in both directions like the GI table.
-void test_lumen_constants_match_cpp()
+void test_gi_pass_constants_match_cpp()
 {
-    std::printf("test_lumen_constants_match_cpp\n");
+    std::printf("test_gi_pass_constants_match_cpp\n");
 #ifndef GI_TESTS_SHADER_DIR
     check(false, "GI_TESTS_SHADER_DIR not defined by the build - the parity test cannot run");
 #else
-    const std::string path = std::string(GI_TESTS_SHADER_DIR) + "/lumen/lumen_constants.sh";
-    const auto shader_constants = parse_shader_constants(path, "LUMEN_");
-    check(!shader_constants.empty(), "lumen_constants.sh found and contains LUMEN_ defines at " + path);
-    for(const auto& row : unravel::gi::lumen::lumen_constant_rows)
+    const std::string path = std::string(GI_TESTS_SHADER_DIR) + "/gi/gi_pass_constants.sh";
+    const auto shader_constants = parse_shader_constants(path);
+    check(!shader_constants.empty(), "gi_pass_constants.sh found and contains GI_ defines at " + path);
+    for(const auto& row : unravel::gi::gi_pass_constant_rows)
     {
         const auto found = shader_constants.find(row.name);
         if(found == shader_constants.end())
         {
-            check(false, std::string(row.name) + " missing from lumen_constants.sh");
+            check(false, std::string(row.name) + " missing from gi_pass_constants.sh");
             continue;
         }
         const double tolerance = 1e-6 * std::max(1.0, std::fabs(row.value));
@@ -163,12 +163,12 @@ void test_lumen_constants_match_cpp()
     }
     for(const auto& [name, value] : shader_constants)
     {
-        const bool owned = std::any_of(std::begin(unravel::gi::lumen::lumen_constant_rows),
-                                       std::end(unravel::gi::lumen::lumen_constant_rows),
+        const bool owned = std::any_of(std::begin(unravel::gi::gi_pass_constant_rows),
+                                       std::end(unravel::gi::gi_pass_constant_rows),
                                        [&](const auto& row) { return name == row.name; });
-        check(owned, name + " in lumen_constants.sh is owned by the table in lumen_constants.h");
+        check(owned, name + " in gi_pass_constants.sh is owned by the table in gi_pass_constants.h");
     }
-    std::printf("  %zu constants verified in both directions\n", std::size(unravel::gi::lumen::lumen_constant_rows));
+    std::printf("  %zu constants verified in both directions\n", std::size(unravel::gi::gi_pass_constant_rows));
 #endif
 }
 
@@ -211,7 +211,7 @@ void test_gi_shaders_compile_sm50()
     fs::create_directories(out_dir);
     size_t compiled = 0;
     std::vector<fs::directory_entry> entries;
-    for(const char* folder : {"gi", "lumen", "shader_print"})
+    for(const char* folder : {"gi", "shader_print"})
     {
         const fs::path shader_dir = include_dir / folder;
         if(fs::exists(shader_dir))
@@ -532,7 +532,7 @@ void test_reference_cornell_bleeds_colour()
 auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
 {
     test_shader_constants_match_cpp();
-    test_lumen_constants_match_cpp();
+    test_gi_pass_constants_match_cpp();
     test_gi_shaders_compile_sm50();
     test_reference_is_deterministic();
     test_reference_furnace_conserves_energy();

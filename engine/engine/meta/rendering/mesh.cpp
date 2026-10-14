@@ -4,7 +4,7 @@
 #include <engine/meta/core/math/quaternion.hpp>
 #include <engine/meta/core/math/transform.hpp>
 #include <engine/meta/core/math/bbox.hpp>
-#include <engine/meta/rendering/gi/lumen_mesh_cards.hpp>
+#include <engine/meta/rendering/gi/gi_mesh_cards.hpp>
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 
 #include <fstream>

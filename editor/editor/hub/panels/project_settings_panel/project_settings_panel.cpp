@@ -782,7 +782,7 @@ auto make_project_settings_categories() -> std::vector<settings_category>
         {"Global Illumination",
          ICON_MDI_WHITE_BALANCE_SUNNY,
          "The surface cache: its atlas, the card capture budget and refresh, and the card resolution rule.",
-         "gi lumen surface cache atlas cards capture refresh budget texel density resolution",
+         "gi surface cache atlas cards capture refresh budget texel density resolution",
          &draw_global_illumination_settings},
         {"Splash Screen",
          ICON_MDI_IMAGE_OUTLINE,

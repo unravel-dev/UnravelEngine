@@ -1,10 +1,10 @@
 #pragma once
 
 #include <engine/engine_export.h>
+#include <engine/rendering/gi/gi_card_library.h>
 #include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
-#include <engine/rendering/gi/lumen_card_library.h>
 #include <engine/rendering/gi/sdf_atlas.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 // For material::sptr, which is a nested typedef and so needs the complete type.
@@ -78,7 +78,7 @@ public:
 
     /// What the surface cache needs to capture one placement, parallel to the instance list
     /// (the same index is the placement's GPU instance index).
-    struct lumen_source
+    struct gi_source
     {
         ///< Stable across frames: entity, submesh and drawn instance.
         uint64_t identity = 0;
@@ -89,7 +89,7 @@ public:
         material::sptr material;
         math::mat4 local_to_world{1.0f};
         ///< Null until the submesh's cards are built.
-        std::shared_ptr<const lumen_mesh_cards> cards;
+        std::shared_ptr<const gi_mesh_cards> cards;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -219,22 +219,22 @@ public:
         return instances_;
     }
 
-    auto get_lumen_sources() const -> const std::vector<lumen_source>&
+    auto get_gi_sources() const -> const std::vector<gi_source>&
     {
-        return lumen_sources_;
+        return gi_sources_;
     }
 
-    /// The recorded build of @p source's card set (lumen_card_library::acquire_build_debug), null while it runs.
-    auto acquire_lumen_card_build_debug(const lumen_source& source) -> std::shared_ptr<const lumen_card_build_debug>
+    /// The recorded build of @p source's card set (gi_card_library::acquire_build_debug), null while it runs.
+    auto acquire_gi_card_build_debug(const gi_source& source) -> std::shared_ptr<const gi_card_build_debug>
     {
         const bool two_sided = source.material && source.material->get_cull_type() == cull_type::none;
-        return lumen_cards_.acquire_build_debug(source.owner, source.submesh_index, two_sided);
+        return gi_cards_.acquire_build_debug(source.owner, source.submesh_index, two_sided);
     }
 
-    /// Drops the recorded card builds (lumen_card_library::release_build_debug).
-    void release_lumen_card_build_debug()
+    /// Drops the recorded card builds (gi_card_library::release_build_debug).
+    void release_gi_card_build_debug()
     {
-        lumen_cards_.release_build_debug();
+        gi_cards_.release_build_debug();
     }
 
     /// The backend runs compute (checked at init) and the atlas exists.
@@ -468,8 +468,8 @@ private:
     std::unordered_map<field_key, mesh_residency, field_key_hash> residency_;
     std::vector<instance> instances_;
     /// Surface cache capture inputs, rebuilt each frame alongside @ref instances_ (same order).
-    std::vector<lumen_source> lumen_sources_;
-    lumen_card_library lumen_cards_;
+    std::vector<gi_source> gi_sources_;
+    gi_card_library gi_cards_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;
     /// Pose caches by placement identity (entity, submesh, placement index), swept of the placements not drawn.

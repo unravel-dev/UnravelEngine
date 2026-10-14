@@ -101,11 +101,11 @@ auto pipeline::init(rtti::context& ctx) -> bool
     gtao_pass_.init(ctx);
     gi_clipmap_compose_pass_.init(ctx);
     temporal_probe_pass_.init(ctx);
-    lumen_gather_pass_.init(ctx);
-    lumen_surface_cache_pass_.init(ctx);
-    lumen_visualize_pass_.init(ctx);
+    gi_gather_pass_.init(ctx);
+    gi_surface_cache_pass_.init(ctx);
+    gi_visualize_pass_.init(ctx);
     shader_print_.init(ctx);
-    lumen_reflection_pass_.init(ctx);
+    gi_reflection_pass_.init(ctx);
     scene_history_pass_.init(ctx);
 
     auto& am = ctx.get_cached<asset_manager>();

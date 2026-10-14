@@ -196,9 +196,9 @@ auto make_mesh_gi_section(const mesh& loaded) -> content_item_section
         section.add("Card Memory", gi.card_memory);
         section.add("Card Table", fmt::format("{} per placement", gi.card_table_memory));
     }
-    if(!loaded.are_lumen_cards_disabled())
+    if(!loaded.are_gi_cards_disabled())
     {
-        section.add("Cards LOD", std::to_string(loaded.get_lumen_cards_lod()));
+        section.add("Cards LOD", std::to_string(loaded.get_gi_cards_lod()));
     }
     return section;
 }

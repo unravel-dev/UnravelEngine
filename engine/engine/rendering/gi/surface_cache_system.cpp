@@ -106,7 +106,7 @@ auto surface_cache_system::init(rtti::context& ctx) -> bool
 auto surface_cache_system::deinit(rtti::context& ctx) -> bool
 {
     instances_.clear();
-    lumen_sources_.clear();
+    gi_sources_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
     residency_.clear();
@@ -938,22 +938,22 @@ void surface_cache_system::walk_scene(scene& scn)
                                              : nullptr};
                 // Every placement of the submesh shares one card set (built on first sight).
                 const bool two_sided = submesh_material && submesh_material->get_cull_type() == cull_type::none;
-                const auto cards = lumen_cards_.acquire(mesh_ptr, mesh_handle.uid(), submesh_index, two_sided);
+                const auto cards = gi_cards_.acquire(mesh_ptr, mesh_handle.uid(), submesh_index, two_sided);
                 // Called right after add_instance, so the placement's GI instance is the last one.
-                const auto add_lumen_source = [&](uint64_t identity, const math::mat4& local_to_world)
+                const auto add_gi_source = [&](uint64_t identity, const math::mat4& local_to_world)
                 {
-                    lumen_sources_.push_back({identity,
-                                              uint32_t(instances_.size() - 1u),
-                                              mesh_ptr,
-                                              submesh_index,
-                                              submesh_material,
-                                              local_to_world,
-                                              cards});
+                    gi_sources_.push_back({identity,
+                                           uint32_t(instances_.size() - 1u),
+                                           mesh_ptr,
+                                           submesh_index,
+                                           submesh_material,
+                                           local_to_world,
+                                           cards});
                 };
                 if(!submesh_transforms.has_transforms(submesh_index))
                 {
                     add_instance(submesh_key, field, world_transform, mesh_ptr, material);
-                    add_lumen_source(submesh_key, world_transform);
+                    add_gi_source(submesh_key, world_transform);
                     continue;
                 }
                 const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
@@ -973,7 +973,7 @@ void surface_cache_system::walk_scene(scene& scn)
                                  *transform_ptr,
                                  mesh_ptr,
                                  material);
-                    add_lumen_source(submesh_key | (uint64_t(instance_index) & 0xFFFFu), *transform_ptr);
+                    add_gi_source(submesh_key | (uint64_t(instance_index) & 0xFFFFu), *transform_ptr);
                 }
             }
         });
@@ -1042,7 +1042,7 @@ void surface_cache_system::update_world(scene& scn)
             });
     }
     instances_.clear();
-    lumen_sources_.clear();
+    gi_sources_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
     instance_order_hash_ = ANONYMOUS::instance_order_hash_seed;

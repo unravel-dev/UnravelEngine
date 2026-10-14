@@ -185,24 +185,24 @@ public:
                                       gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& output,
                                       const run_params& rparams);
-    /// The GI debug views (lumen_visualize_pass), over the finished image; their labels into debug_view_labels_.
-    void run_lumen_visualize_pass(const camera& camera,
-                                  gfx::render_view& rview,
-                                  const gfx::frame_buffer::ptr& output,
-                                  const run_params& rparams);
-    /// The GI overlays (lumen_visualize_pass::draw_overlays: lines and shader_print text) over the finished image,
+    /// The GI debug views (gi_visualize_pass), over the finished image; their labels into debug_view_labels_.
+    void run_gi_visualize_pass(const camera& camera,
+                               gfx::render_view& rview,
+                               const gfx::frame_buffer::ptr& output,
+                               const run_params& rparams);
+    /// The GI overlays (gi_visualize_pass::draw_overlays: lines and shader_print text) over the finished image,
     /// whatever the debug view.
-    void run_lumen_visualize_overlays(const camera& camera,
-                                      gfx::render_view& rview,
-                                      const gfx::frame_buffer::ptr& output,
-                                      const run_params& rparams);
-    /// The world-space GI visualizations (lumen_visualize_pass::draw_world), into the scene colour like
+    void run_gi_visualize_overlays(const camera& camera,
+                                   gfx::render_view& rview,
+                                   const gfx::frame_buffer::ptr& output,
+                                   const run_params& rparams);
+    /// The world-space GI visualizations (gi_visualize_pass::draw_world), into the scene colour like
     /// translucency: ahead of the exposure and the tone map. Draws nothing unless one of them is selected.
-    void run_lumen_visualize_scene_color(const camera& camera,
-                                         gfx::render_view& rview,
-                                         const pre_exposure_state& pre_exposure);
+    void run_gi_visualize_scene_color(const camera& camera,
+                                      gfx::render_view& rview,
+                                      const pre_exposure_state& pre_exposure);
     /// Frees what the card generation view holds while it is not the selected one.
-    void release_lumen_visualize_card_generation();
+    void release_gi_visualize_card_generation();
     /// The selected debug view over the finished image, and the GI overlays on top of whichever one it is.
     void run_debug_passes(const camera& camera,
                           gfx::render_view& rview,
@@ -220,41 +220,41 @@ public:
     /// Auto exposure's own state, drawn as a blended panel OVER the finished image
     /// (fs_exposure_debug.sc): an overlay, not a replacement image.
     static constexpr int debug_pass_exposure = 41;
-    /// The GI debug views, ids debug_pass_lumen_scene + lumen_visualize_pass::view (lumen_visualize_pass): the
+    /// The GI debug views, ids debug_pass_gi_scene + gi_visualize_pass::view (gi_visualize_pass): the
     /// scene, lighting and update views, the physical card atlas, the card coverage, the object grid, the screen-space
     /// views and the two overviews.
-    static constexpr int debug_pass_lumen_scene = 42;
-    static constexpr int debug_pass_lumen_card_atlas = 43;
-    static constexpr int debug_pass_lumen_card_coverage = 44;
-    static constexpr int debug_pass_lumen_scene_albedo = 45;
-    static constexpr int debug_pass_lumen_surface_cache = 46;
-    static constexpr int debug_pass_lumen_object_grid = 47;
-    static constexpr int debug_pass_lumen_scene_direct = 48;
-    static constexpr int debug_pass_lumen_scene_indirect = 49;
-    static constexpr int debug_pass_lumen_reflection_rays = 50;
-    static constexpr int debug_pass_lumen_reflection_view = 51;
-    static constexpr int debug_pass_lumen_geometry_normals = 52;
-    static constexpr int debug_pass_lumen_scene_normals = 53;
-    static constexpr int debug_pass_lumen_scene_emissive = 54;
-    static constexpr int debug_pass_lumen_card_weights = 55;
-    static constexpr int debug_pass_lumen_direct_lighting_updates = 56;
-    static constexpr int debug_pass_lumen_indirect_lighting_updates = 57;
-    static constexpr int debug_pass_lumen_radiosity_frames = 58;
-    static constexpr int debug_pass_lumen_screen_probe_frames = 59;
-    static constexpr int debug_pass_lumen_overview = 60;
-    static constexpr int debug_pass_lumen_performance_overview = 61;
+    static constexpr int debug_pass_gi_scene = 42;
+    static constexpr int debug_pass_gi_card_atlas = 43;
+    static constexpr int debug_pass_gi_card_coverage = 44;
+    static constexpr int debug_pass_gi_scene_albedo = 45;
+    static constexpr int debug_pass_gi_surface_cache = 46;
+    static constexpr int debug_pass_gi_object_grid = 47;
+    static constexpr int debug_pass_gi_scene_direct = 48;
+    static constexpr int debug_pass_gi_scene_indirect = 49;
+    static constexpr int debug_pass_gi_reflection_rays = 50;
+    static constexpr int debug_pass_gi_reflection_view = 51;
+    static constexpr int debug_pass_gi_geometry_normals = 52;
+    static constexpr int debug_pass_gi_scene_normals = 53;
+    static constexpr int debug_pass_gi_scene_emissive = 54;
+    static constexpr int debug_pass_gi_card_weights = 55;
+    static constexpr int debug_pass_gi_direct_lighting_updates = 56;
+    static constexpr int debug_pass_gi_indirect_lighting_updates = 57;
+    static constexpr int debug_pass_gi_radiosity_frames = 58;
+    static constexpr int debug_pass_gi_screen_probe_frames = 59;
+    static constexpr int debug_pass_gi_overview = 60;
+    static constexpr int debug_pass_gi_performance_overview = 61;
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
     /// The surface cache for this frame under the view's @p scene_settings: card placement and resolution,
     /// captures rasterized with the G-buffer program (one orthographic view per page), copied into the physical
     /// atlases, then lit (direct lighting and the final combine).
-    void run_lumen_surface_cache(const camera& camera,
-                                 gfx::render_view& rview,
-                                 surface_cache_system& gi_scene,
-                                 const gi_settings::scene_settings& scene_settings);
+    void run_gi_surface_cache(const camera& camera,
+                              gfx::render_view& rview,
+                              surface_cache_system& gi_scene,
+                              const gi_settings::scene_settings& scene_settings);
     /// Rasterizes this frame's card captures, one orthographic view per page.
-    void capture_lumen_cards(const camera& camera, const surface_cache_system& gi_scene);
+    void capture_gi_cards(const camera& camera, const surface_cache_system& gi_scene);
 
     /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off.
     auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
@@ -266,28 +266,28 @@ public:
     /// Whether the GI reflections own this view's reflection buffers: a camera run with the probe stack and
     /// float buffers and GI with its reflections enabled. SSR and the reflection probes then step aside (no
     /// other specular composites under the GI's).
-    auto lumen_reflections_own_view(const run_params& rparams) -> bool;
+    auto gi_reflections_own_view(const run_params& rparams) -> bool;
     /// True when the GI's short-range AO is enabled in this view: it replaces the screen-space AO at any intensity
     /// (the screen-space AO never stacks on the GI's).
-    auto lumen_short_range_ao_owns_view(const run_params& rparams) -> bool;
+    auto gi_short_range_ao_owns_view(const run_params& rparams) -> bool;
 
     /// The GI reflections into RBUFFER and PBUFFER after the screen probe gather of @p gather_params; true when they
     /// wrote both, every pixel.
-    auto run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params) -> bool;
+    auto run_gi_reflection_pass(gfx::render_view& rview, const gi_run_params& gather_params) -> bool;
 
     /// GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
     /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections.
     /// @return true when the gather produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
-    auto run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
+    auto run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
 
     /// The render view's scale of GI_RESOLVE and GI_ROUGH_SPECULAR (the gather's histories): the GI intensity.
     static constexpr const char* gi_resolve_scale = "GI_RESOLVE_SCALE";
     static auto get_gi_resolve_scale(gfx::render_view& rview) -> float;
 
     /// This view's inputs to the GI passes under @p gi.
-    auto make_lumen_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
-        -> lumen_run_params;
+    auto make_gi_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
+        -> gi_run_params;
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
@@ -690,7 +690,7 @@ private:
         /// u_screen_ao: x = intensity, y = bent normal strength (GTAO only), z = multi-bounce of
         /// the screen term (GTAO's setting, on otherwise), w = 1 when the texture carries a bent normal.
         std::array<float, 4> params{};
-        /// Cap of the albedo the multi-bounce fit uses (LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO for the
+        /// Cap of the albedo the multi-bounce fit uses (GI_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO for the
         /// short-range AO); 0 leaves it uncapped.
         float multi_bounce_albedo_cap = 0.0f;
     };
@@ -751,8 +751,8 @@ private:
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
-    /// The GI reflections wrote RBUFFER and PBUFFER in this run (run_lumen_gi_pass), so RBUFFER needs no clear.
-    bool lumen_reflections_written_{false};
+    /// The GI reflections wrote RBUFFER and PBUFFER in this run (run_gi_pass), so RBUFFER needs no clear.
+    bool gi_reflections_written_{false};
     /// Render frame of the last velocity pass that drew ANY mover (individual or batched),
     /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for SSR's
     /// mover gate, held one temporal window by the consumer. Riding the owning pass's loop keeps

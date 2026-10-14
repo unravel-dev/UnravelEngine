@@ -315,8 +315,8 @@ void visualization_menu::draw_view_labels(int mode,
                                           const ImVec2& image_min,
                                           const ImVec2& image_max)
 {
-    const bool is_overview = mode == static_cast<int>(visualization_mode::lumen_overview) ||
-                             mode == static_cast<int>(visualization_mode::lumen_performance_overview);
+    const bool is_overview = mode == static_cast<int>(visualization_mode::gi_overview) ||
+                             mode == static_cast<int>(visualization_mode::gi_performance_overview);
     if(labels.empty() || (!is_overview && menu_state.show_legend))
     {
         return;
@@ -426,15 +426,15 @@ void visualization_menu::draw_legend_overlay(int mode, state& menu_state, const 
     ImGui::GetStateStorage()->SetFloat(height_key, height);
 }
 
-auto visualization_menu::make_lumen_visualize(const state& menu_state,
-                                              const ImVec2& image_min,
-                                              const ImVec2& image_max,
-                                              const usize32_t& render_size) -> lumen_visualize_pass::world_settings
+auto visualization_menu::make_gi_visualize(const state& menu_state,
+                                           const ImVec2& image_min,
+                                           const ImVec2& image_max,
+                                           const usize32_t& render_size) -> gi_visualize_pass::world_settings
 {
-    auto settings = menu_state.lumen;
-    settings.cursor = menu_state.lumen_cursor_override.value_or(math::vec2(-1.0f));
+    auto settings = menu_state.gi;
+    settings.cursor = menu_state.gi_cursor_override.value_or(math::vec2(-1.0f));
     const ImVec2 extent = image_max - image_min;
-    if(menu_state.lumen_cursor_override || !ImGui::IsItemHovered() || extent.x <= 0.0f || extent.y <= 0.0f)
+    if(menu_state.gi_cursor_override || !ImGui::IsItemHovered() || extent.x <= 0.0f || extent.y <= 0.0f)
     {
         return settings;
     }

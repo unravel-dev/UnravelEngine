@@ -23,10 +23,10 @@
 #include "passes/ssr_pass.h"
 #include "passes/gi_clipmap_compose_pass.h"
 #include "passes/temporal_probe_pass.h"
-#include "passes/lumen_gather_pass.h"
-#include "passes/lumen_reflection_pass.h"
-#include "passes/lumen_surface_cache_pass.h"
-#include "passes/lumen_visualize_pass.h"
+#include "passes/gi_gather_pass.h"
+#include "passes/gi_reflection_pass.h"
+#include "passes/gi_surface_cache_pass.h"
+#include "passes/gi_visualize_pass.h"
 #include "passes/scene_history_pass.h"
 #include "passes/ssil_pass.h"
 #include "passes/bloom_pass.h"
@@ -248,9 +248,9 @@ public:
     virtual void set_debug_pass(int pass) = 0;
 
     /// The world-space GI visualizations to draw over the view, whatever the debug pass (the card placement).
-    void set_lumen_visualize_settings(const lumen_visualize_pass::world_settings& settings)
+    void set_gi_visualize_settings(const gi_visualize_pass::world_settings& settings)
     {
-        lumen_visualize_settings_ = settings;
+        gi_visualize_settings_ = settings;
     }
 
     /// Readback scale for the radiance-valued debug views: the indirect-diffuse view (tone
@@ -334,10 +334,10 @@ protected:
     gtao_pass gtao_pass_{};
     gi_clipmap_compose_pass gi_clipmap_compose_pass_{}; ///< The global distance field's GPU composition
     temporal_probe_pass temporal_probe_pass_{};
-    lumen_gather_pass lumen_gather_pass_{}; ///< The GI screen probe gather: the indirect diffuse
-    lumen_surface_cache_pass lumen_surface_cache_pass_{}; ///< The surface cache: cards, atlases and captures
-    lumen_reflection_pass lumen_reflection_pass_{}; ///< The GI reflections, with the screen probe gather
-    lumen_visualize_pass lumen_visualize_pass_{}; ///< The GI debug views
+    gi_gather_pass gi_gather_pass_{}; ///< The GI screen probe gather: the indirect diffuse
+    gi_surface_cache_pass gi_surface_cache_pass_{}; ///< The surface cache: cards, atlases and captures
+    gi_reflection_pass gi_reflection_pass_{}; ///< The GI reflections, with the screen probe gather
+    gi_visualize_pass gi_visualize_pass_{}; ///< The GI debug views
     shader_print shader_print_{};                 ///< The view's shader print text
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
 
@@ -350,8 +350,8 @@ protected:
     pipeline_stats stats_{};
     ///< See get_debug_view_labels.
     std::vector<debug_view_label> debug_view_labels_;
-    ///< See set_lumen_visualize_settings.
-    lumen_visualize_pass::world_settings lumen_visualize_settings_{};
+    ///< See set_gi_visualize_settings.
+    gi_visualize_pass::world_settings gi_visualize_settings_{};
 
 
     entt::registry cache_registry_;

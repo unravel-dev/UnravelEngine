@@ -35,7 +35,7 @@
 
 #include <engine/meta/scripting/script.hpp>
 
-#include <engine/rendering/gi/lumen_mesh_cards.h>
+#include <engine/rendering/gi/gi_mesh_cards.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/profiler/profiler.h>
@@ -924,15 +924,15 @@ auto get_submesh_face_count(const mesh::load_data& data, uint32_t lod, size_t su
  * changes the sidedness gets the other variant from the runtime card library. @p lod_index is clamped to the
  * generated levels, as the distance field's is.
  */
-void build_submesh_lumen_cards(mesh::load_data& data,
-                               const std::vector<importer::imported_material>& materials,
-                               uint32_t max_cards,
-                               uint32_t lod_index,
-                               const std::string& source_name)
+void build_submesh_gi_cards(mesh::load_data& data,
+                            const std::vector<importer::imported_material>& materials,
+                            uint32_t max_cards,
+                            uint32_t lod_index,
+                            const std::string& source_name)
 {
     APP_SCOPE_PERF("Build Surface Cache Cards");
     const auto start = std::chrono::steady_clock::now();
-    data.submesh_cards.assign(data.submeshes.size(), lumen_mesh_cards{});
+    data.submesh_cards.assign(data.submeshes.size(), gi_mesh_cards{});
     const uint32_t lod = math::min<uint32_t>(lod_index, uint32_t(data.lods.size()));
     data.cards_lod_index = lod;
     std::atomic<uint64_t> card_count{0};
@@ -941,7 +941,7 @@ void build_submesh_lumen_cards(mesh::load_data& data,
         const uint32_t data_group = data.submeshes[i].data_group_id;
         const auto& mat = data_group < materials.size() ? materials[data_group].mat : nullptr;
         const bool two_sided = mat && mat->get_cull_type() == cull_type::none;
-        lumen_mesh_cards& cards = data.submesh_cards[i];
+        gi_mesh_cards& cards = data.submesh_cards[i];
         cards.is_mostly_two_sided = two_sided;
         if(i >= data.submesh_sdfs.size() || !data.submesh_sdfs[i].is_sampleable())
         {
@@ -952,7 +952,7 @@ void build_submesh_lumen_cards(mesh::load_data& data,
         {
             return;
         }
-        build_lumen_mesh_cards(geometry, two_sided, max_cards, cards);
+        build_gi_mesh_cards(geometry, two_sided, max_cards, cards);
         card_count += cards.cards.size();
     };
     // A submesh's build takes from milliseconds to tens of seconds, the most triangles the longest, so the builds
@@ -1732,7 +1732,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     }
     else if(!data.submesh_sdfs.empty())
     {
-        build_submesh_lumen_cards(data, materials, importer->cards.max_cards, importer->cards.lod_index, str_input);
+        build_submesh_gi_cards(data, materials, importer->cards.max_cards, importer->cards.lod_index, str_input);
     }
     // Every write is checked on its own: atomic_write_file clears the error it is given, so one
     // error_code shared by all writes only remembered the last of them.
