@@ -5,11 +5,14 @@
 #include <context/context.hpp>
 #include <engine/layers/layer_mask.h>
 #include <entt/meta/meta.hpp>
+#include <hpp/string_view.hpp>
 #include <ser20/external/simdjson/simdjson.h>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace unravel::mcp
 {
@@ -34,7 +37,8 @@ auto meta_properties_to_json(rtti::context& ctx,
  *
  * The setter is the one the reflection binds (the component's own set_x), so dirty flags and
  * side effects run exactly as for an inspector edit. min / max attributes are enforced, enums
- * take their reflected value names, and read-only properties are rejected with a reason.
+ * take their reflected value names. A read-only property is left as it is: written back with
+ * its current value it is skipped, with another value it is listed in result.read_only.
  *
  * @param only When set, keys outside it are reported unknown even if reflected.
  */
@@ -44,12 +48,39 @@ void apply_meta_properties(rtti::context& ctx,
                            component_apply_result& result,
                            const std::unordered_set<std::string>* only = nullptr);
 
+/**
+ * @brief One value of a type this bridge expresses - a codec type, an enum, a container of them,
+ *        or a reflected struct - as JSON; nothing when it cannot.
+ */
+auto meta_value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>;
+
+/**
+ * @brief Reads @p value into @p target as a property write does: a struct merges the fields named,
+ *        a container takes the array's length, anything else is replaced.
+ * @return False with @p error set when @p value does not fit the type.
+ */
+auto meta_value_from_json(rtti::context& ctx,
+                          const simdjson::dom::element& value,
+                          entt::meta_any& target,
+                          std::string& error) -> bool;
+
 /// A layer mask as the names of its set bits, from the project's layer names (the ones the running
 /// game uses); an unnamed set bit reads "#index".
 auto layer_mask_to_json(rtti::context& ctx, const layer_mask& mask) -> std::string;
 
 /// Reads a layer mask from an array of layer names or indices, or "everything" / "nothing".
 auto parse_layer_mask(rtti::context& ctx, const simdjson::dom::element& value, layer_mask& out, std::string& error)
+    -> bool;
+
+/// The value names a reflected enum declares, in declaration order - the spellings MCP accepts.
+auto meta_enum_names(const entt::meta_type& type) -> std::vector<std::string>;
+
+/**
+ * @brief The value of reflected enum `type` named `name`, matched against each value's name and
+ *        pretty name without case, spaces or underscores ("OutExpo", "out_expo", "Out Expo").
+ * @return False with `error` listing the accepted names when nothing matches.
+ */
+auto find_meta_enum_value(const entt::meta_type& type, hpp::string_view name, entt::meta_any& out, std::string& error)
     -> bool;
 
 /// The reflected property of `type` whose "name" attribute is `name`; empty when there is none.
@@ -68,11 +99,8 @@ auto meta_property_schema(const entt::meta_data& prop) -> std::string;
  */
 auto meta_object_schema(const entt::meta_type& type) -> std::string;
 
-/**
- * @brief True when the reflection exposes at least one property of `type` this bridge can
- *        read and write (a known value type, an enum, or a nested reflected struct).
- */
-auto has_meta_properties(const entt::meta_type& type) -> bool;
+/// How many top-level properties of @p type this bridge can read and write.
+auto count_meta_properties(const entt::meta_type& type) -> size_t;
 
 /**
  * @brief Appends schema rows for a reflected type, in the shape list_component_property_schema_json

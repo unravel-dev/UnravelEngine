@@ -1855,6 +1855,10 @@ template<typename Archive>
 void save_to_archive(Archive& ar, entt::const_handle obj)
 {
     bool pushed = push_save_context();
+    if(get_save_context().registry == nullptr)
+    {
+        get_save_context().registry = obj.registry();
+    }
 
     bool is_root = obj.all_of<root_component>();
     if(!is_root)
@@ -1969,6 +1973,10 @@ template<typename Archive>
 void save_to_archive(Archive& ar, const entt::registry& reg)
 {
     bool pushed = push_save_context();
+    if(get_save_context().registry == nullptr)
+    {
+        get_save_context().registry = &reg;
+    }
 
     size_t count = 0;
     reg.view<root_component, transform_component>().each(

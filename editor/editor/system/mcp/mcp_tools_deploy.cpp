@@ -116,6 +116,21 @@ auto take_snapshot(rtti::context& ctx) -> deploy_snapshot
     return snapshot;
 }
 
+/// The progress of the current or last deploy the Deploy window tracks.
+auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
+{
+    if(snapshot.steps.empty())
+    {
+        return R"({"deploying":false,"steps":[],"note":"No deploy is tracked (none started, or the Deploy window was closed)."})";
+    }
+    return fmt::format(R"({{"deploying":{},"done":{},"total":{},"location":{},"steps":{}}})",
+                       bool_to_json(snapshot.ready < snapshot.steps.size()),
+                       snapshot.ready,
+                       snapshot.steps.size(),
+                       make_json_string(snapshot.location),
+                       steps_to_json(snapshot.steps));
+}
+
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
@@ -153,13 +168,27 @@ auto apply_location(deploy_settings& params, const std::string& location, bool c
 
 } // namespace
 
+auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool
+{
+    const auto* panel = get_deploy_panel(ctx);
+    if(panel != nullptr && panel->is_deploying())
+    {
+        error = "A deploy is running; wait for it to finish (deploy_get_state) before changing the "
+                "project or its settings";
+        return false;
+    }
+    return true;
+}
+
 void register_deploy_tools(mcp_tool_registry& registry)
 {
     registry.add(
-        {.name = "deploy_get_settings",
-         .description = "Read the project's deploy settings: destination folder, whether runtime "
-                        "dependencies are copied, whether the build runs afterwards, and whether "
-                        "assets are cooked into the destination.",
+        {.name = "deploy_get_state",
+         .description =
+             "Everything about deploying in one read: the settings (destination folder, runtime dependencies, run "
+             "after deploy, cooked assets); what keeps the project from deploying, one sentence each (usually a "
+             "missing deploy folder - deploy_set_settings - or no startup scene - settings_set "
+             "standalone.startup_scene); and the progress of the current or last deploy.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -170,16 +199,25 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-             return {.text = deploy_settings_to_json(pm->get_deploy_settings()), .is_error = false};
+             const auto& params = pm->get_deploy_settings();
+             const auto problems = editor_actions::get_deploy_problems(ctx, params);
+             return {.text = fmt::format(R"({{"settings":{},"can_deploy":{},"problems":{},"deploy":{}}})",
+                                         deploy_settings_to_json(params),
+                                         bool_to_json(problems.empty()),
+                                         strings_to_json_array(problems),
+                                         deploy_progress_json(take_snapshot(ctx))),
+                     .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "deploy_set_settings",
          .description =
              "Set the project's deploy settings and save them, then report what still keeps the "
              "project from deploying. location is an absolute folder outside the project, created "
-             "when missing. Omitted fields keep their value.",
+             "when missing; a full deploy clears it, so it must be empty or an earlier deploy. "
+             "Omitted fields keep their value.",
          .input_schema_json =
              R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
@@ -187,11 +225,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
          {
              std::string error;
              auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr)
+             if(pm == nullptr || !require_not_deploying(ctx, error))
              {
                  return {.text = error, .is_error = true};
              }
-
              auto params = pm->get_deploy_settings();
              std::string location;
              if(read_string(args, "location", location) && !location.empty())
@@ -216,65 +253,17 @@ void register_deploy_tools(mcp_tool_registry& registry)
                                          strings_to_json_array(problems)),
                      .is_error = false};
          },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "deploy_get_problems",
-         .description =
-             "What currently keeps the project from deploying, one sentence each; empty when it can "
-             "deploy. The same list the Deploy window shows. The usual answers are a missing deploy "
-             "folder (deploy_set_settings) and no startup scene (settings_set "
-             "standalone.startup_scene).",
-         .input_schema_json = empty_object_schema(),
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
-         {
-             std::string error;
-             auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr)
-             {
-                 return {.text = error, .is_error = true};
-             }
-             const auto problems = editor_actions::get_deploy_problems(ctx, pm->get_deploy_settings());
-             return {.text = fmt::format(R"({{"can_deploy":{},"problems":{}}})",
-                                         bool_to_json(problems.empty()),
-                                         strings_to_json_array(problems)),
-                     .is_error = false};
-         },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "deploy_get_status",
-         .description = "Progress of the current or last deploy - one started here or from the "
-                        "editor's Deploy button: the steps done and each step's state. Use it when "
-                        "project_deploy timed out rather than starting another deploy.",
-         .input_schema_json = empty_object_schema(),
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
-         {
-             const auto snapshot = take_snapshot(ctx);
-             if(snapshot.steps.empty())
-             {
-                 return {.text = R"({"deploying":false,"steps":[],"note":"No deploy is tracked (none started, or the Deploy window was closed)."})",
-                         .is_error = false};
-             }
-             return {.text = fmt::format(R"({{"deploying":{},"done":{},"total":{},"location":{},"steps":{}}})",
-                                         bool_to_json(snapshot.ready < snapshot.steps.size()),
-                                         snapshot.ready,
-                                         snapshot.steps.size(),
-                                         make_json_string(snapshot.location),
-                                         steps_to_json(snapshot.steps)),
-                     .is_error = false};
-         },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 
     registry.add(
         {.name = "project_deploy",
          .description =
-             "Build the game into the deploy folder - the same deploy the editor's Deploy button "
-             "runs, shown in its progress. Requires a deploy location and a startup scene: call "
-             "deploy_get_problems first. Waits up to timeout_ms (default 180000); on timeout the "
-             "deploy keeps running and deploy_get_status reports it. Refuses play mode.",
+             "Build the game into the deploy folder, as the editor's Deploy does. With deploy_dependencies on "
+             "(default) the folder is cleared first, so it must be empty or an earlier deploy. Needs a deploy "
+             "location and a startup scene: call deploy_get_state first. Waits up to timeout_ms (default 180000); "
+             "on timeout the deploy keeps running and deploy_get_state reports it. Refuses play mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"location":{"type":"string","description":"Destination folder; also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
          .handler =
@@ -305,7 +294,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      }
                      if(panel->is_deploying())
                      {
-                         return {.text = "A deploy is already running; poll deploy_get_status", .is_error = true};
+                         return {.text = "A deploy is already running; poll deploy_get_state", .is_error = true};
                      }
 
                      auto params = pm->get_deploy_settings();
@@ -361,11 +350,19 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      snapshot = std::move(*taken);
                  }
                  const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
-                 if(finished || std::chrono::steady_clock::now() >= deadline)
+                 // No steps after a start means the Deploy window was closed, which drops its progress.
+                 const bool is_untracked = taken && snapshot.steps.empty();
+                 if(finished || is_untracked || std::chrono::steady_clock::now() >= deadline)
                  {
                      break;
                  }
                  std::this_thread::sleep_for(k_deploy_poll_interval);
+             }
+             if(snapshot.steps.empty())
+             {
+                 return {.text = "The deploy's progress is no longer tracked (the Deploy window was closed); "
+                                 "check the deploy folder and logs_get_recent",
+                         .is_error = true};
              }
 
              const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
@@ -373,7 +370,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  return {.text = fmt::format(
                              R"({{"ok":false,"timed_out":true,"done":{},"total":{},"location":{},)"
-                             R"("steps":{},"note":"The deploy is still running; poll deploy_get_status."}})",
+                             R"("steps":{},"note":"The deploy is still running; poll deploy_get_state."}})",
                              snapshot.ready,
                              snapshot.steps.size(),
                              make_json_string(snapshot.location),
@@ -403,7 +400,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::destructive});
 }
 
 } // namespace unravel::mcp

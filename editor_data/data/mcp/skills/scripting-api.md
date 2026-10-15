@@ -48,7 +48,7 @@ scripts_get_source {"path":"engine:/data/scripts/input/Input.cs"}
 
 ## Start from a sample, not a blank file
 
-`engine:/data/scripts/samples/` holds four working components. They are the fastest
+`engine:/data/scripts/samples/` holds five working components. They are the fastest
 way to see the idioms in context:
 
 - `SampleCharacterController.cs` - movement driven by `Input` actions through
@@ -56,6 +56,7 @@ way to see the idioms in context:
 - `SampleMouseLookComponent.cs` - mouse-delta look
 - `SampleOrbitComponent.cs` - transform animation over time
 - `SampleUIWrapperController.cs` - driving a `UIDocument` from script
+- `SampleHudController.cs` - a HUD bound to a data model
 
 Read the one closest to the task before writing anything.
 

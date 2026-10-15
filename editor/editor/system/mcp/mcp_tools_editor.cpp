@@ -1,6 +1,13 @@
 #include "mcp_input_utils.h"
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 
+#include "mcp_viewport_utils.h"
+
+#include <editor/hub/hub.h>
+#include <editor/hub/panels/panel.h>
+#include <editor/hub/panels/viewport_stats_overlay.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/entity_inspect.h>
 #include <editor/system/mcp_manager.h>
@@ -8,8 +15,10 @@
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <graphics/graphics.h>
+#include <imgui/imgui_internal.h>
 
 #include <algorithm>
+#include <limits>
 #include <array>
 #include <logging/logging.h>
 
@@ -23,60 +32,141 @@ constexpr int64_t k_max_skip_frames = 600;
 /// Largest burst one particles_control_batch emit queues.
 constexpr int64_t k_max_emit_count = 100000;
 
-auto level_to_string(level::level_enum level) -> const char*
+constexpr double k_milliseconds_per_second = 1000.0;
+/// Frames an answered dialog gets to close and run its answer before the result is read.
+constexpr int k_answer_frames = 2;
+
+/// The newest message box still waiting for an answer: the one on top.
+auto find_waiting_box() -> std::shared_ptr<ImBox::MsgBox>
 {
-    switch(level)
-    {
-        case level::trace:
-            return "trace";
-        case level::debug:
-            return "debug";
-        case level::info:
-            return "info";
-        case level::warn:
-            return "warn";
-        case level::err:
-            return "error";
-        case level::critical:
-            return "critical";
-        default:
-            return "off";
-    }
+    const auto& boxes = ImBox::MsgBoxManager::GetInstance().GetActiveBoxes();
+    const auto it = std::find_if(boxes.rbegin(),
+                                 boxes.rend(),
+                                 [](const auto& box)
+                                 {
+                                     return box && box->IsWaiting();
+                                 });
+    return it != boxes.rend() ? *it : nullptr;
 }
 
-auto parse_min_level(const std::string& name, level::level_enum& out) -> bool
+/**
+ * @brief The dialog the editor waits on, or null. A message box (the save prompts) is answerable with
+ *        editor_answer_modal; another modal window is named so a stalled call can be explained.
+ */
+auto modal_status_json() -> std::string
 {
-    if(name.empty() || name == "trace")
+    if(auto box = find_waiting_box())
     {
-        out = level::trace;
-        return true;
+        std::vector<std::string> labels;
+        for(const auto& button : box->GetButtons())
+        {
+            labels.push_back(button.second);
+        }
+        return fmt::format(R"({{"title":{},"message":{},"buttons":{},"answerable":true}})",
+                           make_json_string(box->GetTitle()),
+                           make_json_string(box->GetMessage()),
+                           strings_to_json_array(labels));
     }
-    if(name == "debug")
+    const auto* popup = ImGui::GetCurrentContext() != nullptr ? ImGui::GetTopMostPopupModal() : nullptr;
+    if(popup == nullptr)
     {
-        out = level::debug;
-        return true;
+        return "null";
     }
-    if(name == "info")
+    const std::string name(popup->Name);
+    return fmt::format(R"({{"title":{},"answerable":false}})", make_json_string(name.substr(0, name.find("##"))));
+}
+
+/// Asks the waiting message box to take the answer of the button labelled @p label, as a click would.
+auto request_modal_answer(const std::string& label, std::string& title, std::string& error) -> bool
+{
+    auto box = find_waiting_box();
+    if(!box)
     {
-        out = level::info;
-        return true;
+        error = "No dialog waits for an answer";
+        return false;
     }
-    if(name == "warn" || name == "warning")
+    title = box->GetTitle();
+    std::vector<std::string> labels;
+    for(const auto& [result, button_label] : box->GetButtons())
     {
-        out = level::warn;
-        return true;
+        if(to_lower_ascii(button_label) == to_lower_ascii(label))
+        {
+            return box->RequestAnswer(result);
+        }
+        labels.push_back(button_label);
     }
-    if(name == "error" || name == "err")
-    {
-        out = level::err;
-        return true;
-    }
-    if(name == "critical")
-    {
-        out = level::critical;
-        return true;
-    }
+    error = fmt::format("\"{}\" has no button {} (buttons: {})", title, label, strings_to_json_array(labels));
     return false;
+}
+
+/// What one camera's pipeline drew last frame.
+auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
+{
+    return fmt::format(
+        R"({{"models":{},"submeshes":{},"skinned_models":{},"skinned_submeshes":{},"shadow_models":{},)"
+        R"("shadow_submeshes":{},"lights":{},"shadow_lights":{},"particle_emitters":{{"active":{},"simulated":{},)"
+        R"("drawn":{},"skipped":{}}},"particles":{{"active":{},"simulated":{},"drawn":{},"skipped":{}}},)"
+        R"("particle_batches":{}}})",
+        stats.drawn_models,
+        stats.drawn_static_submeshes,
+        stats.drawn_skinned_models,
+        stats.drawn_skinned_submeshes,
+        stats.drawn_models_for_shadows + stats.drawn_skinned_models_for_shadows,
+        stats.drawn_submeshes_for_shadows + stats.drawn_skinned_submeshes_for_shadows,
+        stats.drawn_lights,
+        stats.drawn_lights_casting_shadows,
+        stats.active_particle_emitters,
+        stats.simulated_particle_emitters,
+        stats.drawn_particle_emitters,
+        stats.skipped_particle_emitters,
+        stats.active_particles,
+        stats.simulated_particles,
+        stats.drawn_particles,
+        stats.skipped_particles,
+        stats.drawn_particles_batches);
+}
+
+/// The frame as the viewport statistics overlay shows it: time, draw counts without the editor UI,
+/// GPU memory, and what the Scene view's and the game's cameras drew.
+auto frame_stats_json(rtti::context& ctx) -> std::string
+{
+    const auto* stats = bgfx::getStats();
+    const double cpu_ms = static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) * k_milliseconds_per_second /
+                          static_cast<double>(stats->cpuTimerFreq);
+    const double gpu_ms = static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * k_milliseconds_per_second /
+                          static_cast<double>(stats->gpuTimerFreq);
+    const float fps = ImGui::GetIO().Framerate;
+    const auto counts = viewport_stats_overlay::get_scene_draw_counts();
+    std::string error;
+    const auto scene_camera = resolve_scene_camera(ctx, error);
+    const auto scene_view_json =
+        scene_camera ? pipeline_stats_json(
+                           scene_camera.get<camera_component>().get_pipeline_data().get_pipeline()->get_stats())
+                     : std::string("null");
+    auto* scn = ctx.get_cached<editing_manager>().get_active_scene(ctx);
+    return fmt::format(
+        R"({{"frame":{{"fps":{:.1f},"frame_ms":{:.2f},"cpu_submit_ms":{:.2f},"gpu_ms":{:.2f},"gpu_latency_frames":{}}},)"
+        R"("draw":{{"triangles":{},"draw_calls":{},"compute_calls":{},"blit_calls":{},"render_passes":{}}},)"
+        R"("memory":{{"gpu_used_bytes":{},"gpu_max_bytes":{},"texture_bytes":{},"render_target_bytes":{}}},)"
+        R"("entities":{},"play_phase":{},"scene_view":{},"game":{}}})",
+        fps,
+        fps > 0.0f ? static_cast<float>(k_milliseconds_per_second) / fps : 0.0f,
+        cpu_ms,
+        gpu_ms,
+        stats->maxGpuLatency,
+        counts.triangles,
+        counts.draw_calls,
+        stats->numCompute,
+        stats->numBlit,
+        gfx::render_pass::get_last_frame_max_pass_id(),
+        stats->gpuMemoryUsed,
+        stats->gpuMemoryMax,
+        stats->textureMemoryUsed,
+        stats->rtMemoryUsed,
+        scn != nullptr && scn->registry ? count_live_entities(*scn->registry) : 0,
+        make_json_string(play_phase_from_ctx(ctx)),
+        scene_view_json,
+        pipeline_stats_json(game_panel::get_rendered_pipeline_stats(ctx)));
 }
 
 /// The tool surface this editor serves, so a client can tell which profile it has
@@ -228,6 +318,44 @@ auto play_state_to_json(const play_state_info& info) -> std::string
         info.frames_simulated);
 }
 
+/// Most history steps one undo / redo call takes.
+constexpr int64_t k_max_history_steps = 100;
+
+/**
+ * @brief Steps the undo history `count` times backward (undo) or forward (redo). An action whose
+ *        entities are gone is passed over by the stack ("missing references") and reported as
+ *        skipped, not as done.
+ */
+auto step_history(editing_manager& em, bool backward, int64_t count) -> tool_result
+{
+    std::vector<std::string> done;
+    std::vector<std::string> skipped;
+    for(int64_t i = 0; i < count && (backward ? em.can_undo() : em.can_redo()); ++i)
+    {
+        const auto action = backward ? em.undo() : em.redo();
+        if(action && action->is_valid())
+        {
+            done.push_back(action->name);
+        }
+        else
+        {
+            skipped.push_back(action ? action->name : std::string{});
+        }
+    }
+    if(done.empty() && skipped.empty())
+    {
+        return {.text = backward ? R"json({"ok":false,"reason":"nothing to undo (the history is cleared when scripts recompile, a scene loads or play ends)"})json"
+                                 : R"({"ok":false,"reason":"nothing to redo"})",
+                .is_error = false};
+    }
+    return {.text = fmt::format(R"({{"ok":{},"{}":{},"skipped_missing_references":{}}})",
+                                bool_to_json(!done.empty()),
+                                backward ? "undone" : "redone",
+                                strings_to_json_array(done),
+                                strings_to_json_array(skipped)),
+            .is_error = false};
+}
+
 } // namespace
 
 void register_editor_tools(mcp_tool_registry& registry)
@@ -235,9 +363,9 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "editor_get_status",
          .description =
-             "Bootstrap status: open project, active scene, prefab mode, play state and the active MCP "
-             "profile in "
-             "one call. Prefer this over separate project_get_info + scene_get_info + play_get_state.",
+             "Where the editor is, in one call: the open project, the active scene, prefab mode, play state "
+             "(phase, paused, frames running and simulated), the dialog the editor waits on (modal: title, "
+             "message, buttons; answer it with editor_answer_modal) and the active MCP profile.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -246,33 +374,77 @@ void register_editor_tools(mcp_tool_registry& registry)
                  const auto prefab_json = ctx.has<editing_manager>()
                                               ? prefab_mode_status_json(ctx.get_cached<editing_manager>())
                                               : std::string(R"({"active":false})");
-                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"mcp":{}}})",
+                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"modal":{},"mcp":{}}})",
                                              project_info_json(ctx),
                                              active_scene_status_json(ctx),
                                              prefab_json,
                                              play_json,
+                                             modal_status_json(),
                                              mcp_status_json(ctx)),
                          .is_error = false};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
-        {.name = "play_get_state",
-         .description = "Get editor play mode state: phase, active, paused, splash, frames_running (every frame "
-                        "since play began running, paused ones too) and frames_simulated (frames the game "
-                        "advanced: unpaused frames and play_skip_frame steps).",
-         .input_schema_json = empty_object_schema(),
+        {.name = "editor_answer_modal",
+         .description =
+             "Answer the dialog the editor waits on (editor_get_status modal) by pressing one of its buttons, "
+             "by label (\"Save\", \"Don't Save\", \"Cancel\", ...), as a click would. Returns the next dialog "
+             "when the answer opened one.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"button":{"type":"string","description":"Button label, case-insensitive"}},"required":["button"]})json",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string label;
+             read_string(args, "button", label);
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             struct request_outcome
              {
-                 return {.text = play_state_to_json(editor_actions::get_play_state(ctx)), .is_error = false};
-             },
-         .mutates_scene = false});
+                 std::string title;
+                 std::string error;
+             };
+             auto requested = mcp.invoke_on_main(
+                 [&label]() -> request_outcome
+                 {
+                     request_outcome outcome;
+                     request_modal_answer(label, outcome.title, outcome.error);
+                     return outcome;
+                 });
+             if(!requested || !requested->error.empty())
+             {
+                 return {.text = requested ? requested->error : "Timed out on the main thread", .is_error = true};
+             }
+             for(int frame = 0; frame < k_answer_frames; ++frame)
+             {
+                 mcp.invoke_on_main(
+                     []()
+                     {
+                         return true;
+                     });
+             }
+             auto next = mcp.invoke_on_main(
+                 []()
+                 {
+                     return modal_status_json();
+                 });
+             return {.text = fmt::format(R"({{"ok":true,"answered":{},"dialog":{},"modal":{}}})",
+                                         make_json_string(label),
+                                         make_json_string(requested->title),
+                                         next ? *next : std::string("null")),
+                     .is_error = false};
+         },
+         .mutates_scene = true,
+         .requires_main_thread = false,
+         .effect = tool_effect::destructive});
 
     registry.add(
         {.name = "play_set_active",
          .description =
-             "Enter or exit play mode. Blocked when scripts have compile errors. Optional allow_splash.",
+             "Enter or exit play mode. Entering is blocked while scripts have compile errors. allow_splash "
+             "(default true) shows the project's splash screen first when it has one; false starts the "
+             "game at once.",
          .input_schema_json =
              R"({"type":"object","properties":{"active":{"type":"boolean"},"allow_splash":{"type":"boolean"}},"required":["active"]})",
          .handler =
@@ -293,7 +465,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  return {.text = fmt::format(R"({{"ok":true,"active":{}}})", bool_to_json(active)),
                          .is_error = false};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "play_set_paused",
@@ -316,7 +489,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  return {.text = fmt::format(R"({{"ok":true,"paused":{}}})", bool_to_json(paused)),
                          .is_error = false};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "play_skip_frame",
@@ -365,13 +539,11 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "particles_control_batch",
          .description =
-             "Play, pause, resume, stop, stop_and_reset or emit particle emitters, in edit or play mode, "
-             "as the inspector's playback buttons do, and read their state. Each item: entity_id, action "
-             "(default status), count for emit (a burst, whatever the emission rate), with_children to "
-             "reach the emitters below the entity as well. Every item reports num_particles, playing, "
-             "paused, simulated (false while renderer-based culling freezes an emitter no camera sees) "
-             "and culling_mode, as of this frame: an emitted burst shows up on the next one. "
-             "with_children also lists the child emitters' state.",
+             "Play, pause, resume, stop, reset or emit particle emitters in edit or play mode, or only read their "
+             "state (action status, the default). count sets an emit burst, whatever the emission rate; "
+             "with_children reaches the emitters below the entity too. Each item reports num_particles, playing, "
+             "paused, simulated (false while culling freezes an emitter no camera sees) and culling_mode, as of "
+             "this frame: a burst shows up on the next.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"action":{"type":"string","enum":["status","play","pause","resume","stop","stop_and_reset","emit"]},"count":{"type":"integer","minimum":1,"maximum":100000},"with_children":{"type":"boolean"}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
@@ -410,61 +582,58 @@ void register_editor_tools(mcp_tool_registry& registry)
                  const auto sel = editor_actions::get_selection(ctx);
                  return {.text = selection_to_json(sel.active_entity_id, sel.entity_ids), .is_error = false};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
-        {.name = "selection_set_batch",
+        {.name = "selection_set",
          .description =
-             "Set editor entity selection by UUID (or integral) ids. "
-             "mode=normal (default) replaces selection; mode=add appends (ctrl-select).",
+             "Set what the editor has selected. entity_ids replaces the entity selection (mode add adds "
+             "to it, as ctrl-click does; [] clears it). asset (a key, or a path relative to app:/data) "
+             "selects an asset as a Content Browser click does, so the Inspector shows its details and "
+             "import settings. Returns the entity selection.",
          .input_schema_json =
-             R"({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["normal","add"]}},"required":["entity_ids"]})",
+             R"({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"mode":{"type":"string","enum":["replace","add"],"default":"replace"},"asset":{"type":"string"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
-                 std::vector<std::string> ids;
                  std::string error;
+                 std::string asset;
+                 const bool has_asset = read_string(args, "asset", asset);
+                 const bool has_entities = args["entity_ids"].error() == simdjson::SUCCESS;
+                 if(has_asset == has_entities)
+                 {
+                     return {.text = "Pass entity_ids or asset", .is_error = true};
+                 }
+                 if(has_asset)
+                 {
+                     const auto key = to_asset_key(asset);
+                     if(!editor_actions::select_asset(ctx, key, &error))
+                     {
+                         return {.text = error, .is_error = true};
+                     }
+                     return {.text = fmt::format(R"({{"asset":{}}})", make_json_string(key)), .is_error = false};
+                 }
+                 std::vector<std::string> ids;
                  if(!read_string_array(args, "entity_ids", ids, error))
                  {
                      return {.text = error, .is_error = true};
                  }
-                 bool add = false;
                  std::string mode;
-                 if(read_string(args, "mode", mode) && mode == "add")
+                 const bool is_add = read_string(args, "mode", mode) && mode == "add";
+                 if(ids.empty() && !is_add)
                  {
-                     add = true;
+                     editor_actions::clear_selection(ctx);
                  }
-                 if(!editor_actions::set_selection(ctx, ids, add, &error))
+                 else if(!editor_actions::set_selection(ctx, ids, is_add, &error))
                  {
                      return {.text = error, .is_error = true};
                  }
                  const auto sel = editor_actions::get_selection(ctx);
                  return {.text = selection_to_json(sel.active_entity_id, sel.entity_ids), .is_error = false};
              },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "selection_set_asset",
-         .description = "Select an asset by key (e.g. app:/data/Model.fbx), as a click in the Content Browser does, so "
-                        "the Inspector shows its details and import settings. Textures, materials, meshes, prefabs "
-                        "and scenes.",
-         .input_schema_json = R"({"type":"object","properties":{"key":{"type":"string"}},"required":["key"]})",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 std::string key;
-                 if(!read_string(args, "key", key) || key.empty())
-                 {
-                     return {.text = "Missing key", .is_error = true};
-                 }
-                 std::string error;
-                 if(!editor_actions::select_asset(ctx, key, &error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 return {.text = fmt::format(R"({{"selected":{}}})", make_json_string(key)), .is_error = false};
-             },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "editor_open_project_settings",
@@ -482,24 +651,14 @@ void register_editor_tools(mcp_tool_registry& registry)
                  }
                  return {.text = R"({"opened":true})", .is_error = false};
              },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "selection_clear",
-         .description = "Clear the editor selection.",
-         .input_schema_json = empty_object_schema(),
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
-             {
-                 editor_actions::clear_selection(ctx);
-                 return {.text = R"({"cleared":true})", .is_error = false};
-             },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "window_request_focus",
          .description =
-             "Focus/raise the editor OS window so filesystem watchers can process asset changes.",
+             "Raise and focus the editor's OS window, for a user who should see it. Asset changes are picked up "
+             "without it.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -511,47 +670,46 @@ void register_editor_tools(mcp_tool_registry& registry)
                  }
                  return {.text = R"({"ok":true,"requested":true})", .is_error = false};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
-        {.name = "panel_focus_scene",
-         .description = "Focus the Scene panel (editor viewport tab) so it becomes the active ImGui window.",
-         .input_schema_json = empty_object_schema(),
+        {.name = "panel_focus",
+         .description = "Make the Scene or the Game panel the active editor tab, as clicking its tab does.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"panel":{"type":"string","enum":["scene","game"]}},"required":["panel"]})",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
+                 std::string panel;
+                 read_string(args, "panel", panel);
+                 if(panel != "scene" && panel != "game")
+                 {
+                     return {.text = "panel must be scene or game", .is_error = true};
+                 }
                  std::string error;
-                 if(!editor_actions::focus_scene_panel(ctx, &error))
+                 const bool is_focused = panel == "scene" ? editor_actions::focus_scene_panel(ctx, &error)
+                                                          : editor_actions::focus_game_panel(ctx, &error);
+                 if(!is_focused)
                  {
                      return {.text = error, .is_error = true};
                  }
-                 return {.text = R"({"panel":"scene","focused":true})", .is_error = false};
+                 return {.text = fmt::format(R"({{"panel":{},"focused":true}})", make_json_string(panel)),
+                         .is_error = false};
              },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "panel_focus_game",
-         .description = "Focus the Game panel (play view tab) so it becomes the active ImGui window.",
-         .input_schema_json = empty_object_schema(),
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
-             {
-                 std::string error;
-                 if(!editor_actions::focus_game_panel(ctx, &error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 return {.text = R"({"panel":"game","focused":true})", .is_error = false};
-             },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "logs_get_recent",
          .description =
-             "Get recent console log entries. Optional min_level (trace|debug|info|warn|error|critical), "
-             "max_count (default 50), after_id (exclusive cursor).",
+             "Read the editor console log. Without after_id: the newest max_count entries (default 50). "
+             "With after_id (the next_after_id of an earlier call): the entries logged since, oldest "
+             "first, max_count at a time - has_more says another page waits. min_level filters by "
+             "severity (default info), contains by text (case-insensitive). The console keeps the last "
+             "~1000 entries.",
          .input_schema_json =
-             R"({"type":"object","properties":{"min_level":{"type":"string"},"max_count":{"type":"integer","minimum":1,"maximum":1024},"after_id":{"type":"integer","minimum":0}}})",
+             R"({"type":"object","properties":{"min_level":{"type":"string","enum":["trace","debug","info","warn","warning","error","critical"]},"max_count":{"type":"integer","minimum":1,"maximum":1024},"after_id":{"type":"integer","minimum":0,"description":"Return entries after this id, oldest first"},"contains":{"type":"string","description":"Only entries whose text contains this"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -561,28 +719,35 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Invalid min_level", .is_error = true};
                  }
-                 double max_count_d = 50.0;
-                 size_t max_count = 50;
-                 if(read_double(args, "max_count", max_count_d))
+                 const auto max_count = static_cast<size_t>(std::clamp<int64_t>(read_int64_or(args, "max_count", 50), 1, 1024));
+                 const bool has_cursor = args["after_id"].error() == simdjson::SUCCESS;
+                 const auto after_id = static_cast<uint64_t>(std::max<int64_t>(read_int64_or(args, "after_id", 0), 0));
+                 std::string contains;
+                 read_string(args, "contains", contains);
+                 // The console's id 0 is a real entry: without a cursor nothing is skipped.
+                 auto logs = editor_actions::get_recent_logs(ctx, min_level, std::numeric_limits<size_t>::max(), 0);
+                 std::erase_if(logs,
+                               [&](const auto& entry)
+                               {
+                                   return (has_cursor && entry.id <= after_id) ||
+                                          (!contains.empty() && !contains_ci(entry.text, contains));
+                               });
+                 const bool has_more = has_cursor && logs.size() > max_count;
+                 // A cursor pages forward from the oldest; a plain call wants the newest.
+                 if(logs.size() > max_count && has_cursor)
                  {
-                     max_count = static_cast<size_t>(std::clamp(max_count_d, 1.0, 1024.0));
+                     logs.erase(logs.begin() + static_cast<std::ptrdiff_t>(max_count), logs.end());
                  }
-                 double after_d = 0.0;
-                 uint64_t after_id = 0;
-                 if(read_double(args, "after_id", after_d) && after_d >= 0.0)
+                 else if(logs.size() > max_count)
                  {
-                     after_id = static_cast<uint64_t>(after_d);
+                     logs.erase(logs.begin(), logs.end() - static_cast<std::ptrdiff_t>(max_count));
                  }
-                 const auto logs = editor_actions::get_recent_logs(ctx, min_level, max_count, after_id);
                  std::string json = "[";
                  for(size_t i = 0; i < logs.size(); ++i)
                  {
-                     if(i > 0)
-                     {
-                         json += ",";
-                     }
                      const auto& e = logs[i];
-                     json += fmt::format(R"({{"id":{},"level":{},"text":{},"filename":{},"funcname":{},"line":{}}})",
+                     json += fmt::format(R"({}{{"id":{},"level":{},"text":{},"filename":{},"funcname":{},"line":{}}})",
+                                         i > 0 ? "," : "",
                                          e.id,
                                          make_json_string(level_to_string(e.level)),
                                          make_json_string(e.text),
@@ -591,57 +756,69 @@ void register_editor_tools(mcp_tool_registry& registry)
                                          e.line);
                  }
                  json += "]";
-                 return {.text = std::move(json), .is_error = false};
+                 const auto next_after_id = logs.empty() ? after_id : logs.back().id;
+                 return {.text = fmt::format(R"({{"entries":{},"count":{},"next_after_id":{},"has_more":{}}})",
+                                             json,
+                                             logs.size(),
+                                             next_after_id,
+                                             bool_to_json(has_more))};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "edit_undo",
-         .description = "Undo the last undoable editor action (same as Ctrl+Z).",
-         .input_schema_json = empty_object_schema(),
+         .description = "Undo editor actions (Ctrl+Z), count steps (default 1). Every MCP call that "
+                        "changes the scene is one step. Returns the names undone.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":100,"default":1}}})json",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  std::string error;
                  if(!require_not_play_mode(ctx, error))
                  {
                      return {.text = error, .is_error = true};
                  }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 if(!em.can_undo())
-                 {
-                     return {.text = R"({"ok":false,"undone":false,"reason":"nothing to undo"})", .is_error = false};
-                 }
-                 auto action = em.undo();
-                 const auto name = action ? action->name : std::string{};
-                 return {.text = fmt::format(R"({{"ok":true,"undone":true,"action":{}}})", make_json_string(name)),
-                         .is_error = false};
+                 const auto count = std::clamp<int64_t>(read_int64_or(args, "count", 1), 1, k_max_history_steps);
+                 return step_history(ctx.get_cached<editing_manager>(), true, count);
              },
          .mutates_scene = true});
 
     registry.add(
         {.name = "edit_redo",
-         .description = "Redo the last undone editor action (same as Ctrl+Y).",
-         .input_schema_json = empty_object_schema(),
+         .description = "Redo undone editor actions (Ctrl+Y), count steps (default 1). Returns the names "
+                        "redone.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":100,"default":1}}})json",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  std::string error;
                  if(!require_not_play_mode(ctx, error))
                  {
                      return {.text = error, .is_error = true};
                  }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 if(!em.can_redo())
-                 {
-                     return {.text = R"({"ok":false,"redone":false,"reason":"nothing to redo"})", .is_error = false};
-                 }
-                 auto action = em.redo();
-                 const auto name = action ? action->name : std::string{};
-                 return {.text = fmt::format(R"({{"ok":true,"redone":true,"action":{}}})", make_json_string(name)),
-                         .is_error = false};
+                 const auto count = std::clamp<int64_t>(read_int64_or(args, "count", 1), 1, k_max_history_steps);
+                 return step_history(ctx.get_cached<editing_manager>(), false, count);
              },
          .mutates_scene = true});
+
+    registry.add(
+        {.name = "stats_get",
+         .description =
+             "Frame statistics, as the viewport statistics overlay shows them: fps, CPU and GPU ms, triangles and "
+             "draw calls without the editor UI, GPU memory, live entities, and per view (scene_view, game) the "
+             "models, lights, shadow casters and particles drawn. Last frame's values; with vsync on, times "
+             "include waiting for the display.",
+         .input_schema_json = empty_object_schema(),
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+         {
+             return {.text = frame_stats_json(ctx), .is_error = false};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "profiler_get_passes",
@@ -651,7 +828,7 @@ void register_editor_tools(mcp_tool_registry& registry)
              "several times and average. Pass enable:true once to switch the GPU profiler on.",
          .input_schema_json = R"({"type":"object","properties":{"prefix":{"type":"string"},"enable":{"type":"boolean"}}})",
          .handler =
-             [](rtti::context&, const simdjson::dom::object& args) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  std::string prefix;
                  std::string_view prefix_view;
@@ -659,11 +836,12 @@ void register_editor_tools(mcp_tool_registry& registry)
                  {
                      prefix = std::string(prefix_view);
                  }
-                 // The GPU view timings only exist while the bgfx profiler is on (same switch
-                 // as the profiler panel's Enable checkbox).
+                 // The GPU view timings only exist while the bgfx profiler is on. Switched through the
+                 // profiler panel's own Enable state, so the panel shows what is really on.
                  bool enable = false;
                  if(!args["enable"].get(enable))
                  {
+                     ctx.get_cached<hub>().get_panels().gpu_profiler_enabled() = enable;
                      bgfx::setDebug(enable ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
                  }
                  const auto* stats = bgfx::getStats();
@@ -696,7 +874,8 @@ void register_editor_tools(mcp_tool_registry& registry)
                  json += "]";
                  return {.text = json, .is_error = false};
              },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 }
 
 } // namespace unravel::mcp

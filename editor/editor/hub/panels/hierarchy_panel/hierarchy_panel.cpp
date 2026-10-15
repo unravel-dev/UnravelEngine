@@ -11,6 +11,7 @@
 #include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/imgui/integration/imgui_style.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/prefab_instance_changes.h>
 #include <editor/shortcuts.h>
 #include <editor/events.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
@@ -769,9 +770,9 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
                 {
                     auto& em = ctx.get_cached<editing_manager>();
                     em.queue_action("Unlink from Prefab",
-                    [entity]() mutable
+                    [entity]()
                     {
-                        entity.remove<prefab_component, prefab_id_component>();
+                        unlink_from_prefab(entity);
                     });
                 }
             }

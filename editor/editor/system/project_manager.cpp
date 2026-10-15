@@ -366,6 +366,36 @@ auto project_manager::inspect_project(const fs::path& project_path) const -> pro
     return report;
 }
 
+auto project_manager::can_create_project(const fs::path& project_path, std::string* error) const -> bool
+{
+    auto fail = [&](const std::string& message) -> bool
+    {
+        if(error)
+        {
+            *error = message;
+        }
+        return false;
+    };
+    if(!project_path.is_absolute())
+    {
+        return fail(fmt::format("Project path must be absolute: {}", project_path.generic_string()));
+    }
+    fs::error_code err;
+    if(!fs::exists(project_path, err))
+    {
+        return true;
+    }
+    if(!fs::is_directory(project_path, err))
+    {
+        return fail(fmt::format("Project path exists and is not a directory: {}", project_path.generic_string()));
+    }
+    if(!fs::is_empty(project_path, err))
+    {
+        return fail(fmt::format("Project directory already exists and is not empty: {}", project_path.generic_string()));
+    }
+    return true;
+}
+
 auto project_manager::create_project(rtti::context& ctx, const fs::path& project_path, std::string* error) -> bool
 {
     auto fail = [&](const std::string& message) -> bool
@@ -378,24 +408,12 @@ auto project_manager::create_project(rtti::context& ctx, const fs::path& project
         return false;
     };
 
-    if(!project_path.is_absolute())
+    std::string refusal;
+    if(!can_create_project(project_path, &refusal))
     {
-        return fail(fmt::format("Project path must be absolute: {}", project_path.generic_string()));
+        return fail(refusal);
     }
     fs::error_code err;
-    if(fs::exists(project_path, err))
-    {
-        if(!fs::is_directory(project_path, err))
-        {
-            return fail(fmt::format("Project path exists and is not a directory: {}", project_path.generic_string()));
-        }
-        if(!fs::is_empty(project_path, err))
-        {
-            return fail(fmt::format("Project directory already exists and is not empty: {}",
-                                    project_path.generic_string()));
-        }
-    }
-
     fs::create_directories(project_path, err);
 
     if(err)

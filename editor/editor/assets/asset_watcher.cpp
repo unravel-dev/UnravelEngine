@@ -186,7 +186,11 @@ auto get_meta_key(const fs::path& path) -> std::string
     return key + ".meta";
 }
 
-auto check_files_integrity(const std::string& key, const fs::path& entry_path) -> bool
+/// False when @p key's source is gone: the compiled file @p entry_path left behind is removed. Its .meta is removed
+/// only on @p is_initial_listing (a source deleted while the editor was closed). Live, the meta syncer owns metas,
+/// and a compile that lands while its source is being moved would otherwise delete the .meta - and the asset's id -
+/// before the rename carried it to the new path.
+auto check_files_integrity(const std::string& key, const fs::path& entry_path, bool is_initial_listing) -> bool
 {
     // A key that is not a protocol path means the compiled file could not be mapped back to its source. It is
     // not known to be an orphan, so it is neither deleted nor used.
@@ -208,7 +212,7 @@ auto check_files_integrity(const std::string& key, const fs::path& entry_path) -
 
         auto meta = get_meta_key(entry_path);
         auto meta_path = fs::resolve_protocol(meta);
-        if(fs::exists(meta_path, ec))
+        if(is_initial_listing && fs::exists(meta_path, ec))
         {
             APPLOG_WARNING("{} does not exist. Cleaning up meta...", key);
             fs::remove(meta_path, ec);
@@ -281,7 +285,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
                 }
                 else // created or modified
                 {
-                    if(check_files_integrity(key, entry.path))
+                    if(check_files_integrity(key, entry.path, is_initial_list))
                     {
                         load_flags flags = is_initial_list ? load_flags::standard : load_flags::reload;
                         auto asset = am.get_asset<T>(key, flags, load_mode::deferred);
@@ -444,7 +448,7 @@ static void add_to_syncer(rtti::context& ctx,
             }
 
             auto key = get_asset_key(output);
-            if(check_files_integrity(key, output))
+            if(check_files_integrity(key, output, is_initial_listing))
             {
                 auto job_name = fmt::format("Compiling {}", ex::get_type<T>());
                 auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
@@ -461,6 +465,28 @@ static void add_to_syncer(rtti::context& ctx,
         }
     };
 
+    // The rename moves the compiled asset and its manifest along with the meta. A compile still writing the old
+    // path when the source moved finishes there and is discarded (its source is gone), which leaves the new path
+    // without a compiled asset or with one older than its source: that one is compiled again, as an edit would be.
+    auto on_renamed_and_current = [on_renamed, on_modified](const std::string& ext,
+                                                            const fs::syncer::rename_pair_t& ref_paths,
+                                                            const std::vector<fs::syncer::rename_pair_t>& synced_paths)
+    {
+        on_renamed(ext, ref_paths, synced_paths);
+        std::vector<fs::path> stale;
+        for(const auto& synced_path : synced_paths)
+        {
+            if(needs_recompilation<T>(ref_paths.second, remove_meta_tag(synced_path.second)))
+            {
+                stale.push_back(synced_path.second);
+            }
+        }
+        if(!stale.empty())
+        {
+            on_modified(ext, ref_paths.second, stale, false);
+        }
+    };
+
     for(const auto& type : ex::get_suported_formats<T>())
     {
         syncer.set_mapping(type + ".meta",
@@ -468,7 +494,7 @@ static void add_to_syncer(rtti::context& ctx,
                            on_modified,
                            on_modified,
                            on_removed,
-                           on_renamed);
+                           on_renamed_and_current);
     }
 }
 
@@ -518,7 +544,7 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
             }
 
             auto key = get_asset_key(output);
-            if(check_files_integrity(key, output))
+            if(check_files_integrity(key, output, is_initial_listing))
             {
                 bool high_priority = gfx::get_current_renderer_filename_extension() == extension;
                 tpp::priority::group priority = high_priority ? tpp::priority::normal() : tpp::priority::low();
@@ -617,13 +643,16 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         }
     };
 
-    const auto on_file_renamed = [](const std::string& ext, const auto& /*ref_path*/, const auto& synced_paths)
+    const auto on_file_renamed = [&am](const std::string& ext, const auto& ref_paths, const auto& synced_paths)
     {
         for(const auto& synced_path : synced_paths)
         {
             fs::error_code err;
             fs::rename(synced_path.first, synced_path.second, err);
         }
+        // The .meta carries the id, so the entry moves with it - also when no compiled asset was there to move
+        // (a compile still writing the old path), which is the compiled-asset watcher's only rename signal.
+        am.rename_asset_info_for_path(ref_paths.first, ref_paths.second);
     };
 
     const auto on_file_modified =

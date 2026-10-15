@@ -1,10 +1,9 @@
 #include "mcp_async.h"
 #include "mcp_input_utils.h"
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
+#include "mcp_viewport_utils.h"
 
-#include <editor/hub/hub.h>
-#include <editor/hub/panels/panel.h>
-#include <editor/hub/panels/scene_panel/scene_panel.h>
 #include <editor/hub/panels/visualization_modes.h>
 #include <editor/system/mcp_manager.h>
 
@@ -23,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -30,11 +30,6 @@ namespace unravel::mcp
 {
 namespace
 {
-
-auto resolve_scene_panel(rtti::context& ctx) -> scene_panel&
-{
-    return ctx.get_cached<hub>().get_panels().get_scene_panel();
-}
 
 auto debug_view_name_for_value(int value) -> const char*
 {
@@ -90,15 +85,17 @@ auto debug_view_mode_json(const visualization_mode_entry& entry, bool include_le
     return json;
 }
 
-auto resolve_scene_camera(rtti::context& ctx, std::string& error) -> entt::handle
+/// The listing's schema, with the group ids taken from the visualization table itself.
+auto debug_view_list_schema() -> std::string
 {
-    auto camera = resolve_scene_panel(ctx).get_camera();
-    if(!camera || !camera.all_of<transform_component, camera_component>())
+    std::vector<std::string> groups;
+    for(const auto& group : get_visualization_groups())
     {
-        error = "Scene panel camera not available";
-        return {};
+        groups.emplace_back(group.name);
     }
-    return camera;
+    return fmt::format(
+        R"({{"type":"object","properties":{{"group":{{"type":"string","enum":{},"description":"Restrict the listing to one group"}},"include_legend":{{"type":"boolean","description":"Include per-mode color legends; default true"}}}}}})",
+        strings_to_json_array(groups));
 }
 
 auto resolve_scene_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
@@ -126,11 +123,6 @@ auto camera_to_json(entt::handle camera) -> std::string
         cc.get_ortho_size());
 }
 
-auto cancel_camera_focus() -> void
-{
-    seq::scope::stop_all("camera_focus");
-}
-
 auto read_duration(const simdjson::dom::object& args, float default_duration = 0.4f) -> float
 {
     double duration = default_duration;
@@ -144,20 +136,6 @@ auto read_duration(const simdjson::dom::object& args, float default_duration = 0
         duration = 10.0;
     }
     return static_cast<float>(duration);
-}
-
-auto resolve_focus_entities(rtti::context& ctx,
-                            const simdjson::dom::object& args,
-                            std::vector<entt::handle>& out,
-                            std::string& error) -> bool
-{
-    scene* scn = nullptr;
-    if(!require_edit_scene(ctx, scn, error))
-    {
-        return false;
-    }
-
-    return resolve_entity_id_or_ids(*scn, args, out, error);
 }
 
 /// Frames the editor runs after a game render size change before a capture: the panel applies the
@@ -203,6 +181,22 @@ auto read_render_size(const simdjson::dom::object& args, bool required, uint32_t
     return true;
 }
 
+/// Longest settle a capture can ask for.
+constexpr int64_t k_max_settle_frames = 120;
+
+/// The capture arguments both panels share: settle_frames and scale.
+auto read_capture_options(const simdjson::dom::object& args) -> capture_options
+{
+    capture_options options{};
+    options.settle_frames = static_cast<uint32_t>(std::clamp<int64_t>(read_int64_or(args, "settle_frames", 0), 0, k_max_settle_frames));
+    double scale = 1.0;
+    if(!args["scale"].get(scale))
+    {
+        options.scale = scale;
+    }
+    return options;
+}
+
 } // namespace
 
 void register_viewport_tools(mcp_tool_registry& registry)
@@ -210,51 +204,40 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_capture_scene",
          .description =
-             "Capture Scene panel viewport as PNG (image content). Renders the panel for the capture, also when its "
-             "tab is hidden. Optional wait_ms (default 500), scale (0-1, default 1; bimg linear resize). Prefer "
-             "scale 0.5 to save tokens.",
+             "Capture the Scene panel's view as PNG, a frame rendered after the call, also while the Scene tab is "
+             "hidden. settle_frames renders that many frames first, after a change temporal effects blend in; "
+             "scale 0.5 saves tokens.",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
+             R"({"type":"object","properties":{"settle_frames":{"type":"integer","minimum":0,"maximum":120},"scale":{"type":"number","minimum":0.05,"maximum":1}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             capture_options options{};
-             options.wait_timeout = read_wait_ms(args, 500);
-             double scale = 1.0;
-             if(!args["scale"].get(scale))
+             auto options = read_capture_options(args);
+             options.resolve_panel = [](rtti::context& ctx) -> panel_base&
              {
-                 options.scale = scale;
-             }
-             options.request_render = [](rtti::context& ctx)
-             {
-                 resolve_scene_panel(ctx).set_visible_force(true);
+                 return resolve_scene_panel(ctx);
              };
              return capture_fbo_screenshot(mcp, ctx, resolve_scene_obuffer, "scene", options);
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "viewport_capture_game",
          .description =
-             "Capture Game panel / active camera as PNG (image content). Renders the game view for the capture, "
-             "also when the Game tab is hidden. Optional wait_ms (default 500), scale (0-1, default 1; bimg linear "
-             "resize), width + height: render the game at exactly that size for this capture (e.g. 1280 x 720, "
-             "for layouts at a known resolution) and go back to the previous size afterwards.",
+             "Capture the Game panel (the active camera) as PNG, a frame rendered after the call, also while the "
+             "Game tab is hidden. settle_frames renders that many frames first; scale 0.5 saves tokens. width + "
+             "height render the game at exactly that size for this capture (e.g. 1280 x 720, for layouts at a "
+             "known resolution), then restore the previous size.",
          .input_schema_json =
-             R"({"type":"object","properties":{"wait_ms":{"type":"integer","minimum":100,"maximum":15000},"scale":{"type":"number","minimum":0.05,"maximum":1},"width":{"type":"integer","minimum":1,"maximum":8192},"height":{"type":"integer","minimum":1,"maximum":8192}}})",
+             R"({"type":"object","properties":{"settle_frames":{"type":"integer","minimum":0,"maximum":120},"scale":{"type":"number","minimum":0.05,"maximum":1},"width":{"type":"integer","minimum":1,"maximum":8192},"height":{"type":"integer","minimum":1,"maximum":8192}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
-             capture_options options{};
-             options.wait_timeout = read_wait_ms(args, 500);
-             double scale = 1.0;
-             if(!args["scale"].get(scale))
-             {
-                 options.scale = scale;
-             }
+             auto options = read_capture_options(args);
              uint32_t width = 0;
              uint32_t height = 0;
              std::string error;
@@ -262,14 +245,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-             options.request_render = [](rtti::context& ctx)
+             options.resolve_panel = [](rtti::context& ctx) -> panel_base&
              {
-                 ctx.get_cached<hub>().get_panels().get_game_panel().set_visible_force(true);
+                 return ctx.get_cached<hub>().get_panels().get_game_panel();
              };
              if(width == 0 || height == 0)
              {
                  return capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
              }
+             // One sized capture at a time: two interleaved would each restore the other's size.
+             static std::mutex sized_capture_mutex;
+             const std::lock_guard<std::mutex> lock(sized_capture_mutex);
              const auto previous_size = exchange_game_render_size(mcp, ctx, {width, height});
              if(!previous_size)
              {
@@ -277,11 +263,16 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
              wait_input_frames(ctx, RESIZE_APPLY_FRAMES);
              auto result = capture_fbo_screenshot(mcp, ctx, resolve_game_obuffer, "game", options);
-             exchange_game_render_size(mcp, ctx, *previous_size);
+             if(!exchange_game_render_size(mcp, ctx, *previous_size))
+             {
+                 result.warnings.push_back("The game view kept the capture size; viewport_set_render_size panel game "
+                                           "restores it");
+             }
              return result;
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "viewport_get_camera",
@@ -299,15 +290,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
              return {.text = camera_to_json(camera), .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "viewport_set_camera",
          .description =
-             "Set Scene panel camera position and/or rotation_euler (degrees). "
-             "Optional relative:true applies position in camera local space.",
+             "Pose the Scene panel camera: position, then rotation_euler (degrees) or target - a world "
+             "point to look at (up default world up; straight down works). relative:true moves position "
+             "in the camera's own axes. Stops any camera coasting or focus animation first.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"relative":{"type":"boolean"}}})json",
+             R"json({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"target":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"up":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"relative":{"type":"boolean"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -317,97 +310,54 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-
              math::vec3 position{};
              math::vec3 rotation{};
+             math::vec3 target{};
+             math::vec3 up{0.0f, 1.0f, 0.0f};
              const bool has_position = read_vec3(args, "position", position);
              const bool has_rotation = read_vec3(args, "rotation_euler", rotation);
-             if(!has_position && !has_rotation)
+             const bool has_target = read_vec3(args, "target", target);
+             read_vec3(args, "up", up);
+             if(!has_position && !has_rotation && !has_target)
              {
-                 return {.text = "Provide position and/or rotation_euler", .is_error = true};
+                 return {.text = "Provide position, rotation_euler or target", .is_error = true};
              }
-
+             if(has_rotation && has_target)
+             {
+                 return {.text = "Pass rotation_euler or target, not both", .is_error = true};
+             }
              bool relative = false;
              read_bool(args, "relative", relative);
-
-             cancel_camera_focus();
+             resolve_scene_panel(ctx).stop_camera_motion();
              auto& tc = camera.get<transform_component>();
-
              if(has_position)
              {
-                 if(relative)
-                 {
-                     const auto world_delta = tc.get_x_axis_global() * position.x +
-                                              tc.get_y_axis_global() * position.y +
-                                              tc.get_z_axis_global() * position.z;
-                     tc.set_position_global(tc.get_position_global() + world_delta);
-                 }
-                 else
-                 {
-                     tc.set_position_global(position);
-                 }
+                 const auto world_delta = tc.get_x_axis_global() * position.x + tc.get_y_axis_global() * position.y +
+                                          tc.get_z_axis_global() * position.z;
+                 tc.set_position_global(relative ? tc.get_position_global() + world_delta : position);
              }
              if(has_rotation)
              {
                  tc.set_rotation_euler_global(rotation);
              }
-
-             return {.text = R"({"ok":true})", .is_error = false};
-         },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "viewport_look_at",
-         .description =
-             "Aim Scene panel camera at a world-space target. Optional position and up (default world up).",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"target":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"up":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["target"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-         {
-             std::string error;
-             auto camera = resolve_scene_camera(ctx, error);
-             if(!camera)
-             {
-                 return {.text = error, .is_error = true};
-             }
-
-             math::vec3 target{};
-             if(!read_vec3(args, "target", target))
-             {
-                 return {.text = "Missing target [x,y,z]", .is_error = true};
-             }
-
-             cancel_camera_focus();
-             auto& tc = camera.get<transform_component>();
-
-             math::vec3 position{};
-             if(read_vec3(args, "position", position))
-             {
-                 tc.set_position_global(position);
-             }
-
-             math::vec3 up{};
-             if(read_vec3(args, "up", up))
+             if(has_target)
              {
                  tc.look_at(target, up);
              }
-             else
-             {
-                 tc.look_at(target);
-             }
-
-             return {.text = fmt::format(R"({{"ok":true,"target":{}}})", vec3_to_json(target)), .is_error = false};
+             return {.text = camera_to_json(camera)};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
-        {.name = "viewport_focus_entities_batch",
+        {.name = "viewport_focus",
          .description =
-             "Focus Scene panel camera on entities (dolly along current forward). "
-             "duration default 0.4; use 0 for instant.",
+             "Frame the Scene panel camera on entities (entity_ids), a sphere (center + radius) or a box "
+             "(min + max), keeping its view direction - the editor's F focus. Entities without bounds count "
+             "as a 2 m box at their position. duration in seconds (default 0.4, 0 is instant); "
+             "viewport_get_camera after it ends reads the final pose.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"entity_ids":{"type":"array","items":{"type":"string"}},"duration":{"type":"number","minimum":0,"maximum":10}}})json",
+             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}},"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","minimum":0},"min":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"max":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"duration":{"type":"number","minimum":0,"maximum":10}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -417,84 +367,53 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-
-             std::vector<entt::handle> entities;
-             if(!resolve_focus_entities(ctx, args, entities, error))
-             {
-                 return {.text = error, .is_error = true};
-             }
-
              const float duration = read_duration(args, 0.4f);
-
-             cancel_camera_focus();
-             defaults::focus_camera_on_entities(camera, hpp::span<const entt::handle>{entities}, duration);
-
-             return {.text = fmt::format(R"({{"ok":true,"count":{},"duration":{:.3g}}})", entities.size(), duration),
-                     .is_error = false};
-         },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "viewport_focus_bounds",
-         .description =
-             "Focus Scene panel camera on a world sphere (center+radius) or box (min+max). "
-             "duration default 0.4; use 0 for instant.",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","minimum":0},"min":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"max":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"duration":{"type":"number","minimum":0,"maximum":10}}})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-         {
-             std::string error;
-             auto camera = resolve_scene_camera(ctx, error);
-             if(!camera)
-             {
-                 return {.text = error, .is_error = true};
-             }
-
-             const float duration = read_duration(args, 0.4f);
-
              math::vec3 center{};
-             math::vec3 min_v{};
-             math::vec3 max_v{};
-             const bool has_center = read_vec3(args, "center", center);
-             const bool has_min = read_vec3(args, "min", min_v);
-             const bool has_max = read_vec3(args, "max", max_v);
-
+             math::vec3 min_corner{};
+             math::vec3 max_corner{};
              double radius = 0.0;
-             const bool has_radius = !args["radius"].get(radius);
-
-             cancel_camera_focus();
-
-             if(has_min && has_max)
+             const bool has_entities = args["entity_ids"].error() == simdjson::SUCCESS;
+             const bool has_box = read_vec3(args, "min", min_corner) && read_vec3(args, "max", max_corner);
+             const bool has_sphere = read_vec3(args, "center", center) && !args["radius"].get(radius);
+             if(int(has_entities) + int(has_box) + int(has_sphere) != 1)
+             {
+                 return {.text = "Pass exactly one of entity_ids, center + radius, or min + max", .is_error = true};
+             }
+             std::vector<entt::handle> entities;
+             scene* scn = nullptr;
+             if(has_entities && (!require_active_scene(ctx, scn, error) || !read_entity_ids(args, *scn, entities, error)))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             resolve_scene_panel(ctx).stop_camera_motion();
+             if(has_entities)
+             {
+                 defaults::focus_camera_on_entities(camera, hpp::span<const entt::handle>{entities}, duration);
+             }
+             else if(has_box)
              {
                  math::bbox box;
-                 box.add_point(min_v);
-                 box.add_point(max_v);
+                 box.add_point(min_corner);
+                 box.add_point(max_corner);
                  defaults::focus_camera_on_bounds(camera, box, duration);
-             }
-             else if(has_center && has_radius)
-             {
-                 if(radius < 0.001)
-                 {
-                     radius = 0.001;
-                 }
-                 math::bsphere sphere{center, static_cast<float>(radius)};
-                 defaults::focus_camera_on_bounds(camera, sphere, duration);
              }
              else
              {
-                 return {.text = "Provide center+radius, or min+max", .is_error = true};
+                 constexpr double k_min_radius = 0.001;
+                 const math::bsphere sphere{center, static_cast<float>(std::max(radius, k_min_radius))};
+                 defaults::focus_camera_on_bounds(camera, sphere, duration);
              }
-
-             return {.text = fmt::format(R"({{"ok":true,"duration":{:.3g}}})", duration), .is_error = false};
+             return {.text = fmt::format(R"({{"ok":true,"duration":{:.3g}}})", duration)};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_orbit_camera",
          .description =
-             "Orbit Scene panel camera around a world pivot by yaw/pitch degrees. "
-             "Optional pivot and distance.",
+             "Orbit the Scene panel camera by yaw / pitch degrees around pivot - by default the point an "
+             "Alt-drag orbits (the selection's depth ahead, or a default distance). Optional distance "
+             "places the camera that far from the pivot afterwards.",
          .input_schema_json =
              R"json({"type":"object","properties":{"yaw":{"type":"number"},"pitch":{"type":"number"},"pivot":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"distance":{"type":"number","minimum":0.01}}})json",
          .handler =
@@ -506,7 +425,6 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-
              double yaw = 0.0;
              double pitch = 0.0;
              (void)args["yaw"].get(yaw);
@@ -515,47 +433,24 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = "Provide yaw and/or pitch in degrees", .is_error = true};
              }
-
-             cancel_camera_focus();
+             auto& panel = resolve_scene_panel(ctx);
+             panel.stop_camera_motion();
+             math::vec3 pivot{};
+             if(!read_vec3(args, "pivot", pivot))
+             {
+                 pivot = panel.get_orbit_pivot(ctx.get_cached<editing_manager>());
+             }
              auto& tc = camera.get<transform_component>();
-             const auto position = tc.get_position_global();
-
-             math::vec3 pivot = position + tc.get_z_axis_global() * 5.0f;
-             read_vec3(args, "pivot", pivot);
-
+             tc.rotate_around_global(pivot, math::vec3{0.0f, 1.0f, 0.0f}, static_cast<float>(yaw));
+             tc.rotate_around_global(pivot, tc.get_x_axis_global(), static_cast<float>(pitch));
              double distance = 0.0;
-             if(args["distance"].get(distance) || distance <= 0.0)
+             const auto offset = tc.get_position_global() - pivot;
+             if(!args["distance"].get(distance) && distance > 0.0 && math::length(offset) > 0.0f)
              {
-                 distance = static_cast<double>(math::length(position - pivot));
-                 if(distance < 0.01)
-                 {
-                     distance = 5.0;
-                 }
-             }
-
-             if(yaw != 0.0)
-             {
-                 tc.rotate_around_global(pivot, math::vec3{0.0f, 1.0f, 0.0f}, static_cast<float>(yaw));
-             }
-             if(pitch != 0.0)
-             {
-                 tc.rotate_around_global(pivot, tc.get_x_axis_global(), static_cast<float>(pitch));
-             }
-
-             // Enforce distance after orbit (rotate_around keeps it; distance override may differ).
-             auto offset = tc.get_position_global() - pivot;
-             if(math::length(offset) > 1e-6f)
-             {
-                 offset = math::normalize(offset) * static_cast<float>(distance);
-                 tc.set_position_global(pivot + offset);
+                 tc.set_position_global(pivot + math::normalize(offset) * static_cast<float>(distance));
              }
              tc.look_at(pivot);
-
-             return {.text = fmt::format(R"({{"ok":true,"pivot":{},"yaw":{:.3g},"pitch":{:.3g}}})",
-                                         vec3_to_json(pivot),
-                                         yaw,
-                                         pitch),
-                     .is_error = false};
+             return {.text = fmt::format(R"({{"ok":true,"pivot":{},"camera":{}}})", vec3_to_json(pivot), camera_to_json(camera))};
          },
          .mutates_scene = false});
 
@@ -566,8 +461,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
          {
-             cancel_camera_focus();
              auto& panel = resolve_scene_panel(ctx);
+             panel.stop_camera_motion();
              panel.reset_camera(ctx);
 
              std::string error;
@@ -578,7 +473,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
              return {.text = R"({"ok":true})", .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_set_render_size",
@@ -618,7 +514,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                                          height),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_set_debug_overlays",
@@ -639,7 +536,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                         "for the view's centre; \"mouse\" follows the mouse again). "
                         "Returns the settings in effect.",
          .input_schema_json =
-             R"({"type":"object","properties":{"card_placement":{"type":"boolean"},"card_placement_distance":{"type":"number","minimum":0},"card_placement_index":{"type":"integer","minimum":-1},"radiosity_probes":{"type":"boolean"},"radiosity_probe_radius":{"type":"number","minimum":0},"radiosity_show_invalid":{"type":"boolean"},"radiance_cache_probes":{"type":"boolean"},"radiance_cache_radius_scale":{"type":"number","minimum":0},"radiance_cache_clipmap":{"type":"integer","minimum":-1},"screen_probe_traces":{"type":"boolean"},"screen_probe_traces_freeze":{"type":"boolean"},"reflection_traces":{"type":"boolean"},"screen_probe_gather_debug":{"type":"boolean"},"radiance_cache_stats":{"type":"boolean"},"screen_probe_placement":{"type":"integer","minimum":0,"maximum":3},"card_generation_surfels":{"type":"boolean"},"card_generation_cluster":{"type":"boolean"},"card_generation_surfel_scale":{"type":"number","minimum":0},"card_generation_max_surfel":{"type":"integer","minimum":-1},"card_placement_direction":{"type":"integer","minimum":-1,"maximum":5},"cursor":{"description":"[x, y] or \"mouse\""}}})",
+             R"({"type":"object","properties":{"card_placement":{"type":"boolean"},"card_placement_distance":{"type":"number","minimum":0},"card_placement_index":{"type":"integer","minimum":-1},"radiosity_probes":{"type":"boolean"},"radiosity_probe_radius":{"type":"number","minimum":0},"radiosity_show_invalid":{"type":"boolean"},"radiance_cache_probes":{"type":"boolean"},"radiance_cache_radius_scale":{"type":"number","minimum":0},"radiance_cache_clipmap":{"type":"integer","minimum":-1},"screen_probe_traces":{"type":"boolean"},"screen_probe_traces_freeze":{"type":"boolean"},"reflection_traces":{"type":"boolean"},"screen_probe_gather_debug":{"type":"boolean"},"radiance_cache_stats":{"type":"boolean"},"screen_probe_placement":{"type":"integer","minimum":0,"maximum":3},"card_generation_surfels":{"type":"boolean"},"card_generation_cluster":{"type":"boolean"},"card_generation_surfel_scale":{"type":"number","minimum":0},"card_generation_max_surfel":{"type":"integer","minimum":-1},"card_placement_direction":{"type":"integer","minimum":-1,"maximum":5},"cursor":{"anyOf":[{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},{"type":"string","enum":["mouse"]}],"description":"[x, y] or \"mouse\""}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -797,7 +694,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false,
-         .developer_only = true});
+         .developer_only = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_open_debug_popover",
@@ -828,13 +726,12 @@ void register_viewport_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "viewport_set_debug_view",
-         .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
-                        "(e.g. \"full\", \"base_color\", \"normals\", \"gi_scene\") or as the "
-                        "raw integer id. \"full\" (-1) restores the normal render. Call "
-                        "viewport_list_debug_views for every mode with its group, what it actually "
-                        "shows and its color legend. Optional scale (default 1): an exposure "
-                        "multiplier the indirect_diffuse view applies ahead of its tone map.",
-         .input_schema_json = R"({"type":"object","properties":{"mode":{"description":"Mode name or raw integer id"},"scale":{"type":"number","minimum":0.0000001,"maximum":1000000}},"required":["mode"]})",
+         .description =
+             "Set the Scene panel debug visualization by name (\"full\", \"base_color\", \"normals\", ...) or "
+             "integer id; \"full\" restores the normal render. viewport_list_debug_views lists every mode with "
+             "what it shows and its color legend. scale (default 1) multiplies the exposure of the "
+             "indirect_diffuse view.",
+         .input_schema_json = R"({"type":"object","properties":{"mode":{"anyOf":[{"type":"string"},{"type":"integer"}],"description":"Mode name or raw integer id"},"scale":{"type":"number","minimum":0.0000001,"maximum":1000000}},"required":["mode"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -894,7 +791,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                                          group != nullptr ? group->name : "none"),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_measure_temporal",
@@ -912,7 +810,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "\"from_target\":[..],\"to_position\":[..],\"to_target\":[..]}, {\"type\":\"orbit\","
              "\"center\":[..],\"radius\":r,\"height\":h,\"start_degrees\":a,\"degrees\":sweep} or a pure turn at "
              "a constant rate {\"type\":\"yaw\",\"position\":[..],\"forward\":[..],\"start_degrees\":a,"
-             "\"degrees\":sweep} (the forward rotated about world up). Optional `save` (absolute file path) also "
+             "\"degrees\":sweep} (the forward rotated about world up). Optional `save` (a file name; the file goes "
+             "to the editor's MCP output folder and `saved_path` in the result says where) also "
              "writes the per-pixel planes as raw little-endian float32, rows from the top: the mean luminance, its "
              "std, the mean reprojected change (-1 where unmeasured) and the LAST measured frame's luminance - "
              "frame-locked to the end of the measurement (and of the motion). Optional `motion_frames` runs the "
@@ -922,7 +821,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "colour byte count, the displayed image as rendered (rows from the top) and the AGE plane as float32 "
              "(frames each pixel's surface had stayed visible within the measurement; 0 = revealed this frame).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"},"motion_frames":{"type":"integer","minimum":1,"maximum":4096},"marks":{"type":"array","items":{"type":"integer","minimum":1,"maximum":4096}},"lowpass":{"type":"boolean"},"save":{"type":"string"}}})json",
+             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object","properties":{"type":{"type":"string","enum":["path","orbit","yaw"]},"from_position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"from_target":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"to_position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"to_target":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number"},"height":{"type":"number"},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"forward":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"start_degrees":{"type":"number"},"degrees":{"type":"number"}},"required":["type"]},"motion_frames":{"type":"integer","minimum":1,"maximum":4096},"marks":{"type":"array","items":{"type":"integer","minimum":1,"maximum":4096}},"lowpass":{"type":"boolean"},"save":{"type":"string"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -938,14 +837,16 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  lowpass = false;
              }
-             int64_t timeout_ms = 30000 + frames * 100;
-             int64_t requested_timeout = 0;
-             if(!args["timeout_ms"].get(requested_timeout))
+             const auto timeout = read_timeout_ms(args, 30000 + frames * 100, 600000, "timeout_ms");
+             std::string save_name;
+             read_string(args, "save", save_name);
+             if(!save_name.empty() && !is_plain_file_name(save_name))
              {
-                 timeout_ms = requested_timeout;
+                 return {.text = "save is a file name without folders; the result's saved_path says where it went",
+                         .is_error = true};
              }
-             std::string save_path;
-             read_string(args, "save", save_path);
+             const std::string save_path =
+                 save_name.empty() ? std::string{} : (mcp_output_directory() / save_name).string();
              int64_t motion_frames = frames;
              if(args["motion_frames"].get(motion_frames))
              {
@@ -1069,7 +970,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                                 math::vec3(std::cos(angle) * motion.radius, motion.height, std::sin(angle) * motion.radius);
                      target = motion.center;
                  }
-                 cancel_camera_focus();
+                 resolve_scene_panel(ctx).stop_camera_motion();
                  auto& tc = camera.get<transform_component>();
                  tc.set_position_global(position);
                  tc.look_at(target);
@@ -1083,6 +984,15 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  }
                  return camera_ent.get<camera_component>().get_pipeline_data().get_pipeline().get();
              };
+             // Each poll renews the hold: a hidden Scene tab renders only while held, and the probe counts
+             // rendered frames.
+             constexpr uint32_t k_probe_hold_frames = 8;
+             struct camera_pose
+             {
+                 math::vec3 position{};
+                 math::quat rotation{};
+             };
+             std::optional<camera_pose> start_pose;
              auto armed = mcp.invoke_on_main(
                  [&]() -> bool
                  {
@@ -1091,8 +1001,15 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      {
                          return false;
                      }
+                     resolve_scene_panel(ctx).hold_visible_force(k_probe_hold_frames);
                      if(has_motion)
                      {
+                         std::string error;
+                         if(auto camera = resolve_scene_camera(ctx, error))
+                         {
+                             const auto& transform = camera.get<transform_component>();
+                             start_pose = camera_pose{transform.get_position_global(), transform.get_rotation_global()};
+                         }
                          apply_pose(0.0f);
                      }
                      pipeline->request_temporal_probe(uint32_t(frames), lowpass, !save_path.empty(), marks);
@@ -1102,121 +1019,150 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  return {.text = "Scene panel camera has no pipeline", .is_error = true};
              }
-             auto format_grid = [](const std::vector<float>& grid) -> std::string
+             // The motion moved the editor camera; it goes back where the user left it, whatever the outcome.
+             const auto restore_camera = [&]()
              {
-                 std::string json = "[";
-                 for(size_t i = 0; i < grid.size(); ++i)
+                 if(!start_pose)
                  {
-                     json += fmt::format("{}{:.3f}", i == 0 ? "" : ",", grid[i]);
+                     return;
                  }
-                 return json + "]";
-             };
-             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-             std::vector<float> saved_images;
-             std::vector<temporal_probe_pass::mark_capture> saved_marks;
-             uint32_t saved_width = 0;
-             uint32_t saved_height = 0;
-             while(std::chrono::steady_clock::now() < deadline)
-             {
-                 auto polled = mcp.invoke_on_main(
-                     [&]() -> std::string
+                 mcp.invoke_on_main(
+                     [&]() -> bool
                      {
-                         auto* pipeline = resolve_pipeline();
-                         if(pipeline == nullptr)
+                         std::string error;
+                         if(auto camera = resolve_scene_camera(ctx, error))
                          {
-                             return "!";
+                             auto& transform = camera.get<transform_component>();
+                             transform.set_position_global(start_pose->position);
+                             transform.set_rotation_global(start_pose->rotation);
                          }
-                         const auto& probe = pipeline->get_temporal_probe();
-                         if(has_motion && probe.get_frames_done() < probe.get_frames_requested())
+                         return true;
+                     });
+             };
+             const auto wait_for_probe = [&]() -> tool_result
+             {
+                 auto format_grid = [](const std::vector<float>& grid) -> std::string
+                 {
+                     std::string json = "[";
+                     for(size_t i = 0; i < grid.size(); ++i)
+                     {
+                         json += fmt::format("{}{:.3f}", i == 0 ? "" : ",", grid[i]);
+                     }
+                     return json + "]";
+                 };
+                 const auto deadline = std::chrono::steady_clock::now() + timeout;
+                 std::vector<float> saved_images;
+                 std::vector<temporal_probe_pass::mark_capture> saved_marks;
+                 uint32_t saved_width = 0;
+                 uint32_t saved_height = 0;
+                 while(std::chrono::steady_clock::now() < deadline)
+                 {
+                     auto polled = mcp.invoke_on_main(
+                         [&]() -> std::string
                          {
-                             apply_pose(std::min(float(probe.get_frames_done() + 1u) / float(motion_frames), 1.0f));
-                         }
-                         if(probe.is_busy() || !probe.get_result().valid)
+                             auto* pipeline = resolve_pipeline();
+                             if(pipeline == nullptr)
+                             {
+                                 return "!";
+                             }
+                             const auto& probe = pipeline->get_temporal_probe();
+                             resolve_scene_panel(ctx).hold_visible_force(k_probe_hold_frames);
+                             if(has_motion && probe.get_frames_done() < probe.get_frames_requested())
+                             {
+                                 apply_pose(std::min(float(probe.get_frames_done() + 1u) / float(motion_frames), 1.0f));
+                             }
+                             if(probe.is_busy() || !probe.get_result().valid)
+                             {
+                                 return {};
+                             }
+                             const auto& r = probe.get_result();
+                             if(!save_path.empty())
+                             {
+                                 saved_images = r.images;
+                                 saved_marks = r.marks;
+                                 saved_width = r.width;
+                                 saved_height = r.height;
+                             }
+                             return fmt::format(
+                                 R"({{"frames":{},"lowpass":{},"width":{},"height":{},"std":{{"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1_5":{:.5f},"share_gt_4":{:.5f}}},"delta":{{"pixels":{},"mean":{:.3f},"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1":{:.5f},"share_gt_4":{:.5f}}},"std_grid":{},"delta_grid":{}}})",
+                                 r.frames, r.lowpass, r.width, r.height, r.std_percentiles[0], r.std_percentiles[1],
+                                 r.std_percentiles[2], r.std_shares[0], r.std_shares[1], r.delta_pixels, r.delta_mean,
+                                 r.delta_percentiles[0], r.delta_percentiles[1], r.delta_percentiles[2],
+                                 r.delta_shares[0], r.delta_shares[1], format_grid(r.std_grid),
+                                 format_grid(r.delta_grid));
+                         });
+                     if(polled && !polled->empty())
+                     {
+                         if(*polled == "!")
                          {
-                             return {};
+                             return {.text = "Scene panel camera has no pipeline", .is_error = true};
                          }
-                         const auto& r = probe.get_result();
                          if(!save_path.empty())
                          {
-                             saved_images = r.images;
-                             saved_marks = r.marks;
-                             saved_width = r.width;
-                             saved_height = r.height;
+                             const size_t expected = size_t(saved_width) * saved_height * 4u;
+                             if(saved_images.size() != expected || expected == 0u)
+                             {
+                                 return {.text = "temporal probe returned no per-pixel planes to save", .is_error = true};
+                             }
+                             std::FILE* file = std::fopen(save_path.c_str(), "wb");
+                             if(file == nullptr)
+                             {
+                                 return {.text = "cannot open the save path for writing", .is_error = true};
+                             }
+                             const size_t written = std::fwrite(saved_images.data(), sizeof(float), saved_images.size(), file);
+                             std::fclose(file);
+                             if(written != saved_images.size())
+                             {
+                                 return {.text = "short write to the save path", .is_error = true};
+                             }
+                             polled->insert(polled->size() - 1u,
+                                            ",\"saved_path\":" + make_json_string(fs::path(save_path).generic_string()));
                          }
-                         return fmt::format(
-                             R"({{"frames":{},"lowpass":{},"width":{},"height":{},"std":{{"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1_5":{:.5f},"share_gt_4":{:.5f}}},"delta":{{"pixels":{},"mean":{:.3f},"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1":{:.5f},"share_gt_4":{:.5f}}},"std_grid":{},"delta_grid":{}}})",
-                             r.frames, r.lowpass, r.width, r.height, r.std_percentiles[0], r.std_percentiles[1],
-                             r.std_percentiles[2], r.std_shares[0], r.std_shares[1], r.delta_pixels, r.delta_mean,
-                             r.delta_percentiles[0], r.delta_percentiles[1], r.delta_percentiles[2],
-                             r.delta_shares[0], r.delta_shares[1], format_grid(r.std_grid),
-                             format_grid(r.delta_grid));
-                     });
-                 if(polled && !polled->empty())
-                 {
-                     if(*polled == "!")
-                     {
-                         return {.text = "Scene panel camera has no pipeline", .is_error = true};
+                         if(!marks.empty())
+                         {
+                             std::FILE* file = std::fopen((save_path + ".marks").c_str(), "wb");
+                             if(file == nullptr)
+                             {
+                                 return {.text = "cannot open the marks file for writing", .is_error = true};
+                             }
+                             constexpr uint32_t marks_magic = 0x4B4D5055u;
+                             constexpr uint32_t marks_version = 1u;
+                             const uint32_t header[3] = {marks_magic, marks_version, uint32_t(saved_marks.size())};
+                             bool ok = std::fwrite(header, sizeof(uint32_t), 3, file) == 3;
+                             for(const auto& mark : saved_marks)
+                             {
+                                 const uint32_t mark_header[5] = {mark.frame,
+                                                                  mark.width,
+                                                                  mark.height,
+                                                                  uint32_t(mark.format),
+                                                                  uint32_t(mark.color.size())};
+                                 ok = ok && std::fwrite(mark_header, sizeof(uint32_t), 5, file) == 5;
+                                 ok = ok && std::fwrite(mark.color.data(), 1, mark.color.size(), file) == mark.color.size();
+                                 ok = ok && std::fwrite(mark.age.data(), sizeof(float), mark.age.size(), file) ==
+                                                mark.age.size();
+                             }
+                             std::fclose(file);
+                             if(!ok)
+                             {
+                                 return {.text = "short write to the marks file", .is_error = true};
+                             }
+                             std::string marks_json = ",\"marks\":[";
+                             for(size_t i = 0; i < saved_marks.size(); ++i)
+                             {
+                                 marks_json += fmt::format("{}{}", i == 0 ? "" : ",", saved_marks[i].frame);
+                             }
+                             marks_json += "]";
+                             polled->insert(polled->size() - 1u, marks_json);
+                         }
+                         return {.text = *polled, .is_error = false};
                      }
-                     if(!save_path.empty())
-                     {
-                         const size_t expected = size_t(saved_width) * saved_height * 4u;
-                         if(saved_images.size() != expected || expected == 0u)
-                         {
-                             return {.text = "temporal probe returned no per-pixel planes to save", .is_error = true};
-                         }
-                         std::FILE* file = std::fopen(save_path.c_str(), "wb");
-                         if(file == nullptr)
-                         {
-                             return {.text = "cannot open the save path for writing", .is_error = true};
-                         }
-                         const size_t written = std::fwrite(saved_images.data(), sizeof(float), saved_images.size(), file);
-                         std::fclose(file);
-                         if(written != saved_images.size())
-                         {
-                             return {.text = "short write to the save path", .is_error = true};
-                         }
-                     }
-                     if(!marks.empty())
-                     {
-                         std::FILE* file = std::fopen((save_path + ".marks").c_str(), "wb");
-                         if(file == nullptr)
-                         {
-                             return {.text = "cannot open the marks file for writing", .is_error = true};
-                         }
-                         constexpr uint32_t marks_magic = 0x4B4D5055u;
-                         constexpr uint32_t marks_version = 1u;
-                         const uint32_t header[3] = {marks_magic, marks_version, uint32_t(saved_marks.size())};
-                         bool ok = std::fwrite(header, sizeof(uint32_t), 3, file) == 3;
-                         for(const auto& mark : saved_marks)
-                         {
-                             const uint32_t mark_header[5] = {mark.frame,
-                                                              mark.width,
-                                                              mark.height,
-                                                              uint32_t(mark.format),
-                                                              uint32_t(mark.color.size())};
-                             ok = ok && std::fwrite(mark_header, sizeof(uint32_t), 5, file) == 5;
-                             ok = ok && std::fwrite(mark.color.data(), 1, mark.color.size(), file) == mark.color.size();
-                             ok = ok && std::fwrite(mark.age.data(), sizeof(float), mark.age.size(), file) ==
-                                            mark.age.size();
-                         }
-                         std::fclose(file);
-                         if(!ok)
-                         {
-                             return {.text = "short write to the marks file", .is_error = true};
-                         }
-                         std::string marks_json = ",\"marks\":[";
-                         for(size_t i = 0; i < saved_marks.size(); ++i)
-                         {
-                             marks_json += fmt::format("{}{}", i == 0 ? "" : ",", saved_marks[i].frame);
-                         }
-                         marks_json += "]";
-                         polled->insert(polled->size() - 1u, marks_json);
-                     }
-                     return {.text = *polled, .is_error = false};
+                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
                  }
-                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
-             }
-             return {.text = "Timed out waiting for the temporal probe", .is_error = true};
+                 return {.text = "Timed out waiting for the temporal probe", .is_error = true};
+             };
+             auto result = wait_for_probe();
+             restore_camera();
+             return result;
          },
          .mutates_scene = false,
          .requires_main_thread = false,
@@ -1313,7 +1259,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .developer_only = true});
+         .developer_only = true,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "gi_sdf_probe",
@@ -1420,7 +1367,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .developer_only = true});
+         .developer_only = true,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "gi_set_experiment_flags",
@@ -1435,15 +1383,19 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             double flags = 0.0;
-             read_double(args, "flags", flags);
+             // Read as an integer: a double would drop the bits above 2^53.
+             uint64_t flags = 0;
+             if(args["flags"].get_uint64().get(flags) != simdjson::SUCCESS)
+             {
+                 return {.text = "Pass flags, a non-negative integer bit mask", .is_error = true};
+             }
              auto& mcp = ctx.get_cached<mcp_manager>();
              auto result = mcp.invoke_on_main(
                  [&]() -> std::string
                  {
                      auto& surface_cache = ctx.get_cached<surface_cache_system>();
                      const uint64_t previous = surface_cache.get_experiment_flags();
-                     surface_cache.set_experiment_flags(uint64_t(math::max(flags, 0.0)));
+                     surface_cache.set_experiment_flags(flags);
                      return fmt::format(R"({{"flags":{},"previous":{}}})", surface_cache.get_experiment_flags(), previous);
                  });
              if(!result)
@@ -1454,15 +1406,15 @@ void register_viewport_tools(mcp_tool_registry& registry)
          },
          .mutates_scene = false,
          .requires_main_thread = false,
-         .developer_only = true});
+         .developer_only = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_set_overlays",
          .description =
-             "Show or hide the Scene panel's editor overlays: the icon gizmos (camera, light and probe billboards and "
-             "gizmos), the grid and the selection outline. Omitted keys keep their state; the state is not saved. "
-             "viewport_measure_temporal reads the pipeline output and never includes them, viewport_capture_scene "
-             "does. Returns the resulting state.",
+             "Show or hide the Scene panel's editor overlays: icon gizmos (camera, light and probe billboards), "
+             "the grid and the selection outline. Omitted keys keep their state; the state is not saved. "
+             "viewport_capture_scene includes them. Returns the resulting state.",
          .input_schema_json =
              R"({"type":"object","properties":{"gizmos":{"type":"boolean"},"grid":{"type":"boolean"},"selection_outline":{"type":"boolean"}}})",
          .handler =
@@ -1503,18 +1455,17 @@ void register_viewport_tools(mcp_tool_registry& registry)
              return {.text = *result, .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .idempotent = true});
 
     registry.add(
         {.name = "viewport_list_debug_views",
          .description = "List every debug visualization mode for viewport_set_debug_view, grouped, "
                         "with what each one actually shows and the meaning of its categorical "
-                        "colors. Optional \"group\" restricts the listing to one group (surface, "
-                        "occlusion, lighting, motion, distance_field, global_illumination); optional "
+                        "colors. Optional \"group\" restricts the listing to one group; optional "
                         "\"include_legend\" (default true) drops the color tables for a short list. "
                         "Also returns the currently applied mode.",
-         .input_schema_json =
-             R"({"type":"object","properties":{"group":{"type":"string","description":"Restrict the listing to one group id"},"include_legend":{"type":"boolean","description":"Include per-mode color legends; default true"}}})",
+         .input_schema_json = debug_view_list_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -1585,7 +1536,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
 
              return {.text = json, .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 }
 
 } // namespace unravel::mcp

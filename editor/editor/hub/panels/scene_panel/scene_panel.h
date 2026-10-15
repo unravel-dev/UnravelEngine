@@ -36,6 +36,14 @@ public:
     /// Recreate the Scene panel editor camera at the default pose (UI "Reset Camera").
     void reset_camera(rtti::context& ctx);
 
+    /// Stops the camera's coasting (wheel dolly, flight inertia) and its focus animation, so a pose set
+    /// from outside the panel stays where it was put.
+    void stop_camera_motion();
+
+    /// The point an Alt-drag orbits: the selection's depth along the view, or a default distance
+    /// ahead without a selection in front of the camera.
+    auto get_orbit_pivot(const editing_manager& em) -> math::vec3;
+
     auto get_auto_save_prefab() const -> bool;
 
     /// Debug visualization mode the panel drives into the scene camera's pipeline every frame

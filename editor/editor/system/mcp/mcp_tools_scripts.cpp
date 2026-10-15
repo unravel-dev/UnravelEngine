@@ -1,4 +1,5 @@
 #include "mcp_component_utils.h"
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 
 #include <editor/assets/asset_actions.h>
@@ -30,41 +31,36 @@ namespace unravel::mcp
 namespace
 {
 
-auto resolve_source_path(const std::string& path_or_key) -> fs::path
-{
-    if(path_or_key.empty())
-    {
-        return {};
-    }
-    fs::error_code ec;
-    const fs::path as_path(path_or_key);
-    if(as_path.is_absolute())
-    {
-        return as_path;
-    }
-    auto resolved = fs::resolve_protocol(path_or_key);
-    if(!resolved.empty())
-    {
-        return resolved;
-    }
-    return as_path;
-}
+/// Where generated scripts go when the caller names no folder.
+constexpr const char* k_default_script_folder = "app:/data/scripts";
 
-auto find_script_object(script_component& script_comp, const std::string& type_name)
-    -> script_component::script_object
+/// Script source files are written and built only in the project; engine scripts are shared.
+constexpr const char* k_script_protocol = "app";
+
+/// The source file of an entity's script of `type_name` (full or short C# name), as its script
+/// component records it.
+auto script_source_of(rtti::context& ctx,
+                      const std::string& entity_id,
+                      const std::string& type_name,
+                      std::string& path,
+                      std::string& error) -> bool
 {
-    for(const auto& obj : script_comp.get_script_components())
+    auto* scn = ctx.get_cached<editing_manager>().get_active_scene(ctx);
+    auto entity = scn && scn->registry ? find_entity(*scn, entity_id) : entt::handle{};
+    const auto* script_comp = entity ? entity.try_get<script_component>() : nullptr;
+    const auto position = script_comp ? find_script_position(entity, {type_name, 0}) : std::nullopt;
+    if(!position)
     {
-        if(!obj.pinned)
-        {
-            continue;
-        }
-        if(obj.pinned->get_object().get_type().get_fullname() == type_name)
-        {
-            return obj;
-        }
+        error = "No script of type " + type_name + " on entity " + entity_id;
+        return false;
     }
-    return {};
+    path = script_comp->get_script_source_location(script_comp->get_script_components()[position->index]);
+    if(path.empty())
+    {
+        error = "No source file known for script type " + type_name;
+        return false;
+    }
+    return true;
 }
 
 auto unique_script_path(const fs::path& dir, const std::string& stem) -> fs::path
@@ -79,12 +75,6 @@ auto unique_script_path(const fs::path& dir, const std::string& stem) -> fs::pat
         candidate = dir / (fmt::format("{}{}", stem, i) + ext);
     }
     return candidate;
-}
-
-auto protocol_for_path(const fs::path& absolute) -> std::string
-{
-    const auto key = fs::convert_to_protocol(absolute).generic_string();
-    return fs::extract_protocol(key).string();
 }
 
 /**
@@ -233,8 +223,8 @@ void register_script_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scripts_list_types",
          .description =
-             "List C# ScriptComponent type full names available to add via scene_add_scripts_batch "
-             "(project + engine scriptable types from script_system).",
+             "List the C# ScriptComponent type full names - project and engine - that "
+             "scene_add_components_batch adds as component Script with that type_name.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -252,7 +242,8 @@ void register_script_tools(mcp_tool_registry& registry)
              }
              return {.text = strings_to_json_array(names), .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "scripts_api_search",
@@ -278,7 +269,8 @@ void register_script_tools(mcp_tool_registry& registry)
              const auto limit = static_cast<int>(read_int64_or(args, "limit", 0));
              return {.text = ctx.get_cached<script_system>().search_api(query, limit), .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "scripts_api_get",
@@ -302,7 +294,8 @@ void register_script_tools(mcp_tool_registry& registry)
              }
              return {.text = ctx.get_cached<script_system>().describe_api_type(type_name), .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "scripts_invoke",
@@ -314,7 +307,7 @@ void register_script_tools(mcp_tool_registry& registry)
              "strings, enum names, and number arrays for Vector2/3/4, Color or Quaternion; missing "
              "trailing arguments take their defaults.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0},"method":{"type":"string"},"arguments":{"type":"array"}},"required":["entity_id","type_name","method"]})json",
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0},"method":{"type":"string"},"arguments":{"type":"array","items":{"anyOf":[{"type":"number"},{"type":"boolean"},{"type":"string"},{"type":"array","items":{"type":"number"}}]}}},"required":["entity_id","type_name","method"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -360,12 +353,11 @@ void register_script_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scripts_get_compile_status",
          .description =
-             "Whether the project's scripts are building and, for the last build, its errors and "
-             "warnings with file, line and message - the compiler's own parsed diagnostics for exactly "
-             "one build, not a log search. wait:true first waits for a queued or running build to "
-             "finish and, when it succeeds, for the editor to load it - new script types can be "
-             "attached as soon as it returns - up to timeout_ms (default 60000). Call it after "
-             "scripts_set_sources_batch; play mode will not start while has_errors is true.",
+             "Whether the project's scripts are building, and the last build's errors and warnings with file, "
+             "line and message. wait:true first waits for a queued or running build to finish and, when it "
+             "succeeds, for the editor to load it - new script types can be attached once it returns - up to "
+             "timeout_ms (default 60000). Call it after scripts_set_sources_batch; play mode will not start while "
+             "has_errors is true.",
          .input_schema_json =
              R"json({"type":"object","properties":{"wait":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}})json",
          .handler =
@@ -404,7 +396,8 @@ void register_script_tools(mcp_tool_registry& registry)
 
              auto state = query();
              const auto deadline = std::chrono::steady_clock::now() + timeout;
-             while(wait && state && state->pending && std::chrono::steady_clock::now() < deadline)
+             // A main thread busy loading the new build misses a query: a reason to keep waiting, not to fail.
+             while(wait && (!state || state->pending) && std::chrono::steady_clock::now() < deadline)
              {
                  std::this_thread::sleep_for(k_poll_interval);
                  state = query();
@@ -449,13 +442,14 @@ void register_script_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "scripts_get_source",
          .description =
-             "Read C# source for a script. Resolve by path/key, or by entity_id + type_name "
-             "(uses get_script_source_location).",
+             "Read C# source for a script: key (app:/ or engine:/ .cs, or a path relative to "
+             "app:/data), or entity_id + type_name (full or short C# name).",
          .input_schema_json =
              R"json({"type":"object","properties":{"path":{"type":"string"},"key":{"type":"string"},"entity_id":{"type":"string"},"type_name":{"type":"string"}}})json",
          .handler =
@@ -475,56 +469,44 @@ void register_script_tools(mcp_tool_registry& registry)
              std::string entity_id;
              read_string(args, "entity_id", entity_id);
 
+             std::string error;
              if(path.empty())
              {
                  if(entity_id.empty() || type_name.empty())
                  {
                      return {.text = "Provide path/key, or entity_id + type_name", .is_error = true};
                  }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 auto* scn = em.get_active_scene(ctx);
-                 if(!scn || !scn->registry)
+                 if(!script_source_of(ctx, entity_id, type_name, path, error))
                  {
-                     return {.text = "No active scene", .is_error = true};
-                 }
-                 auto entity = find_entity(*scn, entity_id);
-                 auto* script_comp = entity ? entity.try_get<script_component>() : nullptr;
-                 if(!script_comp)
-                 {
-                     return {.text = "Entity has no ScriptComponent", .is_error = true};
-                 }
-                 auto obj = find_script_object(*script_comp, type_name);
-                 if(!obj.pinned)
-                 {
-                     return {.text = "Script type not on entity: " + type_name, .is_error = true};
-                 }
-                 path = script_comp->get_script_source_location(obj);
-                 if(path.empty())
-                 {
-                     return {.text = "No source path for script type: " + type_name, .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
              }
-
-             const auto absolute = resolve_source_path(path);
+             std::string source_key;
+             if(!to_readable_file_key(path, ex::get_suported_formats<script>(), source_key, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const auto absolute = fs::absolute(fs::resolve_protocol(source_key));
              std::string code;
-             std::string error;
              if(!asset_actions::read_text_file(absolute, code, &error))
              {
                  return {.text = error, .is_error = true};
              }
-             return {.text = fmt::format(R"({{"path":{},"bytes":{},"code":{}}})",
-                                         make_json_string(absolute.generic_string()),
+             return {.text = fmt::format(R"({{"key":{},"bytes":{},"code":{}}})",
+                                         make_json_string(source_key),
                                          code.size(),
                                          make_json_string(code)),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "scripts_set_sources_batch",
          .description =
-             "Write C# source files (batch) via asset_writer::atomic_write_file. Each item: code, "
-             "plus path/key or entity_id + type_name. Optional recompile (default true, once for batch). "
+             "Write C# source files in the project (batch, atomic writes). Each item: code, plus key "
+             "(app:/data/... or a path relative to app:/data; .cs is added) or entity_id + type_name. "
+             "Optional recompile (default true, once for batch). "
              "A batch that adds a new file builds once the asset pipeline has imported it (build: "
              "after_import); scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =
@@ -548,7 +530,7 @@ void register_script_tools(mcp_tool_registry& registry)
              bool first = true;
              size_t ok_count = 0;
              size_t requested = 0;
-             std::string protocol;
+             const std::string protocol = k_script_protocol;
              bool all_imported = true;
              for(auto el : items_arr)
              {
@@ -581,61 +563,39 @@ void register_script_tools(mcp_tool_registry& registry)
                  std::string entity_id;
                  read_string(obj, "type_name", type_name);
                  read_string(obj, "entity_id", entity_id);
+                 const auto fail = [&](const std::string& message)
+                 {
+                     results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(message));
+                 };
                  if(path.empty())
                  {
                      if(entity_id.empty() || type_name.empty())
                      {
-                         results += R"({"ok":false,"error":"Provide path/key, or entity_id + type_name"})";
+                         fail("Provide path/key, or entity_id + type_name");
                          continue;
                      }
-                     scene* scn = nullptr;
-                     if(!require_edit_scene(ctx, scn, error))
+                     if(!script_source_of(ctx, entity_id, type_name, path, error))
                      {
-                         results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
-                         continue;
-                     }
-                     auto entity = find_entity(*scn, entity_id);
-                     auto* script_comp = entity ? entity.try_get<script_component>() : nullptr;
-                     if(!script_comp)
-                     {
-                         results += R"({"ok":false,"error":"Entity has no ScriptComponent"})";
-                         continue;
-                     }
-                     auto script_obj = find_script_object(*script_comp, type_name);
-                     if(!script_obj.pinned)
-                     {
-                         results += fmt::format(R"({{"ok":false,"error":{}}})",
-                                                make_json_string("Script type not on entity: " + type_name));
-                         continue;
-                     }
-                     path = script_comp->get_script_source_location(script_obj);
-                     if(path.empty())
-                     {
-                         results += fmt::format(R"({{"ok":false,"error":{}}})",
-                                                make_json_string("No source path for script type: " + type_name));
+                         fail(error);
                          continue;
                      }
                  }
-                 const auto absolute = resolve_source_path(path);
+                 std::string source_key;
+                 if(!to_project_data_file_key(ctx, path, ex::get_suported_formats<script>(), source_key, error))
+                 {
+                     fail(error);
+                     continue;
+                 }
+                 const auto absolute = fs::absolute(fs::resolve_protocol(source_key));
                  if(!asset_actions::write_text_file(absolute, code, &error))
                  {
-                     results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
+                     fail(error);
                      continue;
                  }
                  note_written_source(absolute);
                  all_imported &= is_script_imported(ctx, absolute);
-                 if(recompile && protocol.empty())
-                 {
-                     protocol = protocol_for_path(absolute);
-                     if(protocol.empty())
-                     {
-                         protocol = "app";
-                     }
-                 }
                  ++ok_count;
-                 results += fmt::format(R"({{"ok":true,"path":{},"bytes":{}}})",
-                                        make_json_string(absolute.generic_string()),
-                                        code.size());
+                 results += fmt::format(R"({{"ok":true,"key":{},"bytes":{}}})", make_json_string(source_key), code.size());
              }
              results += "]";
              const bool build_now = recompile && ok_count > 0 && !protocol.empty() && all_imported;
@@ -652,15 +612,17 @@ void register_script_tools(mcp_tool_registry& registry)
                                          make_json_string(protocol)),
                      .is_error = ok_count == 0 && requested > 0};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 
     registry.add(
         {.name = "scripts_create_batch",
          .description =
-             "Create many C# ScriptComponent .cs files from TemplateComponent.cs.in. Each item: name, "
-             "optional folder (default app:/data/scripts). Optional recompile (default true, once). New "
-             "files build once the asset pipeline has imported them (build: after_import); "
-             "scripts_get_compile_status wait:true waits for that build.",
+             "Create C# script component files from the engine's template. Each item: name, optional folder "
+             "(app:/data/... or a path relative to app:/data; default app:/data/scripts). Optional recompile "
+             "(default true, once). New files build once the asset pipeline has imported them (build: "
+             "after_import); scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"folder":{"type":"string"}},"required":["name"]}},"recompile":{"type":"boolean","default":true}},"required":["items"]})json",
          .handler =
@@ -684,7 +646,7 @@ void register_script_tools(mcp_tool_registry& registry)
              bool first = true;
              size_t ok_count = 0;
              size_t requested = 0;
-             std::string protocol;
+             const std::string protocol = k_script_protocol;
              bool all_imported = true;
              for(auto el : items_arr)
              {
@@ -714,13 +676,15 @@ void register_script_tools(mcp_tool_registry& registry)
                      results += R"({"ok":false,"error":"name must be a valid C# identifier"})";
                      continue;
                  }
-                 std::string folder = "app:/data/scripts";
+                 std::string folder = k_default_script_folder;
                  read_string(obj, "folder", folder);
-                 if(folder.empty())
+                 std::string folder_key;
+                 if(!to_project_data_key(ctx, folder.empty() ? k_default_script_folder : folder, folder_key, error))
                  {
-                     folder = "app:/data/scripts";
+                     results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
+                     continue;
                  }
-                 const auto dir = resolve_source_path(folder);
+                 const auto dir = fs::absolute(fs::resolve_protocol(folder_key));
                  const auto dst = unique_script_path(dir, name);
                  if(!asset_actions::create_script_from_template(template_path, dst, &error))
                  {
@@ -729,14 +693,6 @@ void register_script_tools(mcp_tool_registry& registry)
                  }
                  note_written_source(dst);
                  all_imported &= is_script_imported(ctx, dst);
-                 if(recompile && protocol.empty())
-                 {
-                     protocol = protocol_for_path(dst);
-                     if(protocol.empty())
-                     {
-                         protocol = "app";
-                     }
-                 }
                  ++ok_count;
                  const auto key = fs::convert_to_protocol(dst).generic_string();
                  results += fmt::format(R"({{"ok":true,"path":{},"key":{},"type_name":{}}})",

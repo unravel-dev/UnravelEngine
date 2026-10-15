@@ -40,8 +40,8 @@ const std::string k_server_instructions =
     "1. Never create or edit the project's serialized files (.spfb scenes, .pfb prefabs, .mat "
     "materials) directly on disk - always go through the tools, which run the editor's real "
     "setters and validation.\n"
-    "2. Components must be added (scene_add_components_batch; C# scripts via "
-    "scene_add_scripts_batch) before typed property writes "
+    "2. Components must be added (scene_add_components_batch; a C# script is component Script "
+    "with its type_name) before typed property writes "
     "(scene_set_component_properties_batch).\n"
     "3. Mutating tools refuse play mode; stop play before editing.\n"
     "Before any non-trivial task, call skills_list and fetch the relevant workflow guides with "
@@ -64,6 +64,12 @@ auto trim(std::string_view value) -> std::string_view
 /// in the served text: the rest of the skill is still worth more than an error.
 auto read_included_file(const std::string& protocol_path) -> std::string
 {
+    // An include names a file of a mounted folder (editor:/data/...); one that climbs out is not read.
+    if(protocol_path.find("..") != std::string::npos)
+    {
+        APPLOG_WARNING("MCP skill include refused: {}", protocol_path);
+        return "(The included file " + protocol_path + " leaves its folder and was not read.)";
+    }
     fs::error_code ec;
     const auto resolved = fs::resolve_protocol(protocol_path);
     if(resolved.empty() || !fs::exists(resolved, ec))
@@ -93,7 +99,13 @@ auto parse_skill_file(const fs::path& path, mcp_skill& out) -> bool
     }
     std::stringstream buffer;
     buffer << input.rdbuf();
-    const std::string text = buffer.str();
+    std::string text = buffer.str();
+    // An editor that saves UTF-8 with a byte order mark would otherwise hide the opening "---".
+    constexpr std::string_view k_utf8_bom = "\xEF\xBB\xBF";
+    if(text.starts_with(k_utf8_bom))
+    {
+        text.erase(0, k_utf8_bom.size());
+    }
     std::istringstream lines(text);
     std::string line;
     if(!std::getline(lines, line) || trim(line) != "---")
@@ -250,7 +262,8 @@ void register_skill_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "skills_get",
@@ -329,7 +342,8 @@ void register_skill_tools(mcp_tool_registry& registry)
              return {.text = text, .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::read_only});
 }
 
 } // namespace unravel::mcp

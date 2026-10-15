@@ -8,9 +8,6 @@
 namespace unravel
 {
 
-/// Whether an instance root sits inside another instance.
-auto is_nested_instance(entt::handle entity) -> bool;
-
 /**
  * @brief Draws the aggregated "Changes" section for everything from `root` down.
  *

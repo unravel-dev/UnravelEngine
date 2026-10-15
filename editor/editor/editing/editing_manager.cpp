@@ -1093,6 +1093,11 @@ void editing_manager::queue_action(const std::string& name, const std::function<
     editing_manager::queue_action<tracked_lambda_action_t>(name, do_action, undo_action);
 }
 
+void editing_manager::break_undo_merge()
+{
+    ++session.epoch;
+}
+
 void editing_manager::queue_action(const std::string& name, std::shared_ptr<editing_action_t> action)
 {
     add_action(name, action, false);

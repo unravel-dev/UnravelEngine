@@ -66,7 +66,7 @@ engine:/data/scripts/samples/SampleHudController.cs.
 
 ## Showing a document
 
-Add component "UI Document" to an entity and set (it is typed):
+Add component "UI Document" to an entity and set:
 
 - asset - the .rhtml key
 - render_mode - screen_space_overlay for HUDs and menus, sized to the game view;
@@ -199,7 +199,7 @@ Reload() also resets a document to its initial markup.
   shows script errors and RmlUi warnings. Pass width + height to check a layout at a
   given resolution (1280 x 720, 3840 x 2160); viewport_set_render_size
   {"panel":"game"} holds one while you click and query (element rects follow it).
-- Lower level: input_set_mouse_position (game space) + input_send_mouse click, and
+- Lower level: input_send_mouse {x, y, button} (game space), and
   input_send_keys {"text":"hello"} after a field has focus (key presses alone carry no
   characters). The game, its UI and the editor all follow the virtual pointer; clear
   it (or stop play) when done - while it is set the user's own mouse does not reach

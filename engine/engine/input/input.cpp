@@ -59,7 +59,10 @@ auto input_system::init(rtti::context& ctx) -> bool
 
 void input_system::on_play_end(rtti::context& ctx)
 {
+    // A key or button held when play stopped (by a script test, or synthesized input) must not
+    // read as held in the next session.
     manager.set_virtual_mouse_position({});
+    manager.release_all();
 }
 
 auto input_system::deinit(rtti::context& ctx) -> bool

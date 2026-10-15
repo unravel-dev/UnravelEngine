@@ -1357,13 +1357,13 @@ auto particle_emitter_component::get_shape_mesh_mode() const -> ps_soa::mesh_spa
 
 void particle_emitter_component::refresh_emission_mesh()
 {
-    if(desc_.emission.shape != ps_soa::emitter_shape::mesh || !shape_mesh_.is_valid() ||
-       !shape_mesh_.is_ready())
+    if(desc_.emission.shape != ps_soa::emitter_shape::mesh || !shape_mesh_.is_valid())
     {
         return;
     }
-    const auto source = shape_mesh_.get(false);
-    if(!source || source.get() == emission_mesh_source_)
+    // A scene loads its asset handles deferred: try_get starts the load, is_ready alone never would.
+    const auto source = shape_mesh_.try_get();
+    if(!source || asset_handle<mesh>::is_empty(source) || source.get() == emission_mesh_source_)
     {
         return;
     }
@@ -1822,12 +1822,10 @@ void particle_emitter_component::refresh_render_mesh()
         }
         return;
     }
-    if(!render_mesh_.is_ready())
-    {
-        return;
-    }
-    const auto source = render_mesh_.get(false);
-    if(!source || (source.get() == render_mesh_source_ && !is_render_mesh_dirty_))
+    // A scene loads its asset handles deferred: try_get starts the load, is_ready alone never would.
+    const auto source = render_mesh_.try_get();
+    if(!source || asset_handle<mesh>::is_empty(source) ||
+       (source.get() == render_mesh_source_ && !is_render_mesh_dirty_))
     {
         return;
     }

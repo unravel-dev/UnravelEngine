@@ -69,6 +69,17 @@ void collect_unknown_arguments(const simdjson::dom::element& schema,
     }
 }
 
+/// The MCP tool annotations. Everything a tool touches is this editor and its project, never an
+/// open world.
+auto annotations_json(const mcp_tool& tool) -> std::string
+{
+    const bool is_read_only = tool.effect == tool_effect::read_only;
+    return fmt::format(R"({{"readOnlyHint":{},"destructiveHint":{},"idempotentHint":{},"openWorldHint":false}})",
+                       is_read_only ? "true" : "false",
+                       tool.effect == tool_effect::destructive ? "true" : "false",
+                       is_read_only || tool.idempotent ? "true" : "false");
+}
+
 } // namespace
 
 auto find_unknown_arguments(const mcp_tool& tool, const simdjson::dom::element& args) -> std::vector<std::string>
@@ -169,11 +180,12 @@ auto mcp_tool_registry::list_tools_json() const -> std::string
             out += ",";
         }
         first = false;
-        out += fmt::format(R"({{"name":{},"description":{},"inputSchema":{}}})",
+        out += fmt::format(R"({{"name":{},"description":{},"inputSchema":{},"annotations":{}}})",
                            make_json_string(tool.name),
                            make_json_string(tool.description),
                            tool.input_schema_json.empty() ? R"({"type":"object","properties":{}})"
-                                                         : tool.input_schema_json);
+                                                         : tool.input_schema_json,
+                           annotations_json(tool));
     }
     out += "]";
     return out;

@@ -19,8 +19,9 @@ struct component_apply_result
     std::vector<std::string> applied;
     std::vector<std::string> unknown;
     std::vector<std::string> errors;
-    /// Values that were applied but change nothing (e.g. gradient keys the particle model never reads).
-    std::vector<std::string> warnings;
+    /// Read-only properties a write named with a value other than the current one (a statistic that
+    /// moved since it was read, say): left as they are, not an error, so a read can be written back.
+    std::vector<std::string> read_only;
     bool ok{true};
 };
 
@@ -29,6 +30,13 @@ struct component_apply_result
  *        Optional component pretty-name filter (Light, Skylight, Audio Source, ...).
  */
 auto list_component_property_schema_json(const std::string& component_filter = {}) -> std::string;
+
+/// The components scene_add_components_batch adds, in the Add Component menu's order, as
+/// [{"name":..., "properties": count}].
+auto list_components_json() -> std::string;
+
+/// Names the fix when an entity lacks @p component: it is added first, then configured.
+auto component_missing_error(const std::string& component) -> std::string;
 
 /**
  * @brief True if MCP exposes typed get/set for this component pretty name.
@@ -61,6 +69,13 @@ auto read_script_selector(const simdjson::dom::object& item, script_selector& ou
  * @brief The entity's scripts as [{"type":...,"script_index":k}], k counting scripts of one type.
  */
 auto scripts_summary_json(entt::handle entity) -> std::string;
+
+/**
+ * @brief The full name of the scriptable C# type `name` names, full ("Game.Mover") or short ("Mover").
+ * @return False with `error` set when no compiled script type has that name.
+ */
+auto resolve_script_type_name(rtti::context& ctx, const std::string& name, std::string& full_name, std::string& error)
+    -> bool;
 
 /// Where a selected script sits in its entity's list, and its type's full name.
 struct script_position

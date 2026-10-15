@@ -5,8 +5,70 @@
 #include <logging/logging.h>
 #include <ser20/external/simdjson/simdjson.h>
 
+#include <array>
+#include <cstring>
+
 namespace unravel::mcp
 {
+namespace
+{
+
+/// Length of the non-finite number fmt printed at `pos` ("nan", "-inf", ...), or 0 when none starts there.
+auto non_finite_token_length(const std::string& text, size_t pos) -> size_t
+{
+    constexpr std::array<const char*, 4> tokens{"-nan", "-inf", "nan", "inf"};
+    constexpr const char* token_end = ",]} \t\r\n";
+    for(const char* token : tokens)
+    {
+        const size_t length = std::strlen(token);
+        const size_t end = pos + length;
+        if(text.compare(pos, length, token) == 0 && (end == text.size() || std::strchr(token_end, text[end]) != nullptr))
+        {
+            return length;
+        }
+    }
+    return 0;
+}
+
+/**
+ * @brief `json` with every bare nan / inf number replaced by null. JSON has neither, and one float
+ *        printed that way (an unloaded mesh's bounds, a degenerate rotation) would make the whole
+ *        result unparsable. Strings are copied as they are.
+ */
+auto replace_non_finite_numbers(const std::string& json) -> std::string
+{
+    std::string out;
+    out.reserve(json.size());
+    bool in_string = false;
+    for(size_t i = 0; i < json.size(); ++i)
+    {
+        const char c = json[i];
+        if(in_string)
+        {
+            out.push_back(c);
+            if(c == '\\' && i + 1 < json.size())
+            {
+                out.push_back(json[++i]);
+            }
+            else if(c == '"')
+            {
+                in_string = false;
+            }
+            continue;
+        }
+        if(const size_t length = non_finite_token_length(json, i); length > 0)
+        {
+            out += "null";
+            i += length - 1;
+            continue;
+        }
+        in_string = c == '"';
+        out.push_back(c);
+    }
+    return out;
+}
+
+} // namespace
 
 auto json_escape(const std::string& value) -> std::string
 {
@@ -84,7 +146,8 @@ auto make_tool_result(const tool_result& result) -> std::string
 {
     // Warnings join a JSON object result as its "warnings" field and follow any other text as a
     // block of their own, so a client parsing the result as JSON still can.
-    std::string text = result.text;
+    const bool is_json = !result.text.empty() && (result.text.front() == '{' || result.text.front() == '[');
+    std::string text = is_json ? replace_non_finite_numbers(result.text) : result.text;
     std::string warnings_block;
     if(!result.warnings.empty())
     {

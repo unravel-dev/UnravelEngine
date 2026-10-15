@@ -64,21 +64,19 @@ auto composite_action_t::is_mergeable(const editing_action_t& previous) const ->
         return false;
     }
 
-    bool all_sub_actions_can_merge = true;
-    for (size_t i = 0; i < sub_actions.size() && i < prev_composite_action.sub_actions.size(); ++i)
+    // Every pair must be the same kind of edit: a rename followed by a deactivation of the same
+    // count is two steps, not one.
+    for (size_t i = 0; i < sub_actions.size(); ++i)
     {
-        if (sub_actions[i] && prev_composite_action.sub_actions[i] &&
-            sub_actions[i]->get_meta_type() == prev_composite_action.sub_actions[i]->get_meta_type())
+        const auto& current = sub_actions[i];
+        const auto& prior = prev_composite_action.sub_actions[i];
+        if (!current || !prior || current->get_meta_type() != prior->get_meta_type() ||
+            !current->is_mergeable(*prior))
         {
-            if(!sub_actions[i]->is_mergeable(*prev_composite_action.sub_actions[i]))
-            {
-                all_sub_actions_can_merge = false;
-                break;
-            }
+            return false;
         }
     }
-
-    return all_sub_actions_can_merge;
+    return true;
 }
 
 void composite_action_t::merge_with(const editing_action_t& previous)

@@ -1,3 +1,4 @@
+#include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 
 #include <editor/assets/asset_actions.h>
@@ -25,37 +26,10 @@ auto source_extension(ui_source_kind kind) -> std::string
     return kind == ui_source_kind::document ? ex::get_format<ui_tree>() : ex::get_format<style_sheet>();
 }
 
-/// Which kind a key names, from its extension; false for anything that is not UI source.
-auto kind_of_key(const std::string& key, ui_source_kind& out) -> bool
+/// Extensions of every UI source file: documents and style sheets.
+auto ui_source_extensions() -> std::vector<std::string>
 {
-    if(ends_with_ci(key, ex::get_format<ui_tree>()))
-    {
-        out = ui_source_kind::document;
-        return true;
-    }
-    if(ends_with_ci(key, ex::get_format<style_sheet>()))
-    {
-        out = ui_source_kind::style_sheet;
-        return true;
-    }
-    return false;
-}
-
-/// UI sources an agent may write live in the project; engine data is shared by every project.
-auto check_writable_key(const std::string& key, std::string& error) -> bool
-{
-    if(!starts_with(key, "app:/"))
-    {
-        error = "only project files (app:/...) can be written: " + key;
-        return false;
-    }
-    ui_source_kind kind{};
-    if(!kind_of_key(key, kind))
-    {
-        error = "not a UI source (.rhtml document or .rcss style sheet): " + key;
-        return false;
-    }
-    return true;
+    return {ex::get_format<ui_tree>(), ex::get_format<style_sheet>()};
 }
 
 } // namespace
@@ -65,11 +39,10 @@ void register_ui_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "ui_create_batch",
          .description =
-             "Create in-game UI source files from the engine's templates, the same way the Content "
-             "Browser's Create menu does: kind \"document\" makes an .rhtml page (it links the engine's "
-             "base style sheet and a starter one), kind \"style_sheet\" an .rcss file. Each item: kind "
-             "plus path, or folder + name. Then edit them with ui_set_sources_batch and show a document "
-             "by adding a UI Document component whose asset is the .rhtml key.",
+             "Create UI source files from the engine's templates: kind document makes an .rhtml page (linking the "
+             "engine's base style sheet and a starter one), kind style_sheet an .rcss file. Each item: kind plus "
+             "path (the extension is added) or folder + name. Edit them with ui_set_sources_batch; show a "
+             "document with a UI Document component whose asset is the .rhtml key.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["document","style_sheet"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"}},"required":["kind"]}}},"required":["items"]})json",
          .handler =
@@ -125,24 +98,20 @@ void register_ui_tools(mcp_tool_registry& registry)
                  read_string(item, "path", path);
                  read_string(item, "folder", folder);
                  read_string(item, "name", name);
-                 std::string key = path;
-                 if(key.empty() && !folder.empty() && !name.empty())
+                 std::string requested = path;
+                 if(requested.empty() && !folder.empty() && !name.empty())
                  {
-                     key = folder + (folder.back() == '/' ? "" : "/") + name;
+                     requested = folder + "/" + name;
                  }
-                 if(key.empty())
+                 if(requested.empty())
                  {
                      fail({}, "Provide path, or folder + name");
                      continue;
                  }
-                 const auto extension = source_extension(kind);
-                 if(!ends_with_ci(key, extension))
+                 std::string key;
+                 if(!to_project_data_file_key(ctx, requested, {source_extension(kind)}, key, error))
                  {
-                     key += extension;
-                 }
-                 if(!check_writable_key(key, error))
-                 {
-                     fail(key, error);
+                     fail(requested, error);
                      continue;
                  }
                  fs::error_code ec;
@@ -199,16 +168,12 @@ void register_ui_tools(mcp_tool_registry& registry)
                      results += ",";
                  }
                  first = false;
-                 ui_source_kind kind{};
                  std::string source;
                  std::string read_error;
-                 if(!kind_of_key(key, kind))
+                 std::string source_key;
+                 if(to_readable_file_key(key, ui_source_extensions(), source_key, read_error))
                  {
-                     read_error = "not a UI source (.rhtml or .rcss)";
-                 }
-                 else
-                 {
-                     asset_actions::read_text_file(fs::absolute(fs::resolve_protocol(key)), source, &read_error);
+                     asset_actions::read_text_file(fs::absolute(fs::resolve_protocol(source_key)), source, &read_error);
                  }
                  if(!read_error.empty())
                  {
@@ -224,15 +189,15 @@ void register_ui_tools(mcp_tool_registry& registry)
              results += "]";
              return {.text = results, .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "ui_set_sources_batch",
          .description =
-             "Write UI source files (.rhtml documents, .rcss style sheets) in the project, atomically, "
-             "with the same writer the editor uses for every source file. Write whole files. The asset "
-             "watcher reimports them and documents on screen reload in edit mode; during play a document "
-             "keeps what it loaded, so stop play first. RCSS differs from CSS: see the ui skill.",
+             "Write whole UI source files (.rhtml documents, .rcss style sheets) in the project, atomically. They "
+             "reimport and documents on screen reload in edit mode; during play a document keeps what it loaded, "
+             "so stop play first. RCSS differs from CSS: see the ui skill.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"},"source":{"type":"string"}},"required":["key","source"]}}},"required":["items"]})json",
          .handler =
@@ -270,14 +235,16 @@ void register_ui_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  std::string write_error;
-                 if(!check_writable_key(key, write_error) ||
-                    !asset_actions::write_text_file(fs::absolute(fs::resolve_protocol(key)), source, &write_error))
+                 std::string target;
+                 if(!to_project_data_file_key(ctx, key, ui_source_extensions(), target, write_error) ||
+                    !asset_actions::write_text_file(fs::absolute(fs::resolve_protocol(target)), source, &write_error))
                  {
                      results += fmt::format(R"({{"ok":false,"key":{},"error":{}}})",
                                             make_json_string(key),
                                             make_json_string(write_error));
                      continue;
                  }
+                 key = target;
                  ++ok_count;
                  results += fmt::format(R"({{"ok":true,"key":{},"bytes":{}}})", make_json_string(key), source.size());
              }
@@ -288,7 +255,9 @@ void register_ui_tools(mcp_tool_registry& registry)
                                          requested),
                      .is_error = ok_count == 0};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 }
 
 } // namespace unravel::mcp

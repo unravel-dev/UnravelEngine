@@ -40,6 +40,19 @@ struct tool_result
 
 using tool_handler = std::function<tool_result(rtti::context& ctx, const simdjson::dom::object& args)>;
 
+/// What a call can do to the user's work. Sent as the MCP tool annotations a client decides
+/// confirmations by.
+enum class tool_effect : uint8_t
+{
+    /// Changes the editor or the project in ways edit_undo, or another call, takes back.
+    changes,
+    /// Changes nothing the user keeps (readOnlyHint).
+    read_only,
+    /// Can write over or remove what edit_undo does not bring back: files, settings, unsaved work
+    /// (destructiveHint).
+    destructive,
+};
+
 struct mcp_tool
 {
     std::string name;
@@ -54,6 +67,10 @@ struct mcp_tool
     /// Hidden from clients on the user profile. For tools that only make sense while
     /// working on the engine itself.
     bool developer_only{false};
+    tool_effect effect{tool_effect::changes};
+    /// A second call with the same arguments changes nothing more (idempotentHint). Read-only
+    /// tools are idempotent without saying so.
+    bool idempotent{false};
 };
 
 class mcp_tool_registry
@@ -80,19 +97,23 @@ private:
 
 void register_scene_tools(mcp_tool_registry& registry);
 void register_scene_batch_tools(mcp_tool_registry& registry);
+void register_create_tools(mcp_tool_registry& registry);
 void register_ops_batch_tools(mcp_tool_registry& registry);
 void register_asset_tools(mcp_tool_registry& registry);
 void register_viewport_tools(mcp_tool_registry& registry);
 void register_material_tools(mcp_tool_registry& registry);
+void register_asset_property_tools(mcp_tool_registry& registry);
 void register_project_tools(mcp_tool_registry& registry);
 void register_settings_tools(mcp_tool_registry& registry);
 void register_deploy_tools(mcp_tool_registry& registry);
 void register_input_tools(mcp_tool_registry& registry);
 void register_input_action_tools(mcp_tool_registry& registry);
-void register_physics_tools(mcp_tool_registry& registry);
 void register_ui_tools(mcp_tool_registry& registry);
 void register_ui_inspect_tools(mcp_tool_registry& registry);
 void register_prefab_tools(mcp_tool_registry& registry);
+void register_prefab_instance_tools(mcp_tool_registry& registry);
+void register_spatial_tools(mcp_tool_registry& registry);
+void register_wait_tools(mcp_tool_registry& registry);
 void register_script_tools(mcp_tool_registry& registry);
 void register_editor_tools(mcp_tool_registry& registry);
 void register_skill_tools(mcp_tool_registry& registry);

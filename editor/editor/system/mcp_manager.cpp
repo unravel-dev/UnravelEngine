@@ -10,7 +10,11 @@
 #include <editor/editing/editing_manager.h>
 #include <ser20/external/simdjson/simdjson.h>
 
+#include <hpp/string_view.hpp>
+
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <utility>
 #include <vector>
 
@@ -29,6 +33,81 @@ constexpr auto k_default_profile = mcp::mcp_profile::user;
 
 namespace
 {
+/// Protocol revisions this server speaks, newest first. initialize answers with the client's
+/// revision when it is one of these, else with the newest.
+constexpr std::array<hpp::string_view, 3> k_protocol_versions{"2025-06-18", "2025-03-26", "2024-11-05"};
+
+/// The host part of an Origin ("http://localhost:3000") or Host ("127.0.0.1:27182") value.
+auto host_of(std::string value) -> std::string
+{
+    const auto scheme = value.find("://");
+    if(scheme != std::string::npos)
+    {
+        value = value.substr(scheme + 3);
+    }
+    if(!value.empty() && value.front() == '[')
+    {
+        return value.substr(0, value.find(']') + 1);
+    }
+    return value.substr(0, value.find_first_of(":/"));
+}
+
+auto is_local_host(const std::string& host) -> bool
+{
+    std::string lower(host);
+    std::transform(lower.begin(),
+                   lower.end(),
+                   lower.begin(),
+                   [](unsigned char c)
+                   {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    return lower == "127.0.0.1" || lower == "localhost" || lower == "[::1]";
+}
+
+/**
+ * @brief Whether a request may reach the tools. Local MCP clients send no Origin and name the
+ *        loopback host; a web page sends its own Origin, and a DNS-rebinding page its own Host,
+ *        so both are refused - otherwise any site open in a browser could call every tool.
+ *        A JSON content type keeps plain HTML forms out as well.
+ */
+auto is_allowed_request(const httplib::Request& req, std::string& refusal) -> bool
+{
+    if(req.has_header("Origin") && !is_local_host(host_of(req.get_header_value("Origin"))))
+    {
+        refusal = "Requests from web pages are refused (Origin " + req.get_header_value("Origin") + ")";
+        return false;
+    }
+    if(req.has_header("Host") && !is_local_host(host_of(req.get_header_value("Host"))))
+    {
+        refusal = "Requests must address the loopback host (Host " + req.get_header_value("Host") + ")";
+        return false;
+    }
+    if(req.get_header_value("Content-Type").rfind("application/json", 0) != 0)
+    {
+        refusal = "Content-Type must be application/json";
+        return false;
+    }
+    return true;
+}
+
+/// The protocol revision to answer an initialize request with.
+auto negotiate_protocol_version(const std::string& params_json) -> hpp::string_view
+{
+    simdjson::dom::parser parser;
+    simdjson::dom::element params;
+    hpp::string_view requested;
+    if(!parser.parse(params_json).get(params) && !params["protocolVersion"].get(requested))
+    {
+        const auto known = std::find(k_protocol_versions.begin(), k_protocol_versions.end(), requested);
+        if(known != k_protocol_versions.end())
+        {
+            return *known;
+        }
+    }
+    return k_protocol_versions.front();
+}
+
 /// Words of a tool name, for matching a near miss against real names.
 auto split_tool_words(const std::string& name) -> std::vector<std::string>
 {
@@ -121,6 +200,8 @@ constexpr int k_invalid_request = -32600;
 constexpr int k_method_not_found = -32601;
 constexpr int k_invalid_params = -32602;
 constexpr int k_internal_error = -32603;
+/// How long a main-thread tool waits for the main thread to pick it up; once picked up it runs to the end.
+constexpr auto k_main_thread_tool_timeout = std::chrono::milliseconds(15000);
 } // namespace
 
 auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
@@ -146,19 +227,23 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
 
     mcp::register_scene_tools(registry_);
     mcp::register_scene_batch_tools(registry_);
+    mcp::register_create_tools(registry_);
     mcp::register_ops_batch_tools(registry_);
     mcp::register_asset_tools(registry_);
     mcp::register_viewport_tools(registry_);
     mcp::register_material_tools(registry_);
+    mcp::register_asset_property_tools(registry_);
     mcp::register_project_tools(registry_);
     mcp::register_settings_tools(registry_);
     mcp::register_deploy_tools(registry_);
     mcp::register_input_tools(registry_);
     mcp::register_input_action_tools(registry_);
-    mcp::register_physics_tools(registry_);
     mcp::register_ui_tools(registry_);
     mcp::register_ui_inspect_tools(registry_);
     mcp::register_prefab_tools(registry_);
+    mcp::register_prefab_instance_tools(registry_);
+    mcp::register_spatial_tools(registry_);
+    mcp::register_wait_tools(registry_);
     mcp::register_script_tools(registry_);
     mcp::register_editor_tools(registry_);
     mcp::register_skill_tools(registry_);
@@ -204,23 +289,30 @@ void mcp_manager::start()
                      res.set_content(R"({"ok":true,"service":"unravel-editor-mcp"})", "application/json");
                  });
 
+    // No CORS headers and no preflight route: browsers must not reach the tools.
     server_->Post("/mcp",
                   [this](const httplib::Request& req, httplib::Response& res)
                   {
-                      res.set_header("Access-Control-Allow-Origin", "*");
+                      std::string refusal;
+                      if(!is_allowed_request(req, refusal))
+                      {
+                          error_count_.fetch_add(1);
+                          log_activity("http", refusal, true);
+                          res.status = 403;
+                          res.set_content(mcp::make_json_rpc_error(std::nullopt, k_invalid_request, refusal),
+                                          "application/json");
+                          return;
+                      }
                       auto response = handle_http_request(req.body);
+                      if(response.empty())
+                      {
+                          // A notification: accepted, nothing to answer.
+                          res.status = 202;
+                          return;
+                      }
                       res.status = 200;
                       res.set_content(response, "application/json");
                   });
-
-    server_->Options("/mcp",
-                     [](const httplib::Request&, httplib::Response& res)
-                     {
-                         res.set_header("Access-Control-Allow-Origin", "*");
-                         res.set_header("Access-Control-Allow-Methods", "POST, OPTIONS");
-                         res.set_header("Access-Control-Allow-Headers", "Content-Type");
-                         res.status = 204;
-                     });
 
     running_.store(true);
     server_thread_ = std::thread(
@@ -352,34 +444,13 @@ void mcp_manager::log_activity(std::string category, std::string message, bool i
     }
 }
 
-auto mcp_manager::run_on_main_thread(job_fn work, std::chrono::milliseconds timeout) -> std::string
+void mcp_manager::report_main_thread_failure(const std::string& reason, std::string* failure)
 {
-    tpp::this_thread::register_this_thread();
-    // On-process: a tool that changes the scene (opens it, destroys entities) must not run from a wait of the main
-    // thread, such as a render pass blocked on an asset, which would free what that pass is still using.
-    auto future = tpp::async_on_process(tpp::main_thread::get_id(), std::move(work));
-    if(future.wait_for(timeout) != std::future_status::ready)
+    error_count_.fetch_add(1);
+    log_activity("rpc", reason, true);
+    if(failure != nullptr)
     {
-        error_count_.fetch_add(1);
-        log_activity("rpc", "Timed out waiting for main thread", true);
-        return mcp::make_json_rpc_error(std::nullopt, k_internal_error, "Timed out waiting for main thread");
-    }
-
-    try
-    {
-        return future.get();
-    }
-    catch(const std::exception& ex)
-    {
-        error_count_.fetch_add(1);
-        log_activity("rpc", std::string("Exception on main thread: ") + ex.what(), true);
-        return mcp::make_json_rpc_error(std::nullopt, k_internal_error, ex.what());
-    }
-    catch(...)
-    {
-        error_count_.fetch_add(1);
-        log_activity("rpc", "Exception on main thread", true);
-        return mcp::make_json_rpc_error(std::nullopt, k_internal_error, "Unknown MCP job error");
+        *failure = reason;
     }
 }
 
@@ -405,17 +476,20 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
     if(request.method == "initialize")
     {
         log_activity("rpc", "initialize");
+        const auto protocol_version = negotiate_protocol_version(request.params_json);
         const auto result = fmt::format(
-            R"({{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"unravel-editor","version":{}}},"instructions":{}}})",
+            R"({{"protocolVersion":{},"capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"unravel-editor","version":{}}},"instructions":{}}})",
+            mcp::make_json_string(std::string(protocol_version.data(), protocol_version.size())),
             mcp::make_json_string(version::get_full()),
             mcp::make_json_string(mcp::get_server_instructions()));
         return mcp::make_json_rpc_result(id, result);
     }
 
-    if(request.method == "notifications/initialized" || request.method == "initialized")
+    // Notifications (no id) get no response body; the transport answers 202.
+    if(!request.has_id && request.method.rfind("notifications/", 0) == 0)
     {
-        log_activity("rpc", "initialized");
-        return mcp::make_json_rpc_result(id, "null");
+        log_activity("rpc", request.method);
+        return {};
     }
 
     if(request.method == "ping")
@@ -494,12 +568,17 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
 
         if(tool->requires_main_thread)
         {
-            return run_on_main_thread(
-                [this, tool_name, args_json, id]() -> std::string
+            // On-process: a tool that changes the scene (opens it, destroys entities) must not run from a wait of
+            // the main thread, such as a render pass blocked on an asset, which would free what that pass uses.
+            std::string failure;
+            auto response = invoke_on_main(
+                [this, &tool_name, &args_json, &id]() -> std::string
                 {
                     return execute_tool_call(tool_name, args_json, id);
                 },
-                std::chrono::milliseconds(15000));
+                k_main_thread_tool_timeout,
+                &failure);
+            return response ? *response : mcp::make_json_rpc_error(id, k_internal_error, failure);
         }
 
         // Action+wait tools: run on HTTP worker so waiting does not stall the frame loop.
@@ -558,6 +637,11 @@ auto mcp_manager::execute_tool_call(const std::string& tool_name,
     };
     const bool opens_undo_scope = tool->mutates_scene && tool->requires_main_thread && ctx_->has<editing_manager>();
     const undo_scope scope(opens_undo_scope ? &ctx_->get_cached<editing_manager>() : nullptr);
+    if(opens_undo_scope)
+    {
+        // One call is one undo step, never merged into the previous call's.
+        ctx_->get_cached<editing_manager>().break_undo_merge();
+    }
     auto result = tool->handler(*ctx_, args);
     auto unknown_arguments = mcp::find_unknown_arguments(*tool, args_root);
     result.warnings.insert(result.warnings.begin(), unknown_arguments.begin(), unknown_arguments.end());

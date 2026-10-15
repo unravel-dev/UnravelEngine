@@ -339,7 +339,12 @@ void transform_set_parent_action_t::do_action()
     }
     const auto from = old_parent.resolve();
     const auto to = new_parent.resolve();
-    transform->set_parent(to, true);
+    // set_parent refuses self, a descendant and a no-op move; only a move that happened is recorded.
+    if(!transform->set_parent(to, true))
+    {
+        prefab_record = {};
+        return;
+    }
     prefab_record = prefab_override_context::mark_entity_reparented(ent, from, to);
 }
 void transform_set_parent_action_t::undo_action()

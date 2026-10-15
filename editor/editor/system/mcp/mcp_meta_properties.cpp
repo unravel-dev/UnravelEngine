@@ -1,13 +1,17 @@
 #include "mcp_meta_properties.h"
 
 #include "mcp_tools_common.h"
+#include "mcp_asset_lookup.h"
+#include "mcp_project_paths.h"
 
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/prefab.h>
 #include <engine/layers/layer_mask.h>
+#include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/physics_material.h>
+#include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -26,8 +30,11 @@
 #include <cctype>
 #include <chrono>
 #include <functional>
+#include <iterator>
+#include <limits>
 #include <optional>
 #include <unordered_map>
+#include <variant>
 
 namespace unravel::mcp
 {
@@ -60,7 +67,7 @@ auto make_number_codec(const char* schema_type) -> value_codec
             {
                 if constexpr(std::is_floating_point_v<T>)
                 {
-                    return fmt::format("{:.6g}", value.cast<T>());
+                    return fmt::format("{}", value.cast<T>());
                 }
                 else
                 {
@@ -88,13 +95,13 @@ auto make_number_codec(const char* schema_type) -> value_codec
                         error = "expected an integer";
                         return false;
                     }
-                    if constexpr(std::is_unsigned_v<T>)
+                    // Out of the type's range a cast would wrap: 300 into a byte stores 44.
+                    const auto lowest = static_cast<double>(std::numeric_limits<T>::lowest());
+                    const auto highest = static_cast<double>(std::numeric_limits<T>::max());
+                    if(number < lowest || number > highest)
                     {
-                        if(number < 0.0)
-                        {
-                            error = "expected a non-negative integer";
-                            return false;
-                        }
+                        error = fmt::format("expected an integer from {} to {}", std::numeric_limits<T>::lowest(), std::numeric_limits<T>::max());
+                        return false;
                     }
                 }
                 out = entt::meta_any{static_cast<T>(number)};
@@ -110,13 +117,22 @@ auto make_number_codec(const char* schema_type) -> value_codec
 template<typename T>
 auto make_range_codec() -> value_codec
 {
+    constexpr bool is_float = std::is_floating_point_v<T>;
     return {.schema_type = "array",
-            .schema_extra = R"("items":"number","minItems":2,"maxItems":2)",
+            .schema_extra = is_float ? R"("items":{"type":"number"},"minItems":2,"maxItems":2)"
+                                     : R"("items":{"type":"integer"},"minItems":2,"maxItems":2)",
             .format_hint = "[min, max]",
             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
             {
                 const auto& bounds = value.cast<const range<T>&>();
-                return fmt::format("[{:.6g},{:.6g}]", bounds.min, bounds.max);
+                if constexpr(is_float)
+                {
+                    return fmt::format("[{},{}]", bounds.min, bounds.max);
+                }
+                else
+                {
+                    return fmt::format("[{},{}]", bounds.min, bounds.max);
+                }
             },
             .from_json = [](rtti::context& ctx, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
                 -> bool
@@ -127,7 +143,7 @@ auto make_range_codec() -> value_codec
                     error = "expected [min, max]";
                     return false;
                 }
-                static const auto element_codec = make_number_codec<T>("number");
+                static const auto element_codec = make_number_codec<T>(is_float ? "number" : "integer");
                 std::array<T, 2> values{};
                 std::size_t index = 0;
                 for(auto item : items)
@@ -150,15 +166,15 @@ auto make_size_codec() -> value_codec
 {
     constexpr bool is_float = std::is_floating_point_v<T>;
     return {.schema_type = "array",
-            .schema_extra = is_float ? R"("items":"number","minItems":2,"maxItems":2)"
-                                     : R"("items":"integer","minItems":2,"maxItems":2)",
+            .schema_extra = is_float ? R"("items":{"type":"number"},"minItems":2,"maxItems":2)"
+                                     : R"("items":{"type":"integer"},"minItems":2,"maxItems":2)",
             .format_hint = "[width, height]",
             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
             {
                 const auto& extent = value.cast<const size<T>&>();
                 if constexpr(is_float)
                 {
-                    return fmt::format("[{:.6g},{:.6g}]", extent.width, extent.height);
+                    return fmt::format("[{},{}]", extent.width, extent.height);
                 }
                 else
                 {
@@ -191,6 +207,14 @@ auto make_size_codec() -> value_codec
             }};
 }
 
+/// A color as [r, g, b, a], each number the shortest text that reads back as the same value. The bridge spells
+/// every number that way, so writing back what a read gave changes nothing (and makes no prefab override).
+auto exact_color_json(const math::color& color) -> std::string
+{
+    const math::vec4 v = color;
+    return fmt::format("[{},{},{},{}]", v.x, v.y, v.z, v.w);
+}
+
 /// How one key of a curve of T spells its value: the fields after "progress".
 template<typename T>
 struct curve_key_json;
@@ -202,7 +226,7 @@ struct curve_key_json<float>
 
     static auto to_fields(float value) -> std::string
     {
-        return fmt::format(R"("value":{:.6g})", value);
+        return fmt::format(R"("value":{})", value);
     }
 
     static auto from_fields(const simdjson::dom::object& key, float& out, std::string& /*error*/) -> bool
@@ -224,7 +248,7 @@ struct curve_key_json<frange_t>
 
     static auto to_fields(const frange_t& value) -> std::string
     {
-        return fmt::format(R"("min":{:.6g},"max":{:.6g})", value.min, value.max);
+        return fmt::format(R"("min":{},"max":{})", value.min, value.max);
     }
 
     static auto from_fields(const simdjson::dom::object& key, frange_t& out, std::string& /*error*/) -> bool
@@ -247,7 +271,7 @@ struct curve_key_json<math::color>
 
     static auto to_fields(const math::color& value) -> std::string
     {
-        return R"("color":)" + color_to_json(value);
+        return R"("color":)" + exact_color_json(value);
     }
 
     static auto from_fields(const simdjson::dom::object& key, math::color& out, std::string& error) -> bool
@@ -264,7 +288,7 @@ struct curve_key_json<math::vec3>
 
     static auto to_fields(const math::vec3& value) -> std::string
     {
-        return R"("value":)" + vec3_to_json(value);
+        return R"("value":)" + fmt::format("[{},{},{}]", value.x, value.y, value.z);
     }
 
     static auto from_fields(const simdjson::dom::object& key, math::vec3& out, std::string& error) -> bool
@@ -286,7 +310,7 @@ auto make_curve_codec() -> value_codec
                 std::string json = "[";
                 for(const auto& point : value.cast<const math::curve<T>&>().get_points())
                 {
-                    json += fmt::format(R"({}{{"progress":{:.6g},{}}})",
+                    json += fmt::format(R"({}{{"progress":{},{}}})",
                                         json.size() > 1 ? "," : "",
                                         point.progress,
                                         curve_key_json<T>::to_fields(point.element));
@@ -365,7 +389,7 @@ auto make_seconds_codec() -> value_codec
             .format_hint = "seconds",
             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
             {
-                return fmt::format("{:.6g}", value.cast<seconds>().count());
+                return fmt::format("{}", value.cast<seconds>().count());
             },
             .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
                 -> bool
@@ -440,21 +464,398 @@ auto make_handle_codec() -> value_codec
                     out = entt::meta_any{asset_handle<T>{}};
                     return true;
                 }
-                auto& am = ctx.get_cached<asset_manager>();
-                auto handle = [&]
-                {
-                    if(auto as_uuid = hpp::uuid::from_string(key))
-                    {
-                        return am.get_asset<T>(*as_uuid);
-                    }
-                    return am.get_asset<T>(key);
-                }();
+                auto handle = find_existing_asset<T>(ctx, to_asset_key(key), error);
                 if(!handle)
                 {
-                    error = "asset not found: " + key;
                     return false;
                 }
                 out = entt::meta_any{handle};
+                return true;
+            }};
+}
+
+/// A fixed-length vector of numbers or booleans (vec4, bvec3) crosses as an array of that length.
+template<int Length, typename T>
+auto make_vector_codec() -> value_codec
+{
+    using vector_type = glm::vec<Length, T, glm::defaultp>;
+    constexpr bool is_bool = std::is_same_v<T, bool>;
+    static const std::string schema_extra =
+        fmt::format(R"("items":{{"type":"{}"}},"minItems":{},"maxItems":{})", is_bool ? "boolean" : "number", Length, Length);
+    return {.schema_type = "array",
+            .schema_extra = schema_extra.c_str(),
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                const auto& vector = value.cast<const vector_type&>();
+                std::string json = "[";
+                for(int i = 0; i < Length; ++i)
+                {
+                    json += (i > 0 ? "," : "");
+                    if constexpr(is_bool)
+                    {
+                        json += bool_to_json(vector[i]);
+                    }
+                    else
+                    {
+                        json += fmt::format("{}", vector[i]);
+                    }
+                }
+                return json + "]";
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::array items;
+                if(element.get_array().get(items) != simdjson::SUCCESS || items.size() != static_cast<size_t>(Length))
+                {
+                    error = fmt::format("expected an array of {} {}", Length, is_bool ? "booleans" : "numbers");
+                    return false;
+                }
+                vector_type vector{};
+                int index = 0;
+                for(auto item : items)
+                {
+                    bool is_read = false;
+                    if constexpr(is_bool)
+                    {
+                        is_read = parse_bool(item, vector[index], error);
+                    }
+                    else
+                    {
+                        is_read = parse_number(item, vector[index], error);
+                    }
+                    if(!is_read)
+                    {
+                        return false;
+                    }
+                    ++index;
+                }
+                out = entt::meta_any{vector};
+                return true;
+            }};
+}
+
+/// An entity reference crosses as the entity's id, found in the scene being edited.
+auto make_entity_codec() -> value_codec
+{
+    return {.schema_type = "string",
+            .format_hint = "entity id, or null",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                const auto& entity = value.cast<const entt::handle&>();
+                return entity ? make_json_string(entity_id_string(entity)) : std::string("null");
+            },
+            .from_json = [](rtti::context& ctx, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                if(element.is_null())
+                {
+                    out = entt::meta_any{entt::handle{}};
+                    return true;
+                }
+                std::string id;
+                if(!parse_string(element, id, error))
+                {
+                    return false;
+                }
+                auto* scn = ctx.get_cached<editing_manager>().get_active_scene(ctx);
+                const auto entity = scn != nullptr ? find_entity_by_id(*scn, id) : entt::handle{};
+                if(!entity)
+                {
+                    error = "no entity " + id + " in the scene being edited";
+                    return false;
+                }
+                out = entt::meta_any{entity};
+                return true;
+            }};
+}
+
+/// A name and the flag it stands for, in the order the inspector shows them.
+struct named_flag
+{
+    const char* name;
+    uint32_t flag;
+};
+
+constexpr std::array<named_flag, 3> k_horizontal_alignments{{
+    {"left", align::left},
+    {"center", align::center},
+    {"right", align::right},
+}};
+
+constexpr std::array<named_flag, 6> k_vertical_alignments{{
+    {"top", align::top},
+    {"middle", align::middle},
+    {"bottom", align::bottom},
+    {"capline", align::capline},
+    {"midline", align::midline},
+    {"baseline", align::baseline},
+}};
+
+constexpr std::array<named_flag, 5> k_text_style_flags{{
+    {"overline", gfx::style_overline},
+    {"underline", gfx::style_underline},
+    {"strike_through", gfx::style_strike_through},
+    {"background", gfx::style_background},
+    {"foreground", gfx::style_foreground},
+}};
+
+/// The name of the first entry of @p names whose flag @p flags has; the first name when none is set.
+template<size_t Count>
+auto flag_name(const std::array<named_flag, Count>& names, uint32_t flags) -> const char*
+{
+    const auto found = std::find_if(names.begin(),
+                                    names.end(),
+                                    [flags](const named_flag& entry)
+                                    {
+                                        return (flags & entry.flag) != 0;
+                                    });
+    return found != names.end() ? found->name : names.front().name;
+}
+
+template<size_t Count>
+auto find_flag(const std::array<named_flag, Count>& names, hpp::string_view name, uint32_t& flag, std::string& error)
+    -> bool
+{
+    const auto found = std::find_if(names.begin(),
+                                    names.end(),
+                                    [name](const named_flag& entry)
+                                    {
+                                        return name == entry.name;
+                                    });
+    if(found == names.end())
+    {
+        std::vector<std::string> spellings;
+        std::transform(names.begin(),
+                       names.end(),
+                       std::back_inserter(spellings),
+                       [](const named_flag& entry)
+                       {
+                           return std::string(entry.name);
+                       });
+        error = "\"" + std::string(name) + "\" is not one of " + fmt::format("{}", fmt::join(spellings, ", "));
+        return false;
+    }
+    flag = found->flag;
+    return true;
+}
+
+/// Text alignment crosses as {horizontal, vertical}, the inspector's two rows; a write may name one and keep
+/// the other.
+auto make_alignment_codec() -> value_codec
+{
+    return {.schema_type = "object",
+            .schema_extra =
+                R"("properties":{"horizontal":{"type":"string","enum":["left","center","right"]},"vertical":{"type":"string","enum":["top","middle","bottom","capline","midline","baseline"]}})",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                const auto flags = value.cast<const alignment&>().flags;
+                return fmt::format(R"({{"horizontal":"{}","vertical":"{}"}})",
+                                   flag_name(k_horizontal_alignments, flags),
+                                   flag_name(k_vertical_alignments, flags));
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::object fields;
+                if(element.get_object().get(fields) != simdjson::SUCCESS)
+                {
+                    error = "expected {horizontal, vertical}";
+                    return false;
+                }
+                const auto* current = out.try_cast<alignment>();
+                alignment result = current != nullptr ? *current : alignment{};
+                std::string_view name;
+                uint32_t flag{};
+                if(fields["horizontal"].get_string().get(name) == simdjson::SUCCESS)
+                {
+                    if(!find_flag(k_horizontal_alignments, name, flag, error))
+                    {
+                        return false;
+                    }
+                    result.flags = (result.flags & ~align::horizontal_mask) | flag;
+                }
+                if(fields["vertical"].get_string().get(name) == simdjson::SUCCESS)
+                {
+                    if(!find_flag(k_vertical_alignments, name, flag, error))
+                    {
+                        return false;
+                    }
+                    result.flags = (result.flags & ~align::vertical_text_mask) | flag;
+                }
+                out = entt::meta_any{result};
+                return true;
+            }};
+}
+
+/// Text style flags cross as the names of the flags set.
+auto make_text_style_flags_codec() -> value_codec
+{
+    return {.schema_type = "array",
+            .schema_extra =
+                R"("items":{"type":"string","enum":["overline","underline","strike_through","background","foreground"]})",
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                const auto flags = value.cast<const text_style_flags&>().flags;
+                std::vector<std::string> names;
+                for(const auto& entry : k_text_style_flags)
+                {
+                    if((flags & entry.flag) != 0)
+                    {
+                        names.emplace_back(entry.name);
+                    }
+                }
+                return strings_to_json_array(names);
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::array items;
+                if(element.get_array().get(items) != simdjson::SUCCESS)
+                {
+                    error = "expected an array of style names";
+                    return false;
+                }
+                text_style_flags result{gfx::style_normal};
+                for(auto item : items)
+                {
+                    std::string_view name;
+                    uint32_t flag{};
+                    if(item.get_string().get(name) != simdjson::SUCCESS)
+                    {
+                        error = "style names are strings";
+                        return false;
+                    }
+                    if(!find_flag(k_text_style_flags, name, flag, error))
+                    {
+                        return false;
+                    }
+                    result.flags |= flag;
+                }
+                out = entt::meta_any{result};
+                return true;
+            }};
+}
+
+using physics_shape = physics_compound_shape::shape_t;
+
+/// The JSON name of physics shape type @p type: its pretty name in lower case ("box", "mesh").
+auto shape_type_name(const entt::meta_type& type) -> std::string
+{
+    return to_lower_ascii(entt::get_pretty_name(type));
+}
+
+/// Calls @p visit with a default value of each shape type a physics shape can hold, until it returns true.
+template<size_t Index = 0, typename Visitor>
+auto find_shape_type(Visitor&& visit) -> bool
+{
+    if constexpr(Index < std::variant_size_v<physics_shape>)
+    {
+        if(visit(std::variant_alternative_t<Index, physics_shape>{}))
+        {
+            return true;
+        }
+        return find_shape_type<Index + 1>(std::forward<Visitor>(visit));
+    }
+    return false;
+}
+
+/// The names of the shape types, for errors.
+auto shape_type_names() -> std::vector<std::string>
+{
+    std::vector<std::string> names;
+    find_shape_type(
+        [&names](auto shape)
+        {
+            names.push_back(shape_type_name(entt::resolve<decltype(shape)>()));
+            return false;
+        });
+    return names;
+}
+
+/// One collision shape crosses as {type, then that shape type's reflected fields}. A write of the same type
+/// keeps the fields it leaves out; another type starts from that type's defaults.
+auto make_physics_shape_codec() -> value_codec
+{
+    return {.schema_type = "object",
+            .format_hint = "{type: box|sphere|capsule|cylinder|mesh, then that shape's fields}",
+            .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> std::optional<std::string>
+            {
+                return std::visit(
+                    [&ctx](const auto& shape) -> std::string
+                    {
+                        auto object = entt::forward_as_meta(shape);
+                        const auto fields = meta_properties_to_json(ctx, object);
+                        const auto type_field =
+                            R"({"type":)" + make_json_string(shape_type_name(entt::resolve<std::decay_t<decltype(shape)>>()));
+                        return fields.size() > 2 ? type_field + "," + fields.substr(1) : type_field + "}";
+                    },
+                    value.cast<const physics_compound_shape&>().shape);
+            },
+            .from_json = [](rtti::context& ctx, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
+                -> bool
+            {
+                simdjson::dom::object fields;
+                std::string_view type_name;
+                if(element.get_object().get(fields) != simdjson::SUCCESS ||
+                   fields["type"].get_string().get(type_name) != simdjson::SUCCESS)
+                {
+                    error = "expected {type: " + fmt::format("{}", fmt::join(shape_type_names(), "|")) + ", ...}";
+                    return false;
+                }
+                // The shape's own fields, without the type that picked it.
+                std::string shape_json = "{";
+                for(auto field : fields)
+                {
+                    if(field.key != "type")
+                    {
+                        shape_json += (shape_json.size() > 1 ? "," : "") + make_json_string(std::string(field.key)) + ":" +
+                                      std::string(simdjson::minify(field.value));
+                    }
+                }
+                shape_json += "}";
+                simdjson::dom::parser parser;
+                simdjson::dom::object shape_fields;
+                if(parser.parse(shape_json).get(shape_fields) != simdjson::SUCCESS)
+                {
+                    error = "the shape's fields could not be read";
+                    return false;
+                }
+                const auto* current = out.try_cast<physics_compound_shape>();
+                physics_compound_shape compound = current != nullptr ? *current : physics_compound_shape{};
+                const bool is_known = find_shape_type(
+                    [&](auto shape) -> bool
+                    {
+                        using shape_type = decltype(shape);
+                        if(shape_type_name(entt::resolve<shape_type>()) != type_name)
+                        {
+                            return false;
+                        }
+                        if(const auto* same = std::get_if<shape_type>(&compound.shape))
+                        {
+                            shape = *same;
+                        }
+                        auto object = entt::forward_as_meta(shape);
+                        component_apply_result result;
+                        apply_meta_properties(ctx, object, shape_fields, result);
+                        if(result.ok)
+                        {
+                            compound.shape = shape;
+                        }
+                        error = fmt::format("{}", fmt::join(result.errors, "; "));
+                        return true;
+                    });
+                if(!is_known)
+                {
+                    error = "\"" + std::string(type_name) + "\" is not one of " +
+                            fmt::format("{}", fmt::join(shape_type_names(), ", "));
+                    return false;
+                }
+                if(!error.empty())
+                {
+                    return false;
+                }
+                out = entt::meta_any{compound};
                 return true;
             }};
 }
@@ -518,10 +919,11 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
              }});
         add(entt::type_id<math::vec2>(),
             {.schema_type = "array",
-             .schema_extra = R"("items":"number","minItems":2,"maxItems":2)",
+             .schema_extra = R"("items":{"type":"number"},"minItems":2,"maxItems":2)",
              .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
              {
-                 return vec2_to_json(value.cast<math::vec2>());
+                 const auto v = value.cast<math::vec2>();
+                 return fmt::format("[{},{}]", v.x, v.y);
              },
              .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
                  -> bool
@@ -536,10 +938,11 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
              }});
         add(entt::type_id<math::vec3>(),
             {.schema_type = "array",
-             .schema_extra = R"("items":"number","minItems":3,"maxItems":3)",
+             .schema_extra = R"("items":{"type":"number"},"minItems":3,"maxItems":3)",
              .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
              {
-                 return vec3_to_json(value.cast<math::vec3>());
+                 const auto v = value.cast<math::vec3>();
+                 return fmt::format("[{},{},{}]", v.x, v.y, v.z);
              },
              .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
                  -> bool
@@ -554,10 +957,10 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
              }});
         add(entt::type_id<math::color>(),
             {.schema_type = "array",
-             .schema_extra = R"("items":"number","minItems":3,"maxItems":4)",
+             .schema_extra = R"("items":{"type":"number"},"minItems":3,"maxItems":4)",
              .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
              {
-                 return color_to_json(value.cast<math::color>());
+                 return exact_color_json(value.cast<math::color>());
              },
              .from_json = [](rtti::context&, const simdjson::dom::element& element, entt::meta_any& out, std::string& error)
                  -> bool
@@ -603,10 +1006,35 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<math::curve<math::color>>(), make_curve_codec<math::color>());
         add(entt::type_id<math::curve<math::vec3>>(), make_curve_codec<math::vec3>());
         add(entt::type_id<math::bbox>(), make_bbox_codec());
+        add(entt::type_id<math::vec4>(), make_vector_codec<4, float>());
+        add(entt::type_id<math::bvec3>(), make_vector_codec<3, bool>());
+        add(entt::type_id<entt::handle>(), make_entity_codec());
+        add(entt::type_id<range<uint32_t>>(), make_range_codec<uint32_t>());
+        add(entt::type_id<alignment>(), make_alignment_codec());
+        add(entt::type_id<text_style_flags>(), make_text_style_flags_codec());
+        add(entt::type_id<physics_compound_shape>(), make_physics_shape_codec());
         add(entt::type_id<std::chrono::duration<float>>(), make_seconds_codec());
         return result;
     }();
     return table;
+}
+
+/// Calls @p visit with each reflected property of @p type: its base types' first, then its own - the
+/// order the inspector draws them in.
+template<typename Visitor>
+void for_each_meta_property(const entt::meta_type& type, Visitor&& visit)
+{
+    for(auto [base_id, base] : type.base())
+    {
+        for(auto [id, prop] : base.data())
+        {
+            visit(prop);
+        }
+    }
+    for(auto [id, prop] : type.data())
+    {
+        visit(prop);
+    }
 }
 
 auto find_codec(const entt::meta_type& type) -> const value_codec*
@@ -628,7 +1056,13 @@ auto is_nested_object(const entt::meta_type& type) -> bool
     {
         return false;
     }
-    return type.data().begin() != type.data().end();
+    bool has_property = false;
+    for_each_meta_property(type,
+                           [&has_property](const entt::meta_data&)
+                           {
+                               has_property = true;
+                           });
+    return has_property;
 }
 
 auto enum_value_names(const entt::meta_type& type) -> std::vector<std::string>
@@ -668,18 +1102,30 @@ auto enum_from_json(const simdjson::dom::element& element,
         error = "expected one of " + fmt::format("{}", fmt::join(enum_value_names(type), ", "));
         return false;
     }
-    const std::string wanted = fold_enum_spelling(name);
-    for(auto [id, candidate] : type.data())
+    return find_meta_enum_value(type, name, out, error);
+}
+
+auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>;
+auto schema_type_of(const entt::meta_type& type) -> const char*;
+
+/// A container's elements as a JSON array; nothing when its element type cannot be spelled, empty or not.
+auto sequence_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
+{
+    if(std::string_view(schema_type_of(value.type())) == "unsupported")
     {
-        if(fold_enum_spelling(entt::get_name(candidate)) == wanted ||
-           fold_enum_spelling(entt::get_pretty_name(candidate)) == wanted)
-        {
-            out = candidate.get({});
-            return true;
-        }
+        return std::nullopt;
     }
-    error = "\"" + std::string(name) + "\" is not one of " + fmt::format("{}", fmt::join(enum_value_names(type), ", "));
-    return false;
+    std::string json = "[";
+    for(auto element : value.as_sequence_container())
+    {
+        const auto element_json = value_to_json(ctx, element);
+        if(!element_json)
+        {
+            return std::nullopt;
+        }
+        json += (json.size() > 1 ? "," : "") + *element_json;
+    }
+    return json + "]";
 }
 
 auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
@@ -692,6 +1138,10 @@ auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<s
     if(type.is_enum())
     {
         return enum_to_json(value);
+    }
+    if(type.is_sequence_container())
+    {
+        return sequence_to_json(ctx, value);
     }
     if(is_nested_object(type))
     {
@@ -723,6 +1173,13 @@ auto check_range(const entt::meta_data& prop, double value, std::string& error) 
     return true;
 }
 
+/// The element type of sequence container type @p type.
+auto element_type_of(const entt::meta_type& type) -> entt::meta_type
+{
+    auto instance = type.construct();
+    return instance ? instance.as_sequence_container().value_type() : entt::meta_type{};
+}
+
 auto schema_type_of(const entt::meta_type& type) -> const char*
 {
     if(const auto* codec = find_codec(type))
@@ -733,11 +1190,210 @@ auto schema_type_of(const entt::meta_type& type) -> const char*
     {
         return "string";
     }
+    if(type.is_sequence_container())
+    {
+        return std::string_view(schema_type_of(element_type_of(type))) == "unsupported" ? "unsupported" : "array";
+    }
     if(is_nested_object(type))
     {
         return "object";
     }
     return "unsupported";
+}
+
+void write_properties(rtti::context& ctx,
+                      entt::meta_any& object,
+                      const simdjson::dom::object& properties,
+                      const std::string& path,
+                      component_apply_result& result,
+                      const std::unordered_set<std::string>* only);
+
+auto write_value(rtti::context& ctx,
+                 entt::meta_any& target,
+                 const simdjson::dom::element& value,
+                 const std::string& path,
+                 component_apply_result& result) -> bool;
+
+/// A container takes the array's length - new elements start from their defaults - and each element.
+auto write_sequence(rtti::context& ctx,
+                    entt::meta_any& target,
+                    const simdjson::dom::element& value,
+                    const std::string& path,
+                    component_apply_result& result) -> bool
+{
+    const auto fail = [&](const std::string& message)
+    {
+        result.ok = false;
+        result.errors.push_back(path + ": " + message);
+        return false;
+    };
+    simdjson::dom::array items;
+    if(value.get_array().get(items) != simdjson::SUCCESS)
+    {
+        return fail("expected an array");
+    }
+    auto sequence = target.as_sequence_container();
+    if(!sequence.resize(items.size()))
+    {
+        return fail("the list cannot take this length");
+    }
+    bool is_written = true;
+    size_t index = 0;
+    for(auto item : items)
+    {
+        auto element = sequence[index];
+        is_written = write_value(ctx, element, item, fmt::format("{}[{}]", path, index), result) && is_written;
+        ++index;
+    }
+    return is_written;
+}
+
+/**
+ * @brief Reads @p value into @p target, which refers to the value being written: a property's current
+ * value, or a container element.
+ *
+ * A nested struct merges the fields @p value names, a container takes @p value's length and each
+ * element, anything else is replaced. Errors are reported at @p path.
+ */
+auto write_value(rtti::context& ctx,
+                 entt::meta_any& target,
+                 const simdjson::dom::element& value,
+                 const std::string& path,
+                 component_apply_result& result) -> bool
+{
+    const auto fail = [&](const std::string& message)
+    {
+        result.ok = false;
+        result.errors.push_back(path + ": " + message);
+        return false;
+    };
+    const auto type = target.type();
+    std::string error;
+    if(const auto* codec = find_codec(type))
+    {
+        // The codec reads the current value through the reference (a curve keeps its tangents) and
+        // returns a new value, which is then stored where the target points.
+        auto decoded = target.as_ref();
+        if(!codec->from_json(ctx, value, decoded, error))
+        {
+            return fail(error);
+        }
+        return target.assign(decoded) || fail("the value could not be stored");
+    }
+    if(type.is_enum())
+    {
+        entt::meta_any decoded;
+        if(!enum_from_json(value, type, decoded, error))
+        {
+            return fail(error);
+        }
+        return target.assign(decoded) || fail("the value could not be stored");
+    }
+    if(type.is_sequence_container())
+    {
+        return write_sequence(ctx, target, value, path, result);
+    }
+    simdjson::dom::object fields;
+    if(!is_nested_object(type))
+    {
+        return fail(fmt::format("type {} cannot be set through MCP", entt::get_pretty_name(type)));
+    }
+    if(value.get_object().get(fields) != simdjson::SUCCESS)
+    {
+        return fail("expected an object");
+    }
+    const auto errors_before = result.errors.size();
+    const auto unknown_before = result.unknown.size();
+    write_properties(ctx, target, fields, path + ".", result, nullptr);
+    return result.errors.size() == errors_before && result.unknown.size() == unknown_before;
+}
+
+/// True when @p value spells what @p prop holds now: writing back what a read gave, read-only
+/// properties included, is not an edit. Both sides go through the property's own JSON spelling,
+/// so formatting differences (1 vs 1.0) do not count.
+auto is_unchanged(rtti::context& ctx,
+                  entt::meta_any& object,
+                  const entt::meta_data& prop,
+                  const simdjson::dom::element& value) -> bool
+{
+    auto current = prop.get(object);
+    const auto current_json = value_to_json(ctx, current);
+    auto incoming = prop.get(object);
+    component_apply_result ignored;
+    if(!current_json || !write_value(ctx, incoming, value, {}, ignored))
+    {
+        return false;
+    }
+    const auto incoming_json = value_to_json(ctx, incoming);
+    return incoming_json && *incoming_json == *current_json;
+}
+
+/**
+ * @brief Writes each of @p properties through its reflected setter.
+ *
+ * @p path is where @p object sits ("" at the top, "light." inside a nested struct), so every error
+ * and unknown name reads from the top. Only top-level properties are listed as applied.
+ */
+void write_properties(rtti::context& ctx,
+                      entt::meta_any& object,
+                      const simdjson::dom::object& properties,
+                      const std::string& path,
+                      component_apply_result& result,
+                      const std::unordered_set<std::string>* only)
+{
+    const auto type = object.type();
+    for(auto field : properties)
+    {
+        const std::string key(field.key);
+        const auto key_path = path + key;
+        const auto fail = [&](const std::string& message)
+        {
+            result.ok = false;
+            result.errors.push_back(key_path + ": " + message);
+        };
+        const auto prop = find_meta_property(type, key);
+        if(!prop || (only != nullptr && only->count(key) == 0))
+        {
+            if(const auto renamed = entt::find_renamed_property(type, key))
+            {
+                fail("renamed " + entt::get_name(renamed));
+                continue;
+            }
+            result.unknown.push_back(key_path);
+            continue;
+        }
+        if(is_read_only(object, prop))
+        {
+            if(!is_unchanged(ctx, object, prop, field.value))
+            {
+                result.read_only.push_back(key_path);
+            }
+            continue;
+        }
+        // The value is edited as a whole and goes back through the property's setter, as an inspector
+        // edit of one sub-field does.
+        auto current = prop.get(object);
+        if(!write_value(ctx, current, field.value, key_path, result))
+        {
+            continue;
+        }
+        const auto* codec = find_codec(prop.type());
+        std::string error;
+        if(codec != nullptr && codec->as_double && !check_range(prop, codec->as_double(current), error))
+        {
+            fail(error);
+            continue;
+        }
+        if(!prop.set(object, current))
+        {
+            fail("the setter rejected the value");
+            continue;
+        }
+        if(path.empty())
+        {
+            result.applied.push_back(key);
+        }
+    }
 }
 
 } // namespace
@@ -827,34 +1483,23 @@ auto meta_properties_to_json(rtti::context& ctx,
                              bool include_hidden) -> std::string
 {
     std::string json = "{";
-    bool first = true;
-    for(auto [id, prop] : object.type().data())
-    {
-        const auto name = entt::get_name(prop);
-        if(name.empty() || (only != nullptr && only->count(name) == 0) ||
-           (!include_hidden && !entt::is_property_visible(object, prop)))
-        {
-            continue;
-        }
-        auto value = prop.get(object);
-        if(!value)
-        {
-            continue;
-        }
-        const auto value_json = value_to_json(ctx, value);
-        if(!value_json)
-        {
-            continue;
-        }
-        if(!first)
-        {
-            json += ",";
-        }
-        first = false;
-        json += make_json_string(name) + ":" + *value_json;
-    }
-    json += "}";
-    return json;
+    for_each_meta_property(object.type(),
+                           [&](const entt::meta_data& prop)
+                           {
+                               const auto name = entt::get_name(prop);
+                               if(name.empty() || (only != nullptr && only->count(name) == 0) ||
+                                  (!include_hidden && !entt::is_property_visible(object, prop)))
+                               {
+                                   return;
+                               }
+                               auto value = prop.get(object);
+                               const auto value_json = value ? value_to_json(ctx, value) : std::nullopt;
+                               if(value_json)
+                               {
+                                   json += (json.size() > 1 ? "," : "") + make_json_string(name) + ":" + *value_json;
+                               }
+                           });
+    return json + "}";
 }
 
 void apply_meta_properties(rtti::context& ctx,
@@ -863,136 +1508,135 @@ void apply_meta_properties(rtti::context& ctx,
                            component_apply_result& result,
                            const std::unordered_set<std::string>* only)
 {
-    const auto type = object.type();
-    for(auto field : properties)
-    {
-        const std::string key(field.key);
-        auto fail = [&](const std::string& message)
-        {
-            result.ok = false;
-            result.errors.push_back(key + ": " + message);
-        };
-        const auto prop = find_meta_property(type, key);
-        if(!prop || (only != nullptr && only->count(key) == 0))
-        {
-            if(const auto renamed = entt::find_renamed_property(type, key))
-            {
-                fail("renamed " + entt::get_name(renamed));
-                continue;
-            }
-            result.unknown.push_back(key);
-            continue;
-        }
-        if(is_read_only(object, prop))
-        {
-            fail("read-only");
-            continue;
-        }
-
-        const auto target = prop.type();
-        simdjson::dom::object nested;
-        if(is_nested_object(target) && field.value.get_object().get(nested) == simdjson::SUCCESS)
-        {
-            // Partial objects merge into the current value, then the whole struct goes back
-            // through the property's setter, as an inspector edit of one sub-field does.
-            auto current = prop.get(object);
-            component_apply_result nested_result;
-            apply_meta_properties(ctx, current, nested, nested_result);
-            for(const auto& error : nested_result.errors)
-            {
-                fail(error);
-            }
-            for(const auto& unknown : nested_result.unknown)
-            {
-                result.unknown.push_back(key + "." + unknown);
-            }
-            if(nested_result.ok && nested_result.unknown.empty())
-            {
-                prop.set(object, current) ? result.applied.push_back(key) : fail("the setter rejected the value");
-            }
-            continue;
-        }
-
-        entt::meta_any converted;
-        std::string error;
-        if(const auto* codec = find_codec(target))
-        {
-            converted = prop.get(object);
-            if(!codec->from_json(ctx, field.value, converted, error))
-            {
-                fail(error);
-                continue;
-            }
-            if(codec->as_double && !check_range(prop, codec->as_double(converted), error))
-            {
-                fail(error);
-                continue;
-            }
-        }
-        else if(target.is_enum())
-        {
-            if(!enum_from_json(field.value, target, converted, error))
-            {
-                fail(error);
-                continue;
-            }
-        }
-        else
-        {
-            fail(fmt::format("type {} cannot be set through MCP", entt::get_pretty_name(target)));
-            continue;
-        }
-
-        prop.set(object, converted) ? result.applied.push_back(key) : fail("the setter rejected the value");
-    }
+    write_properties(ctx, object, properties, {}, result, only);
     if(!result.unknown.empty())
     {
         // A typo silently ignored reads as success; reject it so the caller sees the name.
         result.ok = false;
         result.errors.push_back("unknown properties: " + fmt::format("{}", fmt::join(result.unknown, ", ")) +
-                                " (see scene_list_component_properties)");
+                                " (see scene_list_components)");
     }
 }
 
-auto has_meta_properties(const entt::meta_type& type) -> bool
+auto meta_value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
 {
-    for(auto [id, prop] : type.data())
+    return value_to_json(ctx, value);
+}
+
+auto meta_value_from_json(rtti::context& ctx,
+                          const simdjson::dom::element& value,
+                          entt::meta_any& target,
+                          std::string& error) -> bool
+{
+    component_apply_result result;
+    if(write_value(ctx, target, value, {}, result))
     {
-        if(!entt::get_name(prop).empty() && std::string_view(schema_type_of(prop.type())) != "unsupported")
+        return true;
+    }
+    // Errors read "<path>: <reason>"; at the value itself the path is empty.
+    for(auto& message : result.errors)
+    {
+        message.erase(0, message.rfind(": ", 0) == 0 ? 2 : 0);
+    }
+    error = fmt::format("{}", fmt::join(result.errors, "; "));
+    return false;
+}
+
+auto meta_enum_names(const entt::meta_type& type) -> std::vector<std::string>
+{
+    return enum_value_names(type);
+}
+
+auto find_meta_enum_value(const entt::meta_type& type,
+                          hpp::string_view name,
+                          entt::meta_any& out,
+                          std::string& error) -> bool
+{
+    const std::string wanted = fold_enum_spelling(name);
+    for(auto [id, candidate] : type.data())
+    {
+        if(fold_enum_spelling(entt::get_name(candidate)) == wanted ||
+           fold_enum_spelling(entt::get_pretty_name(candidate)) == wanted)
         {
+            out = candidate.get({});
             return true;
         }
     }
+    error = "\"" + std::string(name.data(), name.size()) + "\" is not one of " +
+            fmt::format("{}", fmt::join(enum_value_names(type), ", "));
     return false;
+}
+
+auto count_meta_properties(const entt::meta_type& type) -> size_t
+{
+    size_t count = 0;
+    for_each_meta_property(type,
+                           [&count](const entt::meta_data& prop)
+                           {
+                               const bool is_expressible = !entt::get_name(prop).empty() &&
+                                                           std::string_view(schema_type_of(prop.type())) != "unsupported";
+                               count += is_expressible ? 1 : 0;
+                           });
+    return count;
 }
 
 auto find_meta_property(const entt::meta_type& type, std::string_view name) -> entt::meta_data
 {
-    for(auto [id, prop] : type.data())
-    {
-        if(entt::get_name(prop) == name)
-        {
-            return prop;
-        }
-    }
-    return {};
+    entt::meta_data found;
+    for_each_meta_property(type,
+                           [&](const entt::meta_data& prop)
+                           {
+                               if(!found && entt::get_name(prop) == name)
+                               {
+                                   found = prop;
+                               }
+                           });
+    return found;
 }
 
 namespace
 {
+auto object_properties_schema(const entt::meta_type& type) -> std::string;
+
+/// Schema fields for a value of @p type (no braces): its JSON type and the enum values, struct fields
+/// or element schema it has.
+auto type_schema_fields(const entt::meta_type& type) -> std::string
+{
+    std::string fields = fmt::format(R"("type":{})", make_json_string(schema_type_of(type)));
+    const auto* codec = find_codec(type);
+    if(codec != nullptr && codec->schema_extra != nullptr)
+    {
+        fields += std::string(",") + codec->schema_extra;
+    }
+    if(type.is_enum())
+    {
+        fields += ",\"enum\":" + strings_to_json_array(enum_value_names(type));
+    }
+    if(type.is_sequence_container())
+    {
+        fields += ",\"items\":{" + type_schema_fields(element_type_of(type)) + "}";
+    }
+    if(is_nested_object(type))
+    {
+        fields += "," + object_properties_schema(type);
+    }
+    return fields;
+}
+
 /// "properties":{name:{schema},...} of a reflected struct, leaving out what the bridge cannot express.
 auto object_properties_schema(const entt::meta_type& type) -> std::string
 {
     std::string properties;
-    for(auto [id, prop] : type.data())
-    {
-        const auto name = entt::get_name(prop);
-        if(name.empty() || std::string_view(schema_type_of(prop.type())) == "unsupported")
-        {
-            continue;
-        }
-        properties += (properties.empty() ? "" : ",") + make_json_string(name) + ":{" + meta_property_schema(prop) + "}";
-    }
+    for_each_meta_property(type,
+                           [&properties](const entt::meta_data& prop)
+                           {
+                               const auto name = entt::get_name(prop);
+                               if(!name.empty() && std::string_view(schema_type_of(prop.type())) != "unsupported")
+                               {
+                                   properties += (properties.empty() ? "" : ",") + make_json_string(name) + ":{" +
+                                                 meta_property_schema(prop) + "}";
+                               }
+                           });
     return "\"properties\":{" + properties + "}";
 }
 } // namespace
@@ -1005,20 +1649,8 @@ auto meta_object_schema(const entt::meta_type& type) -> std::string
 auto meta_property_schema(const entt::meta_data& prop) -> std::string
 {
     const auto prop_type = prop.type();
-    std::string fields = fmt::format(R"("type":{})", make_json_string(schema_type_of(prop_type)));
+    std::string fields = type_schema_fields(prop_type);
     const auto* codec = find_codec(prop_type);
-    if(codec != nullptr && codec->schema_extra != nullptr)
-    {
-        fields += std::string(",") + codec->schema_extra;
-    }
-    if(prop_type.is_enum())
-    {
-        fields += ",\"enum\":" + strings_to_json_array(enum_value_names(prop_type));
-    }
-    if(is_nested_object(prop_type))
-    {
-        fields += "," + object_properties_schema(prop_type);
-    }
     if(entt::get_attribute(prop, "min"))
     {
         fields += fmt::format(",\"minimum\":{:.6g}", entt::get_attribute_as<double>(prop, "min"));
@@ -1049,23 +1681,21 @@ void append_meta_schema(const entt::meta_type& type,
                         bool& first,
                         const std::unordered_set<std::string>* only)
 {
-    for(auto [id, prop] : type.data())
-    {
-        const auto name = entt::get_name(prop);
-        if(name.empty() || (only != nullptr && only->count(name) == 0))
-        {
-            continue;
-        }
-        if(!first)
-        {
-            json += ",";
-        }
-        first = false;
-        json += fmt::format(R"({{"component":{},"name":{},{}}})",
-                            make_json_string(component),
-                            make_json_string(name),
-                            meta_property_schema(prop));
-    }
+    for_each_meta_property(type,
+                           [&](const entt::meta_data& prop)
+                           {
+                               const auto name = entt::get_name(prop);
+                               if(name.empty() || (only != nullptr && only->count(name) == 0))
+                               {
+                                   return;
+                               }
+                               json += fmt::format(R"({}{{"component":{},"name":{},{}}})",
+                                                   first ? "" : ",",
+                                                   make_json_string(component),
+                                                   make_json_string(name),
+                                                   meta_property_schema(prop));
+                               first = false;
+                           });
 }
 
 } // namespace unravel::mcp

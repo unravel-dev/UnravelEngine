@@ -491,6 +491,22 @@ auto draw_switch(const char* id, const ImRect& bb, bool is_on, const char* toolt
     return is_pressed;
 }
 
+} // namespace
+
+auto get_scene_draw_counts() -> scene_draw_counts
+{
+    const auto* stats = bgfx::getStats();
+    const ImGuiIO& io = ImGui::GetIO();
+    const std::uint32_t total_primitives = std::accumulate(std::begin(stats->numPrims), std::end(stats->numPrims), 0u);
+    const std::uint32_t ui_primitives = std::min(static_cast<std::uint32_t>(io.MetricsRenderIndices / 3), total_primitives);
+    const std::uint32_t total_calls = stats->numDraw;
+    const std::uint32_t editor_calls = std::min(static_cast<std::uint32_t>(ImGui::GetDrawCalls()), total_calls);
+    return {total_primitives - ui_primitives, total_calls - editor_calls};
+}
+
+namespace
+{
+
 void draw_scene_section()
 {
     if(!panel_section::draw_header("##scene", ICON_MDI_CUBE_OUTLINE, "Scene", true).is_open)
@@ -498,17 +514,13 @@ void draw_scene_section()
         return;
     }
     const auto* stats = bgfx::getStats();
-    const ImGuiIO& io = ImGui::GetIO();
-    const std::uint32_t total_primitives = std::accumulate(std::begin(stats->numPrims), std::end(stats->numPrims), 0u);
-    const std::uint32_t ui_primitives = std::min(static_cast<std::uint32_t>(io.MetricsRenderIndices / 3), total_primitives);
-    const std::uint32_t total_calls = stats->numDraw;
-    const std::uint32_t editor_calls = std::min(static_cast<std::uint32_t>(ImGui::GetDrawCalls()), total_calls);
+    const auto counts = get_scene_draw_counts();
 
     draw_row({"Triangles",
-              format_count(total_primitives - ui_primitives),
+              format_count(counts.triangles),
               "Triangles rendered for the scene, without the editor UI.\nLODs and culling bring it down."});
     draw_row({"Draw Calls",
-              fmt::format("{}", total_calls - editor_calls),
+              fmt::format("{}", counts.draw_calls),
               "Draw commands sent to the GPU for the scene, without the editor UI.\n"
               "Fewer draw calls cost the CPU less."});
     draw_row({"Compute Calls", fmt::format("{}", stats->numCompute), "Compute shader dispatches of this frame."});

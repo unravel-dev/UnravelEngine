@@ -4,6 +4,7 @@
 #include "prefab_changes_view.h"
 
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/prefab_instance_changes.h>
 
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
@@ -88,49 +89,6 @@ auto resolve_inspected_entity(const meta_any_proxy& var_proxy, prefab_component&
     return owner_is_live ? owner : entt::handle{};
 }
 
-} // namespace
-
-namespace
-{
-/**
- * @brief Writes an instance into its prefab file and re-homes what it carried: what was stated
- *        here about the nested content is the document's statement now, what was stated about
- *        this instance's own content is its content. One override survives - a nested root's
- *        own placement, which is the *containing* document's to state; dropping it would let
- *        the container's next replay snap the instance back to where it was before the move.
- */
-void apply_instance_to_prefab(entt::handle root)
-{
-    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
-    if(prefab_comp == nullptr)
-    {
-        return;
-    }
-    prefab_comp->changed = false;
-    auto prefab_path = fs::resolve_protocol(prefab_comp->source.id());
-    asset_writer::atomic_save_to_file(prefab_path.string(), root);
-
-    prefab_statements kept;
-    if(is_nested_instance(root))
-    {
-        const auto* root_id = root.try_get<prefab_id_component>();
-        for(const auto& override_data : prefab_comp->local.overrides)
-        {
-            const bool is_root = root_id != nullptr && override_data.instance_path.empty() &&
-                                 override_data.entity_uuid == root_id->id;
-            const bool is_placement =
-                override_data.component_path.rfind("transform_component/local_transform/position", 0) == 0 ||
-                override_data.component_path.rfind("transform_component/local_transform/rotation", 0) == 0;
-            if(is_root && is_placement)
-            {
-                kept.overrides.insert(override_data);
-            }
-        }
-    }
-    prefab_comp->from_document = fold_document_statements(root);
-    prefab_comp->local = std::move(kept);
-    clear_local_statements_below(root);
-}
 } // namespace
 
 auto inspector_prefab_component::inspect(rtti::context& ctx,

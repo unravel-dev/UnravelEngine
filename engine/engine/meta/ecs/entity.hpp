@@ -53,6 +53,18 @@ struct save_context
     entt::const_handle save_source{};
 
     /**
+     * @brief The registry being written, for values that name an entity without a handle (a
+     *        script's Entity field holds only the entity). Set by the outermost save.
+     */
+    const entt::registry* registry{};
+
+    /// The registry an entity id belongs to: the source's when saving one hierarchy, else the registry being written.
+    auto get_registry() const -> const entt::registry*
+    {
+        return save_source ? save_source.registry() : registry;
+    }
+
+    /**
      * @brief Marks the document as one whose nested prefab instances are already current.
      *
      * Set by the deploy bake, which resolves every nested instance against its own asset

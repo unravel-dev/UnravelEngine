@@ -1,29 +1,53 @@
 ---
 name: components
-title: Typed component workflow + semantics
-description: The list -> add -> set -> get -> remove workflow and per-component knowledge - lights, particle emitters (semantics + recipes), physics bodies and shapes, animation clips, world-space text, reflection probes, local volumes and bloom.
+title: Component workflow + semantics
+description: The list -> add -> set -> get -> remove workflow, how properties are shaped (nested objects, lists, enums, entity and asset references), and per-component knowledge - lights, particle emitters (semantics + recipes), physics bodies and shapes, character controllers, animation clips, world-space text, reflection probes, local volumes and post effects.
 order: 40
 ---
-# Typed component workflow and semantics
+# Component workflow and semantics
 
 ## Workflow
 
-1. scene_list_component_properties (optional component filter) - the editable
-   schema, including enum values.
-2. scene_add_components_batch to add the component. Valid names come from
-   scene_list_component_types. C# scripts are different: scene_add_scripts_batch
-   (see the scripting skill).
+1. scene_list_components - the components you can add, with how many
+   properties each has; scene_list_components {"component":"Light"} - that
+   component's properties: names, types, enum values, ranges, read-only.
+2. scene_add_components_batch to add the component. A C# script is component
+   "Script" with its type_name (see the scripting skill).
 3. scene_set_component_properties_batch with a properties object.
-4. Round-trip check with scene_get_component_properties_batch when unsure.
+4. scene_get_component_properties_batch to read back (names: [...] reads only
+   those, also the ones the current mode hides).
 5. scene_remove_components_batch to take a component off again.
 
-Which components are typed: scene_list_component_types marks each one with
-typed true/false. Most come straight from the reflection the inspector uses, so
-property names, ranges (minimum/maximum), enum values and descriptions in
-scene_list_component_properties match what a person sees in the Inspector, and
+Every component's properties come from the reflection the Inspector uses:
+names, ranges, enum values and descriptions match what a person sees there, and
 writes go through the component's own setters.
 
+## How values are shaped
+
+- Nested settings are objects: {"light":{"intensity":3}}. A partial object
+  merges into the current value - name only what you change.
+- Lists are arrays and take the array's length; a list of objects merges each
+  element by index (a shorter array drops the rest).
+- Enums are strings: the value name ("res_512") or its label ("512"); case,
+  spaces and underscores do not matter.
+- Asset references are keys (or uids), null clears them; entity references are
+  entity ids.
+- Out-of-range values, unknown names and renamed names (reported with the new
+  name) reject the whole call; nothing changes.
+- Read-only properties (statistics, velocities) may be written back as read;
+  a value that moved since the read is left as it is and reported in a warning.
+- Undo restores the whole component as it was, hidden settings included.
+
 ## Light
+
+Light has enabled and a nested light object: color, intensity,
+indirect_intensity, type (directional | point | spot), casts_shadows,
+source_radius / source_length, point_data {range}, spot_data {range,
+inner_angle, outer_angle}, shadow_params {type, resolution, bias, normal_bias,
+slope_bias, near_plane, far_plane, pcf / pcss / vsm / esm settings},
+directional_shadow_params {splits, distribution, stabilize} and contact_shadow
+{enabled, ray_length, thickness, max_distance, opacity}. Example:
+{"light":{"type":"spot","intensity":15,"spot_data":{"range":10,"outer_angle":45,"inner_angle":22}}}.
 
 enabled false switches a light off without deactivating its entity: no direct
 light, no shadows, nothing in the global illumination. intensity 0 is not off -
@@ -44,9 +68,9 @@ size the emitter in metres: wider, softer highlights at the same total light.
 
 Every key below is a reflected property, named as the inspector's tooltips
 describe it; enum values are snake_case (older spellings such as "OutExpo"
-are accepted). A get without a property filter leaves out the settings of
-other modes (hidden in the inspector too); name them to read them anyway. A
-renamed key is rejected with its new name.
+are accepted). A get without names leaves out the settings of other modes
+(hidden in the inspector too); name them to read them anyway. A renamed key is
+rejected with its new name.
 
 Emission:
 - lifetime [min,max] = particle life in seconds; duration = seconds of one
@@ -76,8 +100,7 @@ Motion (exact at any frame rate; there is no per-frame integration):
   launch velocity; drag (per second) decays it so gravity and acceleration
   reach a terminal speed; gravity_scale 1 falls (fountains); acceleration
   [x,y,z] m/s^2 is wind or buoyancy; inherit_velocity carries the emitter's own
-  motion. The old keys velocity_gradient, velocity_damping and
-  emission_lifetime are rejected with what replaced them.
+  motion.
 - motion_easing (linear, out_expo, out_cubic, ...) remaps a particle's time:
   out_expo bursts out and settles - explosions, novas. spawn_along_path 1
   spreads a moving emitter's spawns along its path (smooth trails).
@@ -218,21 +241,27 @@ turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
   (simulated). Dynamic bodies need is_using_gravity true and a mass.
 - A freshly added Physics component has NO shapes, and a body without a shape
   collides with nothing - things fall straight through it. Always set shapes.
-- shapes is an array: {type:"box",center,extents} | {type:"sphere",center,
-  radius} | {type:"capsule"|"cylinder",center,radius,length}. Omitted fields
-  take defaults: box extents [1,1,1] (FULL size - a unit cube), sphere radius
-  0.5 (a real radius - the 1 m Sphere primitive). With is_autoscaled true (the
-  default) they are multiplied by the entity scale, so a scaled Cube primitive
-  needs only [{"type":"box"}] and a Sphere primitive [{"type":"sphere"}].
-- For meshes, set center/extents from the model AABB (assets_get_mesh_info).
+- shapes is an array: {type:"box",center,extends} | {type:"sphere",center,
+  radius} | {type:"capsule"|"cylinder",center,radius,length} |
+  {type:"mesh",center,mesh_asset,collision_type:"convex"|"concave"} (convex
+  for dynamic bodies). Omitted fields take defaults: box extends [1,1,1] (FULL
+  size - a unit cube), sphere radius 0.5 (a real radius - the 1 m sphere
+  primitive). With is_autoscaled true (the default) they are multiplied by the
+  entity scale, so a scaled cube primitive needs only [{"type":"box"}] and a
+  sphere primitive [{"type":"sphere"}]. A shape written with its own type
+  keeps the fields you leave out.
+- For meshes, set center/extends from the model AABB (assets_get_mesh_info), or
+  use a mesh shape.
+- freeze_position / freeze_rotation are [x,y,z] booleans; include_layers /
+  exclude_layers take layer names, indices or "everything" / "nothing".
 - Nothing simulates in edit mode; test with play mode (verification skill).
 - Domino-style chains: spacing must be less than tilt reach - a 1.4m tall
   domino tilted 30 degrees reaches about 0.7m.
 - Surfaces: a physics material sets bounce (restitution 0..1) and grip
-  (friction, 0 is ice). physics_materials_create_batch makes one,
-  physics_materials_list_properties shows the ranges; assign it with property
-  material on the Physics component. Bodies read it when they are built, so it
-  shows in play mode.
+  (friction, 0 is ice). assets_create_batch {"type":"physics_material"} makes
+  one, assets_list_properties {"type":"physics_material"} shows the ranges;
+  assign it with property material on the Physics component. Bodies read it
+  when they are built, so it shows in play mode.
 - Contact events (sensor_events, collision_events, sensor_exit_on_destroy) are
   ON by default - triggers and collisions already reach scripts. Turn one off
   only to save cost; collision_exit_on_destroy is the one that starts off.
@@ -267,23 +296,39 @@ leave false for in-place showcase loops.
 ## Text (world-space labels)
 
 Text renders in world units: with a ~1m scale entity, font_size 12-20 reads as
-a signage label; area [width,height] is the wrap box in meters. alignment is
-"middle_center" etc. Glyphs face +Z at yaw 0 - rotate the entity 180 in yaw to
-face -Z viewers.
+a signage label (font_size is read-only while auto_size is on; auto_size_range
+[min,max] bounds it then); area [width,height] is the wrap box in meters.
+alignment is {horizontal: left|center|right, vertical: top|middle|bottom|
+capline|midline|baseline} - name one to change only it. style holds the colors,
+outline, shadow and style_flags (["underline","overline","strike_through",
+"background","foreground"]). The readable side of the glyphs faces -Z at yaw 0:
+a viewer standing on -Z reads it; rotate the entity 180 in yaw for viewers on
++Z.
 
-## Reflection Probe / Volume / Bloom
+## Reflection Probe / Volume / post effects
 
-- Reflection Probe: type box with extents as HALF extents fitted to the room
-  interior plus transition_distance for the blend skirt; type sphere uses
-  range. update_mode once is right for static showcases.
+- Reflection Probe: probe {type, method, intensity, box_data {extents,
+  transition_distance}, sphere_data {range}}. Type box with extents as HALF
+  extents fitted to the room interior plus transition_distance for the blend
+  skirt; type sphere uses range. update_mode once is right for static
+  showcases; resolution res_16 ... res_1024.
 - Volume: mode local + extents (full size) + blend_distance scopes co-located
   post components (e.g. Bloom) to a region; higher priority wins over the
   global volume. Put Volume and Bloom on the same entity, then raise bloom
-  intensity (global default 0.15; a strong local glow zone is 0.6-1.0).
+  settings.intensity (global default 0.15; a strong local glow zone is
+  0.6-1.0).
+- Post effects (Bloom, GTAO, SSR, Temporal AA, Auto Exposure, Global
+  Illumination, ...) have enabled and a nested settings object, as the
+  Inspector groups them: {"settings":{"intensity":0.8}}.
+- Camera: field_of_view, near_clip_distance, far_clip_distance,
+  projection_mode, orthographic_size, include_layers / exclude_layers.
+- Audio Source: clip, volume, pitch, loop, range [min,max], bus, priority,
+  spatial; is_playing (read-only) tells whether it holds a voice in play mode.
 
 ## Do
 
-- Read the schema before writing values; enums are strings, not ints.
+- Read the schema (scene_list_components {component}) before writing values;
+  enums are strings, not ints.
 - Batch all property writes for one feature into one call (one undo step).
 
 ## Do not

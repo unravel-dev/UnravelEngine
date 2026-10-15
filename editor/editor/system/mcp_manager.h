@@ -74,48 +74,77 @@ public:
     auto snapshot_activity() const -> std::vector<mcp_activity_entry>;
     void clear_activity();
 
-    /// Run `fn` on the editor main thread and wait. Safe from MCP HTTP workers. `fn` runs from the main thread's
-    /// task processing at the frame start (tpp::async_on_process), never from a wait in the middle of a frame.
-    /// `fn` must return a value (use bool for success/fail). Returns nullopt on timeout / exception.
+    /**
+     * @brief Runs `fn` on the editor main thread and waits for it. Safe from MCP HTTP workers.
+     *
+     * `fn` runs from the main thread's task processing at the frame start (tpp::async_on_process),
+     * never from a wait in the middle of a frame. A call either runs or does not: when `timeout`
+     * passes before the main thread picks `fn` up, `fn` is abandoned and never runs; once it has
+     * started, the caller waits for it to finish however long it takes. So `fn` may capture the
+     * caller's locals by reference, and a timeout always means "nothing happened".
+     *
+     * @param failure When set, receives why the result is empty: the timeout or the exception text.
+     * @return `fn`'s result, or nullopt when it timed out before starting or threw.
+     */
     template<typename Fn>
-    auto invoke_on_main(Fn&& fn, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
-        -> std::optional<std::invoke_result_t<std::decay_t<Fn>>>
+    auto invoke_on_main(Fn&& fn,
+                        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000),
+                        std::string* failure = nullptr) -> std::optional<std::invoke_result_t<std::decay_t<Fn>>>
     {
         using result_t = std::invoke_result_t<std::decay_t<Fn>>;
         static_assert(!std::is_void_v<result_t>, "invoke_on_main requires a non-void return type");
-
+        // The task holds the gate while it runs, so a caller that gives up either cancels a task
+        // that has not started or waits on the gate for one that has.
+        struct gate
+        {
+            std::mutex mutex;
+            bool started{};
+            bool abandoned{};
+        };
+        auto shared_gate = std::make_shared<gate>();
         tpp::this_thread::register_this_thread();
-        auto future = tpp::async_on_process(tpp::main_thread::get_id(), std::forward<Fn>(fn));
+        auto future = tpp::async_on_process(tpp::main_thread::get_id(),
+                                            [shared_gate, &fn]() -> std::optional<result_t>
+                                            {
+                                                std::lock_guard<std::mutex> lock(shared_gate->mutex);
+                                                if(shared_gate->abandoned)
+                                                {
+                                                    return std::nullopt;
+                                                }
+                                                shared_gate->started = true;
+                                                return fn();
+                                            });
         if(future.wait_for(timeout) != std::future_status::ready)
         {
-            error_count_.fetch_add(1);
-            log_activity("rpc", "Timed out waiting for main thread", true);
-            return std::nullopt;
+            std::lock_guard<std::mutex> lock(shared_gate->mutex);
+            if(!shared_gate->started)
+            {
+                shared_gate->abandoned = true;
+                report_main_thread_failure("The main thread did not take the call within " +
+                                               std::to_string(timeout.count()) + " ms; it was not run",
+                                           failure);
+                return std::nullopt;
+            }
         }
-
         try
         {
             return future.get();
         }
         catch(const std::exception& ex)
         {
-            error_count_.fetch_add(1);
-            log_activity("rpc", std::string("Exception on main thread: ") + ex.what(), true);
+            report_main_thread_failure(std::string("Exception on main thread: ") + ex.what(), failure);
             return std::nullopt;
         }
         catch(...)
         {
-            error_count_.fetch_add(1);
-            log_activity("rpc", "Exception on main thread", true);
+            report_main_thread_failure("Exception on main thread", failure);
             return std::nullopt;
         }
     }
 
 private:
-    using job_fn = std::function<std::string()>;
-
-    auto run_on_main_thread(job_fn job, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
-        -> std::string;
+    /// Counts and logs a call that produced no result, and hands the reason to the caller.
+    void report_main_thread_failure(const std::string& reason, std::string* failure);
     auto handle_http_request(const std::string& body) -> std::string;
     auto dispatch_json_rpc(const std::string& body) -> std::string;
     auto execute_tool_call(const std::string& tool_name,

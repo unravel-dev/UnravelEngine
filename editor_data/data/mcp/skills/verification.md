@@ -8,21 +8,21 @@ order: 70
 
 ## Scene viewport captures (edit mode)
 
-- viewport_set_camera positions the Scene panel camera; yaw 0 faces +Z, yaw
-  180 faces -Z; positive pitch looks down. viewport_get_camera reads the
-  current pose - useful before relative moves.
-- The camera interpolates: set the pose, wait ~0.5s, set it again, then
-  viewport_capture_scene (wait_ms 800-1500, scale 0.5). A capture taken too
-  early can show the previous pose.
-- Framing without math: viewport_focus_entities_batch (entities),
-  viewport_focus_bounds (world sphere/box), viewport_look_at (aim the camera
-  at a point or entity), viewport_orbit_camera (orbit a pivot by yaw/pitch),
-  viewport_reset_camera (default pose). Use duration 0 for instant moves
-  before captures.
+- viewport_set_camera poses the Scene panel camera: position plus
+  rotation_euler (yaw 0 faces +Z, yaw 180 faces -Z, positive pitch looks down)
+  or target, a world point to look at. It stops camera motion first, so the
+  pose holds. viewport_get_camera reads the current pose.
+- viewport_capture_scene captures a frame rendered after the call (scale 0.5
+  is enough to judge composition); settle_frames lets temporal effects settle
+  after a big change. A hidden Scene tab renders for the capture.
+- Framing without math: viewport_focus {entity_ids} (or center + radius, or
+  min + max) frames like the editor's F key - duration 0 is instant;
+  viewport_orbit_camera orbits a pivot by yaw / pitch; viewport_reset_camera
+  restores the default pose.
 - viewport_set_debug_view switches visualization ("full", "base_color",
-  "normals", "depth", "velocity", "gi_light_voxels", ...). Always restore
-  "full" afterwards. viewport_list_debug_views lists every mode grouped, with
-  what it shows and what its colors mean - call it instead of guessing a name.
+  "normals", "depth", "velocity", ...). Always restore "full" afterwards.
+  viewport_list_debug_views lists every mode grouped, with what it shows and
+  what its colors mean - call it instead of guessing a name.
   "particle_overdraw" shows how many particle layers each pixel shades (blue 1,
   green 4, yellow 8, red 16, white 32+): the view to judge an effect's fill
   cost before reaching for half_resolution, octagon or max_screen_size.
@@ -30,20 +30,21 @@ order: 70
 ## Play mode testing (physics, animation, particles, scripts)
 
 Mutating tools refuse play mode, so choreograph (the Scene panel still renders
-during play while its tab shows - panel_focus_scene, then viewport_look_at and
-viewport_capture_scene film a paused moment from any angle):
+during play - viewport_set_camera {target} and viewport_capture_scene film a
+paused moment from any angle):
 
 1. Move the game's Main Camera entity (scene_set_transforms_batch, WORLD pose)
    to frame the target - BEFORE entering play.
-2. play_set_active {"active":true}; wait 2-4s real time (the first frame is a
-   splash screen - never capture immediately).
+2. play_set_active {"active":true} (allow_splash:false skips the splash
+   screen); editor_wait_for {"play_phase":"running"} returns once the
+   simulation runs - capture after that.
 3. viewport_capture_game (it renders the game view itself, even with the Game
    tab hidden). width + height (e.g. 1280 x 720) capture at that resolution
    and restore the previous size afterwards; viewport_set_render_size
    {"panel":"game",...} keeps the game at one size (0 x 0 to undo).
 4. play_set_active {"active":false} - edit state is restored, including
    everything physics moved.
-5. play_get_state answers "am I in play?" when unsure; play_set_paused +
+5. editor_get_status answers "am I in play?" when unsure; play_set_paused +
    play_skip_frame give deterministic frame stepping: each step runs scripts,
    physics and animation once over 1/60 s, so a capture after every step
    films script-driven motion frame by frame. play_skip_frame {"count":30}
@@ -59,6 +60,17 @@ viewport_capture_scene film a paused moment from any angle):
 Two captures a few seconds apart prove motion (dominoes mid-fall, animation
 pose changes) better than one.
 
+Wait for outcomes instead of sleeping or polling: editor_wait_for blocks until
+one condition holds and returns met, elapsed_ms and the last value seen (a
+timeout is met false, not an error):
+- property: {"entity_id", "component":"Transform", "name":"position.1",
+  "op":"<", "value":0} - a ball fell below the floor. Any component works the
+  same, and script fields with component "Script" + type_name ("Score", name
+  "value", op ">=", value 10); op "changed" waits for any change.
+- entity: {"name_contains":"Enemy", "exists":false} - every enemy destroyed.
+- log: {"contains":"Game Over"} - logged after the call (or after an after_id
+  from logs_get_recent).
+
 ## Driving the game: synthesized input
 
 Captures prove rendering. Only input proves gameplay - a player controller, a
@@ -67,19 +79,23 @@ jump, a trigger, a menu button.
 1. input_get_state first. input_allowed false means the Game panel is not
    focused and NOTHING reaches the action map; the input tools focus it for you
    unless you pass focus_game_panel false.
-2. input_hold_keys {"keys":["w"],"frames":60} holds the keys for exactly that
+2. input_send_keys {"keys":["w"],"frames":60} holds the keys for exactly that
    many frames and waits for them to elapse, so the effect is finished when the
-   call returns. input_send_keys with state down/up holds across several calls;
-   state "press" taps for one frame, which is what Input.IsPressed sees.
+   call returns; the default (one frame) is a tap, which is what
+   Input.IsPressed sees. state down / up holds across several calls. Keys are
+   always released at the end of a press, and when play stops.
 3. Key names are the platform's, matched ignoring case, spaces and dashes:
-   "w", "space", "left shift" or "lshift", "f1". A rejected name lists near
-   misses.
+   "w", "space", "left shift" or "lshift", "f1"; "ctrl+s" (or {"key":"s",
+   "ctrl":true}) holds the modifier around the key as a real press does. A
+   rejected name lists near misses.
 4. Scripts only run in play mode - enter play first or nothing moves.
-5. Pointer: input_set_mouse_position (play mode) drives a virtual pointer that
-   the game, its UI and the editor all follow - the user's real cursor is not
-   moved - then input_send_mouse clicks or scrolls. While it is set the user's
-   mouse does not reach the editor, so clear it (clear:true) as soon as the test
-   is done; it also clears itself when play ends.
+5. Pointer: input_send_mouse {x, y} (play mode, game pixels by default) moves
+   a virtual pointer that the game, its UI and the editor all follow - the
+   user's real cursor is not moved - and button / wheel click or scroll there.
+   A point outside the Game panel is refused (the press would land on the
+   editor). While it is set the user's mouse does not reach the editor, so clear
+   it (clear:true) as soon as the test is done; it also clears itself when play
+   ends.
 
 Prove it with numbers, not only pixels: scene_find_entities_batch then
 scene_get_bounds_batch (both allowed in play mode) before and after gives a
@@ -93,8 +109,15 @@ silently reads zero.
 
 ## Logs and profiling
 
-- logs_get_recent (min_level "warning") after imports, scene loads and play
-  sessions; use after_id to tail new entries only.
+- logs_get_recent (min_level "warn") after imports, scene loads and play
+  sessions; contains filters by text. Pass the next_after_id of one call as
+  after_id to the next to read only what was logged since (has_more says
+  another page waits).
+- stats_get: the frame as the statistics overlay shows it - fps, CPU submit
+  and GPU ms, triangles and draw calls without the editor UI, GPU memory, and
+  per view (scene_view, game) models, lights, shadow casters and particles
+  drawn. The first check for "is this scene too heavy"; with vsync on the
+  times include waiting for the display.
 - profiler_get_passes returns per-render-pass CPU/GPU milliseconds. Pass
   enable:true once to switch the GPU profiler on; one frame is noisy, so
   sample several times and average. Use a prefix filter to watch one pass.

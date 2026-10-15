@@ -2,6 +2,7 @@
 #include "fonts/icons/icons_material_design_icons.h"
 #include "imgui/imgui.h"
 #include <algorithm>
+#include <utility>
 
 namespace ImBox
 {
@@ -218,9 +219,41 @@ auto MsgBox::DrawMessage() -> void
     ImGui::EndGroup();
 }
 
+auto MsgBox::RequestAnswer(ModalResult result) -> bool
+{
+    const bool has_button = std::any_of(button_layout_.begin(),
+                                        button_layout_.end(),
+                                        [result](const auto& button)
+                                        {
+                                            return button.first == result;
+                                        });
+    if (!has_button || !IsWaiting())
+    {
+        return false;
+    }
+    requested_answer_ = result;
+    return true;
+}
+
+auto MsgBox::Answer(ModalResult result) -> void
+{
+    animation_state_ = AnimationState::Closing;
+    animation_start_ = std::chrono::steady_clock::now();
+    if (callback_)
+    {
+        callback_(result);
+    }
+}
+
 auto MsgBox::DrawButtons() -> void
 {
     if (button_layout_.empty()) return;
+
+    if (requested_answer_ != ModalResult::None)
+    {
+        Answer(std::exchange(requested_answer_, ModalResult::None));
+        return;
+    }
     
     const float button_width = 100.0f;
     const float button_height = 30.0f;
@@ -278,12 +311,7 @@ auto MsgBox::DrawButtons() -> void
         // Handle button click
         if (clicked)
         {
-            animation_state_ = AnimationState::Closing;
-            animation_start_ = std::chrono::steady_clock::now();
-            if (callback_)
-            {
-                callback_(result);
-            }
+            Answer(result);
         }
         
         // Handle keyboard shortcuts
@@ -298,12 +326,7 @@ auto MsgBox::DrawButtons() -> void
             (result == ModalResult::Yes && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
             (result == ModalResult::No && ImGui::IsKeyPressed(ImGuiKey_N)))
         {
-            animation_state_ = AnimationState::Closing;
-            animation_start_ = std::chrono::steady_clock::now();
-            if (callback_)
-            {
-                callback_(result);
-            }
+            Answer(result);
         }
     }
 }

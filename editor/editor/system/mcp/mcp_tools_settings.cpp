@@ -124,7 +124,7 @@ auto custom_rows(const settings& current) -> std::vector<custom_row>
     rows.push_back(
         {.group = "layer",
          .name = "layers",
-         .schema = fmt::format(R"("type":"array","items":"string","description":"The 32 layer names physics )"
+         .schema = fmt::format(R"("type":"array","items":{{"type":"string"}},"description":"The 32 layer names physics )"
                                R"(queries and rendering filter on. The first {} are engine-owned and cannot be )"
                                R"(renamed; a shorter array leaves later slots untouched.")",
                                reserved_count),
@@ -270,10 +270,9 @@ void register_settings_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "settings_list_properties",
          .description =
-             "List the project settings this server exposes: dotted path, type, range, enum values, "
-             "description (from the settings reflection the Project Settings window draws), whether "
-             "it is read-only, and whether a change needs an editor restart (cold). Optional group "
-             "filter (standalone, app, graphics, physics, splash, assets, resolution, layer).",
+             "List the project settings this server exposes: dotted path, type, range, enum values, description, "
+             "whether it is read-only, and whether a change needs an editor restart (cold). Optional group "
+             "filter.",
          .input_schema_json =
              R"json({"type":"object","properties":{"group":{"type":"string"},"groups":{"type":"array","items":{"type":"string"}}}})json",
          .handler =
@@ -325,7 +324,8 @@ void register_settings_tools(mcp_tool_registry& registry)
                                          json),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "settings_get",
@@ -382,23 +382,23 @@ void register_settings_tools(mcp_tool_registry& registry)
              json += "}";
              return {.text = json, .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "settings_set",
          .description =
              "Write project settings and save them. `properties` maps dotted paths to values, e.g. "
-             "{\"standalone.startup_scene\":\"app:/data/Main.spfb\",\"physics.solver_iterations\":6}. "
-             "Values go through the same reflection the Project Settings window uses, so its ranges "
-             "and enum names apply. All-or-nothing: nothing is written when any entry is rejected. "
-             "Cold settings are stored but need an editor restart to take effect.",
+             "{\"standalone.startup_scene\":\"app:/data/Main.spfb\",\"physics.solver_iterations\":6}; ranges and "
+             "enum names as settings_list_properties lists them. All-or-nothing: nothing is written when any "
+             "entry is rejected. Cold settings are stored but need an editor restart to take effect.",
          .input_schema_json =
              R"json({"type":"object","properties":{"properties":{"type":"object"}},"required":["properties"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
-             if(!require_not_play_mode(ctx, error))
+             if(!require_not_play_mode(ctx, error) || !require_not_deploying(ctx, error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -532,7 +532,9 @@ void register_settings_tools(mcp_tool_registry& registry)
                                          strings_to_json_array(restart_required)),
                      .is_error = false};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 }
 
 } // namespace unravel::mcp

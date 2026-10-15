@@ -111,6 +111,12 @@ REFLECT(audio_source_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "clip"},
             entt::attribute{"pretty_name", "Clip"},
+        })
+        .data<nullptr, &audio_source_component::is_playing>("is_playing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_playing"},
+            entt::attribute{"pretty_name", "Is Playing"},
+            entt::attribute{"tooltip", "Whether the source holds a playing voice (play mode)."},
         });
 }
 

@@ -516,6 +516,10 @@ struct editing_manager
     
     auto has_unsaved_changes() const -> bool { return has_unsaved_changes_; }
     void clear_unsaved_changes() { has_unsaved_changes_ = false; }
+
+    /// Starts a new undo step: the next action never merges into the previous one. For edits made outside a
+    /// mouse gesture (MCP tool calls), where the per-gesture merge boundary never comes.
+    void break_undo_merge();
     /// Whether anything was edited in prefab mode since it was entered or last saved.
     auto has_unsaved_prefab_changes() const -> bool { return prefab_has_unsaved_changes_; }
 

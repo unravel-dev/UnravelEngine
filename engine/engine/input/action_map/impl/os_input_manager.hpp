@@ -87,6 +87,9 @@ public:
     void set_virtual_mouse_position(const hpp::optional<coord>& position);
     auto get_virtual_mouse_position() const -> const hpp::optional<coord>&;
 
+    /// Lets go of every key and mouse button: nothing reads as held until it is pressed again.
+    void release_all();
+
     /// Counts calls to before_events_update, which is the boundary where a pressed state
     /// becomes down and a released state becomes up - so it is the unit a synthesized tap or
     /// hold has to be measured in.

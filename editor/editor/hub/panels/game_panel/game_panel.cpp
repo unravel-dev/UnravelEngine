@@ -49,6 +49,20 @@ auto has_output_image(const camera_component& camera_comp) -> bool
 }
 } // namespace
 
+auto game_panel::get_rendered_pipeline_stats(rtti::context& ctx) -> rendering::pipeline_stats
+{
+    rendering::pipeline_stats pstats;
+    ctx.get_cached<ecs>().get_scene().registry->view<camera_component>().each(
+        [&](auto e, auto&& camera_comp)
+        {
+            if(has_output_image(camera_comp))
+            {
+                pstats.add_stats(camera_comp.get_pipeline_data().get_pipeline()->get_stats());
+            }
+        });
+    return pstats;
+}
+
 game_panel::game_panel(imgui_panels* parent, const char* name)
     : panel_base(name)
     , parent_(parent)
@@ -158,7 +172,7 @@ void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
 
     path.render_scene(scene, dt);
 
-    is_visible_force_ = false;
+    end_forced_frame();
 }
 
 void game_panel::on_after_render(rtti::context& ctx)
@@ -208,16 +222,7 @@ void game_panel::draw_ui(rtti::context& ctx)
         const ImRect toolbar_area(area_origin, area_origin + size);
         update_toolbar_visibility(ctx, toolbar_area);
 
-        // Every camera that rendered costs frame time, also those the panel does not show.
-        rendering::pipeline_stats pstats;
-        ec.get_scene().registry->view<camera_component>().each(
-            [&](auto e, auto&& camera_comp)
-            {
-                if(has_output_image(camera_comp))
-                {
-                    pstats.add_stats(camera_comp.get_pipeline_data().get_pipeline()->get_stats());
-                }
-            });
+        const auto pstats = get_rendered_pipeline_stats(ctx);
 
         if(const auto displayed_camera = get_displayed_camera(ctx))
         {

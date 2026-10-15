@@ -9,6 +9,7 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/console_log_panel/console_log_panel.h>
+#include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/system/project_manager.h>
@@ -20,6 +21,8 @@
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
+#include <engine/ecs/components/prefab_component.h>
+#include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/prefab.h>
 #include <engine/engine.h>
 #include <engine/events.h>
@@ -1767,6 +1770,26 @@ auto editor_actions::is_path_inside_project(const fs::path& path) -> bool
            project_root.end();
 }
 
+namespace
+{
+/// True when `folder` holds a build an earlier deploy wrote: every deploy writes the asset pack.
+auto is_previous_deploy(const fs::path& folder) -> bool
+{
+    fs::error_code ec;
+    return fs::exists(folder / "data" / "app" / "assets.pack", ec);
+}
+
+/// True when `folder` contains the open project, so clearing it would delete the project.
+auto contains_project(const fs::path& folder) -> bool
+{
+    fs::error_code ec;
+    const auto project_root = fs::weakly_canonical(fs::resolve_protocol("app:/"), ec);
+    const auto target = fs::weakly_canonical(folder, ec);
+    return !project_root.empty() && !target.empty() &&
+           (project_root == target || fs::is_any_parent_path(target, project_root));
+}
+} // namespace
+
 auto editor_actions::can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool
 {
     return get_deploy_problems(ctx, params).empty();
@@ -1784,9 +1807,20 @@ auto editor_actions::get_deploy_problems(rtti::context& ctx, const deploy_settin
     {
         problems.emplace_back("The deploy folder is inside the project; choose one outside it.");
     }
+    else if(contains_project(params.deploy_location))
+    {
+        problems.emplace_back("The deploy folder contains the project; deploying clears the folder first.");
+    }
     else if(!fs::is_directory(params.deploy_location, ec))
     {
         problems.emplace_back("The deploy folder does not exist.");
+    }
+    else if(params.deploy_dependencies && !fs::is_empty(params.deploy_location, ec) &&
+            !is_previous_deploy(params.deploy_location))
+    {
+        // A full deploy clears the folder; only an empty one or an earlier build may be cleared.
+        problems.emplace_back("The deploy folder is not empty and holds no earlier build; deploying clears it. "
+                              "Choose an empty folder or a previous deploy.");
     }
     auto& settings = ctx.get_cached<project_manager>().get_settings();
     if(!settings.standalone.startup_scene.is_valid())
@@ -2303,6 +2337,55 @@ auto editor_actions::save_import_settings(const std::string& key, const asset_me
     return asset_writer::atomic_save_to_file(asset_writer::resolve_meta_file_for_key(key).string(), meta);
 }
 
+auto editor_actions::save_entity_as_prefab(rtti::context& ctx,
+                                           entt::handle entity,
+                                           const fs::path& prefab_path,
+                                           bool attach) -> asset_handle<prefab>
+{
+    if(!asset_writer::atomic_save_to_file(prefab_path.string(), entity))
+    {
+        return {};
+    }
+    auto& am = ctx.get_cached<asset_manager>();
+    auto prefab_asset = am.get_asset<prefab>(fs::convert_to_protocol(prefab_path).generic_string());
+    if(!attach)
+    {
+        return prefab_asset;
+    }
+    // The entity may already be an instance of a different prefab. Its old bookkeeping is keyed by
+    // uids that also exist in the file just written (prefab uids survive the save), so keeping it
+    // would suppress those properties from the new asset on every resync - and a stale instance_id
+    // would claim a slot in a document that never wrote this instance. Becoming the source of a new
+    // prefab leaves nothing overridden by definition.
+    //
+    // Reset field by field, not replaced: emplace_or_replace on an existing component takes entt's
+    // patch path, which assigns a default-constructed component over the live one - owner handle
+    // included - and fires only on_update, so the owner never gets re-stamped. That null owner
+    // surfaced as a crash in the inspector's Apply All. And not removed-and-re-added either: the
+    // on_destroy hook strips prefab ids from the whole subtree.
+    // A nested instance saved as its own prefab is no longer its container's slot: the container's
+    // document would put the old instance back there on its next replay. The slot is stated removed
+    // on the container, and the new instance is the user's.
+    if(const auto* old_prefab = entity.try_get<prefab_component>();
+       old_prefab != nullptr && !old_prefab->instance_id.is_nil())
+    {
+        const auto* trans = entity.try_get<transform_component>();
+        auto container =
+            trans != nullptr ? prefab_override_context::find_prefab_root_entity(trans->get_parent()) : entt::handle{};
+        if(auto* container_prefab = container ? container.try_get<prefab_component>() : nullptr)
+        {
+            container_prefab->remove_instance(old_prefab->instance_id);
+            container_prefab->changed = true;
+        }
+    }
+    auto& prefab_comp = entity.get_or_emplace<prefab_component>();
+    prefab_comp.clear_overrides();
+    prefab_comp.instance_id = {};
+    prefab_comp.instance_document = {};
+    prefab_comp.source = prefab_asset;
+    return prefab_asset;
+}
+
 void editor_actions::recompile_textures(const std::string& group)
 {
     auto& ctx = engine::context();
@@ -2678,11 +2761,8 @@ auto editor_actions::set_selection(rtti::context& ctx,
         }
         return false;
     }
-    if(!add)
-    {
-        em.unselect();
-    }
-    bool any = false;
+    // Every id is resolved before the selection changes, so a bad one leaves it as it was.
+    std::vector<entt::handle> entities;
     for(const auto& id : entity_ids)
     {
         auto entity = find_entity_by_id(*scn, id);
@@ -2694,13 +2774,16 @@ auto editor_actions::set_selection(rtti::context& ctx,
             }
             return false;
         }
-        const auto mode = (!add && !any) ? editing_manager::select_mode::normal : editing_manager::select_mode::ctrl;
-        em.select(entity, mode);
-        any = true;
+        entities.push_back(entity);
     }
-    if(!any && !add)
+    if(!add)
     {
         em.unselect();
+    }
+    for(size_t i = 0; i < entities.size(); ++i)
+    {
+        const auto mode = (!add && i == 0) ? editing_manager::select_mode::normal : editing_manager::select_mode::ctrl;
+        em.select(entities[i], mode);
     }
     return true;
 }

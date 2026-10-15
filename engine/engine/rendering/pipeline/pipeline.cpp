@@ -264,7 +264,13 @@ auto get_normal_texture_uid(const particle_emitter_component& emitter) -> hpp::u
 {
     const auto& normal_texture = emitter.get_normal_texture();
     if(ps_soa::get_capped_lighting(emitter.get_lighting()) != ps_soa::particle_lighting::surface ||
-       emitter.get_blend_mode() == ps_soa::blend_mode::multiply || !normal_texture.is_valid() || !normal_texture.is_ready())
+       emitter.get_blend_mode() == ps_soa::blend_mode::multiply || !normal_texture.is_valid())
+    {
+        return {};
+    }
+    // A scene loads its asset handles deferred: try_get starts the load, is_ready alone never would.
+    const auto loaded = normal_texture.try_get();
+    if(!loaded || asset_handle<gfx::texture>::is_empty(loaded))
     {
         return {};
     }

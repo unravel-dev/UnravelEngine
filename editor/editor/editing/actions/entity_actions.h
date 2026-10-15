@@ -317,6 +317,60 @@ struct entity_reset_component_action_t : crtp_meta_type<entity_reset_component_a
 };
 
 /**
+ * @brief Records an edit already made to a component, as the component before and after it.
+ *
+ * For edits made through the component's setters outside the inspector - a tool writing many
+ * properties at once. Undo loads the state before and redo the state after, so every property
+ * comes back, those hidden in the current mode included, and the setters' side effects run once:
+ * the first do finds the edit made. On a prefab instance the properties that differ become
+ * overrides, as inspector edits would.
+ */
+struct entity_component_state_action_t : crtp_meta_type<entity_component_state_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    entt::meta_type component_type{};
+    std::string state_before{};
+    std::string state_after{};
+    prefab_override_record prefab_record{};
+    /// The edit is live when the action is made; only a redo loads state_after.
+    bool is_edit_live{true};
+
+    /// @param state_before What prefab_override_context::save_component_state returned before the edit.
+    entity_component_state_action_t(entt::handle ent, const entt::meta_type& ctype, std::string state_before);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+/**
+ * @brief An entity subtree saved so it can be put back in place of what is there later: the same
+ *        ids, under the same parent, at the same place among its siblings.
+ *
+ * For undoing an operation that rewrites a whole subtree at once - a prefab instance reverted or
+ * applied - from the same kind of snapshot an undone delete restores. The entities come back as
+ * new entities carrying their ids, so a handle held into the old subtree does not follow them.
+ */
+struct entity_subtree_snapshot
+{
+    std::string serialized{};
+    /// Preorder ids of the subtree, as save_to_stream wrote it.
+    std::vector<hpp::uuid> subtree_uuids{};
+    entt::uhandle root{};
+    entt::uhandle parent{};
+    size_t sibling_index{};
+
+    /// Saves the subtree under @p root_entity. Empty when the root has no id.
+    static auto capture(entt::handle root_entity) -> entity_subtree_snapshot;
+
+    /// Destroys the subtree now at the root's id, then rebuilds the snapshot in its place.
+    /// @return The restored root, or an empty handle when nothing was captured.
+    auto restore() const -> entt::handle;
+};
+
+/**
  * @brief Puts one script back to its defaults where it is, keeping its slot.
  *
  * On a prefab instance the fields that change become overrides, as edits would; the script stays

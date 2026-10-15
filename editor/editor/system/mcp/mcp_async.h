@@ -2,11 +2,11 @@
 
 #include "mcp_tool_registry.h"
 
+#include <filesystem/filesystem.h>
 #include <graphics/frame_buffer.h>
 
 #include <chrono>
 #include <context/context.hpp>
-#include <filesystem>
 #include <functional>
 #include <string>
 #include <vector>
@@ -14,32 +14,30 @@
 namespace unravel
 {
 class mcp_manager;
+class panel_base;
 }
 
 namespace unravel::mcp
 {
 
-/// Poll until `path` exists and is non-empty, or timeout elapses.
-/// Call from an HTTP/worker thread - never from the main/render thread.
-auto wait_for_file(const std::filesystem::path& path,
-                   std::chrono::milliseconds timeout = std::chrono::milliseconds(3000),
-                   std::chrono::milliseconds poll_interval = std::chrono::milliseconds(32)) -> bool;
-
-auto read_file_bytes(const std::filesystem::path& path, std::string& error) -> std::vector<uint8_t>;
-
 auto encode_base64(const std::vector<uint8_t>& bytes) -> std::string;
 
-auto make_temp_screenshot_stem(const std::string& tag) -> std::filesystem::path;
+/// The folder MCP writes its own output files to (captures, measurements): <temp>/unravel_mcp, created
+/// on first use. Never the project: those files are not assets.
+auto mcp_output_directory() -> fs::path;
+
 
 struct capture_options
 {
-    std::chrono::milliseconds wait_timeout{std::chrono::milliseconds(500)};
+    /// Frames rendered after the request before the capture, e.g. to let temporal AA and GI settle after
+    /// a change. The capture always waits for at least one frame rendered after the request.
+    uint32_t settle_frames{0};
     /// Downscale factor in (0, 1]; uses bimg linear resize. Prefer 0.5 to cut tokens.
     double scale{1.0};
-    /// Makes the panel that owns the framebuffer render on the next frame, also while its tab is
-    /// hidden. Called on the main thread. When set, the capture waits for a frame rendered after
-    /// the request instead of reading whatever the framebuffer last held.
-    std::function<void(rtti::context&)> request_render;
+    /// The panel that owns the framebuffer. The capture keeps it rendering until the blit, also while its
+    /// tab is hidden; a hidden panel's view, torn down while hidden, first renders warm-up frames so it is
+    /// not captured without history. Called on the main thread.
+    std::function<panel_base&(rtti::context&)> resolve_panel;
 };
 
 /// Action + wait: blit an offscreen FBO color attachment into a READ_BACK

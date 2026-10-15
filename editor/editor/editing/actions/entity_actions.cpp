@@ -508,7 +508,8 @@ void entity_add_component_action_t::do_action()
 
 void entity_add_component_action_t::undo_action()
 {
-    if(auto ent = entity.resolve())
+    // A component the entity already had was not added here, so undo must not take it away.
+    if(auto ent = entity.resolve(); ent && do_was_successful)
     {
         component_type.invoke("component_remove"_hs, {}, ent);
     }
@@ -552,7 +553,7 @@ void entity_remove_component_action_t::do_action()
 
 void entity_remove_component_action_t::undo_action()
 {
-    if(auto ent = entity.resolve())
+    if(auto ent = entity.resolve(); ent && do_was_successful)
     {
         component_type.invoke("component_add"_hs, {}, ent);
         stream.seekg(0);
@@ -1266,6 +1267,69 @@ void entity_reset_component_action_t::draw_in_inspector(rtti::context& ctx)
 {
 }
 
+namespace
+{
+/// Loads @p state, a component as save_component_state saved it, into the entity's component in place.
+void load_component_state(entt::handle entity, const entt::meta_type& component_type, const std::string& state)
+{
+    std::stringstream stream(state);
+    component_type.invoke("component_load"_hs, {}, entity, entt::forward_as_meta(stream));
+}
+} // namespace
+
+entity_component_state_action_t::entity_component_state_action_t(entt::handle ent,
+                                                                 const entt::meta_type& ctype,
+                                                                 std::string before)
+    : entity(entt::make_uhandle(ent)),
+      component_type(ctype),
+      state_before(std::move(before)),
+      state_after(prefab_override_context::save_component_state(ent, ctype))
+{
+    name = "Edit " + entt::get_pretty_name(component_type);
+}
+
+void entity_component_state_action_t::do_action()
+{
+    auto ent = entity.resolve();
+    if(!ent || state_before.empty() || state_after.empty())
+    {
+        return;
+    }
+    if(!is_edit_live)
+    {
+        load_component_state(ent, component_type, state_after);
+    }
+    is_edit_live = false;
+    prefab_record = prefab_override_context::mark_changed_properties(ent, component_type, state_before);
+}
+
+void entity_component_state_action_t::undo_action()
+{
+    auto ent = entity.resolve();
+    if(!ent || state_before.empty() || state_after.empty())
+    {
+        return;
+    }
+    load_component_state(ent, component_type, state_before);
+    prefab_override_context::restore_overrides(prefab_record);
+    prefab_record = {};
+}
+
+auto entity_component_state_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_component_state_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && component_type;
+}
+
+void entity_component_state_action_t::draw_in_inspector(rtti::context& ctx)
+{
+}
+
 entity_reset_script_component_action_t::entity_reset_script_component_action_t(entt::handle ent,
                                                                                const hpp::uuid& script_slot)
     : entity(entt::make_uhandle(ent)), slot(script_slot)
@@ -1345,6 +1409,63 @@ auto entity_reset_script_component_action_t::is_valid() const -> bool
 
 void entity_reset_script_component_action_t::draw_in_inspector(rtti::context& ctx)
 {
+}
+
+auto entity_subtree_snapshot::capture(entt::handle root_entity) -> entity_subtree_snapshot
+{
+    entity_subtree_snapshot snapshot;
+    collect_subtree_uuid_preorder(static_cast<entt::const_handle>(root_entity), snapshot.subtree_uuids);
+    if(snapshot.subtree_uuids.empty())
+    {
+        return {};
+    }
+    std::stringstream stream;
+    {
+        serialization::scoped_output_format compact(serialization::output_format::compact);
+        save_to_stream(stream, static_cast<entt::const_handle>(root_entity));
+    }
+    snapshot.serialized = stream.str();
+    snapshot.root = entt::make_uhandle(root_entity);
+    if(auto parent_entity = root_entity.get<transform_component>().get_parent())
+    {
+        const auto& siblings = parent_entity.get<transform_component>().get_children();
+        snapshot.parent = entt::make_uhandle(parent_entity);
+        snapshot.sibling_index =
+            static_cast<size_t>(std::distance(siblings.begin(), std::find(siblings.begin(), siblings.end(), root_entity)));
+    }
+    return snapshot;
+}
+
+auto entity_subtree_snapshot::restore() const -> entt::handle
+{
+    if(root.registry == nullptr || serialized.empty())
+    {
+        return {};
+    }
+    if(auto current = root.resolve())
+    {
+        engine::context().get_cached<editing_manager>().unselect(current);
+        scene::destroy_entity(current);
+    }
+    auto restored = restore_root_from_serialized_subtree(*root.registry, serialized);
+    if(!restored)
+    {
+        return {};
+    }
+    size_t next_uid = 0;
+    apply_subtree_uuid_preorder(restored, subtree_uuids, next_uid);
+    auto parent_entity = parent.resolve();
+    if(!parent_entity)
+    {
+        return restored;
+    }
+    restored.get<transform_component>().set_parent(parent_entity, false);
+    auto& parent_transform = parent_entity.get<transform_component>();
+    auto children = parent_transform.get_children();
+    children.erase(std::remove(children.begin(), children.end(), restored), children.end());
+    children.insert(children.begin() + static_cast<std::ptrdiff_t>(std::min(sibling_index, children.size())), restored);
+    parent_transform.set_children(children);
+    return restored;
 }
 
 } // namespace unravel

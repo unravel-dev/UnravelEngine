@@ -348,7 +348,9 @@ inline auto try_serialize_direct(Archive& ar,
         }
         serialization::note_failed_lookup();
         serialization::note_thrown_lookup();
-        if constexpr(is_binary_archive<Archive>())
+        // A save that throws stops partway through what it was writing and nothing repairs that,
+        // so it is always reported.
+        if constexpr(is_binary_archive<Archive>() || !is_loading_archive<Archive>())
         {
             serialization::log_warning(e.what(), loc);
         }

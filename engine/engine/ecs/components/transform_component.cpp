@@ -502,11 +502,9 @@ void transform_component::look_at(const math::vec3& point) noexcept
 
 void transform_component::look_at(const math::vec3& point, const math::vec3& up) noexcept
 {
-    auto eye = get_position_global();
-    math::transform m = math::lookAt(eye, point, up);
-    m = math::inverse(m);
-
-    set_rotation_global(m.get_rotation());
+    // look_rotation keeps a target straight above or below the eye, or at it, well defined; the
+    // lookAt matrix divides by zero there and left the rotation NaN.
+    set_rotation_global(math::look_rotation(point - get_position_global(), up));
 }
 
 //---------------------------------------------

@@ -112,6 +112,11 @@ REFLECT(reflection_probe)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "res_512"},
             entt::attribute{"pretty_name", "512"},
+        })
+        .data<probe_resolution::res_1024>("res_1024"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "res_1024"},
+            entt::attribute{"pretty_name", "1024"},
         });
 
     entt::meta_factory<reflection_probe::box>{}

@@ -197,6 +197,20 @@ struct editor_actions
     /// Writes an asset's import settings (@p meta, the asset database's entry) to the .meta file beside
     /// the asset @p key names; the asset watcher then imports the asset again with them.
     static auto save_import_settings(const std::string& key, const asset_meta& meta) -> bool;
+
+    /**
+     * @brief Writes `entity` and its children to a prefab file and, with `attach`, makes the entity
+     *        an instance of it - what dropping an entity on the Content Browser does.
+     *
+     * The entity becomes the source of the new prefab, so nothing of it is overridden: its old prefab
+     * bookkeeping (overrides, instance id and document) is reset, and a nested-instance slot it
+     * filled is stated removed on its container.
+     *
+     * @param prefab_path Absolute path of the .pfb to write; its folder must exist.
+     * @return The prefab, or an empty handle when the file could not be written.
+     */
+    static auto save_entity_as_prefab(rtti::context& ctx, entt::handle entity, const fs::path& prefab_path, bool attach)
+        -> asset_handle<prefab>;
     /// One-time migration: tags textures referenced by material slots with their
     /// authored color space (base color/emissive = sRGB, data maps = linear) and
     /// recompiles the changed ones. Metas with an explicit (non-automatic) color

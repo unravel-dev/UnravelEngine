@@ -248,16 +248,19 @@ REFLECT(physics_mesh_shape)
         })
         .data<&physics_mesh_shape::center>("center"_hs)
             .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"name", "center"},
                 entt::attribute{"pretty_name", "Center"},
                 entt::attribute{"tooltip", "Center offset of the mesh collision shape."},
             })
         .data<&physics_mesh_shape::mesh_asset>("mesh_asset"_hs)
             .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"name", "mesh_asset"},
                 entt::attribute{"pretty_name", "Mesh Asset"},
                 entt::attribute{"tooltip", "The mesh asset to use for collision."},
             })
         .data<&physics_mesh_shape::collision_type>("collision_type"_hs)
             .custom<entt::attributes>(entt::attributes{
+                entt::attribute{"name", "collision_type"},
                 entt::attribute{"pretty_name", "Collision Type"},
                 entt::attribute{"tooltip", "Type of collision shape (convex for dynamic, concave for static)."},
             });

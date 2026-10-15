@@ -28,7 +28,7 @@ auto get_cache_directory() -> std::string&
 }
 
 /// One file per cache id inside the configured directory; empty path when caching is off.
-auto make_cache_path(uint64_t id) -> std::filesystem::path
+auto make_cache_path(uint64_t id) -> fs::path
 {
     const auto& dir = get_cache_directory();
     if(dir.empty())
@@ -37,7 +37,7 @@ auto make_cache_path(uint64_t id) -> std::filesystem::path
     }
     char name[32]{};
     std::snprintf(name, sizeof(name), "%016llx.bin", static_cast<unsigned long long>(id));
-    return std::filesystem::path(dir) / name;
+    return fs::path(dir) / name;
 }
 
 struct context_data
@@ -240,8 +240,8 @@ struct gfx_callback final : public bgfx::CallbackI
         {
             return 0;
         }
-        std::error_code ec;
-        const auto size = std::filesystem::file_size(path, ec);
+        fs::error_code ec;
+        const auto size = fs::file_size(path, ec);
         return ec ? 0u : uint32_t(size);
     }
 
@@ -374,8 +374,8 @@ void set_cache_directory(const std::string& directory)
     dir = directory;
     if(!dir.empty())
     {
-        std::error_code ec;
-        std::filesystem::create_directories(dir, ec);
+        fs::error_code ec;
+        fs::create_directories(dir, ec);
         if(ec)
         {
             log("warning", "Failed to create the renderer cache directory: " + dir, __FILE__, __LINE__);

@@ -66,8 +66,10 @@ and the C# that drives them. Check exact signatures with scripting-api before wr
 
 For each recipe, a control case and a measurement:
 
-1. Enter play mode and wait until play_get_state reports is_simulation_running.
-2. Act: input_hold_keys {"keys":["w"],"frames":60}, or input_send_keys "space".
+1. Enter play mode (play_set_active {"active":true}) and wait until
+   editor_get_status reports play.is_simulation_running.
+2. Act: input_send_keys {"keys":["w"],"frames":60} walks for 60 frames,
+   input_send_keys {"keys":["space"]} taps jump; input_send_mouse clicks.
 3. Measure: scene_get_bounds_batch on the player before and after (moved?), Log
    lines from the script via logs_get_recent (picked up? scored?).
 4. Control: the same input with the action unbound, or the sensor off, must change

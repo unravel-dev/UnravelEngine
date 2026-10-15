@@ -8,6 +8,7 @@
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/authoring_root.h>
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/prefab_instance_changes.h>
 #include <editor/hub/panels/entity_panel.h>
 
 #include <engine/ecs/components/id_component.h>
@@ -27,22 +28,6 @@
 
 namespace unravel
 {
-
-auto is_nested_instance(entt::handle entity) -> bool
-{
-    const auto* trans_comp = entity.try_get<transform_component>();
-    auto current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
-    while(current)
-    {
-        if(current.all_of<prefab_component>())
-        {
-            return true;
-        }
-        const auto* parent_trans = current.try_get<transform_component>();
-        current = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
-    }
-    return false;
-}
 
 namespace
 {
@@ -81,50 +66,7 @@ struct entity_overrides
     override_node root;
 };
 
-/// A removal recorded on one instance, attributed to whoever made it.
-struct removal_row
-{
-    hpp::uuid id;
-    bool is_instance{};
-    bool inherited{};
-};
-
-/// An entity that exists under an instance without being part of any prefab file.
-struct addition_row
-{
-    entt::handle handle;
-    bool is_instance{};
-
-    /// Added by the prefab that contains this instance rather than here; shown, not editable.
-    bool inherited{};
-};
-
-/**
- * @brief Everything recorded on one prefab instance, ready to draw.
- *
- * The clicked entity's own instance first (when it is one), then every instance nested under
- * it at any depth, in hierarchy order - which is what makes the view answer "what changed from
- * here down" without the user visiting each nested root by hand.
- */
-struct instance_changes
-{
-    entt::handle root;
-    std::string title;
-    std::string asset_name;
-    bool is_self{};
-
-    /// What is stated about this instance's content, by whom. Owned here so the override tree
-    /// can point into it.
-    statements_about_instance about;
-
-    std::map<hpp::uuid, entity_overrides> overrides;
-    std::vector<removal_row> removals;
-    std::vector<addition_row> additions;
-
-    size_t local_count{};
-    size_t inherited_count{};
-    size_t added_count{};
-};
+using override_tree = std::map<hpp::uuid, entity_overrides>;
 
 auto split_path(const std::string& path) -> std::vector<std::string>
 {
@@ -166,10 +108,9 @@ auto free_leaf_name(const std::map<std::string, override_node>& children, const 
 /// Which author an override came from. Inherited ones are stated by the documents containing
 /// this instance, and they re-state them every time they are replayed - so they are shown, and
 /// are not the user's to revert here. Local ones were stated in this scene.
-auto build_override_tree(const statements_about_instance& about, entt::handle instance_root)
-    -> std::map<hpp::uuid, entity_overrides>
+auto build_override_tree(const statements_about_instance& about, entt::handle instance_root) -> override_tree
 {
-    std::map<hpp::uuid, entity_overrides> by_entity;
+    override_tree by_entity;
 
     const auto add = [&by_entity, instance_root](const prefab_property_override_data& override_data, bool inherited)
     {
@@ -213,154 +154,6 @@ auto build_override_tree(const statements_about_instance& about, entt::handle in
     return by_entity;
 }
 
-auto asset_display_name(const asset_handle<prefab>& source) -> std::string
-{
-    if(!source.is_valid())
-    {
-        return "missing prefab";
-    }
-    return fs::path(source.id()).stem().string();
-}
-
-/// Fills one group from its instance's bookkeeping.
-void build_group(instance_changes& group)
-{
-    const auto* prefab_comp = group.root.try_get<prefab_component>();
-    if(prefab_comp == nullptr)
-    {
-        return;
-    }
-
-    group.asset_name = asset_display_name(prefab_comp->source);
-    group.about = collect_statements_about(group.root);
-    group.overrides = build_override_tree(group.about, group.root);
-
-    group.inherited_count = group.about.stated.overrides.size();
-    group.local_count = group.about.local.overrides.size();
-
-    for(const auto& removed : group.about.local.removed_entities)
-    {
-        group.removals.push_back({removed.id, false, false});
-        ++group.local_count;
-    }
-    for(const auto& removed : group.about.stated.removed_entities)
-    {
-        group.removals.push_back({removed.id, false, true});
-        ++group.inherited_count;
-    }
-    for(const auto& removed : group.about.local.removed_instances)
-    {
-        group.removals.push_back({removed.id, true, false});
-        ++group.local_count;
-    }
-    for(const auto& removed : group.about.stated.removed_instances)
-    {
-        group.removals.push_back({removed.id, true, true});
-        ++group.inherited_count;
-    }
-}
-
-void collect_groups(entt::handle entity, size_t group_index, std::vector<instance_changes>& groups)
-{
-    const auto* trans_comp = entity.try_get<transform_component>();
-    if(trans_comp == nullptr)
-    {
-        return;
-    }
-
-    for(auto child : trans_comp->get_children())
-    {
-        if(const auto* child_prefab = child.try_get<prefab_component>())
-        {
-            // A nested instance is a group of its own. One with no instance id was added
-            // where it stands, so it is also an addition to the group that contains it.
-            if(child_prefab->instance_id.is_nil())
-            {
-                groups[group_index].additions.push_back({child, true, false});
-                ++groups[group_index].added_count;
-            }
-
-            instance_changes nested;
-            nested.root = child;
-            nested.title = entity_panel::get_entity_name(child);
-            build_group(nested);
-
-            groups.push_back(std::move(nested));
-            const size_t nested_index = groups.size() - 1;
-            collect_groups(child, nested_index, groups);
-            continue;
-        }
-
-        if(child.all_of<prefab_id_component>())
-        {
-            collect_groups(child, group_index, groups);
-            continue;
-        }
-
-        // No prefab id and not an instance: added here, along with everything under it. Not
-        // recursed into - the whole subtree is the addition, and one row says so.
-        groups[group_index].additions.push_back({child, false, false});
-        ++groups[group_index].added_count;
-    }
-}
-
-/// Entities under an instance root whose id names a document other than the instance's own
-/// asset: introduced by whatever contains it. Stops at nested instances, which are groups of
-/// their own, and does not descend into an addition - the whole subtree is the addition.
-void collect_outer_additions(entt::handle entity,
-                             const hpp::uuid& own_document,
-                             const std::set<hpp::uuid>& authoring_documents,
-                             instance_changes& group)
-{
-    const auto* trans_comp = entity.try_get<transform_component>();
-    if(trans_comp == nullptr)
-    {
-        return;
-    }
-
-    for(auto child : trans_comp->get_children())
-    {
-        if(child.all_of<prefab_component>())
-        {
-            continue;
-        }
-
-        if(const auto* id_comp = child.try_get<prefab_id_component>())
-        {
-            if(!id_comp->document.is_nil() && id_comp->document != own_document)
-            {
-                // Added by the document being edited here - the authoring root above - it is
-                // the author's own addition, not something inherited.
-                const bool inherited = authoring_documents.count(id_comp->document) == 0u;
-                group.additions.push_back({child, false, inherited});
-                continue;
-            }
-        }
-
-        collect_outer_additions(child, own_document, authoring_documents, group);
-    }
-}
-
-/// The asset uids of the authoring roots at or above `root` - the documents being edited here.
-auto authoring_documents_above(entt::handle root) -> std::set<hpp::uuid>
-{
-    std::set<hpp::uuid> documents;
-    auto current = root;
-    while(current)
-    {
-        if(is_authoring_root(current))
-        {
-            if(const auto* prefab_comp = current.try_get<prefab_component>())
-            {
-                documents.insert(prefab_comp->source.uid());
-            }
-        }
-        const auto* trans_comp = current.try_get<transform_component>();
-        current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
-    }
-    return documents;
-}
-
 /// The nearest authoring root at or above `root`, if any.
 auto authoring_root_above(entt::handle root) -> entt::handle
 {
@@ -375,43 +168,6 @@ auto authoring_root_above(entt::handle root) -> entt::handle
         current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
     }
     return {};
-}
-
-/**
- * @brief The root (when it is an instance) plus every instance nested below it, each with its
- *        changes.
- *
- * An authoring root - the content of the prefab being edited - is not an instance and gets no
- * group; its entry is a placeholder that only collects direct additions, and is not drawn.
- */
-auto collect_changes(entt::handle root) -> std::vector<instance_changes>
-{
-    std::vector<instance_changes> groups;
-
-    instance_changes self;
-    self.root = root;
-    self.title = entity_panel::get_entity_name(root);
-    self.is_self = true;
-    build_group(self);
-    groups.push_back(std::move(self));
-
-    collect_groups(root, 0, groups);
-
-    // Entities a *containing* document introduced under an instance - their ids name that
-    // document rather than the instance's own asset. Part of the containing prefab's
-    // definition, so shown as inherited additions rather than local ones.
-    const auto authoring_documents = authoring_documents_above(root);
-    for(auto& group : groups)
-    {
-        const auto* prefab_comp = group.root.try_get<prefab_component>();
-        if(prefab_comp == nullptr)
-        {
-            continue;
-        }
-        collect_outer_additions(group.root, prefab_comp->source.uid(), authoring_documents, group);
-    }
-
-    return groups;
 }
 
 /// The root whose deep Revert All was confirmed in the message box. The box answers on a later
@@ -441,19 +197,6 @@ struct pending_ops
     std::vector<entt::handle> delete_added;
 };
 
-/**
- * @brief Puts one instance back to exactly what the prefabs say.
- *
- * The inherited halves are what the containing document states - and will state again on the
- * next replay - so they are what the sets collapse to. For a top-level instance, and for every
- * instance directly under an authoring root, they are empty and this is a full clear.
- */
-void revert_local_changes(prefab_component& prefab_comp)
-{
-    prefab_comp.local.clear();
-    prefab_comp.changed = true;
-}
-
 auto short_uuid(const hpp::uuid& id) -> std::string
 {
     return hpp::to_string(id).substr(0, 8);
@@ -473,7 +216,10 @@ auto small_button_width(const char* label) -> float
     return ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 }
 
-void draw_override_rows(const instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
+void draw_override_rows(const prefab_instance_changes& group,
+                        const override_tree& overrides,
+                        pending_ops& ops,
+                        const ImVec4& disabled_colour)
 {
     const auto set_leaf_tooltip = [&](const override_node& node, const entity_overrides& entity)
     {
@@ -579,7 +325,7 @@ void draw_override_rows(const instance_changes& group, pending_ops& ops, const I
         }
     };
 
-    for(const auto& [entity_uuid, entity] : group.overrides)
+    for(const auto& [entity_uuid, entity] : overrides)
     {
         ImGui::PushID(hpp::to_string(entity_uuid).c_str());
 
@@ -618,7 +364,7 @@ void draw_override_rows(const instance_changes& group, pending_ops& ops, const I
     }
 }
 
-void draw_removal_rows(const instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
+void draw_removal_rows(const prefab_instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
 {
     for(const auto& removal : group.removals)
     {
@@ -675,7 +421,7 @@ void draw_removal_rows(const instance_changes& group, pending_ops& ops, const Im
     }
 }
 
-void draw_addition_rows(const instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
+void draw_addition_rows(const prefab_instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
 {
     for(const auto& addition : group.additions)
     {
@@ -730,7 +476,7 @@ void draw_addition_rows(const instance_changes& group, pending_ops& ops, const I
     }
 }
 
-void draw_group(const instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
+void draw_group(const prefab_instance_changes& group, pending_ops& ops, const ImVec4& disabled_colour)
 {
     ImGui::PushID(static_cast<int>(group.root.entity()));
 
@@ -741,7 +487,7 @@ void draw_group(const instance_changes& group, pending_ops& ops, const ImVec4& d
     }
     else
     {
-        label = fmt::format(ICON_MDI_CUBE " {} ({})", group.title, group.asset_name);
+        label = fmt::format(ICON_MDI_CUBE " {} ({})", entity_panel::get_entity_name(group.root), group.asset_name);
     }
 
     std::vector<std::string> parts;
@@ -807,7 +553,8 @@ void draw_group(const instance_changes& group, pending_ops& ops, const ImVec4& d
 
     if(open)
     {
-        draw_override_rows(group, ops, disabled_colour);
+        // The tree points into group.about, which outlives this draw.
+        draw_override_rows(group, build_override_tree(group.about, group.root), ops, disabled_colour);
         draw_removal_rows(group, ops, disabled_colour);
         draw_addition_rows(group, ops, disabled_colour);
         ImGui::TreePop();
@@ -832,7 +579,7 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
     const bool root_is_instance = root.all_of<prefab_component>() && !is_authoring_root(root);
     const char* subject = root_is_instance ? "this instance" : "this prefab";
 
-    auto groups = collect_changes(root);
+    auto groups = collect_prefab_changes(root);
 
     size_t total_local = 0;
     size_t total_inherited = 0;

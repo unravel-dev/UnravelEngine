@@ -70,18 +70,6 @@ constexpr float CONTENT_ITEM_SIZE_IN_FRAMES = 6.0f;
 
 fs::path pending_rename;
 
-auto get_new_file(const fs::path& path, const std::string& name, const std::string& ext = "") -> fs::path
-{
-    int i = 0;
-    fs::error_code err;
-    while(fs::exists(path / (fmt::format("{} ({})", name.c_str(), i) + ext), err))
-    {
-        ++i;
-    }
-
-    return path / (fmt::format("{} ({})", name.c_str(), i) + ext);
-}
-
 auto get_new_file_simple(const fs::path& path, const std::string& name, const std::string& ext = "") -> fs::path
 {
     int i = 0;
@@ -92,46 +80,6 @@ auto get_new_file_simple(const fs::path& path, const std::string& name, const st
     }
 
     return path / (fmt::format("{}{}", name.c_str(), i) + ext);
-}
-
-/// If the renamed file is a C# script whose class name still matches the old
-/// file stem (i.e. the user never touched the file), keep them in sync by
-/// renaming the class too. Uses word-boundary matching to avoid corrupting
-/// identifiers that merely contain the stem.
-void sync_script_class_name(const fs::path& script_path, const std::string& old_stem, const std::string& new_stem)
-{
-    // Only touch the file when both names are plain identifiers - anything
-    // else can't be a class name (and could break the regex below).
-    if(!asset_actions::is_valid_csharp_identifier(old_stem) ||
-       !asset_actions::is_valid_csharp_identifier(new_stem))
-    {
-        return;
-    }
-
-    std::ifstream input(script_path);
-    if(!input.is_open())
-    {
-        return;
-    }
-
-    std::stringstream buffer;
-    buffer << input.rdbuf();
-    auto content = buffer.str();
-    input.close();
-
-    const std::regex identifier(fmt::format("\\b{}\\b", old_stem));
-    if(!std::regex_search(content, identifier))
-    {
-        return;
-    }
-
-    content = std::regex_replace(content, identifier, new_stem);
-
-    std::ofstream output(script_path);
-    if(output.is_open())
-    {
-        output << content;
-    }
 }
 
 auto process_drag_drop_source(const gfx::texture::ptr& preview, const fs::path& absolute_path) -> bool
@@ -189,12 +137,7 @@ void process_drag_drop_target(const fs::path& absolute_path)
                     fs::path new_name = absolute_path / fs::path(data).filename();
                     if(data != new_name)
                     {
-                        fs::error_code err;
-
-                        if(!fs::exists(new_name, err))
-                        {
-                            fs::rename(data, new_name, err);
-                        }
+                        asset_actions::rename_entry(data, new_name);
                     }
                 }
                 return payload;
@@ -229,50 +172,7 @@ void process_drag_drop_target(const fs::path& absolute_path)
                             {
                                 auto& comp = dropped.get<tag_component>();
                                 auto prefab_path = absolute_path / fs::path(comp.name + ".pfb").make_preferred();
-                                asset_writer::atomic_save_to_file(prefab_path.string(), dropped);
-
-                                auto& am = ctx.get_cached<asset_manager>();
-                                auto key = fs::convert_to_protocol(prefab_path);
-
-                                // The entity may already be an instance of a different prefab.
-                                // Its old bookkeeping is keyed by uids that also exist in the
-                                // file just written (prefab uids survive the save), so keeping
-                                // it would suppress those properties from the new asset on
-                                // every resync - and a stale instance_id would claim a slot in
-                                // a document that never wrote this instance. Becoming the
-                                // source of a new prefab leaves nothing overridden by
-                                // definition.
-                                //
-                                // Reset field by field, not replaced: emplace_or_replace on an
-                                // existing component takes entt's patch path, which assigns a
-                                // default-constructed component over the live one - owner
-                                // handle included - and fires only on_update, so the owner
-                                // never gets re-stamped. That null owner surfaced as a crash
-                                // in the inspector's Apply All. And not removed-and-re-added
-                                // either: the on_destroy hook strips prefab ids from the whole
-                                // subtree.
-                                // A nested instance saved as its own prefab is no longer its
-                                // container's slot: the container's document would put the old
-                                // instance back there on its next replay. The slot is stated
-                                // removed on the container, and the new instance is the user's.
-                                if(const auto* old_prefab = dropped.try_get<prefab_component>();
-                                   old_prefab != nullptr && !old_prefab->instance_id.is_nil())
-                                {
-                                    const auto* trans = dropped.try_get<transform_component>();
-                                    auto container = trans != nullptr
-                                                         ? prefab_override_context::find_prefab_root_entity(trans->get_parent())
-                                                         : entt::handle{};
-                                    if(auto* container_prefab = container ? container.try_get<prefab_component>() : nullptr)
-                                    {
-                                        container_prefab->remove_instance(old_prefab->instance_id);
-                                        container_prefab->changed = true;
-                                    }
-                                }
-                                auto& prefab_comp = dropped.get_or_emplace<prefab_component>();
-                                prefab_comp.clear_overrides();
-                                prefab_comp.instance_id = {};
-                                prefab_comp.instance_document = {};
-                                prefab_comp.source = am.get_asset<prefab>(key.generic_string());
+                                editor_actions::save_entity_as_prefab(ctx, dropped, prefab_path, true);
                             };
 
 
@@ -335,15 +235,6 @@ struct entry_interaction
 auto get_selection_label(const content_browser_item& item) -> std::string
 {
     return fmt::format("{} ({})", item.entry.stem, item.type);
-}
-
-/// Copies the entry next to itself under the first free "name (n)" file name.
-void duplicate_entry(const fs::directory_cache::cache_entry& entry)
-{
-    fs::error_code err;
-    const auto& absolute_path = entry.entry.path();
-    const auto available = get_new_file(absolute_path.parent_path(), entry.stem, entry.extension);
-    fs::copy(absolute_path, available, fs::copy_options::overwrite_existing, err);
 }
 
 /// The rename, delete and duplicate shortcuts of the selected entry, and the rename a just created
@@ -541,7 +432,7 @@ void apply_entry_action(const content_browser_item& item, entry_action action, c
             run(item.on_delete);
             break;
         case entry_action::duplicate:
-            duplicate_entry(item.entry);
+            asset_actions::duplicate_entry(item.entry.entry.path());
             break;
         case entry_action::canceled:
             run(item.on_cancel);
@@ -1155,7 +1046,7 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
     {
         if(ImGui::MenuItem("Folder"))
         {
-            const auto available = get_new_file(target_path, "New Folder");
+            const auto available = asset_actions::get_free_copy_path(target_path, "New Folder", {});
             fs::error_code ec;
             fs::create_directory(available, ec);
 
@@ -1190,14 +1081,10 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         if(ImGui::MenuItem(ex::get_type<material>().c_str()))
         {
-            auto& am = ctx.get_cached<asset_manager>();
-
             auto new_name = fmt::format("New {}", ex::get_type<material>());
-            const auto available = get_new_file(target_path, new_name, ex::get_format<material>());
-            const auto key = fs::convert_to_protocol(available).generic_string();
+            const auto available = asset_actions::get_free_copy_path(target_path, new_name, ex::get_format<material>());
 
-            auto new_mat_future = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
-            asset_writer::atomic_save_to_file(new_mat_future.id(), new_mat_future);
+            asset_actions::create_material(ctx, available);
 
             {
                 pending_rename = available;
@@ -1208,7 +1095,7 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
         {
             auto new_name = fmt::format("New {}", ex::get_type<physics_material>());
             const auto available =
-                get_new_file(target_path, new_name, ex::get_format<physics_material>());
+                asset_actions::get_free_copy_path(target_path, new_name, ex::get_format<physics_material>());
 
             asset_actions::create_physics_material(ctx, available);
 
@@ -1223,7 +1110,7 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
         {
             auto new_name = fmt::format("New {}", ex::get_type<ui_tree>());
             const auto available =
-                get_new_file(target_path, new_name, ex::get_format<ui_tree>());
+                asset_actions::get_free_copy_path(target_path, new_name, ex::get_format<ui_tree>());
 
             if(asset_actions::create_ui_document(available))
             {
@@ -1235,7 +1122,7 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
         {
             auto new_name = fmt::format("New {}", ex::get_type<style_sheet>());
             const auto available =
-                get_new_file(target_path, new_name, ex::get_format<style_sheet>());
+                asset_actions::get_free_copy_path(target_path, new_name, ex::get_format<style_sheet>());
 
             if(asset_actions::create_style_sheet(available))
             {
@@ -1340,12 +1227,7 @@ void content_browser_panel::setup_rename_handler(content_browser_item& item)
         fs::path new_absolute_path = absolute_path;
         new_absolute_path.remove_filename();
         new_absolute_path /= new_name + file_ext;
-        fs::error_code err;
-        fs::rename(absolute_path, new_absolute_path, err);
-        if(!err && file_ext == ex::get_format<script>())
-        {
-            sync_script_class_name(new_absolute_path, absolute_path.stem().string(), new_name);
-        }
+        asset_actions::rename_entry(absolute_path, new_absolute_path);
     };
 }
 

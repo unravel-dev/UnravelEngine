@@ -150,22 +150,24 @@ struct mono_saver
 template<typename Archive>
 struct mono_saver<Archive, entt::entity>
 {
+    /// A link to @p entity in the registry being saved; empty when no save names one.
+    static auto make_link(entt::entity entity) -> ser20::const_entity_handle_link
+    {
+        ser20::const_entity_handle_link link;
+        if(const auto* registry = get_save_context().get_registry())
+        {
+            link.handle = entt::const_handle(*registry, entity);
+        }
+        return link;
+    }
+
     template<typename Invoker>
     static auto try_save_mono_invoker(ser20::detail::OutputArchiveBase& arbase,
                                       const dotnet::object& obj,
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
-        auto val = invoker.get_value(obj);
-
-
-        auto& save_ctx = get_save_context();
-        auto& registry = *save_ctx.save_source.registry();
-
-        ser20::const_entity_handle_link e;
-        e.handle = entt::const_handle(registry, val);
-
-        return try_save(ar, ser20::make_nvp(invoker.get_name(), e));
+        return try_save(ar, ser20::make_nvp(invoker.get_name(), make_link(invoker.get_value(obj))));
     }
 
     static auto try_save_mono_object(ser20::detail::OutputArchiveBase& arbase,
@@ -174,14 +176,7 @@ struct mono_saver<Archive, entt::entity>
         auto& ar = static_cast<Archive&>(arbase);
 
         auto entity = dotnet_converter<entt::entity>::from_managed(dotnet::get_managed_ptr(obj));
-        
-        auto& save_ctx = get_save_context();
-        auto& registry = *save_ctx.save_source.registry();
-
-        ser20::const_entity_handle_link e;
-        e.handle = entt::const_handle(registry, entity);
-        
-        return try_save(ar, ser20::make_nvp("value", e));
+        return try_save(ar, ser20::make_nvp("value", make_link(entity)));
     }
 
     static auto try_save_mono_field(ser20::detail::OutputArchiveBase& arbase,
@@ -819,6 +814,28 @@ void load_mono_member(const dotnet::type& owner, const std::string& member, Load
     }
 }
 
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Runs the save of one public member of a script object. Every member's value is read before
+/// anything of it is written, so a getter that throws leaves the archive where the member began:
+/// the member is left out and reported, and the rest of the entity and the document still save.
+/// Let through, the throw would end the save of the whole object inside nodes it had opened, and
+/// everything written after it would land inside them.
+/// </summary>
+//-----------------------------------------------------------------------------
+template<typename Save>
+void save_mono_member(const dotnet::type& owner, const std::string& member, Save&& save)
+{
+    try
+    {
+        save();
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_WARNING("Script member {}.{} was not saved: {}", owner.get_fullname(), member, e.what());
+    }
+}
+
 SAVE(dotnet::object)
 {
     using namespace unravel;
@@ -1001,13 +1018,12 @@ SAVE(dotnet::object)
     
     for(auto& field : fields)
     {
-        if(field.get_visibility() == dotnet::visibility::vis_public)
+        if(field.get_visibility() != dotnet::visibility::vis_public || field.is_static() || field.has_attribute("HideAttribute"))
         {
-            if(field.is_static() || field.has_attribute("HideAttribute"))
-            {
-                continue;
-            }
-
+            continue;
+        }
+        save_mono_member(type, field.get_name(), [&]()
+        {
             const auto& field_type = field.get_type();
             auto field_serilizer = get_field_serilizer(field_type.get_name());
             if(field_serilizer)
@@ -1065,17 +1081,23 @@ SAVE(dotnet::object)
                     try_save(ar, ser20::make_nvp(field.get_name(), nested_obj));
                 }
             }
-        }
+        });
     }
 
     for(auto& prop : properties)
     {
-        if(prop.get_visibility() == dotnet::visibility::vis_public)
+        if(prop.get_visibility() != dotnet::visibility::vis_public || prop.is_static() || prop.has_attribute("HideAttribute"))
         {
-            if(prop.is_static() || prop.has_attribute("HideAttribute"))
-            {
-                continue;
-            }
+            continue;
+        }
+        // A property without a setter never loads back - only a dictionary is filled in place - and
+        // its getter may need state the script has only while it plays.
+        if(prop.is_readonly() && !prop.get_type().is_dictionary())
+        {
+            continue;
+        }
+        save_mono_member(type, prop.get_name(), [&]()
+        {
             const auto& prop_type = prop.get_type();
 
             auto prop_serilizer = get_property_serilizer(prop_type.get_name());
@@ -1134,9 +1156,8 @@ SAVE(dotnet::object)
                     try_save(ar, ser20::make_nvp(prop.get_name(), nested_obj));
                 }
             }
-        }
+        });
     }
-    
 }
 
 LOAD(dotnet::object)

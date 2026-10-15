@@ -2,6 +2,7 @@
 
 #include "mcp_protocol.h"
 
+#include <editor/hub/panels/panel_base.h>
 #include <editor/system/mcp_manager.h>
 
 #include <graphics/graphics.h>
@@ -9,16 +10,14 @@
 #include <graphics/texture.h>
 #include <logging/logging.h>
 #include <ser20/external/base64.hpp>
-#include <uuid/uuid.h>
 
 #include <bimg/bimg.h>
 #include <bimg/encode.h>
 #include <bx/allocator.h>
-#include <bx/file.h>
+#include <bx/readerwriter.h>
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -44,9 +43,19 @@ struct fbo_capture_state
 /// bgfx's copy, which the render thread performs when it executes the frame the read was issued in.
 constexpr auto readback_guard_timeout = std::chrono::milliseconds(10000);
 
-/// How long a capture waits for the panel to render a requested frame however short the caller's wait_ms: the
-/// first render of a hidden view can build its whole pipeline.
+/// How long a capture waits for the panel to render a requested frame: the first render of a hidden view can
+/// build its whole pipeline.
 constexpr auto render_guard_timeout = std::chrono::milliseconds(5000);
+
+/// Time allowed per frame a capture waits for, on top of render_guard_timeout, at a 10 fps worst case.
+constexpr auto frame_budget = std::chrono::milliseconds(100);
+
+/// Frames each request keeps the panel rendering: enough to bridge the gap between two polls from the worker.
+constexpr uint32_t capture_hold_frames = 8;
+
+/// Frames a hidden panel renders before it is captured: its view was torn down while hidden, and temporal AA and GI
+/// need this much history to settle.
+constexpr uint32_t hidden_warmup_frames = 16;
 
 /// Outcome of one attempt to submit the capture blit on the main thread.
 enum class blit_status
@@ -215,102 +224,44 @@ auto scale_rgba8_bimg(const std::vector<uint8_t>& src,
     return true;
 }
 
-/// Writes RGBA8 @p pixels as a PNG, top row first; @p is_bottom_up reverses rows stored bottom-up.
-auto write_rgba_png(const std::filesystem::path& path,
-                    uint16_t width,
-                    uint16_t height,
-                    const std::vector<uint8_t>& pixels,
-                    bool is_bottom_up,
-                    std::string& error) -> bool
+/// Encodes RGBA8 @p pixels as PNG bytes, top row first; @p is_bottom_up reverses rows stored bottom-up.
+auto encode_rgba_png(uint16_t width,
+                     uint16_t height,
+                     const std::vector<uint8_t>& pixels,
+                     bool is_bottom_up,
+                     std::vector<uint8_t>& out,
+                     std::string& error) -> bool
 {
-    bx::FileWriter writer;
-    if(!bx::open(&writer, path.generic_string().c_str()))
-    {
-        error = "Failed to open PNG for write: " + path.generic_string();
-        return false;
-    }
-
+    bx::MemoryBlock memory(bimg_allocator());
+    bx::MemoryWriter writer(&memory);
     const uint32_t pitch = static_cast<uint32_t>(width) * 4u;
     bx::Error err;
-    bimg::imageWritePng(&writer,
-                        width,
-                        height,
-                        pitch,
-                        pixels.data(),
-                        bimg::TextureFormat::RGBA8,
-                        is_bottom_up,
-                        &err);
-    bx::close(&writer);
+    bimg::imageWritePng(&writer, width, height, pitch, pixels.data(), bimg::TextureFormat::RGBA8, is_bottom_up, &err);
     if(!err.isOk())
     {
         error = "bimg::imageWritePng failed";
         return false;
     }
+    // The block grows in chunks; the writer's end is how much of it holds the PNG.
+    const auto written = static_cast<size_t>(writer.seek(0, bx::Whence::End));
+    const auto* bytes = static_cast<const uint8_t*>(memory.more(0));
+    out.assign(bytes, bytes + written);
     return true;
 }
 
 } // namespace
-
-auto wait_for_file(const std::filesystem::path& path,
-                   std::chrono::milliseconds timeout,
-                   std::chrono::milliseconds poll_interval) -> bool
-{
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while(std::chrono::steady_clock::now() < deadline)
-    {
-        std::error_code ec;
-        if(std::filesystem::exists(path, ec) && !ec)
-        {
-            const auto size = std::filesystem::file_size(path, ec);
-            if(!ec && size > 0)
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(16));
-                return true;
-            }
-        }
-        std::this_thread::sleep_for(poll_interval);
-    }
-    return false;
-}
-
-auto read_file_bytes(const std::filesystem::path& path, std::string& error) -> std::vector<uint8_t>
-{
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if(!file)
-    {
-        error = "Failed to open file: " + path.string();
-        return {};
-    }
-
-    const auto size = file.tellg();
-    if(size <= 0)
-    {
-        error = "Empty file: " + path.string();
-        return {};
-    }
-
-    std::vector<uint8_t> bytes(static_cast<size_t>(size));
-    file.seekg(0, std::ios::beg);
-    if(!file.read(reinterpret_cast<char*>(bytes.data()), size))
-    {
-        error = "Failed to read file: " + path.string();
-        return {};
-    }
-    return bytes;
-}
 
 auto encode_base64(const std::vector<uint8_t>& bytes) -> std::string
 {
     return ser20::base64::encode(bytes.data(), bytes.size());
 }
 
-auto make_temp_screenshot_stem(const std::string& tag) -> std::filesystem::path
+auto mcp_output_directory() -> fs::path
 {
-    const auto dir = std::filesystem::temp_directory_path() / "unravel_mcp";
-    std::error_code ec;
-    std::filesystem::create_directories(dir, ec);
-    const auto name = fmt::format("ss_{}_{}", tag, hpp::to_string(generate_uuid()));
-    return dir / name;
+    const auto dir = fs::temp_directory_path() / "unravel_mcp";
+    fs::error_code ec;
+    fs::create_directories(dir, ec);
+    return dir;
 }
 
 auto capture_fbo_screenshot(mcp_manager& mcp,
@@ -323,41 +274,42 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
     // OBUFFER targets are offscreen, so we blit into a READ_BACK texture instead.
     auto state = std::make_shared<fbo_capture_state>();
 
-    // A panel whose tab is hidden releases its framebuffer every frame it does not render. The request makes it
-    // render; the blit waits for a frame rendered after the first request.
-    uint32_t requested_frame = 0;
-    if(options.request_render)
-    {
-        const auto frame = mcp.invoke_on_main(
-            [&ctx, &options]() -> uint32_t
-            {
-                options.request_render(ctx);
-                return gfx::get_render_frame();
-            },
-            std::chrono::milliseconds(10000));
-        if(!frame)
+    // A panel whose tab is hidden releases its framebuffer every frame it does not render. The hold keeps it
+    // rendering; the blit waits for the last frame the capture asked for.
+    uint32_t frames_to_wait = options.settle_frames;
+    const auto requested_frame = mcp.invoke_on_main(
+        [&ctx, &options, &frames_to_wait]() -> uint32_t
         {
-            return {.text = "Timed out requesting a render on main thread", .is_error = true};
-        }
-        requested_frame = *frame;
+            if(options.resolve_panel)
+            {
+                auto& panel = options.resolve_panel(ctx);
+                frames_to_wait += panel.is_visible() ? 0 : hidden_warmup_frames;
+                panel.hold_visible_force(capture_hold_frames + frames_to_wait);
+            }
+            return gfx::get_render_frame() + frames_to_wait;
+        },
+        std::chrono::milliseconds(10000));
+    if(!requested_frame)
+    {
+        return {.text = "Timed out requesting a render on main thread", .is_error = true};
     }
 
-    const auto submit_blit = [&ctx, &resolve_fbo, &options, state, requested_frame]() -> blit_status
+    const auto submit_blit = [&ctx, &resolve_fbo, &options, state, last_frame = *requested_frame]() -> blit_status
     {
-        if(options.request_render)
+        if(options.resolve_panel)
         {
-            // Renewed every attempt: the panel also renders this frame, so the framebuffer outlives the blit.
-            options.request_render(ctx);
-            if(gfx::get_render_frame() <= requested_frame)
-            {
-                return blit_status::waiting_for_render;
-            }
+            // Renewed every attempt: the panel also renders the blit's frame, so the framebuffer outlives the blit.
+            options.resolve_panel(ctx).hold_visible_force(capture_hold_frames);
+        }
+        if(gfx::get_render_frame() <= last_frame)
+        {
+            return blit_status::waiting_for_render;
         }
         const bool submitted = submit_fbo_blit(ctx, resolve_fbo, *state);
         return submitted ? blit_status::submitted : blit_status::failed;
     };
 
-    const auto render_deadline = std::chrono::steady_clock::now() + std::max(options.wait_timeout, render_guard_timeout);
+    const auto render_deadline = std::chrono::steady_clock::now() + render_guard_timeout + frame_budget * frames_to_wait;
     blit_status status = blit_status::waiting_for_render;
     while(status == blit_status::waiting_for_render)
     {
@@ -381,10 +333,9 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
         return {.text = state->error.empty() ? "Failed to request capture" : state->error, .is_error = true};
     }
 
-    // Never shorter than readback_guard_timeout: the caller's wait_ms bounds how long this tool is willing to wait,
-    // not when the READ_BACK buffer may be freed (wait_ms 0 freed it before bgfx copied into it and crashed the
-    // editor on the render thread). The loop still returns as soon as the readback lands.
-    const auto deadline = std::chrono::steady_clock::now() + std::max(options.wait_timeout, readback_guard_timeout);
+    // The READ_BACK buffer must outlive bgfx's copy (freeing it earlier crashed the editor on the render thread);
+    // the loop still returns as soon as the readback lands.
+    const auto deadline = std::chrono::steady_clock::now() + readback_guard_timeout;
     bool ready = false;
     while(std::chrono::steady_clock::now() < deadline)
     {
@@ -431,20 +382,11 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
         return {.text = scale_error, .is_error = true};
     }
 
-    const auto stem = make_temp_screenshot_stem(tag);
-    const auto png_path = std::filesystem::path(stem.generic_string() + ".png");
+    std::vector<uint8_t> bytes;
     std::string encode_error;
-    if(!write_rgba_png(png_path, out_w, out_h, pixels, state->is_bottom_up, encode_error))
+    if(!encode_rgba_png(out_w, out_h, pixels, state->is_bottom_up, bytes, encode_error))
     {
         return {.text = encode_error, .is_error = true};
-    }
-
-    auto bytes = read_file_bytes(png_path, encode_error);
-    std::error_code ec;
-    std::filesystem::remove(png_path, ec);
-    if(bytes.empty())
-    {
-        return {.text = encode_error.empty() ? "Failed to read capture PNG" : encode_error, .is_error = true};
     }
 
     tool_result result;
@@ -452,7 +394,7 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
                               make_json_string(tag),
                               out_w,
                               out_h,
-                              options.scale);
+                              static_cast<double>(out_w) / static_cast<double>(state->width));
     result.image_base64 = encode_base64(bytes);
     result.image_mime = "image/png";
     result.is_error = false;

@@ -39,6 +39,9 @@ public:
     auto get_displayed_camera(rtti::context& ctx) const -> entt::handle;
     /// What the displayed camera rendered last, null while no camera renders.
     auto get_output(rtti::context& ctx) const -> gfx::frame_buffer::ptr;
+    /// What every game camera that rendered this frame drew, together: also those the panel does not show,
+    /// since each costs frame time.
+    static auto get_rendered_pipeline_stats(rtti::context& ctx) -> rendering::pipeline_stats;
 
     /**
      * @brief Renders the game view at exactly @p width x @p height pixels, shown scaled into the

@@ -29,6 +29,27 @@ auto compat_to_string(project_manager::project_compat status) -> const char*
     return "ok";
 }
 
+/// Why opening a folder needs `upgrade:true`, or empty when it opens as it is. The start page asks
+/// the same two questions before opening such a folder.
+auto compat_refusal(const fs::path& project_path, const project_manager::project_compat_report& report) -> std::string
+{
+    const auto path = project_path.generic_string();
+    switch(report.status)
+    {
+        case project_manager::project_compat::ok:
+            return {};
+        case project_manager::project_compat::no_info_file:
+            return path + " has no project.cfg: it is either not a project (make one with project_create) or a "
+                          "legacy project. Pass upgrade:true only for a legacy project; opening writes project.cfg "
+                          "and the project folders into it.";
+        case project_manager::project_compat::engine_older:
+            return path + " was last opened by engine " + report.on_disk.engine_version_opened.to_string() +
+                   ", older than this one; opening may re-save its files in newer formats. Back it up, then pass "
+                   "upgrade:true.";
+    }
+    return {};
+}
+
 } // namespace
 
 void register_project_tools(mcp_tool_registry& registry)
@@ -72,15 +93,17 @@ void register_project_tools(mcp_tool_registry& registry)
              json += "]";
              return {.text = json, .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "project_open",
          .description =
-             "Open a project by path, recent:true, or recent_index. Uses preset (default medium) "
-             "when no startup scene exists.",
+             "Open an existing project by path, recent:true, or recent_index. Refuses a folder that is "
+             "not a project or was saved by an older engine unless upgrade:true, and unsaved edits in "
+             "the open project unless force:true. Seeds a scene from preset when the project has none.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project directory, or 'recent'"},"recent":{"type":"boolean"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Used only when a new scene modal would appear; default medium"},"force":{"type":"boolean","description":"Discard unsaved scene changes before open; default true"}}})json",
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project folder"},"recent":{"type":"boolean","description":"Open the most recent project"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded when the project has none; default medium"},"upgrade":{"type":"boolean","default":false,"description":"Open a legacy folder without project.cfg, or a project saved by an older engine"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -97,14 +120,16 @@ void register_project_tools(mcp_tool_registry& registry)
              }
              std::string preset_str = "medium";
              read_string(args, "preset", preset_str);
-             bool force = true;
+             bool force = false;
              read_bool(args, "force", force);
+             bool upgrade = false;
+             read_bool(args, "upgrade", upgrade);
 
              auto result = mcp.invoke_on_main(
-                 [&ctx, path_arg, recent, recent_index, preset_str, force]() -> tool_result
+                 [&]() -> tool_result
                  {
                      std::string error;
-                     if(!require_not_play_mode(ctx, error))
+                     if(!require_not_play_mode(ctx, error) || !require_not_deploying(ctx, error))
                      {
                          return {.text = error, .is_error = true};
                      }
@@ -120,19 +145,6 @@ void register_project_tools(mcp_tool_registry& registry)
                      }
 
                      auto& pm = ctx.get_cached<project_manager>();
-                     auto& em = ctx.get_cached<editing_manager>();
-
-                     if(em.has_unsaved_changes() && !force)
-                     {
-                         return {.text = "Unsaved scene changes; pass force:true to discard", .is_error = true};
-                     }
-                     if(force)
-                     {
-                         em.clear_unsaved_changes();
-                     }
-
-                     // Rebuild args object fields into a path resolution using a temp object isn't
-                     // available; resolve manually from captured values.
                      fs::path project_path;
                      const auto& recent_projects = pm.get_editor_settings().projects.recent_projects;
                      if(recent || path_arg == "recent")
@@ -161,16 +173,28 @@ void register_project_tools(mcp_tool_registry& registry)
                      }
 
                      fs::error_code ec;
-                     if(!fs::exists(project_path, ec))
+                     if(!project_path.is_absolute() || !fs::is_directory(project_path, ec))
                      {
-                         return {.text = "Project directory does not exist: " + project_path.generic_string(),
+                         return {.text = "Not an existing absolute project folder: " + project_path.generic_string(),
                                  .is_error = true};
                      }
-
                      const auto report = pm.inspect_project(project_path);
+                     if(const auto refusal = compat_refusal(project_path, report); !refusal.empty() && !upgrade)
+                     {
+                         return {.text = refusal, .is_error = true};
+                     }
+                     if(!release_unsaved_work(ctx, force, error))
+                     {
+                         return {.text = error, .is_error = true};
+                     }
                      if(!pm.open_project(ctx, project_path))
                      {
                          return {.text = "Failed to open project: " + project_path.generic_string(), .is_error = true};
+                     }
+                     if(pm.is_restart_pending())
+                     {
+                         return {.text = R"({"ok":true,"restarting":true,"note":"The project uses another renderer or physics backend; the editor restarts and opens it. Reconnect once editor_get_status answers."})",
+                                 .is_error = false};
                      }
 
                      bool created_from_preset = false;
@@ -196,7 +220,9 @@ void register_project_tools(mcp_tool_registry& registry)
              return *result;
          },
          .mutates_scene = true,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 
     registry.add(
         {.name = "project_create",
@@ -205,7 +231,7 @@ void register_project_tools(mcp_tool_registry& registry)
              "empty. Seeds a scene from preset (default medium) and writes the project's agent "
              "instructions. Use project_open for a project that already exists.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded into the new project; default medium"},"force":{"type":"boolean","description":"Discard unsaved changes in the currently open project; default true"}},"required":["path"]})json",
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded into the new project; default medium"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits in the open project"}},"required":["path"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -215,14 +241,14 @@ void register_project_tools(mcp_tool_registry& registry)
              read_string(args, "path", path_arg);
              std::string preset_str = "medium";
              read_string(args, "preset", preset_str);
-             bool force = true;
+             bool force = false;
              read_bool(args, "force", force);
 
              auto result = mcp.invoke_on_main(
-                 [&ctx, path_arg, preset_str, force]() -> tool_result
+                 [&]() -> tool_result
                  {
                      std::string error;
-                     if(!require_not_play_mode(ctx, error))
+                     if(!require_not_play_mode(ctx, error) || !require_not_deploying(ctx, error))
                      {
                          return {.text = error, .is_error = true};
                      }
@@ -243,17 +269,16 @@ void register_project_tools(mcp_tool_registry& registry)
                      }
 
                      auto& pm = ctx.get_cached<project_manager>();
-                     auto& em = ctx.get_cached<editing_manager>();
-                     if(em.has_unsaved_changes() && !force)
-                     {
-                         return {.text = "Unsaved scene changes; pass force:true to discard", .is_error = true};
-                     }
-                     if(force)
-                     {
-                         em.clear_unsaved_changes();
-                     }
-
                      std::string create_error;
+                     if(!pm.can_create_project(fs::path(path_arg), &create_error))
+                     {
+                         return {.text = create_error + " (project_open opens an existing project)",
+                                 .is_error = true};
+                     }
+                     if(!release_unsaved_work(ctx, force, error))
+                     {
+                         return {.text = error, .is_error = true};
+                     }
                      if(!pm.create_project(ctx, fs::path(path_arg), &create_error))
                      {
                          return {.text = create_error + " (project_open opens an existing project)",
@@ -277,18 +302,20 @@ void register_project_tools(mcp_tool_registry& registry)
              return *result;
          },
          .mutates_scene = true,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .effect = tool_effect::destructive});
 
     registry.add(
         {.name = "project_close",
-         .description = "Close the current project. force:true (default) discards unsaved scene changes.",
+         .description = "Close the current project. Refuses when the scene or prefab has unsaved edits, "
+                        "unless force:true discards them.",
          .input_schema_json =
-             R"({"type":"object","properties":{"force":{"type":"boolean","default":true}}})",
+             R"({"type":"object","properties":{"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
-             if(!require_not_play_mode(ctx, error))
+             if(!require_not_play_mode(ctx, error) || !require_not_deploying(ctx, error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -303,24 +330,19 @@ void register_project_tools(mcp_tool_registry& registry)
                  return {.text = R"({"ok":true,"was_open":false})", .is_error = false};
              }
 
-             bool force = true;
+             bool force = false;
              read_bool(args, "force", force);
-
-             auto& em = ctx.get_cached<editing_manager>();
-             if(em.has_unsaved_changes() && !force)
+             if(!release_unsaved_work(ctx, force, error))
              {
-                 return {.text = "Unsaved scene changes; pass force:true to discard", .is_error = true};
-             }
-             if(force)
-             {
-                 em.clear_unsaved_changes();
+                 return {.text = error, .is_error = true};
              }
 
              create_scene_modal::cancel_if_pending();
              pm.close_project(ctx);
              return {.text = R"({"ok":true,"was_open":true})", .is_error = false};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .effect = tool_effect::destructive});
 }
 
 } // namespace unravel::mcp

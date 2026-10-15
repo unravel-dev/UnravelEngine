@@ -38,13 +38,15 @@ auto build_enum_table(uint32_t count) -> std::map<std::string, Enum>
 
 auto mouse_button_table() -> const std::map<std::string, input::mouse_button>&
 {
-    static const auto table = build_enum_table<input::mouse_button>(16);
+    static const auto table =
+        build_enum_table<input::mouse_button>(static_cast<uint32_t>(input::mouse_button::count));
     return table;
 }
 
 auto gamepad_button_table() -> const std::map<std::string, input::gamepad_button>&
 {
-    static const auto table = build_enum_table<input::gamepad_button>(21);
+    static const auto table =
+        build_enum_table<input::gamepad_button>(static_cast<uint32_t>(input::gamepad_button::count));
     return table;
 }
 
@@ -57,11 +59,9 @@ auto gamepad_axis_table() -> const std::map<std::string, input::gamepad_axis>&
 
 auto mouse_axis_table() -> const std::map<std::string, input::mouse_axis>&
 {
-    static const std::map<std::string, input::mouse_axis> table{
-        {"x", input::mouse_axis::x},
-        {"y", input::mouse_axis::y},
-        {"scroll", input::mouse_axis::scroll},
-    };
+    // mouse_axis has no count entry; scroll is its last value.
+    static const auto table =
+        build_enum_table<input::mouse_axis>(static_cast<uint32_t>(input::mouse_axis::scroll) + 1);
     return table;
 }
 
@@ -266,7 +266,8 @@ void register_input_action_tools(mcp_tool_registry& registry)
              json += "]";
              return {.text = fmt::format(R"({{"actions":{}}})", json), .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "input_map_action",
@@ -454,7 +455,8 @@ void register_input_action_tools(mcp_tool_registry& registry)
                                          make_json_string(device)),
                      .is_error = false};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "input_unmap_action",
@@ -521,7 +523,8 @@ void register_input_action_tools(mcp_tool_registry& registry)
                                          removed),
                      .is_error = false};
          },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .effect = tool_effect::destructive});
 }
 
 } // namespace unravel::mcp

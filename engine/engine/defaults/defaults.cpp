@@ -563,32 +563,43 @@ void calc_bounds_global_impl(math::bbox& bounds, entt::handle entity, int depth)
     auto& tc = entity.get<transform_component>();
     const auto world_xform = tc.get_transform_global();
 
+    // Only populated boxes count: the corners of an empty one (a model whose mesh has not loaded)
+    // sit at +-FLT_MAX and would turn the union into an infinite box.
     // include this entity's own model AABB if it has one
     if(auto* mc = entity.try_get<model_component>())
     {
         mc->update_world_bounds(world_xform);
         auto b = mc->get_world_bounds();
-        for(const auto& corner : b.get_corners())
+        if(b.is_populated())
         {
-            bounds.add_point(corner);
+            for(const auto& corner : b.get_corners())
+            {
+                bounds.add_point(corner);
+            }
         }
     }
 
     if(auto* tc = entity.try_get<text_component>())
     {
         auto b = tc->get_render_bounds();
-        for(const auto& corner : b.get_corners())
+        if(b.is_populated())
         {
-            bounds.add_point(world_xform.transform_coord(corner));
+            for(const auto& corner : b.get_corners())
+            {
+                bounds.add_point(world_xform.transform_coord(corner));
+            }
         }
     }
 
     if(auto* pc = entity.try_get<particle_emitter_component>())
     {
         auto b = pc->get_updated_world_bounds(world_xform);
-        for(const auto& corner : b.get_corners())
+        if(b.is_populated())
         {
-            bounds.add_point(corner);
+            for(const auto& corner : b.get_corners())
+            {
+                bounds.add_point(corner);
+            }
         }
     }
 

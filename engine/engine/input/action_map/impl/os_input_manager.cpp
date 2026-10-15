@@ -296,6 +296,12 @@ void os_input_manager::set_virtual_mouse_position(const hpp::optional<coord>& po
     virtual_mouse_position_ = position;
 }
 
+void os_input_manager::release_all()
+{
+    keyboard_->get_key_state_map().clear();
+    mouse_->get_button_state_map().clear();
+}
+
 auto os_input_manager::get_virtual_mouse_position() const -> const hpp::optional<coord>&
 {
     return virtual_mouse_position_;

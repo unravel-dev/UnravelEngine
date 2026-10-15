@@ -68,6 +68,12 @@ public:
      */
     auto create_project(rtti::context& ctx, const fs::path& project_path, std::string* error = nullptr) -> bool;
 
+    /**
+     * @brief Whether create_project would accept `project_path`, without creating anything.
+     * @param error When set, receives one sentence saying why not.
+     */
+    auto can_create_project(const fs::path& project_path, std::string* error = nullptr) const -> bool;
+
     /// Copies editor agent instruction templates into the project root as
     /// `UNRAVEL-AGENTS.md` (overwrites those files). Returns
     /// true when `UNRAVEL-AGENTS.md` was written successfully.
@@ -112,6 +118,13 @@ public:
 
 
     auto has_open_project() const -> bool;
+
+    /// True once opening a project asked the editor to restart, because the project uses another
+    /// renderer or physics backend than the running one; the project opens after the restart.
+    auto is_restart_pending() const -> bool
+    {
+        return restart_opens_recent_;
+    }
 
     void load_project_settings();
     void save_project_settings(rtti::context& ctx);

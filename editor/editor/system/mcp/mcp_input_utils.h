@@ -3,10 +3,15 @@
 #include <context/context.hpp>
 #include <engine/input/input.h>
 #include <ospp/mouse.h>
-#include <ser20/external/simdjson/simdjson.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
+
+namespace unravel
+{
+class mcp_manager;
+}
 
 namespace unravel::mcp
 {
@@ -28,25 +33,46 @@ auto get_input_manager(rtti::context& ctx) -> input::os_input_manager*;
 auto wait_input_frames(rtti::context& ctx, uint64_t frames) -> bool;
 
 /**
- * @brief Focuses the Game panel unless the call's "focus_game_panel" argument is false: without
- * focus nothing reaches the game's input.
+ * @brief Gets the Game panel ready for synthesized input, from a worker thread: focuses it unless
+ *        @p focus_game_panel is false, then waits until it accepts input. Focus lands during the
+ *        next UI pass, after that frame's input was read, so events pushed right away were dropped.
+ * @param window_id Receives the window the events go to.
  */
-auto ensure_game_input_allowed(rtti::context& ctx, const simdjson::dom::object& args, std::string& error) -> bool;
+auto prepare_game_input(mcp_manager& mcp,
+                        rtti::context& ctx,
+                        bool focus_game_panel,
+                        uint32_t& window_id,
+                        std::string& error) -> bool;
 
 /**
- * @brief Queues a mouse button press or release at @p position (screen pixels).
+ * @brief Runs @p push on the main thread, where OS events must be queued. Worker thread only.
  */
-void push_mouse_button_event(uint32_t window_id, os::mouse::button button, bool down, input::coord position);
+auto push_on_main(mcp_manager& mcp, const std::function<void()>& push) -> bool;
+
+/**
+ * @brief Moves the virtual pointer to @p game_position (pixels in the game's render target, the
+ *        space a script's Input.mousePosition reads) and tells the UI, so hover follows it.
+ *        Refuses a point outside the Game panel's view: a press there lands on the editor.
+ *        Main thread.
+ */
+auto move_game_pointer(rtti::context& ctx, uint32_t window_id, input::coord game_position, std::string& error)
+    -> bool;
+
+/**
+ * @brief Presses @p button at the virtual pointer, holds it @p frames input frames and releases it.
+ *        The release is sent even when the frames do not pass, so no button stays held. Worker
+ *        thread only.
+ */
+auto click_mouse_button(mcp_manager& mcp,
+                        rtti::context& ctx,
+                        uint32_t window_id,
+                        os::mouse::button button,
+                        uint64_t frames,
+                        std::string& error) -> bool;
 
 /**
  * @brief Queues the characters typing produces, for the focused text field.
  */
 void push_text_input_event(uint32_t window_id, const std::string& text);
-
-/**
- * @brief Puts the virtual pointer at @p game_position: pixels in the game's render target, the
- * space a script's Input.mousePosition reads.
- */
-void set_game_pointer(input::os_input_manager& manager, input::coord game_position);
 
 } // namespace unravel::mcp

@@ -35,10 +35,11 @@ Always-on rules for AI coding agents working in this project.
 
 ## Assets
 
-- Do **not** create or modify real assets (prefabs, `.meta`, compiled assets) unless
-  the user explicitly asks. Prefer scene and script changes.
-- Prefer importing through the editor/content browser rather than hand-copying files
-  into the project without sidecars.
+- Do **not** write asset files by hand (scenes, prefabs, materials, `.meta`, compiled
+  assets): create and change them through the editor - its MCP tools or the Content
+  Browser - which run the real setters and keep ids and sidecars right.
+- Import through the editor (MCP `assets_import_files` or the Content Browser) rather
+  than hand-copying files into the project without sidecars.
 
 ## Working style
 

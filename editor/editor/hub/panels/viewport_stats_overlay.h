@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace unravel::panel_toolbar
 {
@@ -28,6 +29,15 @@ struct state
     /// ImGui frame of the last sample: a gap means the overlay was hidden, and the history restarts.
     int last_sample_frame{-1};
 };
+
+/// What the last frame drew for the scene and game views, without the editor's own UI.
+struct scene_draw_counts
+{
+    std::uint32_t triangles{};
+    std::uint32_t draw_calls{};
+};
+
+auto get_scene_draw_counts() -> scene_draw_counts;
 
 //-----------------------------------------------------------------------------
 /// <summary>

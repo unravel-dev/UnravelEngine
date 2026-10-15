@@ -1,7 +1,8 @@
 #include "mcp_tools_common.h"
+#include "mcp_asset_lookup.h"
+#include "mcp_project_paths.h"
 
 #include <editor/editing/editing_manager.h>
-#include <engine/assets/asset_manager.h>
 #include <engine/ecs/prefab.h>
 #include <uuid/uuid.h>
 
@@ -14,20 +15,7 @@ namespace
 
 auto resolve_prefab(rtti::context& ctx, const std::string& key_or_uid, std::string& error) -> asset_handle<prefab>
 {
-    auto& am = ctx.get_cached<asset_manager>();
-    auto handle = [&]
-    {
-        if(auto as_uuid = hpp::uuid::from_string(key_or_uid))
-        {
-            return am.get_asset<prefab>(*as_uuid);
-        }
-        return am.get_asset<prefab>(key_or_uid);
-    }();
-    if(!handle)
-    {
-        error = "Prefab not found: " + key_or_uid;
-    }
-    return handle;
+    return find_existing_asset<prefab>(ctx, to_asset_key(key_or_uid), error);
 }
 
 /// Reads the optional `save` argument. Prefab mode would otherwise ask with a modal dialog,
@@ -49,11 +37,10 @@ void register_prefab_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "prefab_open",
          .description =
-             "Open a prefab (.pfb) for editing, as double-clicking it in the Content Browser does. "
-             "While it is open every scene_* tool works on the prefab's contents instead of the scene; "
-             "save with prefab_save, leave with prefab_close, and instances everywhere pick up the "
-             "saved prefab. Switching from another prefab with unsaved edits needs save_current "
-             "true or false.",
+             "Open a prefab (.pfb) for editing. While it is open every scene_* tool works on the prefab's "
+             "contents instead of the scene; save with prefab_save, leave with prefab_close, and instances "
+             "everywhere pick up the saved prefab. Switching from another prefab with unsaved edits needs "
+             "save_current true or false.",
          .input_schema_json =
              R"json({"type":"object","properties":{"key":{"type":"string","description":"Prefab asset key or uid"},"save_current":{"type":"boolean","description":"When another prefab is open with unsaved edits: save them (true) or drop them (false)"}},"required":["key"]})json",
          .handler =
@@ -100,7 +87,8 @@ void register_prefab_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"ok":true,"prefab_mode":{}}})", prefab_mode_status_json(em)),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::destructive});
 
     registry.add(
         {.name = "prefab_save",
@@ -123,7 +111,9 @@ void register_prefab_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"ok":true,"prefab_mode":{}}})", prefab_mode_status_json(em)),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::destructive,
+         .idempotent = true});
 
     registry.add(
         {.name = "prefab_close",
@@ -157,7 +147,8 @@ void register_prefab_tools(mcp_tool_registry& registry)
              em.exit_prefab_mode(ctx, save);
              return {.text = R"({"ok":true,"was_open":true})", .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::destructive});
 }
 
 } // namespace unravel::mcp

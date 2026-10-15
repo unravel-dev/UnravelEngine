@@ -1,6 +1,8 @@
 #include "mcp_component_utils.h"
 #include "mcp_meta_properties.h"
 #include "mcp_tools_common.h"
+#include "mcp_asset_lookup.h"
+#include "mcp_project_paths.h"
 
 #include <editor/editing/actions/actions.h>
 #include <editor/editing/editor_actions.h>
@@ -14,8 +16,11 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <hpp/utility.hpp>
-#include <map>
 #include <math/math.h>
+
+#include <map>
+#include <set>
+#include <tuple>
 
 namespace unravel::mcp
 {
@@ -40,306 +45,156 @@ auto resolve_addable_component(const std::string& name) -> entt::meta_type
     return found;
 }
 
-auto item_space_is_local(const simdjson::dom::object& obj) -> bool
+/// True when `node` is `root` or lies under it - a parent that would make a cycle.
+auto is_in_subtree(entt::handle root, entt::handle node) -> bool
 {
-    std::string space;
-    if(read_string(obj, "space", space) && space == "local")
+    for(auto current = node; current; current = current.get<transform_component>().get_parent())
     {
-        return true;
+        if(current == root)
+        {
+            return true;
+        }
     }
     return false;
 }
 
-auto summarize_created(const std::vector<entt::handle>& created, size_t requested) -> tool_result
+/// Whether a part item adds or removes.
+enum class part_change : uint8_t
 {
-    std::string json = "[";
-    for(size_t i = 0; i < created.size(); ++i)
+    add,
+    remove,
+};
+
+/// One component or script an add or remove item names, checked against the entity.
+struct entity_part
+{
+    entt::handle entity;
+    /// The component type; empty for a script.
+    entt::meta_type component;
+    /// A script's C# type full name.
+    std::string script_type;
+    /// Remove only: where the script sits in the entity's list (0 for components).
+    size_t script_position{};
+};
+
+/// Reads a script part: the type must exist to add, the script must be on the entity to remove.
+auto read_script_part(rtti::context& ctx,
+                      const simdjson::dom::object& obj,
+                      part_change change,
+                      entity_part& part,
+                      std::string& error) -> bool
+{
+    script_selector script;
+    if(!read_script_selector(obj, script, error))
     {
-        if(i > 0)
-        {
-            json += ",";
-        }
-        json += entity_to_lean_json(created[i], true);
+        return false;
     }
-    json += "]";
-    return {.text = fmt::format(R"({{"created":{},"count":{},"requested":{}}})", json, created.size(), requested),
-            .is_error = created.empty() && requested > 0};
+    if(script.type.empty())
+    {
+        error = "component Script needs type_name";
+        return false;
+    }
+    if(change == part_change::add)
+    {
+        return resolve_script_type_name(ctx, script.type, part.script_type, error);
+    }
+    const auto position = find_script_position(part.entity, script);
+    if(!position)
+    {
+        error = fmt::format("{} has no {} script at script_index {}", entity_id_string(part.entity), script.type, script.index);
+        return false;
+    }
+    part.script_type = position->type_fullname;
+    part.script_position = position->index;
+    return true;
+}
+
+/// Reads a component part: an addable component, absent to add and present to remove.
+auto read_component_part(const std::string& name, part_change change, entity_part& part, std::string& error) -> bool
+{
+    part.component = resolve_addable_component(name);
+    if(!part.component)
+    {
+        error = "Unknown component " + name + " (scene_list_components lists the ones you can add and remove)";
+        return false;
+    }
+    const bool present = part.component.invoke("component_exists"_hs, {}, part.entity).cast<bool>();
+    if(change == part_change::add && present)
+    {
+        error = entity_id_string(part.entity) + " already has " + name;
+        return false;
+    }
+    if(change == part_change::remove && !present)
+    {
+        error = entity_id_string(part.entity) + " has no " + name;
+        return false;
+    }
+    return true;
+}
+
+/// Reads every item of an add or remove call; false on the first item that would not apply, or
+/// one that repeats another.
+auto read_part_items(rtti::context& ctx,
+                     const simdjson::dom::object& args,
+                     part_change change,
+                     std::vector<entity_part>& parts,
+                     std::string& error) -> bool
+{
+    scene* scn = nullptr;
+    simdjson::dom::array items;
+    if(!require_edit_scene(ctx, scn, error) || !read_required_array(args, "items", items, error))
+    {
+        return false;
+    }
+    std::set<std::tuple<entt::entity, entt::id_type, std::string, size_t>> seen;
+    for(auto element : items)
+    {
+        simdjson::dom::object obj;
+        std::string entity_id;
+        std::string component;
+        if(!read_object(element, obj, error) || !read_string(obj, "entity_id", entity_id) ||
+           !read_string(obj, "component", component))
+        {
+            error = fmt::format("Item {} needs entity_id and component", parts.size());
+            return false;
+        }
+        entity_part part;
+        part.entity = find_entity(*scn, entity_id);
+        if(!part.entity)
+        {
+            error = "Entity not found: " + entity_id;
+            return false;
+        }
+        const bool read = component == "Script" ? read_script_part(ctx, obj, change, part, error)
+                                                : read_component_part(component, change, part, error);
+        if(!read)
+        {
+            return false;
+        }
+        const auto key = std::make_tuple(part.entity.entity(),
+                                         part.component ? part.component.id() : entt::id_type{},
+                                         part.script_type,
+                                         part.script_position);
+        // Two adds of one script type are two scripts; every other repeat names one part twice.
+        if(!seen.insert(key).second && (change == part_change::remove || part.component))
+        {
+            error = "Item " + std::to_string(parts.size()) + " repeats an earlier item";
+            return false;
+        }
+        parts.push_back(std::move(part));
+    }
+    if(parts.empty())
+    {
+        error = "items array is empty";
+        return false;
+    }
+    return true;
 }
 
 } // namespace
 
 void register_ops_batch_tools(mcp_tool_registry& registry)
 {
-    registry.add(
-        {.name = "scene_create_entities_batch",
-         .description =
-             "Create empty entities in one undoable action. Each item: name (required), optional "
-             "parent_id, position/rotation_euler/scale, space (world default|local).",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"parent_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["name"]}}},"required":["items"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 struct item_t
-                 {
-                     std::string name;
-                     std::string parent_id;
-                     transform_snapshot pose{};
-                     bool is_local{false};
-                 };
-                 std::vector<item_t> items;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     item_t item{};
-                     if(!read_string(obj, "name", item.name) || item.name.empty())
-                     {
-                         return {.text = "Item missing name", .is_error = true};
-                     }
-                     read_string(obj, "parent_id", item.parent_id);
-                     item.is_local = item_space_is_local(obj);
-                     read_transform_snapshot(obj, item.pose);
-                     items.push_back(std::move(item));
-                 }
-                 if(items.empty())
-                 {
-                     return {.text = "items array is empty", .is_error = true};
-                 }
-                 std::vector<entt::handle> created;
-                 auto& em = ctx.get_cached<editing_manager>();
-                 em.do_action<create_entities_action_t>(
-                     "MCP Batch Create Entities",
-                     [&]()
-                     {
-                         created.clear();
-                         created.reserve(items.size());
-                         for(const auto& item : items)
-                         {
-                             entt::handle parent{};
-                             if(!item.parent_id.empty())
-                             {
-                                 parent = find_entity(*scn, item.parent_id);
-                             }
-                             auto entity = scn->create_entity(item.name, parent);
-                             if(!entity)
-                             {
-                                 continue;
-                             }
-                             apply_pose_direct(entity, item.pose, item.is_local);
-                             created.push_back(entity);
-                         }
-                         return created;
-                     });
-                 return summarize_created(created, items.size());
-             },
-         .mutates_scene = true});
-
-    registry.add(
-        {.name = "scene_create_from_prefab_batch",
-         .description =
-             "Instantiate prefab assets in one undoable action. Each item: asset_key (required), "
-             "optional name/parent_id, position/rotation_euler/scale, space (world default|local).",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"asset_key":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["asset_key"]}}},"required":["items"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 struct item_t
-                 {
-                     std::string asset_key;
-                     std::string name;
-                     std::string parent_id;
-                     transform_snapshot pose{};
-                     bool is_local{false};
-                 };
-                 std::vector<item_t> items;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     item_t item{};
-                     if(!read_string(obj, "asset_key", item.asset_key) || item.asset_key.empty())
-                     {
-                         return {.text = "Item missing asset_key", .is_error = true};
-                     }
-                     read_string(obj, "name", item.name);
-                     read_string(obj, "parent_id", item.parent_id);
-                     item.is_local = item_space_is_local(obj);
-                     read_transform_snapshot(obj, item.pose);
-                     items.push_back(std::move(item));
-                 }
-                 if(items.empty())
-                 {
-                     return {.text = "items array is empty", .is_error = true};
-                 }
-                 std::vector<entt::handle> created;
-                 auto& em = ctx.get_cached<editing_manager>();
-                 em.do_action<create_entities_action_t>(
-                     "MCP Batch Create Prefabs",
-                     [&]()
-                     {
-                         created.clear();
-                         for(const auto& item : items)
-                         {
-                             entt::handle entity{};
-                             if(item.pose.has_position && !item.is_local)
-                             {
-                                 entity = defaults::create_prefab_at(ctx, *scn, item.asset_key, item.pose.position);
-                             }
-                             else
-                             {
-                                 entity = defaults::create_prefab_at(ctx, *scn, item.asset_key);
-                             }
-                             if(!entity)
-                             {
-                                 continue;
-                             }
-                             auto* tag = entity.try_get<tag_component>();
-                             if(!item.name.empty() && tag != nullptr && tag->name != item.name)
-                             {
-                                 tag->name = item.name;
-                                 prefab_override_context::mark_property_as_changed(entity,
-                                                                                   entt::resolve<tag_component>(),
-                                                                                   "name");
-                             }
-                             if(!item.parent_id.empty())
-                             {
-                                 auto parent = find_entity(*scn, item.parent_id);
-                                 if(parent)
-                                 {
-                                     entity.get<transform_component>().set_parent(parent, true);
-                                 }
-                             }
-                             apply_pose_direct(entity, item.pose, item.is_local);
-                             created.push_back(entity);
-                         }
-                         return created;
-                     });
-                 return summarize_created(created, items.size());
-             },
-         .mutates_scene = true});
-
-    registry.add(
-        {.name = "scene_create_meshes_batch",
-         .description =
-             "Create mesh entities from asset keys in one undoable action. Each item: asset_key "
-             "(required), optional name/parent_id, position/rotation_euler/scale, space.",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"asset_key":{"type":"string"},"name":{"type":"string"},"parent_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]},"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"rotation_euler":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"scale":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3}},"required":["asset_key"]}}},"required":["items"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 struct item_t
-                 {
-                     std::string asset_key;
-                     std::string name;
-                     std::string parent_id;
-                     transform_snapshot pose{};
-                     bool is_local{false};
-                 };
-                 std::vector<item_t> items;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     item_t item{};
-                     if(!read_string(obj, "asset_key", item.asset_key) || item.asset_key.empty())
-                     {
-                         return {.text = "Item missing asset_key", .is_error = true};
-                     }
-                     read_string(obj, "name", item.name);
-                     read_string(obj, "parent_id", item.parent_id);
-                     item.is_local = item_space_is_local(obj);
-                     read_transform_snapshot(obj, item.pose);
-                     items.push_back(std::move(item));
-                 }
-                 if(items.empty())
-                 {
-                     return {.text = "items array is empty", .is_error = true};
-                 }
-                 std::vector<entt::handle> created;
-                 auto& em = ctx.get_cached<editing_manager>();
-                 em.do_action<create_entities_action_t>(
-                     "MCP Batch Create Meshes",
-                     [&]()
-                     {
-                         created.clear();
-                         for(const auto& item : items)
-                         {
-                             const math::vec3 spawn =
-                                 (!item.is_local && item.pose.has_position) ? item.pose.position : math::vec3{0, 0, 0};
-                             auto entity = defaults::create_mesh_entity_at(ctx, *scn, item.asset_key, spawn);
-                             if(!entity)
-                             {
-                                 continue;
-                             }
-                             if(!item.name.empty())
-                             {
-                                 if(auto* tag = entity.try_get<tag_component>())
-                                 {
-                                     tag->name = item.name;
-                                 }
-                             }
-                             if(!item.parent_id.empty())
-                             {
-                                 auto parent = find_entity(*scn, item.parent_id);
-                                 if(parent)
-                                 {
-                                     entity.get<transform_component>().set_parent(parent, true);
-                                 }
-                             }
-                             apply_pose_direct(entity, item.pose, item.is_local);
-                             created.push_back(entity);
-                         }
-                         return created;
-                     });
-                 return summarize_created(created, items.size());
-             },
-         .mutates_scene = true});
-
     registry.add(
         {.name = "scene_set_parents_batch",
          .description =
@@ -396,6 +251,12 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                          {
                              return {.text = "Parent not found: " + parent_id, .is_error = true};
                          }
+                         if(is_in_subtree(entity, e.new_parent))
+                         {
+                             return {.text = parent_id + " is " + entity_id + " or one of its children; nothing was "
+                                                         "reparented",
+                                     .is_error = true};
+                         }
                      }
                      entries.push_back(e);
                  }
@@ -412,7 +273,8 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  ctx.get_cached<editing_manager>().do_action("MCP Batch Set Parents", batch);
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
              },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_set_names_batch",
@@ -472,18 +334,18 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  ctx.get_cached<editing_manager>().do_action("MCP Batch Set Names", batch);
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
              },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_set_models_batch",
          .description =
-             "Swap the mesh an existing entity shows, keeping the entity, its transform and its other "
-             "components, in one undoable action. The new model is built exactly as for "
-             "scene_create_meshes_batch: the mesh as LOD 0 with the mesh's own default materials. The "
-             "entity needs a Model component. A skinned mesh is reported, since playing its clips needs "
-             "an Animation component.",
+             "Swap the mesh an entity's Model shows, keeping the entity, its transform and other components, in "
+             "one undo step. The model is built as scene_create_batch kind mesh builds it: the mesh as LOD 0 with "
+             "its own default materials. A skinned mesh is reported, since playing its clips needs an Animation "
+             "component.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"asset_key":{"type":"string","description":"Mesh asset key"}},"required":["entity_id","asset_key"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"asset":{"type":"string","description":"Mesh asset key or uid"}},"required":["entity_id","asset"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -514,9 +376,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      std::string entity_id;
                      std::string asset_key;
                      if(!read_object(el, obj, error) || !read_string(obj, "entity_id", entity_id) ||
-                        !read_string(obj, "asset_key", asset_key))
+                        !read_string(obj, "asset", asset_key))
                      {
-                         return {.text = "Each item needs entity_id and asset_key", .is_error = true};
+                         return {.text = "Each item needs entity_id and asset", .is_error = true};
                      }
                      auto entity = find_entity(*scn, entity_id);
                      if(!entity)
@@ -527,16 +389,16 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      if(model_comp == nullptr)
                      {
                          return {.text = entity_id + " has no Model component (scene_add_components_batch Model, "
-                                                     "or create it with scene_create_meshes_batch)",
+                                                     "or create it with scene_create_batch kind mesh)",
                                  .is_error = true};
                      }
-                     if(!am.get_asset<mesh>(asset_key))
+                     const auto mesh_asset = find_existing_asset<mesh>(ctx, to_asset_key(asset_key), error);
+                     if(!mesh_asset)
                      {
-                         return {.text = "Mesh not found: " + asset_key + " (assets_find_batch type mesh)",
-                                 .is_error = true};
+                         return {.text = error + " (assets_find_batch type mesh)", .is_error = true};
                      }
                      entries.push_back(
-                         {entity, model_comp->get_model(), defaults::make_model_from_mesh(ctx, asset_key)});
+                         {entity, model_comp->get_model(), defaults::make_model_from_mesh(ctx, mesh_asset.id())});
                  }
                  if(entries.empty())
                  {
@@ -583,18 +445,17 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                                              strings_to_json_array(skinned_without_animation)),
                          .is_error = false};
              },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_set_layers_batch",
          .description =
-             "Set which layers entities are on, in one undoable action - the hierarchy's layer picker "
-             "does the same, and records it as a prefab override on prefab instances. layers is an array "
-             "of layer names (the project's layer.layers setting, see settings_get) or indices, or "
-             "\"everything\" / \"nothing\". Physics queries and rendering filter on these; "
-             "scene_get_entities_batch detail summary reports them.",
+             "Set which layers entities are on, in one undo step (a prefab override on instances). layers: names "
+             "(the project's layer.layers setting) or indices, or \"everything\" / \"nothing\". Physics queries "
+             "and rendering filter on them; scene_get_entities_batch detail summary reports them.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"layers":{"description":"Layer names or indices, or \"everything\" / \"nothing\""}},"required":["entity_id","layers"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"layers":{"anyOf":[{"type":"array","items":{"anyOf":[{"type":"string"},{"type":"integer","minimum":0,"maximum":31}]}},{"type":"string","enum":["everything","nothing"]}],"description":"Layer names or indices, or \"everything\" / \"nothing\""}},"required":["entity_id","layers"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -642,11 +503,14 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  ctx.get_cached<editing_manager>().do_action("MCP Batch Set Layers", batch);
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count), .is_error = false};
              },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_set_active_batch",
-         .description = "Set active flags on many entities in one undoable action.",
+         .description =
+             "Activate or deactivate entities in one undo step; the children of an inactive entity are inactive "
+             "too.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"active":{"type":"boolean"}},"required":["entity_id","active"]}}},"required":["items"]})json",
          .handler =
@@ -703,403 +567,91 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  ctx.get_cached<editing_manager>().do_action("MCP Batch Set Active", batch);
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
              },
-         .mutates_scene = true});
+         .mutates_scene = true,
+         .idempotent = true});
 
     registry.add(
         {.name = "scene_add_components_batch",
          .description =
-             "Add engine components to many entities in one undoable action. Use "
-             "scene_list_component_types for valid names.",
+             "Add components to entities in one undo step. Each item: entity_id, component (a name from "
+             "scene_list_components, or Script with type_name from scripts_list_types). Every item is checked "
+             "first: an unknown name, a component the entity already has or a duplicate item adds nothing. "
+             "Configure them with scene_set_component_properties_batch.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component_type":{"type":"string"}},"required":["entity_id","component_type"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::vector<entity_part> parts;
+             std::string error;
+             if(!read_part_items(ctx, args, part_change::add, parts, error))
              {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
+                 return {.text = error + "; nothing was added", .is_error = true};
+             }
+             auto batch = std::make_shared<composite_action_t>();
+             for(const auto& part : parts)
+             {
+                 if(part.component)
                  {
-                     return {.text = error, .is_error = true};
+                     batch->add_sub_action(std::make_shared<entity_add_component_action_t>(part.entity, part.component));
                  }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
+                 else
                  {
-                     return {.text = error, .is_error = true};
+                     batch->add_sub_action(
+                         std::make_shared<entity_add_script_component_action_t>(part.entity, part.script_type));
                  }
-                 struct entry_t
-                 {
-                     entt::handle entity{};
-                     entt::meta_type type{};
-                 };
-                 std::vector<entry_t> entries;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     std::string entity_id;
-                     std::string component_type;
-                     if(!read_string(obj, "entity_id", entity_id) || !read_string(obj, "component_type", component_type))
-                     {
-                         return {.text = "Item missing entity_id or component_type", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, entity_id);
-                     if(!entity)
-                     {
-                         return {.text = "Entity not found: " + entity_id, .is_error = true};
-                     }
-                     auto type = resolve_addable_component(component_type);
-                     if(!type)
-                     {
-                         return {.text = "Unknown or non-addable component_type: " + component_type, .is_error = true};
-                     }
-                     entries.push_back({entity, type});
-                 }
-                 if(entries.empty())
-                 {
-                     return {.text = "items array is empty", .is_error = true};
-                 }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 for(const auto& e : entries)
-                 {
-                     em.do_action<entity_add_component_action_t>("MCP Add Component", e.entity, e.type);
-                 }
-                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
-             },
+             }
+             ctx.get_cached<editing_manager>().do_action("MCP Add Components", batch);
+             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", parts.size()), .is_error = false};
+         },
          .mutates_scene = true});
 
     registry.add(
         {.name = "scene_remove_components_batch",
-         .description = "Remove components from many entities in one undoable action.",
+         .description =
+             "Remove components from entities in one undo step. Each item: entity_id, component (a name from "
+             "scene_list_components, or Script with type_name and script_index). Transform, Id, Tag, Layer and "
+             "Prefab cannot be removed. Every item is checked first. On a prefab instance each removal is "
+             "recorded as an override.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component_type":{"type":"string"}},"required":["entity_id","component_type"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"type_name":{"type":"string","description":"component Script: C# type"},"script_index":{"type":"integer","minimum":0,"description":"component Script: which of the entity's scripts of that type, from 0"}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::vector<entity_part> parts;
+             std::string error;
+             if(!read_part_items(ctx, args, part_change::remove, parts, error))
              {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
+                 return {.text = error + "; nothing was removed", .is_error = true};
+             }
+             // A script removal shifts the list positions after it: remove from the back.
+             std::stable_sort(parts.begin(),
+                              parts.end(),
+                              [](const entity_part& lhs, const entity_part& rhs)
+                              {
+                                  return lhs.script_position > rhs.script_position;
+                              });
+             auto batch = std::make_shared<composite_action_t>();
+             for(const auto& part : parts)
+             {
+                 if(part.component)
                  {
-                     return {.text = error, .is_error = true};
+                     batch->add_sub_action(
+                         std::make_shared<entity_remove_component_action_t>(part.entity, part.component));
                  }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
+                 else
                  {
-                     return {.text = error, .is_error = true};
+                     batch->add_sub_action(std::make_shared<entity_remove_script_component_action_t>(
+                         part.entity,
+                         part.script_type,
+                         static_cast<int>(part.script_position)));
                  }
-                 struct entry_t
-                 {
-                     entt::handle entity{};
-                     entt::meta_type type{};
-                 };
-                 std::vector<entry_t> entries;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     std::string entity_id;
-                     std::string component_type;
-                     if(!read_string(obj, "entity_id", entity_id) || !read_string(obj, "component_type", component_type))
-                     {
-                         return {.text = "Item missing entity_id or component_type", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, entity_id);
-                     if(!entity)
-                     {
-                         return {.text = "Entity not found: " + entity_id, .is_error = true};
-                     }
-                     auto type = resolve_addable_component(component_type);
-                     if(!type)
-                     {
-                         type = entt::resolve(entt::hashed_string{component_type.c_str()});
-                     }
-                     if(!type)
-                     {
-                         return {.text = "Unknown component_type: " + component_type, .is_error = true};
-                     }
-                     entries.push_back({entity, type});
-                 }
-                 if(entries.empty())
-                 {
-                     return {.text = "items array is empty", .is_error = true};
-                 }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 for(const auto& e : entries)
-                 {
-                     em.do_action<entity_remove_component_action_t>("MCP Remove Component", e.entity, e.type);
-                 }
-                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
-             },
+             }
+             ctx.get_cached<editing_manager>().do_action("MCP Remove Components", batch);
+             return {.text = fmt::format(R"({{"ok":true,"count":{}}})", parts.size()), .is_error = false};
+         },
          .mutates_scene = true});
 
-    registry.add(
-        {.name = "scene_add_scripts_batch",
-         .description =
-             "Add C# ScriptComponent types to many entities. type_name from scripts_list_types.",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"}},"required":["entity_id","type_name"]}}},"required":["items"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 if(!ctx.has<script_system>())
-                 {
-                     return {.text = "Script system unavailable", .is_error = true};
-                 }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 auto& script_sys = ctx.get_cached<script_system>();
-                 auto& em = ctx.get_cached<editing_manager>();
-                 size_t count = 0;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     std::string entity_id;
-                     std::string type_name;
-                     if(!read_string(obj, "entity_id", entity_id) || !read_string(obj, "type_name", type_name))
-                     {
-                         return {.text = "Item missing entity_id or type_name", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, entity_id);
-                     if(!entity)
-                     {
-                         return {.text = "Entity not found: " + entity_id, .is_error = true};
-                     }
-                     if(!script_sys.get_type_by_fullname(type_name).valid())
-                     {
-                         return {.text = "Unknown script type: " + type_name, .is_error = true};
-                     }
-                     em.do_action<entity_add_script_component_action_t>("MCP Add Script", entity, type_name);
-                     ++count;
-                 }
-                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count), .is_error = count == 0};
-             },
-         .mutates_scene = true});
-
-    registry.add(
-        {.name = "scene_remove_scripts_batch",
-         .description =
-             "Remove C# ScriptComponent scripts from many entities by type_name; script_index (from 0, "
-             "as scene_get_entities_batch summary lists scripts) picks one of several of a type. On a "
-             "prefab instance the removal is recorded as an override, as the inspector's is.",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0}},"required":["entity_id","type_name"]}}},"required":["items"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_edit_scene(ctx, scn, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 simdjson::dom::array items_arr;
-                 if(!read_required_array(args, "items", items_arr, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 size_t count = 0;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     std::string entity_id;
-                     std::string type_name;
-                     if(!read_string(obj, "entity_id", entity_id) || !read_string(obj, "type_name", type_name))
-                     {
-                         return {.text = "Item missing entity_id or type_name", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, entity_id);
-                     if(!entity)
-                     {
-                         return {.text = "Entity not found: " + entity_id, .is_error = true};
-                     }
-                     script_selector script{type_name};
-                     if(!read_script_selector(obj, script, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     const auto position = find_script_position(entity, script);
-                     if(!position)
-                     {
-                         return {.text = fmt::format("{} has no {} script at script_index {}", entity_id, type_name, script.index),
-                                 .is_error = true};
-                     }
-                     em.do_action<entity_remove_script_component_action_t>("MCP Remove Script",
-                                                                          entity,
-                                                                          position->type_fullname,
-                                                                          static_cast<int>(position->index));
-                     ++count;
-                 }
-                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count), .is_error = count == 0};
-             },
-         .mutates_scene = true});
-
-    registry.add(
-        {.name = "scene_get_transforms_batch",
-         .description =
-             "Get transforms for many entities. Each item: entity_id, optional space world|local "
-             "(omit space for both world and local fields).",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"space":{"type":"string","enum":["world","local"]}},"required":["entity_id"]}}},"required":["items"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 auto& em = ctx.get_cached<editing_manager>();
-                 auto* scn = em.get_active_scene(ctx);
-                 if(!scn || !scn->registry)
-                 {
-                     return {.text = "No active scene", .is_error = true};
-                 }
-                 simdjson::dom::array items_arr;
-                 std::string error;
-                 if(!read_required_array(args, "items", items_arr, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 std::string json = "[";
-                 size_t count = 0;
-                 for(auto el : items_arr)
-                 {
-                     simdjson::dom::object obj;
-                     if(!read_object(el, obj, error))
-                     {
-                         return {.text = error, .is_error = true};
-                     }
-                     std::string entity_id;
-                     if(!read_string(obj, "entity_id", entity_id))
-                     {
-                         return {.text = "Item missing entity_id", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, entity_id);
-                     if(!entity || !entity.all_of<transform_component>())
-                     {
-                         return {.text = "Entity not found or missing transform: " + entity_id, .is_error = true};
-                     }
-                     if(count > 0)
-                     {
-                         json += ",";
-                     }
-                     std::string space;
-                     read_string(obj, "space", space);
-                     if(space.empty())
-                     {
-                         json += entity_to_pose_json(entity);
-                     }
-                     else
-                     {
-                         bool is_local = false;
-                         if(!read_transform_space(obj, is_local, error))
-                         {
-                             return {.text = error, .is_error = true};
-                         }
-                         auto& t = entity.get<transform_component>();
-                         const auto pos = is_local ? t.get_position_local() : t.get_position_global();
-                         const auto rot = is_local ? t.get_rotation_euler_local() : t.get_rotation_euler_global();
-                         const auto scl = is_local ? t.get_scale_local() : t.get_scale_global();
-                         json += fmt::format(
-                             R"({{"id":{},"space":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}]}})",
-                             make_json_string(entity_id_string(entity)),
-                             make_json_string(is_local ? "local" : "world"),
-                             pos.x,
-                             pos.y,
-                             pos.z,
-                             rot.x,
-                             rot.y,
-                             rot.z,
-                             scl.x,
-                             scl.y,
-                             scl.z);
-                     }
-                     ++count;
-                 }
-                 json += "]";
-                 return {.text = fmt::format(R"({{"transforms":{},"count":{}}})", json, count), .is_error = false};
-             },
-         .mutates_scene = false});
-
-    registry.add(
-        {.name = "scene_list_scripts_batch",
-         .description = "List ScriptComponent instances on many entities (entity_ids required).",
-         .input_schema_json =
-             R"json({"type":"object","properties":{"entity_ids":{"type":"array","items":{"type":"string"}}},"required":["entity_ids"]})json",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-             {
-                 scene* scn = nullptr;
-                 std::string error;
-                 if(!require_active_scene(ctx, scn, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 std::vector<entt::handle> entities;
-                 if(!read_entity_ids(args, *scn, entities, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
-                 std::string json = "[";
-                 size_t count = 0;
-                 for(auto entity : entities)
-                 {
-                     if(count > 0)
-                     {
-                         json += ",";
-                     }
-                     std::string scripts = "[";
-                     bool first_script = true;
-                     if(auto* sc = entity.try_get<script_component>())
-                     {
-                         std::map<std::string, size_t> type_counts;
-                         for(const auto& obj : sc->get_script_components())
-                         {
-                             if(!obj.pinned)
-                             {
-                                 continue;
-                             }
-                             if(!first_script)
-                             {
-                                 scripts += ",";
-                             }
-                             first_script = false;
-                             const auto type_name = obj.pinned->get_object().get_type().get_fullname();
-                             const auto source = sc->get_script_source_location(obj);
-                             scripts += fmt::format(R"({{"type":{},"script_index":{},"source_path":{}}})",
-                                                    make_json_string(type_name),
-                                                    type_counts[type_name]++,
-                                                    make_json_string(source));
-                         }
-                     }
-                     scripts += "]";
-                     json += fmt::format(R"({{"entity_id":{},"scripts":{}}})",
-                                         make_json_string(entity_id_string(entity)),
-                                         scripts);
-                     ++count;
-                 }
-                 json += "]";
-                 return {.text = fmt::format(R"({{"entities":{},"count":{}}})", json, count), .is_error = false};
-             },
-         .mutates_scene = false});
 }
 
 } // namespace unravel::mcp

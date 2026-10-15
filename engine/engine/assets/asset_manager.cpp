@@ -294,6 +294,14 @@ void asset_manager::remove_asset_info_for_path(const fs::path& path)
     remove_asset_info_for_key(key);
 }
 
+void asset_manager::rename_asset_info_for_path(const fs::path& path, const fs::path& new_path)
+{
+    const auto key = fs::convert_to_protocol(path).generic_string();
+    const auto new_key = fs::convert_to_protocol(new_path).generic_string();
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    get_database(key).rename_asset(key, new_key);
+}
+
 void asset_manager::remove_asset_info_for_key(const std::string& key)
 {
     std::lock_guard<std::mutex> lock(db_mutex_);

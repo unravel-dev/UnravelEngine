@@ -91,6 +91,22 @@ public:
     /// @brief Check if the message box is open
     auto IsOpen() const -> bool { return animation_state_ != AnimationState::Closed; }
 
+    /// @brief Whether the box still waits for an answer: open and not answered yet
+    auto IsWaiting() const -> bool
+    {
+        return animation_state_ == AnimationState::Opening || animation_state_ == AnimationState::Open;
+    }
+
+    auto GetTitle() const -> const std::string& { return title_; }
+    auto GetMessage() const -> const std::string& { return message_; }
+
+    /// @brief The buttons in the order drawn, with their labels
+    auto GetButtons() const -> const std::vector<std::pair<ModalResult, std::string>>& { return button_layout_; }
+
+    /// @brief Answers as a click on the button of @p result does, on the box's next draw
+    /// @return False when the box has no such button or no longer waits
+    auto RequestAnswer(ModalResult result) -> bool;
+
     
     /// @brief Set custom icon (overrides type-based icon)
     auto SetCustomIcon(const char* icon) -> void { custom_icon_ = icon; }
@@ -104,6 +120,8 @@ private:
     auto GetTypeIcon() const -> const char*;
     auto GetTypeColor() const -> ImVec4;
     auto GetAnimationAlpha() const -> float;
+    /// @brief Starts closing and reports @p result to the callback
+    auto Answer(ModalResult result) -> void;
     
     std::string title_;
     std::string message_;
@@ -125,6 +143,8 @@ private:
     const char* custom_icon_;
 
 	bool open_requested_{false};
+    /// An answer a tool requested, applied on the next draw as a click is
+    ModalResult requested_answer_{ModalResult::None};
     int id_counter_{}; // Store the unique ID counter for this instance
     
     static int next_id_counter_;
@@ -153,6 +173,9 @@ public:
     
     /// @brief Get count of active message boxes
     auto GetActiveCount() const -> size_t { return active_boxes_.size(); }
+
+    /// @brief The boxes shown or closing, oldest first
+    auto GetActiveBoxes() const -> const std::vector<std::shared_ptr<MsgBox>>& { return active_boxes_; }
 
 private:
     MsgBoxManager() = default;

@@ -13,6 +13,7 @@
 #include <uuid/uuid.h>
 
 #include <algorithm>
+#include <charconv>
 #include <logging/logging.h>
 #include <sstream>
 
@@ -94,26 +95,21 @@ auto find_entity_by_id(scene& scn, const std::string& id) -> entt::handle
     {
         return {};
     }
+    // A uuid that matches nothing is a stale id: it names no entity, whatever its leading digits read as.
     if(auto uuid = hpp::uuid::from_string(id))
     {
-        auto handle = scn.find_entity_by_uuid(*uuid);
-        if(handle)
-        {
-            return handle;
-        }
+        return scn.find_entity_by_uuid(*uuid);
     }
-    try
+    // Entities without an id component are addressed by their entt value, all digits.
+    std::uint32_t value{};
+    const auto* const end = id.data() + id.size();
+    const auto [ptr, error] = std::from_chars(id.data(), end, value);
+    const auto integral = static_cast<entt::entity>(value);
+    if(error != std::errc{} || ptr != end || !scn.registry->valid(integral))
     {
-        const auto integral = static_cast<entt::entity>(std::stoul(id));
-        if(scn.registry->valid(integral))
-        {
-            return entt::handle(*scn.registry, integral);
-        }
+        return {};
     }
-    catch(...)
-    {
-    }
-    return {};
+    return entt::handle(*scn.registry, integral);
 }
 
 auto entity_id_string(entt::handle entity) -> std::string
@@ -361,26 +357,26 @@ auto entity_to_summary_json(entt::handle entity, int depth, int max_depth) -> st
         components_json += make_json_string(components[i]);
     }
     components_json += "]";
-    std::string children_json = "[]";
-    if(depth < max_depth)
+    const auto* transform = entity.try_get<transform_component>();
+    const size_t child_count = transform != nullptr ? transform->get_children().size() : 0;
+    // Past max_depth the children are only counted: an empty list would read as "no children".
+    std::string children_json;
+    if(depth < max_depth && transform != nullptr)
     {
-        if(auto* transform = entity.try_get<transform_component>())
+        children_json = R"(,"children":[)";
+        const auto& children = transform->get_children();
+        for(size_t i = 0; i < children.size(); ++i)
         {
-            children_json = "[";
-            const auto& children = transform->get_children();
-            for(size_t i = 0; i < children.size(); ++i)
+            if(i > 0)
             {
-                if(i > 0)
-                {
-                    children_json += ",";
-                }
-                children_json += entity_to_summary_json(children[i], depth + 1, max_depth);
+                children_json += ",";
             }
-            children_json += "]";
+            children_json += entity_to_summary_json(children[i], depth + 1, max_depth);
         }
+        children_json += "]";
     }
     return fmt::format(
-        R"({{"id":{},"name":{},"tag":{},"active":{},"parent_id":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}],"position_local":[{:.6g},{:.6g},{:.6g}],"rotation_euler_local":[{:.6g},{:.6g},{:.6g}],"scale_local":[{:.6g},{:.6g},{:.6g}],"components":{},"children":{}}})",
+        R"({{"id":{},"name":{},"tag":{},"active":{},"parent_id":{},"position":[{:.6g},{:.6g},{:.6g}],"rotation_euler":[{:.6g},{:.6g},{:.6g}],"scale":[{:.6g},{:.6g},{:.6g}],"position_local":[{:.6g},{:.6g},{:.6g}],"rotation_euler_local":[{:.6g},{:.6g},{:.6g}],"scale_local":[{:.6g},{:.6g},{:.6g}],"components":{},"child_count":{}{}}})",
         make_json_string(entity_id_string(entity)),
         make_json_string(name),
         make_json_string(tag),
@@ -405,6 +401,7 @@ auto entity_to_summary_json(entt::handle entity, int depth, int max_depth) -> st
         scale_local.y,
         scale_local.z,
         components_json,
+        child_count,
         children_json);
 }
 

@@ -1498,7 +1498,7 @@ void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         return;
     }
     draw_scene(ctx, dt);
-    is_visible_force_ = false;
+    end_forced_frame();
 }
 
 void scene_panel::on_project_opened()
@@ -2034,17 +2034,32 @@ auto scene_panel::handle_camera_wheel(const math::vec3& view_direction, float fl
     return true;
 }
 
-void scene_panel::begin_camera_orbit(const editing_manager& em)
+void scene_panel::stop_camera_motion()
+{
+    camera_controller_.stop();
+    seq::scope::stop_all("camera_focus");
+}
+
+auto scene_panel::get_orbit_pivot(const editing_manager& em) -> math::vec3
 {
     auto camera = get_camera();
     if(!camera)
     {
-        return;
+        return {};
     }
     const auto& transform = camera.get<transform_component>();
     const auto selections = em.try_get_selections_as_copy<entt::handle>();
     const float distance = calc_orbit_distance(transform, selections);
-    camera_orbit_pivot_ = transform.get_position_global() + transform.get_z_axis_global() * distance;
+    return transform.get_position_global() + transform.get_z_axis_global() * distance;
+}
+
+void scene_panel::begin_camera_orbit(const editing_manager& em)
+{
+    if(!get_camera())
+    {
+        return;
+    }
+    camera_orbit_pivot_ = get_orbit_pivot(em);
     is_orbiting_ = true;
     // A coast would pull the camera off the sphere around the pivot.
     camera_controller_.stop();

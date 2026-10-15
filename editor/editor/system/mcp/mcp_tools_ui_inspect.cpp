@@ -1,7 +1,7 @@
 // UI inspection over MCP: query the elements of the documents on screen, click one by selector, and
 // read the data models scripts bound. Element geometry and text come from the engine's own UI queries
 // (ui_element_queries.h, which the script API uses too); clicks go through the same virtual pointer
-// as input_set_mouse_position / input_send_mouse.
+// and press / release helpers as input_send_mouse.
 #include "mcp_input_utils.h"
 #include "mcp_tools_common.h"
 
@@ -378,7 +378,6 @@ struct click_target
     std::string element_json;
     std::string covered_by;
     input::coord game_point{};
-    uint32_t window_id{};
 };
 
 auto find_click_target(rtti::context& ctx, const simdjson::dom::object& args, click_target& out, std::string& error) -> bool
@@ -427,32 +426,7 @@ auto find_click_target(rtti::context& ctx, const simdjson::dom::object& args, cl
     }
     out.element_json = element_json(*hit.view, element, {});
     out.game_point = {static_cast<int>(game_center.x), static_cast<int>(game_center.y)};
-    if(!ensure_game_input_allowed(ctx, args, error) || !get_main_window_id(ctx, out.window_id, error))
-    {
-        return false;
-    }
-    auto* manager = get_input_manager(ctx);
-    if(manager == nullptr)
-    {
-        error = "input_system unavailable";
-        return false;
-    }
-    set_game_pointer(*manager, out.game_point);
     return true;
-}
-
-/// Presses or releases @p button at the virtual pointer, on the main thread.
-auto push_button(mcp_manager& mcp, rtti::context& ctx, uint32_t window_id, os::mouse::button button, bool down) -> bool
-{
-    auto pushed = mcp.invoke_on_main(
-        [&ctx, window_id, button, down]() -> tool_result
-        {
-            auto* manager = get_input_manager(ctx);
-            const auto& position = manager->get_virtual_mouse_position();
-            push_mouse_button_event(window_id, button, down, position ? *position : input::coord{});
-            return {.text = "ok"};
-        });
-    return pushed && !pushed->is_error;
 }
 
 } // namespace
@@ -462,15 +436,12 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "ui_query_elements",
          .description =
-             "Find elements of the UI documents on screen. selector is an RCSS selector (\"#start\", "
-             "\".demo\", \"button\"); point [x, y] in game pixels returns the topmost element under it in "
-             "each document it falls on - the one a click there reaches. Without entity_id every loaded "
-             "document of the active scene is searched, screen-space ones first. Each element reports "
-             "its document, path (body > ... > tag#id.class), text, visibility, active pseudo-classes "
-             "(hover, active, focus, checked, disabled, selected), form value, rect_document (the "
-             "document's pixels) and rect_game / center_game (game pixels, the space of "
-             "input_set_mouse_position; world-space documents projected through the Game panel's camera), "
-             "and the computed values of the properties you list. Works in edit and play mode.",
+             "Find elements of the UI documents on screen by RCSS selector (\"#start\", \"button\"), or the "
+             "topmost element under a point [x, y] in game pixels - the one a click there reaches. Without "
+             "entity_id every document of the active scene is searched. Each element reports its path, text, "
+             "visibility, state (hover, focus, checked, disabled, ...), form value, rect_game / center_game in "
+             "the game pixels input_send_mouse uses, and the computed values of the properties you list. Edit and "
+             "play mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"selector":{"type":"string"},"point":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"Game pixels"},"entity_id":{"type":"string","description":"An entity with a UI Document; default all"},"properties":{"type":"array","items":{"type":"string"},"description":"RCSS properties to read, e.g. decorator, display, image-color"},"limit":{"type":"integer","minimum":1,"maximum":200,"description":"Default 25"}}})json",
          .handler =
@@ -513,18 +484,17 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
                                          views.size(),
                                          bool_to_json(truncated))};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 
     registry.add(
         {.name = "ui_click_element",
          .description =
-             "Click a UI element found by RCSS selector (index picks among several matches, default 0): "
-             "moves the virtual pointer to the element's centre - projected for a world-space document - "
-             "waits for hover, then presses and releases the button. text types characters after the "
-             "click, for a text field the click focused. Reports the element, the game pixel clicked, and "
-             "covered_by when another element sits over the centre (that one gets the click). Play mode "
-             "only; the virtual pointer stays where it clicked (input_set_mouse_position clear:true "
-             "releases it).",
+             "Click a UI element found by RCSS selector (index picks among matches): moves the virtual pointer to "
+             "its centre, waits for hover, then presses and releases the button. text types characters after the "
+             "click, into the field it focused. Reports the element, the game pixel clicked, and covered_by when "
+             "another element sits over the centre (that one gets the click). Play mode only; the pointer stays "
+             "there until input_send_mouse clear:true.",
          .input_schema_json =
              R"json({"type":"object","properties":{"selector":{"type":"string"},"entity_id":{"type":"string","description":"An entity with a UI Document; default all"},"index":{"type":"integer","minimum":0,"description":"Default 0"},"button":{"type":"string","enum":["left","right","middle"],"description":"Default left"},"text":{"type":"string","description":"Characters to type after the click"},"focus_game_panel":{"type":"boolean","description":"Default true"}},"required":["selector"]})json",
          .handler =
@@ -533,6 +503,10 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              auto& mcp = ctx.get_cached<mcp_manager>();
              std::string button_name = "left";
              read_string(args, "button", button_name);
+             if(button_name != "left" && button_name != "right" && button_name != "middle")
+             {
+                 return {.text = "button must be left, right or middle", .is_error = true};
+             }
              const auto button = button_name == "right"    ? os::mouse::button::right
                                  : button_name == "middle" ? os::mouse::button::middle
                                                            : os::mouse::button::left;
@@ -564,25 +538,36 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
              {
                  return *found;
              }
-             const auto window = target.window_id;
-             if(!wait_input_frames(ctx, k_hover_frames) || !push_button(mcp, ctx, window, button, true) ||
-                !wait_input_frames(ctx, 1) || !push_button(mcp, ctx, window, button, false) ||
-                !wait_input_frames(ctx, 1))
+             bool focus_game_panel = true;
+             read_bool(args, "focus_game_panel", focus_game_panel);
+             uint32_t window = 0;
+             std::string error;
+             if(!prepare_game_input(mcp, ctx, focus_game_panel, window, error))
              {
-                 return {.text = "The editor stopped advancing frames during the click", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
-             if(!text.empty())
-             {
-                 auto typed = mcp.invoke_on_main(
-                     [window, &text]() -> tool_result
-                     {
-                         push_text_input_event(window, text);
-                         return {.text = "ok"};
-                     });
-                 if(!typed || typed->is_error || !wait_input_frames(ctx, 1))
+             const auto moved = mcp.invoke_on_main(
+                 [&]() -> bool
                  {
-                     return {.text = "The click landed but the text could not be typed", .is_error = true};
-                 }
+                     return move_game_pointer(ctx, window, target.game_point, error);
+                 });
+             if(!moved || !*moved)
+             {
+                 return {.text = error.empty() ? "Timed out reaching the editor main thread" : error, .is_error = true};
+             }
+             if(!wait_input_frames(ctx, k_hover_frames) || !click_mouse_button(mcp, ctx, window, button, 1, error))
+             {
+                 return {.text = error.empty() ? "The editor stopped advancing frames before the click" : error,
+                         .is_error = true};
+             }
+             if(!text.empty() && (!push_on_main(mcp,
+                                                [&]
+                                                {
+                                                    push_text_input_event(window, text);
+                                                }) ||
+                                  !wait_input_frames(ctx, 1)))
+             {
+                 return {.text = "The click landed but the text could not be typed", .is_error = true};
              }
              return {.text = fmt::format(R"({{"ok":true,"game_point":[{},{}],"element":{},"covered_by":{},"typed":{}}})",
                                          target.game_point.x,
@@ -641,7 +626,8 @@ void register_ui_inspect_tools(mcp_tool_registry& registry)
                                          bool_to_json(editor_actions::get_play_state(ctx).is_active),
                                          models)};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
 }
 
 } // namespace unravel::mcp

@@ -81,6 +81,10 @@ public:
      */
     void remove_asset_info_for_path(const fs::path& path);
 
+    /// Moves the database entry of the asset at @p path to @p new_path, keeping its id: what a rename of
+    /// the source file means, whether or not its compiled asset could move along.
+    void rename_asset_info_for_path(const fs::path& path, const fs::path& new_path);
+
     /**
      * @brief Removes asset information for a specified key.
      * @param key The key of the asset.
@@ -375,10 +379,19 @@ public:
         auto it = storage.container.find(key);
         if(it != storage.container.end())
         {
-            auto& handle = it->second;
-            handle.set_internal_id(new_key);
-            storage.container[new_key] = handle;
+            // A copy shares the handle's link; the entry goes before the new one is inserted, which may rehash.
+            auto handle = it->second;
             storage.container.erase(it);
+            handle.set_internal_id(new_key);
+            // A load not done yet would read the old path, which the rename emptied: it is set up again for
+            // the new one, as an evicted asset's is. A loaded asset keeps what it holds.
+            if(handle.is_deferred() || handle.is_loading())
+            {
+                pool_.stop(handle.task_id());
+                handle.demote_to_deferred();
+                storage.load_from_file(pool_, handle, new_key, load_mode::deferred);
+            }
+            storage.container[new_key] = handle;
         }
 
         if(parent_)

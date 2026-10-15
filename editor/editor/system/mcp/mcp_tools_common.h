@@ -472,9 +472,17 @@ inline auto apply_result_to_json(const Result& result) -> std::string
             warnings = R"(,"warnings":)" + strings_to_json_array(result.warnings);
         }
     }
+    if constexpr(requires { result.read_only; })
+    {
+        if(!result.read_only.empty())
+        {
+            warnings += R"(,"read_only_left_as_is":)" + strings_to_json_array(result.read_only);
+        }
+    }
+    // A rejected write is undone whole, so on failure nothing counts as applied.
     return fmt::format(R"({{"ok":{},"applied":{},"unknown":{},"errors":{}{}}})",
                        bool_to_json(result.ok),
-                       strings_to_json_array(result.applied),
+                       result.ok ? strings_to_json_array(result.applied) : std::string("[]"),
                        strings_to_json_array(result.unknown),
                        strings_to_json_array(result.errors),
                        warnings);
@@ -614,6 +622,10 @@ inline auto require_not_play_mode(rtti::context& ctx, std::string& error) -> boo
     return true;
 }
 
+/// Refuses while a deploy runs: it reads the project's files and settings until it finishes.
+/// Defined with the deploy tools, which own the deploy state.
+auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool;
+
 /// Whether prefab mode is on, which prefab it edits and whether it has unsaved edits. While it
 /// is on, the scene tools work on the prefab's contents.
 inline auto prefab_mode_status_json(editing_manager& em) -> std::string
@@ -625,6 +637,34 @@ inline auto prefab_mode_status_json(editing_manager& em) -> std::string
     return fmt::format(R"({{"active":true,"prefab":{},"unsaved_changes":{}}})",
                        em.edited_prefab ? make_json_string(em.edited_prefab.id()) : std::string("null"),
                        bool_to_json(em.has_unsaved_prefab_changes()));
+}
+
+/**
+ * @brief Clears the way for a call that replaces the open scene or project.
+ *
+ * Unsaved scene or prefab edits stop the call unless `discard` is set; with it, prefab mode is left
+ * without saving and the scene's unsaved flag is cleared, so the replacement neither saves nor
+ * prompts. Call it after every other check, right before replacing: a call that fails earlier must
+ * leave the unsaved state as it was.
+ */
+inline auto release_unsaved_work(rtti::context& ctx, bool discard, std::string& error) -> bool
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    const bool scene_unsaved = em.has_unsaved_changes();
+    const bool prefab_unsaved = em.is_prefab_mode() && em.has_unsaved_prefab_changes();
+    if((scene_unsaved || prefab_unsaved) && !discard)
+    {
+        error = std::string("Unsaved ") +
+                (scene_unsaved && prefab_unsaved ? "scene and prefab edits"
+                 : scene_unsaved                 ? "scene edits"
+                                                 : "prefab edits") +
+                " would be lost: save them first (" + (prefab_unsaved ? "prefab_save" : "scene_save") +
+                ") or pass force:true to discard them";
+        return false;
+    }
+    em.exit_prefab_mode(ctx, editing_manager::save_option::no);
+    em.clear_unsaved_changes();
+    return true;
 }
 
 inline auto require_open_project(rtti::context& ctx, std::string& error) -> bool
@@ -742,14 +782,6 @@ inline auto read_wait_ms(const simdjson::dom::object& args, int64_t default_ms =
     return read_timeout_ms(args, default_ms, 15000);
 }
 
-inline auto sleep_worker(std::chrono::milliseconds wait_ms) -> void
-{
-    if(wait_ms.count() > 0)
-    {
-        std::this_thread::sleep_for(wait_ms);
-    }
-}
-
 inline auto to_lower_ascii(std::string value) -> std::string
 {
     std::transform(value.begin(),
@@ -808,69 +840,121 @@ inline auto bbox_to_json(const math::bbox& bounds) -> std::string
         extents.z);
 }
 
-inline auto normalize_asset_type_filter(std::string type) -> std::string
+inline auto level_to_string(level::level_enum level) -> const char*
 {
-    type = to_lower_ascii(std::move(type));
-    while(!type.empty() && (type.front() == '*' || type.front() == '.'))
+    switch(level)
     {
-        if(type.front() == '*')
-        {
-            type.erase(type.begin());
-            continue;
-        }
-        break;
+        case level::trace:
+            return "trace";
+        case level::debug:
+            return "debug";
+        case level::info:
+            return "info";
+        case level::warn:
+            return "warn";
+        case level::err:
+            return "error";
+        case level::critical:
+            return "critical";
+        default:
+            return "off";
     }
-    if(!type.empty() && type.front() != '.')
-    {
-        type.insert(type.begin(), '.');
-    }
-    // Friendly names -> primary format from ex::get_suported_formats (first entry).
-    if(type == ".prefab")
-    {
-        return ex::get_format<unravel::prefab>();
-    }
-    if(type == ".mesh" || type == ".model")
-    {
-        return ex::get_format<unravel::mesh>();
-    }
-    if(type == ".material")
-    {
-        return ex::get_format<unravel::material>();
-    }
-    if(type == ".texture" || type == ".tex")
-    {
-        return ex::get_format<gfx::texture>();
-    }
-    if(type == ".audio" || type == ".audioclip")
-    {
-        return ex::get_format<unravel::audio_clip>();
-    }
-    if(type == ".scene")
-    {
-        return ex::get_format<unravel::scene_prefab>();
-    }
-    if(type == ".physics" || type == ".phxmat" || type == ".physics_material")
-    {
-        return ex::get_format<unravel::physics_material>();
-    }
-    return type;
 }
 
-inline auto protocol_to_group(const std::string& protocol) -> std::string
+/// Reads a log level name ("warning" and "err" too); empty is trace.
+inline auto parse_min_level(const std::string& name, level::level_enum& out) -> bool
 {
-    if(protocol == "app" || protocol == "app:/")
+    if(name.empty() || name == "trace")
     {
-        return "app:/";
+        out = level::trace;
+        return true;
     }
-    if(protocol == "engine" || protocol == "engine:/")
+    if(name == "debug")
     {
-        return "engine:/";
+        out = level::debug;
+        return true;
     }
-    if(protocol == "editor" || protocol == "editor:/")
+    if(name == "info")
     {
-        return "editor:/";
+        out = level::info;
+        return true;
     }
-    return {};
+    if(name == "warn" || name == "warning")
+    {
+        out = level::warn;
+        return true;
+    }
+    if(name == "error" || name == "err")
+    {
+        out = level::err;
+        return true;
+    }
+    if(name == "critical")
+    {
+        out = level::critical;
+        return true;
+    }
+    return false;
+}
+
+/// What entities are matched by: every field set must match, an empty filter matches everything.
+struct entity_filter
+{
+    /// Case-insensitive part of the name.
+    std::string name_contains;
+    std::string name_exact;
+    /// A component name from scene_list_components.
+    std::string component;
+    /// A C# script type, full or short name.
+    std::string script_type;
+
+    auto is_empty() const -> bool
+    {
+        return name_contains.empty() && name_exact.empty() && component.empty() && script_type.empty();
+    }
+};
+
+/// Reads name_contains, name_exact, component and type_name.
+inline auto read_entity_filter(const simdjson::dom::object& args) -> entity_filter
+{
+    entity_filter filter;
+    read_string(args, "name_contains", filter.name_contains);
+    read_string(args, "name_exact", filter.name_exact);
+    read_string(args, "component", filter.component);
+    read_string(args, "type_name", filter.script_type);
+    return filter;
+}
+
+inline auto entity_matches_filter(entt::handle entity, const entity_filter& filter) -> bool
+{
+    const auto* tag = entity.try_get<tag_component>();
+    const std::string name = tag != nullptr ? tag->name : std::string{};
+    if((!filter.name_exact.empty() && name != filter.name_exact) ||
+       (!filter.name_contains.empty() && !contains_ci(name, filter.name_contains)))
+    {
+        return false;
+    }
+    if(!filter.component.empty() && !entity_has_component_pretty_name(entity, filter.component))
+    {
+        return false;
+    }
+    return filter.script_type.empty() || entity_has_script_type(entity, filter.script_type);
+}
+
+/// The scene's entities @p filter matches, at most @p limit.
+inline auto find_matching_entities(scene& scn, const entity_filter& filter, size_t limit) -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> matches;
+    scn.registry->view<tag_component>().each(
+        [&](auto entity_id, auto&)
+        {
+            entt::handle entity(*scn.registry, entity_id);
+            if(matches.size() < limit && entity_matches_filter(entity, filter))
+            {
+                matches.push_back(entity);
+            }
+        });
+    return matches;
 }
 
 } // namespace unravel::mcp

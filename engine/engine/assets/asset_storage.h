@@ -414,6 +414,20 @@ public:
     void rename_asset(const std::string& key, const std::string& new_key)
     {
         std::lock_guard<std::mutex> lock(asset_mutex_);
+        // Nothing at key: the entry has moved already (the meta syncer and the compiled-asset watcher
+        // both report a rename), and whatever is at new_key is it.
+        if(key == new_key || find_entry_by_location_unlocked(key) == asset_meta_.end())
+        {
+            return;
+        }
+        // An entry already at new_key was registered by a load of the new path that ran before this
+        // rename arrived. The renamed entry is the asset (its .meta carries that id), so the early one
+        // goes rather than alias the same location.
+        std::erase_if(asset_meta_,
+                      [&new_key](const auto& kvp)
+                      {
+                          return kvp.second.location == new_key;
+                      });
         for(auto& kvp : asset_meta_)
         {
             auto& uid = kvp.first;
