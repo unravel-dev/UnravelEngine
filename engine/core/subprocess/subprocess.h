@@ -70,6 +70,16 @@ For more information, please refer to <http://unlicense.org/>
 #error Non clang, non gcc, non MSVC compiler found!
 #endif
 
+// 1 (the default): a child gets its own pipe ends and nothing more from them.
+// On Windows it inherits only its stdin/stdout/stderr handles (an explicit
+// handle list) instead of every inheritable handle the parent holds; on POSIX
+// the pipes are created close-on-exec, so a child started at the same moment on
+// another thread does not inherit them. Define it as 0 before including this
+// file to inherit every inheritable handle (Windows) and use plain pipes (POSIX).
+#ifndef SUBPROCESS_LIMIT_INHERITANCE
+#define SUBPROCESS_LIMIT_INHERITANCE 1
+#endif
+
 struct subprocess_s;
 
 enum subprocess_option_e {
@@ -238,6 +248,9 @@ extern "C" {
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if SUBPROCESS_LIMIT_INHERITANCE
+#include <fcntl.h>
+#endif
 #endif
 
 #if defined(_WIN32)
@@ -266,6 +279,15 @@ extern "C" {
     typedef struct _SECURITY_ATTRIBUTES *LPSECURITY_ATTRIBUTES;
     typedef struct _STARTUPINFOA *LPSTARTUPINFOA;
     typedef struct _OVERLAPPED *LPOVERLAPPED;
+#if SUBPROCESS_LIMIT_INHERITANCE
+    typedef struct _PROC_THREAD_ATTRIBUTE_LIST *LPPROC_THREAD_ATTRIBUTE_LIST;
+
+#ifdef _WIN64
+    typedef unsigned long long subprocess_ulong_ptr_t;
+#else
+    typedef unsigned long subprocess_ulong_ptr_t;
+#endif
+#endif
 
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -313,6 +335,13 @@ extern "C" {
         void *hStdError;
     };
 
+#if SUBPROCESS_LIMIT_INHERITANCE
+    struct subprocess_startup_info_ex_s {
+        struct subprocess_startup_info_s StartupInfo;
+        LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeList;
+    };
+#endif
+
     struct subprocess_overlapped_s {
         uintptr_t Internal;
         uintptr_t InternalHigh;
@@ -357,6 +386,16 @@ extern "C" {
     __declspec(dllimport) int __stdcall CreateProcessA(
         const char *, char *, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, int,
         unsigned long, void *, const char *, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
+#if SUBPROCESS_LIMIT_INHERITANCE
+    __declspec(dllimport) int __stdcall InitializeProcThreadAttributeList(
+        LPPROC_THREAD_ATTRIBUTE_LIST, unsigned long, unsigned long,
+        subprocess_ulong_ptr_t *);
+    __declspec(dllimport) int __stdcall UpdateProcThreadAttribute(
+        LPPROC_THREAD_ATTRIBUTE_LIST, unsigned long, subprocess_ulong_ptr_t, void *,
+        subprocess_ulong_ptr_t, void *, subprocess_ulong_ptr_t *);
+    __declspec(dllimport) void __stdcall DeleteProcThreadAttributeList(
+        LPPROC_THREAD_ATTRIBUTE_LIST);
+#endif
     __declspec(dllimport) int __stdcall CloseHandle(void *);
     __declspec(dllimport) unsigned long __stdcall WaitForSingleObject(
         void *, unsigned long);
@@ -481,6 +520,33 @@ typedef size_t subprocess_size_t;
     }
 #endif
 
+#if !defined(_WIN32) && SUBPROCESS_LIMIT_INHERITANCE
+    // A pipe whose two ends close on exec. The child dup2s its ends onto
+    // stdin/stdout/stderr and a dup2 copy does not keep the flag, so that child
+    // still gets them; a child started meanwhile on another thread does not.
+    subprocess_weak int subprocess_create_pipe_helper(int fds[2]);
+    int subprocess_create_pipe_helper(int fds[2]) {
+#if defined(__APPLE__)
+        // No pipe2 here: the flag is set right after the pipe exists, which
+        // leaves a short window for a child started on another thread.
+        if (0 != pipe(fds)) {
+            return -1;
+        }
+
+        if (-1 == fcntl(fds[0], F_SETFD, FD_CLOEXEC) ||
+            -1 == fcntl(fds[1], F_SETFD, FD_CLOEXEC)) {
+            close(fds[0]);
+            close(fds[1]);
+            return -1;
+        }
+
+        return 0;
+#else
+        return pipe2(fds, O_CLOEXEC);
+#endif
+    }
+#endif
+
     int subprocess_create(const char *const commandLine[], int options,
                           struct subprocess_s *const out_process) {
         return subprocess_create_ex(commandLine, options, SUBPROCESS_NULL,
@@ -501,6 +567,15 @@ typedef size_t subprocess_size_t;
         const unsigned long startFUseStdHandles = 0x00000100;
         const unsigned long handleFlagInherit = 0x00000001;
         const unsigned long createNoWindow = 0x08000000;
+#if SUBPROCESS_LIMIT_INHERITANCE
+        const unsigned long extendedStartupInfoPresent = 0x00080000;
+        const subprocess_ulong_ptr_t procThreadAttributeHandleList = 0x00020002;
+        void *inheritedHandles[3];
+        unsigned long inheritedHandleCount = 0;
+        subprocess_ulong_ptr_t attributeListSize = 0;
+        struct subprocess_startup_info_ex_s startInfoEx;
+        int created;
+#endif
         struct subprocess_subprocess_information_s processInfo;
         struct subprocess_security_attributes_s saAttr = {sizeof(saAttr),
                                                           SUBPROCESS_NULL, 1};
@@ -737,6 +812,54 @@ typedef size_t subprocess_size_t;
 
         commandLineCombined[len] = '\0';
 
+#if SUBPROCESS_LIMIT_INHERITANCE
+        // The child inherits its own pipe ends only. Inheriting every inheritable
+        // handle would hand it whatever other threads have open at this moment
+        // (a CRT file is inheritable by default), and a sibling's file then stays
+        // open, unrenameable and undeletable, until this child exits.
+        inheritedHandles[inheritedHandleCount++] = startInfo.hStdInput;
+        inheritedHandles[inheritedHandleCount++] = startInfo.hStdOutput;
+        if (startInfo.hStdError != startInfo.hStdOutput) {
+            inheritedHandles[inheritedHandleCount++] = startInfo.hStdError;
+        }
+
+        InitializeProcThreadAttributeList(SUBPROCESS_NULL, 1, 0, &attributeListSize);
+        startInfoEx.StartupInfo = startInfo;
+        startInfoEx.StartupInfo.cb = sizeof(startInfoEx);
+        startInfoEx.lpAttributeList = SUBPROCESS_PTR_CAST(
+            LPPROC_THREAD_ATTRIBUTE_LIST, _alloca(attributeListSize));
+
+        if (!InitializeProcThreadAttributeList(startInfoEx.lpAttributeList, 1, 0,
+                                               &attributeListSize)) {
+            return -1;
+        }
+
+        if (!UpdateProcThreadAttribute(
+               startInfoEx.lpAttributeList, 0, procThreadAttributeHandleList,
+               inheritedHandles, inheritedHandleCount * sizeof(void *),
+               SUBPROCESS_NULL, SUBPROCESS_NULL)) {
+            DeleteProcThreadAttributeList(startInfoEx.lpAttributeList);
+            return -1;
+        }
+
+        created = CreateProcessA(
+               SUBPROCESS_NULL,
+               commandLineCombined, // command line
+               SUBPROCESS_NULL,     // process security attributes
+               SUBPROCESS_NULL,     // primary thread security attributes
+               1,                   // the handle list above is inherited
+               flags | extendedStartupInfoPresent, // creation flags
+               used_environment,    // used environment
+               SUBPROCESS_NULL,     // use parent's current directory
+               SUBPROCESS_PTR_CAST(LPSTARTUPINFOA,
+                                   &startInfoEx), // STARTUPINFOEX pointer
+               SUBPROCESS_PTR_CAST(LPPROCESS_INFORMATION, &processInfo));
+        DeleteProcThreadAttributeList(startInfoEx.lpAttributeList);
+
+        if (!created) {
+            return -1;
+        }
+#else
         if (!CreateProcessA(
                SUBPROCESS_NULL,
                commandLineCombined, // command line
@@ -751,6 +874,7 @@ typedef size_t subprocess_size_t;
                SUBPROCESS_PTR_CAST(LPPROCESS_INFORMATION, &processInfo))) {
             return -1;
         }
+#endif
 
         out_process->hProcess = processInfo.hProcess;
 
@@ -787,6 +911,22 @@ typedef size_t subprocess_size_t;
         }
     }
 
+#if SUBPROCESS_LIMIT_INHERITANCE
+    if (0 != subprocess_create_pipe_helper(stdinfd)) {
+        return -1;
+    }
+
+    if (0 != subprocess_create_pipe_helper(stdoutfd)) {
+        return -1;
+    }
+
+    if (subprocess_option_combined_stdout_stderr !=
+       (options & subprocess_option_combined_stdout_stderr)) {
+        if (0 != subprocess_create_pipe_helper(stderrfd)) {
+            return -1;
+        }
+    }
+#else
     if (0 != pipe(stdinfd)) {
         return -1;
     }
@@ -801,6 +941,7 @@ typedef size_t subprocess_size_t;
             return -1;
         }
     }
+#endif
 
     if (environment) {
 #ifdef __clang__
