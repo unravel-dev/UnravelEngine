@@ -2,6 +2,7 @@
 #include "editor/imgui/integration/imgui.h"
 #include "entt/core/any.hpp"
 #include "imgui/imgui.h"
+#include "imgui/imgui_internal.h"
 #include "inspectors.h"
 #include <engine/assets/asset_manager.h>
 #include <dotnetpp/dotnetpp.h>
@@ -53,6 +54,73 @@ auto get_current_mono_type() -> dotnet::type
     }
     return get_mono_type_stack().top();
 }
+
+namespace
+{
+/// The first line of an exception's text: a managed exception's type and message, without its stack trace.
+auto get_first_line(const std::string& text) -> std::string
+{
+    return text.substr(0, text.find('\n'));
+}
+
+/// Restores ImGui's stacks after an inspector unwound out of a script getter partway through its widgets. The
+/// imbalance is expected there, so ImGui's error report (assert, log, tooltip) stays quiet for it.
+void recover_imgui_state_after_getter(const ImGuiErrorRecoveryState& state)
+{
+    ImGuiIO& io = ImGui::GetIO();
+    const bool was_asserting = io.ConfigErrorRecoveryEnableAssert;
+    const bool was_logging = io.ConfigErrorRecoveryEnableDebugLog;
+    const bool was_showing_tooltip = io.ConfigErrorRecoveryEnableTooltip;
+    io.ConfigErrorRecoveryEnableAssert = false;
+    io.ConfigErrorRecoveryEnableDebugLog = false;
+    io.ConfigErrorRecoveryEnableTooltip = false;
+    ImGui::ErrorRecoveryTryToRecoverState(&state);
+    io.ConfigErrorRecoveryEnableAssert = was_asserting;
+    io.ConfigErrorRecoveryEnableDebugLog = was_logging;
+    io.ConfigErrorRecoveryEnableTooltip = was_showing_tooltip;
+}
+
+/// A read-only row naming the exception a property's getter threw; its tooltip holds the full text.
+auto inspect_getter_exception(rtti::context& ctx, const std::string& name, const std::exception& e) -> inspect_result
+{
+    var_info field_info;
+    field_info.is_property = true;
+    field_info.read_only = true;
+    std::string text = "Getter threw " + get_first_line(e.what());
+    entt::meta_any var = entt::forward_as_meta(text);
+    auto var_proxy = make_proxy(var);
+    property_layout layout(name);
+    const inspect_result result = inspect_var(ctx, var, var_proxy, field_info);
+    ImGui::SetItemTooltipEx("%s", e.what());
+    return result;
+}
+
+/**
+ * @brief Runs @p inspect, which reads a script property through its getter. The getter is the script's own code and
+ * may throw - one that reads state only play mode sets up, say. The throw shows as a read-only row naming the
+ * exception rather than unwinding out of the inspector and the frame.
+ */
+template<typename Inspect>
+auto inspect_property_guarded(rtti::context& ctx, const std::string& name, Inspect&& inspect) -> inspect_result
+{
+    ImGuiErrorRecoveryState imgui_state;
+    ImGui::ErrorRecoveryStoreState(&imgui_state);
+    const size_t type_depth = get_mono_type_stack().size();
+    try
+    {
+        return inspect();
+    }
+    catch(const std::exception& e)
+    {
+        recover_imgui_state_after_getter(imgui_state);
+        while(get_mono_type_stack().size() > type_depth)
+        {
+            pop_mono_type();
+        }
+        return inspect_getter_exception(ctx, name, e);
+    }
+}
+} // namespace
 
 auto find_attribute(const std::string& name, const std::vector<dotnet::object>& attribs) -> dotnet::object
 {
@@ -2702,7 +2770,12 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 if(property_inspector)
                 {
                     auto mono_obj = pinned_ptr->get_object();
-                    result |= property_inspector(ctx, mono_obj, obj_proxy, prop, info);
+                    result |= inspect_property_guarded(ctx,
+                                                       prop.get_name(),
+                                                       [&]()
+                                                       {
+                                                           return property_inspector(ctx, mono_obj, obj_proxy, prop, info);
+                                                       });
                 }
                 else if(prop_type.is_enum())
                 {
@@ -2711,34 +2784,60 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     if(enum_inspector)
                     {
                         auto mono_obj = pinned_ptr->get_object();
-                        result |= enum_inspector(ctx, mono_obj, obj_proxy, prop, info);
+                        result |= inspect_property_guarded(ctx,
+                                                           prop.get_name(),
+                                                           [&]()
+                                                           {
+                                                               return enum_inspector(ctx, mono_obj, obj_proxy, prop, info);
+                                                           });
                     }
                 }
                 else if(prop_type.is_array() || prop_type.is_list())
                 {
                     // Handle arrays and List<T> with add/remove support
                     auto mono_obj = pinned_ptr->get_object();
-                    result |= mono_inspector_collection::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
+                    result |= inspect_property_guarded(
+                        ctx,
+                        prop.get_name(),
+                        [&]()
+                        {
+                            return mono_inspector_collection::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
+                        });
                 }
                 else if(prop_type.is_dictionary())
                 {
                     auto mono_obj = pinned_ptr->get_object();
-                    result |= mono_inspector_dictionary_member::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
+                    result |= inspect_property_guarded(
+                        ctx,
+                        prop.get_name(),
+                        [&]()
+                        {
+                            return mono_inspector_dictionary_member::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
+                        });
                 }
                 else if(prop_type.is_serializable())
                 {
                     // Recursively inspect serializable nested objects
                     auto mono_obj = pinned_ptr->get_object();
                     auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
-                    auto nested_obj = invoker.get_value(mono_obj);
-                    
-                    if(nested_obj.valid())
+                    dotnet::object nested_obj;
+                    bool is_read = false;
+                    result |= inspect_property_guarded(ctx,
+                                                       prop.get_name(),
+                                                       [&]() -> inspect_result
+                                                       {
+                                                           nested_obj = invoker.get_value(mono_obj);
+                                                           is_read = true;
+                                                           return {};
+                                                       });
+
+                    if(is_read && nested_obj.valid())
                     {
                         auto nested_pinned = dotnet::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_property_proxy(obj_proxy, invoker);
                         result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, prop.get_name(), info);
                     }
-                    else
+                    else if(is_read)
                     {
                         // Object is null, show as read-only field
                         var_info field_info;
