@@ -1782,9 +1782,13 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     for(const auto& material : materials)
     {
         const auto mat_output = get_default_material_path(dir, file, material.name);
-        if(!material.name.empty())
+        const fs::path former_output = dir / (material.name + ".mat");
+        if(!material.name.empty() && generated_asset::adopt_former_file(am, former_output, mat_output))
         {
-            generated_asset::adopt_former_file(am, dir / (material.name + ".mat"), mat_output);
+            // Loaded handles move to the new key now. The watcher reports the move later, and may report it
+            // as a delete of the old file, which would unload them from every model that uses them.
+            am.rename_asset<unravel::material>(fs::convert_to_protocol(former_output).generic_string(),
+                                               fs::convert_to_protocol(mat_output).generic_string());
         }
         auto uid = am.add_asset_for_path(mat_output, false);
         data.default_material_uids.push_back(uid);

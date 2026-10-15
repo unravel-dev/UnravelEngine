@@ -26,8 +26,12 @@ private:
     void draw_menubar_child(rtti::context& ctx);
     void draw_play_toolbar(rtti::context& ctx);
 
-    /// Project and scene, centered on the menu bar. Call between BeginMenuBar and EndMenuBar.
-    void draw_title(rtti::context& ctx);
+    /// Project and scene, centered on the menu bar between the menus, which end at @p menus_end_x,
+    /// and @p right_limit_x. Call between BeginMenuBar and EndMenuBar.
+    void draw_title(rtti::context& ctx, float menus_end_x, float right_limit_x);
+    /// The state of the MCP server at the right end of the menu bar, over the frame pacing control;
+    /// a click opens its window. Returns where it starts, for the title to keep clear of it.
+    auto draw_mcp_status(rtti::context& ctx) -> float;
     /// A line along the bottom edge of the header in the color of the play state.
     void draw_play_state_line(rtti::context& ctx);
     // The play toolbar, a panel_toolbar strip: deploy and the play options on the left, the

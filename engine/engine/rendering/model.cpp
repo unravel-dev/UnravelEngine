@@ -226,7 +226,9 @@ auto model::apply_default_materials(asset_manager& am, bool wait) -> bool
     for(size_t i = 0; i < material_uids.size(); ++i)
     {
         const auto index = static_cast<uint32_t>(i);
-        if(get_material(index))
+        // set_lod fills every new slot with the default material, so that one counts as no choice.
+        const auto current = get_material(index);
+        if(current && current != default_material())
         {
             continue;
         }

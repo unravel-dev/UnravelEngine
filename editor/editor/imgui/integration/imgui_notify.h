@@ -36,6 +36,8 @@
 #include <chrono>
 #include <functional>
 #include "fonts/icons/icons_material_design_icons.h"
+#include <editor/imgui/integration/imgui.h>
+#include <editor/imgui/integration/imgui_style.h>
 #include <imgui_includes.h>
 
 #define NOTIFY_MAX_TOASTS				10
@@ -47,8 +49,17 @@
 #define NOTIFY_DEFAULT_DISMISS			3000		// Auto dismiss after X ms (default, applied only of no data provided in constructors)
 #define NOTIFY_OPACITY					1.0f		// 0-1 Toast opacity
 #define NOTIFY_TOAST_FLAGS				ImGuiWindowFlags_Tooltip | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs
-// Comment out if you don't want any separator between title and content
-#define NOTIFY_USE_SEPARATOR
+// Define to draw a separator between title and content
+// #define NOTIFY_USE_SEPARATOR
+// A toast is a rounded card with a strip in the color of its type along its left edge, the bold title
+// over the muted content; at least NOTIFY_MIN_WIDTH font sizes wide, so a stack of toasts lines up.
+#define NOTIFY_ROUNDING					8.0f
+#define NOTIFY_FRAME_PADDING_X			14.0f
+#define NOTIFY_FRAME_PADDING_Y			12.0f
+#define NOTIFY_MIN_WIDTH				17.0f
+#define NOTIFY_EDGE_WIDTH				3.0f
+#define NOTIFY_BACKGROUND_LIFT			0.035f
+#define NOTIFY_BORDER_COLOR				IM_COL32(255, 255, 255, 26)
 #define NOTIFY_USE_DISMISS_BUTTON		false		// If true, a dismiss button will be rendered in the top right corner of the toast
 #define NOTIFY_RENDER_LIMIT				10
 
@@ -119,7 +130,7 @@ private:
 	bool			show_dismiss_button = NOTIFY_USE_DISMISS_BUTTON;
 	std::function<void()> on_dismiss = nullptr;
 	ImGuiToastHorizontalPos horizontal_pos = ImGuiToastHorizontalPos_Right;
-	ImVec2			frame_padding = ImVec2(20.0f, 20.0f);
+	ImVec2			frame_padding = ImVec2(NOTIFY_FRAME_PADDING_X, NOTIFY_FRAME_PADDING_Y);
 
 	
 private:
@@ -204,19 +215,23 @@ public:
 	{
 		switch (type)
 		{
-		case ImGuiToastType_None:
-			return { 255, 255, 255, 255 }; // White
 		case ImGuiToastType_Success:
-			return { 0, 255, 0, 255 }; // Green
+			return { 0.40f, 0.80f, 0.47f, 1.0f };
 		case ImGuiToastType_Warning:
-			return { 255, 255, 0, 255 }; // Yellow
+			return { 1.0f, 0.75f, 0.24f, 1.0f };
 		case ImGuiToastType_Error:
-			return { 255, 0, 0, 255 }; // Error
+			return { 0.96f, 0.40f, 0.38f, 1.0f };
 		case ImGuiToastType_Info:
-			return { 255, 255, 255, 255 }; // Blue
+			return imgui_style::get_accent_color();
 		default:
-			return { 255, 255, 255, 255 }; // White
+			return ImGui::GetStyleColorVec4(ImGuiCol_Text);
 		}
+	}
+
+	/// The strip along the left edge: the color of the type, the theme accent for a toast without one.
+	static NOTIFY_INLINE auto get_edge_color(ImGuiToastType type) -> const ImVec4
+	{
+		return type == ImGuiToastType_None ? imgui_style::get_accent_color() : get_color(type);
 	}
 
 	NOTIFY_INLINE auto get_color() -> const ImVec4
@@ -491,9 +506,19 @@ namespace ImGui
 				flags &= ~ImGuiWindowFlags_NoBringToFrontOnFocus;
             }
 
+			SetNextWindowSizeConstraints(ImVec2(GetFontSize() * NOTIFY_MIN_WIDTH, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+			ImVec4 background = GetStyleColorVec4(ImGuiCol_WindowBg);
+			background.x = ImMin(background.x + NOTIFY_BACKGROUND_LIFT, 1.0f);
+			background.y = ImMin(background.y + NOTIFY_BACKGROUND_LIFT, 1.0f);
+			background.z = ImMin(background.z + NOTIFY_BACKGROUND_LIFT, 1.0f);
 			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, toast_frame_padding);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, NOTIFY_ROUNDING);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+			ImGui::PushStyleColor(ImGuiCol_PopupBg, background);
+			ImGui::PushStyleColor(ImGuiCol_Border, NOTIFY_BORDER_COLOR);
 			Begin(window_name, nullptr, flags);
-			PopStyleVar();
+			PopStyleColor(2);
+			PopStyleVar(3);
 			// Here we render the toast content
 			{
 				ImGui::BeginGroup();
@@ -510,6 +535,11 @@ namespace ImGui
 					// was_title_rendered = true;
 				}
 
+				ImVec4 title_color = GetStyleColorVec4(ImGuiCol_Text);
+				title_color.w *= opacity;
+				ImVec4 content_color = imgui_style::get_muted_text_color();
+				content_color.w *= opacity;
+
 				// If a title is set
 				if (!NOTIFY_NULL_OR_EMPTY(title))
 				{
@@ -518,7 +548,9 @@ namespace ImGui
 						SameLine();
 
 					ImGui::AlignTextToFramePadding();
-					Text("%s",title); // Render title text
+					PushFont(ImGui::Font::Bold);
+					TextColored(title_color, "%s", title); // Render title text
+					PopFont();
 					was_title_rendered = true;
 				}
 				else if (!NOTIFY_NULL_OR_EMPTY(default_title))
@@ -527,16 +559,13 @@ namespace ImGui
 						SameLine();
 
 					ImGui::AlignTextToFramePadding();
-					Text("%s", default_title); // Render default title text (ImGuiToastType_Success -> "Success", etc...)
+					PushFont(ImGui::Font::Bold);
+					TextColored(title_color, "%s", default_title); // Render default title text (ImGuiToastType_Success -> "Success", etc...)
+					PopFont();
 					was_title_rendered = true;
 				}
 
 
-				// In case ANYTHING was rendered in the top, we want to add a small padding so the text (or icon) looks centered vertically
-				if (was_title_rendered && !NOTIFY_NULL_OR_EMPTY(content))
-				{
-					SetCursorPosY(GetCursorPosY() + 5.f); // Must be a better way to do this!!!!
-				}
 
 				// If a content is set, render default text
 				if (!NOTIFY_NULL_OR_EMPTY(content))
@@ -548,8 +577,7 @@ namespace ImGui
 #endif
 					}
 
-					ImGui::AlignTextToFramePadding();
-					Text("%s", content); // Render content text
+					TextColored(content_color, "%s", content); // Render content text
 				}
 
 				// If a draw callback is set, call it after the text content
@@ -588,6 +616,20 @@ namespace ImGui
                         RemoveNotification(i);
                     }
                 }
+			}
+
+			// The strip along the left edge, following the rounded corners: a rounded fill clipped to its width.
+			{
+				ImGuiWindow* window = GetCurrentWindow();
+				ImVec4 edge_color = ImGuiToast::get_edge_color(current_toast->get_type());
+				edge_color.w *= opacity;
+				window->DrawList->PushClipRect(window->Pos, window->Pos + ImVec2(NOTIFY_EDGE_WIDTH, window->Size.y), false);
+				window->DrawList->AddRectFilled(window->Pos,
+												window->Pos + ImVec2(NOTIFY_ROUNDING * 2.0f, window->Size.y),
+												GetColorU32(edge_color),
+												NOTIFY_ROUNDING,
+												ImDrawFlags_RoundCornersLeft);
+				window->DrawList->PopClipRect();
 			}
 
 			// Save height for next toasts in the same stack

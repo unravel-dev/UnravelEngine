@@ -315,6 +315,7 @@ void mcp_manager::start()
                   });
 
     running_.store(true);
+    has_listen_failed_.store(false);
     server_thread_ = std::thread(
         [this]()
         {
@@ -325,6 +326,7 @@ void mcp_manager::start()
             {
                 APPLOG_ERROR("MCP server failed to listen on {}:{}", k_host, port_);
                 log_activity("lifecycle", fmt::format("Failed to listen on {}:{}", k_host, port_), true);
+                has_listen_failed_.store(true);
                 running_.store(false);
             }
         });
@@ -416,6 +418,32 @@ auto mcp_manager::get_error_count() const -> uint64_t
     return error_count_.load();
 }
 
+auto mcp_manager::get_active_call_count() const -> int
+{
+    return active_call_count_.load();
+}
+
+auto mcp_manager::get_last_request_time() const -> hpp::optional<std::chrono::steady_clock::time_point>
+{
+    const auto ticks = last_request_ticks_.load();
+    if(ticks == 0)
+    {
+        return std::nullopt;
+    }
+    return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(ticks));
+}
+
+auto mcp_manager::get_last_tool_name() const -> std::string
+{
+    std::lock_guard<std::mutex> lock(last_tool_mutex_);
+    return last_tool_name_;
+}
+
+auto mcp_manager::has_listen_failed() const -> bool
+{
+    return has_listen_failed_.load();
+}
+
 auto mcp_manager::snapshot_activity() const -> std::vector<mcp_activity_entry>
 {
     std::lock_guard<std::mutex> lock(activity_mutex_);
@@ -457,6 +485,7 @@ void mcp_manager::report_main_thread_failure(const std::string& reason, std::str
 auto mcp_manager::handle_http_request(const std::string& body) -> std::string
 {
     request_count_.fetch_add(1);
+    last_request_ticks_.store(std::chrono::steady_clock::now().time_since_epoch().count());
     return dispatch_json_rpc(body);
 }
 
@@ -600,6 +629,26 @@ auto mcp_manager::execute_tool_call(const std::string& tool_name,
         error_count_.fetch_add(1);
         return mcp::make_json_rpc_error(id, k_method_not_found, "Unknown tool: " + tool_name);
     }
+    {
+        std::lock_guard<std::mutex> lock(last_tool_mutex_);
+        last_tool_name_ = tool_name;
+    }
+    // Counted for as long as the call runs, whichever way it returns.
+    struct active_call_scope
+    {
+        std::atomic_int& count;
+        explicit active_call_scope(std::atomic_int& c) : count(c)
+        {
+            count.fetch_add(1);
+        }
+        ~active_call_scope()
+        {
+            count.fetch_sub(1);
+        }
+        active_call_scope(const active_call_scope&) = delete;
+        auto operator=(const active_call_scope&) -> active_call_scope& = delete;
+    };
+    const active_call_scope active_call(active_call_count_);
 
     simdjson::dom::parser args_parser;
     simdjson::dom::element args_root;

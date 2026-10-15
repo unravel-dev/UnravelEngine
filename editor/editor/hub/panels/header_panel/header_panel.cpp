@@ -2,13 +2,16 @@
 #include "../panel.h"
 #include "../panel_toolbar.h"
 #include "../panels_defs.h"
+#include "../mcp_panel/mcp_status.h"
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/shortcuts.h>
+#include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
 #include <editor/system/version_manager.h>
+#include <editor/imgui/integration/imgui_style.h>
 #include <editor/assets/asset_watcher.h>
 
 #include <engine/assets/asset_manager.h>
@@ -58,6 +61,15 @@ constexpr std::array<float, 6> HEADER_TIME_SCALE_PRESETS = {0.1f, 0.25f, 0.5f, 1
 constexpr int HEADER_MAX_FPS_LIMIT = 240;
 // 0 is uncapped.
 constexpr std::array<int, 6> HEADER_MAX_FPS_PRESETS = {0, 30, 60, 120, 144, 240};
+// The MCP state at the right end of the menu bar: a dot and a label on a button as tall as most of
+// the bar. Sizes in units of the font size.
+constexpr const char* HEADER_MCP_LABEL = "MCP";
+constexpr float HEADER_MCP_PADDING_X = 0.5f;
+constexpr float HEADER_MCP_DOT_RADIUS = 0.24f;
+constexpr float HEADER_MCP_DOT_GAP = 0.4f;
+constexpr float HEADER_MCP_HEIGHT_SHARE = 0.8f;
+constexpr float HEADER_MCP_ROUNDING = 0.3f;
+constexpr ImU32 HEADER_MCP_HOVERED_COLOR = IM_COL32(255, 255, 255, 26);
 
 /// Switching the mode recompiles and reloads every script, so only a real change goes through.
 void set_script_debug_mode(bool is_debug_mode)
@@ -591,7 +603,10 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             ImGui::EndMenu();
         }
 
-        draw_title(ctx);
+        // Right after the last menu, the cursor marks where the menus end.
+        const float menus_end_x = ImGui::GetCursorScreenPos().x;
+        const float status_min_x = draw_mcp_status(ctx);
+        draw_title(ctx, menus_end_x, status_min_x);
         ImGui::EndMenuBar();
     }
 
@@ -646,10 +661,8 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
     ImGui::EndChild();
 }
 
-void header_panel::draw_title(rtti::context& ctx)
+void header_panel::draw_title(rtti::context& ctx, float menus_end_x, float right_limit_x)
 {
-    // Right after the last menu, the cursor marks where the menus end.
-    const float menus_end_x = ImGui::GetCursorScreenPos().x;
     const std::string& project_name = ctx.get_cached<project_manager>().get_name();
     const std::string scene_text = HEADER_TITLE_SEPARATOR + make_scene_title(ctx);
     ImGui::PushFont(ImGui::Font::Bold);
@@ -659,9 +672,9 @@ void header_panel::draw_title(rtti::context& ctx)
     const ImRect bar = ImGui::GetCurrentWindow()->MenuBarRect();
     const float margin = ImGui::GetFontSize() * HEADER_TITLE_MARGIN;
     const float title_width = project_size.x + scene_size.x;
-    // Centered on the editor, but never over the menus; a window too narrow for both drops it.
+    // Centered on the editor, but never over the menus or the MCP state; a window too narrow drops it.
     const float title_x = ImMax(ImFloor(bar.GetCenter().x - title_width * 0.5f), menus_end_x + margin);
-    if(title_x + title_width > bar.Max.x - margin)
+    if(title_x + title_width > right_limit_x - margin)
     {
         return;
     }
@@ -673,6 +686,54 @@ void header_panel::draw_title(rtti::context& ctx)
     draw_list->AddText(ImVec2(title_x + project_size.x, title_y),
                        ImGui::GetColorU32(ImGuiCol_Text, HEADER_TITLE_SCENE_ALPHA),
                        scene_text.c_str());
+}
+
+auto header_panel::draw_mcp_status(rtti::context& ctx) -> float
+{
+    const ImRect bar = ImGui::GetCurrentWindow()->MenuBarRect();
+    if(!ctx.has<mcp_manager>())
+    {
+        return bar.Max.x;
+    }
+    const auto& mcp = ctx.get_cached<mcp_manager>();
+    const mcp_status::status state = mcp_status::get_status(mcp);
+    const float font_size = ImGui::GetFontSize();
+    const ImVec2 label_size = ImGui::CalcTextSize(HEADER_MCP_LABEL);
+    const float padding_x = font_size * HEADER_MCP_PADDING_X;
+    const float dot_radius = font_size * HEADER_MCP_DOT_RADIUS;
+    const float dot_gap = font_size * HEADER_MCP_DOT_GAP;
+    const ImVec2 size(padding_x * 2.0f + dot_radius * 2.0f + dot_gap + label_size.x,
+                      ImFloor(bar.GetHeight() * HEADER_MCP_HEIGHT_SHARE));
+    // Its right edge lines up with the frame pacing control at the end of the toolbar under it.
+    const ImVec2 min(ImFloor(bar.Max.x - panel_toolbar::get_bar_margin() - size.x),
+                     ImFloor(bar.Min.y + (bar.GetHeight() - size.y) * 0.5f));
+    ImGui::SetCursorScreenPos(min);
+    const bool is_clicked = ImGui::InvisibleButton("##mcp_status", size);
+    const bool is_hovered = ImGui::IsItemHovered();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    if(is_hovered)
+    {
+        draw_list->AddRectFilled(min, min + size, HEADER_MCP_HOVERED_COLOR, font_size * HEADER_MCP_ROUNDING);
+    }
+    const float center_y = min.y + size.y * 0.5f;
+    mcp_status::draw_dot(draw_list, ImVec2(min.x + padding_x + dot_radius, center_y), dot_radius, state);
+    const bool is_quiet = state.state == mcp_status::server_state::listening ||
+                          state.state == mcp_status::server_state::stopped;
+    const ImU32 label_color = state.state == mcp_status::server_state::failed ? state.color
+                              : is_quiet                                       ? imgui_style::get_muted_text_color_u32()
+                                                                               : ImGui::GetColorU32(ImGuiCol_Text);
+    draw_list->AddText(ImVec2(min.x + padding_x + dot_radius * 2.0f + dot_gap, ImFloor(center_y - label_size.y * 0.5f)),
+                       is_hovered ? ImGui::GetColorU32(ImGuiCol_Text) : label_color,
+                       HEADER_MCP_LABEL);
+    if(is_hovered)
+    {
+        mcp_status::draw_tooltip(mcp, state);
+    }
+    if(is_clicked)
+    {
+        parent_->get_mcp_panel().show(true);
+    }
+    return min.x;
 }
 
 void header_panel::draw_play_state_line(rtti::context& ctx)

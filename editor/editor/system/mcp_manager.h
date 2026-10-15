@@ -70,6 +70,14 @@ public:
     auto get_request_count() const -> uint64_t;
     auto get_tool_call_count() const -> uint64_t;
     auto get_error_count() const -> uint64_t;
+    /// Tool calls running right now.
+    auto get_active_call_count() const -> int;
+    /// When the last request arrived; nothing before the first one.
+    auto get_last_request_time() const -> hpp::optional<std::chrono::steady_clock::time_point>;
+    /// The tool called last, running or finished; empty before the first call.
+    auto get_last_tool_name() const -> std::string;
+    /// The last start could not listen on the port (another editor holds it, say).
+    auto has_listen_failed() const -> bool;
 
     auto snapshot_activity() const -> std::vector<mcp_activity_entry>;
     void clear_activity();
@@ -167,6 +175,12 @@ private:
     std::atomic_uint64_t request_count_{0};
     std::atomic_uint64_t tool_call_count_{0};
     std::atomic_uint64_t error_count_{0};
+    std::atomic_int active_call_count_{0};
+    /// steady_clock ticks of the last request; 0 before the first one.
+    std::atomic<std::chrono::steady_clock::rep> last_request_ticks_{0};
+    std::atomic_bool has_listen_failed_{false};
+    mutable std::mutex last_tool_mutex_;
+    std::string last_tool_name_;
 };
 
 } // namespace unravel

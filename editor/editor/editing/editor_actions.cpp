@@ -3059,6 +3059,20 @@ auto editor_actions::focus_game_panel(rtti::context& ctx, std::string* error) ->
     return true;
 }
 
+auto editor_actions::show_mcp_window(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<hub>())
+    {
+        if(error)
+        {
+            *error = "Hub is not available";
+        }
+        return false;
+    }
+    ctx.get_cached<hub>().get_panels().get_mcp_panel().show(true);
+    return true;
+}
+
 auto editor_actions::rebuild_pending_armatures(rtti::context& ctx) -> std::vector<std::shared_ptr<editing_action_t>>
 {
     auto& em = ctx.get_cached<editing_manager>();

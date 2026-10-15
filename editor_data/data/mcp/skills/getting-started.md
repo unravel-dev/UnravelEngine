@@ -86,7 +86,8 @@ Building a scene is not shipping a game. The rest of the chain:
   {"entity_ids":[]} clears the selection, selection_set {"asset":...} selects
   an asset in the Content Browser, and assets_reveal {"key":...} opens its
   folder there and scrolls to it.
-- panel_focus {"panel":"scene"|"game"} switches the center panel;
+- panel_focus {"panel":"scene"|"game"} switches the center panel ("mcp"
+  opens the MCP Server window);
   window_request_focus raises the editor window.
 - After imports, loads and play sessions check logs_get_recent (min_level
   "warn") - compile problems and runtime errors land there. Page with after_id.

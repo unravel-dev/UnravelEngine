@@ -409,7 +409,8 @@ public:
     void set_material_instances(const std::vector<material::sptr>& materials);
 
     /**
-     * @brief Fills the slots that have no material with LOD 0's default (imported) materials.
+     * @brief Fills the slots that have no material of their own - empty, or still holding the
+     * default_material() set_lod fills new slots with - with LOD 0's default (imported) materials.
      * @param am Resolves the material assets.
      * @param wait Waits for LOD 0 to finish loading when true; otherwise only a loaded LOD 0 counts.
      * @return False when LOD 0 is not loaded (still loading, or not compiled yet): nothing changed.

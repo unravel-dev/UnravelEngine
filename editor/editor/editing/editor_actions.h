@@ -285,6 +285,8 @@ struct editor_actions
     // Panel focus (ImGui dock tabs)
     static auto focus_scene_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
     static auto focus_game_panel(rtti::context& ctx, std::string* error = nullptr) -> bool;
+    /// Opens the MCP Server window, as the header's MCP indicator does.
+    static auto show_mcp_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
 
     /**
      * @brief Focus/raise the OS main window so asset watcher and similar focus-gated
