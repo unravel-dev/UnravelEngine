@@ -149,7 +149,7 @@ using EngineVersion = version::engine_version;
 // Adapter: hpp::string_view is not implicitly convertible to hpp::string_view.
 // The parser API lives in <version/version.h> and takes hpp::string_view, so
 // we convert here at the boundary.
-static auto parse_engine_version(hpp::string_view ver) -> std::optional<EngineVersion>
+static auto parse_engine_version(hpp::string_view ver) -> hpp::optional<EngineVersion>
 {
     return version::parse(hpp::string_view(ver.data(), ver.size()));
 }
@@ -165,7 +165,7 @@ static auto compare_versions(const EngineVersion& a, const EngineVersion& b) -> 
 // Extract version from asset filename.
 // Pattern: "UnravelEngine-{version}-{platform-info}"
 // Example: "UnravelEngine-1.0.0-69-g1ead714-Windows-AMD64.exe" -> "1.0.0-69-g1ead714"
-static auto extract_version_from_asset_name(hpp::string_view asset_name) -> std::optional<EngineVersion>
+static auto extract_version_from_asset_name(hpp::string_view asset_name) -> hpp::optional<EngineVersion>
 {
     // Look for "UnravelEngine-" prefix
     constexpr hpp::string_view prefix = "UnravelEngine-";
@@ -454,13 +454,13 @@ static auto fetch_github_releases(const GitHubClientConfig& cfg) -> FetchResult
 }
 
 // Extract the best version from a release (checks both tag_name and asset names).
-static auto get_best_version_from_release(const GitHubRelease& release) -> std::optional<EngineVersion>
+static auto get_best_version_from_release(const GitHubRelease& release) -> hpp::optional<EngineVersion>
 {
     // First, try tag_name
     auto tag_ver = parse_engine_version(release.tag_name);
     
     // Also check asset names for versions
-    std::optional<EngineVersion> asset_ver;
+    hpp::optional<EngineVersion> asset_ver;
     for(const auto& asset : release.assets)
     {
         auto extracted = extract_version_from_asset_name(asset.name);
@@ -489,10 +489,10 @@ static auto get_best_version_from_release(const GitHubRelease& release) -> std::
 // Find "latest" release by comparing tag_name versions and asset versions (your custom scheme).
 // Checks both the release tag_name and versions extracted from asset filenames.
 // Ignores releases whose tag_name doesn't parse (unless assets have parseable versions).
-static auto pick_latest_by_version(const std::vector<GitHubRelease>& releases) -> std::optional<GitHubRelease>
+static auto pick_latest_by_version(const std::vector<GitHubRelease>& releases) -> hpp::optional<GitHubRelease>
 {
-    std::optional<GitHubRelease> best;
-    std::optional<EngineVersion> best_ver;
+    hpp::optional<GitHubRelease> best;
+    hpp::optional<EngineVersion> best_ver;
 
     for(const auto& r : releases)
     {
@@ -517,7 +517,7 @@ static auto pick_latest_by_version(const std::vector<GitHubRelease>& releases) -
 // Uses your compare: major/minor/patch then commit_count.
 // Checks both release tag_name and versions extracted from asset filenames.
 static auto check_for_update(const std::vector<GitHubRelease>& releases,
-                                                     hpp::string_view current_version) -> std::optional<GitHubRelease>
+                                                     hpp::string_view current_version) -> hpp::optional<GitHubRelease>
 {
     auto cur = parse_engine_version(current_version);
     if(!cur)

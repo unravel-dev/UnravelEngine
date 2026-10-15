@@ -32,7 +32,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <unordered_map>
 #include <variant>
 
@@ -51,7 +51,7 @@ struct value_codec
     const char* schema_extra{};
     /// How a writable value is spelled in JSON, appended to the reflection's tooltip.
     const char* format_hint{};
-    std::function<std::optional<std::string>(rtti::context&, const entt::meta_any&)> to_json;
+    std::function<hpp::optional<std::string>(rtti::context&, const entt::meta_any&)> to_json;
     /// On entry the meta_any holds the property's current value (empty when there is none), for a codec that
     /// merges what it reads into it.
     std::function<bool(rtti::context&, const simdjson::dom::element&, entt::meta_any&, std::string&)> from_json;
@@ -63,7 +63,7 @@ template<typename T>
 auto make_number_codec(const char* schema_type) -> value_codec
 {
     return {.schema_type = schema_type,
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 if constexpr(std::is_floating_point_v<T>)
                 {
@@ -122,7 +122,7 @@ auto make_range_codec() -> value_codec
             .schema_extra = is_float ? R"("items":{"type":"number"},"minItems":2,"maxItems":2)"
                                      : R"("items":{"type":"integer"},"minItems":2,"maxItems":2)",
             .format_hint = "[min, max]",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto& bounds = value.cast<const range<T>&>();
                 if constexpr(is_float)
@@ -169,7 +169,7 @@ auto make_size_codec() -> value_codec
             .schema_extra = is_float ? R"("items":{"type":"number"},"minItems":2,"maxItems":2)"
                                      : R"("items":{"type":"integer"},"minItems":2,"maxItems":2)",
             .format_hint = "[width, height]",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto& extent = value.cast<const size<T>&>();
                 if constexpr(is_float)
@@ -305,7 +305,7 @@ auto make_curve_codec() -> value_codec
 {
     return {.schema_type = "array",
             .format_hint = curve_key_json<T>::format,
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 std::string json = "[";
                 for(const auto& point : value.cast<const math::curve<T>&>().get_points())
@@ -355,7 +355,7 @@ auto make_bbox_codec() -> value_codec
 {
     return {.schema_type = "object",
             .format_hint = "{min: [x, y, z], max: [x, y, z]}",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 return bbox_to_json(value.cast<const math::bbox&>());
             },
@@ -387,7 +387,7 @@ auto make_seconds_codec() -> value_codec
     using seconds = std::chrono::duration<float>;
     return {.schema_type = "number",
             .format_hint = "seconds",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 return fmt::format("{}", value.cast<seconds>().count());
             },
@@ -437,7 +437,7 @@ auto make_handle_codec() -> value_codec
 {
     return {.schema_type = "string",
             .format_hint = "asset key or uid, or null",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto* handle = value.try_cast<asset_handle<T>>();
                 if(handle == nullptr)
@@ -484,7 +484,7 @@ auto make_vector_codec() -> value_codec
         fmt::format(R"("items":{{"type":"{}"}},"minItems":{},"maxItems":{})", is_bool ? "boolean" : "number", Length, Length);
     return {.schema_type = "array",
             .schema_extra = schema_extra.c_str(),
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto& vector = value.cast<const vector_type&>();
                 std::string json = "[";
@@ -540,7 +540,7 @@ auto make_entity_codec() -> value_codec
 {
     return {.schema_type = "string",
             .format_hint = "entity id, or null",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto& entity = value.cast<const entt::handle&>();
                 return entity ? make_json_string(entity_id_string(entity)) : std::string("null");
@@ -647,7 +647,7 @@ auto make_alignment_codec() -> value_codec
     return {.schema_type = "object",
             .schema_extra =
                 R"("properties":{"horizontal":{"type":"string","enum":["left","center","right"]},"vertical":{"type":"string","enum":["top","middle","bottom","capline","midline","baseline"]}})",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto flags = value.cast<const alignment&>().flags;
                 return fmt::format(R"({{"horizontal":"{}","vertical":"{}"}})",
@@ -694,7 +694,7 @@ auto make_text_style_flags_codec() -> value_codec
     return {.schema_type = "array",
             .schema_extra =
                 R"("items":{"type":"string","enum":["overline","underline","strike_through","background","foreground"]})",
-            .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 const auto flags = value.cast<const text_style_flags&>().flags;
                 std::vector<std::string> names;
@@ -779,7 +779,7 @@ auto make_physics_shape_codec() -> value_codec
 {
     return {.schema_type = "object",
             .format_hint = "{type: box|sphere|capsule|cylinder|mesh, then that shape's fields}",
-            .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> std::optional<std::string>
+            .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> hpp::optional<std::string>
             {
                 return std::visit(
                     [&ctx](const auto& shape) -> std::string
@@ -881,7 +881,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<uint64_t>(), make_number_codec<uint64_t>("integer"));
         add(entt::type_id<bool>(),
             {.schema_type = "boolean",
-             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+             .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
              {
                  return std::string(bool_to_json(value.cast<bool>()));
              },
@@ -902,7 +902,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<size<uint32_t>>(), make_size_codec<uint32_t>());
         add(entt::type_id<std::string>(),
             {.schema_type = "string",
-             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+             .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
              {
                  return make_json_string(value.cast<std::string>());
              },
@@ -920,7 +920,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<math::vec2>(),
             {.schema_type = "array",
              .schema_extra = R"("items":{"type":"number"},"minItems":2,"maxItems":2)",
-             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+             .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
              {
                  const auto v = value.cast<math::vec2>();
                  return fmt::format("[{},{}]", v.x, v.y);
@@ -939,7 +939,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<math::vec3>(),
             {.schema_type = "array",
              .schema_extra = R"("items":{"type":"number"},"minItems":3,"maxItems":3)",
-             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+             .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
              {
                  const auto v = value.cast<math::vec3>();
                  return fmt::format("[{},{},{}]", v.x, v.y, v.z);
@@ -958,7 +958,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<math::color>(),
             {.schema_type = "array",
              .schema_extra = R"("items":{"type":"number"},"minItems":3,"maxItems":4)",
-             .to_json = [](rtti::context&, const entt::meta_any& value) -> std::optional<std::string>
+             .to_json = [](rtti::context&, const entt::meta_any& value) -> hpp::optional<std::string>
              {
                  return exact_color_json(value.cast<math::color>());
              },
@@ -976,7 +976,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<layer_mask>(),
             {.schema_type = "array",
              .format_hint = "layer names or indices, or \"everything\" / \"nothing\"",
-             .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> std::optional<std::string>
+             .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> hpp::optional<std::string>
              {
                  return layer_mask_to_json(ctx, value.cast<layer_mask>());
              },
@@ -1079,7 +1079,7 @@ auto enum_value_names(const entt::meta_type& type) -> std::vector<std::string>
     return names;
 }
 
-auto enum_to_json(const entt::meta_any& value) -> std::optional<std::string>
+auto enum_to_json(const entt::meta_any& value) -> hpp::optional<std::string>
 {
     for(auto [id, candidate] : value.type().data())
     {
@@ -1105,11 +1105,11 @@ auto enum_from_json(const simdjson::dom::element& element,
     return find_meta_enum_value(type, name, out, error);
 }
 
-auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>;
+auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> hpp::optional<std::string>;
 auto schema_type_of(const entt::meta_type& type) -> const char*;
 
 /// A container's elements as a JSON array; nothing when its element type cannot be spelled, empty or not.
-auto sequence_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
+auto sequence_to_json(rtti::context& ctx, entt::meta_any& value) -> hpp::optional<std::string>
 {
     if(hpp::string_view(schema_type_of(value.type())) == "unsupported")
     {
@@ -1128,7 +1128,7 @@ auto sequence_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optiona
     return json + "]";
 }
 
-auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
+auto value_to_json(rtti::context& ctx, entt::meta_any& value) -> hpp::optional<std::string>
 {
     const auto type = value.type();
     if(const auto* codec = find_codec(type))
@@ -1518,7 +1518,7 @@ void apply_meta_properties(rtti::context& ctx,
     }
 }
 
-auto meta_value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
+auto meta_value_to_json(rtti::context& ctx, entt::meta_any& value) -> hpp::optional<std::string>
 {
     return value_to_json(ctx, value);
 }

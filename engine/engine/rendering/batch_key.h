@@ -7,7 +7,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 
 #include "material.h"
@@ -121,7 +121,7 @@ struct shadow_batch_key
     uint32_t lod_index = 0;
     uint32_t submesh_index = 0;
     cull_type cull = cull_type::counter_clockwise;
-    std::optional<shadow_cutout_state> cutout;
+    hpp::optional<shadow_cutout_state> cutout;
 
     shadow_batch_key() = default;
 
@@ -129,7 +129,7 @@ struct shadow_batch_key
                      uint32_t lod,
                      uint32_t submesh,
                      cull_type cull_type,
-                     std::optional<shadow_cutout_state> cutout_state = std::nullopt);
+                     hpp::optional<shadow_cutout_state> cutout_state = std::nullopt);
 
     auto operator<=>(const shadow_batch_key& other) const -> std::strong_ordering;
     auto operator==(const shadow_batch_key& other) const -> bool;

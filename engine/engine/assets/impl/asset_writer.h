@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem/filesystem.h>
-#include <filesystem>
 #include <string_utils/utils.h>
 
 #include <engine/assets/impl/asset_extensions.h>

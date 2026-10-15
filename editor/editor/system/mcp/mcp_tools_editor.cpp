@@ -8,10 +8,12 @@
 #include <editor/hub/panels/panel.h>
 #include <editor/hub/panels/viewport_stats_overlay.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
+#include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/entity_inspect.h>
 #include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
+#include <engine/assets/asset_manager.h>
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <graphics/graphics.h>
@@ -49,9 +51,19 @@ auto find_waiting_box() -> std::shared_ptr<ImBox::MsgBox>
     return it != boxes.rend() ? *it : nullptr;
 }
 
+auto answerable_modal_json(const std::string& title, const std::string& message, const std::vector<std::string>& labels)
+    -> std::string
+{
+    return fmt::format(R"({{"title":{},"message":{},"buttons":{},"answerable":true}})",
+                       make_json_string(title),
+                       make_json_string(message),
+                       strings_to_json_array(labels));
+}
+
 /**
- * @brief The dialog the editor waits on, or null. A message box (the save prompts) is answerable with
- *        editor_answer_modal; another modal window is named so a stalled call can be explained.
+ * @brief The dialog the editor waits on, or null. A message box (the save prompts) and the Create Scene
+ *        dialog are answerable with editor_answer_modal; another modal window is named so a stalled call
+ *        can be explained.
  */
 auto modal_status_json() -> std::string
 {
@@ -62,12 +74,15 @@ auto modal_status_json() -> std::string
         {
             labels.push_back(button.second);
         }
-        return fmt::format(R"({{"title":{},"message":{},"buttons":{},"answerable":true}})",
-                           make_json_string(box->GetTitle()),
-                           make_json_string(box->GetMessage()),
-                           strings_to_json_array(labels));
+        return answerable_modal_json(box->GetTitle(), box->GetMessage(), labels);
     }
-    const auto* popup = ImGui::GetCurrentContext() != nullptr ? ImGui::GetTopMostPopupModal() : nullptr;
+    if(create_scene_modal::is_pending())
+    {
+        return answerable_modal_json(create_scene_modal::get_title(),
+                                     create_scene_modal::get_message(),
+                                     create_scene_modal::get_answer_labels());
+    }
+    const auto* popup = ImGui::GetCurrentContext() != nullptr ? ImGui::GetTopMostAndVisiblePopupModal() : nullptr;
     if(popup == nullptr)
     {
         return "null";
@@ -76,10 +91,29 @@ auto modal_status_json() -> std::string
     return fmt::format(R"({{"title":{},"answerable":false}})", make_json_string(name.substr(0, name.find("##"))));
 }
 
-/// Asks the waiting message box to take the answer of the button labelled @p label, as a click would.
+/// Answers the Create Scene dialog with its button or preset card labelled @p label, as a click would.
+auto request_create_scene_answer(const std::string& label, std::string& title, std::string& error) -> bool
+{
+    title = create_scene_modal::get_title();
+    if(create_scene_modal::answer_if_pending(label))
+    {
+        return true;
+    }
+    error = fmt::format("\"{}\" has no button {} (buttons: {})",
+                        title,
+                        label,
+                        strings_to_json_array(create_scene_modal::get_answer_labels()));
+    return false;
+}
+
+/// Asks the waiting dialog to take the answer of the button labelled @p label, as a click would.
 auto request_modal_answer(const std::string& label, std::string& title, std::string& error) -> bool
 {
     auto box = find_waiting_box();
+    if(!box && create_scene_modal::is_pending())
+    {
+        return request_create_scene_answer(label, title, error);
+    }
     if(!box)
     {
         error = "No dialog waits for an answer";
@@ -390,8 +424,8 @@ void register_editor_tools(mcp_tool_registry& registry)
         {.name = "editor_answer_modal",
          .description =
              "Answer the dialog the editor waits on (editor_get_status modal) by pressing one of its buttons, "
-             "by label (\"Save\", \"Don't Save\", \"Cancel\", ...), as a click would. Returns the next dialog "
-             "when the answer opened one.",
+             "by label (\"Save\", \"Don't Save\", \"Cancel\", ...), as a click would; the Create Scene dialog "
+             "also takes a preset name (\"Standard\", ...). Returns the next dialog when the answer opened one.",
          .input_schema_json =
              R"json({"type":"object","properties":{"button":{"type":"string","description":"Button label, case-insensitive"}},"required":["button"]})json",
          .handler =
@@ -631,6 +665,39 @@ void register_editor_tools(mcp_tool_registry& registry)
                  }
                  const auto sel = editor_actions::get_selection(ctx);
                  return {.text = selection_to_json(sel.active_entity_id, sel.entity_ids), .is_error = false};
+             },
+         .mutates_scene = false,
+         .idempotent = true});
+
+    registry.add(
+        {.name = "assets_reveal",
+         .description =
+             "Show a file or folder in the Content Browser, as an asset field's locate button does: the browser "
+             "opens the folder that holds it, scrolls to it and rings it, and the Content panel comes to the "
+             "front. key: a key, a uid, or a path relative to app:/data. The selection is left as it is "
+             "(selection_set {\"asset\":...} selects).",
+         .input_schema_json =
+             R"({"type":"object","properties":{"key":{"type":"string","description":"Key, uid, or path relative to app:/data"}},"required":["key"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 std::string input;
+                 read_string(args, "key", input);
+                 std::string key = to_asset_key(input);
+                 if(const auto uid = hpp::uuid::from_string(input))
+                 {
+                     key = ctx.get_cached<asset_manager>().get_metadata(*uid).location;
+                     if(key.empty())
+                     {
+                         return {.text = "No asset has uid " + input, .is_error = true};
+                     }
+                 }
+                 std::string error;
+                 if(!editor_actions::reveal_in_content_browser(ctx, key, &error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 return {.text = fmt::format(R"({{"revealed":{}}})", make_json_string(key)), .is_error = false};
              },
          .mutates_scene = false,
          .idempotent = true});

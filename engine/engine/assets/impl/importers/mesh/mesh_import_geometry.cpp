@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
-#include <optional>
+#include <hpp/optional.hpp>
 
 namespace unravel
 {
@@ -385,9 +385,9 @@ auto are_matrices_nearly_equal(const aiMatrix4x4& left, const aiMatrix4x4& right
  * Identity when the spaces agree; nullopt when the shared bones disagree with each other, where no
  * single re-expression exists.
  */
-auto find_bind_space_correction(const aiMesh* mesh, const bind_offsets_t& offsets) -> std::optional<aiMatrix4x4>
+auto find_bind_space_correction(const aiMesh* mesh, const bind_offsets_t& offsets) -> hpp::optional<aiMatrix4x4>
 {
-    std::optional<aiMatrix4x4> correction;
+    hpp::optional<aiMatrix4x4> correction;
     for(unsigned int i = 0; i < mesh->mNumBones; ++i)
     {
         const aiBone* bone = mesh->mBones[i];
@@ -439,9 +439,9 @@ void apply_bind_space_correction(aiMesh* mesh, const aiMatrix4x4& correction)
  * @brief Bring a skinned mesh into the shared bind space, then register its bones. Returns the
  * transform from its node to the space its vertices now live in (nullopt: unchanged).
  */
-auto align_to_shared_bind_space(aiMesh* mesh, bind_offsets_t& offsets) -> std::optional<math::transform>
+auto align_to_shared_bind_space(aiMesh* mesh, bind_offsets_t& offsets) -> hpp::optional<math::transform>
 {
-    std::optional<math::transform> placement;
+    hpp::optional<math::transform> placement;
     const auto correction = find_bind_space_correction(mesh, offsets);
     if(!correction)
     {

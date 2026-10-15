@@ -47,6 +47,11 @@ struct inspector_asset_handle_material : public crtp_meta_type<inspector_asset_h
 {
     auto inspect_as_property(rtti::context& ctx, asset_handle<material>& data) -> inspect_result;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
+
+private:
+    /// For a model's default material: a banner naming the model it comes from and whether imports still rewrite
+    /// it, with Reset to Imported once it was edited.
+    void inspect_import_origin(rtti::context& ctx, const asset_handle<material>& data);
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_material, asset_handle<material>)
 

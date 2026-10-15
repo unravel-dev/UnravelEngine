@@ -47,7 +47,7 @@
 #include <filesystem/filesystem.h>
 #include <logging/logging.h>
 #include <numeric>
-#include <optional>
+#include <hpp/optional.hpp>
 
 namespace unravel
 {
@@ -386,7 +386,7 @@ void claim_camera_orbit_modifier()
     ImGui::SetKeyOwner(ImGuiMod_Alt, ImGui::GetID("scene_camera_orbit"));
 }
 
-auto calc_selection_center(const std::vector<entt::handle>& selections) -> std::optional<math::vec3>
+auto calc_selection_center(const std::vector<entt::handle>& selections) -> hpp::optional<math::vec3>
 {
     math::bbox bounds;
     for(const auto& entity : selections)
@@ -408,7 +408,7 @@ auto calc_selection_center(const std::vector<entt::handle>& selections) -> std::
 
 auto calc_orbit_distance(const transform_component& transform, const std::vector<entt::handle>& selections) -> float
 {
-    const std::optional<math::vec3> selection_center = calc_selection_center(selections);
+    const hpp::optional<math::vec3> selection_center = calc_selection_center(selections);
     if(!selection_center)
     {
         return CAMERA_ORBIT_DEFAULT_DISTANCE;
@@ -1863,12 +1863,12 @@ auto scene_panel::get_gi_visualize() const -> const gi_visualize_pass::world_set
     return visualization_menu_state_.gi;
 }
 
-void scene_panel::set_gi_cursor_override(const std::optional<math::vec2>& cursor)
+void scene_panel::set_gi_cursor_override(const hpp::optional<math::vec2>& cursor)
 {
     visualization_menu_state_.gi_cursor_override = cursor;
 }
 
-auto scene_panel::get_gi_cursor_override() const -> const std::optional<math::vec2>&
+auto scene_panel::get_gi_cursor_override() const -> const hpp::optional<math::vec2>&
 {
     return visualization_menu_state_.gi_cursor_override;
 }

@@ -84,7 +84,8 @@ Building a scene is not shipping a game. The rest of the chain:
   selection_set {"entity_ids":[...]} on the result and viewport_focus
   {"entity_ids":[...]} point the user at what you built; selection_set
   {"entity_ids":[]} clears the selection, selection_set {"asset":...} selects
-  an asset in the Content Browser.
+  an asset in the Content Browser, and assets_reveal {"key":...} opens its
+  folder there and scrolls to it.
 - panel_focus {"panel":"scene"|"game"} switches the center panel;
   window_request_focus raises the editor window.
 - After imports, loads and play sessions check logs_get_recent (min_level

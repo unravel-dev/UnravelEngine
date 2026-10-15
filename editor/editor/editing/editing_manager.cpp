@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <set>
-#include <string_view>
+#include <hpp/string_view.hpp>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>

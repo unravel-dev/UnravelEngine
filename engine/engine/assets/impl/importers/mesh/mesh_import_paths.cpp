@@ -8,7 +8,7 @@
 #include <assimp/scene.h>
 
 #include <algorithm>
-#include <string_view>
+#include <hpp/string_view.hpp>
 
 namespace unravel
 {
@@ -155,7 +155,7 @@ auto build_converted_texture_name(const fs::path& filename,
     return (src.parent_path() / (src.stem().string() + "_" + target_semantic + ".png")).generic_string();
 }
 
-auto resolve_texture_on_disk(const fs::path& output_dir, fs::path relative) -> std::optional<fs::path>
+auto resolve_texture_on_disk(const fs::path& output_dir, fs::path relative) -> hpp::optional<fs::path>
 {
     if(relative.empty())
     {
@@ -180,7 +180,7 @@ auto texture_file_exists(const fs::path& output_dir, const std::string& relative
     return resolve_texture_on_disk(output_dir, normalize_assimp_path(relative)).has_value();
 }
 
-auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& relative) -> std::optional<std::string>
+auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& relative) -> hpp::optional<std::string>
 {
     const auto absolute = resolve_texture_on_disk(output_dir, normalize_assimp_path(relative));
     if(!absolute)

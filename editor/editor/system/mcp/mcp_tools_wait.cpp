@@ -13,7 +13,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 #include <vector>
 
@@ -52,7 +52,7 @@ auto make_log_condition(const simdjson::dom::object& spec, condition_check& out,
         return false;
     }
     // Entries after this id count; without after_id, the ones logged once the wait has begun.
-    auto newest_seen = std::make_shared<std::optional<int64_t>>();
+    auto newest_seen = std::make_shared<hpp::optional<int64_t>>();
     int64_t after_id = 0;
     if(!spec["after_id"].get(after_id))
     {
@@ -176,7 +176,7 @@ struct property_watch
     std::string op;
     std::string expected_json;
     /// For "changed": the first value read.
-    std::optional<std::string> first_json;
+    hpp::optional<std::string> first_json;
 };
 
 /// The property bag a watch reads: Transform is the entity's pose, anything else its component.

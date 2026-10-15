@@ -1629,7 +1629,7 @@ auto script_slot_segment(const hpp::uuid& slot) -> std::string
     return "[" + hpp::to_string(slot) + "]";
 }
 
-auto parse_script_slot(hpp::string_view property_path) -> std::optional<hpp::uuid>
+auto parse_script_slot(hpp::string_view property_path) -> hpp::optional<hpp::uuid>
 {
     if(!property_path.starts_with(SCRIPT_LIST_SEGMENT))
     {

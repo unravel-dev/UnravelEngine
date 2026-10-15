@@ -3,9 +3,9 @@
 #include <reflection/reflection.h>
 #include <serialization/serialization.h>
 
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
-#include <string_view>
+#include <hpp/string_view.hpp>
 
 namespace ser20
 {
@@ -28,7 +28,7 @@ inline constexpr const char* SCRIPT_SLOT_KEY = "@slot";
 auto script_slot_segment(const hpp::uuid& slot) -> std::string;
 
 /// The slot a script property path names ("script_components[<slot>]/..."), if it names one.
-auto parse_script_slot(hpp::string_view property_path) -> std::optional<hpp::uuid>;
+auto parse_script_slot(hpp::string_view property_path) -> hpp::optional<hpp::uuid>;
 
 SAVE_EXTERN(script_component);
 LOAD_EXTERN(script_component);

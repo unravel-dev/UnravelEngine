@@ -33,6 +33,24 @@ auto get_muted_text_color_u32() -> ImU32
 
 namespace
 {
+/// The content browser's Material accent: the assets imports write are materials.
+constexpr ImU32 IMPORTED_ASSET_COLOR = IM_COL32(86, 180, 168, 255);
+/// The amber of the inspector's notes.
+constexpr ImU32 EDITED_IMPORT_COLOR = IM_COL32(255, 190, 60, 255);
+} // namespace
+
+auto get_imported_asset_color_u32() -> ImU32
+{
+    return IMPORTED_ASSET_COLOR;
+}
+
+auto get_edited_import_color_u32() -> ImU32
+{
+    return EDITED_IMPORT_COLOR;
+}
+
+namespace
+{
 //-----------------------------------------------------------------------------
 /// <summary>
 /// The colors a theme is made of. apply_palette() lays them onto the ImGui colors the same way

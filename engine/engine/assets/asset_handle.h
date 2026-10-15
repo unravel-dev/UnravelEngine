@@ -239,9 +239,9 @@ struct asset_handle
      * and after a failed load, and is_ready() read after it can see a load that finished in between; this decides
      * from one snapshot.
      */
-    auto try_get() const -> std::shared_ptr<T>
+    auto try_get(bool wait = false) const -> std::shared_ptr<T>
     {
-        return resolve(false, nullptr);
+        return resolve(wait, nullptr);
     }
 
     /**

@@ -13,7 +13,7 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <unordered_set>
 
 namespace unravel::mcp
@@ -54,7 +54,7 @@ auto resolve_script_type(rtti::context& ctx, const std::string& script_type, std
 /// How one C# field type is read and written as JSON.
 struct script_field_codec
 {
-    std::function<std::optional<std::string>(rtti::context&, const dotnet::object&, const dotnet::field&)> to_json;
+    std::function<hpp::optional<std::string>(rtti::context&, const dotnet::object&, const dotnet::field&)> to_json;
     std::function<bool(rtti::context&, dotnet::object&, const dotnet::field&, const simdjson::dom::element&, std::string&)>
         from_json;
 };
@@ -65,7 +65,7 @@ template<typename T>
 auto make_script_field_codec() -> script_field_codec
 {
     return {.to_json = [](rtti::context& ctx, const dotnet::object& obj, const dotnet::field& field)
-                -> std::optional<std::string>
+                -> hpp::optional<std::string>
             {
                 entt::meta_any value{dotnet::make_field_invoker<T>(field).get_value(obj)};
                 return meta_value_to_json(ctx, value);
@@ -91,7 +91,7 @@ auto make_script_field_codec() -> script_field_codec
 template<typename T>
 auto make_script_enum_codec() -> script_field_codec
 {
-    return {.to_json = [](rtti::context&, const dotnet::object& obj, const dotnet::field& field) -> std::optional<std::string>
+    return {.to_json = [](rtti::context&, const dotnet::object& obj, const dotnet::field& field) -> hpp::optional<std::string>
             {
                 const auto value = dotnet::make_field_invoker<T>(field).get_value(obj);
                 for(const auto& [candidate, name] : field.get_type().get_enum_values<T>())
@@ -146,7 +146,7 @@ auto make_script_entity_codec() -> script_field_codec
         return scn != nullptr && scn->registry ? entt::handle(*scn->registry, entity) : entt::handle{};
     };
     return {.to_json = [handle_of](rtti::context& ctx, const dotnet::object& obj, const dotnet::field& field)
-                -> std::optional<std::string>
+                -> hpp::optional<std::string>
             {
                 entt::meta_any value{handle_of(ctx, dotnet::make_field_invoker<entt::entity>(field).get_value(obj))};
                 return meta_value_to_json(ctx, value);
@@ -692,7 +692,7 @@ auto read_script_selector(const simdjson::dom::object& item, script_selector& ou
     return true;
 }
 
-auto find_script_position(entt::handle entity, const script_selector& script) -> std::optional<script_position>
+auto find_script_position(entt::handle entity, const script_selector& script) -> hpp::optional<script_position>
 {
     const auto* scripts = entity.try_get<script_component>();
     if(scripts == nullptr)

@@ -21,7 +21,7 @@
 
 #include <algorithm>
 #include <limits>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 #include <vector>
 
@@ -238,7 +238,7 @@ auto rect_json(const math::vec4& rect) -> std::string
 }
 
 /// The element's border box in game pixels: the bounds of its projected corners for a world-space document.
-auto game_rect(const document_view& view, const math::vec4& rect) -> std::optional<math::vec4>
+auto game_rect(const document_view& view, const math::vec4& rect) -> hpp::optional<math::vec4>
 {
     const math::vec2 corners[] = {{rect.x, rect.y}, {rect.x + rect.z, rect.y}, {rect.x, rect.y + rect.w}, {rect.x + rect.z, rect.y + rect.w}};
     math::vec2 low{std::numeric_limits<float>::max()};

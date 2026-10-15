@@ -46,6 +46,10 @@ struct content_browser_item
     hpp::uuid uid;
     /// A short type-specific fact badged on the card's thumbnail, such as a triangle count; empty for none.
     std::string summary;
+    /// An asset an import writes, such as a model's default material: badged in the thumbnail's top-left corner.
+    bool is_generated{};
+    /// Such an asset was edited since its import wrote it, so imports keep it; its badge says so.
+    bool is_generated_edited{};
     bool is_loading{};
     bool is_selected{};
     bool is_focused{};
@@ -56,9 +60,10 @@ struct content_browser_item
 /**
  * @brief Draws the card of an item as a single ImGui item.
  *
- * The card shows the thumbnail in a well with the summary badged in its corner, a strip in the type's accent color,
- * the name centered on up to two lines, and the type in bold on a centered pill of the accent color. A loading item
- * shows a spinner in place of its thumbnail; selection and focus draw rings around the card.
+ * The card shows the thumbnail in a well with the summary badged in its bottom-right corner and, for an asset an
+ * import writes, an import mark in its top-left one; a strip in the type's accent color, the name centered on up to
+ * two lines, and the type in bold on a centered pill of the accent color. A loading item shows a spinner in place of
+ * its thumbnail; selection and focus draw rings around the card.
  * @param item The item to draw.
  * @return True when the card was pressed.
  */

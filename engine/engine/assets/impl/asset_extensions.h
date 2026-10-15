@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <string>
-#include <string_view>
+#include <hpp/string_view.hpp>
 #include <vector>
 
 namespace gfx

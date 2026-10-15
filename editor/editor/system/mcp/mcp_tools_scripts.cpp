@@ -20,7 +20,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -378,7 +378,7 @@ void register_script_tools(mcp_tool_registry& registry)
                  bool pending{false};
                  bool has_errors{false};
              };
-             auto query = [&]() -> std::optional<build_state>
+             auto query = [&]() -> hpp::optional<build_state>
              {
                  return mcp.invoke_on_main(
                      [&ctx]() -> build_state

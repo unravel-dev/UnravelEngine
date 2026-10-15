@@ -3,7 +3,7 @@
 #include <filesystem/filesystem.h>
 
 #include <cstddef>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 
 struct aiTexture;
@@ -62,11 +62,11 @@ auto build_converted_texture_name(const fs::path& filename,
                                   const std::string& target_semantic) -> std::string;
 
 /// Absolute path of an existing texture relative to @p output_dir (extension fallback applied).
-auto resolve_texture_on_disk(const fs::path& output_dir, fs::path relative) -> std::optional<fs::path>;
+auto resolve_texture_on_disk(const fs::path& output_dir, fs::path relative) -> hpp::optional<fs::path>;
 auto texture_file_exists(const fs::path& output_dir, const std::string& relative) -> bool;
 
 /// Protocol asset key of an existing texture, or nullopt when it is missing or outside every protocol.
-auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& relative) -> std::optional<std::string>;
+auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& relative) -> hpp::optional<std::string>;
 
 /**
  * @brief Replace the characters a file name cannot hold on Windows (<>:"/\|?* and control

@@ -11,7 +11,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -89,7 +89,7 @@ public:
     template<typename Fn>
     auto invoke_on_main(Fn&& fn,
                         std::chrono::milliseconds timeout = std::chrono::milliseconds(5000),
-                        std::string* failure = nullptr) -> std::optional<std::invoke_result_t<std::decay_t<Fn>>>
+                        std::string* failure = nullptr) -> hpp::optional<std::invoke_result_t<std::decay_t<Fn>>>
     {
         using result_t = std::invoke_result_t<std::decay_t<Fn>>;
         static_assert(!std::is_void_v<result_t>, "invoke_on_main requires a non-void return type");
@@ -104,7 +104,7 @@ public:
         auto shared_gate = std::make_shared<gate>();
         tpp::this_thread::register_this_thread();
         auto future = tpp::async_on_process(tpp::main_thread::get_id(),
-                                            [shared_gate, &fn]() -> std::optional<result_t>
+                                            [shared_gate, &fn]() -> hpp::optional<result_t>
                                             {
                                                 std::lock_guard<std::mutex> lock(shared_gate->mutex);
                                                 if(shared_gate->abandoned)
@@ -149,7 +149,7 @@ private:
     auto dispatch_json_rpc(const std::string& body) -> std::string;
     auto execute_tool_call(const std::string& tool_name,
                            const std::string& args_json,
-                           const std::optional<std::string>& id) -> std::string;
+                           const hpp::optional<std::string>& id) -> std::string;
     void log_activity(std::string category, std::string message, bool is_error = false);
     /// "Unknown tool" plus the nearest real names, so a guessed name corrects itself.
     auto unknown_tool_message(const std::string& tool_name) const -> std::string;

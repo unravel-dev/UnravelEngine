@@ -32,6 +32,11 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
+#include <engine/rendering/font.h>
+#include <engine/animation/animation.h>
+#include <engine/audio/audio_clip.h>
+#include <engine/physics/physics_material.h>
+#include <engine/ui/style_sheet.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/components/model_component.h>
@@ -41,7 +46,6 @@
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/watcher.h>
-#include <filesystem>
 #include <subprocess/subprocess.hpp>
 
 
@@ -1495,6 +1499,8 @@ auto editor_actions::load_scene_from_asset(rtti::context& ctx,
         }
         return false;
     }
+    // A loaded scene answers a pending request for a new one.
+    create_scene_modal::cancel_if_pending();
 
     em.sync_prefab_instances(ctx, &scene);
     em.clear_unsaved_changes();
@@ -2821,6 +2827,78 @@ auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, st
         *error = "No texture, material, mesh, prefab or scene asset at " + key;
     }
     return is_selected;
+}
+
+namespace
+{
+/// Focuses the asset at @p key as its locate button does; false for a folder or a file of no asset type.
+auto focus_known_asset(rtti::context& ctx, const std::string& key) -> bool
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
+    const std::string extension = fs::path(key).extension().string();
+    bool is_focused = false;
+    // The asset types the Content Browser shows as assets.
+    hpp::for_each_type<gfx::texture,
+                       gfx::shader,
+                       scene_prefab,
+                       material,
+                       physics_material,
+                       ui_tree,
+                       style_sheet,
+                       audio_clip,
+                       mesh,
+                       prefab,
+                       animation_clip,
+                       font,
+                       script>(
+        [&](auto tag)
+        {
+            using asset_t = typename std::decay_t<decltype(tag)>::type;
+            if(is_focused || !ex::is_format<asset_t>(extension))
+            {
+                return;
+            }
+            if(const auto handle = am.find_asset<asset_t>(key))
+            {
+                em.foucs_asset(handle);
+                is_focused = true;
+            }
+        });
+    return is_focused;
+}
+} // namespace
+
+auto editor_actions::reveal_in_content_browser(rtti::context& ctx, const std::string& key, std::string* error) -> bool
+{
+    if(!ctx.has<hub>())
+    {
+        if(error)
+        {
+            *error = "Hub is not available";
+        }
+        return false;
+    }
+    const fs::path absolute = fs::absolute(fs::resolve_protocol(key));
+    fs::error_code err;
+    if(!fs::exists(absolute, err))
+    {
+        if(error)
+        {
+            *error = "Nothing at " + key;
+        }
+        return false;
+    }
+    if(!focus_known_asset(ctx, key))
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        em.focus(absolute);
+        em.focus_path(absolute);
+    }
+    auto& panel = ctx.get_cached<hub>().get_panels().get_content_browser_panel();
+    panel.set_visible(true);
+    panel.focus();
+    return true;
 }
 
 auto editor_actions::open_project_settings(rtti::context& ctx, const std::string& category, std::string* error)

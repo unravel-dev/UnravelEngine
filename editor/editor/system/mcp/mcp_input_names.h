@@ -3,7 +3,7 @@
 #include <ospp/keyboard.h>
 
 #include <string>
-#include <string_view>
+#include <hpp/string_view.hpp>
 
 namespace unravel::mcp
 {

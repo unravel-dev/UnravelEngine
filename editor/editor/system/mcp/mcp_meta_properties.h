@@ -8,9 +8,9 @@
 #include <hpp/string_view.hpp>
 #include <ser20/external/simdjson/simdjson.h>
 
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
-#include <string_view>
+#include <hpp/string_view.hpp>
 #include <unordered_set>
 #include <vector>
 
@@ -52,7 +52,7 @@ void apply_meta_properties(rtti::context& ctx,
  * @brief One value of a type this bridge expresses - a codec type, an enum, a container of them,
  *        or a reflected struct - as JSON; nothing when it cannot.
  */
-auto meta_value_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>;
+auto meta_value_to_json(rtti::context& ctx, entt::meta_any& value) -> hpp::optional<std::string>;
 
 /**
  * @brief Reads @p value into @p target as a property write does: a struct merges the fields named,

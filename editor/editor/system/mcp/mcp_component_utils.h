@@ -7,7 +7,7 @@
 #include <context/context.hpp>
 #include <ser20/external/simdjson/simdjson.h>
 
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 #include <vector>
 
@@ -88,7 +88,7 @@ struct script_position
  * @brief Finds the script a selector names, counted as scripts_summary_json counts them.
  * @return Its position, or nullopt when the entity has no such script
  */
-auto find_script_position(entt::handle entity, const script_selector& script) -> std::optional<script_position>;
+auto find_script_position(entt::handle entity, const script_selector& script) -> hpp::optional<script_position>;
 
 /**
  * @brief Read typed properties for one component on an entity.

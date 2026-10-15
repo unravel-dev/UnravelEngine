@@ -9,6 +9,9 @@
 namespace unravel
 {
 
+SAVE_EXTERN(asset_generated_info);
+LOAD_EXTERN(asset_generated_info);
+
 SAVE_EXTERN(asset_meta);
 LOAD_EXTERN(asset_meta);
 

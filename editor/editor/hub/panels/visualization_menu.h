@@ -3,7 +3,7 @@
 
 #include <engine/rendering/pipeline/passes/gi_visualize_pass.h>
 
-#include <optional>
+#include <hpp/optional.hpp>
 #include <vector>
 
 struct ImVec2;
@@ -46,7 +46,7 @@ struct state
     gi_visualize_pass::world_settings gi{};
     /// The cursor those visualizations use in place of the mouse's (an MCP hook for repeatable captures);
     /// negative for the view's centre.
-    std::optional<math::vec2> gi_cursor_override{};
+    hpp::optional<math::vec2> gi_cursor_override{};
 };
 
 //-----------------------------------------------------------------------------

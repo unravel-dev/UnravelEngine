@@ -1,6 +1,7 @@
 #include "content_browser_item.h"
 
 #include <editor/imgui/integration/imgui.h>
+#include <editor/imgui/integration/imgui_style.h>
 #include <engine/assets/impl/asset_extensions.h>
 
 #include <imgui/imgui.h>
@@ -45,6 +46,9 @@ constexpr float BADGE_PADDING_Y = 1.0f;
 constexpr float BADGE_ROUNDING = 3.0f;
 constexpr ImU32 BADGE_BACKGROUND = IM_COL32(0, 0, 0, 165);
 constexpr ImU32 BADGE_TEXT_COLOR = IM_COL32(235, 236, 240, 255);
+/// The import mark of a generated asset sits in the thumbnail's top-left corner, a little larger than the summary.
+constexpr float IMPORT_BADGE_FONT_SCALE = 0.9f;
+constexpr float IMPORT_BADGE_EXTRA_PADDING = 1.0f;
 constexpr float SELECTED_RING_THICKNESS = 1.5f;
 constexpr float FOCUSED_RING_THICKNESS = 2.0f;
 constexpr float HOVERED_RING_THICKNESS = 1.0f;
@@ -352,6 +356,31 @@ void draw_card_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts
     }
     draw_list->AddRectFilled(badge_min, badge_max, BADGE_BACKGROUND, BADGE_ROUNDING);
     draw_list->AddText(fonts.name, font_size, badge_min + padding, BADGE_TEXT_COLOR, item.summary.c_str());
+}
+
+/// For an asset an import writes, an import mark on a dark rounded badge in the thumbnail's top-left corner, in
+/// the imported color; a pencil in the edited color once it was edited. Dropped when the card is too narrow.
+void draw_card_import_badge(ImDrawList* draw_list, const ImRect& well, const card_fonts& fonts, const content_browser_item& item)
+{
+    if(!item.is_generated || item.is_loading)
+    {
+        return;
+    }
+    const char* icon = item.is_generated_edited ? ICON_MDI_PENCIL_OUTLINE : ICON_MDI_IMPORT;
+    const ImU32 color =
+        item.is_generated_edited ? imgui_style::get_edited_import_color_u32() : imgui_style::get_imported_asset_color_u32();
+    const float font_size = fonts.panel_size * IMPORT_BADGE_FONT_SCALE;
+    const ImVec2 icon_size = fonts.name->CalcTextSizeA(font_size, FLT_MAX, 0.0f, icon);
+    const ImVec2 padding(BADGE_PADDING_Y + IMPORT_BADGE_EXTRA_PADDING, BADGE_PADDING_Y + IMPORT_BADGE_EXTRA_PADDING);
+    const ImRect area = get_thumbnail_area(well);
+    const ImVec2 badge_min = area.Min + ImVec2(BADGE_MARGIN, BADGE_MARGIN);
+    const ImVec2 badge_max = badge_min + icon_size + padding * 2.0f;
+    if(badge_max.x > area.Max.x - BADGE_MARGIN)
+    {
+        return;
+    }
+    draw_list->AddRectFilled(badge_min, badge_max, BADGE_BACKGROUND, BADGE_ROUNDING);
+    draw_list->AddText(fonts.name, font_size, badge_min + padding, color, icon);
 }
 
 /// A type's pill: its type in dark bold text on a pill of its accent color, shared by the card and the tooltip.
@@ -893,6 +922,7 @@ auto draw_content_card(const content_browser_item& item) -> bool
     content_card::draw_card_background(draw_list, layout, item, state);
     content_card::draw_card_thumbnail(draw_list, layout.well, item);
     content_card::draw_card_badge(draw_list, layout.well, fonts, item);
+    content_card::draw_card_import_badge(draw_list, layout.well, fonts, item);
     content_card::draw_card_labels(draw_list, layout, fonts, item);
     content_card::draw_card_ring(draw_list, layout, item, state);
     return is_pressed;

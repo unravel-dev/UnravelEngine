@@ -3,6 +3,10 @@
 #include <editor/imgui/integration/imgui.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <string_utils/utils.h>
+
+#include <algorithm>
+#include <iterator>
 
 namespace unravel
 {
@@ -139,6 +143,32 @@ auto draw_preset_card(const preset_card_info& info, float card_width, bool is_se
     return result;
 }
 
+constexpr const char* CREATE_SCENE_TITLE = "Create Scene";
+constexpr const char* CREATE_SCENE_MESSAGE = "Choose a preset for your new scene.";
+constexpr const char* CREATE_SCENE_CREATE_LABEL = "Create";
+constexpr const char* CREATE_SCENE_CANCEL_LABEL = "Cancel";
+
+auto is_answer_label(const std::string& label, const char* candidate) -> bool
+{
+    return string_utils::to_lower(label) == string_utils::to_lower(candidate);
+}
+
+/// A request withdrawn in code (a scene loaded, the project closed) leaves the popup open in ImGui,
+/// where it would still count as the dialog the editor waits on; it is closed here instead.
+void close_withdrawn_popup()
+{
+    ImGuiContext& g = *GImGui;
+    const ImGuiID popup_id = ImGui::GetID(CREATE_SCENE_TITLE);
+    for(int level = 0; level < g.OpenPopupStack.Size; ++level)
+    {
+        if(g.OpenPopupStack[level].PopupId == popup_id)
+        {
+            ImGui::ClosePopupToLevel(level, true);
+            return;
+        }
+    }
+}
+
 } // namespace
 
 void create_scene_modal::show(std::function<void(defaults::scene_preset)> on_preset_selected)
@@ -184,17 +214,62 @@ void create_scene_modal::cancel_if_pending()
     inst.open_requested_ = false;
 }
 
+auto create_scene_modal::answer_if_pending(const std::string& label) -> bool
+{
+    if(!is_pending())
+    {
+        return false;
+    }
+    if(is_answer_label(label, CREATE_SCENE_CANCEL_LABEL))
+    {
+        cancel_if_pending();
+        return true;
+    }
+    if(is_answer_label(label, CREATE_SCENE_CREATE_LABEL))
+    {
+        return complete_if_pending(get_instance().selected_preset_);
+    }
+    const auto card = std::find_if(std::begin(presets),
+                                   std::end(presets),
+                                   [&label](const preset_card_info& info)
+                                   {
+                                       return is_answer_label(label, info.title);
+                                   });
+    return card != std::end(presets) && complete_if_pending(card->preset);
+}
+
+auto create_scene_modal::get_answer_labels() -> std::vector<std::string>
+{
+    std::vector<std::string> labels{CREATE_SCENE_CREATE_LABEL, CREATE_SCENE_CANCEL_LABEL};
+    for(const auto& info : presets)
+    {
+        labels.emplace_back(info.title);
+    }
+    return labels;
+}
+
+auto create_scene_modal::get_title() -> const char*
+{
+    return CREATE_SCENE_TITLE;
+}
+
+auto create_scene_modal::get_message() -> const char*
+{
+    return CREATE_SCENE_MESSAGE;
+}
+
 void create_scene_modal::render()
 {
     auto& inst = get_instance();
     if(!inst.show_requested_)
     {
+        close_withdrawn_popup();
         return;
     }
 
     // if(inst.open_requested_)
     {
-        ImGui::OpenPopup("Create Scene");
+        ImGui::OpenPopup(CREATE_SCENE_TITLE);
         // inst.open_requested_ = false;
     }
 
@@ -210,7 +285,7 @@ void create_scene_modal::render()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12, 10));
 
-    if(!ImGui::BeginPopupModal("Create Scene", nullptr,
+    if(!ImGui::BeginPopupModal(CREATE_SCENE_TITLE, nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
     {
         ImGui::PopStyleVar(3);
@@ -218,7 +293,7 @@ void create_scene_modal::render()
     }
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.8f));
-    ImGui::TextWrapped("Choose a preset for your new scene.");
+    ImGui::TextWrapped("%s", CREATE_SCENE_MESSAGE);
     ImGui::PopStyleColor();
 
     ImGui::Spacing();
@@ -262,7 +337,7 @@ void create_scene_modal::render()
 
     ImGui::AlignedItem(1.0f, ImGui::GetContentRegionAvail().x, total_buttons_w, [&]() -> void
     {
-        if(ImGui::Button("Create", ImVec2(button_width, 30)) || should_confirm)
+        if(ImGui::Button(CREATE_SCENE_CREATE_LABEL, ImVec2(button_width, 30)) || should_confirm)
         {
             if(inst.callback_)
             {
@@ -274,7 +349,7 @@ void create_scene_modal::render()
 
         ImGui::SameLine();
 
-        if(ImGui::Button("Cancel", ImVec2(button_width, 30)))
+        if(ImGui::Button(CREATE_SCENE_CANCEL_LABEL, ImVec2(button_width, 30)))
         {
             ImGui::CloseCurrentPopup();
             inst.show_requested_ = false;

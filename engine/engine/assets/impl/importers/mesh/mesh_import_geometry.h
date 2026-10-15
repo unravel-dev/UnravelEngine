@@ -4,7 +4,7 @@
 
 #include <math/math.h>
 
-#include <optional>
+#include <hpp/optional.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -27,7 +27,7 @@ auto assign_node_indices(const aiScene* scene) -> node_index_lut_t;
  * @brief Per submesh, the transform from the node holding it to the space its vertices were
  * re-expressed in to share one bind pose per bone; nullopt for vertices left in the node's space.
  */
-using submesh_placements_t = std::vector<std::optional<math::transform>>;
+using submesh_placements_t = std::vector<hpp::optional<math::transform>>;
 
 /**
  * @brief Append every scene mesh as a submesh: vertices, triangles, bones and a stable id.

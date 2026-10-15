@@ -6,7 +6,7 @@
 #include <reflection/reflection.h>
 #include <serialization/serialization.h>
 
-#include <string_view>
+#include <hpp/string_view.hpp>
 
 #include <engine/ecs/components/prefab_component.h>
 

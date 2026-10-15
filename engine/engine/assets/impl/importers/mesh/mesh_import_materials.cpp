@@ -20,7 +20,7 @@
 #include <assimp/scene.h>
 
 #include <array>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <unordered_set>
 
 namespace unravel
@@ -497,7 +497,7 @@ private:
     /// The texture asset for @p relative, its .meta tagged with @p colorspace; nullopt (logged) when unbindable.
     auto load_texture_map(const std::string& relative,
                           texture_importer_meta::color_space colorspace,
-                          const char* label) -> std::optional<texture_handle_t>
+                          const char* label) -> hpp::optional<texture_handle_t>
     {
         const auto key = try_make_texture_asset_key(ctx_.output_dir, relative);
         if(!key)

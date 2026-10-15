@@ -1,7 +1,7 @@
 #include "prefab_component.h"
 
 #include <algorithm>
-#include <string_view>
+#include <hpp/string_view.hpp>
 #include <uuid/uuid.h>
 
 namespace unravel

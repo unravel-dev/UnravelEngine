@@ -48,6 +48,7 @@ public:
     auto get_scene_panel() -> scene_panel&;
     auto get_game_panel() -> game_panel&;
     auto get_console_log_panel() -> console_log_panel&;
+    auto get_content_browser_panel() -> content_browser_panel&;
     auto get_style_panel() -> style_panel&;
     auto get_undo_redo_panel() -> undo_redo_panel&;
     auto get_animation_panel() -> animation_panel&;

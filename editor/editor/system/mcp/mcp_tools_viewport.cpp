@@ -145,7 +145,7 @@ constexpr int64_t MAX_RENDER_SIZE = 8192;
 
 /// Sets the Game panel's forced render size on the main thread; returns the size it replaced.
 auto exchange_game_render_size(mcp_manager& mcp, rtti::context& ctx, std::pair<uint32_t, uint32_t> size)
-    -> std::optional<std::pair<uint32_t, uint32_t>>
+    -> hpp::optional<std::pair<uint32_t, uint32_t>>
 {
     return mcp.invoke_on_main(
         [&ctx, size]() -> std::pair<uint32_t, uint32_t>
@@ -992,7 +992,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  math::vec3 position{};
                  math::quat rotation{};
              };
-             std::optional<camera_pose> start_pose;
+             hpp::optional<camera_pose> start_pose;
              auto armed = mcp.invoke_on_main(
                  [&]() -> bool
                  {

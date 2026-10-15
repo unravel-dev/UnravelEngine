@@ -471,7 +471,7 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
         return mcp::make_json_rpc_error(std::nullopt, k_parse_error, parse_error);
     }
 
-    std::optional<std::string> id = request.has_id ? request.id_json : std::nullopt;
+    hpp::optional<std::string> id = request.has_id ? request.id_json : std::nullopt;
 
     if(request.method == "initialize")
     {
@@ -592,7 +592,7 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
 
 auto mcp_manager::execute_tool_call(const std::string& tool_name,
                                     const std::string& args_json,
-                                    const std::optional<std::string>& id) -> std::string
+                                    const hpp::optional<std::string>& id) -> std::string
 {
     const auto* tool = registry_.find(tool_name);
     if(!tool || !ctx_)

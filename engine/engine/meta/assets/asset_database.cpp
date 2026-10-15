@@ -84,12 +84,34 @@ auto load_from_file_bin(const std::string& absolute_path, asset_database& obj) -
 
 
 
+SAVE(asset_generated_info)
+{
+    try_save(ar, ser20::make_nvp("source_uid", obj.source_uid));
+    try_save(ar, ser20::make_nvp("fingerprint", obj.fingerprint));
+}
+SAVE_INSTANTIATE(asset_generated_info, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(asset_generated_info, ser20::oarchive_binary_t);
+
+LOAD(asset_generated_info)
+{
+    try_load(ar, ser20::make_nvp("source_uid", obj.source_uid));
+    try_load(ar, ser20::make_nvp("fingerprint", obj.fingerprint));
+}
+LOAD_INSTANTIATE(asset_generated_info, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(asset_generated_info, ser20::iarchive_binary_t);
+
 SAVE(asset_meta)
 {
     try_save(ar, ser20::make_nvp("type", obj.type));
     try_save(ar, ser20::make_nvp("uid", obj.uid));
     try_save(ar, ser20::make_nvp("importer", obj.importer));
     try_save(ar, ser20::make_nvp("header", obj.header));
+    // Only generated assets carry the record, so every other .meta keeps its bytes - and with them its
+    // asset's source fingerprint, which a changed .meta would invalidate.
+    if(is_binary_archive<Archive>() || obj.generated.is_generated())
+    {
+        try_save(ar, ser20::make_nvp("generated", obj.generated));
+    }
 }
 SAVE_INSTANTIATE(asset_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(asset_meta, ser20::oarchive_binary_t);
@@ -100,6 +122,7 @@ LOAD(asset_meta)
     try_load(ar, ser20::make_nvp("uid", obj.uid));
     try_load(ar, ser20::make_nvp("importer", obj.importer));
     try_load(ar, ser20::make_nvp("header", obj.header));
+    try_load(ar, ser20::make_nvp("generated", obj.generated));
 }
 LOAD_INSTANTIATE(asset_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(asset_meta, ser20::iarchive_binary_t);

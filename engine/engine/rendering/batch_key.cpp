@@ -64,7 +64,7 @@ shadow_batch_key::shadow_batch_key(std::shared_ptr<mesh> mesh,
                                    uint32_t lod,
                                    uint32_t submesh,
                                    cull_type cull_type,
-                                   std::optional<shadow_cutout_state> cutout_state)
+                                   hpp::optional<shadow_cutout_state> cutout_state)
     : mesh_ptr(std::move(mesh))
     , lod_index(lod)
     , submesh_index(submesh)
@@ -88,8 +88,8 @@ auto compare_float(float lhs, float rhs) -> std::strong_ordering
     return std::strong_ordering::equal;
 }
 
-auto compare_shadow_cutout(const std::optional<shadow_cutout_state>& a,
-                           const std::optional<shadow_cutout_state>& b) -> std::strong_ordering
+auto compare_shadow_cutout(const hpp::optional<shadow_cutout_state>& a,
+                           const hpp::optional<shadow_cutout_state>& b) -> std::strong_ordering
 {
     if(a.has_value() != b.has_value())
     {
@@ -208,7 +208,7 @@ auto make_shadow_batch_key(const std::shared_ptr<mesh>& mesh_ptr,
                            const std::shared_ptr<material>& material_ptr) -> shadow_batch_key
 {
     cull_type cull = cull_type::counter_clockwise;
-    std::optional<shadow_cutout_state> cutout;
+    hpp::optional<shadow_cutout_state> cutout;
     if(material_ptr)
     {
         cull = material_ptr->get_cull_type();

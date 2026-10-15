@@ -294,7 +294,7 @@ auto global_sdf_clipmap::is_partial_update_due(uint32_t index, uint64_t update_i
 auto global_sdf_clipmap::plan_partial_update(uint32_t index,
                                              const math::vec3& target_origin,
                                              const std::vector<composed_entry>& entries) const
-    -> std::optional<level_plan>
+    -> hpp::optional<level_plan>
 {
     const auto& lvl = levels_[index];
     if(!settings_.partial_updates || !lvl.has_composed_entries)
@@ -449,7 +449,7 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
     // Pass one: decide what each level SHOULD be, how it gets there and how stale it is. Nothing is composed here,
     // so the budget below chooses between levels knowing all of them.
     std::array<math::vec3, level_count> target_origin{};
-    std::array<std::optional<level_plan>, level_count> partial_plans{};
+    std::array<hpp::optional<level_plan>, level_count> partial_plans{};
     for(uint32_t i = 0; i < level_count; ++i)
     {
         auto& lvl = levels_[i];

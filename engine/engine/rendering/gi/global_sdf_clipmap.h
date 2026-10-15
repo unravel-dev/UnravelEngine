@@ -7,7 +7,7 @@
 
 #include <array>
 #include <cstdint>
-#include <optional>
+#include <hpp/optional.hpp>
 #include <vector>
 
 namespace unravel
@@ -393,7 +393,7 @@ private:
     /// none (full recompose) when the level has no composed set, the move leaves no overlap, or the changes exceed the
     /// partial limits.
     auto plan_partial_update(uint32_t index, const math::vec3& target_origin, const std::vector<composed_entry>& entries)
-        const -> std::optional<level_plan>;
+        const -> hpp::optional<level_plan>;
 
     /// World-space region a level covers, given its origin.
     auto compute_level_bounds(uint32_t index, const math::vec3& origin) const -> math::bbox;

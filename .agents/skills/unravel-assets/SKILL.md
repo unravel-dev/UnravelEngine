@@ -70,6 +70,7 @@ Context menu actions in `content_browser_panel.cpp`.
 | `assets_list_batch` | List by protocol (`app`/`engine`/`editor`); optional `type`, `limit` (default 200) |
 | `assets_find_batch` | Prefer for search: `protocol` (incl. `all`), `type`, `prefix`, `name_contains`, `limit` |
 | `assets_get_batch` | Metadata for many (`items`: `key` / `uid`) |
+| `assets_reveal` | Show a file or folder in the Content Browser (locate-button parity: opens its folder, scrolls, rings it) |
 | `assets_list_types` | Known extensions (`.mat`, `.pfb`, `.emesh`, ...) |
 | `assets_list_embedded_primitives` | Names for `scene_create_primitives_batch` |
 | `assets_create_folder` | Create folder under protocol path |

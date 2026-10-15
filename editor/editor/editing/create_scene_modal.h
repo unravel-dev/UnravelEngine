@@ -2,6 +2,8 @@
 
 #include <engine/defaults/defaults.h>
 #include <functional>
+#include <string>
+#include <vector>
 
 namespace unravel
 {
@@ -34,6 +36,17 @@ public:
 
     /// Dismiss a pending create-scene modal without invoking the callback.
     static void cancel_if_pending();
+
+    /// Headless path (MCP): answer a pending modal as a click on the button or preset card labelled
+    /// @p label would ("Create", "Cancel", "Standard", ..., case-insensitive). False when nothing is
+    /// pending or no button or card has that label.
+    static auto answer_if_pending(const std::string& label) -> bool;
+
+    /// The labels answer_if_pending takes: the two buttons, then the preset cards.
+    static auto get_answer_labels() -> std::vector<std::string>;
+
+    static auto get_title() -> const char*;
+    static auto get_message() -> const char*;
 
 private:
     create_scene_modal() = default;

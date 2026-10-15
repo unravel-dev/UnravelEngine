@@ -35,6 +35,7 @@
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
+#include <editor/imgui/integration/imgui_style.h>
 
 #include <filesystem/filesystem.h>
 #include <algorithm>
@@ -414,7 +415,8 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
 
 void inspector_asset_handle_texture::draw_image(const asset_handle<gfx::texture>& data, ImVec2 size)
 {
-    if(data.is_ready())
+    // try_get, not is_ready: it also starts the load of a texture nothing has loaded yet.
+    if(data.try_get())
     {
         auto sz = ImGui::GetSize(data, size);
         ImGui::ImageWithAspect(ImGui::ToId(data, inspected_mip_), sz, size);
@@ -483,7 +485,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
 
             draw_image(data, available);
 
-            if(data.is_ready())
+            if(data.try_get())
             {
                 var_info tex_var_info;
                 tex_var_info.read_only = true;
@@ -569,7 +571,15 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
 
     inspect_result result{};
 
-    if(data.is_ready())
+    inspect_import_origin(ctx, data);
+    // try_get, not is_ready: it also starts the load of a material nothing has loaded yet.
+    const auto loaded = data.try_get();
+    if(asset_handle<material>::is_empty(loaded))
+    {
+        // A failed load hands out the shared empty material; editing it would write that over the file.
+        ImGui::TextColored(imgui_style::get_muted_text_color(), "This material could not be loaded.");
+    }
+    else if(loaded)
     {
         auto data_var_proxy = make_mutable_asset_proxy<material>(var, var_proxy);
 
@@ -591,6 +601,86 @@ auto inspector_asset_handle_material::inspect(rtti::context& ctx,
     }
 
     return result;
+}
+
+namespace
+{
+constexpr float IMPORT_BANNER_ROUNDING = 4.0f;
+constexpr float IMPORT_BANNER_ICON_GAP_EM = 0.4f;
+/// The banner is tinted with its color at this alpha, as the inspector's notes are.
+constexpr float IMPORT_BANNER_BACKGROUND_ALPHA = 0.12f;
+constexpr const char* MISSING_SOURCE_NAME = "a model no longer in the project";
+
+/// The icon in the banner's color at the cursor; the cursor moves past it, to where the text starts.
+void draw_import_banner_icon(const char* icon, ImU32 color)
+{
+    const float icon_width = ImGui::GetFontSize();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
+                              ImVec2(min.x + icon_width * 0.5f, min.y + ImGui::GetTextLineHeight() * 0.5f),
+                              icon,
+                              color);
+    ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width * (1.0f + IMPORT_BANNER_ICON_GAP_EM), min.y));
+}
+
+/// A bold title over a muted, wrapped message.
+void draw_import_banner_text(const std::string& title, const std::string& message)
+{
+    ImGui::PushFont(ImGui::Font::Bold);
+    ImGui::TextUnformatted(title.c_str());
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(message.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+}
+
+/// The banner's text and, for an edited asset, Reset to Imported.
+void draw_import_banner_body(rtti::context& ctx, const asset_actions::generated_status& status, const std::string& key)
+{
+    const std::string source = status.source_name.empty() ? MISSING_SOURCE_NAME : status.source_name;
+    if(!status.is_edited)
+    {
+        draw_import_banner_text("Imported from " + source,
+                                "Each reimport of " + source + " rewrites this material until it is edited.");
+        return;
+    }
+    draw_import_banner_text("Edited import of " + source, "Reimports of " + source + " keep these changes.");
+    if(ImGui::Button(ICON_MDI_RESTORE " Reset to Imported"))
+    {
+        asset_actions::reset_to_imported(ctx, key);
+    }
+    ImGui::SetItemTooltipEx("Discards the edits and reimports %s.", source.c_str());
+}
+} // namespace
+
+void inspector_asset_handle_material::inspect_import_origin(rtti::context& ctx, const asset_handle<material>& data)
+{
+    const auto status = asset_actions::get_generated_status(ctx.get_cached<asset_manager>(), data.uid());
+    if(!status.is_generated)
+    {
+        return;
+    }
+    const ImU32 color =
+        status.is_edited ? imgui_style::get_edited_import_color_u32() : imgui_style::get_imported_asset_color_u32();
+    ImVec4 background = ImGui::ColorConvertU32ToFloat4(color);
+    background.w = IMPORT_BANNER_BACKGROUND_ALPHA;
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, IMPORT_BANNER_ROUNDING);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImGui::GetStyle().FramePadding);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+    if(ImGui::BeginChild("##import_banner",
+                         ImVec2(0.0f, 0.0f),
+                         ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY))
+    {
+        draw_import_banner_icon(status.is_edited ? ICON_MDI_PENCIL_OUTLINE : ICON_MDI_IMPORT, color);
+        ImGui::BeginGroup();
+        draw_import_banner_body(ctx, status, data.id());
+        ImGui::EndGroup();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
 }
 
 auto inspector_shared_material::inspect(rtti::context& ctx,

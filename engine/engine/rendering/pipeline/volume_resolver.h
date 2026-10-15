@@ -13,7 +13,7 @@
 #include <engine/rendering/pipeline/passes/taa_pass.h>
 #include <entt/entt.hpp>
 #include <math/math.h>
-#include <optional>
+#include <hpp/optional.hpp>
 
 namespace unravel
 {

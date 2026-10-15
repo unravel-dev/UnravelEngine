@@ -237,6 +237,25 @@ struct audio_header_info : crtp_meta_type<audio_header_info, asset_header_info>
 };
 
 /**
+ * @struct asset_generated_info
+ * @brief Marks an asset an importer writes as a by-product of another asset, such as a model's default
+ *        materials. The importer rewrites it only while it still holds what the importer last wrote.
+ */
+struct asset_generated_info
+{
+    /// The asset whose import writes this one. Nil when the asset is not generated.
+    hpp::uuid source_uid{};
+    /// Fingerprint of the content the import last wrote. A file that no longer matches it was edited,
+    /// and the import keeps it as it is.
+    std::string fingerprint{};
+
+    auto is_generated() const -> bool
+    {
+        return !source_uid.is_nil();
+    }
+};
+
+/**
  * @struct asset_meta
  * @brief Metadata for an asset, including its UUID and type.
  */
@@ -250,6 +269,8 @@ struct asset_meta
     std::shared_ptr<asset_importer_meta> importer;
     /// Per-type header info (editor only, populated during compilation).
     std::shared_ptr<asset_header_info> header;
+    /// Set when an importer writes this asset as a by-product of another one.
+    asset_generated_info generated;
 };
 
 /**

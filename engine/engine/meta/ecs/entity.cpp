@@ -25,7 +25,7 @@
 #include <algorithm>
 #include <charconv>
 #include <set>
-#include <string_view>
+#include <hpp/string_view.hpp>
 #include <hpp/utility.hpp>
 #include <sstream>
 #include <utility>

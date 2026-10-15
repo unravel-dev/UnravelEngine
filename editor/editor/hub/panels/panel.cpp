@@ -213,6 +213,11 @@ auto imgui_panels::get_console_log_panel() -> console_log_panel&
     return *console_log_panel_;
 }
 
+auto imgui_panels::get_content_browser_panel() -> content_browser_panel&
+{
+    return *content_browser_panel_;
+}
+
 auto imgui_panels::get_style_panel() -> style_panel&
 {
     return *style_panel_;

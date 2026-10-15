@@ -119,13 +119,13 @@ auto make_json_string(const std::string& value) -> std::string
     return "\"" + json_escape(value) + "\"";
 }
 
-auto make_json_rpc_result(const std::optional<std::string>& id_json, const std::string& result_json) -> std::string
+auto make_json_rpc_result(const hpp::optional<std::string>& id_json, const std::string& result_json) -> std::string
 {
     const std::string id = id_json ? *id_json : "null";
     return fmt::format(R"({{"jsonrpc":"2.0","id":{},"result":{}}})", id, result_json);
 }
 
-auto make_json_rpc_error(const std::optional<std::string>& id_json, int code, const std::string& message) -> std::string
+auto make_json_rpc_error(const hpp::optional<std::string>& id_json, int code, const std::string& message) -> std::string
 {
     const std::string id = id_json ? *id_json : "null";
     return fmt::format(R"({{"jsonrpc":"2.0","id":{},"error":{{"code":{},"message":{}}}}})",

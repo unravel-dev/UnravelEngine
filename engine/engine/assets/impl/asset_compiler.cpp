@@ -2,6 +2,7 @@
 #include "asset_dependencies.h"
 #include "asset_writer.h"
 #include "asset_manifest.h"
+#include "generated_asset.h"
 #include "bimg/bimg.h"
 #include "importers/mesh_importer.h"
 
@@ -84,6 +85,31 @@ auto resolve_input_file(const fs::path& key) -> fs::path
         absolute_path.replace_extension();
     }
     return absolute_path;
+}
+
+/// The id of the asset whose .meta is @p key: from the .meta itself, else from the database.
+auto get_source_uid(asset_manager& am, const fs::path& key, const fs::path& source_path) -> hpp::uuid
+{
+    asset_meta meta;
+    if(load_from_file(fs::resolve_protocol(key).string(), meta) && !meta.uid.is_nil())
+    {
+        return meta.uid;
+    }
+    return am.get_metadata_for_path(source_path).meta.uid;
+}
+
+/**
+ * @brief Where a model writes its default material @p material_name: next to the model and named after it, so
+ * two models in one folder never write the same file. An unnamed material takes the model's own name.
+ */
+auto get_default_material_path(const fs::path& dir, const fs::path& model_stem, const std::string& material_name)
+    -> fs::path
+{
+    if(material_name.empty())
+    {
+        return (dir / model_stem).string() + ".mat";
+    }
+    return dir / (model_stem.string() + "_" + material_name + ".mat");
 }
 
 auto escape_str(const std::string& str) -> std::string
@@ -1751,23 +1777,41 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     // Save materials and register their UIDs before writing the mesh binary
     data.default_material_uids.reserve(materials.size());
     APPLOG_INFO("Adding default material UIDs for {0}", str_input);
+    const auto source_uid = get_source_uid(am, key, absolute_path);
+    std::vector<std::string> kept_material_names;
     for(const auto& material : materials)
     {
-        fs::path mat_output;
-        if(material.name.empty())
+        const auto mat_output = get_default_material_path(dir, file, material.name);
+        if(!material.name.empty())
         {
-            mat_output = (dir / file).string() + ".mat";
-        }
-        else
-        {
-            mat_output = dir / (material.name + ".mat");
+            generated_asset::adopt_former_file(am, dir / (material.name + ".mat"), mat_output);
         }
         auto uid = am.add_asset_for_path(mat_output, false);
         data.default_material_uids.push_back(uid);
-        write_output(mat_output, [&](const fs::path& temp) -> void
+        const auto result = generated_asset::write_file(am,
+                                                        mat_output,
+                                                        uid,
+                                                        source_uid,
+                                                        [&](const fs::path& temp)
+                                                        {
+                                                            save_to_file(temp.string(), material.mat);
+                                                        });
+        if(result == generated_asset::write_result::failed)
         {
-            save_to_file(temp.string(), material.mat);
-        });
+            has_write_error = true;
+        }
+        else if(result == generated_asset::write_result::kept_edited)
+        {
+            kept_material_names.push_back(mat_output.filename().string());
+        }
+    }
+    if(!kept_material_names.empty())
+    {
+        APPLOG_INFO("{0}: kept {1} edited default material(s) as they are: {2}. Reset to Imported in a "
+                    "material's inspector takes the import again.",
+                    str_input,
+                    kept_material_names.size(),
+                    fmt::join(kept_material_names, ", "));
     }
     write_output(output, [&](const fs::path& temp) -> void
     {

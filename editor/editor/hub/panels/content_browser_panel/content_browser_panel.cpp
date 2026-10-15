@@ -43,7 +43,7 @@
 #include <filedialog/filedialog.h>
 #include <filesystem/watcher.h>
 #include <algorithm>
-#include <filesystem>
+#include <hpp/filesystem.hpp>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -198,6 +198,19 @@ void process_drag_drop_target(const fs::path& absolute_path)
         }
         ImGui::EndDragDropTarget();
     }
+}
+
+/// The tooltip section of an asset an import writes: where it comes from and what a reimport does to it.
+void collect_generated_details(const asset_actions::generated_status& status, content_item_sections& sections)
+{
+    if(!status.is_generated)
+    {
+        return;
+    }
+    content_item_section section{"Import"};
+    section.add("Source", status.source_name.empty() ? "No longer in the project" : status.source_name);
+    section.add("On Reimport", status.is_edited ? "Kept as edited" : "Rewritten until edited");
+    sections.push_back(std::move(section));
 }
 
 // A unity build merges the anonymous namespaces of the editor's sources; the grid entry helpers' own
@@ -1244,9 +1257,13 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
     item.is_focused = em.is_focused(entry);
     item.is_loading = !entry.is_ready();
     item.summary = get_asset_summary(entry);
-    item.collect_details = [entry](content_item_sections& sections)
+    const auto generated = asset_actions::get_generated_status(am, item.uid);
+    item.is_generated = generated.is_generated;
+    item.is_generated_edited = generated.is_edited;
+    item.collect_details = [entry, generated](content_item_sections& sections)
     {
         collect_asset_details(entry, sections);
+        collect_generated_details(generated, sections);
     };
     item.on_click = [&em, entry, &item]()
     {

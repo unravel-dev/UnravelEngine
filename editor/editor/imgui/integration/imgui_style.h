@@ -25,6 +25,16 @@ auto get_muted_text_color_u32() -> ImU32;
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// The colors that mark an asset an import writes, such as a model's default material: one
+/// while imports still rewrite it, one once it is edited and imports keep it. The inspector
+/// and the content browser mark it the same way.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_imported_asset_color_u32() -> ImU32;
+auto get_edited_import_color_u32() -> ImU32;
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// The themes of the editor, in the order the Style window lists them: the neutral ones, the
 /// cool ones, the warm ones.
 /// </summary>

@@ -9,7 +9,7 @@
 #include <cctype>
 #include <map>
 #include <string>
-#include <string_view>
+#include <hpp/string_view.hpp>
 #include <vector>
 
 namespace unravel::mcp
