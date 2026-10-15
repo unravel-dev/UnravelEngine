@@ -199,7 +199,7 @@ auto try_make_texture_asset_key(const fs::path& output_dir, const std::string& r
 
 auto replace_invalid_file_name_characters(std::string name) -> std::string
 {
-    constexpr std::string_view invalid_characters = "<>:\"/\\|?*";
+    constexpr hpp::string_view invalid_characters = "<>:\"/\\|?*";
     constexpr unsigned char first_printable_character = 0x20;
     std::replace_if(
         name.begin(),
@@ -207,7 +207,7 @@ auto replace_invalid_file_name_characters(std::string name) -> std::string
         [&](char c)
         {
             return static_cast<unsigned char>(c) < first_printable_character
-                   || invalid_characters.find(c) != std::string_view::npos;
+                   || invalid_characters.find(c) != hpp::string_view::npos;
         },
         '_');
     return name;

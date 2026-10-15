@@ -831,7 +831,7 @@ void register_editor_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
                  std::string prefix;
-                 std::string_view prefix_view;
+                 hpp::string_view prefix_view;
                  if(!args["prefix"].get(prefix_view))
                  {
                      prefix = std::string(prefix_view);

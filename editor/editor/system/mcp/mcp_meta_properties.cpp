@@ -665,7 +665,7 @@ auto make_alignment_codec() -> value_codec
                 }
                 const auto* current = out.try_cast<alignment>();
                 alignment result = current != nullptr ? *current : alignment{};
-                std::string_view name;
+                hpp::string_view name;
                 uint32_t flag{};
                 if(fields["horizontal"].get_string().get(name) == simdjson::SUCCESS)
                 {
@@ -719,7 +719,7 @@ auto make_text_style_flags_codec() -> value_codec
                 text_style_flags result{gfx::style_normal};
                 for(auto item : items)
                 {
-                    std::string_view name;
+                    hpp::string_view name;
                     uint32_t flag{};
                     if(item.get_string().get(name) != simdjson::SUCCESS)
                     {
@@ -796,7 +796,7 @@ auto make_physics_shape_codec() -> value_codec
                 -> bool
             {
                 simdjson::dom::object fields;
-                std::string_view type_name;
+                hpp::string_view type_name;
                 if(element.get_object().get(fields) != simdjson::SUCCESS ||
                    fields["type"].get_string().get(type_name) != simdjson::SUCCESS)
                 {
@@ -1096,7 +1096,7 @@ auto enum_from_json(const simdjson::dom::element& element,
                     entt::meta_any& out,
                     std::string& error) -> bool
 {
-    std::string_view name;
+    hpp::string_view name;
     if(element.get_string().get(name) != simdjson::SUCCESS)
     {
         error = "expected one of " + fmt::format("{}", fmt::join(enum_value_names(type), ", "));
@@ -1111,7 +1111,7 @@ auto schema_type_of(const entt::meta_type& type) -> const char*;
 /// A container's elements as a JSON array; nothing when its element type cannot be spelled, empty or not.
 auto sequence_to_json(rtti::context& ctx, entt::meta_any& value) -> std::optional<std::string>
 {
-    if(std::string_view(schema_type_of(value.type())) == "unsupported")
+    if(hpp::string_view(schema_type_of(value.type())) == "unsupported")
     {
         return std::nullopt;
     }
@@ -1192,7 +1192,7 @@ auto schema_type_of(const entt::meta_type& type) -> const char*
     }
     if(type.is_sequence_container())
     {
-        return std::string_view(schema_type_of(element_type_of(type))) == "unsupported" ? "unsupported" : "array";
+        return hpp::string_view(schema_type_of(element_type_of(type))) == "unsupported" ? "unsupported" : "array";
     }
     if(is_nested_object(type))
     {
@@ -1419,7 +1419,7 @@ auto layer_mask_to_json(rtti::context& ctx, const layer_mask& mask) -> std::stri
 auto parse_layer_mask(rtti::context& ctx, const simdjson::dom::element& value, layer_mask& out, std::string& error)
     -> bool
 {
-    std::string_view word;
+    hpp::string_view word;
     if(value.get_string().get(word) == simdjson::SUCCESS)
     {
         if(word == "everything" || word == "nothing")
@@ -1441,7 +1441,7 @@ auto parse_layer_mask(rtti::context& ctx, const simdjson::dom::element& value, l
     for(auto item : items)
     {
         int64_t index = -1;
-        std::string_view name;
+        hpp::string_view name;
         if(item.get_int64().get(index) == simdjson::SUCCESS)
         {
             if(index < 0 || index >= static_cast<int64_t>(names.size()))
@@ -1574,13 +1574,13 @@ auto count_meta_properties(const entt::meta_type& type) -> size_t
                            [&count](const entt::meta_data& prop)
                            {
                                const bool is_expressible = !entt::get_name(prop).empty() &&
-                                                           std::string_view(schema_type_of(prop.type())) != "unsupported";
+                                                           hpp::string_view(schema_type_of(prop.type())) != "unsupported";
                                count += is_expressible ? 1 : 0;
                            });
     return count;
 }
 
-auto find_meta_property(const entt::meta_type& type, std::string_view name) -> entt::meta_data
+auto find_meta_property(const entt::meta_type& type, hpp::string_view name) -> entt::meta_data
 {
     entt::meta_data found;
     for_each_meta_property(type,
@@ -1631,7 +1631,7 @@ auto object_properties_schema(const entt::meta_type& type) -> std::string
                            [&properties](const entt::meta_data& prop)
                            {
                                const auto name = entt::get_name(prop);
-                               if(!name.empty() && std::string_view(schema_type_of(prop.type())) != "unsupported")
+                               if(!name.empty() && hpp::string_view(schema_type_of(prop.type())) != "unsupported")
                                {
                                    properties += (properties.empty() ? "" : ",") + make_json_string(name) + ":{" +
                                                  meta_property_schema(prop) + "}";

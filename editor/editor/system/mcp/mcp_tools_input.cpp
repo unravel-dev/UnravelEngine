@@ -65,7 +65,7 @@ auto virtual_pointer(rtti::context& ctx) -> input::coord
     return position != nullptr && *position ? **position : input::coord{};
 }
 
-auto parse_mouse_button(std::string_view name, os::mouse::button& out) -> bool
+auto parse_mouse_button(hpp::string_view name, os::mouse::button& out) -> bool
 {
     constexpr std::pair<const char*, os::mouse::button> buttons[] = {{"left", os::mouse::button::left},
                                                                      {"right", os::mouse::button::right},
@@ -178,7 +178,7 @@ auto take_modifier_prefix(std::string& name, key_request& request) -> bool
 
 auto read_key_request(const simdjson::dom::element& item, key_request& request, std::string& error) -> bool
 {
-    std::string_view name;
+    hpp::string_view name;
     simdjson::dom::object object;
     if(item.get_string().get(name) != simdjson::SUCCESS)
     {

@@ -99,7 +99,7 @@ auto to_string(mcp_profile profile) -> const char*
     return profile == mcp_profile::developer ? "developer" : "user";
 }
 
-auto parse_mcp_profile(std::string_view name, mcp_profile& out) -> bool
+auto parse_mcp_profile(hpp::string_view name, mcp_profile& out) -> bool
 {
     if(name == "user")
     {

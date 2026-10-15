@@ -68,7 +68,7 @@ inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::strin
 
 inline auto read_string(const simdjson::dom::object& args, const char* key, std::string& out) -> bool
 {
-    std::string_view view;
+    hpp::string_view view;
     if(args[key].get(view))
     {
         return false;
@@ -297,7 +297,7 @@ inline auto parse_string(const simdjson::dom::element& value, std::string& out, 
         out.clear();
         return true;
     }
-    std::string_view view;
+    hpp::string_view view;
     if(value.get(view))
     {
         error = "Expected string or null";
@@ -320,7 +320,7 @@ inline auto parse_string_array(const simdjson::dom::element& value,
     }
     for(auto el : arr)
     {
-        std::string_view view;
+        hpp::string_view view;
         if(el.get(view))
         {
             error = std::string(key) + " must be strings";
@@ -794,7 +794,7 @@ inline auto to_lower_ascii(std::string value) -> std::string
     return value;
 }
 
-inline auto contains_ci(std::string_view haystack, std::string_view needle) -> bool
+inline auto contains_ci(hpp::string_view haystack, hpp::string_view needle) -> bool
 {
     if(needle.empty())
     {
@@ -805,12 +805,12 @@ inline auto contains_ci(std::string_view haystack, std::string_view needle) -> b
     return h.find(n) != std::string::npos;
 }
 
-inline auto starts_with(std::string_view value, std::string_view prefix) -> bool
+inline auto starts_with(hpp::string_view value, hpp::string_view prefix) -> bool
 {
     return value.size() >= prefix.size() && value.compare(0, prefix.size(), prefix) == 0;
 }
 
-inline auto ends_with_ci(std::string_view value, std::string_view suffix) -> bool
+inline auto ends_with_ci(hpp::string_view value, hpp::string_view suffix) -> bool
 {
     if(suffix.size() > value.size())
     {

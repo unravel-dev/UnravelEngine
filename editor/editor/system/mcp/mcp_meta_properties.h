@@ -84,7 +84,7 @@ auto find_meta_enum_value(const entt::meta_type& type, hpp::string_view name, en
     -> bool;
 
 /// The reflected property of `type` whose "name" attribute is `name`; empty when there is none.
-auto find_meta_property(const entt::meta_type& type, std::string_view name) -> entt::meta_data;
+auto find_meta_property(const entt::meta_type& type, hpp::string_view name) -> entt::meta_data;
 
 /**
  * @brief Schema fields for one reflected property (no braces): "type", plus "enum", "minimum",

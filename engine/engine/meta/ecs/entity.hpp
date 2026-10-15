@@ -346,10 +346,10 @@ auto atomic_save_to_file(const fs::path& key, entt::const_handle obj) -> bool;
 auto atomic_save_to_file(const fs::path& key, entt::handle obj) -> bool;
 } // namespace asset_writer
 
-void load_from_view(std::string_view view, entt::registry& obj);
+void load_from_view(hpp::string_view view, entt::registry& obj);
 void load_from_stream(std::istream& stream, entt::registry& obj);
 
-void load_from_view(std::string_view view, entt::handle& obj);
+void load_from_view(hpp::string_view view, entt::handle& obj);
 void load_from_stream(std::istream& stream, entt::handle& obj);
 void load_from_file(const std::string& absolute_path, entt::handle& obj);
 void load_from_stream_bin(std::istream& stream, entt::handle& obj);
@@ -448,7 +448,7 @@ void save_to_file(const std::string& absolute_path, const scene& scn);
 void save_to_stream_bin(std::ostream& stream, const scene& scn);
 void save_to_file_bin(const std::string& absolute_path, const scene& scn);
 
-void load_from_view(std::string_view view, scene& scn);
+void load_from_view(hpp::string_view view, scene& scn);
 void load_from_stream(std::istream& stream, scene& scn);
 
 void load_from_file(const std::string& absolute_path, scene& scn);

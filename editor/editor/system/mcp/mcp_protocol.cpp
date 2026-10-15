@@ -198,7 +198,7 @@ auto parse_json_rpc_request(const std::string& body, json_rpc_request& out, std:
         return false;
     }
 
-    std::string_view method;
+    hpp::string_view method;
     if(obj["method"].get(method))
     {
         error = "Missing JSON-RPC method";

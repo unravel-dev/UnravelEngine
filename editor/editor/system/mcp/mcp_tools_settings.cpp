@@ -24,8 +24,8 @@ namespace
 /// its description all come from the settings reflection the Project Settings window draws.
 struct reflected_row
 {
-    std::string_view group;
-    std::string_view name;
+    hpp::string_view group;
+    hpp::string_view name;
     /// Stored immediately, but only applied at process start.
     bool cold{false};
 };
@@ -59,8 +59,8 @@ auto reflected_rows() -> const std::vector<reflected_row>&
 /// array with engine-owned slots.
 struct custom_row
 {
-    std::string_view group;
-    std::string_view name;
+    hpp::string_view group;
+    hpp::string_view name;
     std::string schema;
     bool cold{false};
     std::function<std::string(rtti::context&, const settings&)> get;
@@ -148,7 +148,7 @@ auto custom_rows(const settings& current) -> std::vector<custom_row>
              size_t index = 0;
              for(auto item : items)
              {
-                 std::string_view name;
+                 hpp::string_view name;
                  if(item.get_string().get(name) != simdjson::SUCCESS)
                  {
                      error = fmt::format("layer {} is not a string", index);
@@ -170,25 +170,25 @@ auto custom_rows(const settings& current) -> std::vector<custom_row>
     return rows;
 }
 
-auto group_property(std::string_view group) -> entt::meta_data
+auto group_property(hpp::string_view group) -> entt::meta_data
 {
     return find_meta_property(entt::resolve<settings>(), group);
 }
 
 /// Splits "group.name". Returns false when there is not exactly one dot.
-auto split_property_path(std::string_view path, std::string_view& group, std::string_view& name) -> bool
+auto split_property_path(hpp::string_view path, hpp::string_view& group, hpp::string_view& name) -> bool
 {
     const auto dot = path.find('.');
-    if(dot == std::string_view::npos || dot == 0 || dot + 1 >= path.size())
+    if(dot == hpp::string_view::npos || dot == 0 || dot + 1 >= path.size())
     {
         return false;
     }
     group = path.substr(0, dot);
     name = path.substr(dot + 1);
-    return name.find('.') == std::string_view::npos;
+    return name.find('.') == hpp::string_view::npos;
 }
 
-auto find_reflected_row(std::string_view group, std::string_view name) -> const reflected_row*
+auto find_reflected_row(hpp::string_view group, hpp::string_view name) -> const reflected_row*
 {
     for(const auto& row : reflected_rows())
     {
@@ -200,7 +200,7 @@ auto find_reflected_row(std::string_view group, std::string_view name) -> const 
     return nullptr;
 }
 
-auto reflected_names_in(std::string_view group) -> std::unordered_set<std::string>
+auto reflected_names_in(hpp::string_view group) -> std::unordered_set<std::string>
 {
     std::unordered_set<std::string> names;
     for(const auto& row : reflected_rows())
@@ -217,7 +217,7 @@ auto reflected_names_in(std::string_view group) -> std::unordered_set<std::strin
 auto group_order(const std::vector<custom_row>& custom) -> std::vector<std::string>
 {
     std::vector<std::string> order;
-    auto note = [&](std::string_view group)
+    auto note = [&](hpp::string_view group)
     {
         if(std::find(order.begin(), order.end(), group) == order.end())
         {
@@ -238,7 +238,7 @@ auto group_order(const std::vector<custom_row>& custom) -> std::vector<std::stri
 auto collect_groups(const simdjson::dom::object& args) -> std::vector<std::string>
 {
     std::vector<std::string> groups;
-    std::string_view single;
+    hpp::string_view single;
     if(args["group"].get_string().get(single) == simdjson::SUCCESS)
     {
         groups.emplace_back(single);
@@ -248,7 +248,7 @@ auto collect_groups(const simdjson::dom::object& args) -> std::vector<std::strin
     {
         for(auto item : items)
         {
-            std::string_view value;
+            hpp::string_view value;
             if(item.get_string().get(value) == simdjson::SUCCESS)
             {
                 groups.emplace_back(value);
@@ -258,7 +258,7 @@ auto collect_groups(const simdjson::dom::object& args) -> std::vector<std::strin
     return groups;
 }
 
-auto wants_group(const std::vector<std::string>& groups, std::string_view group) -> bool
+auto wants_group(const std::vector<std::string>& groups, hpp::string_view group) -> bool
 {
     return groups.empty() || std::find(groups.begin(), groups.end(), group) != groups.end();
 }
@@ -287,7 +287,7 @@ void register_settings_tools(mcp_tool_registry& registry)
              const auto groups = collect_groups(args);
              std::string json = "[";
              bool first = true;
-             auto add_row = [&](std::string_view group, std::string_view name, bool cold, const std::string& fields)
+             auto add_row = [&](hpp::string_view group, hpp::string_view name, bool cold, const std::string& fields)
              {
                  if(!first)
                  {
@@ -426,8 +426,8 @@ void register_settings_tools(mcp_tool_registry& registry)
              for(auto field : properties)
              {
                  const std::string path(field.key);
-                 std::string_view group;
-                 std::string_view name;
+                 hpp::string_view group;
+                 hpp::string_view name;
                  if(!split_property_path(path, group, name))
                  {
                      errors.push_back(path + ": expected a \"group.name\" path");

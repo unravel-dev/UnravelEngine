@@ -343,7 +343,7 @@ void register_input_action_tools(mcp_tool_registry& registry)
                  {
                      for(auto item : modifier_items)
                      {
-                         std::string_view modifier_name;
+                         hpp::string_view modifier_name;
                          if(item.get_string().get(modifier_name) != simdjson::SUCCESS)
                          {
                              return {.text = "modifiers must be key names", .is_error = true};

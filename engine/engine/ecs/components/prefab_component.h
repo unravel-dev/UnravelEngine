@@ -105,7 +105,7 @@ struct prefab_statements
      */
     auto has_override_touching(const std::vector<hpp::uuid>& instance_path,
                                const hpp::uuid& entity_uuid,
-                               std::string_view component_path) const -> bool;
+                               hpp::string_view component_path) const -> bool;
 
     /**
      * @brief Whether an override lies on a point in an entity's properties or above it - but
@@ -118,7 +118,7 @@ struct prefab_statements
      */
     auto has_override_on_or_above(const std::vector<hpp::uuid>& instance_path,
                                   const hpp::uuid& entity_uuid,
-                                  std::string_view component_path) const -> bool;
+                                  hpp::string_view component_path) const -> bool;
 
     /// Records the removal and drops every override on that entity: nothing is left to
     /// override, and a revert must not bring the overrides back without the entity.
@@ -255,7 +255,7 @@ struct prefab_component : public component_crtp<prefab_component, owned_componen
     /**
      * @brief has_override_touching on the local list, for this instance's direct content.
      */
-    auto has_override_touching(const hpp::uuid& entity_uuid, std::string_view component_path) const -> bool;
+    auto has_override_touching(const hpp::uuid& entity_uuid, hpp::string_view component_path) const -> bool;
 
     /**
      * @brief Check if a serialization path has a local override

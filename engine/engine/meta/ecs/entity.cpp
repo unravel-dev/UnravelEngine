@@ -450,10 +450,10 @@ namespace
 {
 /// What an override on a script named before scripts were named by slot looks like:
 /// "script_component/script_components[<position>]/...".
-constexpr std::string_view POSITIONAL_SCRIPT_PREFIX = "script_component/script_components[";
+constexpr hpp::string_view POSITIONAL_SCRIPT_PREFIX = "script_component/script_components[";
 
 /// The position such an override names, and where the rest of its path starts.
-auto parse_script_position(std::string_view component_path, size_t& position, size_t& rest) -> bool
+auto parse_script_position(hpp::string_view component_path, size_t& position, size_t& rest) -> bool
 {
     if(!component_path.starts_with(POSITIONAL_SCRIPT_PREFIX))
     {
@@ -2177,7 +2177,7 @@ void save_to_file_bin(const std::string& absolute_path, entt::const_handle obj)
 }
 
 
-void load_from_view(std::string_view view, entt::registry& obj)
+void load_from_view(hpp::string_view view, entt::registry& obj)
 {
     if(!view.empty())
     {
@@ -2212,7 +2212,7 @@ void load_from_stream(std::istream& stream, entt::registry& obj)
     }
 }
 
-void load_from_view(std::string_view view, entt::handle& obj)
+void load_from_view(hpp::string_view view, entt::handle& obj)
 {
     if(!view.empty())
     {
@@ -2485,7 +2485,7 @@ struct serialization_path_parts
     hpp::uuid entity_uuid;
 
     /// Everything after "components/", so "tag_component/name" or "has_tag_component".
-    std::string_view component_path;
+    hpp::string_view component_path;
     bool valid{};
 };
 
@@ -2495,19 +2495,19 @@ auto split_serialization_path(const std::string& serialization_path) -> serializ
 {
     serialization_path_parts parts;
 
-    const std::string_view path(serialization_path);
+    const hpp::string_view path(serialization_path);
     const auto first = path.find('/');
-    if(first == std::string_view::npos)
+    if(first == hpp::string_view::npos)
     {
         return parts;
     }
     const auto second = path.find('/', first + 1);
-    if(second == std::string_view::npos)
+    if(second == hpp::string_view::npos)
     {
         return parts;
     }
     const auto third = path.find('/', second + 1);
-    if(third == std::string_view::npos || third + 1 >= path.size())
+    if(third == hpp::string_view::npos || third + 1 >= path.size())
     {
         return parts;
     }
@@ -2557,7 +2557,7 @@ void drop_stale_statement(entt::handle instance, const hpp::uuid& entity_uuid, c
 
 /// The component path a replay decision is made on: "has_<component>" is decided as the
 /// component itself.
-auto replay_component_path(const serialization_path_parts& parts) -> std::string_view
+auto replay_component_path(const serialization_path_parts& parts) -> hpp::string_view
 {
     auto component_path = parts.component_path;
     if(component_path.starts_with("has_"))
@@ -2570,7 +2570,7 @@ auto replay_component_path(const serialization_path_parts& parts) -> std::string
 /// Whether a component path addresses a nested instance's own prefab bookkeeping - the link
 /// itself rather than the entity's contents, which the document that owns the instance
 /// states outright.
-auto is_prefab_bookkeeping_component(std::string_view component_path) -> bool
+auto is_prefab_bookkeeping_component(hpp::string_view component_path) -> bool
 {
     if(component_path.starts_with("has_"))
     {
@@ -2631,12 +2631,12 @@ void collect_entities_by_prefab_uid(entt::handle obj,
  * from either side. Nor is the parent link: a reparent made here has no override bookkeeping,
  * and restating it would undo the reparent on every sync.
  */
-auto is_nested_root_placement_path(std::string_view component_path) -> bool
+auto is_nested_root_placement_path(hpp::string_view component_path) -> bool
 {
-    constexpr std::string_view transform = "transform_component";
-    constexpr std::string_view local = "transform_component/local_transform";
-    constexpr std::string_view position = "transform_component/local_transform/position";
-    constexpr std::string_view rotation = "transform_component/local_transform/rotation";
+    constexpr hpp::string_view transform = "transform_component";
+    constexpr hpp::string_view local = "transform_component/local_transform";
+    constexpr hpp::string_view position = "transform_component/local_transform/position";
+    constexpr hpp::string_view rotation = "transform_component/local_transform/rotation";
 
     // The two containers on the way down have to pass for the leaves to be reached at all;
     // scale and skew underneath them are still decided leaf by leaf.
@@ -2907,7 +2907,7 @@ auto sync_prefab_instance(entt::handle instance) -> bool
             {
                 // By name first, which settles almost every call without parsing the path.
                 const auto name_start = property_path.rfind('/');
-                auto component = std::string_view(property_path).substr(name_start == std::string::npos ? 0 : name_start + 1);
+                auto component = hpp::string_view(property_path).substr(name_start == std::string::npos ? 0 : name_start + 1);
                 if(component.starts_with("has_"))
                 {
                     component.remove_prefix(4);
@@ -3396,7 +3396,7 @@ void save_to_file_bin(const std::string& absolute_path, const scene& scn)
 }
 
 
-void load_from_view(std::string_view view, scene& scn)
+void load_from_view(hpp::string_view view, scene& scn)
 {
     if(!view.empty())
     {

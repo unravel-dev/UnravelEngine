@@ -485,17 +485,17 @@ namespace
 /// stale. A scan of the buffer's text, much cheaper than loading the document to find out.
 auto has_whole_component_statement(const prefab& document) -> bool
 {
-    constexpr std::string_view key = "\"component_path\"";
-    const std::string_view text(reinterpret_cast<const char*>(document.buffer.data.data()), document.buffer.data.size());
-    for(auto at = text.find(key); at != std::string_view::npos; at = text.find(key, at + key.size()))
+    constexpr hpp::string_view key = "\"component_path\"";
+    const hpp::string_view text(reinterpret_cast<const char*>(document.buffer.data.data()), document.buffer.data.size());
+    for(auto at = text.find(key); at != hpp::string_view::npos; at = text.find(key, at + key.size()))
     {
         const auto open = text.find('"', at + key.size() + 1);
-        const auto close = open == std::string_view::npos ? open : text.find('"', open + 1);
-        if(close == std::string_view::npos)
+        const auto close = open == hpp::string_view::npos ? open : text.find('"', open + 1);
+        if(close == hpp::string_view::npos)
         {
             return false;
         }
-        if(text.substr(open + 1, close - open - 1).find('/') == std::string_view::npos)
+        if(text.substr(open + 1, close - open - 1).find('/') == hpp::string_view::npos)
         {
             return true;
         }

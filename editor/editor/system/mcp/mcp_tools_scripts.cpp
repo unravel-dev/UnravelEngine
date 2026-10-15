@@ -174,7 +174,7 @@ auto read_script_arguments(const simdjson::dom::object& args,
         bool flag = false;
         int64_t integer = 0;
         double number = 0.0;
-        std::string_view text;
+        hpp::string_view text;
         simdjson::dom::array components;
         if(!value.get(flag))
         {

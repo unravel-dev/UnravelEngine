@@ -111,7 +111,7 @@ auto make_script_enum_codec() -> script_field_codec
                             std::string& error) -> bool
             {
                 const auto values = field.get_type().get_enum_values<T>();
-                std::string_view name;
+                hpp::string_view name;
                 if(element.get_string().get(name) == simdjson::SUCCESS)
                 {
                     for(const auto& [candidate, candidate_name] : values)
@@ -672,7 +672,7 @@ auto component_apply_result_to_json(const component_apply_result& result) -> std
 
 auto read_script_selector(const simdjson::dom::object& item, script_selector& out, std::string& error) -> bool
 {
-    std::string_view type;
+    hpp::string_view type;
     if(!item["type_name"].get(type))
     {
         out.type = std::string(type);

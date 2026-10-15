@@ -128,8 +128,8 @@ enum class break_type : uint8_t
 
 struct word_frag
 {
-    std::string_view txt;
-    std::string_view brk_symbol;
+    hpp::string_view txt;
+    hpp::string_view brk_symbol;
     rich_state state;
     break_type brk;     // one of none, must_break, no_wrap_before
     float base_width;   // measured at base size

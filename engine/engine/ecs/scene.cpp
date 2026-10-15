@@ -47,12 +47,12 @@ namespace
 //     {
 //         auto name = storage.type().name();
 
-//         if(name.find("edyn::") != std::string_view::npos)
+//         if(name.find("edyn::") != hpp::string_view::npos)
 //         {
 //             continue;
 //         }
 
-//         if(name.find("bullet::") != std::string_view::npos)
+//         if(name.find("bullet::") != hpp::string_view::npos)
 //         {
 //             continue;
 //         }

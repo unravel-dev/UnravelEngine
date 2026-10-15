@@ -599,8 +599,8 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
                 brk = break_type::nobreak;
 
                 // extract slice
-                std::string_view slice(s.data() + start, frag_len);
-                std::string_view break_slice(s.data() + start + frag_len, 0);
+                hpp::string_view slice(s.data() + start, frag_len);
+                hpp::string_view break_slice(s.data() + start + frag_len, 0);
 
                 auto w = measure_text_width(slice, font);
                 frags.push_back({slice, break_slice, state, brk, w, w});
@@ -629,8 +629,8 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
                 }
 
                 // extract slice
-                std::string_view slice(s.data() + start, frag_len);
-                std::string_view break_slice(s.data() + start + frag_len, break_end - (start + frag_len));
+                hpp::string_view slice(s.data() + start, frag_len);
+                hpp::string_view break_slice(s.data() + start + frag_len, break_end - (start + frag_len));
 
                 auto w = measure_text_width(slice, font);
                 frags.push_back({slice, break_slice, state, brk, w, w});

@@ -611,7 +611,7 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
 namespace
 {
 /// The key a saved script object keeps its type under, beside its fields.
-constexpr std::string_view SCRIPT_TYPE_KEY = "type";
+constexpr hpp::string_view SCRIPT_TYPE_KEY = "type";
 
 /// A property an edit changed: its path below the component, and the path to show for it
 /// (empty to derive it from the reflected names).
@@ -651,7 +651,7 @@ auto is_edited_as_one_value(const entt::meta_type& type) -> bool
 /// was saved for it, so there is nothing to override.
 auto is_saved_value_changed(const simdjson::dom::object& before,
                             const simdjson::dom::object& after,
-                            std::string_view key,
+                            hpp::string_view key,
                             simdjson::dom::element& old_value,
                             simdjson::dom::element& new_value) -> bool
 {

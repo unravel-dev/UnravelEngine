@@ -601,7 +601,7 @@ auto find_visualization_group(visualization_group group) -> const visualization_
     return nullptr;
 }
 
-auto find_visualization_group(std::string_view name) -> const visualization_group_entry*
+auto find_visualization_group(hpp::string_view name) -> const visualization_group_entry*
 {
     for(const auto& entry : k_visualization_groups)
     {
@@ -625,7 +625,7 @@ auto find_visualization_mode(int value) -> const visualization_mode_entry*
     return nullptr;
 }
 
-auto find_visualization_mode(std::string_view name) -> const visualization_mode_entry*
+auto find_visualization_mode(hpp::string_view name) -> const visualization_mode_entry*
 {
     for(const auto& entry : k_visualization_modes)
     {

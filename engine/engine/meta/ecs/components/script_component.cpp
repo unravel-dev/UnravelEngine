@@ -75,7 +75,7 @@ namespace
     thread_local script_list_load_context* script_list_ctx{};
 
     /// What precedes a script's slot in a property path below the script component.
-    constexpr std::string_view SCRIPT_LIST_SEGMENT = "script_components[";
+    constexpr hpp::string_view SCRIPT_LIST_SEGMENT = "script_components[";
 
     /// A slot for a script saved without one. The k-th script of a type gets the same slot in a
     /// prefab and in every instance of it, so files written before slots keep matching.
@@ -1629,14 +1629,14 @@ auto script_slot_segment(const hpp::uuid& slot) -> std::string
     return "[" + hpp::to_string(slot) + "]";
 }
 
-auto parse_script_slot(std::string_view property_path) -> std::optional<hpp::uuid>
+auto parse_script_slot(hpp::string_view property_path) -> std::optional<hpp::uuid>
 {
     if(!property_path.starts_with(SCRIPT_LIST_SEGMENT))
     {
         return std::nullopt;
     }
     const auto close = property_path.find(']', SCRIPT_LIST_SEGMENT.size());
-    if(close == std::string_view::npos)
+    if(close == hpp::string_view::npos)
     {
         return std::nullopt;
     }

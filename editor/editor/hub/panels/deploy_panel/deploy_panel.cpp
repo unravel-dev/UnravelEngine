@@ -43,7 +43,7 @@ constexpr ImU32 DEPLOY_FIELD_COLOR = IM_COL32(255, 255, 255, 14);
 constexpr ImU32 DEPLOY_FIELD_HOVERED_COLOR = IM_COL32(255, 255, 255, 24);
 constexpr ImU32 DEPLOY_FIELD_ACTIVE_COLOR = IM_COL32(255, 255, 255, 30);
 // Jobs are named "Deploying X"; the steps show X.
-constexpr std::string_view DEPLOY_JOB_PREFIX = "Deploying ";
+constexpr hpp::string_view DEPLOY_JOB_PREFIX = "Deploying ";
 
 void draw_muted_text(const char* text)
 {
@@ -137,7 +137,7 @@ auto draw_button(const char* label, bool is_primary, bool is_enabled) -> bool
     return is_pressed;
 }
 
-auto get_step_name(std::string_view job_name) -> std::string
+auto get_step_name(hpp::string_view job_name) -> std::string
 {
     if(job_name.starts_with(DEPLOY_JOB_PREFIX))
     {

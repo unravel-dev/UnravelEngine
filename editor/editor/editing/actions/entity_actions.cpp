@@ -24,7 +24,7 @@ namespace unravel
 
 namespace
 {
-auto restore_root_from_serialized_subtree(entt::registry& registry, std::string_view blob) -> entt::handle
+auto restore_root_from_serialized_subtree(entt::registry& registry, hpp::string_view blob) -> entt::handle
 {
     if(blob.empty())
     {

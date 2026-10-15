@@ -10,7 +10,7 @@ namespace unravel::mcp
 
 /// Lower-cases and drops spaces, dashes and underscores, so "Left Shift", "left_shift" and
 /// "leftshift" compare equal. Every MCP input name (keys, buttons, axes) is matched this way.
-auto normalize_input_name(std::string_view name) -> std::string;
+auto normalize_input_name(hpp::string_view name) -> std::string;
 
 /**
  * @brief Resolves a key name to the platform's key code.

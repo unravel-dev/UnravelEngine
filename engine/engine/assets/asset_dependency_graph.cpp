@@ -113,7 +113,7 @@ void collect_prefab_sources(const simdjson::dom::element& value, std::vector<hpp
     {
         if(field.key == "prefab_component")
         {
-            std::string_view uid_str;
+            hpp::string_view uid_str;
             if(!field.value["source"]["uid"].get_string().get(uid_str))
             {
                 const auto uid = hpp::uuid::from_string(uid_str);

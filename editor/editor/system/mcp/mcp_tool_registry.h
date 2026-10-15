@@ -25,7 +25,7 @@ enum class mcp_profile : uint8_t
 auto to_string(mcp_profile profile) -> const char*;
 
 /// Parses "user" / "developer". Returns false on anything else.
-auto parse_mcp_profile(std::string_view name, mcp_profile& out) -> bool;
+auto parse_mcp_profile(hpp::string_view name, mcp_profile& out) -> bool;
 
 struct tool_result
 {

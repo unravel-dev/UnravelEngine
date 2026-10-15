@@ -529,7 +529,7 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
             return mcp::make_json_rpc_error(id, k_invalid_params, "tools/call params must be an object");
         }
 
-        std::string_view tool_name_view;
+        hpp::string_view tool_name_view;
         if(params["name"].get(tool_name_view))
         {
             error_count_.fetch_add(1);

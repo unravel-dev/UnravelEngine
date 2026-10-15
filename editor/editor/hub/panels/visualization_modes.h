@@ -1,7 +1,7 @@
 #pragma once
 #include <hpp/span.hpp>
 
-#include <string_view>
+#include <hpp/string_view.hpp>
 
 namespace unravel
 {
@@ -138,13 +138,13 @@ auto get_visualization_modes(visualization_group group) -> hpp::span<const visua
 auto find_visualization_group(visualization_group group) -> const visualization_group_entry*;
 
 /// Descriptor for a stable snake_case group id; nullptr when unknown.
-auto find_visualization_group(std::string_view name) -> const visualization_group_entry*;
+auto find_visualization_group(hpp::string_view name) -> const visualization_group_entry*;
 
 /// Entry for a raw pipeline id; nullptr when the id maps to no mode.
 auto find_visualization_mode(int value) -> const visualization_mode_entry*;
 
 /// Entry for a stable snake_case name; nullptr when unknown.
-auto find_visualization_mode(std::string_view name) -> const visualization_mode_entry*;
+auto find_visualization_mode(hpp::string_view name) -> const visualization_mode_entry*;
 
 /// Stable name for a mode ("unknown" for unmapped raw values).
 auto to_string(visualization_mode mode) -> const char*;

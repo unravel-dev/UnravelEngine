@@ -91,7 +91,7 @@ auto suggest_key_names(const std::string& normalized) -> std::string
 /// Key names come from the platform layer ("W", "Space", "Left Shift"), and its
 /// from_string is an exact match with no failure value. Comparing on a normalized form
 /// instead lets a caller write "w", "space" or "leftshift" and still land on the right key.
-auto normalize_input_name(std::string_view name) -> std::string
+auto normalize_input_name(hpp::string_view name) -> std::string
 {
     std::string out;
     out.reserve(name.size());

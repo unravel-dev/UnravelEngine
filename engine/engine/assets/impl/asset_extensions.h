@@ -423,14 +423,14 @@ inline auto is_embedded_key(const std::string& key) noexcept -> bool
  */
 inline auto get_source_path_from_compiled(const fs::path& compiled) -> fs::path
 {
-    constexpr std::string_view compiled_suffix = ".asset";
+    constexpr hpp::string_view compiled_suffix = ".asset";
     const std::string name = compiled.filename().string();
     const size_t suffix_pos = name.rfind(compiled_suffix);
     if(suffix_pos != std::string::npos && suffix_pos > 0)
     {
-        const std::string_view rest = std::string_view(name).substr(suffix_pos + compiled_suffix.size());
+        const hpp::string_view rest = hpp::string_view(name).substr(suffix_pos + compiled_suffix.size());
         const bool is_compiled_suffix =
-            rest.empty() || (rest.front() == '.' && rest.find('.', 1) == std::string_view::npos);
+            rest.empty() || (rest.front() == '.' && rest.find('.', 1) == hpp::string_view::npos);
         if(is_compiled_suffix)
         {
             return compiled.parent_path() / name.substr(0, suffix_pos);

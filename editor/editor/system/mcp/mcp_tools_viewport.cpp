@@ -644,7 +644,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
              panel.set_gi_visualize(settings);
              simdjson::dom::array cursor_args;
-             std::string_view cursor_mode;
+             hpp::string_view cursor_mode;
              if(args["cursor"].get(cursor_args) == simdjson::SUCCESS && cursor_args.size() == 2)
              {
                  double x = -1.0;
@@ -709,7 +709,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
          {
              bool is_open = true;
              (void)args["open"].get(is_open);
-             std::string_view tab_name = "views";
+             hpp::string_view tab_name = "views";
              (void)args["tab"].get(tab_name);
              if(tab_name != "views" && tab_name != "overlays")
              {
@@ -738,7 +738,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              int mode_value = 0;
              bool resolved = false;
 
-             std::string_view mode_name;
+             hpp::string_view mode_name;
              int64_t mode_int = 0;
              if(args["mode"].get(mode_name) == simdjson::SUCCESS)
              {

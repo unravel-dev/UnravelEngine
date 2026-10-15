@@ -146,12 +146,12 @@ struct GitHubRelease
 
 using EngineVersion = version::engine_version;
 
-// Adapter: hpp::string_view is not implicitly convertible to std::string_view.
-// The parser API lives in <version/version.h> and takes std::string_view, so
+// Adapter: hpp::string_view is not implicitly convertible to hpp::string_view.
+// The parser API lives in <version/version.h> and takes hpp::string_view, so
 // we convert here at the boundary.
 static auto parse_engine_version(hpp::string_view ver) -> std::optional<EngineVersion>
 {
-    return version::parse(std::string_view(ver.data(), ver.size()));
+    return version::parse(hpp::string_view(ver.data(), ver.size()));
 }
 
 // Back-compat alias for compare_versions: the shared implementation returns
@@ -279,7 +279,7 @@ static auto parse_release_json(const simdjson::dom::element& r) -> GitHubRelease
     auto tag_name = r["tag_name"];
     if(!tag_name.error())
     {
-        std::string_view tag_sv;
+        hpp::string_view tag_sv;
         if(tag_name.get(tag_sv) == simdjson::SUCCESS)
             rel.tag_name = std::string(tag_sv);
     }
@@ -287,7 +287,7 @@ static auto parse_release_json(const simdjson::dom::element& r) -> GitHubRelease
     auto name = r["name"];
     if(!name.error())
     {
-        std::string_view name_sv;
+        hpp::string_view name_sv;
         if(name.get(name_sv) == simdjson::SUCCESS)
             rel.name = std::string(name_sv);
     }
@@ -311,7 +311,7 @@ static auto parse_release_json(const simdjson::dom::element& r) -> GitHubRelease
     auto published_at = r["published_at"];
     if(!published_at.error())
     {
-        std::string_view published_sv;
+        hpp::string_view published_sv;
         if(published_at.get(published_sv) == simdjson::SUCCESS)
             rel.published_at = std::string(published_sv);
     }
@@ -326,7 +326,7 @@ static auto parse_release_json(const simdjson::dom::element& r) -> GitHubRelease
             auto asset_name = a["name"];
             if(!asset_name.error())
             {
-                std::string_view name_sv;
+                hpp::string_view name_sv;
                 if(asset_name.get(name_sv) == simdjson::SUCCESS)
                     asset.name = std::string(name_sv);
             }
@@ -334,7 +334,7 @@ static auto parse_release_json(const simdjson::dom::element& r) -> GitHubRelease
             auto browser_url = a["browser_download_url"];
             if(!browser_url.error())
             {
-                std::string_view url_sv;
+                hpp::string_view url_sv;
                 if(browser_url.get(url_sv) == simdjson::SUCCESS)
                     asset.browser_download_url = std::string(url_sv);
             }

@@ -127,7 +127,7 @@ auto material_has_glossiness_factor(const aiMaterial* material) -> bool
     return material->Get(AI_MATKEY_GLOSSINESS_FACTOR, glossiness) == AI_SUCCESS;
 }
 
-auto string_ends_with(std::string_view value, std::string_view suffix) -> bool
+auto string_ends_with(hpp::string_view value, hpp::string_view suffix) -> bool
 {
     return value.size() >= suffix.size()
            && value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
@@ -164,8 +164,8 @@ auto lumberyard_bistro_basecolor_specular_pair(const aiMaterial* material) -> bo
         return false;
     }
 
-    constexpr std::string_view k_basecolor_suffix = "_basecolor";
-    constexpr std::string_view k_specular_suffix = "_specular";
+    constexpr hpp::string_view k_basecolor_suffix = "_basecolor";
+    constexpr hpp::string_view k_specular_suffix = "_specular";
     const std::string diffuse_prefix =
         diffuse_stem.substr(0, diffuse_stem.size() - k_basecolor_suffix.size());
     const std::string specular_prefix =

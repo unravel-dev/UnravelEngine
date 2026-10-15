@@ -189,7 +189,7 @@ auto prefab_statements::has_override(const std::vector<hpp::uuid>& instance_path
 
 auto prefab_statements::has_override_touching(const std::vector<hpp::uuid>& instance_path,
                                               const hpp::uuid& entity_uuid,
-                                              std::string_view component_path) const -> bool
+                                              hpp::string_view component_path) const -> bool
 {
     if(overrides.empty())
     {
@@ -201,7 +201,7 @@ auto prefab_statements::has_override_touching(const std::vector<hpp::uuid>& inst
         prefab_property_override_data{instance_path, entity_uuid, std::string(component_path), std::string{}});
     if(it != overrides.end() && it->instance_path == instance_path && it->entity_uuid == entity_uuid)
     {
-        const std::string_view candidate(it->component_path);
+        const hpp::string_view candidate(it->component_path);
         if(candidate.starts_with(component_path) &&
            (candidate.size() == component_path.size() || candidate[component_path.size()] == '/' ||
             candidate[component_path.size()] == '['))
@@ -215,7 +215,7 @@ auto prefab_statements::has_override_touching(const std::vector<hpp::uuid>& inst
     while(true)
     {
         const auto separator = ancestor.rfind('/');
-        if(separator == std::string_view::npos)
+        if(separator == hpp::string_view::npos)
         {
             return false;
         }
@@ -229,7 +229,7 @@ auto prefab_statements::has_override_touching(const std::vector<hpp::uuid>& inst
 
 auto prefab_statements::has_override_on_or_above(const std::vector<hpp::uuid>& instance_path,
                                                  const hpp::uuid& entity_uuid,
-                                                 std::string_view component_path) const -> bool
+                                                 hpp::string_view component_path) const -> bool
 {
     if(overrides.empty())
     {
@@ -243,7 +243,7 @@ auto prefab_statements::has_override_on_or_above(const std::vector<hpp::uuid>& i
     while(true)
     {
         const auto separator = ancestor.rfind('/');
-        if(separator == std::string_view::npos)
+        if(separator == hpp::string_view::npos)
         {
             return false;
         }
@@ -374,7 +374,7 @@ auto prefab_component::is_instance_removed(const hpp::uuid& instance_id) const -
     return local.is_instance_removed({}, instance_id);
 }
 
-auto prefab_component::has_override_touching(const hpp::uuid& entity_uuid, std::string_view component_path) const
+auto prefab_component::has_override_touching(const hpp::uuid& entity_uuid, hpp::string_view component_path) const
     -> bool
 {
     return local.has_override_touching({}, entity_uuid, component_path);
@@ -387,19 +387,19 @@ auto prefab_component::has_serialization_override(const std::string& serializati
         return false;
     }
     // Expected format: "entities/<entity_uuid>/components/<component_type>/<property_path>"
-    const std::string_view path(serialization_path);
+    const hpp::string_view path(serialization_path);
     const auto first = path.find('/');
-    if(first == std::string_view::npos)
+    if(first == hpp::string_view::npos)
     {
         return false;
     }
     const auto second = path.find('/', first + 1);
-    if(second == std::string_view::npos)
+    if(second == hpp::string_view::npos)
     {
         return false;
     }
     const auto third = path.find('/', second + 1);
-    if(third == std::string_view::npos || third + 1 >= path.size())
+    if(third == hpp::string_view::npos || third + 1 >= path.size())
     {
         return false;
     }

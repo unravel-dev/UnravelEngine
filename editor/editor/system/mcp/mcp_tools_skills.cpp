@@ -47,7 +47,7 @@ const std::string k_server_instructions =
     "Before any non-trivial task, call skills_list and fetch the relevant workflow guides with "
     "skills_get - they encode correct tool ordering and engine-specific knowledge.";
 
-auto trim(std::string_view value) -> std::string_view
+auto trim(hpp::string_view value) -> hpp::string_view
 {
     while(!value.empty() && (value.front() == ' ' || value.front() == '\t' || value.front() == '\r'))
     {
@@ -101,7 +101,7 @@ auto parse_skill_file(const fs::path& path, mcp_skill& out) -> bool
     buffer << input.rdbuf();
     std::string text = buffer.str();
     // An editor that saves UTF-8 with a byte order mark would otherwise hide the opening "---".
-    constexpr std::string_view k_utf8_bom = "\xEF\xBB\xBF";
+    constexpr hpp::string_view k_utf8_bom = "\xEF\xBB\xBF";
     if(text.starts_with(k_utf8_bom))
     {
         text.erase(0, k_utf8_bom.size());
@@ -122,7 +122,7 @@ auto parse_skill_file(const fs::path& path, mcp_skill& out) -> bool
             break;
         }
         const auto colon = trimmed.find(':');
-        if(colon == std::string_view::npos)
+        if(colon == hpp::string_view::npos)
         {
             continue;
         }
@@ -277,7 +277,7 @@ void register_skill_tools(mcp_tool_registry& registry)
              [](rtti::context& /*ctx*/, const simdjson::dom::object& args) -> tool_result
          {
              std::vector<std::string> names;
-             std::string_view single;
+             hpp::string_view single;
              if(args["name"].get_string().get(single) == simdjson::SUCCESS)
              {
                  names.emplace_back(single);
@@ -287,7 +287,7 @@ void register_skill_tools(mcp_tool_registry& registry)
              {
                  for(auto el : arr)
                  {
-                     std::string_view value;
+                     hpp::string_view value;
                      if(el.get_string().get(value) == simdjson::SUCCESS)
                      {
                          names.emplace_back(value);
