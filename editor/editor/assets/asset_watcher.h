@@ -10,8 +10,11 @@
 namespace unravel
 {
 
-/// Callback invoked after each compilation job completes during a blocking wait.
-using on_wait_progress_t = std::function<void(size_t completed, size_t total, const std::string& current_job)>;
+/// Called while watch_assets indexes the assets and waits for their jobs: completed of total, the
+/// step it is in ("Indexing asset metadata", or the kind of job waited on) and the item of that step
+/// (an asset path), which may be empty.
+using on_wait_progress_t =
+    std::function<void(size_t completed, size_t total, const std::string& step, const std::string& item)>;
 
 class asset_watcher
 {

@@ -353,7 +353,7 @@ void shutdown()
     clear_profiler_hooks();
     if(s_context.initted)
     {
-        finishFileSaves();
+        finishReadbacks();
         eviction::shutdown();
         if(bgfx::isValid(s_context.fallback_texture))
         {
@@ -447,7 +447,7 @@ uint32_t frame(uint8_t _flags)
     s_context.frame = bgfx::frame(_flags);
     eviction::set_frame(s_context.frame);
     eviction::clear_queued_allocations();
-    writeLandedFileSaves(s_context.frame);
+    deliverLandedReadbacks(s_context.frame);
     return s_context.frame;
 }
 

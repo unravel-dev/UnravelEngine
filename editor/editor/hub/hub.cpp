@@ -58,6 +58,7 @@ auto hub::deinit(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     panels_.deinit(ctx);
+    start_page_.release();
 
     return true;
 }

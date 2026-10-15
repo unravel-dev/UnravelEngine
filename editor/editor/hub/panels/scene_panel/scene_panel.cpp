@@ -1517,6 +1517,17 @@ auto scene_panel::get_window_flags() const -> ImGuiWindowFlags
     return flags;
 }
 
+auto scene_panel::get_output() -> gfx::frame_buffer::ptr
+{
+    auto camera = get_camera();
+    auto* camera_comp = camera ? camera.try_get<camera_component>() : nullptr;
+    if(camera_comp == nullptr)
+    {
+        return {};
+    }
+    return camera_comp->get_render_view().fbo_find("OBUFFER");
+}
+
 auto scene_panel::get_camera() -> entt::handle
 {
     entt::handle camera_entity;

@@ -625,8 +625,9 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "GPU"},
         });
 
+    // Not "culling_mode": the animation component registers its own enum under that id.
     entt::meta_factory<particle_emitter_component::culling_mode>{}
-        .type("culling_mode"_hs)
+        .type("particle_culling_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "culling_mode"},
             entt::attribute{"pretty_name", "Particle Culling Mode"},

@@ -5,11 +5,13 @@
 #include <ospp/event.h>
 
 #include "integration/imgui.h"
+#include "loading_page.h"
 
-#include <string>
+#include <chrono>
 
 namespace unravel
 {
+struct loading_screen;
 
 class imgui_interface
 {
@@ -25,11 +27,7 @@ public:
 
     /// Renders a single loading frame outside the normal event loop.
     /// Pumps OS events, draws the loading page, and presents the frame.
-    void render_loading_frame(rtti::context& ctx,
-                              const std::string& stage,
-                              size_t completed,
-                              size_t total,
-                              const std::string& current_job = {});
+    void render_loading_frame(rtti::context& ctx, const loading_screen& screen);
 
 private:
     void on_frame_ui_render(rtti::context& ctx, delta_t dt);
@@ -39,5 +37,6 @@ private:
     bool inited_{};
 
     std::chrono::steady_clock::time_point last_frame_time_;
+    loading_page loading_page_{};
 };
 } // namespace unravel

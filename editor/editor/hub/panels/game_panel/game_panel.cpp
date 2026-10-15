@@ -104,6 +104,16 @@ void game_panel::apply_view_size(rtti::context& ctx, scene& scn) const
     ctx.get_cached<rendering_system>().apply_game_view_size(scn, view_size);
 }
 
+auto game_panel::get_output(rtti::context& ctx) const -> gfx::frame_buffer::ptr
+{
+    const entt::handle camera = get_displayed_camera(ctx);
+    if(!camera)
+    {
+        return {};
+    }
+    return camera.get<camera_component>().get_render_view().fbo_find("OBUFFER");
+}
+
 auto game_panel::get_displayed_camera(rtti::context& ctx) const -> entt::handle
 {
     auto& scn = ctx.get_cached<ecs>().get_scene();

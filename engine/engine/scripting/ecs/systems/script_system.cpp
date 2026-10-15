@@ -41,6 +41,8 @@ enum class recompile_command : int
 
 std::chrono::milliseconds check_interval(50);
 std::atomic_bool initted{};
+// How often a wait for a script build redraws the loading screen.
+constexpr std::chrono::milliseconds compilation_poll_interval(16);
 
 std::atomic<recompile_command> needs_recompile{};
 std::mutex container_mutex;
@@ -62,6 +64,19 @@ struct library_build
 
 /// Guarded by container_mutex.
 std::map<std::string, library_build> library_builds;
+
+/// The result of a script build, with the loading screen drawn while it runs: a build takes
+/// seconds and reports nothing on its own.
+auto wait_for_compilation(rtti::context& ctx, tpp::job_future<bool> job) -> bool
+{
+    auto& ls = ctx.get_cached<loading_screen>();
+    while(!job.is_ready())
+    {
+        job.wait_for(compilation_poll_interval);
+        ls.refresh();
+    }
+    return job.get();
+}
 
 /// Caller holds container_mutex.
 void mark_sources_changed(const std::string& protocol)
@@ -505,7 +520,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         debug = get_script_debug_mode();
 #endif
 
-        if(!is_library_current(ctx, "engine", debug) && !create_compilation_job(ctx, "engine", debug).get())
+        if(!is_library_current(ctx, "engine", debug) && !wait_for_compilation(ctx, create_compilation_job(ctx, "engine", debug)))
         {
             return false;
         }
@@ -617,7 +632,7 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         // library is usually current already: reload it instead of compiling the same sources again.
         if(!is_library_current(ctx, "app", get_script_debug_mode()))
         {
-            result &= create_compilation_job(ctx, "app", get_script_debug_mode()).get();
+            result &= wait_for_compilation(ctx, create_compilation_job(ctx, "app", get_script_debug_mode()));
         }
 
         has_compilation_errors_ = !result;
@@ -1385,7 +1400,7 @@ auto script_system::create_compilation_job(rtti::context& ctx,
     auto& am = ctx.get_cached<asset_manager>();
 
     return thr.pool->schedule(
-        "Compiling " + ex::get_type<script_library>(),
+        tpp::job_desc{"Compiling " + ex::get_type<script_library>(), protocol},
         [&am, flags, protocol, debug]()
         {
             auto key = get_lib_data_key(protocol);

@@ -6,6 +6,7 @@
 #include <engine/profiler/profiler.h>
 
 #include <engine/events.h>
+#include <engine/loading_screen.h>
 #include <engine/rendering/renderer.h>
 #include <graphics/graphics.h>
 
@@ -58,21 +59,17 @@ auto imgui_interface::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
+    loading_page_.release();
+
     return true;
 }
 
-void imgui_interface::render_loading_frame(rtti::context& ctx,
-                                           const std::string& stage,
-                                           size_t completed,
-                                           size_t total,
-                                           const std::string& current_job)
+void imgui_interface::render_loading_frame(rtti::context& ctx, const loading_screen& screen)
 {
-
-
     auto now = std::chrono::steady_clock::now();
     auto dt = now - last_frame_time_;
 
-    if(dt < std::chrono::milliseconds(32) && completed != total)
+    if(dt < std::chrono::milliseconds(32) && screen.completed() != screen.total())
     {
         return;
     }
@@ -98,7 +95,7 @@ void imgui_interface::render_loading_frame(rtti::context& ctx,
     for(int i = 0; i < 1; ++i)
     {
         imguiBeginFrame(1.0f / 60.0f);
-        loading_page::draw({stage, completed, total, current_job});
+        loading_page_.draw(ctx, screen);
     
         auto& main_surface = window->get_surface();
         gfx::render_pass pass("ImGui/Loading Pass");

@@ -13,6 +13,18 @@
 namespace fs
 {
 
+/// The path of an entry as progress names it: relative to the folder being synced, its file name
+/// when it is not under that folder.
+static auto get_progress_label(const fs::path& root, const fs::path& path) -> std::string
+{
+    const fs::path relative = path.lexically_relative(root);
+    if(relative.empty() || *relative.begin() == "..")
+    {
+        return path.filename().generic_string();
+    }
+    return relative.generic_string();
+}
+
 static auto extract_entry_extension(const fs::path& path) -> std::string
 {
     auto entry_path = path;
@@ -342,7 +354,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
             run_entry_batch(chunk_begin, chunk_end);
 
             completed = std::min(offset + progress_stride, entries.size());
-            on_progress(completed, entries.size(), extract_entry_extension(std::prev(chunk_end)->path));
+            on_progress(completed, entries.size(), get_progress_label(watch_root, std::prev(chunk_end)->path));
         }
     };
 

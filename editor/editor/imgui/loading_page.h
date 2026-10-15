@@ -1,25 +1,29 @@
 #pragma once
 
-#include <cstddef>
-#include <string>
+#include "image_file_cache.h"
+
+#include <context/context.hpp>
+
+namespace unravel
+{
+struct loading_screen;
 
 /**
- * @brief The screen the editor shows while it starts up and while it opens a project: the stage
- * being loaded with its progress, and what the process takes of the GPU and system memory.
+ * @brief The screen the editor shows while it starts and while it opens a project.
+ *
+ * What is loading (the editor, or a project with its thumbnail) and for how long, the module in
+ * work with its step, item and count, what the workers of the thread pool run and what waits
+ * behind them, the modules finished so far with their times, and the memory the process takes.
  */
-namespace unravel::loading_page
+class loading_page
 {
-struct progress_info
-{
-    /// What is being loaded, e.g. "Loading [Engine Assets]".
-    const std::string& stage;
-    size_t completed{};
-    /// 0 while the stage has no count to report.
-    size_t total{};
-    /// The item of the stage in work, may be empty.
-    const std::string& current_job;
-};
+public:
+    /// Draws the whole screen. Called between the begin and the end of an ImGui frame.
+    void draw(rtti::context& ctx, const loading_screen& screen);
+    /// Lets go of the images; called before the renderer shuts down.
+    void release();
 
-/// Draws the whole screen. Called between the begin and the end of an ImGui frame.
-void draw(const progress_info& info);
-} // namespace unravel::loading_page
+private:
+    image_file_cache images_{};
+};
+} // namespace unravel

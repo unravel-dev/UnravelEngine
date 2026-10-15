@@ -19,6 +19,7 @@
 #include "imgui/imgui_interface.h"
 #include "system/mcp_manager.h"
 #include "system/project_manager.h"
+#include "system/project_thumbnail.h"
 #include "system/version_manager.h"
 #include <filedialog/filedialog.h>
 
@@ -59,6 +60,7 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<editing_manager>();
     ctx.add<picking_manager>();
     ctx.add<thumbnail_manager>();
+    ctx.add<project_thumbnail>();
     ctx.add<asset_watcher>();
     ctx.add<version_manager>();
     ctx.add<mcp_manager>(parser);
@@ -70,6 +72,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
 {
     auto& ctx = engine::context();
     auto& ls = ctx.get_cached<loading_screen>();
+    ls.begin_session("Starting the editor");
 
     ls.set_on_fail([](const std::string& module, const std::string& message) -> void
     {
@@ -114,11 +117,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     auto& imgui = ctx.get_cached<imgui_interface>();
     ls.set_visualizer([&imgui, &ctx](const loading_screen& screen) -> void
     {
-        imgui.render_loading_frame(ctx,
-                                   screen.current_module(),
-                                   screen.completed(),
-                                   screen.total(),
-                                   screen.current_job());
+        imgui.render_loading_frame(ctx, screen);
     });
 
 
@@ -131,9 +130,9 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
     ls.begin_module("Engine Assets");
-    aw.watch_assets(ctx, "engine:/", true, [&ls](size_t completed, size_t total, const std::string& job) -> void
+    aw.watch_assets(ctx, "engine:/", true, [&ls](size_t completed, size_t total, const std::string& step, const std::string& item) -> void
     {
-        ls.progress(completed, total, job);
+        ls.progress(completed, total, step, item);
     });
 
 
@@ -147,9 +146,9 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     // --- Phase 4: editor assets (visual progress bar) ---
 
     ls.begin_module("Editor Assets");
-    aw.watch_assets(ctx, "editor:/", true, [&ls](size_t completed, size_t total, const std::string& job) -> void
+    aw.watch_assets(ctx, "editor:/", true, [&ls](size_t completed, size_t total, const std::string& step, const std::string& item) -> void
     {
-        ls.progress(completed, total, job);
+        ls.progress(completed, total, step, item);
     });
 
     // --- Phase 5: editor subsystems ---
@@ -183,6 +182,10 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     {
         return false;
     }
+    if(!ls.check(ctx.get_cached<project_thumbnail>().init(ctx)))
+    {
+        return false;
+    }
 
     ls.begin_module("Project Manager");
     if(!ls.check(ctx.get_cached<project_manager>().init(ctx, parser)))
@@ -202,6 +205,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    ls.end_session();
     return true;
 }
 
@@ -238,6 +242,11 @@ auto editor::deinit() -> bool
 
 
     if(!ctx.get_cached<mcp_manager>().deinit(ctx))
+    {
+        return false;
+    }
+
+    if(!ctx.get_cached<project_thumbnail>().deinit(ctx))
     {
         return false;
     }
@@ -297,6 +306,7 @@ auto editor::destroy() -> bool
     auto& ctx = engine::context();
 
     ctx.remove<asset_watcher>();
+    ctx.remove<project_thumbnail>();
     ctx.remove<thumbnail_manager>();
     ctx.remove<picking_manager>();
     ctx.remove<editing_manager>();

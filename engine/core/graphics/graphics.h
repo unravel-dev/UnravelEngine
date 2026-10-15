@@ -36,7 +36,7 @@ auto get_allocation_failure_policy() -> allocation_failure_policy;
 auto fallback_texture() -> bgfx::TextureHandle;
 
 /// Submits the frame (bgfx::frame) and returns its number, then does the graphics layer's per-frame
-/// work: eviction bookkeeping and writing the saveToFile images whose readback has landed.
+/// work: eviction bookkeeping and delivering the texture readbacks that have landed.
 uint32_t frame(uint8_t _flags = BGFX_FRAME_NONE);
 
 /**

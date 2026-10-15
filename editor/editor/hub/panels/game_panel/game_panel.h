@@ -5,6 +5,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/ecs/ecs.h>
+#include <graphics/frame_buffer.h>
 #include "../viewport_stats_overlay.h"
 #include "../panel_toolbar.h"
 #include "../visualization_menu.h"
@@ -36,6 +37,8 @@ public:
      * @return The camera entity, or an empty handle while no camera renders.
      */
     auto get_displayed_camera(rtti::context& ctx) const -> entt::handle;
+    /// What the displayed camera rendered last, null while no camera renders.
+    auto get_output(rtti::context& ctx) const -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the game view at exactly @p width x @p height pixels, shown scaled into the

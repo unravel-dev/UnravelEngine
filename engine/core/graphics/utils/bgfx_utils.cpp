@@ -33,6 +33,7 @@ namespace stl = tinystl;
 #include <time.h>
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -801,113 +802,124 @@ void calcTangents(void* _vertices,
 
 namespace
 {
-/// A saveToFile copy whose readback has not landed yet. The render thread writes the pixels when it
+/// A readTexture copy that has not landed yet. The render thread writes the pixels when it
 /// executes the frame the read was issued in, so the readback texture and the pixel buffer must both
 /// outlive that copy.
-struct PendingFileSave
+struct PendingReadback
 {
-    bx::FilePath filePath;
     bgfx::TextureHandle readback = BGFX_INVALID_HANDLE;
-    std::vector<uint8_t> pixels;
-    uint32_t width = 0;
-    uint32_t height = 0;
+    ReadbackImage image;
     uint32_t readyFrame = 0;
-    /// Rows arrive bottom-up: OpenGL render targets keep their origin at the bottom left.
-    bool isBottomUp = false;
+    ReadbackFn onLanded;
 };
 
-/// Each save lives on the heap, so its pixel buffer never moves while bgfx holds a pointer into it.
-std::vector<std::unique_ptr<PendingFileSave>>& getPendingFileSaves()
+/// Each readback lives on the heap, so its pixel buffer never moves while bgfx holds a pointer into it.
+std::vector<std::unique_ptr<PendingReadback>>& getPendingReadbacks()
 {
-    static std::vector<std::unique_ptr<PendingFileSave>> saves;
-    return saves;
+    static std::vector<std::unique_ptr<PendingReadback>> readbacks;
+    return readbacks;
 }
 
-void writePendingFileSave(const PendingFileSave& _save)
+void writePng(const bx::FilePath& _filePath, const ReadbackImage& _image)
 {
     bx::FileWriter writer;
-    if(!bx::makeAll(_save.filePath.getPath()) || !bx::open(&writer, _save.filePath))
+    if(!bx::makeAll(_filePath.getPath()) || !bx::open(&writer, _filePath))
     {
-        gfx::log("error", std::string("saveToFile: cannot open ") + _save.filePath.getCPtr(), __FILE__, __LINE__);
+        gfx::log("error", std::string("saveToFile: cannot open ") + _filePath.getCPtr(), __FILE__, __LINE__);
         return;
     }
     bx::Error err;
     bimg::imageWritePng(&writer,
-                        _save.width,
-                        _save.height,
-                        _save.width * 4,
-                        _save.pixels.data(),
+                        _image.width,
+                        _image.height,
+                        _image.width * 4,
+                        _image.pixels.data(),
                         bimg::TextureFormat::RGBA8,
-                        _save.isBottomUp,
+                        _image.isBottomUp,
                         &err);
     bx::close(&writer);
     if(!err.isOk())
     {
-        gfx::log("error", std::string("saveToFile: cannot write ") + _save.filePath.getCPtr(), __FILE__, __LINE__);
+        gfx::log("error", std::string("saveToFile: cannot write ") + _filePath.getCPtr(), __FILE__, __LINE__);
     }
 }
 } // namespace
 
-bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height)
+bool readTexture(bgfx::ViewId viewId, bgfx::TextureHandle _texture, uint32_t width, uint32_t height, ReadbackFn _onLanded)
 {
-    const bgfx::TextureHandle input = bgfx::getTexture(fbo);
-    if(!bgfx::isValid(input) || 0 == width || 0 == height)
+    if(!bgfx::isValid(_texture) || 0 == width || 0 == height)
     {
         return false;
     }
-    // A blit copies texels without converting them, so the readback has the attachment's format.
+    // A blit copies texels without converting them, so the readback has the format of the texture.
     constexpr bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA8;
     constexpr uint64_t flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_U_CLAMP |
                                BGFX_SAMPLER_V_CLAMP;
-    auto save = std::make_unique<PendingFileSave>();
-    save->readback = bgfx::createTexture2D(uint16_t(width), uint16_t(height), false, 1, format, flags);
-    if(!bgfx::isValid(save->readback))
+    auto pending = std::make_unique<PendingReadback>();
+    pending->readback = bgfx::createTexture2D(uint16_t(width), uint16_t(height), false, 1, format, flags);
+    if(!bgfx::isValid(pending->readback))
     {
         return false;
     }
     bgfx::TextureInfo info;
     bgfx::calcTextureSize(info, uint16_t(width), uint16_t(height), 1, false, false, 1, format);
-    save->pixels.resize(info.storageSize);
-    save->filePath = _filePath;
-    save->width = width;
-    save->height = height;
-    save->isBottomUp = bgfx::getCaps()->originBottomLeft;
+    pending->image.pixels.resize(info.storageSize);
+    pending->image.width = width;
+    pending->image.height = height;
+    pending->image.isBottomUp = bgfx::getCaps()->originBottomLeft;
+    pending->onLanded = std::move(_onLanded);
     bgfx::touch(viewId);
-    bgfx::blit(viewId, bgfx::TextureRegion{.handle = save->readback}, bgfx::TextureRegion{.handle = input});
-    save->readyFrame = bgfx::read(bgfx::TextureRegion{.handle = save->readback}, save->pixels.data());
-    getPendingFileSaves().push_back(std::move(save));
+    bgfx::blit(viewId, bgfx::TextureRegion{.handle = pending->readback}, bgfx::TextureRegion{.handle = _texture});
+    pending->readyFrame = bgfx::read(bgfx::TextureRegion{.handle = pending->readback}, pending->image.pixels.data());
+    getPendingReadbacks().push_back(std::move(pending));
     return true;
 }
 
-void writeLandedFileSaves(uint32_t _renderFrame)
+bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height)
 {
-    auto& saves = getPendingFileSaves();
-    if(saves.empty())
+    return readTexture(viewId,
+                       bgfx::getTexture(fbo),
+                       width,
+                       height,
+                       [_filePath](ReadbackImage&& _image)
+                       {
+                           writePng(_filePath, _image);
+                       });
+}
+
+void deliverLandedReadbacks(uint32_t _renderFrame)
+{
+    auto& readbacks = getPendingReadbacks();
+    if(readbacks.empty())
     {
         return;
     }
-    const auto landed = std::stable_partition(saves.begin(),
-                                              saves.end(),
-                                              [_renderFrame](const std::unique_ptr<PendingFileSave>& _save)
+    // Taken out of the list before any callback runs: a callback may issue a new readback.
+    const auto landed = std::stable_partition(readbacks.begin(),
+                                              readbacks.end(),
+                                              [_renderFrame](const std::unique_ptr<PendingReadback>& _pending)
                                               {
-                                                  return _save->readyFrame > _renderFrame;
+                                                  return _pending->readyFrame > _renderFrame;
                                               });
-    std::for_each(landed,
-                  saves.end(),
-                  [](const std::unique_ptr<PendingFileSave>& _save)
-                  {
-                      writePendingFileSave(*_save);
-                      bgfx::destroy(_save->readback);
-                  });
-    saves.erase(landed, saves.end());
+    std::vector<std::unique_ptr<PendingReadback>> delivered(std::make_move_iterator(landed),
+                                                            std::make_move_iterator(readbacks.end()));
+    readbacks.erase(landed, readbacks.end());
+    for(const auto& pending : delivered)
+    {
+        bgfx::destroy(pending->readback);
+        if(pending->onLanded)
+        {
+            pending->onLanded(std::move(pending->image));
+        }
+    }
 }
 
-void finishFileSaves()
+void finishReadbacks()
 {
     // bgfx::read lands within two frames, so this loop ends after at most a couple of iterations.
-    while(!getPendingFileSaves().empty())
+    while(!getPendingReadbacks().empty())
     {
-        writeLandedFileSaves(bgfx::frame());
+        deliverLandedReadbacks(bgfx::frame());
     }
 }
 

@@ -70,6 +70,11 @@ auto get_padding() -> ImVec2
     return ImVec2(to_pixels(SCREEN_CARD_PADDING_X), to_pixels(SCREEN_CARD_PADDING_Y));
 }
 
+auto get_rounding() -> float
+{
+    return to_pixels(SCREEN_CARD_ROUNDING);
+}
+
 auto fit_to_viewport(const ImVec2& wanted_size) -> ImVec2
 {
     const ImVec2 viewport_size = ImGui::GetMainViewport()->WorkSize;
@@ -83,10 +88,10 @@ auto begin(const char* id, const card_layout& layout) -> bool
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     begin_backdrop(id, viewport);
     const ImVec2 card_min = calc_card_min(viewport, layout);
-    const float rounding = to_pixels(SCREEN_CARD_ROUNDING);
+    const float rounding = get_rounding();
     draw_soft_shadow(ImGui::GetWindowDrawList(), ImRect(card_min, card_min + layout.size), rounding);
     ImGui::SetCursorScreenPos(card_min);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, get_padding());
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, layout.has_padding ? get_padding() : ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, rounding);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));

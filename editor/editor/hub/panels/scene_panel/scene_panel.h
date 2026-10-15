@@ -30,6 +30,8 @@ public:
 
     auto get_camera() -> entt::handle;
     auto get_center() -> entt::handle;
+    /// What the camera of the panel rendered last, null before its first render.
+    auto get_output() -> gfx::frame_buffer::ptr;
 
     /// Recreate the Scene panel editor camera at the default pose (UI "Reset Camera").
     void reset_camera(rtti::context& ctx);

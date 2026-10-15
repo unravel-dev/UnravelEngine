@@ -163,11 +163,12 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     seed_project_agent_files(project_path);
 
     auto& ls = ctx.get_cached<loading_screen>();
-    ls.begin_module("Opening project");
+    ls.begin_session("Opening project");
+    ls.begin_module("Project Assets");
     auto& aw = ctx.get_cached<asset_watcher>();
-    aw.watch_assets(ctx, "app:/", true, [&ls](size_t completed, size_t total, const std::string& job) -> void
+    aw.watch_assets(ctx, "app:/", true, [&ls](size_t completed, size_t total, const std::string& step, const std::string& item) -> void
     {
-        ls.progress(completed, total, job);
+        ls.progress(completed, total, step, item);
     });
 
     auto& tm = ctx.get_cached<thumbnail_manager>();
@@ -243,10 +244,12 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     bool scene_loaded = false;
     if(opened_scene)
     {
+        ls.progress(0, 0, "Loading", opened_scene.id());
         scene_loaded = editor_actions::open_scene_from_asset(ctx, opened_scene);
     }
     if(!scene_loaded && startup_scene)
     {
+        ls.progress(0, 0, "Loading", startup_scene.id());
         scene_loaded = editor_actions::open_scene_from_asset(ctx, startup_scene);
     }
     if(!scene_loaded)
@@ -257,6 +260,7 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     auto& ev = ctx.get_cached<events>();
     ev.on_project_opened.emit(ctx);
 
+    ls.end_session();
     return true;
 }
 

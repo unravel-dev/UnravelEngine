@@ -12,6 +12,7 @@
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/system/project_manager.h>
+#include <editor/system/project_thumbnail.h>
 #include <engine/assets/asset_dependency_graph.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -1553,6 +1554,11 @@ auto editor_actions::save_scene_to_path(rtti::context& ctx,
 
     auto& em = ctx.get_cached<editing_manager>();
     em.clear_unsaved_changes();
+
+    if(ctx.has<project_thumbnail>())
+    {
+        ctx.get_cached<project_thumbnail>().request_capture();
+    }
 
     if(show_notification)
     {

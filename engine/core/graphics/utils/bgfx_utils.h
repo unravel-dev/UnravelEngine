@@ -19,7 +19,9 @@
 #include <tinystl/allocator.h>
 #include <tinystl/vector.h>
 
+#include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace stl = tinystl;
 
@@ -27,20 +29,38 @@ namespace stl = tinystl;
 /// header) and right before the GPU texture is created. Return false to skip the GPU allocation.
 using TexturePreCreateFn = std::function<bool(const bgfx::TextureInfo& _info)>;
 
+/// Pixels of a texture read back to the CPU: RGBA8, rows of width * 4 bytes.
+struct ReadbackImage
+{
+    std::vector<uint8_t> pixels;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    /// Rows arrive bottom-up: OpenGL render targets keep their origin at the bottom left.
+    bool isBottomUp = false;
+};
+
+/// Receives a readback on the main thread, inside gfx::frame() (or gfx::shutdown()).
+using ReadbackFn = std::function<void(ReadbackImage&& _image)>;
+
+/// Reads mip 0 of @p _texture (non-MSAA RGBA8, @p width x @p height) back to the CPU. The pixels
+/// come back through a GPU readback that lands a couple of frames later, so this only issues the
+/// copy in @p viewId (which must run after the texture is final); gfx::frame() hands them to
+/// @p _onLanded once they are there. Returns false when the copy could not be issued.
+bool readTexture(bgfx::ViewId viewId, bgfx::TextureHandle _texture, uint32_t width, uint32_t height, ReadbackFn _onLanded);
+
 /// Saves the first color attachment of @p fbo (non-MSAA RGBA8, @p width x @p height) as a PNG at
-/// @p _filePath. The pixels come back through a GPU readback that lands a couple of frames later,
-/// so this only issues the copy in @p viewId (which must run after the attachment is final);
-/// gfx::frame() writes the file once the readback has landed. Returns false when the copy could
-/// not be issued. Window framebuffers have no attachment; use bgfx::requestScreenShot for those.
+/// @p _filePath through readTexture: gfx::frame() writes the file once the readback has landed.
+/// Returns false when the copy could not be issued. Window framebuffers have no attachment; use
+/// bgfx::requestScreenShot for those.
 bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height);
 
-/// Writes the saveToFile images whose readback has landed by @p _renderFrame and releases their
+/// Hands the readbacks that have landed by @p _renderFrame to their callbacks and releases their
 /// readback textures. Called by gfx::frame() after every bgfx::frame().
-void writeLandedFileSaves(uint32_t _renderFrame);
+void deliverLandedReadbacks(uint32_t _renderFrame);
 
-/// Advances bgfx frames until every pending saveToFile readback has landed, then writes them.
-/// Called by gfx::shutdown() before bgfx shuts down, so no copy is left targeting freed memory.
-void finishFileSaves();
+/// Advances bgfx frames until every pending readback has landed, then delivers them. Called by
+/// gfx::shutdown() before bgfx shuts down, so no copy is left targeting freed memory.
+void finishReadbacks();
 
 ///
 void* load(const bx::FilePath& _filePath, uint32_t* _size = NULL);

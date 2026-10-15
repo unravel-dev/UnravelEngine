@@ -103,31 +103,13 @@ auto resolve_scene_camera(rtti::context& ctx, std::string& error) -> entt::handl
 
 auto resolve_scene_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
 {
-    auto& hub_sys = ctx.get_cached<hub>();
-    auto camera = hub_sys.get_panels().get_scene_panel().get_camera();
-    if(!camera)
-    {
-        return {};
-    }
-
-    auto* camera_comp = camera.try_get<camera_component>();
-    if(!camera_comp)
-    {
-        return {};
-    }
-
-    return camera_comp->get_render_view().fbo_find("OBUFFER");
+    return ctx.get_cached<hub>().get_panels().get_scene_panel().get_output();
 }
 
 /// The output of the camera the Game panel shows.
 auto resolve_game_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
 {
-    auto camera = ctx.get_cached<hub>().get_panels().get_game_panel().get_displayed_camera(ctx);
-    if(!camera)
-    {
-        return {};
-    }
-    return camera.get<camera_component>().get_render_view().fbo_find("OBUFFER");
+    return ctx.get_cached<hub>().get_panels().get_game_panel().get_output(ctx);
 }
 
 auto camera_to_json(entt::handle camera) -> std::string

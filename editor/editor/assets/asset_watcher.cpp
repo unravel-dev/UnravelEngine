@@ -447,7 +447,7 @@ static void add_to_syncer(rtti::context& ctx,
             if(check_files_integrity(key, output))
             {
                 auto job_name = fmt::format("Compiling {}", ex::get_type<T>());
-                auto task = ts.pool->schedule(job_name,
+                auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
                                               [&am, ref_path, output, job_name]()
                                               {
                                                   APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
@@ -523,8 +523,8 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                 bool high_priority = gfx::get_current_renderer_filename_extension() == extension;
                 tpp::priority::group priority = high_priority ? tpp::priority::normal() : tpp::priority::low();
 
-                auto job_name = fmt::format("Compiling {}", ex::get_type<gfx::shader>() + "(" + extension + ")");
-                auto task = ts.pool->schedule(job_name,
+                auto job_name = fmt::format("Compiling {} ({})", ex::get_type<gfx::shader>(), extension);
+                auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
                                               priority,
                                               [&am, ref_path, output, job_name]()
                                               {
@@ -705,11 +705,11 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
         watchers.emplace_back(id);
     }
 
-    auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_job)
+    auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_entry)
     {
         if(on_progress)
         {
-            on_progress(completed, total, "Indexing Assets Metadata " + current_job);
+            on_progress(completed, total, "Indexing asset metadata", current_entry);
         }
     };
 
@@ -726,7 +726,7 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
                           {
                               if(on_progress)
                               {
-                                  on_progress(info.current_job, info.total_jobs, info.name);
+                                  on_progress(info.current_job, info.total_jobs, info.name, info.detail);
                               }
                           });
     }
@@ -783,11 +783,11 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<ui_tree>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<style_sheet>(ctx, syncer, on_removed, on_renamed);
 
-    auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_job)
+    auto on_sync_progress = [on_progress](size_t completed, size_t total, const std::string& current_entry)
     {
         if(on_progress)
         {
-            on_progress(completed, total, "Indexing Compiled Assets " + current_job);
+            on_progress(completed, total, "Indexing compiled assets", remove_meta_tag(fs::path(current_entry)).generic_string());
         }
     };
     syncer.sync(meta_dir, cache_dir, on_sync_progress);
@@ -802,7 +802,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
                           {
                               if(on_progress)
                               {
-                                  on_progress(info.current_job, info.total_jobs, info.name);
+                                  on_progress(info.current_job, info.total_jobs, info.name, info.detail);
                               }
                           });
     }

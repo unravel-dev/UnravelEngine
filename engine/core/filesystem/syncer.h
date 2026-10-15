@@ -15,7 +15,8 @@ class syncer
 public:
     using rename_pair_t = std::pair<fs::path, fs::path>;
 
-    using on_sync_progress_t = std::function<void(size_t completed, size_t total, const std::string& current_job)>;
+    /// current_entry: the last entry of the reference folder that was handled, relative to it.
+    using on_sync_progress_t = std::function<void(size_t completed, size_t total, const std::string& current_entry)>;
     using on_entry_created_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool)>;
     using on_entry_modified_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&, bool)>;
     using on_entry_removed_t = std::function<void(const std::string&, const fs::path&, const std::vector<fs::path>&)>;
