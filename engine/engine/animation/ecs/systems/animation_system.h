@@ -5,30 +5,28 @@
 #include <engine/ecs/scene.h>
 #include <hpp/span.hpp>
 
+#include <memory>
 #include <utility>
 #include <vector>
 
 namespace unravel
 {
+class animation_component;
+class model_component;
+struct animation_target_skeleton;
+
 class animation_system
 {
 public:
+    /**
+     * @brief The skeleton of `model` as a rest-aligned retargeting target - names, bind pose, rest
+     * pose and humanoid roles - built once per armature version and cached on `animation`.
+     */
+    static auto get_target_skeleton(animation_component& animation, const model_component& model)
+        -> const std::shared_ptr<const animation_target_skeleton>&;
+
     auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
-
-    /**
-     * @brief Called when the component is created.
-     * @param r The registry containing the component.
-     * @param e The entity associated with the component.
-     */
-    static void on_create_component(entt::registry& r, entt::entity e);
-
-    /**
-     * @brief Called when the component is destroyed.
-     * @param r The registry containing the component.
-     * @param e The entity associated with the component.
-     */
-    static void on_destroy_component(entt::registry& r, entt::entity e);
 
     /**
      * @brief Updates the physics system for each frame.

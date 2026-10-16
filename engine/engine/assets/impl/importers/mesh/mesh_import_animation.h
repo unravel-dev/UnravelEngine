@@ -19,7 +19,8 @@ namespace mesh_import
 
 /**
  * @brief One clip per scene animation, named "<file>_<animation>". Channels of nodes that move
- * neither a bone nor a mesh are dropped; root-motion nodes are picked breadth-first.
+ * neither a bone nor a mesh are dropped (a file without meshes keeps every animated node); the
+ * root-motion nodes are the shallowest animated nodes on the skeleton's trunk.
  */
 void process_animations(const aiScene* scene,
                         const fs::path& filename,

@@ -322,6 +322,15 @@ public class AnimationClip : Asset<AnimationClip>
 }
 
 /// <summary>
+/// Animation controller asset handle: a state machine of animation states, transitions and
+/// parameters. Assign it to <see cref="AnimationComponent.controller"/> and drive it with
+/// <see cref="AnimationComponent.SetFloat"/>, <see cref="AnimationComponent.SetTrigger"/> and friends.
+/// </summary>
+public class AnimationController : Asset<AnimationController>
+{
+}
+
+/// <summary>
 /// Physics material asset handle.
 /// </summary>
 public class PhysicsMaterial : Asset<PhysicsMaterial>

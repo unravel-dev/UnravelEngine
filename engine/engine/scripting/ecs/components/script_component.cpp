@@ -1,4 +1,5 @@
 #include "script_component.h"
+#include <engine/animation/animation_player.h>
 #include <dotnetpp/dotnetpp.h>
 
 #include <engine/ecs/components/transform_component.h>
@@ -343,6 +344,48 @@ void script_component::on_sensor_exit(const dotnet::object& obj,
             entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&, uint8_t)>(
             engine_script_cache().on_sensor_exit_method, false);
         method(obj, other.entity(), manifolds, static_cast<uint8_t>(reason));
+    }
+    catch(const dotnet::exception& e)
+    {
+        script_system::log_exception(e);
+    }
+}
+
+void script_component::on_animation_event(const animation_event_hit& hit)
+{
+    safe_foreach(script_components_,
+                 [&](auto& script)
+                 {
+                     auto obj = script.pinned->get_object();
+                     on_animation_event(obj, hit);
+                 });
+}
+
+void script_component::on_animation_event(const dotnet::object& obj, const animation_event_hit& hit)
+{
+    try
+    {
+        auto clip = hit.clip.get();
+        const std::string clip_name = clip ? clip->name : std::string{};
+        auto method = dotnet::make_method_invoker<void(const std::string&,
+                                                       const std::string&,
+                                                       float,
+                                                       int32_t,
+                                                       int32_t,
+                                                       float,
+                                                       const hpp::uuid&,
+                                                       const std::string&)>(
+            engine_script_cache().on_animation_event_method,
+            false);
+        method(obj,
+               hit.event.name,
+               hit.event.string_parameter,
+               hit.event.float_parameter,
+               int32_t(hit.event.int_parameter),
+               int32_t(hit.layer),
+               hit.weight,
+               hit.clip.uid(),
+               clip_name);
     }
     catch(const dotnet::exception& e)
     {

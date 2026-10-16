@@ -1,3 +1,4 @@
+#include <engine/animation/ecs/components/ik_components.h>
 #include "scene.h"
 
 #include <functional>
@@ -264,8 +265,26 @@ scene::scene(const std::string& tag_name)
     on_construct<active_component>(*registry).connect<&bump_shadow_caster_revision>();
     on_destroy<active_component>(*registry).connect<&bump_shadow_caster_revision>();
 
-    on_construct<animation_component>(*registry).connect<&animation_system::on_create_component>();
-    on_destroy<animation_component>(*registry).connect<&animation_system::on_destroy_component>();
+    // The component finds its entity through the owner; replace / patch reassign it.
+    on_construct<animation_component>(*registry).connect<&owned_component::on_create_component<animation_component>>();
+    on_update<animation_component>(*registry).connect<&owned_component::on_create_component<animation_component>>();
+
+    // Rig modifiers find their bone through the owner; replace / patch reassign it, like prefab_component.
+    on_construct<two_bone_ik_component>(*registry).connect<&owned_component::on_create_component<two_bone_ik_component>>();
+    on_update<two_bone_ik_component>(*registry).connect<&owned_component::on_create_component<two_bone_ik_component>>();
+    on_destroy<two_bone_ik_component>(*registry).connect<&owned_component::on_destroy_component<two_bone_ik_component>>();
+    on_construct<chain_ik_component>(*registry).connect<&owned_component::on_create_component<chain_ik_component>>();
+    on_update<chain_ik_component>(*registry).connect<&owned_component::on_create_component<chain_ik_component>>();
+    on_destroy<chain_ik_component>(*registry).connect<&owned_component::on_destroy_component<chain_ik_component>>();
+    on_construct<look_at_ik_component>(*registry).connect<&owned_component::on_create_component<look_at_ik_component>>();
+    on_update<look_at_ik_component>(*registry).connect<&owned_component::on_create_component<look_at_ik_component>>();
+    on_destroy<look_at_ik_component>(*registry).connect<&owned_component::on_destroy_component<look_at_ik_component>>();
+    on_construct<foot_ik_component>(*registry).connect<&owned_component::on_create_component<foot_ik_component>>();
+    on_update<foot_ik_component>(*registry).connect<&owned_component::on_create_component<foot_ik_component>>();
+    on_destroy<foot_ik_component>(*registry).connect<&owned_component::on_destroy_component<foot_ik_component>>();
+    on_construct<spring_bone_component>(*registry).connect<&owned_component::on_create_component<spring_bone_component>>();
+    on_update<spring_bone_component>(*registry).connect<&owned_component::on_create_component<spring_bone_component>>();
+    on_destroy<spring_bone_component>(*registry).connect<&owned_component::on_destroy_component<spring_bone_component>>();
 
     on_construct<physics_component>(*registry).connect<&physics_system::on_create_component>();
     on_destroy<physics_component>(*registry).connect<&physics_system::on_destroy_component>();

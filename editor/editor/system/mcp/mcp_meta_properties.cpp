@@ -11,6 +11,7 @@
 #include <engine/layers/layer_mask.h>
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
@@ -996,6 +997,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<asset_handle<font>>(), make_handle_codec<font>());
         add(entt::type_id<asset_handle<audio_clip>>(), make_handle_codec<audio_clip>());
         add(entt::type_id<asset_handle<animation_clip>>(), make_handle_codec<animation_clip>());
+        add(entt::type_id<asset_handle<animation_controller>>(), make_handle_codec<animation_controller>());
         add(entt::type_id<asset_handle<material>>(), make_handle_codec<material>());
         add(entt::type_id<asset_handle<ui_tree>>(), make_handle_codec<ui_tree>());
         add(entt::type_id<asset_handle<mesh>>(), make_handle_codec<mesh>());

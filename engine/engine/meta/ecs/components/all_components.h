@@ -10,6 +10,7 @@
 #include "light_component.hpp"
 #include "model_component.hpp"
 #include "animation_component.hpp"
+#include "ik_components.hpp"
 #include "physics_component.hpp"
 #include "character_controller_component.hpp"
 #include "prefab_component.hpp"
@@ -48,6 +49,11 @@ using all_serializeable_components = std::tuple<
     animation_component,
     bone_component,
     submesh_component,
+    two_bone_ik_component,
+    chain_ik_component,
+    look_at_ik_component,
+    foot_ik_component,
+    spring_bone_component,
     camera_component,
     volume_component,
     auto_exposure_component,
@@ -85,6 +91,11 @@ using all_inspectable_components = std::tuple<
     animation_component,
     bone_component,
     submesh_component,
+    two_bone_ik_component,
+    chain_ik_component,
+    look_at_ik_component,
+    foot_ik_component,
+    spring_bone_component,
     camera_component,
     volume_component,
     auto_exposure_component,
@@ -113,6 +124,11 @@ using all_addable_components = std::tuple<
     test_component,
     model_component,
     animation_component,
+    two_bone_ik_component,
+    chain_ik_component,
+    look_at_ik_component,
+    foot_ik_component,
+    spring_bone_component,
     camera_component,
     volume_component,
     auto_exposure_component,

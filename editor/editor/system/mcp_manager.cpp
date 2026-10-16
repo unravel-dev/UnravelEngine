@@ -247,6 +247,7 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     mcp::register_script_tools(registry_);
     mcp::register_editor_tools(registry_);
     mcp::register_skill_tools(registry_);
+    mcp::register_animation_tools(registry_);
 
     const auto visible = registry_.visible_tool_count();
     const auto total = registry_.tools().size();

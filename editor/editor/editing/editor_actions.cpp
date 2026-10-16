@@ -5,9 +5,11 @@
 #include "threadpp/thread.h"
 
 #include <editor/editing/actions/entity_actions.h>
+#include <editor/editing/animation_preview.h>
 #include <editor/editing/create_scene_modal.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/hub.h>
+#include <editor/hub/panels/animation_panel/animation_panel.h>
 #include <editor/hub/panels/console_log_panel/console_log_panel.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
@@ -36,6 +38,7 @@
 #include <engine/animation/animation.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/ui/style_sheet.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
@@ -1556,6 +1559,7 @@ auto editor_actions::save_scene_to_path(rtti::context& ctx,
 
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
+    animation_entity_preview::stop_all();
     if(!asset_writer::atomic_save_to_file(absolute.string(), scene))
     {
         return false;
@@ -1616,6 +1620,11 @@ auto editor_actions::open_scene(rtti::context& ctx) -> bool
         }
     }
     return false;
+}
+
+void editor_actions::open_animation_controller(rtti::context& ctx, const asset_handle<animation_controller>& asset)
+{
+    ctx.get_cached<hub>().get_panels().get_animation_panel().open(asset);
 }
 
 auto editor_actions::open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool
@@ -2348,6 +2357,7 @@ auto editor_actions::save_entity_as_prefab(rtti::context& ctx,
                                            const fs::path& prefab_path,
                                            bool attach) -> asset_handle<prefab>
 {
+    animation_entity_preview::stop_all();
     if(!asset_writer::atomic_save_to_file(prefab_path.string(), entity))
     {
         return {};
@@ -2806,7 +2816,21 @@ auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, st
     const std::string extension = fs::path(key).extension().string();
     const std::string name = fs::path(key).stem().string();
     bool is_selected = false;
-    hpp::for_each_type<gfx::texture, material, mesh, prefab, scene_prefab>(
+    // The asset types the content browser selects.
+    hpp::for_each_type<gfx::texture,
+                       gfx::shader,
+                       scene_prefab,
+                       material,
+                       physics_material,
+                       ui_tree,
+                       style_sheet,
+                       audio_clip,
+                       mesh,
+                       prefab,
+                       animation_clip,
+                       animation_controller,
+                       font,
+                       script>(
         [&](auto tag)
         {
             using asset_t = typename std::decay_t<decltype(tag)>::type;
@@ -2824,7 +2848,7 @@ auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, st
         });
     if(!is_selected && error)
     {
-        *error = "No texture, material, mesh, prefab or scene asset at " + key;
+        *error = "No asset at " + key;
     }
     return is_selected;
 }
@@ -2850,6 +2874,7 @@ auto focus_known_asset(rtti::context& ctx, const std::string& key) -> bool
                        mesh,
                        prefab,
                        animation_clip,
+                       animation_controller,
                        font,
                        script>(
         [&](auto tag)

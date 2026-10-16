@@ -6,6 +6,7 @@
 #include <engine/assets/impl/generated_asset.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/physics/physics_material.hpp>
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
@@ -28,6 +29,27 @@
 
 namespace unravel::asset_actions
 {
+
+auto create_animation_controller(rtti::context& ctx, const fs::path& absolute_path)
+    -> asset_handle<animation_controller>
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto key = fs::convert_to_protocol(absolute_path).generic_string();
+
+    auto controller = std::make_shared<animation_controller>();
+    auto& layer = controller->layers.emplace_back();
+    layer.name = "Base";
+    auto& state = layer.states.emplace_back();
+    state.name = "Idle";
+    layer.default_state = state.name;
+
+    auto handle = am.get_asset_from_instance<animation_controller>(key, controller);
+    if(!handle || !asset_writer::atomic_save_to_file(handle.id(), handle))
+    {
+        return {};
+    }
+    return handle;
+}
 
 auto create_physics_material(rtti::context& ctx, const fs::path& absolute_path) -> asset_handle<physics_material>
 {

@@ -20,6 +20,24 @@ REFLECT_EXTERN(animation_channel);
 SERIALIZE_EXTERN(root_motion_params);
 REFLECT_EXTERN(root_motion_params);
 
+SERIALIZE_EXTERN(animation_event);
+REFLECT_EXTERN(animation_event);
+
+SAVE_EXTERN(animation_curve);
+LOAD_EXTERN(animation_curve);
+REFLECT_EXTERN(animation_curve);
+
+/**
+ * @brief Brings authored events into a valid state: positions and weights clamped to 0..1, sorted
+ * by position. Run on everything an importer meta feeds a clip.
+ */
+void sanitize_animation_events(std::vector<animation_event>& events);
+
+/**
+ * @brief Drops unnamed curves; a curve is looked up by name, so an unnamed one is unreachable.
+ */
+void sanitize_animation_curves(std::vector<animation_curve>& curves);
+
 
 template<typename Archive, typename T>
 void SERIALIZE_FUNCTION_NAME(Archive& ar, animation_channel::key<T>& obj)

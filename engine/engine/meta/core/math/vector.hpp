@@ -87,12 +87,13 @@ inline void SAVE_FUNCTION_NAME(Archive& ar, const math::curve<T>& obj)
 template<typename Archive, typename T>
 inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve<T>& obj)
 {
+    // Read in the order SAVE writes: binary archives are positional.
+    bool linked = true;
+    try_load(ar, ser20::make_nvp("linked", linked));
     typename math::curve<T>::channels_t channels;
     if(try_load(ar, ser20::make_nvp("channels", channels)))
     {
         obj.set_channels(channels);
-        bool linked = true;
-        try_load(ar, ser20::make_nvp("linked", linked));
         // Only unlinking is applied: re-linking here would re-key the channels that were just
         // read, and a curve saved as linked already is.
         if(!linked)
@@ -103,7 +104,8 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve<T>& obj)
     }
 
     // The shape curves were saved in before channels existed: one key of every channel at the
-    // same position, always interpolating linearly.
+    // same position, always interpolating linearly. Only associative (JSON) archives can hold it:
+    // a binary archive is positional, and one without channels is not readable past them.
     std::vector<typename math::curve<T>::point_t> points;
     if(try_load(ar, ser20::make_nvp("points", points)))
     {

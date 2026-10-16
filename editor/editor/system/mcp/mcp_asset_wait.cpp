@@ -7,6 +7,7 @@
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/prefab.h>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/ui/ui_tree.h>
@@ -89,6 +90,7 @@ using loadable_asset_types = asset_type_list<material,
                                              gfx::texture,
                                              audio_clip,
                                              animation_clip,
+                                             animation_controller,
                                              physics_material,
                                              ui_tree>;
 

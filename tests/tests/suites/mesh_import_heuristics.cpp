@@ -380,6 +380,51 @@ void test_animation_relevance()
     check(clips[1].name == "door_" && clips[2].name == "door__2", "repeated clip names stay apart");
 }
 
+/**
+ * @brief An animation-only file (no meshes, so no bones listed): Root -> Armature -> Hips -> (Thigh,
+ * Spine), and beside the armature a Prop rig with one node. Clip "Walk" moves the hips and the prop.
+ */
+auto make_meshless_scene() -> std::unique_ptr<aiScene>
+{
+    auto scene = std::make_unique<aiScene>();
+    auto* root = new aiNode("Root");
+    auto* armature = new aiNode("Armature");
+    auto* hips = new aiNode("Hips");
+    auto* thigh = new aiNode("Thigh");
+    auto* spine = new aiNode("Spine");
+    auto* prop = new aiNode("Prop");
+    root->addChildren(1, &prop);
+    root->addChildren(1, &armature);
+    armature->addChildren(1, &hips);
+    hips->addChildren(1, &thigh);
+    hips->addChildren(1, &spine);
+    scene->mRootNode = root;
+    auto* walk = make_animation("Walk", 4);
+    walk->mChannels[0] = make_channel("Hips", true, true);
+    walk->mChannels[1] = make_channel("Thigh", false, true);
+    walk->mChannels[2] = make_channel("Spine", false, true);
+    walk->mChannels[3] = make_channel("Prop", true, true);
+    scene->mNumAnimations = 1;
+    scene->mAnimations = new aiAnimation*[1]{walk};
+    return scene;
+}
+
+void test_meshless_animation()
+{
+    const auto scene = make_meshless_scene();
+    auto node_indices = assign_node_indices(scene.get());
+    std::vector<animation_clip> clips;
+    process_animations(scene.get(), fs::path("walk"), node_indices, clips);
+    check(clips.size() == 1 && clips.front().channels.size() == 4, "a file without meshes keeps every animated channel");
+    if(clips.size() != 1)
+    {
+        return;
+    }
+    // The trunk follows the larger rig under the root, so the prop does not take the root motion.
+    check(clips.front().root_motion.position_node_name == "Hips", "the hips carry the travel");
+    check(clips.front().root_motion.rotation_node_name == "Hips", "and the turn");
+}
+
 auto make_bone(const char* name, const aiMatrix4x4& offset) -> aiBone*
 {
     auto* bone = new aiBone();
@@ -506,6 +551,7 @@ auto run_mesh_import_heuristics(rtti::context&) -> int
     test_packed_metallic_roughness();
     test_material_properties();
     test_animation_relevance();
+    test_meshless_animation();
     test_shared_bind_space();
     test_texture_files();
     std::printf("  %d checks, %d failures\n", g_checks, g_failures);

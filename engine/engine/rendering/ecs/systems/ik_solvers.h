@@ -11,9 +11,7 @@ namespace unravel
 /**
  * @brief How the `pole` argument of a position solver is interpreted.
  *
- * The previous API used a zero-length vector as the "disabled" sentinel, which
- * made the world origin a magic location: a pole authored at (0,0,0) silently
- * turned the constraint off. The mode is explicit instead.
+ * The mode is explicit, so no position (the world origin included) means "disabled".
  */
 enum class ik_pole_mode : uint8_t
 {
@@ -234,6 +232,15 @@ auto ik_look_at_position(entt::handle bone, const math::vec3& target, float weig
 // -----------------------------------------------------------------------------
 
 /**
+ * @brief The next joint up an IK chain from `joint`, or a null handle where the chain ends.
+ *
+ * With `bones_only` (a chain that starts on a skinned bone) the chain ends below the first
+ * ancestor that is not a bone: the armature container. Every walk over an IK chain goes through
+ * this, so the joints a caller saves are exactly the joints the solvers write.
+ */
+auto ik_get_chain_parent(entt::handle joint, bool bones_only) -> entt::handle;
+
+/**
  * @brief Bone-local direction from `bone` toward its first child.
  *
  * The axis the bone visually runs ALONG. Falls back to +Z for leaf bones and for
@@ -260,6 +267,9 @@ auto ik_resolve_bone_axis_local(entt::handle bone) -> math::vec3;
  * six signed unit axes, so a spine slightly bent by the current animation frame
  * still resolves to the same clean axis.
  */
+/// The signed unit axis (+-X, +-Y, +-Z) closest to `direction`.
+auto ik_snap_to_cardinal_axis(const math::vec3& direction) -> math::vec3;
+
 auto ik_resolve_facing_axis_local(entt::handle bone,
                                   const math::vec3& world_direction,
                                   bool snap_to_cardinal = true) -> math::vec3;

@@ -29,6 +29,7 @@
 #include <graphics/shader.h>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/animation/animation.h>
 #include <filesystem/filesystem.h>
@@ -53,7 +54,7 @@ struct asset_type_entry
     const std::vector<std::string>& (*formats)();
 };
 
-const std::array<asset_type_entry, 13> k_asset_types{{
+const std::array<asset_type_entry, 14> k_asset_types{{
     {"texture", &ex::get_suported_formats<gfx::texture>},
     {"mesh", &ex::get_suported_formats<mesh>},
     {"material", &ex::get_suported_formats<material>},
@@ -61,6 +62,7 @@ const std::array<asset_type_entry, 13> k_asset_types{{
     {"scene", &ex::get_suported_formats<scene_prefab>},
     {"audio_clip", &ex::get_suported_formats<audio_clip>},
     {"animation_clip", &ex::get_suported_formats<animation_clip>},
+    {"animation_controller", &ex::get_suported_formats<animation_controller>},
     {"physics_material", &ex::get_suported_formats<physics_material>},
     {"script", &ex::get_suported_formats<script>},
     {"ui_document", &ex::get_suported_formats<ui_tree>},

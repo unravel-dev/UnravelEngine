@@ -8,6 +8,7 @@
 #include <engine/profiler/profiler.h>
 
 #include <engine/animation/ecs/systems/animation_system.h>
+#include <engine/animation/ecs/systems/rig_system.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/systems/transform_system.h>
 #include <engine/engine.h>
@@ -52,6 +53,8 @@ void rendering_system::on_frame_update(scene& scn, delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/On Frame Update");
     auto& ctx = engine::context();
+    // Rigs drawn from their transforms get their input pose back before anything animates them.
+    ctx.get_cached<rig_system>().restore_deferred(*scn.registry);
     ctx.get_cached<transform_system>().on_frame_update(scn, dt);
     ctx.get_cached<camera_system>().on_frame_update(scn, dt);
     ctx.get_cached<model_system>().on_frame_update(scn, dt);
@@ -64,7 +67,11 @@ void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/On Frame Before Render");
     auto& ctx = engine::context();
+    // Rig modifiers (IK, spring bones) pose the bones for skinning, then hand back the input pose.
+    auto& rig = ctx.get_cached<rig_system>();
+    rig.before_skinning(*scn.registry, dt);
     ctx.get_cached<model_system>().on_frame_before_render(scn, dt);
+    rig.after_skinning(*scn.registry);
     ctx.get_cached<camera_system>().on_frame_before_render(scn, dt);
     ctx.get_cached<particle_system>().on_frame_before_render(scn, dt);
 

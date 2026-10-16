@@ -1,10 +1,12 @@
 #include "asset_importer_meta.hpp"
 
+#include <engine/meta/animation/animation.hpp>
 #include <engine/meta/core/common/basetypes.hpp>
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 #include <serialization/types/map.hpp>
+#include <serialization/types/vector.hpp>
 
 namespace unravel
 {
@@ -52,6 +54,18 @@ REFLECT(animation_importer_meta)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "root_motion"},
             entt::attribute{"pretty_name", "Root Motion"},
+        })
+        .data<&animation_importer_meta::events>("events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "events"},
+            entt::attribute{"pretty_name", "Events"},
+            entt::attribute{"tooltip", "Timeline markers reported to scripts (OnAnimationEvent) when playback crosses them."},
+        })
+        .data<&animation_importer_meta::curves>("curves"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "curves"},
+            entt::attribute{"pretty_name", "Curves"},
+            entt::attribute{"tooltip", "Named float tracks blended with the pose (GetCurve, controller parameters, IK weights)."},
         });
 }
 
@@ -81,6 +95,8 @@ SAVE(animation_importer_meta)
 {
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_save(ar, ser20::make_nvp("root_motion", obj.root_motion));
+    try_save(ar, ser20::make_nvp("events", obj.events));
+    try_save(ar, ser20::make_nvp("curves", obj.curves));
 }
 SAVE_INSTANTIATE(animation_importer_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(animation_importer_meta, ser20::oarchive_binary_t);
@@ -89,6 +105,8 @@ LOAD(animation_importer_meta)
 {
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_load(ar, ser20::make_nvp("root_motion", obj.root_motion));
+    try_load(ar, ser20::make_nvp("events", obj.events));
+    try_load(ar, ser20::make_nvp("curves", obj.curves));
 }
 LOAD_INSTANTIATE(animation_importer_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(animation_importer_meta, ser20::iarchive_binary_t);

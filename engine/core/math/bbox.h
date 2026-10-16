@@ -193,6 +193,11 @@ struct bbox
      */
     static bbox mul(const bbox& bounds, const transform& t);
     static bbox mul_no_scale(const bbox& bounds, const transform& t);
+    /**
+     * @brief The box enclosing @p bounds transformed by an affine matrix: its axes and translation
+     * are read from the columns, with no decomposition into components.
+     */
+    static bbox mul(const bbox& bounds, const mat4& m);
 
     /**
      * @brief Grows the bounding box based on the point passed

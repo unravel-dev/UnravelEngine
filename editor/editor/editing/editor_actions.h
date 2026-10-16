@@ -23,6 +23,7 @@ namespace unravel
 
 struct editing_action_t;
 struct asset_meta;
+struct animation_controller;
 
 struct play_state_info
 {
@@ -151,6 +152,11 @@ struct editor_actions
     static auto new_scene(rtti::context& ctx) -> bool;
     static auto open_scene(rtti::context& ctx) -> bool;
     static auto open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool;
+
+    /**
+     * @brief Opens the Animation Controller editor on a controller asset.
+     */
+    static void open_animation_controller(rtti::context& ctx, const asset_handle<animation_controller>& asset);
     static auto save_scene(rtti::context& ctx) -> bool;
     static auto save_scene_as(rtti::context& ctx) -> bool;
     static auto prompt_save_scene(rtti::context& ctx, const std::function<void()>& on_continue) -> bool;

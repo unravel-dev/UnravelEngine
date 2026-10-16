@@ -117,6 +117,7 @@ void register_wait_tools(mcp_tool_registry& registry);
 void register_script_tools(mcp_tool_registry& registry);
 void register_editor_tools(mcp_tool_registry& registry);
 void register_skill_tools(mcp_tool_registry& registry);
+void register_animation_tools(mcp_tool_registry& registry);
 
 /**
  * @brief The arguments a call passed that the tool's input schema does not declare, one message each.

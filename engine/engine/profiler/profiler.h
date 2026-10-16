@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <array>
+#include <deque>
 #include <string>
 #include <vector>
 #include <memory>
@@ -155,39 +156,52 @@ struct profile_event
     }
 };
 
-/// @brief Fixed-size buffer of profile events for one frame on one thread.
-struct thread_profile_buffer
-{
-    static constexpr uint32_t max_events = 32768;
-
-    std::array<profile_event, max_events> events{};
-    uint32_t count{0};
-    uint16_t depth{0};
-    uint16_t thread_index{0};
-
-    void reset()
-    {
-        count = 0;
-        depth = 0;
-    }
-};
-
-/// @brief Double-buffered per-thread profiling state.
-/// One buffer is being written by the owning thread while the other
-/// is read by the main thread for display.
+/// @brief Per-thread profiling state: a ring of events the owning thread appends to and the main
+/// thread takes from once a frame (take_events()). Neither side ever waits for the other: each
+/// one only publishes how far it got. Each time its outermost scope closes, the owner publishes
+/// that every event so far is finished; the main thread takes the events up to there and then
+/// gives their slots back. A thread inside a scope when the events are taken - the render thread
+/// runs out of step with the frame - hands that scope's events over at a later take, once the
+/// scope has closed. New events are dropped while the main thread has a full ring left to take.
 struct thread_profile_data
 {
-    std::array<thread_profile_buffer, 2> buffers{};
-    std::atomic<uint32_t> write_idx{0};
+    /// A power of two, so a position maps to its slot with a mask.
+    static constexpr uint32_t capacity = 65536;
 
-    auto write_buffer() -> thread_profile_buffer& { return buffers[write_idx.load(std::memory_order_relaxed)]; }
-    auto read_buffer() -> thread_profile_buffer& { return buffers[1 - write_idx.load(std::memory_order_acquire)]; }
+    std::array<profile_event, capacity> events{};
+    uint16_t thread_index{0};
+    /// Owner only: the scopes open now.
+    uint16_t depth{0};
+    /// Owner only: the position of the next event, counting every event since registration.
+    uint64_t next_position{0};
+    /// Owner -> main thread: every event before this position is finished.
+    std::atomic<uint64_t> finished_position{0};
+    /// Main thread -> owner: every event before this position is taken, so its slot can be filled again.
+    std::atomic<uint64_t> taken_position{0};
 
-    void flip()
+    static constexpr auto get_slot(uint64_t position) -> uint32_t
     {
-        uint32_t old_idx = write_idx.load(std::memory_order_relaxed);
-        write_idx.store(1 - old_idx, std::memory_order_release);
-        write_buffer().reset();
+        return static_cast<uint32_t>(position & (capacity - 1));
+    }
+
+    /// Owner, with no scope open: hands every event so far to the main thread.
+    void publish_finished()
+    {
+        finished_position.store(next_position, std::memory_order_release);
+    }
+
+    /// Main thread: calls @a visit with each event finished since the last take, in order, then
+    /// gives their slots back to the owner.
+    template<typename Visit>
+    void take_events(Visit&& visit)
+    {
+        const uint64_t end = finished_position.load(std::memory_order_acquire);
+        for(uint64_t position = taken_position.load(std::memory_order_relaxed); position < end; ++position)
+        {
+            const profile_event& event = events[get_slot(position)];
+            visit(event);
+        }
+        taken_position.store(end, std::memory_order_release);
     }
 };
 
@@ -212,7 +226,7 @@ struct frame_snapshot
     float frame_wall_ms{0.0f};
     /// Main-thread busy time in milliseconds (Frame Loop CPU, or longest main root).
     float frame_busy_ms{0.0f};
-    /// @c frame_busy_ms / @c frame_wall_ms — fraction of the frame the main thread was running.
+    /// @c frame_busy_ms / @c frame_wall_ms - fraction of the frame the main thread was running.
     float frame_cpu_ratio{1.0f};
 
     struct thread_snapshot
@@ -250,7 +264,7 @@ public:
     /// Thread must already be registered (e.g. native code or prior ensure_thread_registered).
     void add_record(hpp::string_view name, float time_ms);
 
-    /// @brief End-of-frame: flip buffers and capture a snapshot when recording.
+    /// @brief End-of-frame: takes every thread's finished events, kept as a snapshot when recording.
     void swap();
 
     /// @brief Register the calling thread for timeline profiling.
@@ -258,7 +272,7 @@ public:
     auto register_thread(const std::string& name) -> thread_profile_data*;
 
     /// @brief All registered threads and their profiling data.
-    auto get_threads() const -> const std::vector<thread_info>&;
+    auto get_threads() const -> const std::deque<thread_info>&;
 
     /// @brief Frame boundary timestamps for the last completed frame.
     auto get_frame_start_ns() const -> int64_t;
@@ -295,8 +309,11 @@ public:
     void set_max_frame_history(uint32_t capacity);
 
 private:
-    std::vector<thread_info> threads_;
+    /// Registering never moves a thread already listed, so swap() reads them without the lock.
+    std::deque<thread_info> threads_;
     std::mutex registration_mutex_;
+    /// swap(): the threads registered when it began, listed under the lock.
+    std::vector<const thread_info*> threads_to_take_;
 
     int64_t frame_start_ns_{0};
     int64_t frame_end_ns_{0};
@@ -310,12 +327,12 @@ private:
     recording_state recording_state_{recording_state::stopped};
     int32_t selected_frame_{-1};
 
-    auto register_thread_unlocked(const std::string& name) -> thread_profile_data*;
-
     /// Sets the process-wide capture gate (@ref profiler_process_capture_gate_store).
     void sync_capture_active_to_threads();
 
-    void capture_frame_snapshot();
+    /// @brief Takes the finished events of threads_to_take_; while recording they become the
+    /// frame's snapshot.
+    void take_frame_events();
 };
 
 // ============================================================================
@@ -374,6 +391,55 @@ inline auto get_thread_profile_data(const char* thread_name) -> thread_profile_d
     return t_profile_data;
 }
 
+/// @brief Owner: fills the next event of @a data at the current depth, still open (no end time).
+/// Returns its slot, or UINT32_MAX while the main thread has a full ring left to take.
+inline auto append_profile_event(thread_profile_data& data,
+                                 const char* name_literal,
+                                 hpp::string_view name_owned,
+                                 int64_t start_ns,
+                                 int64_t cpu_start_ns) -> uint32_t
+{
+    // Acquire: the main thread has finished reading a slot before it is filled again.
+    const uint64_t taken_position = data.taken_position.load(std::memory_order_acquire);
+    if(data.next_position - taken_position >= thread_profile_data::capacity) [[unlikely]]
+    {
+        return UINT32_MAX;
+    }
+    const uint32_t idx = thread_profile_data::get_slot(data.next_position++);
+    auto& ev = data.events[idx];
+    ev.name_literal = name_literal;
+    if(name_literal != nullptr)
+    {
+        ev.name_owned.clear();
+    }
+    else
+    {
+        ev.name_owned.assign(name_owned.data(), name_owned.size());
+    }
+    ev.start_ns = start_ns;
+    ev.cpu_start_ns = cpu_start_ns;
+    ev.end_ns = 0;
+    ev.cpu_end_ns = 0;
+    ev.depth = data.depth;
+    ev.thread_index = data.thread_index;
+    ev.color_hash = fnv1a_hash(ev.name());
+    return idx;
+}
+
+/// @brief Opens a scope on @a data: a string literal name, or a copied one when @a name_literal is null.
+inline auto profile_begin_on(thread_profile_data& data, const char* name_literal, hpp::string_view name_owned) -> uint32_t
+{
+    // The wall clock before the CPU clock, so the CPU interval lies inside the wall interval.
+    const int64_t start_ns = get_time_ns();
+    const int64_t cpu_start_ns = platform::get_thread_cpu_time_ns();
+    const uint32_t idx = append_profile_event(data, name_literal, name_owned, start_ns, cpu_start_ns);
+    if(idx != UINT32_MAX)
+    {
+        ++data.depth;
+    }
+    return idx;
+}
+
 /// @brief Begin a profiling scope. Returns an event index for profile_end().
 inline auto profile_begin(const char* name) -> uint32_t
 {
@@ -382,29 +448,7 @@ inline auto profile_begin(const char* name) -> uint32_t
         return UINT32_MAX;
     }
     auto* data = get_thread_profile_data();
-    if(!data) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    auto& buf = data->write_buffer();
-    if(buf.count >= thread_profile_buffer::max_events) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    uint32_t idx = buf.count++;
-    auto& ev = buf.events[idx];
-    ev.name_literal = name;
-    ev.name_owned.clear();
-    ev.start_ns = get_time_ns();
-    ev.cpu_start_ns = platform::get_thread_cpu_time_ns();
-    ev.end_ns = 0;
-    ev.cpu_end_ns = 0;
-    ev.depth = buf.depth++;
-    ev.thread_index = buf.thread_index;
-    ev.color_hash = fnv1a_hash(name);
-    return idx;
+    return data != nullptr ? profile_begin_on(*data, name, {}) : UINT32_MAX;
 }
 
 /// @brief Same as profile_begin(@a name), but the first profiler call on this thread uses
@@ -416,29 +460,7 @@ inline auto profile_begin(const char* name, const char* thread_name) -> uint32_t
         return UINT32_MAX;
     }
     auto* data = get_thread_profile_data(thread_name);
-    if(!data) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    auto& buf = data->write_buffer();
-    if(buf.count >= thread_profile_buffer::max_events) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    uint32_t idx = buf.count++;
-    auto& ev = buf.events[idx];
-    ev.name_literal = name;
-    ev.name_owned.clear();
-    ev.start_ns = get_time_ns();
-    ev.cpu_start_ns = platform::get_thread_cpu_time_ns();
-    ev.end_ns = 0;
-    ev.cpu_end_ns = 0;
-    ev.depth = buf.depth++;
-    ev.thread_index = buf.thread_index;
-    ev.color_hash = fnv1a_hash(name);
-    return idx;
+    return data != nullptr ? profile_begin_on(*data, name, {}) : UINT32_MAX;
 }
 
 /// @brief Like profile_begin() but copies the label into name_owned (script / dynamic names).
@@ -449,29 +471,7 @@ inline auto profile_begin_owned(hpp::string_view name) -> uint32_t
         return UINT32_MAX;
     }
     auto* data = get_thread_profile_data();
-    if(!data) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    auto& buf = data->write_buffer();
-    if(buf.count >= thread_profile_buffer::max_events) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    uint32_t idx = buf.count++;
-    auto& ev = buf.events[idx];
-    ev.name_literal = nullptr;
-    ev.name_owned = std::string(name);
-    ev.start_ns = get_time_ns();
-    ev.cpu_start_ns = platform::get_thread_cpu_time_ns();
-    ev.end_ns = 0;
-    ev.cpu_end_ns = 0;
-    ev.depth = buf.depth++;
-    ev.thread_index = buf.thread_index;
-    ev.color_hash = fnv1a_hash(ev.name());
-    return idx;
+    return data != nullptr ? profile_begin_on(*data, nullptr, name) : UINT32_MAX;
 }
 
 /// @brief profile_begin_owned(@a name) with optional lane label on first registration (see profile_begin two-arg).
@@ -482,29 +482,7 @@ inline auto profile_begin_owned(hpp::string_view name, const char* thread_name) 
         return UINT32_MAX;
     }
     auto* data = get_thread_profile_data(thread_name);
-    if(!data) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    auto& buf = data->write_buffer();
-    if(buf.count >= thread_profile_buffer::max_events) [[unlikely]]
-    {
-        return UINT32_MAX;
-    }
-
-    uint32_t idx = buf.count++;
-    auto& ev = buf.events[idx];
-    ev.name_literal = nullptr;
-    ev.name_owned = std::string(name);
-    ev.start_ns = get_time_ns();
-    ev.cpu_start_ns = platform::get_thread_cpu_time_ns();
-    ev.end_ns = 0;
-    ev.cpu_end_ns = 0;
-    ev.depth = buf.depth++;
-    ev.thread_index = buf.thread_index;
-    ev.color_hash = fnv1a_hash(ev.name());
-    return idx;
+    return data != nullptr ? profile_begin_on(*data, nullptr, name) : UINT32_MAX;
 }
 
 /// @brief End a profiling scope started by profile_begin().
@@ -520,13 +498,18 @@ inline void profile_end(uint32_t idx)
         return;
     }
 
-    auto& buf = data->write_buffer();
     // The reverse of profile_begin(): the CPU interval lies inside the wall interval, so the busy
     // time can never come out longer than the wall time. Read the other way round, the CPU clock
     // (a system call) could sample after the wall clock and add up to a microsecond.
-    buf.events[idx].cpu_end_ns = platform::get_thread_cpu_time_ns();
-    buf.events[idx].end_ns = get_time_ns();
-    buf.depth--;
+    const int64_t cpu_end_ns = platform::get_thread_cpu_time_ns();
+    const int64_t end_ns = get_time_ns();
+    auto& ev = data->events[idx];
+    ev.cpu_end_ns = cpu_end_ns;
+    ev.end_ns = end_ns;
+    if(--data->depth == 0)
+    {
+        data->publish_finished();
+    }
 }
 
 // ============================================================================

@@ -5,9 +5,20 @@
 
 #include <engine/meta/ecs/components/all_components.h>
 
+#include <engine/animation/animation.h>
+#include <engine/animation/animation_controller.h>
+#include <engine/assets/asset_manager.h>
+#include <engine/audio/audio_clip.h>
+#include <engine/ecs/prefab.h>
+#include <engine/physics/physics_material.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/font.h>
+#include <engine/rendering/material.h>
+#include <engine/rendering/mesh.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/scripting/script_asset_reference.h>
+#include <graphics/texture.h>
 
 #include <algorithm>
 #include <functional>
@@ -169,6 +180,35 @@ auto make_script_entity_codec() -> script_field_codec
             }};
 }
 
+/// An asset field (Prefab, Texture, ...): the managed reference read and written as the inspector does, spelled as
+/// the reflection bridge spells asset handles (the asset's key, or null).
+template<typename T>
+auto make_script_asset_codec() -> script_field_codec
+{
+    return {.to_json = [](rtti::context& ctx, const dotnet::object& obj, const dotnet::field& field)
+                -> hpp::optional<std::string>
+            {
+                const auto reference = dotnet::make_field_invoker<dotnet::object>(field).get_value(obj);
+                entt::meta_any value{get_script_asset<T>(ctx.get_cached<asset_manager>(), reference)};
+                return meta_value_to_json(ctx, value);
+            },
+            .from_json = [](rtti::context& ctx,
+                            dotnet::object& obj,
+                            const dotnet::field& field,
+                            const simdjson::dom::element& element,
+                            std::string& error) -> bool
+            {
+                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
+                entt::meta_any value{get_script_asset<T>(ctx.get_cached<asset_manager>(), invoker.get_value(obj))};
+                if(!meta_value_from_json(ctx, element, value, error))
+                {
+                    return false;
+                }
+                set_script_asset(obj, invoker, value.cast<asset_handle<T>>());
+                return true;
+            }};
+}
+
 /// C# field types by name, each with the C++ type the inspector's field table edits it as.
 auto script_field_codecs() -> const std::map<std::string, script_field_codec>&
 {
@@ -191,6 +231,16 @@ auto script_field_codecs() -> const std::map<std::string, script_field_codec>&
         {"Color", make_script_field_codec<math::color>()},
         {"LayerMask", make_script_field_codec<layer_mask>()},
         {"Entity", make_script_entity_codec()},
+        {"Texture", make_script_asset_codec<gfx::texture>()},
+        {"Material", make_script_asset_codec<material>()},
+        {"Mesh", make_script_asset_codec<mesh>()},
+        {"AnimationClip", make_script_asset_codec<animation_clip>()},
+        {"AnimationController", make_script_asset_codec<animation_controller>()},
+        {"Prefab", make_script_asset_codec<prefab>()},
+        {"Scene", make_script_asset_codec<scene_prefab>()},
+        {"PhysicsMaterial", make_script_asset_codec<physics_material>()},
+        {"AudioClip", make_script_asset_codec<audio_clip>()},
+        {"Font", make_script_asset_codec<font>()},
     };
     return table;
 }
@@ -211,8 +261,7 @@ auto script_enum_codecs() -> const std::map<std::string, script_field_codec>&
     return table;
 }
 
-/// The codec for a field of @p type, or none when MCP cannot express it (asset references, lists, nested
-/// objects).
+/// The codec for a field of @p type, or none when MCP cannot express it (lists, nested objects).
 auto find_script_field_codec(const dotnet::type& type) -> const script_field_codec*
 {
     const auto& table = type.is_enum() ? script_enum_codecs() : script_field_codecs();

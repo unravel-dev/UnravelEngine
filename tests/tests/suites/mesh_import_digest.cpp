@@ -327,8 +327,20 @@ void write_animations(digest_writer& out, const std::vector<animation_clip>& ani
     for(const auto& clip : animations)
     {
         digest_hash hash;
+        // The skeleton the keys were authored against, which rest-aligned retargeting maps from.
+        digest_hash rest_hash;
+        const auto add_transform = [&](const math::transform& transform)
+        {
+            rest_hash.add(transform.get_position());
+            rest_hash.add(transform.get_rotation());
+            rest_hash.add(transform.get_scale());
+        };
         for(const auto& channel : clip.channels)
         {
+            rest_hash.add(channel.has_rest);
+            rest_hash.add(channel.parent_channel);
+            add_transform(channel.rest_local);
+            add_transform(channel.parent_offset);
             hash.add_string(channel.node_name);
             hash.add(channel.node_index);
             for(const auto& key : channel.position_keys)
@@ -347,11 +359,13 @@ void write_animations(digest_writer& out, const std::vector<animation_clip>& ani
                 hash.add(key.value);
             }
         }
-        out.line("  clip '{}' duration={:.5f} channels={} hash={:016x} root_position='{}'#{} root_rotation='{}'#{}",
+        out.line("  clip '{}' duration={:.5f} channels={} hash={:016x} rest_hash={:016x} root_position='{}'#{} "
+                 "root_rotation='{}'#{}",
                  clip.name,
                  clip.duration.count(),
                  clip.channels.size(),
                  hash.get_value(),
+                 rest_hash.get_value(),
                  clip.root_motion.position_node_name,
                  clip.root_motion.position_node_index,
                  clip.root_motion.rotation_node_name,

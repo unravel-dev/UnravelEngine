@@ -16,7 +16,10 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <string>
 
 namespace unravel
 {
@@ -24,6 +27,74 @@ namespace importer
 {
 namespace
 {
+
+/// Axis indices an FBX file's settings name (X, Y, Z).
+constexpr int32_t FBX_AXIS_COUNT = 3;
+
+auto is_fbx_file(const fs::path& file) -> bool
+{
+    std::string extension = file.extension().string();
+    std::transform(extension.begin(),
+                   extension.end(),
+                   extension.begin(),
+                   [](unsigned char c)
+                   {
+                       return char(std::tolower(c));
+                   });
+    return extension == ".fbx";
+}
+
+/**
+ * @brief Turns the root of an FBX scene without meshes by the file's axis settings.
+ *
+ * Assimp turns an FBX scene's root by the file's UpAxis / FrontAxis / CoordAxis settings only when
+ * the file has meshes. An animation-only export (a clip saved without its skin) would keep the
+ * authoring tool's axes while the skinned file it belongs to is turned upright: the same correction,
+ * read and applied as Assimp does before post-processing, keeps both on one root frame.
+ */
+void correct_meshless_fbx_root(aiScene& scene, const fs::path& file)
+{
+    if(scene.mNumMeshes > 0 || scene.mRootNode == nullptr || scene.mMetaData == nullptr || !is_fbx_file(file))
+    {
+        return;
+    }
+    int32_t up_axis = 1;
+    int32_t up_axis_sign = 1;
+    int32_t front_axis = 2;
+    int32_t front_axis_sign = 1;
+    int32_t coord_axis = 0;
+    int32_t coord_axis_sign = 1;
+    double unit_scale_factor = 1.0;
+    const aiMetadata& metadata = *scene.mMetaData;
+    metadata.Get("UpAxis", up_axis);
+    metadata.Get("UpAxisSign", up_axis_sign);
+    metadata.Get("FrontAxis", front_axis);
+    metadata.Get("FrontAxisSign", front_axis_sign);
+    metadata.Get("CoordAxis", coord_axis);
+    metadata.Get("CoordAxisSign", coord_axis_sign);
+    // Read as a double, as Assimp reads it for files with meshes, so both kinds get the same scale.
+    metadata.Get("UnitScaleFactor", unit_scale_factor);
+    const auto is_axis = [](int32_t axis)
+    {
+        return axis >= 0 && axis < FBX_AXIS_COUNT;
+    };
+    if(!is_axis(up_axis) || !is_axis(front_axis) || !is_axis(coord_axis))
+    {
+        return;
+    }
+    const float scale = float(unit_scale_factor);
+    aiVector3D up;
+    aiVector3D forward;
+    aiVector3D right;
+    up[unsigned(up_axis)] = float(up_axis_sign) * scale;
+    forward[unsigned(front_axis)] = float(front_axis_sign) * scale;
+    right[unsigned(coord_axis)] = float(coord_axis_sign) * scale;
+    const aiMatrix4x4 correction(right.x, right.y, right.z, 0.0f,
+                                 up.x, up.y, up.z, 0.0f,
+                                 forward.x, forward.y, forward.z, 0.0f,
+                                 0.0f, 0.0f, 0.0f, 1.0f);
+    scene.mRootNode->mTransformation *= correction;
+}
 
 void process_imported_scene(asset_manager& am,
                             const fs::path& filename,
@@ -69,7 +140,16 @@ void process_imported_scene(asset_manager& am,
 auto read_file(Assimp::Importer& importer, const fs::path& file, uint32_t flags) -> const aiScene*
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Importer Read File");
-    return importer.ReadFile(file.string(), flags);
+    // Read without post-processing first: a mesh-less FBX root is corrected in the frame the file
+    // was read in, as Assimp corrects the others, and only then converted.
+    const aiScene* scene = importer.ReadFile(file.string(), 0);
+    if(scene == nullptr)
+    {
+        return nullptr;
+    }
+    // The importer owns the scene and post-processing rewrites it in place anyway.
+    correct_meshless_fbx_root(*const_cast<aiScene*>(scene), file);
+    return importer.ApplyPostProcessing(flags);
 }
 
 /// Assimp post-processing for an import with @p import_meta's model and material options.

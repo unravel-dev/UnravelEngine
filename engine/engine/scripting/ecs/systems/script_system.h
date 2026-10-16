@@ -164,6 +164,8 @@ struct script_system
         dotnet::method on_sensor_exit_method;
         dotnet::method on_collision_enter_method;
         dotnet::method on_collision_exit_method;
+        // ScriptComponent.internal_n2m_on_animation_event(name, string, float, int, layer, weight, clip, clip name)
+        dotnet::method on_animation_event_method;
         // ScriptComponent.internal_n2m_invoke(method name, encoded arguments) -> JSON, for tools
         dotnet::method invoke_method;
 
@@ -306,6 +308,15 @@ private:
     auto bind_internal_calls(rtti::context& ctx) -> bool;
 
     void check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback);
+
+    /**
+     * @brief Delivers the animation events every player recorded this frame to the scripts on the
+     * animated entity (or, when it has none, its nearest ancestor with scripts).
+     *
+     * Runs on the main thread: players record events on the pool threads the animation system
+     * runs on, and managed code must not be entered from there.
+     */
+    void dispatch_animation_events(scene& scn);
 
     auto create_compilation_job(rtti::context& ctx, const std::string& protocol, bool debug) -> tpp::job_future<bool>;
 

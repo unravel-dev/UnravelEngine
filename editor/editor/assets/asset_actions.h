@@ -11,6 +11,7 @@
 namespace unravel
 {
 struct physics_material;
+struct animation_controller;
 class material;
 class asset_manager;
 }
@@ -24,6 +25,12 @@ namespace unravel::asset_actions
  * @return The new asset's handle; empty when it could not be saved.
  */
 auto create_physics_material(rtti::context& ctx, const fs::path& absolute_path) -> asset_handle<physics_material>;
+/**
+ * @brief Creates an animation controller with one Base layer holding an empty Idle state, saved at
+ * @p absolute_path.
+ */
+auto create_animation_controller(rtti::context& ctx, const fs::path& absolute_path)
+    -> asset_handle<animation_controller>;
 
 /**
  * @brief Creates a PBR material asset with default values at `absolute_path` and saves it.

@@ -108,7 +108,26 @@ namespace
 {
 /// Defined further down, next to the other prefab-root helpers.
 auto is_another_documents_content(entt::handle entity, const asset_handle<prefab>& source) -> bool;
+
+/// Open inspect_without_undo_scope instances; inspectors draw on the main thread only.
+int no_undo_depth = 0;
 } // namespace
+
+inspect_without_undo_scope::inspect_without_undo_scope()
+{
+    ++no_undo_depth;
+}
+
+inspect_without_undo_scope::~inspect_without_undo_scope()
+{
+    --no_undo_depth;
+}
+
+auto inspect_without_undo_scope::is_active() -> bool
+{
+    return no_undo_depth > 0;
+}
+
 auto add_property_action(rtti::context& ctx,
                          prefab_override_context& override_ctx,
                          inspect_result& result,
@@ -117,6 +136,13 @@ auto add_property_action(rtti::context& ctx,
                          const entt::meta_any& new_var,
                          const entt::meta_custom& custom) -> bool
 {
+    if(inspect_without_undo_scope::is_active())
+    {
+        // Written at once, as the action would; the owner of the value records the step.
+        var_proxy.impl->setter(var_proxy, new_var, 0);
+        result.change_recorded = true;
+        return true;
+    }
     std::function<void()> on_success = nullptr;
     std::function<void()> on_undo = nullptr;
 
@@ -1629,11 +1655,19 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                                  const meta_any_proxy& var_proxy,
                                  const entt::meta_type& type,
                                  const var_info& info,
-                                 const entt::meta_custom& custom) -> inspect_result
+                                 const entt::meta_custom& custom,
+                                 const property_drawer& drawer) -> inspect_result
 {
     auto properties = type.data();
 
     inspect_result result{};
+    const auto draw = [&](const entt::meta_data& prop)
+    {
+        if(!drawer || !drawer(var, prop, result))
+        {
+            result |= inspect_property(ctx, var, var_proxy, prop);
+        }
+    };
     if(properties.begin() == properties.end())
     {
         if(type.is_enum())
@@ -1699,7 +1733,7 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                 for(auto&& prop : props)
                 {
                     ImGui::PushID(i);
-                    result |= inspect_property(ctx, var, var_proxy, prop);
+                    draw(prop);
                     ImGui::PopID();
                     i++;
                 }
@@ -1722,7 +1756,7 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                     for(auto& prop : props)
                     {
                         ImGui::PushID(i);
-                        result |= inspect_property(ctx, var, var_proxy, prop);
+                        draw(prop);
                         ImGui::PopID();
                         i++;
                     }
@@ -1751,14 +1785,24 @@ auto inspect_var_properties(rtti::context& ctx,
                             const var_info& info,
                             const entt::meta_custom& custom) -> inspect_result
 {
+    return inspect_var_properties(ctx, var, var_proxy, info, custom, {});
+}
+
+auto inspect_var_properties(rtti::context& ctx,
+                            entt::meta_any& var,
+                            const meta_any_proxy& var_proxy,
+                            const var_info& info,
+                            const entt::meta_custom& custom,
+                            const property_drawer& drawer) -> inspect_result
+{
     inspect_result result{};
     for(auto base : var.type().base())
     {
-        result |= inspect_var_properties_impl(ctx, var, var_proxy, base.second, info, custom);
+        result |= inspect_var_properties_impl(ctx, var, var_proxy, base.second, info, custom, drawer);
     }
 
     entt::as_derived(var);
-    result |= inspect_var_properties_impl(ctx, var, var_proxy, var.type(), info, custom);
+    result |= inspect_var_properties_impl(ctx, var, var_proxy, var.type(), info, custom, drawer);
 
     return result;
 }

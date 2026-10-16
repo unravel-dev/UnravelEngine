@@ -1,6 +1,9 @@
 #pragma once
 #include <engine/engine_export.h>
 
+#include <entt/core/hashed_string.hpp>
+#include <hpp/string_view.hpp>
+#include <math/curve.h>
 #include <math/math.h>
 
 #include <chrono>
@@ -67,6 +70,17 @@ struct animation_channel
 
     /// The scaling keys of this animation channel. Scalings are specified as 3D vector.
     std::vector<key<math::vec3>> scaling_keys;
+
+    /// Source skeleton the keys were authored against, for rest-aligned retargeting. Empty for clips
+    /// imported before it was recorded (has_rest false): those play by copying local transforms.
+    bool has_rest{};
+    /// The node's local transform in the source file's rest (bind) pose.
+    math::transform rest_local{};
+    /// Index of the channel animating the nearest ancestor of the node, or -1.
+    int parent_channel{-1};
+    /// Transform from that ancestor (or the source scene root when there is none) to the node's
+    /// parent: the nodes in between are not animated, so their rest transforms hold.
+    math::transform parent_offset{};
 };
 
 
@@ -90,6 +104,67 @@ struct root_motion_params
     std::string rotation_node_name;
     int rotation_node_index{-1};
 };
+
+/**
+ * @brief A named marker on a clip's timeline, reported to scripts when playback crosses it.
+ *
+ * Positions are normalized (0 = first key, 1 = last key) so a marker stays on the same frame when the
+ * source is re-exported at a different length.
+ */
+struct animation_event
+{
+    friend auto operator==(const animation_event& lhs, const animation_event& rhs) -> bool = default;
+
+    /// Name scripts dispatch on, for example "footstep".
+    std::string name;
+    /// Normalized position on the clip, 0..1.
+    float position{};
+    std::string string_parameter;
+    float float_parameter{};
+    int int_parameter{};
+    /**
+     * @brief Smallest effective weight at which the event fires.
+     *
+     * The effective weight is the clip's share of the final pose: layer weight x crossfade weight (and,
+     * in a blend space, the space's own weight - only its highest weighted clip reports events). The
+     * default of one half makes a crossfade report a marker from exactly one side instead of both.
+     */
+    float min_weight{0.5f};
+};
+
+/**
+ * @brief A named float track on a clip's timeline, sampled and blended with the pose.
+ *
+ * Curve positions are normalized like event positions. Scripts read the blended value by name, a
+ * controller float parameter of the same name follows it, and IK components can scale their weight
+ * by it.
+ */
+struct animation_curve
+{
+    friend auto operator==(const animation_curve& lhs, const animation_curve& rhs) -> bool = default;
+
+    std::string name;
+    math::curve<float> curve;
+};
+
+/**
+ * @brief A node name without its namespace: the part after the last ':'. Files of one rig family
+ * prefix the same bones differently ("mixamorig:Hips", "mixamorig1:Hips").
+ */
+inline auto get_name_without_namespace(hpp::string_view name) -> hpp::string_view
+{
+    const size_t separator = name.rfind(':');
+    return separator == hpp::string_view::npos ? name : name.substr(separator + 1);
+}
+
+/**
+ * @brief Stable identifier of a curve name, used to blend and look up curve values without strings.
+ */
+inline auto get_animation_curve_id(hpp::string_view name) -> uint32_t
+{
+    return uint32_t(entt::hashed_string::value(name.data(), name.size()));
+}
+
 /**
  * @brief Struct representing an animation.
  *
@@ -109,6 +184,31 @@ struct animation_clip
     std::vector<animation_channel> channels;
 
     root_motion_params root_motion;
+
+    /// Timeline markers, sorted by position.
+    std::vector<animation_event> events;
+
+    /// Float tracks blended with the pose.
+    std::vector<animation_curve> curves;
 };
+
+/**
+ * @brief Fills the lazily computed parts of a clip's rest transforms.
+ *
+ * A math::transform computes its matrix (or its components) on first read, into its own storage.
+ * One clip is read by every character playing it, from pool threads: resolving those caches once,
+ * before the clip is shared, keeps the reads from writing concurrently.
+ */
+inline void resolve_rest_transforms(animation_clip& clip)
+{
+    for(const auto& channel : clip.channels)
+    {
+        for(const math::transform* transform : {&channel.rest_local, &channel.parent_offset})
+        {
+            (void)transform->get_matrix();
+            (void)transform->get_position();
+        }
+    }
+}
 
 } // namespace unravel

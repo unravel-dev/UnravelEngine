@@ -1,4 +1,5 @@
 #include "editing_manager.h"
+#include "animation_preview.h"
 #include "authoring_root.h"
 #include "base/basetypes.hpp"
 #include "engine/profiler/profiler.h"
@@ -370,6 +371,8 @@ void editing_manager::save_checkpoint(rtti::context& ctx, scene_cache& cache)
     }
     // APPLOG_TRACE("save_checkpoint {}", cache.scn->tag);
 
+    // The checkpoint is what the scene reloads from, so a previewed pose in it would stay for good.
+    animation_entity_preview::stop_all();
     cache.cache = {};
     cache.cache_source = cache.scn->source;
     // first save scene
@@ -1006,6 +1009,7 @@ void editing_manager::save_prefab_changes(rtti::context& ctx)
     }
     
     auto prefab_path = fs::resolve_protocol(edited_prefab.id());
+    animation_entity_preview::stop_all();
     asset_writer::atomic_save_to_file(prefab_path.string(), prefab_entity);
     prefab_has_unsaved_changes_ = false;
     APPLOG_INFO("Saved changes to prefab: {}", edited_prefab.id());

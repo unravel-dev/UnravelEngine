@@ -13,6 +13,7 @@
 
 namespace unravel
 {
+struct animation_event_hit;
 
 /**
  * @class script_component
@@ -175,6 +176,12 @@ public:
                            bool use_b,
                            contact_end_reason reason);
 
+    /**
+     * @brief Delivers an animation event to every script on the entity: OnAnimationEvent, plus a
+     * public method named exactly like the event.
+     */
+    void on_animation_event(const animation_event_hit& hit);
+
 private:
     void enable(script_object& script_obj, bool check_order);
     void disable(script_object& script_obj, bool check_order);
@@ -195,6 +202,7 @@ private:
                            entt::handle other,
                            const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds,
                            contact_end_reason reason);
+    void on_animation_event(const dotnet::object& obj, const animation_event_hit& hit);
 
     template<typename F>
     auto safe_foreach(script_components_t& components, F&& f)

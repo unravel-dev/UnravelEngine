@@ -226,7 +226,7 @@ namespace Unravel.Core
 		}
 
 		/// <summary>
-		/// Gets the first component of the specified type from the entity or any of its children.
+		/// Gets the first component of the specified type from the entity or anything below it, depth first.
 		/// </summary>
 		public T GetComponentInChildren<T>() where T : Component
 		{
@@ -234,7 +234,7 @@ namespace Unravel.Core
 		}
 
 		/// <summary>
-		/// Gets all components of the specified type from the entity and its children.
+		/// Gets all components of the specified type from the entity and everything below it, depth first.
 		/// </summary>
 		public T[] GetComponentsInChildren<T>() where T : Component
 		{
@@ -242,7 +242,7 @@ namespace Unravel.Core
 		}
 
 		/// <summary>
-		/// Gets the first component of the specified type from the entity or any of its children.
+		/// Gets the first component of the specified type from the entity or anything below it, depth first.
 		/// </summary>
 		/// <param name="type">The component type to search for.</param>
 		public Component GetComponentInChildren(Type type)
@@ -251,7 +251,7 @@ namespace Unravel.Core
 		}
 
 		/// <summary>
-		/// Gets all components of the specified type from the entity and its children.
+		/// Gets all components of the specified type from the entity and everything below it, depth first.
 		/// </summary>
 		/// <param name="type">The component type to search for.</param>
 		public Component[] GetComponentsInChildren(Type type)

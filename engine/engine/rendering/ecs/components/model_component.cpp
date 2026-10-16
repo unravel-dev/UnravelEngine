@@ -9,12 +9,21 @@
 #include <hpp/finally.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <limits>
 
 
 namespace unravel
 {
 namespace
 {
+
+/// Last armature version handed out. Versions are unique across components, so a cache built for
+/// one armature never matches another: a model removed and added again starts over at 1 otherwise.
+std::atomic<uint64_t> last_armature_version{1};
+
+/// Marks a name without namespace that several armature nodes share.
+constexpr size_t AMBIGUOUS_ARMATURE_INDEX = std::numeric_limits<size_t>::max();
 
 /**
  * Finds the existing child entity an armature node binds to: the first child named @p name
@@ -555,8 +564,7 @@ auto model_component::update_armature() -> bool
                     continue;
                 }
 
-                const auto bone_world_bounds =
-                    math::bbox::mul(bones[bone_index].bounds, math::transform(bone_transforms[bone_index]));
+                const auto bone_world_bounds = math::bbox::mul(bones[bone_index].bounds, bone_transforms[bone_index]);
                 submesh_bounds.add_point(bone_world_bounds.min);
                 submesh_bounds.add_point(bone_world_bounds.max);
             }
@@ -1184,6 +1192,7 @@ auto model_component::get_submit_extras(bool shadow_pass) const -> model_submit_
 void model_component::set_armature_entities(const std::vector<entt::handle>& entities)
 {
     armature_entities_ = entities;
+    armature_version_ = last_armature_version.fetch_add(1, std::memory_order_relaxed) + 1;
     rebuild_armature_cache();
 
     // Culling-bounds anchor: the topmost bone (entities are in hierarchy order, parents
@@ -1217,6 +1226,8 @@ void model_component::rebuild_armature_cache()
 {
     armature_name_to_index_.clear();
     armature_name_to_index_.reserve(armature_entities_.size());
+    armature_base_name_to_index_.clear();
+    armature_base_name_to_index_.reserve(armature_entities_.size());
     
     for(size_t i = 0; i < armature_entities_.size(); ++i)
     {
@@ -1225,6 +1236,12 @@ void model_component::rebuild_armature_cache()
         {
             const auto& tag_comp = e.get<tag_component>();
             armature_name_to_index_[tag_comp.name] = i;
+            const auto [base, inserted] =
+                armature_base_name_to_index_.emplace(std::string(get_name_without_namespace(tag_comp.name)), i);
+            if(!inserted)
+            {
+                base->second = AMBIGUOUS_ARMATURE_INDEX;
+            }
         }
     }
 }
@@ -1237,6 +1254,21 @@ auto model_component::get_armature_index_by_name_cached(const std::string& node_
         return static_cast<int>(it->second);
     }
     return -1;
+}
+
+auto model_component::get_armature_index_by_base_name_cached(const std::string& node_name) const -> int
+{
+    const auto it = armature_base_name_to_index_.find(std::string(get_name_without_namespace(node_name)));
+    if(it == armature_base_name_to_index_.end() || it->second == AMBIGUOUS_ARMATURE_INDEX)
+    {
+        return -1;
+    }
+    return static_cast<int>(it->second);
+}
+
+auto model_component::get_armature_version() const noexcept -> uint64_t
+{
+    return armature_version_;
 }
 
 auto model_component::get_armature_entities() const -> const std::vector<entt::handle>&

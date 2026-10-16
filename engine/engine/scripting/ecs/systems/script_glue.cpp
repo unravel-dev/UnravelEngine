@@ -34,6 +34,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     register_input_script_bindings();
     register_physics_script_bindings();
     register_ik_script_bindings();
+    register_ik_component_script_bindings();
     register_audio_source_component_script_bindings();
     register_ui_document_component_script_bindings();
     register_ui_document_script_bindings();

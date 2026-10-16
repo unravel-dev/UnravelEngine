@@ -475,6 +475,11 @@ int register_componetns = []()
     native_comp_lut::register_native_component<ui_document_component>("Unravel.Core.UIDocumentComponent");
     native_comp_lut::register_native_component<character_controller_component>("Unravel.Core.CharacterControllerComponent");
     native_comp_lut::register_native_component<volume_component>("Unravel.Core.VolumeComponent");
+    native_comp_lut::register_native_component<two_bone_ik_component>("Unravel.Core.TwoBoneIKComponent");
+    native_comp_lut::register_native_component<chain_ik_component>("Unravel.Core.ChainIKComponent");
+    native_comp_lut::register_native_component<look_at_ik_component>("Unravel.Core.LookAtIKComponent");
+    native_comp_lut::register_native_component<foot_ik_component>("Unravel.Core.FootIKComponent");
+    native_comp_lut::register_native_component<spring_bone_component>("Unravel.Core.SpringBoneComponent");
 
     return 0;
 }();
@@ -675,6 +680,8 @@ auto internal_m2n_get_components(entt::entity id, const dotnet::type& type) -> d
     return dotnet::array<dotnet::object>(components, type);
 }
 
+/// The first component of `type` on the entity or anywhere below it, depth first (a character's
+/// bones sit several levels down).
 auto internal_m2n_get_component_in_children(entt::entity id, const dotnet::type& type) -> dotnet::object
 {
     auto comp = internal_m2n_get_component(id, type);
@@ -682,12 +689,11 @@ auto internal_m2n_get_component_in_children(entt::entity id, const dotnet::type&
     {
         return comp;
     }
-    if(auto comp = safe_get_component<transform_component>(id))
+    if(auto transform = safe_get_component<transform_component>(id))
     {
-        const auto& children = comp->get_children();
-        for(const auto& child : children)
+        for(const auto& child : transform->get_children())
         {
-            if(auto result = internal_m2n_get_component(child, type))
+            if(auto result = internal_m2n_get_component_in_children(child, type))
             {
                 return result;
             }
@@ -697,19 +703,25 @@ auto internal_m2n_get_component_in_children(entt::entity id, const dotnet::type&
     return {};
 }
 
+/// Appends the components of `type` on the entity and everything below it, depth first.
+void collect_components_in_children(entt::entity id, const dotnet::type& type, std::vector<dotnet::object>& components)
+{
+    auto own = internal_m2n_get_components_impl(id, type);
+    std::move(own.begin(), own.end(), std::back_inserter(components));
+    if(auto transform = safe_get_component<transform_component>(id))
+    {
+        for(const auto& child : transform->get_children())
+        {
+            collect_components_in_children(child, type, components);
+        }
+    }
+}
+
 auto internal_m2n_get_components_in_children(entt::entity id, const dotnet::type& type)
     -> dotnet::array<dotnet::object>
 {
-    auto components = internal_m2n_get_components_impl(id, type);
-    if(auto comp = safe_get_component<transform_component>(id))
-    {
-        const auto& children = comp->get_children();
-        for(const auto& child : children)
-        {
-            auto child_components = internal_m2n_get_components_impl(child, type);
-            std::move(child_components.begin(), child_components.end(), std::back_inserter(components));
-        }
-    }
+    std::vector<dotnet::object> components;
+    collect_components_in_children(id, type, components);
     return dotnet::array<dotnet::object>(components, type);
 }
 

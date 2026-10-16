@@ -283,6 +283,24 @@ struct meta_any_proxy
 };
 
 /**
+ * @brief While one is alive, inspector edits are written straight to the inspected value instead
+ * of through an undo action.
+ *
+ * For values whose owner records its own undo step: settings staged outside the scene (an asset's
+ * import settings before Apply) and documents with their own history (an animation controller).
+ * The edit does not mark the scene unsaved.
+ */
+struct inspect_without_undo_scope
+{
+    inspect_without_undo_scope();
+    ~inspect_without_undo_scope();
+    inspect_without_undo_scope(const inspect_without_undo_scope&) = delete;
+    auto operator=(const inspect_without_undo_scope&) -> inspect_without_undo_scope& = delete;
+
+    static auto is_active() -> bool;
+};
+
+/**
  * @brief Creates a simple proxy for direct variable access
  * @param var Variable to create proxy for
  * @return Proxy that provides direct access to the variable
@@ -342,7 +360,17 @@ struct inspector : crtp_meta_type<inspector>
      * @param object Object being inspected
      */
     virtual void after_inspect(const entt::meta_data& prop, const entt::meta_any& object);
-    
+
+    /**
+     * @brief Called when the inspector panel stops showing an object this inspector drew (another
+     * selection, a lock change, the panel closing), so per-object state such as staged edits is
+     * settled instead of left behind.
+     * @param ctx Runtime type information context
+     */
+    virtual void end_inspection(rtti::context& ctx)
+    {
+    }
+
     /**
      * @brief Pure virtual method to render and handle interaction for a variable
      * @param ctx Runtime type information context

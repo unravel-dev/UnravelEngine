@@ -44,4 +44,14 @@ struct tracked_lambda_action_t : crtp_meta_type<tracked_lambda_action_t, editing
     auto is_undoable() const -> bool override;
 };
 
+// Undoable lambda action that is not a scene edit: it changes settings an inspector stages for an
+// asset (import settings before Apply). Doing or undoing it marks neither the scene nor the prefab
+// being edited as unsaved.
+struct tracked_editor_state_action_t : tracked_lambda_action_t
+{
+    using tracked_lambda_action_t::tracked_lambda_action_t;
+
+    auto modifies_scene_content() const -> bool override { return false; }
+};
+
 } // namespace unravel

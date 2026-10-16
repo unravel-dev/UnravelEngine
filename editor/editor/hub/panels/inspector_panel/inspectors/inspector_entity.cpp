@@ -126,6 +126,26 @@ auto get_component_icon() -> std::string
     {
         return ICON_MDI_BONE;
     }
+    else if constexpr(std::is_same<T, two_bone_ik_component>::value)
+    {
+        return ICON_MDI_ARM_FLEX;
+    }
+    else if constexpr(std::is_same<T, chain_ik_component>::value)
+    {
+        return ICON_MDI_VECTOR_POLYLINE;
+    }
+    else if constexpr(std::is_same<T, look_at_ik_component>::value)
+    {
+        return ICON_MDI_EYE_OUTLINE;
+    }
+    else if constexpr(std::is_same<T, foot_ik_component>::value)
+    {
+        return ICON_MDI_FOOT_PRINT;
+    }
+    else if constexpr(std::is_same<T, spring_bone_component>::value)
+    {
+        return ICON_MDI_WAVES;
+    }
     // Lighting
     else if constexpr(std::is_same<T, light_component>::value)
     {

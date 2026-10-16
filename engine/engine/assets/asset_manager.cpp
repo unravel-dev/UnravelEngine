@@ -4,6 +4,7 @@
 #include "impl/importers/mesh_importer.h"
 
 #include <engine/animation/animation.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/prefab.h>
 #include <engine/meta/assets/asset_database.hpp>
@@ -65,6 +66,12 @@ auto asset_manager::init(rtti::context& ctx) -> bool
         auto& storage = add_storage<animation_clip>();
         storage.load_from_file = asset_reader::load_from_file<animation_clip>;
         storage.load_from_instance = asset_reader::load_from_instance<animation_clip>;
+    }
+
+    {
+        auto& storage = add_storage<animation_controller>();
+        storage.load_from_file = asset_reader::load_from_file<animation_controller>;
+        storage.load_from_instance = asset_reader::load_from_instance<animation_controller>;
     }
 
     {

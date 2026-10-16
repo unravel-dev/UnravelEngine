@@ -56,6 +56,12 @@ paused moment from any angle):
 7. particles_control_batch plays, stops or emits an emitter (edit or play
    mode) and reports num_particles and simulated: an emitter showing nothing
    with simulated false is frozen by renderer-based culling (no camera saw it).
+8. Animation: animation_set_parameters {"entity_id", "triggers":["Attack"]} fires
+   a controller move without input timing; paused, a capture after every
+   play_skip_frame {"count":4} makes a frame strip of the move. Root motion
+   is proven by the entity's position before and after; a bone that drifts
+   away from its entity and slides back afterwards means motion stayed in the
+   pose. IK and other rig modifiers only show in captures (see components).
 
 Two captures a few seconds apart prove motion (dominoes mid-fall, animation
 pose changes) better than one.
@@ -96,6 +102,11 @@ jump, a trigger, a menu button.
    editor). While it is set the user's mouse does not reach the editor, so clear
    it (clear:true) as soon as the test is done; it also clears itself when play
    ends.
+6. editor_ui_click {x, y} clicks the EDITOR's own interface (client pixels of
+   the editor window, edit or play mode) - a panel control no tool covers, such
+   as a node of the Animation Controller window. button, double, a drag with
+   to_x / to_y and wheel are supported; the pointer is released afterwards.
+   Prefer a dedicated tool whenever one exists.
 
 Prove it with numbers, not only pixels: scene_find_entities_batch then
 scene_get_bounds_batch (both allowed in play mode) before and after gives a

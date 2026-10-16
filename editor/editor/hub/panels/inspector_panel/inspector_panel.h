@@ -31,8 +31,14 @@ private:
     /// The locked object, else the selection: inspected when it is one object, summed up
     /// when it is several.
     void draw_inspected_object(rtti::context& ctx, entt::meta_any& selected, size_t selections_count);
+    /// Ends the inspection of the object shown last frame when `shown` (null for none) is another.
+    void follow_shown_object(rtti::context& ctx, const entt::meta_any* shown);
+    /// Tells the inspector of the object shown last that it left (see inspector::end_inspection).
+    void end_inspection(rtti::context& ctx);
 
     entt::meta_any locked_object_;
+    /// The object the panel showed last frame, to tell its inspector when it leaves.
+    entt::meta_any shown_object_;
     bool debug_{};
 };
 } // namespace unravel

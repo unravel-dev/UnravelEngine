@@ -1,5 +1,6 @@
 #pragma once
 
+#include "animation_clip_timeline.h"
 #include "inspector.h"
 #include <engine/assets/asset_handle.h>
 #include <engine/assets/asset_manager.h>
@@ -17,6 +18,7 @@ class mesh;
 class material;
 struct physics_material;
 struct animation_clip;
+struct animation_controller;
 struct audio_clip;
 struct font;
 struct prefab;
@@ -77,10 +79,26 @@ struct inspector_asset_handle_animation : public crtp_meta_type<inspector_asset_
 {
     auto inspect_as_property(rtti::context& ctx, asset_handle<animation_clip>& data) -> inspect_result;
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
+    /// Edits nobody applied or reverted are applied rather than lost with the selection.
+    void end_inspection(rtti::context& ctx) override;
 
     asset_handle<animation_clip> inspected_asset_;
+    /// The import settings being edited, and as of the last finished edit (the base of the next
+    /// undo step). Undo steps reach them through weak references: once Apply or Revert drops the
+    /// staged copy, its steps do nothing.
     std::shared_ptr<animation_importer_meta> importer_;
+    std::shared_ptr<animation_importer_meta> committed_;
     uintptr_t inspected_version_{};
+    /// Events and curves of the import settings: timeline, scrubbing preview, editors.
+    animation_clip_timeline timeline_;
+
+private:
+    void apply_import_settings(rtti::context& ctx);
+    /// The finished edits differ from the settings the asset was imported with.
+    auto has_unapplied_edits(rtti::context& ctx) const -> bool;
+    void drop_staged_edits();
+    void record_import_edit(rtti::context& ctx);
+    void draw_unapplied_bar(rtti::context& ctx);
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_animation, asset_handle<animation_clip>)
 
@@ -117,6 +135,14 @@ struct inspector_asset_handle_physics_material : public crtp_meta_type<inspector
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_physics_material, asset_handle<physics_material>)
+
+struct inspector_asset_handle_animation_controller
+    : public crtp_meta_type<inspector_asset_handle_animation_controller, inspector_asset_handle>
+{
+    auto inspect_as_property(rtti::context& ctx, asset_handle<animation_controller>& data) -> inspect_result;
+    auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
+};
+REFLECT_INSPECTOR_INLINE(inspector_asset_handle_animation_controller, asset_handle<animation_controller>)
 
 struct inspector_asset_handle_audio_clip : public crtp_meta_type<inspector_asset_handle_audio_clip, inspector_asset_handle>
 {

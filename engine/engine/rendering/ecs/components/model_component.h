@@ -167,6 +167,16 @@ public:
      * @return The index of the armature node, or -1 if not found.
      */
     auto get_armature_index_by_name_cached(const std::string& node_name) const -> int;
+    /**
+     * @brief Index of the armature node whose name matches `node_name` once both drop their
+     * namespace (see get_name_without_namespace), or -1 when no node or several do.
+     */
+    auto get_armature_index_by_base_name_cached(const std::string& node_name) const -> int;
+    /**
+     * @brief Changes whenever the armature entity set changes, so caches keyed by armature
+     * index (animation clip bindings, layer masks) know to rebuild.
+     */
+    auto get_armature_version() const noexcept -> uint64_t;
     
     auto get_skinning_transforms() const -> const std::vector<pose_mat4>&;
 
@@ -388,6 +398,11 @@ private:
      * Rebuilt automatically when armature_entities_ changes.
      */
     std::unordered_map<std::string, size_t> armature_name_to_index_;
+    /// Armature indices by name without namespace; a name several nodes share maps to no node.
+    std::unordered_map<std::string, size_t> armature_base_name_to_index_;
+
+    /// Bumped by set_armature_entities; see get_armature_version.
+    uint64_t armature_version_{1};
 
     /**
      * @brief Bind pose or reference pose.

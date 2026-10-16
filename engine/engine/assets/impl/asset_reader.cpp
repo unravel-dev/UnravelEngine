@@ -4,6 +4,7 @@
 #include <engine/meta/animation/animation.hpp>
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/mesh.hpp>
@@ -249,6 +250,7 @@ auto load_from_file<animation_clip>(tpp::thread_pool& pool, asset_handle<animati
         {
             auto anim = std::make_shared<animation_clip>();
             load_from_file_bin(path, *anim);
+            resolve_rest_transforms(*anim);
             return anim;
         }, mode);
 }
@@ -278,6 +280,19 @@ auto load_from_file<scene_prefab>(tpp::thread_pool& pool, asset_handle<scene_pre
             auto stream = std::ifstream{path};
             pfb->buffer = fs::read_stream_buffer(stream);
             return pfb;
+        }, mode);
+}
+
+template<>
+auto load_from_file<animation_controller>(tpp::thread_pool& pool, asset_handle<animation_controller>& output,
+                                           const std::string& key, load_mode mode) -> bool
+{
+    return detail::schedule_load<animation_controller>(pool, output, key, {}, source_fallback::none,
+        [](const std::string& path)
+        {
+            auto controller = std::make_shared<animation_controller>();
+            load_from_file_bin(path, controller);
+            return controller;
         }, mode);
 }
 

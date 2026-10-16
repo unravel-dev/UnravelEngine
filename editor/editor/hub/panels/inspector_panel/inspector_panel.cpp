@@ -91,6 +91,7 @@ void inspector_panel::init(rtti::context& ctx)
 
 void inspector_panel::deinit(rtti::context& ctx)
 {
+    end_inspection(ctx);
     ctx.remove<inspector_registry>();
     ctx.remove<inspector_context>();
     ctx.remove<prefab_override_context>();
@@ -178,6 +179,8 @@ void inspector_panel::draw_debug_toggle()
 
 void inspector_panel::draw_inspected_object(rtti::context& ctx, entt::meta_any& selected, size_t selections_count)
 {
+    const entt::meta_any* shown = locked_object_ ? &locked_object_ : (selections_count == 1 && selected ? &selected : nullptr);
+    follow_shown_object(ctx, shown);
     if(locked_object_)
     {
         inspect_object_with_prefab_check(ctx, locked_object_);
@@ -192,6 +195,33 @@ void inspector_panel::draw_inspected_object(rtti::context& ctx, entt::meta_any& 
     {
         inspect_object_with_prefab_check(ctx, selected);
     }
+}
+
+void inspector_panel::follow_shown_object(rtti::context& ctx, const entt::meta_any* shown)
+{
+    const bool is_same = shown != nullptr ? (shown_object_ && *shown == shown_object_) : !shown_object_;
+    if(is_same)
+    {
+        return;
+    }
+    end_inspection(ctx);
+    if(shown != nullptr)
+    {
+        shown_object_ = *shown;
+    }
+}
+
+void inspector_panel::end_inspection(rtti::context& ctx)
+{
+    if(!shown_object_)
+    {
+        return;
+    }
+    if(auto shown_inspector = get_inspector(ctx, shown_object_.type()))
+    {
+        shown_inspector->end_inspection(ctx);
+    }
+    shown_object_ = {};
 }
 
 } // namespace unravel

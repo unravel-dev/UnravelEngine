@@ -8,6 +8,7 @@
 #include <dotnetpp/dotnetpp.h>
 #include <engine/scripting/ecs/systems/script_interop.h>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/scripting/script_asset_reference.h>
 #include <type_traits>
 #include <functional>
 
@@ -22,6 +23,7 @@
 
 
 #include <engine/animation/animation.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/prefab.h>
 #include <engine/physics/physics_material.h>
@@ -627,22 +629,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
             auto obj_type = mono_obj.get_type();
             auto field = obj_type.get_field(field_name);
             auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
-            
-            auto val = invoker.get_value(mono_obj);
-            
-            // Convert mono asset handle to engine asset handle
-            asset_handle<T> asset;
-            if(val)
-            {
-                const auto& field_type = invoker.get_type();
-                auto prop = field_type.get_property("uid");
-                auto mutable_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
-                auto uid = mutable_prop.get_value(val);
-
-                auto& am = ctx.get_cached<asset_manager>();
-                asset = am.get_asset<T>(uid);
-            }
-            
+            auto asset = get_script_asset<T>(ctx.get_cached<asset_manager>(), invoker.get_value(mono_obj));
             // Create an owned copy to avoid dangling references
             result = entt::meta_any{std::in_place_type<asset_handle<T>>, asset};
             return true;
@@ -667,24 +654,7 @@ auto make_asset_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mut
                 const auto& obj_type = mono_obj.get_type();
                 auto field = obj_type.get_field(field_name);
                 auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
-                
-                auto asset = value.cast<asset_handle<T>>();
-                const auto& field_type = invoker.get_type();
-                
-                auto val = invoker.get_value(mono_obj);
-                if(asset && !val)
-                {
-                    val = field_type.new_instance();
-                    invoker.set_value(mono_obj, val);
-                }
-
-                if(val)
-                {
-                    auto prop = field_type.get_property("uid");
-                    auto mutable_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
-                    mutable_prop.set_value(val, asset.uid());
-                }
-                
+                set_script_asset(mono_obj, invoker, value.cast<asset_handle<T>>());
                 return obj_proxy.impl->setter(proxy, obj_var, execution_count);
             }
         }
@@ -1531,25 +1501,9 @@ struct mono_inspector<asset_handle<T>>
                 {
                     return false;
                 }
+                // The mono_object itself is the asset reference.
                 const auto& mono_obj = pinned_ptr->get_object();
-                
-                // The mono_object itself represents an asset handle (reference type)
-                // Get the UID property from the asset handle object
-                asset_handle<T> asset;
-                if(mono_obj.valid())
-                {
-                    auto obj_type = mono_obj.get_type();
-                    auto prop = obj_type.get_property("uid");
-                    if(prop.is_valid())
-                    {
-                        auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
-                        auto uid = uid_prop.get_value(mono_obj);
-                        
-                        auto& am = ctx.get_cached<asset_manager>();
-                        asset = am.get_asset<T>(uid);
-                    }
-                }
-                
+                auto asset = get_script_asset<T>(ctx.get_cached<asset_manager>(), mono_obj);
                 result = entt::meta_any{std::in_place_type<asset_handle<T>>, asset};
                 return true;
             }
@@ -2357,6 +2311,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             {"Material",        &mono_inspector<asset_handle<material>>::inspect_object},
             {"Mesh",            &mono_inspector<asset_handle<mesh>>::inspect_object},
             {"AnimationClip",   &mono_inspector<asset_handle<animation_clip>>::inspect_object},
+            {"AnimationController", &mono_inspector<asset_handle<animation_controller>>::inspect_object},
             {"Prefab",          &mono_inspector<asset_handle<prefab>>::inspect_object},
             {"Scene",           &mono_inspector<asset_handle<scene_prefab>>::inspect_object},
             {"PhysicsMaterial", &mono_inspector<asset_handle<physics_material>>::inspect_object},
@@ -2410,6 +2365,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
             {"Material",        &mono_inspector<asset_handle<material>>::inspect_field},
             {"Mesh",            &mono_inspector<asset_handle<mesh>>::inspect_field},
             {"AnimationClip",   &mono_inspector<asset_handle<animation_clip>>::inspect_field},
+            {"AnimationController", &mono_inspector<asset_handle<animation_controller>>::inspect_field},
             {"Prefab",          &mono_inspector<asset_handle<prefab>>::inspect_field},
             {"Scene",           &mono_inspector<asset_handle<scene_prefab>>::inspect_field},
             {"PhysicsMaterial", &mono_inspector<asset_handle<physics_material>>::inspect_field},
@@ -2686,6 +2642,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 {"Material",        &mono_inspector<asset_handle<material>>::inspect_property},
                 {"Mesh",            &mono_inspector<asset_handle<mesh>>::inspect_property},
                 {"AnimationClip",   &mono_inspector<asset_handle<animation_clip>>::inspect_property},
+                {"AnimationController", &mono_inspector<asset_handle<animation_controller>>::inspect_property},
                 {"Prefab",          &mono_inspector<asset_handle<prefab>>::inspect_property},
                 {"Scene",           &mono_inspector<asset_handle<scene_prefab>>::inspect_property},
                 {"PhysicsMaterial", &mono_inspector<asset_handle<physics_material>>::inspect_property},

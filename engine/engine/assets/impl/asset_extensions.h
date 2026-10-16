@@ -21,6 +21,7 @@ class material;
 struct prefab;
 struct scene_prefab;
 struct animation_clip;
+struct animation_controller;
 struct physics_material;
 struct audio_clip;
 struct script;
@@ -109,6 +110,15 @@ inline auto get_suported_formats<unravel::animation_clip>() -> const std::vector
 }
 
 template<>
+inline auto get_suported_formats<unravel::animation_controller>() -> const std::vector<std::string>&
+{
+    // Deliberately not ".anim..." - is_format matches by substring, and a controller extension
+    // starting with ".anim" would claim clip files.
+    static std::vector<std::string> formats = {".actrl"};
+    return formats;
+}
+
+template<>
 inline auto get_suported_formats<unravel::prefab>() -> const std::vector<std::string>&
 {
     static std::vector<std::string> formats = {".pfb"};
@@ -157,6 +167,7 @@ inline auto get_all_formats() -> const std::vector<std::vector<std::string>>&
                                                                 ex::get_suported_formats<unravel::material>(),
                                                                 ex::get_suported_formats<unravel::mesh>(),
                                                                 ex::get_suported_formats<unravel::animation_clip>(),
+                                                                ex::get_suported_formats<unravel::animation_controller>(),
                                                                 ex::get_suported_formats<unravel::audio_clip>(),
                                                                 ex::get_suported_formats<unravel::font>(),
                                                                 ex::get_suported_formats<unravel::prefab>(),
@@ -289,6 +300,14 @@ inline auto get_format_version<unravel::material>() -> uint64_t
 template<>
 inline auto get_format_version<unravel::animation_clip>() -> uint64_t
 {
+    // 2: clips carry authored events and curves.
+    // 3: channels carry the source rest pose (rest-aligned retargeting).
+    return 3;
+}
+
+template<>
+inline auto get_format_version<unravel::animation_controller>() -> uint64_t
+{
     return 1;
 }
 
@@ -346,6 +365,11 @@ inline auto get_format_version(const std::string& extension) -> uint64_t
         return get_format_version<unravel::animation_clip>();
     }
     
+    if(is_format<unravel::animation_controller>(extension))
+    {
+        return get_format_version<unravel::animation_controller>();
+    }
+
     if(is_format<unravel::physics_material>(extension))
     {
         return get_format_version<unravel::physics_material>();
@@ -561,6 +585,11 @@ inline auto get_type(const std::string& ex, bool is_directory = false) -> const 
         static const std::string result = "Scene";
         return result;
     }
+    if(is_format<unravel::animation_controller>(ex))
+    {
+        static const std::string result = "Animation Controller";
+        return result;
+    }
     if(is_format<unravel::physics_material>(ex))
     {
         static const std::string result = "Physics Material";
@@ -642,6 +671,11 @@ inline auto is_binary(const std::string& ex) -> bool
         // .spfb files are typically text-based
         return false;
     }
+    if(is_format<unravel::animation_controller>(ex))
+    {
+        // .actrl files are text (associative archive)
+        return false;
+    }
     if(is_format<unravel::physics_material>(ex))
     {
         // Physics material files are typically text-based
@@ -713,6 +747,11 @@ inline auto get_type() -> const std::string&
     if constexpr(std::is_same_v<T, unravel::scene_prefab>)
     {
         static const std::string result = "Scene";
+        return result;
+    }
+    if constexpr(std::is_same_v<T, unravel::animation_controller>)
+    {
+        static const std::string result = "Animation Controller";
         return result;
     }
     if constexpr(std::is_same_v<T, unravel::physics_material>)

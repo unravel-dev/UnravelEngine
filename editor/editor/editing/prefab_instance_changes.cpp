@@ -1,5 +1,6 @@
 #include "prefab_instance_changes.h"
 
+#include <editor/editing/animation_preview.h>
 #include <editor/editing/authoring_root.h>
 
 #include <engine/assets/impl/asset_writer.h>
@@ -199,6 +200,7 @@ void apply_instance_to_prefab(entt::handle root)
     }
     prefab_comp->changed = false;
     auto prefab_path = fs::resolve_protocol(prefab_comp->source.id());
+    animation_entity_preview::stop_all();
     asset_writer::atomic_save_to_file(prefab_path.string(), root);
     prefab_statements kept;
     if(is_nested_instance(root))

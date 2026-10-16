@@ -5,6 +5,23 @@ namespace math
 {
 bbox bbox::empty(0, 0, 0, 0, 0, 0);
 
+namespace
+{
+/// The box enclosing @p bounds placed in a frame with the given (possibly scaled) axes and origin.
+auto transform_bounds(const bbox& bounds, const vec3& x_axis, const vec3& y_axis, const vec3& z_axis, const vec3& origin)
+    -> bbox
+{
+    const auto xa = x_axis * bounds.min.x;
+    const auto xb = x_axis * bounds.max.x;
+    const auto ya = y_axis * bounds.min.y;
+    const auto yb = y_axis * bounds.max.y;
+    const auto za = z_axis * bounds.min.z;
+    const auto zb = z_axis * bounds.max.z;
+    return bbox(math::min(xa, xb) + math::min(ya, yb) + math::min(za, zb) + origin,
+                math::max(xa, xb) + math::max(ya, yb) + math::max(za, zb) + origin);
+}
+} // namespace
+
 bbox::bbox()
 {
     // Initialize values
@@ -883,18 +900,12 @@ bbox& bbox::mul(const transform& t)
 
 bbox bbox::mul(const bbox& bounds, const transform& t)
 {
-    const auto x_axis = t.x_axis();
-    const auto y_axis = t.y_axis();
-    const auto z_axis = t.z_axis();
-    auto xa = x_axis * bounds.min.x;
-    auto xb = x_axis * bounds.max.x;
-    auto ya = y_axis * bounds.min.y;
-    auto yb = y_axis * bounds.max.y;
-    auto za = z_axis * bounds.min.z;
-    auto zb = z_axis * bounds.max.z;
+    return transform_bounds(bounds, t.x_axis(), t.y_axis(), t.z_axis(), t.get_position());
+}
 
-    return bbox(math::min(xa, xb) + math::min(ya, yb) + math::min(za, zb) + t.get_position(),
-                math::max(xa, xb) + math::max(ya, yb) + math::max(za, zb) + t.get_position());
+bbox bbox::mul(const bbox& bounds, const mat4& m)
+{
+    return transform_bounds(bounds, vec3(m[0]), vec3(m[1]), vec3(m[2]), vec3(m[3]));
 }
 
 bbox& bbox::mul_no_scale(const transform& t)
@@ -907,18 +918,7 @@ bbox& bbox::mul_no_scale(const transform& t)
 
 bbox bbox::mul_no_scale(const bbox& bounds, const transform& t)
 {
-    const auto x_axis = t.x_unit_axis();
-    const auto y_axis = t.y_unit_axis();
-    const auto z_axis = t.z_unit_axis();
-    auto xa = x_axis * bounds.min.x;
-    auto xb = x_axis * bounds.max.x;
-    auto ya = y_axis * bounds.min.y;
-    auto yb = y_axis * bounds.max.y;
-    auto za = z_axis * bounds.min.z;
-    auto zb = z_axis * bounds.max.z;
-
-    return bbox(math::min(xa, xb) + math::min(ya, yb) + math::min(za, zb) + t.get_position(),
-                math::max(xa, xb) + math::max(ya, yb) + math::max(za, zb) + t.get_position());
+    return transform_bounds(bounds, t.x_unit_axis(), t.y_unit_axis(), t.z_unit_axis(), t.get_position());
 }
 
 bbox& bbox::add_point(const vec3& point)

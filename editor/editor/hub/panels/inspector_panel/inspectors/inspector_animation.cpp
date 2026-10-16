@@ -1,9 +1,14 @@
 #include "inspector_animation.h"
 #include "inspectors.h"
 
+#include <editor/editing/editing_manager.h>
 #include <engine/animation/animation.h>
+#include <engine/animation/animation_humanoid.h>
 #include <engine/animation/animation_player.h>
+#include <engine/animation/ecs/components/animation_component.h>
+#include <engine/animation/ecs/systems/animation_system.h>
 #include <engine/play_mode.h>
+#include <engine/rendering/ecs/components/model_component.h>
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -60,13 +65,6 @@ auto with_alpha(ImU32 col, float alpha) -> ImU32
 {
     const float a = float((col >> IM_COL32_A_SHIFT) & 0xFF) * std::clamp(alpha, 0.0f, 1.0f);
     return (col & ~IM_COL32_A_MASK) | (ImU32(a) << IM_COL32_A_SHIFT);
-}
-
-auto get_blend_factor(const animation_player& player, const animation_player::animation_layer& layer) -> float
-{
-    const float progress = player.get_blend_progress(layer);
-    const float factor = layer.blending_state.easing ? layer.blending_state.easing(progress) : progress;
-    return std::clamp(factor, 0.0f, 1.0f);
 }
 
 void format_state_time(char* buf, size_t buf_size, float elapsed, float duration)
@@ -248,8 +246,7 @@ void draw_crossfade_graph(const animation_player& player,
     const ImVec2 panel_min = pos;
     const ImVec2 panel_max(pos.x + width, pos.y + total_height);
     const float progress = std::clamp(player.get_blend_progress(layer), 0.0f, 1.0f);
-    const float factor = get_blend_factor(player, layer);
-    const auto& easing = layer.blending_state.easing;
+    const float factor = player.get_blend_weight(layer);
     dl->AddRectFilled(panel_min, panel_max, COL_TRACK_BG, STRIP_ROUNDING);
     const float border_pulse = 0.35f + 0.25f * (0.5f + 0.5f * float(std::sin(ImGui::GetTime() * 4.0)));
     dl->AddRect(panel_min, panel_max, with_alpha(COL_TARGET, border_pulse), STRIP_ROUNDING);
@@ -269,7 +266,7 @@ void draw_crossfade_graph(const animation_player& player,
     for(int i = 0; i <= CURVE_SAMPLE_COUNT; ++i)
     {
         const float t = float(i) / float(CURVE_SAMPLE_COUNT);
-        const float eased = std::clamp(easing ? easing(t) : t, 0.0f, 1.0f);
+        const float eased = player.compute_blend_factor(layer, t);
         target_points[i] = ImVec2(gmin.x + gw * t, gmax.y - gh * eased);
         source_points[i] = ImVec2(gmin.x + gw * t, gmax.y - gh * (1.0f - eased));
     }
@@ -379,7 +376,7 @@ void draw_blend_space_panel(const animation_player::animation_layer_state& layer
     size_t dominant = 0;
     for(size_t i = 1; i < state.blend_clips.size(); ++i)
     {
-        if(state.blend_clips[i].second > state.blend_clips[dominant].second)
+        if(state.blend_clips[i].weight > state.blend_clips[dominant].weight)
         {
             dominant = i;
         }
@@ -391,8 +388,8 @@ void draw_blend_space_panel(const animation_player::animation_layer_state& layer
     for(size_t i = 0; i < state.blend_clips.size(); ++i)
     {
         const auto& clip_weight = state.blend_clips[i];
-        const float weight = std::clamp(clip_weight.second, 0.0f, 1.0f);
-        auto name = clip_weight.first.name();
+        const float weight = std::clamp(clip_weight.weight, 0.0f, 1.0f);
+        auto name = clip_weight.clip.name();
         if(name.empty())
         {
             name = "Clip";
@@ -429,7 +426,7 @@ void draw_blend_space_panel(const animation_player::animation_layer_state& layer
                     pct_buf);
         if(ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("%s - weight %.3f", name.c_str(), clip_weight.second);
+            ImGui::SetTooltip("%s - weight %.3f", name.c_str(), clip_weight.weight);
         }
         ImGui::PopID();
     }
@@ -440,9 +437,9 @@ auto make_state_strip(const animation_player::animation_layer_state& layer_state
     const auto& state = layer_state.state;
     strip_desc d;
     d.layer_index = layer_index;
-    d.elapsed = float(state.elapsed.count());
     d.duration = float(animation_player::get_state_duration(state).count());
-    d.progress = d.duration > 0.0f ? d.elapsed / d.duration : 0.0f;
+    d.progress = state.get_progress();
+    d.elapsed = d.progress * d.duration;
     d.seekable = d.duration > 0.0f;
     char buf[64];
     if(state.blend_space)
@@ -614,6 +611,71 @@ void draw_transport_controls(rtti::context& ctx, animation_component& data)
                        });
 }
 
+/// The humanoid roles Rest Aligned retargeting found on this model: clips whose bone names differ
+/// from the model's land on bones by these roles.
+void draw_humanoid_section(rtti::context& ctx, animation_component& data)
+{
+    auto owner = data.get_owner();
+    auto* model = owner && owner.valid() ? owner.try_get<model_component>() : nullptr;
+    if(model == nullptr || data.get_pose_retargeting() != animation_pose_retargeting::rest_aligned)
+    {
+        return;
+    }
+    const auto& skeleton = animation_system::get_target_skeleton(data, *model);
+    if(!skeleton)
+    {
+        return;
+    }
+    const size_t found = count_humanoid_bones(skeleton->humanoid);
+    ImGui::Spacing();
+    const std::string title = std::string(ICON_MDI_HUMAN " Humanoid Mapping (") + std::to_string(found) + " of " +
+                              std::to_string(HUMANOID_BONE_COUNT) + ")###humanoid_mapping";
+    if(!ImGui::CollapsingHeader(title.c_str()))
+    {
+        return;
+    }
+    if(found == 0)
+    {
+        ImGui::TextWrapped("No humanoid found: clips play on bones with matching names only.");
+        return;
+    }
+    ImGui::TextWrapped("Clips whose bone names differ from this skeleton's (Mixamo, Rigify, VRM, Biped...) land on "
+                       "these bones by role. Found from the skeleton's shape; names only tell left from right.");
+    if(!ImGui::BeginTable("humanoid_roles", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
+    {
+        return;
+    }
+    ImGui::TableSetupColumn("Role", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9.0f);
+    ImGui::TableSetupColumn("Bone");
+    for(size_t role = 0; role < HUMANOID_BONE_COUNT; ++role)
+    {
+        const int bone = skeleton->humanoid[role];
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(get_humanoid_bone_name(humanoid_bone(role)));
+        ImGui::TableNextColumn();
+        if(bone >= 0 && size_t(bone) < skeleton->names.size())
+        {
+            // Target skeleton indices are armature indices: a click selects the bone.
+            ImGui::PushID(int(role));
+            if(ImGui::Selectable(skeleton->names[size_t(bone)].c_str()))
+            {
+                if(auto entity = model->get_armature_by_index(size_t(bone)))
+                {
+                    ctx.get_cached<editing_manager>().select(entity);
+                }
+            }
+            ImGui::PopID();
+            ImGui::SetItemTooltipEx("Select the bone");
+        }
+        else
+        {
+            ImGui::TextDisabled("-");
+        }
+    }
+    ImGui::EndTable();
+}
+
 } // namespace
 
 auto inspector_animation_component::inspect(rtti::context& ctx,
@@ -627,6 +689,7 @@ auto inspector_animation_component::inspect(rtti::context& ctx,
     ImGui::PushID("animation_player_section");
     draw_player_section(ctx, data);
     ImGui::PopID();
+    draw_humanoid_section(ctx, data);
     return result;
 }
 
@@ -710,7 +773,7 @@ void inspector_animation_component::draw_player_section(rtti::context& ctx, anim
                 ImFormatString(state_buf,
                                int(sizeof(state_buf)),
                                ICON_MDI_SWAP_HORIZONTAL " Crossfade %.0f%%",
-                               get_blend_factor(player, layer) * 100.0f);
+                               player.get_blend_weight(layer) * 100.0f);
                 state_color = COL_TARGET;
             }
             else if(current.state.blend_space)
@@ -737,7 +800,7 @@ void inspector_animation_component::draw_player_section(rtti::context& ctx, anim
         ImGui::Spacing();
         if(crossfading)
         {
-            const float factor = get_blend_factor(player, layer);
+            const float factor = player.get_blend_weight(layer);
             auto source_strip = make_state_strip(current, i);
             source_strip.id = "source_strip";
             source_strip.role_letter = "A";
@@ -801,7 +864,7 @@ void inspector_animation_component::update_traces(const animation_player& player
     for(size_t i = 0; i < layers.size(); ++i)
     {
         const auto& layer = layers[i];
-        const float value = layer.target_state.is_valid() ? get_blend_factor(player, layer) : 0.0f;
+        const float value = layer.target_state.is_valid() ? player.get_blend_weight(layer) : 0.0f;
         auto& trace = traces_[i];
         trace.samples[trace.head] = value;
         trace.head = (trace.head + 1) % blend_trace::capacity;

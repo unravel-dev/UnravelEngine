@@ -23,10 +23,13 @@ constexpr float IK_LEGACY_POLE_EPSILON = 1e-10f;
 /// Dot product above which two unit directions are close enough that applying
 /// the correction would be pure numerical noise (~0.03 degrees).
 constexpr float IK_DIRECTION_ALIGNED_DOT = 1.0f - 1e-7f;
+/// Sine of the angle between a two-bone chain's upper bone and its reach below which the chain
+/// counts as straight (no bend plane).
+constexpr float IK_BEND_PLANE_SINE = 1e-3f;
 
 /// Cap on a single CCD bone step so one bone cannot flip past the target,
-/// without shrinking the step as the error falls (that prevented the chain from
-/// converging within the default iteration count).
+/// without shrinking the step as the error falls (so the chain converges within the default
+/// iteration count).
 constexpr float CCD_MAX_STEP_RADIANS = 0.5235987756f; // 30 degrees
 
 /// Fraction of chain length eased before lockout when soften == 1.
@@ -135,13 +138,11 @@ auto place_at_length(const math::vec3& from, const math::vec3& toward, float len
  *
  * On a skinned effector every collected joint must itself carry a
  * bone_component. That is also what terminates the walk at the skeleton root:
- * the armature container above it is not a skinned bone. The previous
- * implementation instead skipped non-bone ancestors and kept walking, which
- * produced a chain of non-adjacent joints - every direction derived from such a
- * chain spans a gap and is wrong. It also stopped at `bone_index == 0`, but that
- * index addresses the mesh's skin influence list (pruned by remove_empty_bones),
- * so index 0 is whichever bone the skinning data happened to list first, not the
- * skeleton root.
+ * the armature container above it is not a skinned bone. Skipping non-bone
+ * ancestors would produce a chain of non-adjacent joints, and every direction
+ * derived from such a chain spans a gap. `bone_index` cannot end the walk
+ * either: it addresses the mesh's skin influence list (pruned by
+ * remove_empty_bones), not the skeleton.
  */
 auto collect_chain(entt::handle end_effector, size_t num_bones_in_chain) -> ik_vector<transform_component*>
 {
@@ -150,32 +151,16 @@ auto collect_chain(entt::handle end_effector, size_t num_bones_in_chain) -> ik_v
     {
         return chain;
     }
-    transform_component* current = end_effector.try_get<transform_component>();
-    if(current == nullptr)
+    const bool bones_only = end_effector.all_of<bone_component>();
+    for(entt::handle joint = end_effector; joint && chain.size() < num_bones_in_chain + 1;
+        joint = ik_get_chain_parent(joint, bones_only))
     {
-        return chain;
-    }
-    const bool require_bone_ancestors = end_effector.all_of<bone_component>();
-
-    chain.push_back(current);
-    while(chain.size() < num_bones_in_chain + 1)
-    {
-        auto parent = current->get_parent();
-        if(!parent)
+        transform_component* transform = joint.try_get<transform_component>();
+        if(transform == nullptr)
         {
             break;
         }
-        if(require_bone_ancestors && !parent.all_of<bone_component>())
-        {
-            break;
-        }
-        transform_component* parent_transform = parent.try_get<transform_component>();
-        if(parent_transform == nullptr)
-        {
-            break;
-        }
-        chain.push_back(parent_transform);
-        current = parent_transform;
+        chain.push_back(transform);
     }
     std::reverse(chain.begin(), chain.end());
     return chain;
@@ -326,6 +311,58 @@ void update_rotations_from_positions(const ik_vector<transform_component*>& chai
         }
         apply_world_rotation_delta(bone, math::from_to_rotation(current_dir, desired_dir));
     }
+}
+
+/**
+ * @brief The rotation that carries the frame (axis, normal) onto (new_axis, new_normal). Both pairs
+ * must be unit and perpendicular.
+ */
+auto rotation_between_frames(const math::vec3& axis,
+                             const math::vec3& normal,
+                             const math::vec3& new_axis,
+                             const math::vec3& new_normal) -> math::quat
+{
+    const math::mat3 from(axis, normal, glm::cross(axis, normal));
+    const math::mat3 to(new_axis, new_normal, glm::cross(new_axis, new_normal));
+    return math::normalize(glm::quat_cast(to * glm::transpose(from)));
+}
+
+/**
+ * @brief Turns a two-bone chain onto `positions` like a limb: the upper bone turns as one piece
+ * from the old bend plane onto the new one, so the middle joint then bends about its own hinge
+ * only. Per-bone shortest arcs would roll the upper bone and bend the middle joint sideways when
+ * the bend plane turns. A chain with no bend plane (straight) falls back to shortest arcs.
+ */
+void rotate_two_bone_chain(const ik_vector<transform_component*>& chain, const ik_vector<math::vec3>& positions)
+{
+    const math::vec3 start = chain[0]->get_position_global();
+    const math::vec3 upper = chain[1]->get_position_global() - start;
+    const math::vec3 reach = chain[2]->get_position_global() - start;
+    const math::vec3 new_upper = positions[1] - positions[0];
+    const math::vec3 new_reach = positions[2] - positions[0];
+    const math::vec3 normal = glm::cross(upper, reach);
+    const math::vec3 new_normal = glm::cross(new_upper, new_reach);
+    const float scale = math::length(upper) * math::length(reach);
+    const float new_scale = math::length(new_upper) * math::length(new_reach);
+    if(scale < IK_EPSILON || new_scale < IK_EPSILON || math::length(normal) < scale * IK_BEND_PLANE_SINE ||
+       math::length(new_normal) < new_scale * IK_BEND_PLANE_SINE)
+    {
+        update_rotations_from_positions(chain, positions);
+        return;
+    }
+    apply_world_rotation_delta(chain[0],
+                               rotation_between_frames(math::normalize(upper),
+                                                       math::normalize(normal),
+                                                       math::normalize(new_upper),
+                                                       math::normalize(new_normal)));
+    // The lower bone now lies in the new bend plane, so its shortest arc turns about the hinge.
+    ik_vector<transform_component*> lower;
+    lower.push_back(chain[1]);
+    lower.push_back(chain[2]);
+    ik_vector<math::vec3> lower_positions;
+    lower_positions.push_back(positions[1]);
+    lower_positions.push_back(positions[2]);
+    update_rotations_from_positions(lower, lower_positions);
 }
 
 auto measure_chain_length(const ik_vector<transform_component*>& chain) -> float
@@ -612,7 +649,7 @@ auto solve_two_bone(const ik_vector<transform_component*>& chain,
     positions.push_back(start_pos + target_dir * distance);
 
     const ik_pose_snapshot snapshot = capture_local_rotations(chain);
-    update_rotations_from_positions(chain, positions);
+    rotate_two_bone_chain(chain, positions);
     blend_toward_snapshot(chain, snapshot, weight);
 
     // The solve is analytical, so a reachable target is hit exactly; the
@@ -861,6 +898,22 @@ auto ik_look_at_position(entt::handle bone, const math::vec3& target, float weig
     return ik_aim_at_position(bone, target, params);
 }
 
+auto ik_get_chain_parent(entt::handle joint, bool bones_only) -> entt::handle
+{
+    const auto* transform = joint && joint.valid() ? joint.try_get<transform_component>() : nullptr;
+    if(transform == nullptr)
+    {
+        return {};
+    }
+    const entt::handle parent = transform->get_parent();
+    if(!parent || !parent.valid() || !parent.all_of<transform_component>() ||
+       (bones_only && !parent.all_of<bone_component>()))
+    {
+        return {};
+    }
+    return parent;
+}
+
 auto ik_resolve_bone_axis_local(entt::handle bone) -> math::vec3
 {
     const math::vec3 fallback(0.0f, 0.0f, 1.0f);
@@ -924,18 +977,23 @@ auto ik_resolve_facing_axis_local(entt::handle bone, const math::vec3& world_dir
         return safe_normalize(local, fallback);
     }
 
-    const float abs_x = std::fabs(local.x);
-    const float abs_y = std::fabs(local.y);
-    const float abs_z = std::fabs(local.z);
+    return ik_snap_to_cardinal_axis(local);
+}
+
+auto ik_snap_to_cardinal_axis(const math::vec3& direction) -> math::vec3
+{
+    const float abs_x = std::fabs(direction.x);
+    const float abs_y = std::fabs(direction.y);
+    const float abs_z = std::fabs(direction.z);
     if(abs_x >= abs_y && abs_x >= abs_z)
     {
-        return math::vec3(local.x < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f);
+        return math::vec3(direction.x < 0.0f ? -1.0f : 1.0f, 0.0f, 0.0f);
     }
     if(abs_y >= abs_z)
     {
-        return math::vec3(0.0f, local.y < 0.0f ? -1.0f : 1.0f, 0.0f);
+        return math::vec3(0.0f, direction.y < 0.0f ? -1.0f : 1.0f, 0.0f);
     }
-    return math::vec3(0.0f, 0.0f, local.z < 0.0f ? -1.0f : 1.0f);
+    return math::vec3(0.0f, 0.0f, direction.z < 0.0f ? -1.0f : 1.0f);
 }
 
 auto ik_get_facing_adjustment_rotation(entt::handle end_effector) -> math::quat

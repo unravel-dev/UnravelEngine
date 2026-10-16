@@ -13,6 +13,7 @@
 #include <hpp/string_view.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <thread>
 #include <vector>
@@ -92,12 +93,42 @@ struct key_request
     bool shift{false};
 };
 
-void push_key_event(uint32_t window_id, os::key::code code, bool down)
+/// Modifier keys a key sequence holds down.
+struct held_modifiers
+{
+    bool ctrl{};
+    bool shift{};
+    bool alt{};
+
+    /// Records `code` going down or up when it is a modifier.
+    void track(os::key::code code, bool down)
+    {
+        if(code == os::key::code::lctrl || code == os::key::code::rctrl)
+        {
+            ctrl = down;
+        }
+        else if(code == os::key::code::lshift || code == os::key::code::rshift)
+        {
+            shift = down;
+        }
+        else if(code == os::key::code::lalt || code == os::key::code::ralt)
+        {
+            alt = down;
+        }
+    }
+};
+
+/// One key event, flagged with the modifiers held: the UI reads Ctrl / Shift / Alt from the flags
+/// of every key event, as a real keyboard reports them.
+void push_key_event(uint32_t window_id, os::key::code code, bool down, const held_modifiers& held)
 {
     os::event event{};
     event.type = down ? os::events::key_down : os::events::key_up;
     event.key.window_id = window_id;
     event.key.code = code;
+    event.key.ctrl = held.ctrl;
+    event.key.shift = held.shift;
+    event.key.alt = held.alt;
     os::push_event(event);
 }
 
@@ -135,25 +166,29 @@ auto key_sequence(const std::vector<key_request>& keys) -> std::vector<os::key::
     return codes;
 }
 
-/// Presses (down) or lets go of (up) a sequence: presses in order, releases in reverse.
+/// Presses (down) or lets go of (up) a sequence: presses in order, releases in reverse. The
+/// modifiers of the sequence come first, so they are held around the other keys.
 void push_key_sequence(uint32_t window_id, const std::vector<os::key::code>& codes, bool down)
 {
+    held_modifiers held;
     if(down)
     {
-        std::for_each(codes.begin(),
-                      codes.end(),
-                      [window_id](os::key::code code)
-                      {
-                          push_key_event(window_id, code, true);
-                      });
+        for(const auto code : codes)
+        {
+            held.track(code, true);
+            push_key_event(window_id, code, true, held);
+        }
         return;
     }
-    std::for_each(codes.rbegin(),
-                  codes.rend(),
-                  [window_id](os::key::code code)
-                  {
-                      push_key_event(window_id, code, false);
-                  });
+    for(const auto code : codes)
+    {
+        held.track(code, true);
+    }
+    for(auto it = codes.rbegin(); it != codes.rend(); ++it)
+    {
+        held.track(*it, false);
+        push_key_event(window_id, *it, false, held);
+    }
 }
 
 /// Moves one "ctrl+" / "shift+" / "alt+" prefix of @p name into @p request, so "ctrl+s" reads as
@@ -468,6 +503,113 @@ auto click_mouse_button(mcp_manager& mcp,
     return true;
 }
 
+namespace
+{
+/// Frames the UI gets to see the pointer hover before a press (hover-gated widgets, tooltips).
+constexpr uint64_t k_ui_hover_frames = 2;
+/// Pointer steps of a UI drag; every step is one frame.
+constexpr int k_ui_drag_steps = 8;
+
+/// Screen position of a point of the main window's client area; refuses points outside it.
+auto client_to_screen(rtti::context& ctx, input::coord client, input::coord& screen, std::string& error) -> bool
+{
+    const auto& window = ctx.get_cached<renderer>().get_main_window();
+    const auto origin = window->get_window().get_position();
+    const auto size = window->get_window().get_size();
+    if(client.x < 0 || client.y < 0 || client.x >= int(size.w) || client.y >= int(size.h))
+    {
+        error = fmt::format("[{}, {}] is outside the editor window's client area ({}x{})",
+                            client.x,
+                            client.y,
+                            size.w,
+                            size.h);
+        return false;
+    }
+    screen = {origin.x + client.x, origin.y + client.y};
+    return true;
+}
+
+/// Puts the virtual pointer at a screen position for the editor UI. Main thread.
+void set_ui_pointer(rtti::context& ctx, uint32_t window_id, input::coord screen)
+{
+    get_input_manager(ctx)->set_virtual_mouse_position(screen);
+    push_mouse_motion_event(window_id, screen);
+}
+
+/// Hover, then scroll the panel under the virtual pointer. Worker thread only.
+auto scroll_ui(mcp_manager& mcp, rtti::context& ctx, uint32_t window_id, float wheel, std::string& error) -> bool
+{
+    const bool scrolled = wait_input_frames(ctx, k_ui_hover_frames) &&
+                          push_on_main(mcp,
+                                       [&]
+                                       {
+                                           os::event event{};
+                                           event.type = os::events::mouse_wheel;
+                                           event.wheel.window_id = window_id;
+                                           event.wheel.y = wheel;
+                                           os::push_event(event);
+                                       }) &&
+                          wait_input_frames(ctx, 2);
+    if(!scrolled)
+    {
+        error = "The editor is not advancing frames";
+    }
+    return scrolled;
+}
+
+/// Hover, then a click, a double click or a drag at the virtual pointer. Worker thread only.
+auto run_ui_gesture(mcp_manager& mcp,
+                    rtti::context& ctx,
+                    uint32_t window_id,
+                    os::mouse::button button,
+                    bool is_double,
+                    bool is_drag,
+                    input::coord start,
+                    input::coord end,
+                    std::string& error) -> bool
+{
+    if(!wait_input_frames(ctx, k_ui_hover_frames))
+    {
+        error = "The editor is not advancing frames";
+        return false;
+    }
+    if(!is_drag)
+    {
+        return click_mouse_button(mcp, ctx, window_id, button, 1, error) &&
+               (!is_double || click_mouse_button(mcp, ctx, window_id, button, 1, error));
+    }
+    const auto push_button = [&](bool down)
+    {
+        return push_on_main(mcp,
+                            [&]
+                            {
+                                push_mouse_button_event(window_id, button, down, virtual_pointer(ctx));
+                            });
+    };
+    bool moved = push_button(true) && wait_input_frames(ctx, 1);
+    for(int step = 1; moved && step <= k_ui_drag_steps; ++step)
+    {
+        const float t = float(step) / float(k_ui_drag_steps);
+        const input::coord point{start.x + int(std::lround(float(end.x - start.x) * t)),
+                                 start.y + int(std::lround(float(end.y - start.y) * t))};
+        moved = push_on_main(mcp,
+                             [&]
+                             {
+                                 set_ui_pointer(ctx, window_id, point);
+                             }) &&
+                wait_input_frames(ctx, 1);
+    }
+    // Released whatever happened above, so no button stays held.
+    const bool released = push_button(false) && wait_input_frames(ctx, 1);
+    if(!moved || !released)
+    {
+        error = "The editor stopped advancing frames during the drag";
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 void register_input_tools(mcp_tool_registry& registry)
 {
     registry.add(
@@ -677,6 +819,93 @@ void register_input_tools(mcp_tool_registry& registry)
                      return input_state_json(ctx);
                  });
              return {.text = fmt::format(R"({{"ok":true,"state":{}}})", state_json ? *state_json : "null")};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "editor_ui_click",
+         .description =
+             "Click the editor's own UI - a panel tab, an inspector button, a timeline - at a point of the editor "
+             "main window's client area (physical pixels, what a capture of the window shows), to verify editor "
+             "tools. A virtual pointer stands in for the user's mouse during the call and is released at its end. "
+             "button (default left); double:true double-clicks; to_x/to_y drag from x,y to there instead of "
+             "clicking; wheel scrolls the panel under x,y instead (positive scrolls up). Edit and play mode.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"]},"double":{"type":"boolean"},"to_x":{"type":"number"},"to_y":{"type":"number"},"wheel":{"type":"number"}},"required":["x","y"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             double x = 0.0;
+             double y = 0.0;
+             if(args["x"].get(x) != simdjson::SUCCESS || args["y"].get(y) != simdjson::SUCCESS)
+             {
+                 return {.text = "Pass x and y", .is_error = true};
+             }
+             std::string button_name = "left";
+             read_string(args, "button", button_name);
+             os::mouse::button button{};
+             if(!parse_mouse_button(button_name, button))
+             {
+                 return {.text = "button must be left, right or middle", .is_error = true};
+             }
+             bool is_double = false;
+             read_bool(args, "double", is_double);
+             double to_x = 0.0;
+             double to_y = 0.0;
+             const bool is_drag =
+                 args["to_x"].get(to_x) == simdjson::SUCCESS && args["to_y"].get(to_y) == simdjson::SUCCESS;
+             std::string error;
+             uint32_t window_id = 0;
+             input::coord start{};
+             input::coord end{};
+             const auto placed = mcp.invoke_on_main(
+                 [&]() -> bool
+                 {
+                     if(get_input_manager(ctx) == nullptr)
+                     {
+                         error = "input_system unavailable";
+                         return false;
+                     }
+                     if(!get_main_window_id(ctx, window_id, error) ||
+                        !client_to_screen(ctx, {int(x), int(y)}, start, error) ||
+                        (is_drag && !client_to_screen(ctx, {int(to_x), int(to_y)}, end, error)))
+                     {
+                         return false;
+                     }
+                     set_ui_pointer(ctx, window_id, start);
+                     return true;
+                 });
+             if(!placed || !*placed)
+             {
+                 return {.text = error.empty() ? "Timed out reaching the editor main thread" : error, .is_error = true};
+             }
+             double wheel = 0.0;
+             const bool is_wheel = args["wheel"].get(wheel) == simdjson::SUCCESS;
+             const bool done = is_wheel ? scroll_ui(mcp, ctx, window_id, float(wheel), error)
+                                        : run_ui_gesture(mcp, ctx, window_id, button, is_double, is_drag, start, end, error);
+             // The user's mouse comes back whatever happened; the next frame polls it again.
+             const bool released = push_on_main(mcp,
+                                                [&]
+                                                {
+                                                    if(auto* manager = get_input_manager(ctx))
+                                                    {
+                                                        manager->set_virtual_mouse_position({});
+                                                    }
+                                                });
+             wait_input_frames(ctx, 1);
+             if(!done)
+             {
+                 return {.text = error, .is_error = true};
+             }
+             if(!released)
+             {
+                 return {.text = "The gesture ran, but the pointer was not handed back to the mouse (the editor main "
+                                 "thread did not answer); the next editor_ui_click restores it",
+                         .is_error = true};
+             }
+             return {.text = fmt::format(R"({{"ok":true,"screen":[{},{}]}})", start.x, start.y)};
          },
          .mutates_scene = false,
          .requires_main_thread = false});

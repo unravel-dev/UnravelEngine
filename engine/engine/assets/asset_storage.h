@@ -1,6 +1,7 @@
 #pragma once
 
 #include "asset_handle.h"
+#include <engine/animation/animation.h>
 #include "asset_flags.h"
 
 #include <context/context.hpp>
@@ -185,6 +186,13 @@ struct animation_importer_meta : crtp_meta_type<animation_importer_meta, asset_i
         bool keep_in_place{};
 
     } root_motion;
+
+    /// Timeline markers authored for this clip. The clip source is regenerated on every model
+    /// reimport, so authored data lives here and is compiled into the clip.
+    std::vector<animation_event> events;
+
+    /// Float tracks authored for this clip.
+    std::vector<animation_curve> curves;
 };
 
 struct audio_importer_meta : crtp_meta_type<audio_importer_meta, asset_importer_meta>

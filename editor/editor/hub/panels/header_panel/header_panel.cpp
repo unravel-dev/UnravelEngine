@@ -571,7 +571,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 parent_->get_layout_panel().focus();
             }
-            if(ImGui::MenuItem("Animation"))
+            if(ImGui::MenuItem("Animation Controller"))
             {
                 parent_->get_animation_panel().show(true);
             }
@@ -610,6 +610,8 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         ImGui::EndMenuBar();
     }
 
+    // A focused Animation Controller window undoes, redoes and saves its own controller.
+    const bool edits_controller = parent_->get_animation_panel().is_focused();
     if(!ImGui::IsAnyItemActive())
     {
         if(ImGui::IsCombinationKeyPressed(shortcuts::new_scene))
@@ -624,20 +626,20 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         {
             editor_actions::save_scene_as(ctx);
         }
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::save_scene))
+        else if(!edits_controller && ImGui::IsCombinationKeyPressed(shortcuts::save_scene))
         {
             editor_actions::save_scene(ctx);
         }
 
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::redo, true))
+        else if(!edits_controller && ImGui::IsCombinationKeyPressed(shortcuts::redo, true))
         {
             ctx.get_cached<editing_manager>().redo();
         }
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::redo_alt, true))
+        else if(!edits_controller && ImGui::IsCombinationKeyPressed(shortcuts::redo_alt, true))
         {
             ctx.get_cached<editing_manager>().redo();
         }
-        else if(ImGui::IsCombinationKeyPressed(shortcuts::undo, true))
+        else if(!edits_controller && ImGui::IsCombinationKeyPressed(shortcuts::undo, true))
         {
             bool any_popup_open = ImGui::IsPopupOpen((ImGuiID)0, ImGuiPopupFlags_AnyPopupId);
             if(!any_popup_open)

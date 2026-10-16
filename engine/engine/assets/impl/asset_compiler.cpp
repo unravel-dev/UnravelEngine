@@ -23,6 +23,7 @@
 #include <engine/engine.h>
 #include <engine/settings/settings.h>
 #include <engine/meta/animation/animation.hpp>
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/audio/audio_clip.hpp>
@@ -1914,6 +1915,11 @@ auto compile<animation_clip>(asset_manager& am, const fs::path& key, const fs::p
         anim.root_motion.keep_rotation = importer->root_motion.keep_rotation;
         anim.root_motion.keep_in_place = importer->root_motion.keep_in_place;
 
+        anim.events = importer->events;
+        sanitize_animation_events(anim.events);
+        anim.curves = importer->curves;
+        sanitize_animation_curves(anim.curves);
+
         fs::error_code err;
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
@@ -1990,6 +1996,43 @@ auto compile<scene_prefab>(asset_manager& am, const fs::path& key, const fs::pat
     if(!write_manifest_file<scene_prefab>(absolute_path, output))
     {
         APPLOG_ERROR("Failed to write manifest for compiled scene_prefab: {0}", output.string());
+        return false;
+    }
+
+    return true;
+}
+
+template<>
+auto compile<animation_controller>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags)
+    -> bool
+{
+    APP_SCOPE_PERF("Compile Animation Controller");
+    auto absolute_path = resolve_input_file(key);
+
+    std::string str_input = absolute_path.string();
+
+    fs::error_code err;
+
+    auto controller = std::make_shared<animation_controller>();
+    {
+        load_from_file(str_input, controller);
+
+        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
+        {
+            save_to_file_bin(temp.string(), controller);
+        }, err);
+    }
+
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}",
+            str_input, output.filename().string(), err.message());
+        return false;
+    }
+
+    if(!write_manifest_file<animation_controller>(absolute_path, output))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled animation_controller: {0}", output.string());
         return false;
     }
 

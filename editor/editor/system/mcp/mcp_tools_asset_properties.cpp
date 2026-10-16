@@ -10,6 +10,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/material.h>
@@ -129,12 +130,71 @@ struct physics_material_kind
     }
 };
 
+/// Animation controllers: written whole once checked; running instances rebuild on the bumped
+/// revision, keeping parameter values and current states by name.
+struct animation_controller_kind
+{
+    using asset_type = animation_controller;
+    static constexpr const char* type = "animation_controller";
+
+    static auto schema() -> std::string
+    {
+        return "{" + meta_object_schema(entt::resolve<animation_controller>()) + "}";
+    }
+
+    static auto read(rtti::context& ctx, const asset_handle<animation_controller>& handle) -> std::string
+    {
+        auto object = entt::forward_as_meta(*handle.get());
+        return meta_properties_to_json(ctx, object);
+    }
+
+    static void check(rtti::context& ctx,
+                      const asset_handle<animation_controller>& handle,
+                      const simdjson::dom::object& properties,
+                      component_apply_result& result)
+    {
+        auto candidate = handle ? *handle.get() : animation_controller{};
+        auto object = entt::forward_as_meta(candidate);
+        apply_meta_properties(ctx, object, properties, result);
+    }
+
+    static void write(rtti::context& ctx,
+                      const asset_handle<animation_controller>& handle,
+                      const simdjson::dom::object& properties,
+                      bool save,
+                      component_apply_result& result)
+    {
+        auto candidate = *handle.get();
+        auto object = entt::forward_as_meta(candidate);
+        apply_meta_properties(ctx, object, properties, result);
+        if(!result.ok)
+        {
+            return;
+        }
+        const auto previous = *handle.get();
+        candidate.revision = previous.revision + 1;
+        *handle.get() = candidate;
+        if(save && !asset_writer::atomic_save_to_file(handle.id(), handle))
+        {
+            *handle.get() = previous;
+            handle.get()->revision = candidate.revision + 1;
+            result.ok = false;
+            result.errors.push_back("Failed to save " + handle.id());
+        }
+    }
+
+    static auto create(rtti::context& ctx, const fs::path& absolute_path) -> asset_handle<animation_controller>
+    {
+        return asset_actions::create_animation_controller(ctx, absolute_path);
+    }
+};
+
 template<typename... Kinds>
 struct kind_list
 {
 };
 
-using editable_kinds = kind_list<material_kind, physics_material_kind>;
+using editable_kinds = kind_list<material_kind, physics_material_kind, animation_controller_kind>;
 
 /// Whether the asset at @p key is of @p Kind: by its extension, or - for a key without one, such as an
 /// embedded asset - by whether the database knows it as that type.
@@ -195,7 +255,7 @@ auto visit_kind_of(rtti::context& ctx, const std::string& key, Visitor&& visit) 
 
 auto kind_names() -> std::string
 {
-    return std::string(material_kind::type) + ", " + physics_material_kind::type;
+    return std::string(material_kind::type) + ", " + physics_material_kind::type + ", " + animation_controller_kind::type;
 }
 
 /// The asset key an argument names: a uid is looked up, a key or relative path is spelled as a key.
@@ -232,10 +292,10 @@ void register_asset_property_tools(mcp_tool_registry& registry)
         {.name = "assets_list_properties",
          .description =
              "The asset types whose properties assets_get/set_properties_batch read and write (material, "
-             "physics_material), or with type, that type's properties from its reflection: names, types, "
+             "physics_material, animation_controller), or with type, that type's properties from its reflection: names, types, "
              "enum values, ranges.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"type":{"type":"string","enum":["material","physics_material"]}}})json",
+             R"json({"type":"object","properties":{"type":{"type":"string","enum":["material","physics_material","animation_controller"]}}})json",
          .handler =
              [](rtti::context&, const simdjson::dom::object& args) -> tool_result
          {
@@ -243,7 +303,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
              read_string(args, "type", type);
              if(type.empty())
              {
-                 return {.text = R"({"types":["material","physics_material"]})", .is_error = false};
+                 return {.text = R"({"types":["material","physics_material","animation_controller"]})", .is_error = false};
              }
              std::string schema;
              if(!visit_kind_named(type,
@@ -261,7 +321,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "assets_get_properties_batch",
-         .description = "Read the properties of material and physics material assets, by key (or a path "
+         .description = "Read the properties of material, physics material and animation controller assets, by key (or a path "
                         "relative to app:/data) or uid.",
          .input_schema_json =
              R"json({"type":"object","properties":{"assets":{"type":"array","items":{"type":"string"}}},"required":["assets"]})json",
@@ -316,7 +376,7 @@ void register_asset_property_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_set_properties_batch",
          .description =
-             "Set properties of the project's material and physics material assets (app:/data/..., by key "
+             "Set properties of the project's material, physics material and animation controller assets (app:/data/..., by key "
              "or uid), as assets_list_properties lists them. Every item is checked before any is written: "
              "one rejected value writes nothing. The assets are shared - every renderer or body using one "
              "changes. Saves each file unless save:false (in memory only).",
@@ -414,13 +474,13 @@ void register_asset_property_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_create_batch",
          .description =
-             "Create material or physics material assets in the project's data folder. Each item: type, path (the "
+             "Create material, physics material or animation controller assets in the project's data folder. Each item: type, path (the "
              "extension is added) or folder + name, optional properties - checked first: a rejected value "
              "creates nothing. Waits up to wait_ms (default 15000; 0: no wait) for them to load, each with a "
              "state. Assign a material with scene_set_model_materials_batch, a physics material with the Physics "
              "property material.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string","enum":["material","physics_material"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"},"properties":{"type":"object"}},"required":["type"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string","enum":["material","physics_material","animation_controller"]},"path":{"type":"string"},"folder":{"type":"string"},"name":{"type":"string"},"properties":{"type":"object"}},"required":["type"]}},"wait_ms":{"type":"integer","minimum":0,"maximum":15000}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {

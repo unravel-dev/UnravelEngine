@@ -288,10 +288,52 @@ Physics - an entity has one or the other.
 ## Animation
 
 Set animation to a clip asset key (clips are generated next to imported
-skinned meshes, e.g. "app:/data/Models/X/Run.anim"), auto_play true. The clip
-must match the skeleton of the entity's model (clips generated from the same
-source file always match). apply_root_motion moves the entity with the clip;
-leave false for in-place showcase loops.
+skinned meshes, e.g. "app:/data/Models/X/Run.anim"), auto_play true - or
+controller to an animation controller asset (.actrl: parameters, layers, states,
+transitions, Any State, exit times, tags) for anything that reacts to gameplay.
+Scripts and animation_set_parameters {"entity_id", "values", "triggers"} drive the
+controller; animation_get_state reports each layer's state, state_time and
+transition plus the blended clip curves - the proof a trigger took.
+
+- Clips from another source file play through retargeting_mode "name_based"
+  with pose_retargeting "rest_aligned": bones are matched by name (also across
+  FBX namespaces: "mixamorig:Hips" binds "mixamorig1:Hips") and each pose is
+  mapped rest to rest, so files with other axes, units (an FBX in centimeters)
+  or proportions play correctly. Bones whose names differ are matched by
+  humanoid role, found from each skeleton's shape (Mixamo, Rigify, VRM, Biped,
+  Character Creator, Daz, KayKit-style rigs all map):
+  animation_get_humanoid {"entity_id"} shows a model's roles, {"clip"} the roles
+  of the skeleton a clip was made on. Both rest poses must be the same pose
+  (T-pose to T-pose). "copy" only suits clips authored on the same skeleton.
+- apply_root_motion moves the entity by the clip's root node (the skeleton's
+  root bone, or the hips when it has none). An entity with a Character
+  Controller is moved through it in play mode, so the motion collides. Per clip,
+  the import settings root_motion decide what moves the entity and what stays
+  in the pose: keep_position_y / keep_position_xz / keep_rotation keep that
+  part in the pose; keep_in_place drops the travel of a loop and moves nothing.
+  Loops a script moves itself (locomotion, jumps) want keep_in_place; attacks,
+  rolls, climbs want their travel extracted. Only the turn about the up axis is
+  ever extracted. Leave apply_root_motion false for in-place showcase loops.
+- Clip import settings also hold events (name, position 0..1, string / float /
+  int parameters, min_weight) and curves (name + keys). A public script method
+  named like an event is called when playback crosses it; curves are read by
+  name (animation.GetCurve) and can weight an IK component (weight_curve).
+- Rig modifiers run after the pose and before skinning, on the bone (or plain
+  entity) they sit on: Two Bone IK (target, pole, soften), Chain IK (FABRIK or
+  CCD over chain_length bones), Look At IK (target, per-bone turn limits), Foot
+  IK (on the model: ground probes, pelvis drop, ground_layers) and Spring Bone
+  (secondary motion, colliders). smoothing (seconds) on Two Bone, Chain and
+  Look At IK eases the goal toward the target and the weight with it: set it
+  when a script swaps or clears the target entity or the target jumps, or the
+  limb snaps. weight 0 fades a modifier out; once faded it costs nothing (no
+  solve, no ground probes). Rigs of different characters solve in parallel; a
+  modifier whose target is another character's bone runs after that character
+  and reaches its solved pose. Modifiers on one rig run parents first (a chest look-at before
+  the hand IK on that arm). They are non-destructive: in edit mode the solved
+  pose is undone right after skinning, so scene_get_entities_batch reads the
+  ANIMATED bone positions; in play mode it is held through the render (until
+  the next frame animates), so reads may see the solved pose - verify IK with
+  captures either way.
 
 ## Text (world-space labels)
 

@@ -37,7 +37,9 @@ script from memory of another engine's API.
    scene_get/set_component_properties_batch read and write public instance
    fields by name, at their exact C# type (byte, short, long, double ... with
    their ranges), Vector2/3/4, Color, LayerMask, Entity (an entity id, or
-   null), strings and enums by value name. Undo puts the fields back.
+   null), assets (Prefab, Texture, Material, Mesh, AnimationClip, Scene,
+   PhysicsMaterial, AudioClip, Font: a key such as app:/data/Prefabs/Enemy.pfb,
+   or null), strings and enums by value name. Undo puts the fields back.
 7. An entity can carry several scripts of one type. script_index (from 0, as
    the entity summary numbers them) picks one for the property tools and
    scene_remove_components_batch; it defaults to the first.

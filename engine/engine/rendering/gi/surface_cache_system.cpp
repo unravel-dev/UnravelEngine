@@ -473,26 +473,6 @@ auto compute_pose_key(uint64_t matrix_hash, const math::bbox& local_bounds) -> u
 {
     return mix_vec3(mix_vec3(matrix_hash, local_bounds.min), local_bounds.max);
 }
-
-/// World bounds of a local box under an affine matrix, by the per-axis min/max method
-/// bbox::mul uses for a transform: each world axis contributes the smaller and the larger of
-/// its two scaled endpoints and the translation rides on top. Exact - it IS the box of the
-/// eight transformed corners - at six vec3 scales instead of eight mat4 x vec4 products.
-auto transform_bounds(const math::mat4& m, const math::bbox& local) -> math::bbox
-{
-    const math::vec3 x_axis(m[0]);
-    const math::vec3 y_axis(m[1]);
-    const math::vec3 z_axis(m[2]);
-    const math::vec3 translation(m[3]);
-    const math::vec3 xa = x_axis * local.min.x;
-    const math::vec3 xb = x_axis * local.max.x;
-    const math::vec3 ya = y_axis * local.min.y;
-    const math::vec3 yb = y_axis * local.max.y;
-    const math::vec3 za = z_axis * local.min.z;
-    const math::vec3 zb = z_axis * local.max.z;
-    return math::bbox(math::min(xa, xb) + math::min(ya, yb) + math::min(za, zb) + translation,
-                      math::max(xa, xb) + math::max(ya, yb) + math::max(za, zb) + translation);
-}
 } // namespace
 
 void surface_cache_system::sweep_tracked_placements()
@@ -558,7 +538,7 @@ void surface_cache_system::add_instance(uint64_t identity,
         // World-space AABB of the field's local bounds, for the tracer's broad phase: the exact
         // box of the transformed corners, so a rotated instance still gets a bound that
         // contains it.
-        inst.world_bounds = transform_bounds(local_to_world, sdf.bounds);
+        inst.world_bounds = math::bbox::mul(sdf.bounds, local_to_world);
     }
     instances_.push_back(inst);
     tracked.pose_key = pose_key;
@@ -916,7 +896,7 @@ void surface_cache_system::walk_scene(scene& scn)
                 // node transforms is banded by the entity rather than per placement: the field is
                 // shared by all of them, so there is one level to choose, and the placements are
                 // offsets within one model rather than scattered across the world.
-                const math::bbox submesh_world_bounds = transform_bounds(world_transform, submesh->bbox);
+                const math::bbox submesh_world_bounds = math::bbox::mul(submesh->bbox, world_transform);
                 const auto acquired = acquire_field(mesh_handle.uid(),
                                                     *mesh_ptr,
                                                     submesh_index,

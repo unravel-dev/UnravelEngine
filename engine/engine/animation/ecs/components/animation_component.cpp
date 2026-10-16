@@ -12,6 +12,68 @@ auto animation_component::get_animation() const -> const asset_handle<animation_
     return animation_;
 }
 
+void animation_component::set_controller(const asset_handle<animation_controller>& controller)
+{
+    if(controller_ == controller)
+    {
+        return;
+    }
+    // The layers the previous controller played are its own; a new one starts them again.
+    for(size_t layer = 0; layer < controller_instance_.get_layer_count(); ++layer)
+    {
+        player_.clear(layer);
+    }
+    controller_instance_.bind(nullptr);
+    controller_ = controller;
+    if(!controller_ && player_.is_playing() && animation_)
+    {
+        player_.blend_to(0, animation_);
+    }
+}
+
+auto animation_component::get_controller() const -> const asset_handle<animation_controller>&
+{
+    return controller_;
+}
+
+auto animation_component::get_controller_instance() -> animation_controller_instance*
+{
+    return bind_controller(controller_ ? controller_.get() : nullptr);
+}
+
+auto animation_component::try_get_controller_instance() -> animation_controller_instance*
+{
+    auto definition = controller_ ? controller_.try_get() : nullptr;
+    if(controller_ && !definition)
+    {
+        // Still loading: keep whatever was bound until the definition arrives.
+        return controller_instance_.is_bound() ? &controller_instance_ : nullptr;
+    }
+    return bind_controller(definition);
+}
+
+auto animation_component::bind_controller(const std::shared_ptr<animation_controller>& definition)
+    -> animation_controller_instance*
+{
+    if(!definition || asset_handle<animation_controller>::is_empty(definition))
+    {
+        if(controller_instance_.is_bound())
+        {
+            controller_instance_.bind(nullptr);
+        }
+        return nullptr;
+    }
+    // Rebinds after a reload: the definition pointer changes when the asset is recompiled.
+    controller_instance_.bind(definition);
+    controller_instance_.sync(player_);
+    return &controller_instance_;
+}
+
+auto animation_component::get_controller_instance() const -> const animation_controller_instance*
+{
+    return controller_instance_.is_bound() ? &controller_instance_ : nullptr;
+}
+
 void animation_component::set_autoplay(bool on)
 {
     auto_play_ = on;
@@ -69,6 +131,32 @@ void animation_component::set_retargeting_mode(animation_retargeting_mode mode)
 auto animation_component::get_retargeting_mode() const -> animation_retargeting_mode
 {
     return retargeting_mode_;
+}
+
+void animation_component::set_pose_retargeting(animation_pose_retargeting retargeting)
+{
+    pose_retargeting_ = retargeting;
+}
+
+auto animation_component::get_pose_retargeting() const -> animation_pose_retargeting
+{
+    return pose_retargeting_;
+}
+
+auto animation_component::get_target_skeleton(uint64_t armature_version,
+                                              const std::function<void(animation_target_skeleton&)>& build)
+    -> const std::shared_ptr<const animation_target_skeleton>&
+{
+    if(!target_skeleton_ || target_skeleton_version_ != armature_version)
+    {
+        auto skeleton = std::make_shared<animation_target_skeleton>();
+        build(*skeleton);
+        skeleton->compute_rest_globals();
+        skeleton->compute_humanoid_bones();
+        target_skeleton_ = std::move(skeleton);
+        target_skeleton_version_ = armature_version;
+    }
+    return target_skeleton_;
 }
 
 } // namespace unravel

@@ -14,6 +14,6 @@
 
 #define LAYOUTS_VIEW    ICON_MDI_VIEW_DASHBOARD " Layouts"
 
-#define ANIMATION_VIEW     " Animation"
+#define ANIMATION_VIEW     ICON_MDI_STATE_MACHINE " Animation Controller"
 #define MCP_VIEW        ICON_MDI_CONSOLE_NETWORK " MCP Server"
 #define PROFILER_VIEW   ICON_MDI_CHART_BAR " Profiler"

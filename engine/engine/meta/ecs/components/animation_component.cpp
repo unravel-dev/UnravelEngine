@@ -1,4 +1,5 @@
 #include "animation_component.hpp"
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <serialization/associative_archive.h>
@@ -24,6 +25,26 @@ REFLECT_INLINE(animation_retargeting_mode)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "name_based"},
             entt::attribute{"pretty_name", "Name Based"},
+        });
+}
+
+REFLECT_INLINE(animation_pose_retargeting)
+{
+    entt::meta_factory<animation_pose_retargeting>{}
+        .type("animation_pose_retargeting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_pose_retargeting"},
+            entt::attribute{"pretty_name", "Pose Retargeting"},
+        })
+        .data<animation_pose_retargeting::copy>("copy"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "copy"},
+            entt::attribute{"pretty_name", "Copy"},
+        })
+        .data<animation_pose_retargeting::rest_aligned>("rest_aligned"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rest_aligned"},
+            entt::attribute{"pretty_name", "Rest Aligned"},
         });
 }
 
@@ -64,6 +85,12 @@ REFLECT(animation_component)
             entt::attribute{"name", "animation"},
             entt::attribute{"pretty_name", "Animation"},
         })
+        .data<&animation_component::set_controller, &animation_component::get_controller>("controller"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "controller"},
+            entt::attribute{"pretty_name", "Controller"},
+            entt::attribute{"tooltip", "State machine to play. While set, it drives the animation and the Animation clip is ignored."},
+        })
         .data<&animation_component::set_autoplay, &animation_component::get_autoplay>("auto_play"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "auto_play"},
@@ -94,6 +121,12 @@ REFLECT(animation_component)
             entt::attribute{"name", "retargeting_mode"},
             entt::attribute{"pretty_name", "Retargeting Mode"},
             entt::attribute{"tooltip", "Bone matching mode: index-based (fast, requires exact match) or name-based (flexible, works with different skeletons)"},
+        })
+        .data<&animation_component::set_pose_retargeting, &animation_component::get_pose_retargeting>("pose_retargeting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pose_retargeting"},
+            entt::attribute{"pretty_name", "Pose Retargeting"},
+            entt::attribute{"tooltip", "Copy: clips play their local transforms as authored (clips exported with this model). Rest Aligned: clips from other exports (other root frame or unit scale) or skeletons of other proportions play correctly - each bone turns by what its source bone turned from the source rest pose, bone lengths stay this model's and motion scales with hip height. Both skeletons must rest in the same pose."},
         });
 }
 
@@ -105,6 +138,9 @@ SAVE(animation_component)
     try_save(ar, ser20::make_nvp("apply_root_motion", obj.get_apply_root_motion()));
     try_save(ar, ser20::make_nvp("speed", obj.get_speed()));
     try_save(ar, ser20::make_nvp("retargeting_mode", obj.get_retargeting_mode()));
+    try_save(ar, ser20::make_nvp("pose_retargeting", obj.get_pose_retargeting()));
+    // Fields added later go last: binary archives read by position.
+    try_save(ar, ser20::make_nvp("controller", obj.get_controller()));
 }
 SAVE_INSTANTIATE(animation_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(animation_component, ser20::oarchive_binary_t);
@@ -145,6 +181,18 @@ LOAD(animation_component)
     if(try_load(ar, ser20::make_nvp("retargeting_mode", retargeting_mode)))
     {
         obj.set_retargeting_mode(retargeting_mode);
+    }
+
+    animation_pose_retargeting pose_retargeting{animation_pose_retargeting::copy};
+    if(try_load(ar, ser20::make_nvp("pose_retargeting", pose_retargeting)))
+    {
+        obj.set_pose_retargeting(pose_retargeting);
+    }
+
+    asset_handle<animation_controller> controller;
+    if(try_load(ar, ser20::make_nvp("controller", controller)))
+    {
+        obj.set_controller(controller);
     }
 }
 LOAD_INSTANTIATE(animation_component, ser20::iarchive_associative_t);

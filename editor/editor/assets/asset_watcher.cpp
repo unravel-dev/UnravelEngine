@@ -15,6 +15,7 @@
 #include <engine/ecs/prefab.h>
 #include <engine/events.h>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -806,6 +807,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     add_to_syncer<prefab>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<scene_prefab>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<physics_material>(ctx, syncer, on_removed, on_renamed);
+    add_to_syncer<animation_controller>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<audio_clip>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<font>(ctx, syncer, on_removed, on_renamed);
     add_to_syncer<script>(ctx, syncer, on_removed, on_renamed);
@@ -844,6 +846,7 @@ void asset_watcher::setup_cache_syncer(rtti::context& ctx,
     watch_synced<prefab>(ctx, watchers, cache_dir);
     watch_synced<scene_prefab>(ctx, watchers, cache_dir);
     watch_synced<physics_material>(ctx, watchers, cache_dir);
+    watch_synced<animation_controller>(ctx, watchers, cache_dir);
     watch_synced<audio_clip>(ctx, watchers, cache_dir);
     watch_synced<font>(ctx, watchers, cache_dir);
     watch_synced<script>(ctx, watchers, cache_dir);

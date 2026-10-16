@@ -142,7 +142,7 @@ void test_profiler_scope_is_never_busier_than_its_wall_time()
         }
         spin_for(PROFILER_SCOPE_DURATION);
         profile_end(idx);
-        const profile_event& ev = get_thread_profile_data()->write_buffer().events[idx];
+        const profile_event& ev = get_thread_profile_data()->events[idx];
         const int64_t excess_ns = (ev.cpu_end_ns - ev.cpu_start_ns) - (ev.end_ns - ev.start_ns);
         busier_count += excess_ns > 0 ? 1 : 0;
         worst_excess_ns = std::max(worst_excess_ns, excess_ns);

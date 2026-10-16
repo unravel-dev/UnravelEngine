@@ -19,6 +19,9 @@
 
 #include "../tests.h"
 
+#include <engine/animation/ecs/components/animation_component.h>
+#include <engine/animation/ecs/components/ik_components.h>
+#include <engine/animation/ecs/systems/rig_system.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/systems/ik_solvers.h>
@@ -642,9 +645,657 @@ void test_aim_up_reference()
 }
 
 
+// -----------------------------------------------------------------------------
+// Rig modifier components (rig_system)
+// -----------------------------------------------------------------------------
+
+constexpr float RIG_FRAME = 1.0f / 60.0f;
+
+auto capture_locals(const test_chain& chain) -> std::vector<math::transform>
+{
+    std::vector<math::transform> locals;
+    for(size_t i = 0; i < chain.joints.size(); ++i)
+    {
+        locals.push_back(chain.transform(i).get_transform_local());
+    }
+    return locals;
+}
+
+auto locals_match(const test_chain& chain, const std::vector<math::transform>& locals) -> bool
+{
+    for(size_t i = 0; i < chain.joints.size(); ++i)
+    {
+        const auto& now = chain.transform(i).get_transform_local();
+        if(math::length(now.get_position() - locals[i].get_position()) > 1e-6f ||
+           std::fabs(std::fabs(math::dot(now.get_rotation(), locals[i].get_rotation())) - 1.0f) > 1e-6f)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void test_rig_two_bone_reaches_and_restores()
+{
+    std::printf("test_rig_two_bone_reaches_and_restores\n");
+    auto chain = make_leg();
+    auto target = spawn(*chain.registry, {0.4f, 0.2f, 0.1f});
+    auto pole = spawn(*chain.registry, {0.0f, 1.0f, 2.0f});
+    auto& component = chain.registry->emplace<two_bone_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.pole = pole;
+    const auto before = capture_locals(chain);
+
+    rig_system rig;
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    check(component.debug.solved, "the two-bone component solved");
+    check_near(math::length(chain.effector_position() - target.get<transform_component>().get_position_global()),
+               0.0f,
+               2e-3f,
+               "the foot reaches the target entity");
+    check(component.debug.joints.size() == 3, "the gizmo gets the three joints");
+
+    rig.after_skinning(*chain.registry);
+    check(locals_match(chain, before), "after skinning the animated pose is back, untouched");
+
+    // A weight curve no playing clip provides keeps the modifier off.
+    component.weight_curve = "HandReach";
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    check(!component.debug.solved, "a missing weight curve gates the solve off");
+    check(locals_match(chain, before), "nothing moved without the curve");
+    rig.after_skinning(*chain.registry);
+}
+
+void test_rig_chain_ik_reaches()
+{
+    std::printf("test_rig_chain_ik_reaches\n");
+    auto chain = make_chain({{0.0f, 0.0f, 0.0f}, {0.0f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.5f, 0.0f}, {0.0f, 2.0f, 0.0f}});
+    auto target = spawn(*chain.registry, {0.9f, 1.2f, 0.4f});
+    auto& component = chain.registry->emplace<chain_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.chain_length = 4;
+    const auto before = capture_locals(chain);
+
+    rig_system rig;
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    check_near(math::length(chain.effector_position() - math::vec3(0.9f, 1.2f, 0.4f)), 0.0f, 5e-3f, "the chain tip reaches the target");
+    check(component.debug.joints.size() == 5, "the gizmo gets every joint");
+    rig.after_skinning(*chain.registry);
+    check(locals_match(chain, before), "chain pose restored after skinning");
+}
+
+void test_rig_chain_ik_eases_to_a_swapped_target()
+{
+    std::printf("test_rig_chain_ik_eases_to_a_swapped_target\n");
+    // A tentacle that switches from wandering to reaching for someone swaps its target entity: with
+    // smoothing the goal starts at the tip and eases toward each new target instead of snapping.
+    constexpr float smoothing = 0.2f;
+    constexpr float frame = 0.1f;
+    const float alpha = 1.0f - std::exp(-frame / smoothing);
+    auto chain = make_chain({{0.0f, 0.0f, 0.0f}, {0.0f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.5f, 0.0f}});
+    const math::vec3 wander_point{0.6f, 1.2f, 0.0f};
+    const math::vec3 reach_point{-0.6f, 1.2f, 0.3f};
+    auto wander = spawn(*chain.registry, wander_point);
+    auto reach = spawn(*chain.registry, reach_point);
+    auto& component = chain.registry->emplace<chain_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = wander;
+    component.chain_length = 3;
+    component.smoothing = smoothing;
+    const math::vec3 tip = chain.effector_position();
+
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(frame));
+        rig.after_skinning(*chain.registry);
+    };
+    step();
+    check(math::length(component.goal.position - (tip + (wander_point - tip) * alpha)) < 1e-4f,
+          "a starting solve eases from the animated tip");
+    for(int i = 0; i < 40; ++i)
+    {
+        step();
+    }
+    check(math::length(component.goal.position - wander_point) < 1e-3f, "the goal settles on its target");
+
+    component.target = reach;
+    step();
+    check(math::length(component.goal.position - (wander_point + (reach_point - wander_point) * alpha)) < 1e-3f,
+          "a swapped target is approached, not jumped to");
+
+    component.smoothing = 0.0f;
+    step();
+    check(math::length(component.goal.position - reach_point) < 1e-5f, "without smoothing the goal is the target");
+}
+
+void test_rig_look_at_turns_toward_target()
+{
+    std::printf("test_rig_look_at_turns_toward_target\n");
+    auto chain = make_chain({{0.0f, 1.0f, 0.0f}, {0.0f, 1.4f, 0.0f}, {0.0f, 1.6f, 0.0f}});
+    auto target = spawn(*chain.registry, {2.0f, 1.6f, 2.0f});
+    auto& component = chain.registry->emplace<look_at_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.chain_length = 3;
+    component.smoothing = 0.0f;
+    component.max_bone_angle = 90.0f;
+    component.forward_axis = {0.0f, 0.0f, 1.0f};
+
+    rig_system rig;
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    const math::vec3 facing = chain.transform(2).get_rotation_global() * math::vec3(0.0f, 0.0f, 1.0f);
+    const math::vec3 wanted = math::normalize(math::vec3(2.0f, 1.6f, 2.0f) - chain.position(2));
+    check(math::dot(math::normalize(facing), wanted) > 0.999f, "the head faces the target");
+    const math::vec3 base_facing = chain.transform(0).get_rotation_global() * math::vec3(0.0f, 0.0f, 1.0f);
+    const float base_angle = math::degrees(std::acos(math::clamp(math::dot(math::normalize(base_facing), math::vec3(0, 0, 1)), -1.0f, 1.0f)));
+    check(base_angle > 5.0f && base_angle < 40.0f, "the lowest bone takes only its share of the turn");
+    rig.after_skinning(*chain.registry);
+
+    // A target behind the character fades the look out instead of twisting the neck round.
+    target.get<transform_component>().set_position_global({0.0f, 1.6f, -2.0f});
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    check(component.smoothed_weight < 1e-3f, "a target behind the character switches the look off");
+    rig.after_skinning(*chain.registry);
+}
+
+void test_rig_spring_bone_falls_and_holds_lengths()
+{
+    std::printf("test_rig_spring_bone_falls_and_holds_lengths\n");
+    const auto run = [](float stiffness) -> std::pair<float, float>
+    {
+        auto chain = make_chain({{0.0f, 1.0f, 0.0f}, {0.2f, 1.0f, 0.0f}, {0.4f, 1.0f, 0.0f}, {0.6f, 1.0f, 0.0f}});
+        auto& component = chain.registry->emplace<spring_bone_component>(chain.joints.front().entity());
+        component.set_owner(chain.joints.front());
+        component.stiffness = stiffness;
+        component.damping = 0.2f;
+        component.gravity = {0.0f, -9.81f, 0.0f};
+        rig_system rig;
+        for(int frame = 0; frame < 120; ++frame)
+        {
+            rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+            rig.after_skinning(*chain.registry);
+        }
+        const auto& joints = component.debug.joints;
+        float worst_length_error = 0.0f;
+        for(size_t i = 0; i + 1 < joints.size(); ++i)
+        {
+            worst_length_error = std::max(worst_length_error, std::fabs(math::length(joints[i + 1] - joints[i]) - 0.2f));
+        }
+        check_finite(joints.back(), "the spring tip stays finite");
+        return {joints.back().y, worst_length_error};
+    };
+    const auto [limp_tip, limp_error] = run(0.0f);
+    const auto [stiff_tip, stiff_error] = run(60.0f);
+    check(limp_tip < 0.5f, "a chain without stiffness hangs down under gravity");
+    check(stiff_tip > limp_tip + 0.2f, "stiffness holds the chain toward its animated pose");
+    check(limp_error < 1e-3f && stiff_error < 1e-3f, "bone lengths survive the simulation");
+}
+
+void test_rig_parents_solve_before_children()
+{
+    std::printf("test_rig_parents_solve_before_children\n");
+    // A look-at that turns the chest moves the shoulder: the hand IK on that arm has to solve after
+    // it, whatever order the components were added in.
+    auto registry = make_registry();
+    const auto attach = [&](const math::vec3& position, entt::handle parent)
+    {
+        auto joint = spawn(*registry, position);
+        if(parent)
+        {
+            joint.get<transform_component>().set_parent(parent);
+        }
+        return joint;
+    };
+    auto hips = attach({0.0f, 1.0f, 0.0f}, {});
+    auto chest = attach({0.0f, 1.4f, 0.0f}, hips);
+    auto neck = attach({0.0f, 1.6f, 0.0f}, chest);
+    auto head = attach({0.0f, 1.7f, 0.0f}, neck);
+    auto upper_arm = attach({0.2f, 1.4f, 0.0f}, chest);
+    auto forearm = attach({0.5f, 1.4f, 0.05f}, upper_arm);
+    auto hand = attach({0.8f, 1.4f, 0.0f}, forearm);
+    const math::vec3 grip{0.5f, 1.3f, 0.2f};
+    auto hand_target = spawn(*registry, grip);
+    auto look_target = spawn(*registry, {2.0f, 1.6f, 2.0f});
+
+    auto& reach = registry->emplace<two_bone_ik_component>(hand.entity());
+    reach.set_owner(hand);
+    reach.target = hand_target;
+    auto& look = registry->emplace<look_at_ik_component>(head.entity());
+    look.set_owner(head);
+    look.target = look_target;
+    look.chain_length = 3;
+    look.smoothing = 0.0f;
+    look.max_bone_angle = 90.0f;
+    look.forward_axis = {0.0f, 0.0f, 1.0f};
+    const math::quat chest_before = chest.get<transform_component>().get_rotation_global();
+
+    rig_system rig;
+    rig.before_skinning(*registry, delta_t(RIG_FRAME));
+    const float chest_turn = std::fabs(math::dot(chest.get<transform_component>().get_rotation_global(), chest_before));
+    check(chest_turn < 0.9999f, "the look-at turned the chest");
+    check_near(math::length(hand.get<transform_component>().get_position_global() - grip),
+               0.0f,
+               2e-3f,
+               "the hand still reaches its target after the chest turned");
+    rig.after_skinning(*registry);
+}
+
+void test_rig_lost_target_fades_out()
+{
+    std::printf("test_rig_lost_target_fades_out\n");
+    auto chain = make_leg();
+    auto target = spawn(*chain.registry, {0.4f, 0.2f, 0.1f});
+    auto& component = chain.registry->emplace<two_bone_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.smoothing = 0.2f;
+    const math::vec3 animated = chain.effector_position();
+
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+        const math::vec3 solved = chain.effector_position();
+        rig.after_skinning(*chain.registry);
+        return solved;
+    };
+    for(int i = 0; i < 120; ++i)
+    {
+        step();
+    }
+    check(component.goal.weight > 0.99f, "a smoothed weight eases in to the component weight");
+
+    component.target = {};
+    const math::vec3 released = step();
+    check(component.debug.solved, "a lost target does not drop the solve at once");
+    check(component.debug.effective_weight > 0.5f && component.debug.effective_weight < 1.0f,
+          "the weight fades out from where it was");
+    check(math::length(released - animated) > 0.1f, "the limb does not snap back to the animation");
+    for(int i = 0; i < 300; ++i)
+    {
+        step();
+    }
+    check(!component.debug.solved && !component.goal.valid, "once faded out the modifier stops and resets");
+}
+
+void test_rig_switched_off_rests_and_resumes()
+{
+    std::printf("test_rig_switched_off_rests_and_resumes\n");
+    auto chain = make_leg();
+    auto target = spawn(*chain.registry, {0.4f, 0.2f, 0.1f});
+    auto& component = chain.registry->emplace<two_bone_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.smoothing = 0.2f;
+    const math::vec3 animated = chain.effector_position();
+
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+        const math::vec3 solved = chain.effector_position();
+        rig.after_skinning(*chain.registry);
+        return solved;
+    };
+    for(int i = 0; i < 120; ++i)
+    {
+        step();
+    }
+    component.weight = 0.0f;
+    step();
+    check(component.debug.solved && component.debug.effective_weight > 0.0f, "a switched-off rig fades out, not snaps");
+    for(int i = 0; i < 300; ++i)
+    {
+        step();
+    }
+    const math::vec3 rested = step();
+    check(!component.debug.solved && !component.goal.valid, "once faded out a switched-off rig no longer runs");
+    check_near(math::length(rested - animated), 0.0f, 1e-5f, "a resting rig leaves the animated pose alone");
+
+    component.weight = 1.0f;
+    step();
+    check(component.debug.solved && component.goal.weight > 0.0f, "switched back on, the rig runs and fades in");
+}
+
+/// A leg like make_leg()'s under its own container in `registry`, offset along X; the foot last.
+auto add_leg(entt::registry& registry, float x, entt::handle parent = {}) -> std::vector<entt::handle>
+{
+    auto container = spawn(registry, {x, 0.0f, 0.0f});
+    if(parent)
+    {
+        container.get<transform_component>().set_parent(parent);
+    }
+    std::vector<entt::handle> joints;
+    for(const auto& point : {math::vec3(x, 2.0f, 0.0f), math::vec3(x, 1.0f, 0.15f), math::vec3(x, 0.0f, 0.0f)})
+    {
+        auto joint = spawn(registry, point);
+        joint.get<transform_component>().set_parent(joints.empty() ? container : joints.back());
+        joints.push_back(joint);
+    }
+    return joints;
+}
+
+auto add_two_bone(entt::registry& registry, entt::handle effector, entt::handle target) -> two_bone_ik_component&
+{
+    auto& component = registry.emplace<two_bone_ik_component>(effector.entity());
+    component.set_owner(effector);
+    component.target = target;
+    component.smoothing = 0.0f;
+    return component;
+}
+
+auto get_position(entt::handle entity) -> math::vec3
+{
+    return entity.get<transform_component>().get_position_global();
+}
+
+/// More characters than the rig system runs on one thread (32), so the modifiers run on the pool.
+constexpr int PARALLEL_CHARACTERS = 40;
+constexpr float CHARACTER_SPACING = 3.0f;
+
+void test_rig_characters_solve_in_parallel_as_one_alone()
+{
+    std::printf("test_rig_characters_solve_in_parallel_as_one_alone\n");
+    const math::vec3 target_offset(0.4f, 0.2f, 0.1f);
+    rig_system rig;
+    auto alone = make_leg();
+    add_two_bone(*alone.registry, alone.effector(), spawn(*alone.registry, target_offset));
+    rig.before_skinning(*alone.registry, delta_t(RIG_FRAME));
+    const math::vec3 expected_knee = alone.position(1);
+    const math::vec3 expected_foot = alone.effector_position();
+    rig.after_skinning(*alone.registry);
+
+    auto registry = make_registry();
+    std::vector<std::vector<entt::handle>> legs;
+    for(int i = 0; i < PARALLEL_CHARACTERS; ++i)
+    {
+        const float x = CHARACTER_SPACING * float(i + 1);
+        legs.push_back(add_leg(*registry, x));
+        add_two_bone(*registry, legs.back().back(), spawn(*registry, target_offset + math::vec3(x, 0.0f, 0.0f)));
+    }
+    rig.before_skinning(*registry, delta_t(RIG_FRAME));
+    bool is_every_leg_solved = true;
+    for(int i = 0; i < PARALLEL_CHARACTERS; ++i)
+    {
+        const math::vec3 offset(CHARACTER_SPACING * float(i + 1), 0.0f, 0.0f);
+        is_every_leg_solved = is_every_leg_solved && math::length(get_position(legs[i][1]) - offset - expected_knee) < 1e-4f &&
+                              math::length(get_position(legs[i][2]) - offset - expected_foot) < 1e-4f;
+    }
+    check(is_every_leg_solved, "every character reaches the pose one character alone reaches");
+    rig.after_skinning(*registry);
+    bool is_every_leg_restored = true;
+    for(int i = 0; i < PARALLEL_CHARACTERS; ++i)
+    {
+        const float x = CHARACTER_SPACING * float(i + 1);
+        is_every_leg_restored = is_every_leg_restored && math::length(get_position(legs[i][2]) - math::vec3(x, 0.0f, 0.0f)) < 1e-5f;
+    }
+    check(is_every_leg_restored, "every character gets its animated pose back after skinning");
+}
+
+void test_rig_aiming_at_another_character_sees_its_solved_pose()
+{
+    std::printf("test_rig_aiming_at_another_character_sees_its_solved_pose\n");
+    auto registry = make_registry();
+    for(int i = 0; i < PARALLEL_CHARACTERS; ++i)
+    {
+        const float x = CHARACTER_SPACING * float(i + 2);
+        const auto leg = add_leg(*registry, x);
+        add_two_bone(*registry, leg.back(), spawn(*registry, {x + 0.4f, 0.2f, 0.1f}));
+    }
+    // The watcher is made first: in one shallowest-first list it would run before the leg it reaches for.
+    const auto watcher = add_leg(*registry, 1.0f);
+    const auto leader = add_leg(*registry, 0.0f);
+    add_two_bone(*registry, leader.back(), spawn(*registry, {0.6f, 0.5f, 0.3f}));
+    add_two_bone(*registry, watcher.back(), leader.back());
+
+    rig_system rig;
+    rig.before_skinning(*registry, delta_t(RIG_FRAME));
+    const math::vec3 leader_foot = get_position(leader.back());
+    check(math::length(leader_foot) > 0.5f, "the leader's foot left its animated pose");
+    check_near(math::length(get_position(watcher.back()) - leader_foot),
+               0.0f,
+               1e-3f,
+               "a rig reaching for another character's bone reaches where that bone was solved to");
+    rig.after_skinning(*registry);
+}
+
+void test_rig_writing_above_its_character_still_solves()
+{
+    std::printf("test_rig_writing_above_its_character_still_solves\n");
+    auto registry = make_registry();
+    for(int i = 0; i < PARALLEL_CHARACTERS; ++i)
+    {
+        const float x = CHARACTER_SPACING * float(i + 2);
+        const auto leg = add_leg(*registry, x);
+        add_two_bone(*registry, leg.back(), spawn(*registry, {x + 0.4f, 0.2f, 0.1f}));
+    }
+    // A character under a shared parent whose chain reaches past the character root into that
+    // parent: no thread may write the parent while others pose below it.
+    auto world = spawn(*registry, {0.0f, -1.0f, 0.0f});
+    const auto leg = add_leg(*registry, 0.0f, world);
+    const auto character = leg.front().get<transform_component>().get_parent();
+    registry->emplace<animation_component>(character.entity());
+    auto& chain = registry->emplace<chain_ik_component>(leg.back().entity());
+    chain.set_owner(leg.back());
+    chain.target = spawn(*registry, {0.5f, 0.4f, 0.2f});
+    chain.chain_length = 4;
+
+    rig_system rig;
+    rig.before_skinning(*registry, delta_t(RIG_FRAME));
+    check(chain.debug.solved, "the chain solves");
+    check_near(math::length(get_position(leg.back()) - math::vec3(0.5f, 0.4f, 0.2f)), 0.0f, 2e-3f, "the chain reaches its target");
+    const float turned = std::fabs(math::dot(world.get<transform_component>().get_rotation_local(), math::identity<math::quat>()));
+    check(turned < 1.0f - 1e-6f, "the chain turns the shared parent it reaches into");
+    rig.after_skinning(*registry);
+    const float restored = std::fabs(math::dot(world.get<transform_component>().get_rotation_local(), math::identity<math::quat>()));
+    check_near(restored, 1.0f, 1e-6f, "the shared parent gets its pose back");
+}
+
+void test_rig_look_at_follows_a_new_forward_axis()
+{
+    std::printf("test_rig_look_at_follows_a_new_forward_axis\n");
+    auto chain = make_chain({{0.0f, 1.0f, 0.0f}, {0.0f, 1.4f, 0.0f}, {0.0f, 1.6f, 0.0f}});
+    auto target = spawn(*chain.registry, {2.0f, 1.6f, 2.0f});
+    auto& component = chain.registry->emplace<look_at_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.smoothing = 0.0f;
+    component.forward_axis = {0.0f, 0.0f, 1.0f};
+
+    rig_system rig;
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    rig.after_skinning(*chain.registry);
+    check(!component.resolved_axes.empty() && component.resolved_axes.front() == math::vec3(0.0f, 0.0f, 1.0f),
+          "the bones look along the forward axis");
+
+    component.forward_axis = {1.0f, 0.0f, 0.0f};
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    rig.after_skinning(*chain.registry);
+    check(!component.resolved_axes.empty() && component.resolved_axes.front() == math::vec3(1.0f, 0.0f, 0.0f),
+          "a changed forward axis is picked up while running");
+}
+
+void test_rig_spring_moves_every_frame_above_the_step_rate()
+{
+    std::printf("test_rig_spring_moves_every_frame_above_the_step_rate\n");
+    // Faster frames than the fixed step show the joints part way between steps: a falling chain
+    // moves on every frame instead of holding a step for several frames and jumping.
+    constexpr float fast_frame = 1.0f / 240.0f;
+    constexpr int warm_up_frames = 8;
+    constexpr int measured_frames = 24;
+    auto chain = make_chain({{0.0f, 1.0f, 0.0f}, {0.2f, 1.0f, 0.0f}, {0.4f, 1.0f, 0.0f}});
+    auto& component = chain.registry->emplace<spring_bone_component>(chain.joints.front().entity());
+    component.set_owner(chain.joints.front());
+    component.stiffness = 0.0f;
+    component.gravity = {0.0f, -9.81f, 0.0f};
+
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(fast_frame));
+        rig.after_skinning(*chain.registry);
+        return component.debug.joints.back().y;
+    };
+    float previous = 0.0f;
+    for(int i = 0; i < warm_up_frames; ++i)
+    {
+        previous = step();
+    }
+    int held_frames = 0;
+    for(int i = 0; i < measured_frames; ++i)
+    {
+        const float tip = step();
+        held_frames += std::fabs(tip - previous) < 1e-7f ? 1 : 0;
+        previous = tip;
+    }
+    check(held_frames == 0, "the spring tip moves on every frame");
+}
+
+void test_rig_recovers_from_a_target_that_is_not_a_number()
+{
+    std::printf("test_rig_recovers_from_a_target_that_is_not_a_number\n");
+    auto chain = make_chain({{0.0f, 0.0f, 0.0f}, {0.0f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.5f, 0.0f}});
+    const math::vec3 reach_point{0.6f, 1.0f, 0.2f};
+    auto target = spawn(*chain.registry, reach_point);
+    auto& component = chain.registry->emplace<chain_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.chain_length = 3;
+    component.smoothing = 0.05f;
+
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+        const math::vec3 solved = chain.effector_position();
+        rig.after_skinning(*chain.registry);
+        return solved;
+    };
+    for(int i = 0; i < 30; ++i)
+    {
+        step();
+    }
+    const float not_a_number = std::numeric_limits<float>::quiet_NaN();
+    target.get<transform_component>().set_position_global({not_a_number, 1.0f, 0.0f});
+    check_finite(step(), "a target that is not a number leaves the chain finite");
+    check_finite(component.goal.position, "the goal never takes the bad position");
+
+    const math::vec3 next_point{-0.5f, 1.1f, 0.3f};
+    target.get<transform_component>().set_position_global(next_point);
+    math::vec3 solved{};
+    for(int i = 0; i < 120; ++i)
+    {
+        solved = step();
+    }
+    check_near(math::length(solved - next_point), 0.0f, 5e-3f, "the chain reaches again once the target is valid");
+}
+
+void test_rig_spring_restarts_after_a_teleport()
+{
+    std::printf("test_rig_spring_restarts_after_a_teleport\n");
+    auto chain = make_chain({{0.0f, 1.0f, 0.0f}, {0.2f, 1.0f, 0.0f}, {0.4f, 1.0f, 0.0f}});
+    auto& component = chain.registry->emplace<spring_bone_component>(chain.joints.front().entity());
+    component.set_owner(chain.joints.front());
+    component.gravity = {0.0f, 0.0f, 0.0f};
+
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+        rig.after_skinning(*chain.registry);
+    };
+    for(int i = 0; i < 10; ++i)
+    {
+        step();
+    }
+    const math::vec3 jump{10.0f, 0.0f, 0.0f};
+    chain.container.get<transform_component>().set_position_global(jump);
+    step();
+    const auto& joints = component.debug.joints;
+    check(joints.size() == 3, "the spring reports every joint");
+    check(joints.back().x > joints.front().x + 0.3f,
+          "after a teleport the chain starts from its animated pose instead of trailing back");
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------------
+
+void test_two_bone_turning_the_bend_plane_keeps_the_knee_on_its_hinge()
+{
+    std::printf("test_two_bone_turning_the_bend_plane_keeps_the_knee_on_its_hinge\n");
+    // The target stays where the foot is and the pole turns the bend plane 30 degrees about the leg:
+    // the limb turns as one piece, so the knee's own rotation does not change at all.
+    auto chain = make_leg();
+    const math::quat knee_before = chain.transform(1).get_rotation_local();
+    const math::vec3 pole_direction = math::angleAxis(math::radians(30.0f), math::vec3(0.0f, 1.0f, 0.0f)) * math::vec3(0.0f, 0.0f, 1.0f);
+    const auto result = ik_set_position_two_bone(chain.effector(), chain.effector_position(), ik_pole::from_direction(pole_direction));
+    check(result.applied, "the solve runs");
+    const math::quat knee_after = chain.transform(1).get_rotation_local();
+    const float knee_change = math::degrees(2.0f * std::acos(math::clamp(std::fabs(math::dot(knee_before, knee_after)), 0.0f, 1.0f)));
+    check(knee_change < 0.05f, "the knee keeps its own rotation (" + std::to_string(knee_change) + " degrees)");
+    const math::vec3 knee = chain.position(1);
+    check_near(math::dot(math::normalize(math::vec3(knee.x, 0.0f, knee.z)), pole_direction), 1.0f, 1e-3f,
+               "and bends toward the turned pole");
+}
+
+void test_rig_goal_follows_a_moving_target_at_once()
+{
+    std::printf("test_rig_goal_follows_a_moving_target_at_once\n");
+    // Smoothing eases where a goal starts and a target swap, never a target that moves: a hand on a
+    // wheel in a moving car does not trail behind it.
+    auto chain = make_leg();
+    auto target = spawn(*chain.registry, {0.4f, 0.2f, 0.1f});
+    auto& component = chain.registry->emplace<two_bone_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.smoothing = 0.1f;
+    rig_system rig;
+    const auto step = [&]()
+    {
+        rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+        rig.after_skinning(*chain.registry);
+    };
+    for(int i = 0; i < 120; ++i)
+    {
+        step();
+    }
+    for(int i = 0; i < 5; ++i)
+    {
+        auto& target_transform = target.get<transform_component>();
+        target_transform.set_position_global(target_transform.get_position_global() + math::vec3(0.0f, 0.0f, 0.05f));
+        step();
+        check_near(math::length(component.goal.position - target_transform.get_position_global()), 0.0f, 1e-4f,
+                   "the goal is on the moving target");
+    }
+    auto other = spawn(*chain.registry, {-0.4f, 0.2f, 0.1f});
+    const math::vec3 before_swap = component.goal.position;
+    component.target = other;
+    step();
+    check(math::length(component.goal.position - before_swap) < math::length(get_position(other) - before_swap) * 0.5f,
+          "a new target is eased over to");
+}
+
+void test_rig_look_at_bone_limit_zero_holds_the_bones()
+{
+    std::printf("test_rig_look_at_bone_limit_zero_holds_the_bones\n");
+    auto chain = make_chain({{0.0f, 1.0f, 0.0f}, {0.0f, 1.5f, 0.0f}, {0.0f, 1.7f, 0.0f}});
+    auto target = spawn(*chain.registry, {2.0f, 1.7f, 0.0f});
+    auto& component = chain.registry->emplace<look_at_ik_component>(chain.effector().entity());
+    component.set_owner(chain.effector());
+    component.target = target;
+    component.smoothing = 0.0f;
+    component.max_bone_angle = 0.0f;
+    const math::quat before = chain.transform(2).get_rotation_global();
+    rig_system rig;
+    rig.before_skinning(*chain.registry, delta_t(RIG_FRAME));
+    const math::quat solved = chain.transform(2).get_rotation_global();
+    rig.after_skinning(*chain.registry);
+    check_near(std::fabs(math::dot(before, solved)), 1.0f, 1e-6f, "a bone limit of 0 turns nothing");
+}
 
 auto run_ik_suite(rtti::context& /*ctx*/) -> int
 {
@@ -664,6 +1315,24 @@ auto run_ik_suite(rtti::context& /*ctx*/) -> int
     test_resolve_facing_axis();
     test_aim_cone_limit();
     test_aim_up_reference();
+    test_rig_two_bone_reaches_and_restores();
+    test_rig_chain_ik_reaches();
+    test_rig_chain_ik_eases_to_a_swapped_target();
+    test_rig_look_at_turns_toward_target();
+    test_rig_spring_bone_falls_and_holds_lengths();
+    test_rig_parents_solve_before_children();
+    test_rig_lost_target_fades_out();
+    test_rig_switched_off_rests_and_resumes();
+    test_rig_characters_solve_in_parallel_as_one_alone();
+    test_rig_aiming_at_another_character_sees_its_solved_pose();
+    test_rig_writing_above_its_character_still_solves();
+    test_rig_look_at_follows_a_new_forward_axis();
+    test_rig_spring_moves_every_frame_above_the_step_rate();
+    test_rig_recovers_from_a_target_that_is_not_a_number();
+    test_rig_spring_restarts_after_a_teleport();
+    test_two_bone_turning_the_bend_plane_keeps_the_knee_on_its_hinge();
+    test_rig_goal_follows_a_moving_target_at_once();
+    test_rig_look_at_bone_limit_zero_holds_the_bones();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

@@ -10,6 +10,7 @@
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <engine/scripting/script_asset_reference.h>
 #include <dotnetpp/dotnetpp.h>
 
 #include <engine/meta/core/math/vector.hpp>
@@ -20,6 +21,7 @@
 #include <engine/meta/rendering/mesh.hpp>
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/animation/animation.hpp>
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/core/common/basetypes.hpp>
@@ -205,22 +207,8 @@ struct mono_saver<Archive, asset_handle<T>>
                                       const Invoker& invoker) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
-
-        auto val = invoker.get_value(obj);
-
-        asset_handle<T> asset{};
-        if(val)
-        {
-            const auto& invoker_type = invoker.get_type();
-            auto guid_property = invoker_type.get_property("uid");
-            auto mutable_uid_property = dotnet::make_property_invoker<hpp::uuid>(guid_property);
-            auto uid = mutable_uid_property.get_value(val);
-
-            auto& ctx = engine::context();
-            auto& am = ctx.get_cached<asset_manager>();
-            asset = am.get_asset<T>(uid);
-        }
-
+        auto& am = engine::context().get_cached<asset_manager>();
+        const auto asset = get_script_asset<T>(am, invoker.get_value(obj));
         return try_save(ar, ser20::make_nvp(invoker.get_name(), asset));
     }
 
@@ -228,23 +216,8 @@ struct mono_saver<Archive, asset_handle<T>>
                                      const dotnet::object& obj) -> bool
     {
         auto& ar = static_cast<Archive&>(arbase);
-        
-        asset_handle<T> asset{};
-        if(obj.valid())
-        {
-            auto obj_type = obj.get_type();
-            auto prop = obj_type.get_property("uid");
-            if(prop.is_valid())
-            {
-                auto uid_prop = dotnet::make_property_invoker<hpp::uuid>(prop);
-                auto uid = uid_prop.get_value(obj);
-                
-                auto& ctx = engine::context();
-                auto& am = ctx.get_cached<asset_manager>();
-                asset = am.get_asset<T>(uid);
-            }
-        }
-        
+        auto& am = engine::context().get_cached<asset_manager>();
+        const auto asset = get_script_asset<T>(am, obj);
         return try_save(ar, ser20::make_nvp("value", asset));
     }
 
@@ -492,6 +465,10 @@ struct mono_loader<Archive, asset_handle<T>>
         }
         if(!is_supported)
         {
+            is_supported |= std::is_same_v<asset_handle<animation_controller>, U> && expected_name == "AnimationController";
+        }
+        if(!is_supported)
+        {
             is_supported |= std::is_same_v<asset_handle<prefab>, U> && expected_name == "Prefab";
         }
         if(!is_supported)
@@ -525,21 +502,7 @@ struct mono_loader<Archive, asset_handle<T>>
             asset_handle<T> val{};
             if(try_load(ar, ser20::make_nvp(invoker.get_name(), val)))
             {
-                const auto& field_type = invoker.get_type();
-                auto guid_property = field_type.get_property("uid");
-                auto mutable_uid_property = dotnet::make_property_invoker<hpp::uuid>(guid_property);
-
-                auto var = invoker.get_value(obj);
-                if(!var && val)
-                {
-                    var = field_type.new_instance();
-                    invoker.set_value(obj, var);
-                }
-
-                if(var)
-                {
-                    mutable_uid_property.set_value(var, val.uid());
-                }
+                set_script_asset(obj, invoker, val);
                 return true;
             }
         }
@@ -871,6 +834,7 @@ SAVE(dotnet::object)
             {"Material",        &mono_saver<Archive, asset_handle<material>>::try_save_mono_object},
             {"Mesh",            &mono_saver<Archive, asset_handle<mesh>>::try_save_mono_object},
             {"AnimationClip",   &mono_saver<Archive, asset_handle<animation_clip>>::try_save_mono_object},
+            {"AnimationController", &mono_saver<Archive, asset_handle<animation_controller>>::try_save_mono_object},
             {"Prefab",          &mono_saver<Archive, asset_handle<prefab>>::try_save_mono_object},
             {"Scene",           &mono_saver<Archive, asset_handle<scene_prefab>>::try_save_mono_object},
             {"PhysicsMaterial", &mono_saver<Archive, asset_handle<physics_material>>::try_save_mono_object},
@@ -947,6 +911,7 @@ SAVE(dotnet::object)
             {"Material",        &mono_saver<Archive, asset_handle<material>>::try_save_mono_field},
             {"Mesh",            &mono_saver<Archive, asset_handle<mesh>>::try_save_mono_field},
             {"AnimationClip",   &mono_saver<Archive, asset_handle<animation_clip>>::try_save_mono_field},
+            {"AnimationController", &mono_saver<Archive, asset_handle<animation_controller>>::try_save_mono_field},
             {"Prefab",          &mono_saver<Archive, asset_handle<prefab>>::try_save_mono_field},
             {"Scene",           &mono_saver<Archive, asset_handle<scene_prefab>>::try_save_mono_field},
             {"PhysicsMaterial", &mono_saver<Archive, asset_handle<physics_material>>::try_save_mono_field},
@@ -995,6 +960,7 @@ SAVE(dotnet::object)
             {"Material",        &mono_saver<Archive, asset_handle<material>>::try_save_mono_property},
             {"Mesh",            &mono_saver<Archive, asset_handle<mesh>>::try_save_mono_property},
             {"AnimationClip",   &mono_saver<Archive, asset_handle<animation_clip>>::try_save_mono_property},
+            {"AnimationController", &mono_saver<Archive, asset_handle<animation_controller>>::try_save_mono_property},
             {"Prefab",          &mono_saver<Archive, asset_handle<prefab>>::try_save_mono_property},
             {"Scene",           &mono_saver<Archive, asset_handle<scene_prefab>>::try_save_mono_property},
             {"PhysicsMaterial", &mono_saver<Archive, asset_handle<physics_material>>::try_save_mono_property},
@@ -1196,6 +1162,7 @@ LOAD(dotnet::object)
             {"Material",        &mono_loader<Archive, asset_handle<material>>::try_load_mono_object},
             {"Mesh",            &mono_loader<Archive, asset_handle<mesh>>::try_load_mono_object},
             {"AnimationClip",   &mono_loader<Archive, asset_handle<animation_clip>>::try_load_mono_object},
+            {"AnimationController", &mono_loader<Archive, asset_handle<animation_controller>>::try_load_mono_object},
             {"Prefab",          &mono_loader<Archive, asset_handle<prefab>>::try_load_mono_object},
             {"Scene",           &mono_loader<Archive, asset_handle<scene_prefab>>::try_load_mono_object},
             {"PhysicsMaterial", &mono_loader<Archive, asset_handle<physics_material>>::try_load_mono_object},
@@ -1269,6 +1236,7 @@ LOAD(dotnet::object)
             {"Material",        &mono_loader<Archive, asset_handle<material>>::try_load_mono_field},
             {"Mesh",            &mono_loader<Archive, asset_handle<mesh>>::try_load_mono_field},
             {"AnimationClip",   &mono_loader<Archive, asset_handle<animation_clip>>::try_load_mono_field},
+            {"AnimationController", &mono_loader<Archive, asset_handle<animation_controller>>::try_load_mono_field},
             {"Prefab",          &mono_loader<Archive, asset_handle<prefab>>::try_load_mono_field},
             {"Scene",           &mono_loader<Archive, asset_handle<scene_prefab>>::try_load_mono_field},
             {"PhysicsMaterial", &mono_loader<Archive, asset_handle<physics_material>>::try_load_mono_field},
@@ -1317,6 +1285,7 @@ LOAD(dotnet::object)
             {"Material",        &mono_loader<Archive, asset_handle<material>>::try_load_mono_property},
             {"Mesh",            &mono_loader<Archive, asset_handle<mesh>>::try_load_mono_property},
             {"AnimationClip",   &mono_loader<Archive, asset_handle<animation_clip>>::try_load_mono_property},
+            {"AnimationController", &mono_loader<Archive, asset_handle<animation_controller>>::try_load_mono_property},
             {"Prefab",          &mono_loader<Archive, asset_handle<prefab>>::try_load_mono_property},
             {"Scene",           &mono_loader<Archive, asset_handle<scene_prefab>>::try_load_mono_property},
             {"PhysicsMaterial", &mono_loader<Archive, asset_handle<physics_material>>::try_load_mono_property},

@@ -1,4 +1,5 @@
 #include "script_system.h"
+#include <engine/animation/ecs/components/animation_component.h>
 #include "engine/assets/impl/asset_extensions.h"
 #include <engine/assets/impl/asset_compiler.h>
 #include <engine/ecs/components/transform_component.h>
@@ -576,6 +577,8 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         cache_.script_component_type.get_method("internal_n2m_on_collision_enter", 2);
     cache_.on_collision_exit_method =
         cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 3);
+    cache_.on_animation_event_method =
+        cache_.script_component_type.get_method("internal_n2m_on_animation_event", 8);
     cache_.invoke_method = cache_.script_component_type.get_method("internal_n2m_invoke", 2);
 
     cache_.ui_dispatch_method = cache_.ui_event_manager_type.get_method("InternalDispatchPayload", 5);
@@ -974,6 +977,11 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
                 }
             });
 
+        if(play.is_simulation_running() && !play.is_simulation_paused())
+        {
+            dispatch_animation_events(scn);
+        }
+
         if(play.is_simulation_running() && !play.is_simulation_paused() && cache_.update_invoker.valid())
         {
             {
@@ -989,6 +997,61 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
         log_exception(e);
     }
     is_updating_ = false;
+}
+
+void script_system::dispatch_animation_events(scene& scn)
+{
+    APP_SCOPE_PERF("Script/Animation Events");
+    if(!cache_.on_animation_event_method.valid())
+    {
+        return;
+    }
+
+    auto& registry = *scn.registry;
+    std::vector<animation_event_hit> events;
+    std::vector<entt::entity> sources;
+    registry.view<animation_component>().each(
+        [&](auto e, auto&& comp)
+        {
+            if(!comp.get_player().get_fired_events().empty())
+            {
+                sources.push_back(e);
+            }
+        });
+
+    for(auto source : sources)
+    {
+        auto* animation = registry.try_get<animation_component>(source);
+        if(animation == nullptr)
+        {
+            continue;
+        }
+        // Copied out first: a handler may change what the player plays (or destroy the entity).
+        events = animation->get_player().get_fired_events();
+        animation->get_player().clear_fired_events();
+
+        // The animated entity takes its events, or its nearest ancestor with scripts.
+        entt::handle receiver(registry, source);
+        while(receiver && !(receiver.all_of<script_component>() && receiver.get<script_component>().has_script_components()))
+        {
+            auto* transform = receiver.try_get<transform_component>();
+            receiver = transform ? transform->get_parent() : entt::handle{};
+        }
+        if(!receiver)
+        {
+            continue;
+        }
+
+        for(const auto& hit : events)
+        {
+            auto* scripts = receiver.valid() ? receiver.try_get<script_component>() : nullptr;
+            if(scripts == nullptr)
+            {
+                break;
+            }
+            scripts->on_animation_event(hit);
+        }
+    }
 }
 
 void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)

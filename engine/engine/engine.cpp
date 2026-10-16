@@ -14,6 +14,7 @@
 #include "events.h"
 #include <engine/settings/boot_config.h>
 #include <engine/animation/ecs/systems/animation_system.h>
+#include <engine/animation/ecs/systems/rig_system.h>
 #include <engine/audio/ecs/systems/audio_system.h>
 #include <engine/ecs/systems/transform_system.h>
 #include <engine/input/input.h>
@@ -195,6 +196,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<skylight_system>();
     ctx.add<model_system>();
     ctx.add<animation_system>();
+    ctx.add<rig_system>();
     ctx.add<particle_system>();
     ctx.add<physics_system>();
     ctx.add<input_system>();
@@ -324,6 +326,10 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
     {
         return false;
     }
+    if(!ls.check(ctx.get_cached<rig_system>().init(ctx)))
+    {
+        return false;
+    }
 
     ls.begin_module("Physics");
     if(!ls.check(ctx.get_cached<physics_system>().init(ctx)))
@@ -406,6 +412,10 @@ auto engine::deinit() -> bool
         return false;
     }
 
+    if(!ctx.get_cached<rig_system>().deinit(ctx))
+    {
+        return false;
+    }
     if(!ctx.get_cached<animation_system>().deinit(ctx))
     {
         return false;
@@ -489,6 +499,7 @@ auto engine::destroy() -> bool
     ctx.remove<particle_system>();
     ctx.remove<input_system>();
     ctx.remove<physics_system>();
+    ctx.remove<rig_system>();
     ctx.remove<animation_system>();
     ctx.remove<model_system>();
     ctx.remove<skylight_system>();

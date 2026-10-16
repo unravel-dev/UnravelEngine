@@ -149,6 +149,16 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Called when animation playback on this entity (or on a child without scripts of its own)
+        /// crosses an event authored on a clip. Runs before <see cref="OnUpdate"/> in the frame the
+        /// event was crossed. A public method named exactly like the event is called as well.
+        /// </summary>
+        /// <param name="animationEvent">The event and the clip, layer and weight it fired from.</param>
+        public virtual void OnAnimationEvent(AnimationEvent animationEvent)
+        {
+        }
+
+        /// <summary>
         /// Called on every frame update. Override this method to implement frame-based logic.
         /// </summary>
         public virtual void OnUpdate()
@@ -399,6 +409,37 @@ namespace Unravel.Core
             using (Run(this))
             {
                 OnCollisionExit(collision);
+            }
+        }
+
+        /// <summary>
+        /// Internal method invoked when animation playback crosses a clip event. Calls
+        /// <see cref="OnAnimationEvent"/> and the public method named like the event, if any.
+        /// </summary>
+        private void internal_n2m_on_animation_event(string name, string stringParameter, float floatParameter,
+                                                     int intParameter, int layer, float weight, Guid clip,
+                                                     string clipName)
+        {
+            AnimationEvent animationEvent = new AnimationEvent
+            {
+                name = name,
+                stringParameter = stringParameter,
+                floatParameter = floatParameter,
+                intParameter = intParameter,
+                layer = layer,
+                weight = weight,
+                clip = clip == Guid.Empty ? null : new AnimationClip { uid = clip },
+                clipName = clipName
+            };
+
+            using (Run(this))
+            {
+                OnAnimationEvent(animationEvent);
+                AnimationEventHandlers.Handler handler = AnimationEventHandlers.Find(GetType(), name);
+                if (handler.method != null)
+                {
+                    AnimationEventHandlers.Invoke(this, handler, animationEvent);
+                }
             }
         }
 

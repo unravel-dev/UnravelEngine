@@ -4,6 +4,9 @@
 #include "inspectors.h"
 
 #include <engine/animation/animation.h>
+#include <editor/hub/panels/animation_panel/animation_controller_ui.h>
+#include <engine/animation/animation_controller.h>
+#include <engine/meta/animation/animation_controller.hpp>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/audio/audio_clip.h>
@@ -29,6 +32,7 @@
 
 
 #include <editor/assets/asset_actions.h>
+#include <editor/editing/actions/lambda_actions.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
@@ -39,6 +43,7 @@
 
 #include <filesystem/filesystem.h>
 #include <algorithm>
+#include <sstream>
 #include <type_traits>
 #include <graphics/texture.h>
 #include <imgui/imgui.h>
@@ -118,6 +123,10 @@ auto get_asset_icon() -> const char*
     else if constexpr(std::is_same_v<T, animation_clip>)
     {
         return ICON_MDI_ANIMATION_OUTLINE;
+    }
+    else if constexpr(std::is_same_v<T, animation_controller>)
+    {
+        return ICON_MDI_STATE_MACHINE;
     }
     else if constexpr(std::is_same_v<T, prefab>)
     {
@@ -409,6 +418,23 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
     };
 
     return data_var_proxy;
+}
+
+/// The import settings as the binary archive writes them.
+auto save_import_settings_bytes(const animation_importer_meta& settings) -> std::string
+{
+    std::stringstream stream;
+    {
+        ser20::oarchive_binary_t archive(stream);
+        try_save(archive, ser20::make_nvp("settings", settings));
+    }
+    return stream.str();
+}
+
+/// Whether two import settings hold the same values; compared as saved, so every saved field counts.
+auto is_same_import_settings(const animation_importer_meta& lhs, const animation_importer_meta& rhs) -> bool
+{
+    return save_import_settings_bytes(lhs) == save_import_settings_bytes(rhs);
 }
 
 } // namespace
@@ -886,6 +912,101 @@ auto inspector_asset_handle_animation::inspect_as_property(rtti::context& ctx, a
     return result;
 }
 
+void inspector_asset_handle_animation::apply_import_settings(rtti::context& ctx)
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto meta = am.get_metadata(inspected_asset_.uid());
+    auto importer = std::static_pointer_cast<animation_importer_meta>(meta.meta.importer);
+    if(importer && importer_)
+    {
+        *importer = *importer_;
+        editor_actions::save_import_settings(inspected_asset_.id(), meta.meta);
+    }
+}
+
+auto inspector_asset_handle_animation::has_unapplied_edits(rtti::context& ctx) const -> bool
+{
+    if(!committed_ || !inspected_asset_)
+    {
+        return false;
+    }
+    const auto meta = ctx.get_cached<asset_manager>().get_metadata(inspected_asset_.uid());
+    const auto applied = std::static_pointer_cast<animation_importer_meta>(meta.meta.importer);
+    return applied && !is_same_import_settings(*committed_, *applied);
+}
+
+void inspector_asset_handle_animation::drop_staged_edits()
+{
+    importer_ = nullptr;
+    committed_ = nullptr;
+}
+
+void inspector_asset_handle_animation::end_inspection(rtti::context& ctx)
+{
+    if(has_unapplied_edits(ctx))
+    {
+        apply_import_settings(ctx);
+    }
+    drop_staged_edits();
+    inspected_asset_ = {};
+}
+
+void inspector_asset_handle_animation::record_import_edit(rtti::context& ctx)
+{
+    // A finished edit that changed nothing (a marker clicked, not moved) is neither an undo step
+    // nor an unapplied change.
+    if(is_same_import_settings(*committed_, *importer_))
+    {
+        return;
+    }
+    const animation_importer_meta before = *committed_;
+    const animation_importer_meta after = *importer_;
+    *committed_ = after;
+    std::weak_ptr<animation_importer_meta> staged = importer_;
+    std::weak_ptr<animation_importer_meta> committed = committed_;
+    const auto restore = [staged, committed](const animation_importer_meta& settings)
+    {
+        auto staged_settings = staged.lock();
+        auto committed_settings = committed.lock();
+        if(staged_settings && committed_settings)
+        {
+            *staged_settings = settings;
+            *committed_settings = settings;
+        }
+    };
+    ctx.get_cached<editing_manager>().do_action<tracked_editor_state_action_t>(
+        "Edit Import Settings",
+        [restore, after]()
+        {
+            restore(after);
+        },
+        [restore, before]()
+        {
+            restore(before);
+        });
+}
+
+void inspector_asset_handle_animation::draw_unapplied_bar(rtti::context& ctx)
+{
+    if(!has_unapplied_edits(ctx))
+    {
+        return;
+    }
+    ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), ICON_MDI_ALERT " Unapplied import changes");
+    ImGui::SetItemTooltipEx("Apply reimports the clip with them; showing anything else in the inspector applies them too.");
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Apply##unapplied"))
+    {
+        apply_import_settings(ctx);
+    }
+    ImGui::SameLine();
+    if(ImGui::SmallButton("Revert##unapplied"))
+    {
+        drop_staged_edits();
+    }
+    ImGui::Separator();
+}
+
 auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                                                entt::meta_any& var,
                                                const meta_any_proxy& var_proxy,
@@ -901,9 +1022,20 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
 
     if(inspected_asset_ != data || inspected_version_ != data.version())
     {
+        const bool unapplied = has_unapplied_edits(ctx);
+        // Edits nobody applied or reverted are applied rather than lost with the clip shown.
+        if(unapplied && inspected_asset_ != data)
+        {
+            apply_import_settings(ctx);
+        }
+        // A reimport of the same asset keeps them staged, still offered to Apply or Revert; anything
+        // else reads the settings afresh.
+        if(!unapplied || inspected_asset_ != data)
+        {
+            drop_staged_edits();
+        }
         inspected_asset_ = data;
         inspected_version_ = data.version();
-        importer_ = nullptr;
     }
 
     auto& am = ctx.get_cached<asset_manager>();
@@ -941,36 +1073,49 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
                 if(!importer_)
                 {
                     importer_ = std::make_shared<animation_importer_meta>(*importer);
+                    committed_ = std::make_shared<animation_importer_meta>(*importer);
                 }
-
-                if(ImGui::BeginTabBar("asset_handle_mesh_import",
-                                      ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
-                                          ImGuiTabBarFlags_FittingPolicyScroll))
+                draw_unapplied_bar(ctx);
+                // The staged settings record their own undo step per finished edit.
+                inspect_result import_result;
+                if(importer_ && ImGui::BeginTabBar("asset_handle_mesh_import",
+                                                   ImGuiTabBarFlags_NoCloseWithMiddleMouseButton |
+                                                       ImGuiTabBarFlags_FittingPolicyScroll))
                 {
-                    if(ImGui::BeginTabItem("Root Motion"))
+                    inspect_without_undo_scope no_undo;
+                    if(ImGui::BeginTabItem(ICON_MDI_MAP_MARKER " Events"))
                     {
-                        result |= ::unravel::inspect(ctx, importer_->root_motion);
-
+                        import_result |= timeline_.draw_events(ctx, data, *importer_);
                         ImGui::EndTabItem();
                     }
-
+                    if(ImGui::BeginTabItem(ICON_MDI_CHART_BELL_CURVE " Curves"))
+                    {
+                        import_result |= timeline_.draw_curves(ctx, data, *importer_);
+                        ImGui::EndTabItem();
+                    }
+                    if(ImGui::BeginTabItem("Root Motion"))
+                    {
+                        import_result |= ::unravel::inspect(ctx, importer_->root_motion);
+                        ImGui::EndTabItem();
+                    }
                     ImGui::EndTabBar();
                 }
+                if(import_result.edit_finished && importer_)
+                {
+                    record_import_edit(ctx);
+                }
+                result.changed |= import_result.changed;
+                result.edit_finished |= import_result.edit_finished;
             }
 
             if(ImGui::Button("Revert"))
             {
-                importer_ = {};
+                drop_staged_edits();
             }
             ImGui::SameLine();
             if(ImGui::Button("Apply"))
             {
-                if(importer_)
-                {
-                    *importer = *importer_;
-                }
-
-                editor_actions::save_import_settings(data.id(), meta.meta);
+                apply_import_settings(ctx);
             }
 
             ImGui::EndTabItem();
@@ -1177,6 +1322,115 @@ auto inspector_asset_handle_physics_material::inspect(rtti::context& ctx,
         asset_writer::atomic_save_to_file(data.id(), data);
     }
 
+    return result;
+}
+
+auto inspector_asset_handle_animation_controller::inspect_as_property(rtti::context& ctx,
+                                                                      asset_handle<animation_controller>& data)
+    -> inspect_result
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto& tm = ctx.get_cached<thumbnail_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
+
+    inspect_result result{};
+    result |= pick_asset(filter, em, tm, am, data, ex::get_type<animation_controller>());
+
+    return result;
+}
+
+auto inspector_asset_handle_animation_controller::inspect(rtti::context& ctx,
+                                                          entt::meta_any& var,
+                                                          const meta_any_proxy& var_proxy,
+                                                          const var_info& info,
+                                                          const entt::meta_custom& custom) -> inspect_result
+{
+    auto& data = var.cast<asset_handle<animation_controller>&>();
+
+    if(info.is_property)
+    {
+        return inspect_as_property(ctx, data);
+    }
+
+    inspect_result result{};
+    // try_get, not is_ready: it also starts the load of a controller nothing has used yet.
+    const auto controller = data.try_get();
+    if(!controller)
+    {
+        ImGui::TextDisabled("Loading...");
+        return result;
+    }
+    if(asset_handle<animation_controller>::is_empty(controller))
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), ICON_MDI_ALERT " The controller could not be loaded.");
+        return result;
+    }
+
+    if(ImGui::Button(ICON_MDI_STATE_MACHINE " Open in Animation Controller Editor", ImVec2(-1.0f, 0.0f)))
+    {
+        editor_actions::open_animation_controller(ctx, data);
+    }
+
+    const auto problems = validate_animation_controller(*controller);
+    if(!problems.empty())
+    {
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.75f, 0.3f, 1.0f));
+        for(const auto& problem : problems)
+        {
+            ImGui::TextWrapped(ICON_MDI_ALERT " %s", problem.c_str());
+        }
+        ImGui::PopStyleColor();
+    }
+    ImGui::Spacing();
+    // A summary: the controller is edited in its own window, which keeps references to renamed
+    // states and parameters, undo and running instances in step.
+    size_t state_count = 0;
+    size_t transition_count = 0;
+    for(const auto& layer : controller->layers)
+    {
+        state_count += layer.states.size();
+        transition_count += layer.transitions.size();
+    }
+    ImGui::TextDisabled("%d layers, %d states, %d transitions",
+                        int(controller->layers.size()),
+                        int(state_count),
+                        int(transition_count));
+    if(controller->preview_model)
+    {
+        ImGui::TextDisabled("Preview model: %s", controller->preview_model.name().c_str());
+    }
+    if(!controller->parameters.empty())
+    {
+        ImGui::SeparatorText("Parameters");
+    }
+    if(!controller->parameters.empty() && ImGui::BeginTable("##controller_parameters", 3, ImGuiTableFlags_RowBg))
+    {
+        for(const auto& parameter : controller->parameters)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(parameter.name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextDisabled("%s", get_parameter_type_name(parameter.type));
+            ImGui::TableSetColumnIndex(2);
+            switch(parameter.type)
+            {
+                case animation_parameter_type::float_value:
+                    ImGui::TextDisabled("%.2f", parameter.default_float);
+                    break;
+                case animation_parameter_type::int_value:
+                    ImGui::TextDisabled("%d", parameter.default_int);
+                    break;
+                case animation_parameter_type::bool_value:
+                    ImGui::TextDisabled("%s", parameter.default_bool ? "true" : "false");
+                    break;
+                case animation_parameter_type::trigger:
+                    break;
+            }
+        }
+        ImGui::EndTable();
+    }
     return result;
 }
 

@@ -5,6 +5,7 @@
 #include "../script_interop.h"
 
 #include <engine/animation/animation.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/ecs/prefab.h>
@@ -58,6 +59,8 @@ auto get_dotnet_asset(size_t type_hash) -> const dotnet_asset*
         {dotnet::type::get_hash("Unravel.Core.Prefab"),          std::make_shared<dotnet_asset_impl<prefab>>()},
         {dotnet::type::get_hash("Unravel.Core.Scene"),           std::make_shared<dotnet_asset_impl<scene_prefab>>()},
         {dotnet::type::get_hash("Unravel.Core.PhysicsMaterial"), std::make_shared<dotnet_asset_impl<physics_material>>()},
+        {dotnet::type::get_hash("Unravel.Core.AnimationController"),
+         std::make_shared<dotnet_asset_impl<animation_controller>>()},
         {dotnet::type::get_hash("Unravel.Core.AudioClip"),       std::make_shared<dotnet_asset_impl<audio_clip>>()},
         {dotnet::type::get_hash("Unravel.Core.Font"),            std::make_shared<dotnet_asset_impl<font>>()}
     };

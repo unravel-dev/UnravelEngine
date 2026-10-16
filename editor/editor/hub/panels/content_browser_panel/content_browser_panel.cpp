@@ -27,6 +27,7 @@
 #include <engine/meta/ui/ui_tree.hpp>
 #include <engine/meta/ui/style_sheet.hpp>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/font.h>
@@ -945,6 +946,7 @@ auto content_browser_panel::setup_known_asset_item(rtti::context& ctx, content_b
                        mesh,
                        prefab,
                        animation_clip,
+                       animation_controller,
                        font,
                        script>(
         [&](auto tag)
@@ -1117,6 +1119,19 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
             }
         }
 
+        if(ImGui::MenuItem(ex::get_type<animation_controller>().c_str()))
+        {
+            auto new_name = fmt::format("New {}", ex::get_type<animation_controller>());
+            const auto available =
+                asset_actions::get_free_copy_path(target_path, new_name, ex::get_format<animation_controller>());
+
+            asset_actions::create_animation_controller(ctx, available);
+
+            {
+                pending_rename = available;
+            }
+        }
+
         ImGui::Separator();
 
         if(ImGui::MenuItem(ex::get_type<ui_tree>().c_str()))
@@ -1275,6 +1290,13 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
         item.on_double_click = [&ctx, entry]()
         {
             editor_actions::open_scene_from_asset(ctx, entry);
+        };
+    }
+    else if constexpr(std::is_same_v<AssetType, animation_controller>)
+    {
+        item.on_double_click = [&ctx, entry]()
+        {
+            editor_actions::open_animation_controller(ctx, entry);
         };
     }
     else if constexpr(std::is_same_v<AssetType, prefab>)

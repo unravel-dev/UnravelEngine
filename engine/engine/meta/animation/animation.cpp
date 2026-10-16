@@ -1,11 +1,16 @@
 #include "animation.hpp"
 #include <engine/meta/core/math/quaternion.hpp>
 #include <engine/meta/core/math/transform.hpp>
+#include <engine/meta/core/math/vector.hpp>
 
 #include <fstream>
 #include <filesystem/file_istream.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/types/string.hpp>
+#include <serialization/types/vector.hpp>
+
+#include <algorithm>
 
 namespace unravel
 {
@@ -72,6 +77,131 @@ SERIALIZE(root_motion_params)
 SERIALIZE_INSTANTIATE(root_motion_params, ser20::oarchive_associative_t);
 SERIALIZE_INSTANTIATE(root_motion_params, ser20::oarchive_binary_t);
 
+REFLECT(animation_event)
+{
+    entt::meta_factory<animation_event>{}
+        .type("animation_event"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_event"},
+            entt::attribute{"pretty_name", "Animation Event"},
+        })
+        .data<&animation_event::name>("name"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "name"},
+            entt::attribute{"pretty_name", "Name"},
+            entt::attribute{"tooltip", "Name scripts receive in OnAnimationEvent; a public script method with this exact name is called too."},
+        })
+        .data<&animation_event::position>("position"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "position"},
+            entt::attribute{"pretty_name", "Position"},
+            entt::attribute{"tooltip", "Normalized position on the clip: 0 = first frame, 1 = last frame."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
+        .data<&animation_event::string_parameter>("string_parameter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "string_parameter"},
+            entt::attribute{"pretty_name", "String"},
+        })
+        .data<&animation_event::float_parameter>("float_parameter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "float_parameter"},
+            entt::attribute{"pretty_name", "Float"},
+        })
+        .data<&animation_event::int_parameter>("int_parameter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "int_parameter"},
+            entt::attribute{"pretty_name", "Int"},
+        })
+        .data<&animation_event::min_weight>("min_weight"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_weight"},
+            entt::attribute{"pretty_name", "Min Weight"},
+            entt::attribute{"tooltip", "Smallest share of the final pose (layer x crossfade weight) at which the event fires. 0.5 makes a crossfade report it from one side only; 0 fires whenever the clip plays at all."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        });
+}
+
+SERIALIZE(animation_event)
+{
+    try_serialize(ar, ser20::make_nvp("name", obj.name));
+    try_serialize(ar, ser20::make_nvp("position", obj.position));
+    try_serialize(ar, ser20::make_nvp("string_parameter", obj.string_parameter));
+    try_serialize(ar, ser20::make_nvp("float_parameter", obj.float_parameter));
+    try_serialize(ar, ser20::make_nvp("int_parameter", obj.int_parameter));
+    try_serialize(ar, ser20::make_nvp("min_weight", obj.min_weight));
+}
+SERIALIZE_INSTANTIATE(animation_event, ser20::oarchive_associative_t);
+SERIALIZE_INSTANTIATE(animation_event, ser20::oarchive_binary_t);
+SERIALIZE_INSTANTIATE(animation_event, ser20::iarchive_associative_t);
+SERIALIZE_INSTANTIATE(animation_event, ser20::iarchive_binary_t);
+
+REFLECT(animation_curve)
+{
+    entt::meta_factory<animation_curve>{}
+        .type("animation_curve"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_curve"},
+            entt::attribute{"pretty_name", "Animation Curve"},
+        })
+        .data<&animation_curve::name>("name"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "name"},
+            entt::attribute{"pretty_name", "Name"},
+            entt::attribute{"tooltip", "Scripts read the blended value with GetCurve(name); a controller float parameter of the same name follows it; IK components can scale their weight by it."},
+        })
+        .data<&animation_curve::curve>("curve"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "curve"},
+            entt::attribute{"pretty_name", "Curve"},
+            entt::attribute{"tooltip", "Value over the clip's normalized time (0 = first frame, 1 = last frame)."},
+        });
+}
+
+SAVE(animation_curve)
+{
+    try_save(ar, ser20::make_nvp("name", obj.name));
+    try_save(ar, ser20::make_nvp("curve", obj.curve));
+}
+SAVE_INSTANTIATE(animation_curve, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(animation_curve, ser20::oarchive_binary_t);
+
+LOAD(animation_curve)
+{
+    try_load(ar, ser20::make_nvp("name", obj.name));
+    try_load(ar, ser20::make_nvp("curve", obj.curve));
+}
+LOAD_INSTANTIATE(animation_curve, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(animation_curve, ser20::iarchive_binary_t);
+
+void sanitize_animation_events(std::vector<animation_event>& events)
+{
+    for(auto& event : events)
+    {
+        event.position = math::clamp(event.position, 0.0f, 1.0f);
+        event.min_weight = math::clamp(event.min_weight, 0.0f, 1.0f);
+    }
+    std::stable_sort(events.begin(),
+                     events.end(),
+                     [](const animation_event& lhs, const animation_event& rhs)
+                     {
+                         return lhs.position < rhs.position;
+                     });
+}
+
+void sanitize_animation_curves(std::vector<animation_curve>& curves)
+{
+    curves.erase(std::remove_if(curves.begin(),
+                                curves.end(),
+                                [](const animation_curve& curve)
+                                {
+                                    return curve.name.empty();
+                                }),
+                 curves.end());
+}
+
 REFLECT(animation_channel)
 {
     // Register animation_channel with entt
@@ -130,6 +260,16 @@ REFLECT(animation_clip)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "channels"},
             entt::attribute{"pretty_name", "Channels"},
+        })
+        .data<nullptr, &animation_clip::events>("events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "events"},
+            entt::attribute{"pretty_name", "Events"},
+        })
+        .data<nullptr, &animation_clip::curves>("curves"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "curves"},
+            entt::attribute{"pretty_name", "Curves"},
         });
 }
 
@@ -140,6 +280,13 @@ SAVE(animation_channel)
     try_save(ar, ser20::make_nvp("position_keys", obj.position_keys));
     try_save(ar, ser20::make_nvp("rotation_keys", obj.rotation_keys));
     try_save(ar, ser20::make_nvp("scaling_keys", obj.scaling_keys));
+    try_save(ar, ser20::make_nvp("has_rest", obj.has_rest));
+    if(obj.has_rest)
+    {
+        try_save(ar, ser20::make_nvp("rest_local", obj.rest_local));
+        try_save(ar, ser20::make_nvp("parent_channel", obj.parent_channel));
+        try_save(ar, ser20::make_nvp("parent_offset", obj.parent_offset));
+    }
 }
 SAVE_INSTANTIATE(animation_channel, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(animation_channel, ser20::oarchive_binary_t);
@@ -151,6 +298,14 @@ LOAD(animation_channel)
     try_load(ar, ser20::make_nvp("position_keys", obj.position_keys));
     try_load(ar, ser20::make_nvp("rotation_keys", obj.rotation_keys));
     try_load(ar, ser20::make_nvp("scaling_keys", obj.scaling_keys));
+    obj.has_rest = false;
+    try_load(ar, ser20::make_nvp("has_rest", obj.has_rest));
+    if(obj.has_rest)
+    {
+        try_load(ar, ser20::make_nvp("rest_local", obj.rest_local));
+        try_load(ar, ser20::make_nvp("parent_channel", obj.parent_channel));
+        try_load(ar, ser20::make_nvp("parent_offset", obj.parent_offset));
+    }
 }
 LOAD_INSTANTIATE(animation_channel, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(animation_channel, ser20::iarchive_binary_t);
@@ -161,6 +316,8 @@ SAVE(animation_clip)
     try_save(ar, ser20::make_nvp("duration", obj.duration));
     try_save(ar, ser20::make_nvp("channels", obj.channels));
     try_save(ar, ser20::make_nvp("root_motion", obj.root_motion));
+    try_save(ar, ser20::make_nvp("events", obj.events));
+    try_save(ar, ser20::make_nvp("curves", obj.curves));
     
     // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
 }
@@ -173,6 +330,8 @@ LOAD(animation_clip)
     try_load(ar, ser20::make_nvp("duration", obj.duration));
     try_load(ar, ser20::make_nvp("channels", obj.channels));
     try_load(ar, ser20::make_nvp("root_motion", obj.root_motion));
+    try_load(ar, ser20::make_nvp("events", obj.events));
+    try_load(ar, ser20::make_nvp("curves", obj.curves));
     
     // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
 }

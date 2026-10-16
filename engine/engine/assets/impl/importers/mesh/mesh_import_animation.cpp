@@ -8,7 +8,7 @@
 #include <assimp/scene.h>
 
 #include <algorithm>
-#include <queue>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace unravel
@@ -32,40 +32,103 @@ enum class channel_requirement
 
 using node_name_set_t = std::unordered_set<std::string>;
 
-/// Whether @p animation moves @p node_name: a channel for it with more than one key of the required kind.
-auto has_animated_channel(const aiAnimation* animation, const std::string& node_name, channel_requirement requirement)
-    -> bool
+/// The channel of @p animation that animates @p node_name, or null.
+auto find_channel(const aiAnimation* animation, const std::string& node_name) -> const aiNodeAnim*
 {
-    if(!animation)
-    {
-        return false;
-    }
-    for(unsigned int ch = 0; ch < animation->mNumChannels; ++ch)
+    for(unsigned int ch = 0; animation != nullptr && ch < animation->mNumChannels; ++ch)
     {
         const aiNodeAnim* channel = animation->mChannels[ch];
-        if(!channel || node_name != channel->mNodeName.C_Str())
+        if(channel && node_name == channel->mNodeName.C_Str())
         {
-            continue;
-        }
-        const unsigned int key_count =
-            requirement == channel_requirement::rotation ? channel->mNumRotationKeys : channel->mNumPositionKeys;
-        if(key_count > 1)
-        {
-            return true;
+            return channel;
         }
     }
-    return false;
+    return nullptr;
 }
 
 /**
- * @brief Breadth-first: the shallowest node among @p skeleton_nodes that @p animation animates as
- * @p requirement asks. Root motion belongs to a skeleton: a rigid prop's pivot or a light swaying in
- * a level must not move the entity playing the clip.
+ * @brief Whether @p animation keys @p node_name more than once in the required kind. A channel keyed
+ * with one value throughout counts too: an in-place clip keys its root bone at the origin, and that
+ * root, not the hips below it, owns the clip's (absent) root motion.
+ */
+auto has_animated_channel(const aiAnimation* animation, const std::string& node_name, channel_requirement requirement)
+    -> bool
+{
+    const aiNodeAnim* channel = find_channel(animation, node_name);
+    if(channel == nullptr)
+    {
+        return false;
+    }
+    const unsigned int key_count =
+        requirement == channel_requirement::rotation ? channel->mNumRotationKeys : channel->mNumPositionKeys;
+    return key_count > 1;
+}
+
+/// Skeleton nodes in the subtree of @p node, @p node included.
+auto count_skeleton_nodes(const aiNode* node, const node_name_set_t& skeleton_nodes) -> size_t
+{
+    size_t count = skeleton_nodes.count(node->mName.C_Str());
+    for(unsigned int i = 0; i < node->mNumChildren; ++i)
+    {
+        count += count_skeleton_nodes(node->mChildren[i], skeleton_nodes);
+    }
+    return count;
+}
+
+/**
+ * @brief The child of @p node the skeleton's trunk continues in, or null where the skeleton
+ * branches (or ends). Under the scene root, a file holding several rigs side by side (a character
+ * and a prop, a character and a camera rig) continues in the one with the most skeleton nodes.
+ */
+auto find_trunk_child(const aiNode* node, bool is_scene_root, const node_name_set_t& skeleton_nodes) -> const aiNode*
+{
+    const aiNode* found = nullptr;
+    size_t found_size = 0;
+    bool branches = false;
+    for(unsigned int i = 0; i < node->mNumChildren; ++i)
+    {
+        const aiNode* child = node->mChildren[i];
+        if(skeleton_nodes.count(child->mName.C_Str()) == 0)
+        {
+            continue;
+        }
+        if(found == nullptr)
+        {
+            found = child;
+            continue;
+        }
+        branches = true;
+        if(!is_scene_root)
+        {
+            break;
+        }
+        const size_t child_size = count_skeleton_nodes(child, skeleton_nodes);
+        if(found_size == 0)
+        {
+            found_size = count_skeleton_nodes(found, skeleton_nodes);
+        }
+        if(child_size > found_size)
+        {
+            found = child;
+            found_size = child_size;
+        }
+    }
+    return branches && !is_scene_root ? nullptr : found;
+}
+
+/**
+ * @brief The node carrying a clip's root motion, on the skeleton's trunk.
+ *
+ * The trunk is the chain from the scene root down to the first node where the skeleton branches -
+ * the hips, where the legs and the spine part. The shallowest trunk node that @p animation animates
+ * as @p requirement asks carries the motion. Root motion belongs to the skeleton's root: a rigid
+ * prop's pivot or a light swaying in a level must not move the entity playing the clip, and neither
+ * may a limb - a seated loop that keeps its hips still and only animates the spine has no root
+ * motion, so it gets the hips, which report none.
  *
  * A translated node satisfies a rotation request too, so the rotation root is the shallowest node
- * that moves at all. That is deliberate: rotation root motion extracts the node's full rotation,
- * so for a rig with a translation-only root bone above the hips it must stay on that root (no
- * rotation to extract) rather than move to the hips, whose sway would tilt the whole entity.
+ * that moves at all: for a rig with a translation-only root bone above the hips it stays on that
+ * root (no turn to extract) rather than moving to the hips, whose sway would turn the entity.
  */
 auto find_root_motion_node(const aiScene* scene,
                            const aiAnimation* animation,
@@ -76,25 +139,24 @@ auto find_root_motion_node(const aiScene* scene,
     {
         return nullptr;
     }
-    std::queue<const aiNode*> pending;
-    pending.push(scene->mRootNode);
-    while(!pending.empty())
+    const aiNode* current = scene->mRootNode;
+    while(true)
     {
-        const aiNode* current = pending.front();
-        pending.pop();
         const std::string name = current->mName.C_Str();
+        const bool is_skeleton = skeleton_nodes.count(name) > 0;
         const bool is_animated = has_animated_channel(animation, name, requirement) ||
                                  has_animated_channel(animation, name, channel_requirement::translation);
-        if(is_animated && skeleton_nodes.count(name) > 0)
+        if(is_animated && is_skeleton)
         {
             return current;
         }
-        for(unsigned int i = 0; i < current->mNumChildren; ++i)
+        const aiNode* next = find_trunk_child(current, current == scene->mRootNode, skeleton_nodes);
+        if(next == nullptr)
         {
-            pending.push(current->mChildren[i]);
+            return is_skeleton && find_channel(animation, name) != nullptr ? current : nullptr;
         }
+        current = next;
     }
-    return nullptr;
 }
 
 /// Insert @p node and the name of every ancestor of it.
@@ -119,9 +181,38 @@ void collect_mesh_nodes_and_ancestors(const aiNode* node, node_name_set_t& names
     }
 }
 
-/// Names of the skeleton: every bone and every ancestor of one.
+/// Insert every node a clip of @p scene animates together with its ancestors.
+void collect_animated_nodes_and_ancestors(const aiScene* scene, node_name_set_t& names)
+{
+    for(unsigned int a = 0; a < scene->mNumAnimations; ++a)
+    {
+        const aiAnimation* animation = scene->mAnimations[a];
+        for(unsigned int ch = 0; animation != nullptr && ch < animation->mNumChannels; ++ch)
+        {
+            const aiNodeAnim* channel = animation->mChannels[ch];
+            if(channel != nullptr)
+            {
+                insert_node_and_ancestors(scene->mRootNode->FindNode(channel->mNodeName), names);
+            }
+        }
+    }
+}
+
+/**
+ * @brief Names of the skeleton: every bone and every ancestor of one. A file without meshes (an
+ * animation-only export) lists no bones: there the skeleton is every animated node and its ancestors.
+ */
 auto collect_skeleton_nodes(const aiScene* scene) -> node_name_set_t
 {
+    if(scene->mNumMeshes == 0)
+    {
+        node_name_set_t animated;
+        if(scene->mRootNode)
+        {
+            collect_animated_nodes_and_ancestors(scene, animated);
+        }
+        return animated;
+    }
     node_name_set_t names;
     const aiNode* root = scene->mRootNode;
     for(unsigned int i = 0; i < scene->mNumMeshes; ++i)
@@ -227,6 +318,64 @@ void assign_root_motion_nodes(const aiScene* scene,
     }
 }
 
+auto to_transform(const aiMatrix4x4& matrix) -> math::transform
+{
+    aiVector3D scaling;
+    aiQuaternion rotation;
+    aiVector3D position;
+    matrix.Decompose(scaling, rotation, position);
+    math::transform result;
+    result.set_position({position.x, position.y, position.z});
+    result.set_rotation(math::normalize(math::quat(rotation.w, rotation.x, rotation.y, rotation.z)));
+    result.set_scale({scaling.x, scaling.y, scaling.z});
+    return result;
+}
+
+/**
+ * @brief Records the skeleton the keys were authored against: each channel's rest local transform,
+ * the channel animating its nearest ancestor, and the rest transform of the unanimated nodes in
+ * between. Rest-aligned retargeting maps poses from this skeleton onto the playing model's, so clips
+ * from files with other root frames, units or proportions play correctly.
+ *
+ * Runs after the channels are sorted, since it stores channel indices.
+ */
+void record_source_rest_pose(const aiScene* scene, animation_clip& anim)
+{
+    if(!scene || !scene->mRootNode)
+    {
+        return;
+    }
+    std::unordered_map<std::string, int> channel_of;
+    for(size_t i = 0; i < anim.channels.size(); ++i)
+    {
+        channel_of[anim.channels[i].node_name] = int(i);
+    }
+    for(auto& channel : anim.channels)
+    {
+        const aiNode* node = scene->mRootNode->FindNode(channel.node_name.c_str());
+        if(node == nullptr)
+        {
+            continue;
+        }
+        channel.rest_local = to_transform(node->mTransformation);
+        // Walk up until an animated ancestor, accumulating the unanimated nodes on the way.
+        aiMatrix4x4 offset;
+        channel.parent_channel = -1;
+        for(const aiNode* ancestor = node->mParent; ancestor != nullptr; ancestor = ancestor->mParent)
+        {
+            auto it = channel_of.find(ancestor->mName.C_Str());
+            if(it != channel_of.end())
+            {
+                channel.parent_channel = it->second;
+                break;
+            }
+            offset = ancestor->mTransformation * offset;
+        }
+        channel.parent_offset = to_transform(offset);
+        channel.has_rest = true;
+    }
+}
+
 void process_animation(const aiScene* scene,
                        const fs::path& filename,
                        const aiAnimation* assimp_anim,
@@ -272,7 +421,8 @@ void process_animation(const aiScene* scene,
                       return lhs.node_index < rhs.node_index;
                   });
     }
-    APPLOG_TRACE("Mesh Importer: Animation {} discarded {} non relevat node keys", anim.name, skipped);
+    record_source_rest_pose(scene, anim);
+    APPLOG_TRACE("Mesh Importer: Animation {} discarded {} non-relevant node channels", anim.name, skipped);
 }
 
 /**

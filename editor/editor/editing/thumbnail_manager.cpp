@@ -8,6 +8,7 @@
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/physics/physics_material.h>
+#include <engine/animation/animation_controller.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -287,6 +288,20 @@ auto thumbnail_manager::get_thumbnail<physics_material>(const asset_handle<physi
 }
 
 template<>
+auto thumbnail_manager::get_thumbnail<animation_controller>(const asset_handle<animation_controller>& asset)
+    -> gfx::texture::ptr
+{
+    if(!asset.is_valid())
+    {
+        return thumbnails_.transparent.get();
+    }
+
+    asset.get(false);
+
+    return !asset.is_ready() ? thumbnails_.loading.get() : thumbnails_.animation_controller.get();
+}
+
+template<>
 auto thumbnail_manager::get_thumbnail<audio_clip>(const asset_handle<audio_clip>& asset) -> gfx::texture::ptr
 {
     if(!asset.is_valid())
@@ -537,6 +552,7 @@ auto thumbnail_manager::init(rtti::context& ctx) -> bool
     thumbnails_.physics_material = am.get_asset<gfx::texture>("editor:/data/icons/material.png");
     thumbnails_.mesh = am.get_asset<gfx::texture>("editor:/data/icons/mesh.png");
     thumbnails_.animation = am.get_asset<gfx::texture>("editor:/data/icons/animation.png");
+    thumbnails_.animation_controller = am.get_asset<gfx::texture>("editor:/data/icons/animation.png");
     thumbnails_.prefab = am.get_asset<gfx::texture>("editor:/data/icons/prefab.png");
     thumbnails_.scene_prefab = am.get_asset<gfx::texture>("editor:/data/icons/scene.png");
     thumbnails_.audio_clip = am.get_asset<gfx::texture>("editor:/data/icons/sound.png");

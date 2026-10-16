@@ -120,55 +120,44 @@ auto ensure_thread_registered(const char* thread_name) -> thread_profile_data*
     return profiler->register_thread(oss.str());
 }
 
-auto performance_profiler::register_thread_unlocked(const std::string& name) -> thread_profile_data*
+auto performance_profiler::register_thread(const std::string& name) -> thread_profile_data*
 {
-    auto thread_index = static_cast<uint16_t>(threads_.size());
+    // Built before the lock: a ring is megabytes, and swap() takes the lock every frame.
     auto data = std::make_unique<thread_profile_data>();
-    data->buffers[0].thread_index = thread_index;
-    data->buffers[1].thread_index = thread_index;
-
     auto* raw_ptr = data.get();
 
+    std::lock_guard lock(registration_mutex_);
+    data->thread_index = static_cast<uint16_t>(threads_.size());
     threads_.push_back({name, std::move(data)});
     return raw_ptr;
 }
 
-auto performance_profiler::register_thread(const std::string& name) -> thread_profile_data*
-{
-    std::lock_guard lock(registration_mutex_);
-    return register_thread_unlocked(name);
-}
-
 void performance_profiler::add_record(hpp::string_view name, float time_ms)
 {
-    if(time_ms < 0.0f)
+    if(time_ms < 0.0f || !profiler_process_capture_gate_load())
     {
         return;
     }
-
-    const int64_t dur_ns = static_cast<int64_t>(time_ms * 1'000'000.0f);
-    const int64_t end_ns = get_time_ns();
-    const int64_t start_ns = end_ns - dur_ns;
-
-    const uint32_t idx = profile_begin_owned(name);
-    if(idx == UINT32_MAX)
-    {
-        return;
-    }
-
-    profile_end(idx);
-
     auto* data = get_thread_profile_data();
     if(!data)
     {
         return;
     }
 
-    auto& ev = data->write_buffer().events[idx];
-    ev.start_ns = start_ns;
-    ev.end_ns = end_ns;
-    ev.cpu_start_ns = start_ns;
-    ev.cpu_end_ns = end_ns;
+    const int64_t end_ns = get_time_ns();
+    const int64_t start_ns = end_ns - static_cast<int64_t>(time_ms * 1'000'000.0f);
+    // A finished span at the current depth: appended whole, so it opens and closes no scope.
+    const uint32_t idx = append_profile_event(*data, nullptr, name, start_ns, start_ns);
+    if(idx == UINT32_MAX)
+    {
+        return;
+    }
+    data->events[idx].end_ns = end_ns;
+    data->events[idx].cpu_end_ns = end_ns;
+    if(data->depth == 0)
+    {
+        data->publish_finished();
+    }
 }
 
 void performance_profiler::swap()
@@ -178,57 +167,56 @@ void performance_profiler::swap()
 
     {
         std::lock_guard lock(registration_mutex_);
-        for(auto& thread : threads_)
+        threads_to_take_.clear();
+        for(const auto& thread : threads_)
         {
-            thread.data->flip();
+            threads_to_take_.push_back(&thread);
         }
     }
-
-    if(recording_state_ == recording_state::recording)
-    {
-        capture_frame_snapshot();
-    }
+    take_frame_events();
 
     frame_start_ns_ = get_time_ns();
 }
 
-void performance_profiler::capture_frame_snapshot()
+void performance_profiler::take_frame_events()
 {
+    if(recording_state_ != recording_state::recording)
+    {
+        // Nothing records now; this frees the slots of scopes that closed after recording stopped.
+        for(const thread_info* thread : threads_to_take_)
+        {
+            thread->data->take_events([](const profile_event&) {});
+        }
+        return;
+    }
+
     frame_snapshot snapshot;
     snapshot.frame_start_ns = prev_frame_start_ns_;
     snapshot.frame_end_ns = prev_frame_end_ns_;
-
-    std::lock_guard lock(registration_mutex_);
-    snapshot.threads.reserve(threads_.size());
+    snapshot.threads.reserve(threads_to_take_.size());
 
     int64_t emin = INT64_MAX;
     int64_t emax = INT64_MIN;
 
-    for(const auto& thread : threads_)
+    for(const thread_info* thread : threads_to_take_)
     {
-        auto& buf = thread.data->read_buffer();
-        if(buf.count == 0)
+        frame_snapshot::thread_snapshot ts;
+        thread->data->take_events(
+            [&](const profile_event& src)
+            {
+                ts.events.push_back(src);
+                if(src.end_ns > src.start_ns)
+                {
+                    emin = std::min(emin, src.start_ns);
+                    emax = std::max(emax, src.end_ns);
+                }
+            });
+        if(ts.events.empty())
         {
             continue;
         }
-
-        frame_snapshot::thread_snapshot ts;
-        ts.thread_index = buf.thread_index;
-        ts.name = thread.name;
-        ts.events.reserve(buf.count);
-
-        for(uint32_t i = 0; i < buf.count; ++i)
-        {
-            const auto& src = buf.events[i];
-            ts.events.push_back(src);
-
-            if(src.end_ns > src.start_ns)
-            {
-                emin = std::min(emin, src.start_ns);
-                emax = std::max(emax, src.end_ns);
-            }
-        }
-
+        ts.thread_index = thread->data->thread_index;
+        ts.name = thread->name;
         snapshot.threads.push_back(std::move(ts));
     }
 
@@ -270,7 +258,7 @@ void performance_profiler::capture_frame_snapshot()
     }
 }
 
-auto performance_profiler::get_threads() const -> const std::vector<thread_info>&
+auto performance_profiler::get_threads() const -> const std::deque<thread_info>&
 {
     return threads_;
 }

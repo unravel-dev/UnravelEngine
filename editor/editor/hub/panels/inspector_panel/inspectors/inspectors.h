@@ -436,6 +436,31 @@ auto inspect_var_properties(rtti::context& ctx,
                                 const entt::meta_custom& custom = {}) -> inspect_result;
 
 /**
+ * @brief Draws one property in place of the inspector: returns true when it drew it (adding what
+ * happened to `result`), false to let the inspector draw it as usual.
+ */
+using property_drawer = std::function<bool(entt::meta_any& object, const entt::meta_data& prop, inspect_result& result)>;
+
+/**
+ * @brief inspect_var_properties, with `drawer` taking over the properties it knows: a type's
+ * inspector keeps the generic layout, groups and visibility rules and draws a few of its fields
+ * its own way.
+ */
+auto inspect_var_properties(rtti::context& ctx,
+                            entt::meta_any& var,
+                            const meta_any_proxy& var_proxy,
+                            const var_info& info,
+                            const entt::meta_custom& custom,
+                            const property_drawer& drawer) -> inspect_result;
+
+/**
+ * @brief Inspects one reflected property of `object` the way inspect_var_properties draws each of
+ * its properties: a labeled row (or group), its tooltip, and the edit recorded for undo.
+ */
+auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop)
+    -> inspect_result;
+
+/**
  * @brief Inspects array-like containers with add/remove functionality
  * @param ctx Runtime type information context
  * @param var Array container to inspect

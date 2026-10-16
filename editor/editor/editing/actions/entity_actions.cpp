@@ -1,5 +1,6 @@
 #include "entity_actions.h"
 #include "reflection/reflection.h"
+#include <editor/editing/animation_preview.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <engine/ecs/components/id_component.h>
@@ -123,6 +124,8 @@ void create_entities_action_t::do_action()
             return;
         }
 
+        // A clone of a previewed entity would copy the preview's pose.
+        animation_entity_preview::stop_all();
         auto produced = factory();
         // Collapse to top-level only in case the factory returns a redundant parent/child pair.
         auto roots = transform_component::get_top_level_entities(produced);
@@ -238,6 +241,7 @@ void create_entities_action_t::undo_action()
     auto& em = ctx.get_cached<editing_manager>();
 
     removal_records.assign(root_entities.size(), {});
+    animation_entity_preview::stop_all();
 
     // Re-snapshot each root before destroying it so that any out-of-band edits made since creation
     // (or since the last redo) are preserved on the next redo - parent may also have changed.
@@ -337,6 +341,8 @@ delete_entities_action_t::delete_entities_action_t(std::vector<entt::handle> ent
         return;
     }
 
+    // The snapshot an undo restores holds the entities' own pose, not a preview's.
+    animation_entity_preview::stop_all();
     auto roots = transform_component::get_top_level_entities(entities);
     serialized_roots.reserve(roots.size());
     root_entities.reserve(roots.size());
@@ -1413,6 +1419,7 @@ void entity_reset_script_component_action_t::draw_in_inspector(rtti::context& ct
 
 auto entity_subtree_snapshot::capture(entt::handle root_entity) -> entity_subtree_snapshot
 {
+    animation_entity_preview::stop_all();
     entity_subtree_snapshot snapshot;
     collect_subtree_uuid_preorder(static_cast<entt::const_handle>(root_entity), snapshot.subtree_uuids);
     if(snapshot.subtree_uuids.empty())
