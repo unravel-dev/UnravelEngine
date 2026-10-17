@@ -314,10 +314,16 @@ auto load_from_file<audio_clip>(tpp::thread_pool& pool, asset_handle<audio_clip>
                                  const std::string& key, load_mode mode) -> bool
 {
     return detail::schedule_load<audio_clip>(pool, output, key, {}, source_fallback::none,
-        [](const std::string& path)
+        [](const std::string& path) -> std::shared_ptr<audio_clip>
         {
+            encoded_sound encoded;
             audio::sound_data data;
-            load_from_file_bin(path, data);
+            std::string error;
+            if(!load_from_file_bin(path, encoded) || !decode_sound(encoded, data, error))
+            {
+                APPLOG_ERROR("Failed to load audio clip {}: {}", path, error.empty() ? "not a compiled audio clip" : error);
+                return nullptr;
+            }
 
             // Create + destroy on main: OpenAL buffers are context-thread affine.
             // Creation already hops here; main_thread_deleter covers reload/demote

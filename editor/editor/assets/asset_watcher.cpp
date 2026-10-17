@@ -34,6 +34,7 @@
 #include <concurrency/parallel.h>
 #include <filesystem/watcher.h>
 #include <graphics/graphics.h>
+#include <hpp/string_view.hpp>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -45,16 +46,26 @@ namespace
 {
 using namespace std::literals;
 
+// The asset pipeline's jobs are told apart from the pool's other work by these name prefixes; the
+// script library build is named "Compiling" too.
+constexpr hpp::string_view COMPILE_JOB_PREFIX = "Compiling ";
+constexpr hpp::string_view CHECKING_DEPENDENCIES_JOB_PREFIX = "Checking dependencies of ";
+
+auto is_asset_pipeline_job(hpp::string_view job_name) -> bool
+{
+    return job_name.starts_with(COMPILE_JOB_PREFIX) || job_name.starts_with(CHECKING_DEPENDENCIES_JOB_PREFIX);
+}
+
 template<typename T>
 auto get_job_name() -> std::string
 {
-    return fmt::format("Compiling {}", ex::get_type<T>());
+    return std::string(COMPILE_JOB_PREFIX) + ex::get_type<T>();
 }
 
 template<typename T>
 auto checking_dependencies_job_name() -> std::string
 {
-    return fmt::format("Checking dependencies of {}", ex::get_type<T>());
+    return std::string(CHECKING_DEPENDENCIES_JOB_PREFIX) + ex::get_type<T>();
 }
 
 
@@ -451,7 +462,7 @@ static void add_to_syncer(rtti::context& ctx,
             auto key = get_asset_key(output);
             if(check_files_integrity(key, output, is_initial_listing))
             {
-                auto job_name = fmt::format("Compiling {}", ex::get_type<T>());
+                auto job_name = get_job_name<T>();
                 auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
                                               [&am, ref_path, output, job_name]()
                                               {
@@ -550,7 +561,7 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                 bool high_priority = gfx::get_current_renderer_filename_extension() == extension;
                 tpp::priority::group priority = high_priority ? tpp::priority::normal() : tpp::priority::low();
 
-                auto job_name = fmt::format("Compiling {} ({})", ex::get_type<gfx::shader>(), extension);
+                auto job_name = fmt::format("{} ({})", get_job_name<gfx::shader>(), extension);
                 auto task = ts.pool->schedule(tpp::job_desc{job_name, key},
                                               priority,
                                               [&am, ref_path, output, job_name]()
@@ -959,10 +970,18 @@ void asset_watcher::unwatch_assets(rtti::context& ctx, const std::string& protoc
     am.unload_group(protocol);
 }
 
-auto asset_watcher::get_pending_jobs_count(rtti::context& ctx) const -> size_t
+auto asset_watcher::get_pending_compile_jobs_count(rtti::context& ctx) const -> size_t
 {
     auto& ts = ctx.get_cached<threader>();
-    return ts.pool->get_jobs_count();
+    size_t count = 0;
+    for(const auto& [name, jobs] : ts.pool->get_jobs_count_detailed())
+    {
+        if(is_asset_pipeline_job(name))
+        {
+            count += jobs;
+        }
+    }
+    return count;
 }
 
 void asset_watcher::recreate_meta_files(rtti::context& ctx, const std::string& protocol)

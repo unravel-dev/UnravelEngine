@@ -4,6 +4,7 @@
 #include "engine/ui/ui_tree.h"
 #include "threadpp/thread.h"
 
+#include <editor/assets/asset_watcher.h>
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/animation_preview.h>
 #include <editor/editing/create_scene_modal.h>
@@ -49,6 +50,7 @@
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/watcher.h>
+#include <graphics/graphics.h>
 #include <subprocess/subprocess.hpp>
 
 
@@ -1044,6 +1046,138 @@ void remove_unreferenced_files(const fs::path& root)
     }
 }
 
+/// A file a script library build leaves beside its dll for debugging: symbols (.pdb, .dll.mdb) or
+/// docs (an .xml named like a dll next to it). Compiled assets all end in .asset, so none match.
+auto is_debug_companion_file(const fs::path& path) -> bool
+{
+    const auto extension = path.extension().generic_string();
+    if(extension == ".pdb" || extension == ".mdb")
+    {
+        return true;
+    }
+    if(extension != ".xml")
+    {
+        return false;
+    }
+    auto library = path;
+    library.replace_extension(".dll");
+    fs::error_code ec;
+    return fs::exists(library, ec);
+}
+
+void remove_debug_files(const fs::path& root)
+{
+    fs::error_code ec;
+    std::vector<fs::path> debug_files;
+    for(fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_regular_file(ec) && is_debug_companion_file(it->path()))
+        {
+            debug_files.push_back(it->path());
+        }
+    }
+    for(const auto& file : debug_files)
+    {
+        APPLOG_TRACE("Removing Debug File {}", file.generic_string());
+        fs::remove(file, ec);
+    }
+}
+
+/// True for the assets whose compiled copies the deploy removes: scripts ship as their library.
+auto is_script_location(const std::string& location) -> bool
+{
+    return ex::is_format<script>(fs::path(location).extension().generic_string());
+}
+
+/// Whether the index a deployed game gets lists the asset: every one but the scripts, whose compiled
+/// copies the deploy removes.
+auto is_shipped_location(const std::string& location) -> bool
+{
+    return !is_script_location(location);
+}
+
+/// The compiled files a deployed game reads for the asset at `location`: one per renderer of the
+/// platform for a shader, none for scripts and for assets that live outside a data folder
+/// (the embedded primitives).
+auto get_shipped_compiled_paths(const std::string& location) -> std::vector<fs::path>
+{
+    if(location.find(ex::get_data_directory()) == std::string::npos || is_script_location(location))
+    {
+        return {};
+    }
+    const auto compiled = asset_reader::resolve_compiled_path(location);
+    if(!ex::is_format<gfx::shader>(fs::path(location).extension().generic_string()))
+    {
+        return {compiled};
+    }
+    std::vector<fs::path> paths;
+    for(const auto& renderer_extension : gfx::get_renderer_platform_supported_filename_extensions())
+    {
+        auto path = compiled;
+        path.concat(renderer_extension);
+        paths.push_back(std::move(path));
+    }
+    return paths;
+}
+
+/// Indexed assets of the protocol without their compiled files. With the compiler idle that is a
+/// source it failed to compile, and a deploy without it ships a game that silently lacks the asset.
+auto find_uncompiled_assets(asset_manager& am, const std::string& protocol) -> std::vector<std::string>
+{
+    std::vector<std::string> uncompiled;
+    for(const auto& location : am.get_all_assets(protocol))
+    {
+        const auto paths = get_shipped_compiled_paths(location);
+        const bool is_missing = std::any_of(paths.begin(),
+                                            paths.end(),
+                                            [](const fs::path& path)
+                                            {
+                                                fs::error_code ec;
+                                                return !fs::exists(path, ec);
+                                            });
+        if(is_missing)
+        {
+            uncompiled.push_back(location);
+        }
+    }
+    return uncompiled;
+}
+
+constexpr size_t DEPLOY_LISTED_UNCOMPILED_MAX = 10;
+constexpr const char* DEPLOY_CHECK_STEP = "Checking Compiled Assets";
+
+/// One sentence naming the uncompiled assets, the first few by location.
+auto describe_uncompiled_assets(const std::vector<std::string>& uncompiled) -> std::string
+{
+    std::string listed;
+    for(size_t i = 0; i < uncompiled.size() && i < DEPLOY_LISTED_UNCOMPILED_MAX; ++i)
+    {
+        listed += (i == 0 ? "" : ", ") + uncompiled[i];
+    }
+    if(uncompiled.size() > DEPLOY_LISTED_UNCOMPILED_MAX)
+    {
+        listed += fmt::format(" and {} more", uncompiled.size() - DEPLOY_LISTED_UNCOMPILED_MAX);
+    }
+    return fmt::format("{} asset(s) have no compiled file (see the log for why they failed to compile); "
+                       "fix or remove them and deploy again: {}",
+                       uncompiled.size(),
+                       listed);
+}
+
+/// fs::copy for a deploy step: a failure fails the step instead of leaving a partial copy that
+/// reports success - a recursive copy stops at the first file it cannot write (a path past the
+/// platform's length limit, a locked file) and skips everything after it.
+void copy_for_deploy(const fs::path& from, const fs::path& to, fs::copy_options options)
+{
+    fs::error_code ec;
+    fs::copy(from, to, options, ec);
+    if(ec)
+    {
+        throw std::runtime_error(
+            fmt::format("Copying {} to {} failed: {}", from.generic_string(), to.generic_string(), ec.message()));
+    }
+}
+
 } // namespace
 
 auto editor_actions::validate_prefab_graph(rtti::context& ctx) -> prefab_graph_report
@@ -1842,7 +1976,34 @@ auto editor_actions::get_deploy_problems(rtti::context& ctx, const deploy_settin
     {
         problems.emplace_back("Choose the scene the game starts with.");
     }
+    auto pending_compile = get_pending_compile_reason(ctx);
+    if(!pending_compile.empty())
+    {
+        problems.emplace_back(std::move(pending_compile));
+    }
+    else if(ctx.get_cached<script_system>().has_compilation_errors())
+    {
+        problems.emplace_back("Scripts have compile errors; fix them so the game does not ship an older build.");
+    }
     return problems;
+}
+
+auto editor_actions::get_pending_compile_reason(rtti::context& ctx) -> std::string
+{
+    // The deploy copies the compiled cache as it is: until the compiler is idle that is a mix of
+    // old and new files. A script library build lands only when its domain reloads.
+    const size_t compile_jobs = ctx.get_cached<asset_watcher>().get_pending_compile_jobs_count(ctx);
+    if(compile_jobs > 0)
+    {
+        return fmt::format("Assets are still compiling ({} job(s) left); the deploy can start once they finish.",
+                           compile_jobs);
+    }
+    auto& scripts = ctx.get_cached<script_system>();
+    if(scripts.is_build_pending("engine") || scripts.is_build_pending("app"))
+    {
+        return "Scripts are still compiling; the deploy can start once they finish.";
+    }
+    return {};
 }
 
 
@@ -1861,6 +2022,29 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     auto& pm = ctx.get_cached<project_manager>();
     auto project_name = pm.get_name();
     auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
+
+    // Before anything touches the destination, so a refused deploy leaves the previous build there.
+    // Reported as a failed step: the Deploy window and the deploy tool both show a step's error.
+    auto uncompiled = find_uncompiled_assets(am, "engine:/");
+    const auto app_uncompiled = find_uncompiled_assets(am, "app:/");
+    uncompiled.insert(uncompiled.end(), app_uncompiled.begin(), app_uncompiled.end());
+    if(!uncompiled.empty())
+    {
+        for(const auto& location : uncompiled)
+        {
+            APPLOG_ERROR("Deploy: {} has no compiled file.", location);
+        }
+        const auto reason = describe_uncompiled_assets(uncompiled);
+        APPLOG_ERROR("Deploy aborted: {}", reason);
+        jobs[DEPLOY_CHECK_STEP] = th.pool
+                                      ->schedule(DEPLOY_CHECK_STEP,
+                                                 [reason]()
+                                                 {
+                                                     throw std::runtime_error(reason);
+                                                 })
+                                      .share();
+        return jobs;
+    }
 
     // Runs before anything is scheduled, and synchronously. The cook builds scenes and
     // drives asset loads, neither of which is safe off the main thread - scene registration
@@ -1915,20 +2099,19 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                    fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
                                auto deps = get_dependencies(app_executable);
 
-                               fs::error_code ec;
                                for(const auto& dep : deps)
                                {
                                    APPLOG_TRACE("Copying {} -> {}",
                                                 fs::path(dep).generic_string(),
                                                 params.deploy_location.generic_string());
-                                   fs::copy(dep, params.deploy_location, fs::copy_options::overwrite_existing, ec);
+                                   copy_for_deploy(dep, params.deploy_location, fs::copy_options::overwrite_existing);
                                }
 
 
                                APPLOG_TRACE("Copying {} -> {}",
                                             app_executable.generic_string(),
                                             params.deploy_location.generic_string());
-                               fs::copy(app_executable, executable_path, fs::copy_options::overwrite_existing, ec);
+                               copy_for_deploy(app_executable, executable_path, fs::copy_options::overwrite_existing);
 
                                APPLOG_INFO("Deploying Dependencies - Done");
                            })
@@ -1954,7 +2137,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                       fs::create_directories(dst, ec);
 
                                       APPLOG_TRACE("Copying {} -> {}", data.generic_string(), dst.generic_string());
-                                      fs::copy(data, dst, fs::copy_options::recursive, ec);
+                                      copy_for_deploy(data, dst, fs::copy_options::recursive);
 
                                       APPLOG_INFO("Deploying Project Settings - Done");
                                   })
@@ -1984,9 +2167,13 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             fs::create_directories(cached_data, ec);
 
                             APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
-                            fs::copy(data, cached_data, fs::copy_options::recursive, ec);
+                            copy_for_deploy(data, cached_data, fs::copy_options::recursive);
 
                             remove_unreferenced_files(cached_data);
+                            if(!params.deploy_debug_symbols)
+                            {
+                                remove_debug_files(cached_data);
+                            }
 
                             // The cooked variants replace their plain-compiled counterparts,
                             // in the destination only.
@@ -1996,17 +2183,16 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                 APPLOG_TRACE("Overlaying cooked assets {} -> {}",
                                              staged.generic_string(),
                                              cached_data.generic_string());
-                                fs::copy(staged,
-                                         cached_data,
-                                         fs::copy_options::recursive | fs::copy_options::overwrite_existing,
-                                         ec);
+                                copy_for_deploy(staged,
+                                                cached_data,
+                                                fs::copy_options::recursive | fs::copy_options::overwrite_existing);
                             }
                         }
 
                         {
                             fs::path cached_data = params.deploy_location / "data" / "app" / "assets.pack";
                             APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
-                            am.save_database("app:/", cached_data);
+                            am.save_database("app:/", cached_data, is_shipped_location);
                         }
 
                         APPLOG_INFO("Deploying Project Data - Done");
@@ -2037,9 +2223,13 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             fs::create_directories(cached_data, ec);
 
                             APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
-                            fs::copy(data, cached_data, fs::copy_options::recursive, ec);
+                            copy_for_deploy(data, cached_data, fs::copy_options::recursive);
 
                             remove_unreferenced_files(cached_data);
+                            if(!params.deploy_debug_symbols)
+                            {
+                                remove_debug_files(cached_data);
+                            }
 
                             const fs::path staged = cook_staging / "engine";
                             if(fs::exists(staged, ec))
@@ -2047,17 +2237,16 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                 APPLOG_TRACE("Overlaying cooked assets {} -> {}",
                                              staged.generic_string(),
                                              cached_data.generic_string());
-                                fs::copy(staged,
-                                         cached_data,
-                                         fs::copy_options::recursive | fs::copy_options::overwrite_existing,
-                                         ec);
+                                copy_for_deploy(staged,
+                                                cached_data,
+                                                fs::copy_options::recursive | fs::copy_options::overwrite_existing);
                             }
                         }
 
                         {
                             fs::path cached_data = params.deploy_location / "data" / "engine" / "assets.pack";
                             APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
-                            am.save_database("engine:/", cached_data);
+                            am.save_database("engine:/", cached_data, is_shipped_location);
                         }
 
                         APPLOG_INFO("Deploying Engine Data - Done");
@@ -2175,7 +2364,11 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             fs::create_directories(dst, ec);
 
                             APPLOG_TRACE("Copying {} -> {}", src.generic_string(), dst.generic_string());
-                            fs::copy(src, dst, fs::copy_options::recursive, ec);
+                            copy_for_deploy(src, dst, fs::copy_options::recursive);
+                            if(!params.deploy_debug_symbols)
+                            {
+                                remove_debug_files(dst);
+                            }
                         }
 
                         // Bundle a pruned dotnet root (hostfxr + shared framework) so the
@@ -2219,12 +2412,12 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                 APPLOG_TRACE("Copying {} -> {}",
                                              fxr_src.generic_string(),
                                              fxr_dst.generic_string());
-                                fs::copy(fxr_src, fxr_dst, fs::copy_options::recursive, ec);
+                                copy_for_deploy(fxr_src, fxr_dst, fs::copy_options::recursive);
 
                                 APPLOG_TRACE("Copying {} -> {}",
                                              shared_src.generic_string(),
                                              shared_dst.generic_string());
-                                fs::copy(shared_src, shared_dst, fs::copy_options::recursive, ec);
+                                copy_for_deploy(shared_src, shared_dst, fs::copy_options::recursive);
                             }
                         }
 
@@ -2240,6 +2433,29 @@ auto editor_actions::deploy_project(rtti::context& ctx,
         .then(tpp::this_thread::get_id(),
               [params, executable_path](auto f)
               {
+                        // A failed step left a partial build: the Deploy window names it, and
+                        // running or showing that build would only hide the failure.
+                        const auto steps = f.get();
+                        const bool has_failed_step = std::any_of(steps.begin(),
+                                                                 steps.end(),
+                                                                 [](const auto& step)
+                                                                 {
+                                                                     try
+                                                                     {
+                                                                         step.get();
+                                                                         return false;
+                                                                     }
+                                                                     catch(...)
+                                                                     {
+                                                                         return true;
+                                                                     }
+                                                                 });
+                        if(has_failed_step)
+                        {
+                            APPLOG_ERROR("Deploy to {} failed; see the Deploy window for the step.",
+                                         params.deploy_location.generic_string());
+                            return;
+                        }
                         if(params.deploy_and_run)
                         {
                             run_project(executable_path);

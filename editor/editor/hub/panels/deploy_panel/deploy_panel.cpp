@@ -149,6 +149,28 @@ auto get_step_name(hpp::string_view job_name) -> std::string
     }
     return std::string(job_name);
 }
+
+/// The error of a finished step, empty when it succeeded: a ready future rethrows its job's exception.
+auto get_step_error(const tpp::shared_future<void>& job) -> std::string
+{
+    if(!job.is_ready())
+    {
+        return {};
+    }
+    try
+    {
+        job.get();
+    }
+    catch(const std::exception& ex)
+    {
+        return ex.what();
+    }
+    catch(...)
+    {
+        return "unknown error";
+    }
+    return {};
+}
 } // namespace
 
 deploy_panel::deploy_panel(imgui_panels* parent) : parent_(parent)
@@ -323,10 +345,27 @@ void deploy_panel::draw_status(rtti::context& ctx)
         return;
     }
 
+    std::map<std::string, std::string> step_errors;
+    for(const auto& [name, job] : deploy_jobs_)
+    {
+        auto error = get_step_error(job);
+        if(!error.empty())
+        {
+            step_errors.emplace(name, std::move(error));
+        }
+    }
+
     const auto step_count = deploy_jobs_.size();
     const auto done_count = static_cast<std::size_t>(get_progress() * static_cast<float>(step_count) + 0.5f);
-    const std::string summary = is_in_progress ? fmt::format("Deploying to {}", location)
-                                               : fmt::format("Deployed to {}", location);
+    std::string summary = fmt::format("Deployed to {}", location);
+    if(is_in_progress)
+    {
+        summary = fmt::format("Deploying to {}", location);
+    }
+    else if(!step_errors.empty())
+    {
+        summary = fmt::format("Deploy to {} failed", location);
+    }
     ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
     ImGui::TextWrapped("%s", summary.c_str());
     ImGui::PopStyleColor();
@@ -339,6 +378,15 @@ void deploy_panel::draw_status(rtti::context& ctx)
     const ImU32 done_color = ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color());
     for(const auto& [name, job] : deploy_jobs_)
     {
+        const auto error = step_errors.find(name);
+        if(error != step_errors.end())
+        {
+            draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                           DEPLOY_WARNING_COLOR,
+                           fmt::format("{}: {}", get_step_name(name), error->second).c_str(),
+                           ImGui::GetColorU32(ImGuiCol_Text));
+            continue;
+        }
         const bool is_done = job.is_ready();
         draw_icon_line(is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK,
                        is_done ? done_color : imgui_style::get_muted_text_color_u32(),

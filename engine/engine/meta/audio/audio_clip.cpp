@@ -1,10 +1,10 @@
 #include "audio_clip.hpp"
-#include <audiopp/loaders/loader.h>
 #include <fstream>
 #include <filesystem/file_istream.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
-#include <serialization/types/chrono.hpp>
+#include <serialization/types/string.hpp>
+#include <serialization/types/vector.hpp>
 
 namespace audio
 {
@@ -49,44 +49,6 @@ REFLECT(sound_info)
         });
 }
 
-SAVE(audio::sound_info)
-{
-    try_save(ar, ser20::make_nvp("bits_per_sample", obj.bits_per_sample));
-    try_save(ar, ser20::make_nvp("sample_rate", obj.sample_rate));
-    try_save(ar, ser20::make_nvp("channels", obj.channels));
-    try_save(ar, ser20::make_nvp("duration", obj.duration));
-    try_save(ar, ser20::make_nvp("frames", obj.frames));
-}
-// SAVE_INSTANTIATE(sound_info, ser20::oarchive_binary_t);
-
-LOAD(audio::sound_info)
-{
-    try_load(ar, ser20::make_nvp("bits_per_sample", obj.bits_per_sample));
-    try_load(ar, ser20::make_nvp("sample_rate", obj.sample_rate));
-    try_load(ar, ser20::make_nvp("channels", obj.channels));
-    try_load(ar, ser20::make_nvp("duration", obj.duration));
-    try_load(ar, ser20::make_nvp("frames", obj.frames));
-}
-// LOAD_INSTANTIATE(sound_info, ser20::iarchive_binary_t);
-
-SAVE(audio::sound_data)
-{
-    try_save(ar, ser20::make_nvp("info", obj.info));
-    try_save(ar, ser20::make_nvp("data", obj.data));
-    
-    // Changes here should be reflected in ex::get_format_version<audio_clip>() in asset_extensions.h
-}
-// SAVE_INSTANTIATE(sound_data, ser20::oarchive_binary_t);
-
-LOAD(audio::sound_data)
-{
-    try_load(ar, ser20::make_nvp("info", obj.info));
-    try_load(ar, ser20::make_nvp("data", obj.data));
-    
-    // Changes here should be reflected in ex::get_format_version<audio_clip>() in asset_extensions.h
-}
-// LOAD_INSTANTIATE(sound_data, ser20::iarchive_binary_t);
-
 } // namespace audio
 
 namespace unravel
@@ -121,46 +83,45 @@ LOAD(audio_clip)
 }
 LOAD_INSTANTIATE(audio_clip, ser20::iarchive_binary_t);
 
-void save_to_file(const std::string& absolute_path, const audio::sound_data& obj)
+SAVE(encoded_sound)
 {
-    // std::ofstream stream(absolute_path);
-    // if(stream.good())
-    // {
-    //     auto ar = ser20::create_oarchive_associative(stream);
-    //     try_save(ar, ser20::make_nvp("audio_clip", obj));
-    // }
-}
+    try_save(ar, ser20::make_nvp("codec", obj.codec));
+    try_save(ar, ser20::make_nvp("bytes", obj.bytes));
+    try_save(ar, ser20::make_nvp("force_to_mono", obj.force_to_mono));
 
-void save_to_file_bin(const std::string& absolute_path, const audio::sound_data& obj)
+    // Changes here should be reflected in ex::get_format_version<audio_clip>() in asset_extensions.h
+}
+SAVE_INSTANTIATE(encoded_sound, ser20::oarchive_binary_t);
+
+LOAD(encoded_sound)
+{
+    try_load(ar, ser20::make_nvp("codec", obj.codec));
+    try_load(ar, ser20::make_nvp("bytes", obj.bytes));
+    try_load(ar, ser20::make_nvp("force_to_mono", obj.force_to_mono));
+
+    // Changes here should be reflected in ex::get_format_version<audio_clip>() in asset_extensions.h
+}
+LOAD_INSTANTIATE(encoded_sound, ser20::iarchive_binary_t);
+
+auto save_to_file_bin(const std::string& absolute_path, const encoded_sound& obj) -> bool
 {
     std::ofstream stream(absolute_path, std::ios::binary);
-    if(stream.good())
+    if(!stream.good())
     {
-        ser20::oarchive_binary_t ar(stream);
-        try_save(ar, ser20::make_nvp("sound_data", obj));
+        return false;
     }
+    ser20::oarchive_binary_t ar(stream);
+    return try_save(ar, ser20::make_nvp("encoded_sound", obj)) && stream.good();
 }
 
-auto load_from_file(const std::string& absolute_path, audio::sound_data& obj, std::string& err) -> bool
-{
-    return audio::load_from_file(absolute_path, obj, err);
-
-    // std::ifstream stream(absolute_path);
-    // if(stream.good())
-    // {
-    //     auto ar = ser20::create_iarchive_associative(stream);
-    //     try_load(ar, ser20::make_nvp("audio_clip", obj));
-    // }
-}
-
-void load_from_file_bin(const std::string& absolute_path, audio::sound_data& obj)
+auto load_from_file_bin(const std::string& absolute_path, encoded_sound& obj) -> bool
 {
     fs::file_istream input(absolute_path);
     if(!input.is_open())
     {
-        return;
+        return false;
     }
     ser20::iarchive_binary_t ar(input);
-    try_load(ar, ser20::make_nvp("sound_data", obj));
+    return try_load(ar, ser20::make_nvp("encoded_sound", obj));
 }
 } // namespace unravel

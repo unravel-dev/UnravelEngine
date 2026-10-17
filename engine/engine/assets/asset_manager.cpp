@@ -207,11 +207,26 @@ auto asset_manager::load_database(const std::string& protocol) -> bool
     return load_from_file(assets_pack.string(), db);
 }
 
-void asset_manager::save_database(const std::string& protocol, const fs::path& path)
+void asset_manager::save_database(const std::string& protocol, const fs::path& path, const database_filter& include)
 {
     std::lock_guard<std::mutex> lock(db_mutex_);
     auto& db = get_database(protocol);
-    save_to_file(path.string(), db);
+    if(!include)
+    {
+        save_to_file(path.string(), db);
+        return;
+    }
+    asset_database::database_t kept;
+    for(const auto& [uid, meta] : db.get_database())
+    {
+        if(include(meta.location))
+        {
+            kept.emplace(uid, meta);
+        }
+    }
+    asset_database filtered;
+    filtered.set_database(kept);
+    save_to_file(path.string(), filtered);
 }
 
 auto asset_manager::add_asset(const std::string& key, bool override) -> hpp::uuid

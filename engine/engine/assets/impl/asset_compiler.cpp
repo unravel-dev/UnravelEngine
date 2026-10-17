@@ -2212,23 +2212,35 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
 
     fs::error_code err;
 
-    audio::sound_data clip;
+    // The source's own bytes are the compiled clip; it is decoded when it loads. Decoding it once
+    // here reports a file that will not play at import, where the rest of the import errors are.
+    encoded_sound clip;
     {
-        std::string error;
-        if(!load_from_file(str_input, clip, error))
+        std::ifstream input(str_input, std::ios::binary);
+        clip.bytes = fs::read_stream(input);
+        clip.codec = string_utils::to_lower(absolute_path.extension().generic_string());
+        if(!clip.codec.empty() && clip.codec.front() == '.')
         {
-            APPLOG_ERROR("Failed compilation of {0} with error: {1}", str_input, error);
-            return false;
+            clip.codec.erase(0, 1);
         }
+        clip.force_to_mono = importer->force_to_mono;
 
-        if(importer->force_to_mono)
+        audio::sound_data decoded;
+        std::string error;
+        if(clip.bytes.empty() || !decode_sound(clip, decoded, error))
         {
-            clip.convert_to_mono();
+            APPLOG_ERROR("Failed compilation of {0} with error: {1}",
+                         str_input,
+                         clip.bytes.empty() ? std::string("the file could not be read") : error);
+            return false;
         }
 
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
-            save_to_file_bin(temp.string(), clip);
+            if(!save_to_file_bin(temp.string(), clip))
+            {
+                throw std::runtime_error("could not write " + temp.string());
+            }
         }, err);
     }
 

@@ -40,6 +40,15 @@ REFLECT(deploy_settings)
                             "Off: the marker is cleared and the game refreshes nested instances\n"
                             "as it loads them - slower, but it cannot serve stale content."},
         })
+        .data<&deploy_settings::deploy_debug_symbols>("deploy_debug_symbols"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_debug_symbols"},
+            entt::attribute{"pretty_name", "Include Debug Symbols"},
+            entt::attribute{"tooltip",
+                            "Ship the scripts' debug symbols (.pdb) and docs (.xml).\n\n"
+                            "The game runs without them; with them, script exceptions\n"
+                            "name the file and line they came from."},
+        })
         .data<&deploy_settings::deploy_and_run>("deploy_and_run"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_and_run"},
@@ -54,6 +63,7 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_save(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
+    try_save(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
 }
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_binary_t);
@@ -69,6 +79,7 @@ LOAD(deploy_settings)
     try_load(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_load(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_load(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
+    try_load(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
 }
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_binary_t);

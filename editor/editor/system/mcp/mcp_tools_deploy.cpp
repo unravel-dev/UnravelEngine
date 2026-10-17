@@ -134,11 +134,12 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{}}})",
+        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{}}})",
         params.deploy_location.empty() ? "null" : make_json_string(params.deploy_location.generic_string()),
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
-        bool_to_json(params.deploy_cooked_assets));
+        bool_to_json(params.deploy_cooked_assets),
+        bool_to_json(params.deploy_debug_symbols));
 }
 
 /// Sets the destination, creating the folder when asked - but never inside the project, where
@@ -186,9 +187,9 @@ void register_deploy_tools(mcp_tool_registry& registry)
         {.name = "deploy_get_state",
          .description =
              "Everything about deploying in one read: the settings (destination folder, runtime dependencies, run "
-             "after deploy, cooked assets); what keeps the project from deploying, one sentence each (usually a "
-             "missing deploy folder - deploy_set_settings - or no startup scene - settings_set "
-             "standalone.startup_scene); and the progress of the current or last deploy.",
+             "after deploy, cooked assets, debug symbols); what keeps the project from deploying, one sentence each "
+             "(usually a missing deploy folder - deploy_set_settings - no startup scene - settings_set "
+             "standalone.startup_scene - or assets still compiling); and the progress of the current or last deploy.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -217,9 +218,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "Set the project's deploy settings and save them, then report what still keeps the "
              "project from deploying. location is an absolute folder outside the project, created "
              "when missing; a full deploy clears it, so it must be empty or an earlier deploy. "
+             "include_debug_symbols ships the scripts' .pdb/.xml so managed exceptions name file and line. "
              "Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -243,6 +245,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "deploy_dependencies", params.deploy_dependencies);
              read_bool(args, "run_after_deploy", params.deploy_and_run);
              read_bool(args, "cook_assets", params.deploy_cooked_assets);
+             read_bool(args, "include_debug_symbols", params.deploy_debug_symbols);
 
              pm->get_deploy_settings() = params;
              pm->save_deploy_settings();
@@ -262,8 +265,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
          .description =
              "Build the game into the deploy folder, as the editor's Deploy does. With deploy_dependencies on "
              "(default) the folder is cleared first, so it must be empty or an earlier deploy. Needs a deploy "
-             "location and a startup scene: call deploy_get_state first. Waits up to timeout_ms (default 180000); "
-             "on timeout the deploy keeps running and deploy_get_state reports it. Refuses play mode.",
+             "location and a startup scene: call deploy_get_state first. Waits for running asset and script "
+             "compiles first, then for the deploy, up to timeout_ms in all (default 180000); on timeout the deploy "
+             "keeps running and deploy_get_state reports it. Assets without a compiled file fail the deploy before "
+             "the folder is touched, named in failed_steps. Refuses play mode.",
          .input_schema_json =
              R"json({"type":"object","properties":{"location":{"type":"string","description":"Destination folder; also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
          .handler =
@@ -277,6 +282,23 @@ void register_deploy_tools(mcp_tool_registry& registry)
              const bool has_run_flag = read_bool(args, "run_after_deploy", run_after_deploy);
              const auto timeout =
                  read_timeout_ms(args, k_default_deploy_timeout_ms, k_max_deploy_timeout_ms, "timeout_ms");
+             const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+             // A deploy needs the compiler idle - it is one of the deploy problems - so wait here as a
+             // user would for the Deploy button to enable. On timeout the start below reports it.
+             while(std::chrono::steady_clock::now() < deadline)
+             {
+                 auto pending = mcp.invoke_on_main(
+                     [&ctx]() -> std::string
+                     {
+                         return editor_actions::get_pending_compile_reason(ctx);
+                     });
+                 if(!pending || pending->empty())
+                 {
+                     break;
+                 }
+                 std::this_thread::sleep_for(k_deploy_poll_interval);
+             }
 
              auto start = mcp.invoke_on_main(
                  [&ctx, location, run_after_deploy, has_run_flag]() -> tool_result
@@ -336,7 +358,6 @@ void register_deploy_tools(mcp_tool_registry& registry)
 
              // Wait on the HTTP worker so frames keep pumping; each look at the jobs hops to the
              // main thread, where the panel owns them.
-             const auto deadline = std::chrono::steady_clock::now() + timeout;
              deploy_snapshot snapshot;
              while(true)
              {

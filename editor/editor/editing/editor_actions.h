@@ -196,6 +196,9 @@ struct editor_actions
     static auto is_path_inside_project(const fs::path& path) -> bool;
     /// What keeps the project from deploying, one sentence each; empty when it can deploy.
     static auto get_deploy_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>;
+    /// Why the compiled cache is not ready to deploy yet - assets or scripts still compiling - in
+    /// one sentence, or empty when the compiler is idle. One of the deploy problems. Main thread.
+    static auto get_pending_compile_reason(rtti::context& ctx) -> std::string;
 
 
     static void recompile_shaders(const std::string& group = "");

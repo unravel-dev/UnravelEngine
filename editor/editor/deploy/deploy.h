@@ -32,6 +32,10 @@ struct deploy_settings
     /// them, so the deployed runtime instantiates flat with no sync logic. The cooked files
     /// exist only in the deploy destination - the editor's compiled cache is never touched.
     bool deploy_cooked_assets{true};
+
+    /// Ship the script libraries' debug companions (.pdb symbols, .xml docs). The game runs
+    /// without them; with them, managed exceptions name the file and line they came from.
+    bool deploy_debug_symbols{false};
 };
 
 

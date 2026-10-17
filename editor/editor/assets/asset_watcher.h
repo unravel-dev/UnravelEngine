@@ -33,7 +33,9 @@ public:
 
     void recreate_meta_files(rtti::context& ctx, const std::string& protocol);
 
-    auto get_pending_jobs_count(rtti::context& ctx) const -> size_t;
+    /// Asset compiles and dependency checks queued or running on the thread pool, including the
+    /// script library build. Zero means the compiled cache matches the sources as far as they are known.
+    auto get_pending_compile_jobs_count(rtti::context& ctx) const -> size_t;
 
 private:
     void on_os_event(rtti::context& ctx, os::event& e);

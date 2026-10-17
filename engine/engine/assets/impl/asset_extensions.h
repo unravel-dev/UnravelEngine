@@ -320,7 +320,8 @@ inline auto get_format_version<unravel::physics_material>() -> uint64_t
 template<>
 inline auto get_format_version<unravel::audio_clip>() -> uint64_t
 {
-    return 1;
+    // 2: the compiled clip keeps the source codec's bytes (encoded_sound) and decodes at load.
+    return 2;
 }
 
 template<>

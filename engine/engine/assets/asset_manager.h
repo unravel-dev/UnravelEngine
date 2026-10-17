@@ -5,6 +5,7 @@
 #include "asset_storage.h"
 #include "impl/asset_extensions.h"
 #include <cassert>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -68,12 +69,17 @@ public:
      */
     auto load_database(const std::string& protocol) -> bool;
 
+    /// Decides, by asset location, which database entries a saved copy keeps.
+    using database_filter = std::function<bool(const std::string& location)>;
+
     /**
      * @brief Saves the asset database to a specified path.
      * @param protocol The protocol to use for saving.
      * @param path The path to save the database to.
+     * @param include Keeps the entries it accepts; empty keeps every entry. The database itself is
+     * not changed.
      */
-    void save_database(const std::string& protocol, const fs::path& path);
+    void save_database(const std::string& protocol, const fs::path& path, const database_filter& include = {});
 
     /**
      * @brief Removes asset information for a specified path.

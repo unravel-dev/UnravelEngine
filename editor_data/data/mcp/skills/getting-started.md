@@ -56,7 +56,9 @@ Building a scene is not shipping a game. The rest of the chain:
 - deploy_get_state reports the deploy settings, what still blocks a build (one
   sentence each) and the progress of a running deploy; deploy_set_settings
   picks the destination folder (outside the project), and project_deploy
-  builds it. While a deploy runs, project and settings changes are refused.
+  builds it once running compiles finish. An asset that failed to compile fails
+  the deploy (failed_steps names it) before the folder is touched. While a
+  deploy runs, project and settings changes are refused.
 - Driving and verifying the game needs synthesized input - see the
   verification skill.
 
