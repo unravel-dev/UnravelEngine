@@ -106,6 +106,11 @@ void os_mouse::set_position(coord pos)
     position_ = pos;
 }
 
+void os_mouse::rebase_position(coord pos)
+{
+    position_ = pos;
+}
+
 //  ----------------------------------------------------------------------------
 void os_mouse::set_scroll(float scroll)
 {

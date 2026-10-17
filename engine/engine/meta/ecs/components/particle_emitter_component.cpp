@@ -311,6 +311,23 @@ REFLECT(particle_emitter_component)
             entt::attribute{"pretty_name", "Tile"},
         });
 
+    entt::meta_factory<ps_soa::ribbon_facing>{}
+        .type("ribbon_facing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ribbon_facing"},
+            entt::attribute{"pretty_name", "Ribbon Facing"},
+        })
+        .data<ps_soa::ribbon_facing::camera>("camera"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "camera"},
+            entt::attribute{"pretty_name", "Camera"},
+        })
+        .data<ps_soa::ribbon_facing::launch_direction>("launch_direction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "launch_direction"},
+            entt::attribute{"pretty_name", "Launch Direction"},
+        });
+
     entt::meta_factory<ps_soa::mesh_spawn_mode>{}
         .type("mesh_spawn_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1429,6 +1446,14 @@ REFLECT(particle_emitter_component)
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_ribbon_tile},
         })
+        .data<&particle_emitter_component::set_ribbon_facing, &particle_emitter_component::get_ribbon_facing>("ribbon_facing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ribbon_facing"},
+            entt::attribute{"pretty_name", "Ribbon Facing"},
+            entt::attribute{"tooltip", "Which way the ribbon's width (each particle's size) runs. Camera: across the ribbon, facing the camera. Launch Direction: along each particle's launch direction as it was at birth - launch slowly along a blade and the ribbon sweeps its arc as one sheet, hilt to tip."},
+            entt::attribute{"group", "Renderer"},
+            entt::attribute{"predicate", is_ribbon},
+        })
         .data<&particle_emitter_component::set_stretch_length_scale, &particle_emitter_component::get_stretch_length_scale>("stretch_length_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "stretch_length_scale"},
@@ -1878,6 +1903,7 @@ SAVE(particle_emitter_component)
     try_save(ar, ser20::make_nvp("taa_response", obj.get_taa_response()));
     try_save(ar, ser20::make_nvp("write_velocity", obj.get_write_velocity()));
     try_save(ar, ser20::make_nvp("velocity_alpha_threshold", obj.get_velocity_alpha_threshold()));
+    try_save(ar, ser20::make_nvp("ribbon_facing", obj.get_ribbon_facing()));
 }
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(particle_emitter_component, ser20::oarchive_binary_t);
@@ -2118,6 +2144,7 @@ LOAD(particle_emitter_component)
     load_property(ar, "taa_response", obj.get_taa_response(), [&](const auto& v) { obj.set_taa_response(v); });
     load_property(ar, "write_velocity", obj.get_write_velocity(), [&](const auto& v) { obj.set_write_velocity(v); });
     load_property(ar, "velocity_alpha_threshold", obj.get_velocity_alpha_threshold(), [&](const auto& v) { obj.set_velocity_alpha_threshold(v); });
+    load_property(ar, "ribbon_facing", obj.get_ribbon_facing(), [&](const auto& v) { obj.set_ribbon_facing(v); });
 
     if constexpr(!is_binary_archive<Archive>())
     {

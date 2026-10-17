@@ -15,7 +15,7 @@
  */
 
 #define PARTICLE_RECORD_UINTS 16u
-#define PARTICLE_STATIC_VEC4S 15u
+#define PARTICLE_STATIC_VEC4S 16u
 #define PARTICLE_DYNAMIC_UINTS 28u
 #define PARTICLE_LUT_SIZE 256u
 #define PARTICLE_LUT_ROWS 7u
@@ -37,6 +37,7 @@
 #define PARTICLE_STATIC_TRAIL 12u
 #define PARTICLE_STATIC_FACING 13u
 #define PARTICLE_STATIC_SPEED_BOUND 14u
+#define PARTICLE_STATIC_RIBBON 15u
 
 /// Slots of the emitter dynamic row (particle_record.h, dynamic_slot).
 #define PARTICLE_DYNAMIC_LOCAL_TO_WORLD 0u

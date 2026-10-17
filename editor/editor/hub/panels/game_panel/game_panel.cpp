@@ -280,6 +280,7 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
     auto& input = ctx.get_cached<input_system>();
     input.manager.set_work_zone(work_zone);
     input.manager.set_reference_size({tex_size_v.x, tex_size_v.y});
+    update_cursor_hold(ctx, ImGui::IsItemHovered());
 
     if(ctx.get_cached<play_mode>().is_active())
     {
@@ -297,6 +298,32 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
                                          max);
 }
 
+
+void game_panel::update_cursor_hold(rtti::context& ctx, bool is_view_hovered)
+{
+    auto& input = ctx.get_cached<input_system>();
+    const auto& play = ctx.get_cached<play_mode>();
+    const bool is_running = play.is_active() && !play.is_paused();
+    if(!is_running)
+    {
+        is_cursor_released_ = false;
+    }
+    else if(is_focused() && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    {
+        is_cursor_released_ = true;
+    }
+    else if(is_view_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        is_cursor_released_ = false;
+    }
+    auto& cursor = input.manager.get_cursor();
+    cursor.set_suspended(!is_running || !is_focused() || is_cursor_released_);
+    // The editor's UI sets the OS cursor every frame; the game's request goes through it.
+    if(is_view_hovered && cursor.is_hidden())
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    }
+}
 
 auto game_panel::begin_panel(const char* name, ImGuiWindowFlags flags) -> bool
 {

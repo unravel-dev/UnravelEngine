@@ -75,6 +75,21 @@ void update_input_zone(const renderer& rend, input_system& input)
     }
 }
 
+/// Shows or hides the OS cursor as the game asks. A host that draws its own UI (the editor) sets
+/// the cursor every frame and follows the input manager itself.
+void update_cursor_visibility(const renderer& rend, input_system& input)
+{
+    const auto& window = rend.get_main_window();
+    if(!window)
+    {
+        return;
+    }
+    if(const auto is_shown = input.manager.get_cursor().take_visibility_change())
+    {
+        window->get_window().show_cursor(*is_shown);
+    }
+}
+
 // Engine crash handlers
 void engine_interrupt_handler(const crash::signal_info& info)
 {
@@ -578,6 +593,7 @@ auto engine::process() -> int
         update_input_zone(rend, input);
 
         input.manager.before_events_update();
+        update_cursor_visibility(rend, input);
 
         bool should_quit = is_shutting_down;
 

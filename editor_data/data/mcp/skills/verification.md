@@ -101,7 +101,8 @@ jump, a trigger, a menu button.
    A point outside the Game panel is refused (the press would land on the
    editor). While it is set the user's mouse does not reach the editor, so clear
    it (clear:true) as soon as the test is done; it also clears itself when play
-   ends.
+   ends. A virtual pointer also suspends a script's cursor lock; input_get_state
+   reports the lock under cursor (lock_state, lock_active, hidden).
 6. editor_ui_click {x, y} clicks the EDITOR's own interface (client pixels of
    the editor window, edit or play mode) - a panel control no tool covers, such
    as a node of the Animation Controller window. button, double, a drag with

@@ -226,6 +226,8 @@ struct emitter_render_desc
     /// Ribbon render mode: how the texture runs along the ribbon, and the seconds of age one repeat spans (tile).
     ribbon_texture_mode ribbon_texture_mode = ribbon_texture_mode::age;
     float ribbon_tile_time = 0.25f;
+    /// Ribbon render mode: which way the ribbon's width runs.
+    ribbon_facing ribbon_facing = ribbon_facing::camera;
     /// Stretched mode: quad length = size x stretch_length_scale + speed x stretch_speed_scale.
     float stretch_length_scale = 1.0f;
     float stretch_speed_scale = 0.1f;

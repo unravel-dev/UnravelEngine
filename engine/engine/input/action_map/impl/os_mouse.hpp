@@ -27,6 +27,8 @@ public:
     auto is_released(uint32_t button) const -> bool override;
 
     void set_position(coord pos);
+    /// Moves the position without reporting motion: the cursor was put there, not moved.
+    void rebase_position(coord pos);
     void set_scroll(float scroll);
     void update();    
 };

@@ -84,6 +84,16 @@ public:
     void resolve_transform_global() noexcept;
 
     /**
+     * @brief Resolves the global transform and its matrix now when the entity has a parent.
+     *
+     * Global transforms resolve lazily on first read, which is not thread safe. Call this on one
+     * thread before a parallel pass whose tasks read the global transforms of entities that may
+     * share an ancestor (a sword in a character's hand, emitters under one moving parent): the
+     * tasks then only read the shared ancestors instead of resolving them at the same time.
+     */
+    void resolve_shared_ancestors() noexcept;
+
+    /**
      * @brief Gets the global transform.
      * @return A constant reference to the global transform.
      */

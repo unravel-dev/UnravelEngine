@@ -145,6 +145,16 @@ mapping provides `Horizontal`, `Vertical`, `Jump`, `Run`, `Submit`, `Cancel`,
 `Mouse Middle`. Use those names, or add bindings, rather than inventing a name that
 is mapped to nothing - an unmapped action silently reads zero.
 
+## Cursor lock for mouse look
+
+`Cursor.lockState = CursorLockMode.Locked` keeps the cursor at the center of the
+game view and hides it, while `Mouse X` / `Mouse Y` keep reporting motion;
+`Confined` keeps it inside the view, `Cursor.visible = false` only hides it. The
+request holds only while the game has input (focused window; in the editor, a
+running, focused Game view), so it never traps the user. In the editor Escape frees
+the cursor until the Game view is clicked, and stopping play resets the request.
+Give players the same way out: free it on Escape, take it back on a click.
+
 ---
 
 The rules below ship with every project as `UNRAVEL-AGENTS.md`. They are the same

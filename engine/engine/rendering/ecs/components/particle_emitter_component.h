@@ -367,6 +367,9 @@ public:
     /// Ribbon render mode, tile texture mode: seconds of the particles' age one texture repeat spans.
     void set_ribbon_tile_time(float value);
     auto get_ribbon_tile_time() const -> float;
+    /// Ribbon render mode: which way the ribbon's width runs (the camera, or each particle's launch direction).
+    void set_ribbon_facing(ps_soa::ribbon_facing facing);
+    auto get_ribbon_facing() const -> ps_soa::ribbon_facing;
 
     /// Collision bounce: share of the speed into the plane a bounce keeps.
     void set_restitution(float value);

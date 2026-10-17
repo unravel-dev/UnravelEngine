@@ -62,6 +62,12 @@ private:
     void apply_view_size(rtti::context& ctx, scene& scn) const;
     /// Draws the displayed camera's image and points the input, debug view and labels at it.
     void draw_camera_image(rtti::context& ctx, entt::handle camera, const ImVec2& area_size);
+    /**
+     * @brief Lets the game hold the cursor (Cursor.lockState, Cursor.visible) only while play runs and
+     * this view has focus. Escape frees it until the view is clicked again, so a locked cursor never
+     * keeps the user from the editor.
+     */
+    void update_cursor_hold(rtti::context& ctx, bool is_view_hovered);
 
     // Floating toolbar (panel_toolbar), one bar on the right like the view bar of the scene.
     /// Fades the bar out while the game plays, unless the pointer is at the top edge or a
@@ -88,5 +94,7 @@ private:
     /// Render size set by set_forced_render_size; 0 x 0 when not forced.
     uint32_t forced_render_width_{0};
     uint32_t forced_render_height_{0};
+    /// Escape freed the cursor; a click in the view gives it back to the game.
+    bool is_cursor_released_{};
 };
 } // namespace unravel

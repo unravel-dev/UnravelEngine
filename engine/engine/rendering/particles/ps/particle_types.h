@@ -154,6 +154,17 @@ enum class ribbon_texture_mode : int
     count
 };
 
+/// Which way a ribbon's width runs at each of its particles (the width is the particle's size, centered on it).
+enum class ribbon_facing : int
+{
+    /// Across the ribbon's direction, facing the camera (beams, streams, magic streaks).
+    camera = 0,
+    /// Along the particle's launch direction, as it was at birth: particles launched along a blade sweep its arc
+    /// as one sheet from hilt to tip (sword slashes). Launch them slowly; the direction is all that counts.
+    launch_direction,
+    count
+};
+
 /// Blend mode. Ordinals match legacy BlendMode.
 enum class blend_mode : int
 {

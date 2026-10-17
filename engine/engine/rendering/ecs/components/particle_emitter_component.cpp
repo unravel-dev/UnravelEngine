@@ -1028,6 +1028,16 @@ auto particle_emitter_component::get_ribbon_tile_time() const -> float
     return desc_.render.ribbon_tile_time;
 }
 
+void particle_emitter_component::set_ribbon_facing(ps_soa::ribbon_facing facing)
+{
+    desc_.render.ribbon_facing = facing;
+}
+
+auto particle_emitter_component::get_ribbon_facing() const -> ps_soa::ribbon_facing
+{
+    return desc_.render.ribbon_facing;
+}
+
 void particle_emitter_component::set_restitution(float value)
 {
     desc_.motion.restitution = math::clamp(value, 0.0f, 1.0f);

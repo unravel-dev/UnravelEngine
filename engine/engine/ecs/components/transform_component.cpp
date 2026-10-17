@@ -267,6 +267,14 @@ void transform_component::resolve_transform_global() noexcept
     }
 }
 
+void transform_component::resolve_shared_ancestors() noexcept
+{
+    if(parent_)
+    {
+        get_transform_global().get_matrix();
+    }
+}
+
 auto transform_component::get_transform_global() const noexcept -> const math::transform&
 {
     return transform_.get_global_value(this, false);

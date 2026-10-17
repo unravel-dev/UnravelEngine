@@ -1437,6 +1437,17 @@ auto parse_particle_shader_constants(const std::string& path) -> std::map<std::s
     return constants;
 }
 
+/// The ribbon facing reaches the static row the vertex shader reads (camera 0, launch direction 1).
+void test_ribbon_facing_reaches_the_static_row()
+{
+    std::printf("test_ribbon_facing_reaches_the_static_row\n");
+    ps_soa::emitter_eval_params params;
+    check(ps_soa::pack_static_row(params)[ps_soa::static_slot_ribbon].x == 0.0f, "a ribbon faces the camera by default");
+    params.ribbon_facing = ps_soa::ribbon_facing::launch_direction;
+    check(ps_soa::pack_static_row(params)[ps_soa::static_slot_ribbon].x == 1.0f,
+          "launch direction facing is packed for the shader");
+}
+
 /// The layout the shaders read (row sizes, slots, LUT rows, feature flags, salts) matches the C++ one.
 void test_shader_layout_matches_cpp()
 {
@@ -1478,6 +1489,7 @@ void test_shader_layout_matches_cpp()
         {"PARTICLE_STATIC_TRAIL", ps_soa::static_slot_trail},
         {"PARTICLE_STATIC_FACING", ps_soa::static_slot_facing},
         {"PARTICLE_STATIC_SPEED_BOUND", ps_soa::static_slot_speed_bound},
+        {"PARTICLE_STATIC_RIBBON", ps_soa::static_slot_ribbon},
         {"PARTICLE_DYNAMIC_LOCAL_TO_WORLD", ps_soa::dynamic_slot_local_to_world},
         {"PARTICLE_DYNAMIC_ROTATION", ps_soa::dynamic_slot_rotation},
         {"PARTICLE_DYNAMIC_ACCELERATION", ps_soa::dynamic_slot_acceleration},
@@ -1585,6 +1597,7 @@ auto run_particle_motion_suite(rtti::context& /*ctx*/) -> int
     test_camera_stretch_stays_culled_conservatively();
     test_trail_reach_holds_the_past_path();
     test_shader_layout_matches_cpp();
+    test_ribbon_facing_reaches_the_static_row();
     test_cutout_polygons();
     bgfx::Init init;
     init.type = bgfx::RendererType::Noop;

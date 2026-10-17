@@ -94,6 +94,7 @@ auto pack_static_row(const emitter_eval_params& params) -> static_row
     row[static_slot_trail] = math::vec4(params.trail_length, params.trail_width_end, float(int(params.ribbon_texture_mode)), params.ribbon_tiles_per_second);
     row[static_slot_facing] = math::vec4(params.facing_axis, params.stretch_camera_velocity_scale);
     row[static_slot_speed_bound] = math::vec4(params.speed_bound.x, params.speed_bound.y, 0.0f, 0.0f);
+    row[static_slot_ribbon] = math::vec4(float(int(params.ribbon_facing)), 0.0f, 0.0f, 0.0f);
     return row;
 }
 

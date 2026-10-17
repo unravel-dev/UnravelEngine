@@ -14,7 +14,7 @@ namespace ps_soa
 /// count wraps after ~6 days, far beyond max_particle_lifetime.
 constexpr double ticks_per_second = 8192.0;
 constexpr uint32_t record_uints = 16;
-constexpr uint32_t static_row_vec4s = 15;
+constexpr uint32_t static_row_vec4s = 16;
 constexpr uint32_t dynamic_row_uints = 28;
 constexpr uint32_t lut_size = 256;
 constexpr uint32_t lut_rows = 7;
@@ -53,6 +53,8 @@ enum static_slot : uint32_t
     static_slot_facing = 13,
     /// Fastest speed as multiples of the launch speed and of the acceleration's speed.
     static_slot_speed_bound = 14,
+    /// Ribbon facing (ribbon_facing), unused yzw.
+    static_slot_ribbon = 15,
 };
 
 /// Slots of the emitter dynamic row (PARTICLE_DYNAMIC_* in particle_common.sh; the particle motion suite checks the two match).

@@ -792,6 +792,7 @@ private:
         params.trail_width_end = math::max(desc.render.trail_width_end, 0.0f);
         params.ribbon_texture_mode = desc.render.ribbon_texture_mode;
         params.ribbon_tiles_per_second = 1.0f / math::max(desc.render.ribbon_tile_time, k_min_ribbon_tile_time);
+        params.ribbon_facing = desc.render.ribbon_facing;
         params.stretch_speed_scale = desc.render.stretch_speed_scale;
         params.stretch_camera_velocity_scale = desc.render.stretch_camera_velocity_scale;
         params.facing_axis = desc.render.facing_axis;

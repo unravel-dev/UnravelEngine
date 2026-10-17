@@ -21,4 +21,14 @@ inline auto operator!=(const coord& p1, const coord& p2) -> bool
 {
     return p1.x != p2.x || p1.y != p2.y;
 }
+
+/// A rectangle in pixels: its top-left corner and its size.
+struct zone
+{
+    int x{};
+    int y{};
+
+    int w{};
+    int h{};
+};
 } // namespace input

@@ -27,6 +27,8 @@ uniform vec4 u_particle_draw;
 /// Thresholds between the ribbon texture modes stored as floats (ribbon_texture_mode: age 0, stretch 1, tile 2).
 #define PARTICLE_RIBBON_TEXTURE_STRETCH 0.5
 #define PARTICLE_RIBBON_TEXTURE_TILE 1.5
+/// Threshold of the ribbon facing stored as a float (ribbon_facing: camera 0, launch direction 1).
+#define PARTICLE_RIBBON_FACING_LAUNCH 0.5
 
 /// The normal of a quad with axes @p axis_x and @p axis_y, on the side of @p toward_camera (the frame a lit particle
 /// is shaded in stays orthonormal in every render mode).
@@ -207,7 +209,8 @@ particle_state particle_ribbon_point(uint index, out particle_record record)
 /**
  * A ribbon segment's corner of @p vertex: segment @p segment joins the list's particles segment (corner.y < 0) and
  * segment + 1 (oldest first), each end as wide as its particle, facing the camera across the ribbon's direction
- * there. The last segment has no far end and collapses.
+ * there, or with its width along the particle's launch direction (ribbon_facing). The last segment has no far end
+ * and collapses.
  */
 void particle_ribbon_corner(uint segment, vec2 corner, vec3 camera_position, inout particle_vertex vertex)
 {
@@ -227,13 +230,23 @@ void particle_ribbon_corner(uint segment, vec2 corner, vec3 camera_position, ino
 	}
 	vec3 side = cross(along, anchor.position - camera_position);
 	side = dot(side, side) > PARTICLE_MIN_DIRECTION_SQ ? normalize(side) : vertex.axis_x;
+	uint flags = particle_flags(record.emitter);
+	if(particle_static(record.emitter, PARTICLE_STATIC_RIBBON).x > PARTICLE_RIBBON_FACING_LAUNCH)
+	{
+		// The launch velocity as it was at birth: a blade's direction then, wherever the blade is now.
+		vec3 launch = record.velocity;
+		if((flags & PARTICLE_FLAG_LOCAL_SPACE) != 0u)
+		{
+			launch = particle_local_to_world_vector(record.emitter, launch);
+		}
+		side = dot(launch, launch) > PARTICLE_MIN_DIRECTION_SQ ? normalize(launch) : side;
+	}
 	float width = particle_quad(record, anchor).x * particle_static(record.emitter, PARTICLE_STATIC_SIZE_AXES).x;
 	if(segment + 1u >= count)
 	{
 		width = 0.0;
 	}
 	// The anchor's own fades: its distance, and a width below a pixel keeping one pixel and fading by the rest.
-	uint flags = particle_flags(record.emitter);
 	float distance = max(length(anchor.position - camera_position), 1e-4);
 	float fade = particle_distance_fade(record.emitter, flags, distance);
 	float pixel_size = particle_pixel_size(distance);

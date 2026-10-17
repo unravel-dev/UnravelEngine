@@ -193,6 +193,7 @@ void emitter_render_desc::reset()
     cutout_alpha_threshold = 0.05f;
     ribbon_texture_mode = ribbon_texture_mode::age;
     ribbon_tile_time = 0.25f;
+    ribbon_facing = ribbon_facing::camera;
     stretch_length_scale = 1.0f;
     stretch_speed_scale = 0.1f;
     stretch_camera_velocity_scale = 0.0f;

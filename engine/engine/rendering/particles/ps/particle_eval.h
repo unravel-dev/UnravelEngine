@@ -69,6 +69,8 @@ struct emitter_eval_params
     /// Ribbon mode: the texture mode (ribbon_texture_mode) and the repeats per second of age (tile).
     ribbon_texture_mode ribbon_texture_mode = ribbon_texture_mode::age;
     float ribbon_tiles_per_second = 4.0f;
+    /// Ribbon mode: which way the width runs (ribbon_facing).
+    ribbon_facing ribbon_facing = ribbon_facing::camera;
     /// Fastest a particle moves: x multiples of its launch speed (the speed curve's peak x the easing's fastest
     /// rate) plus y multiples of the speed the acceleration gave it (the easing's fastest rate).
     math::vec2 speed_bound{1.0f, 1.0f};

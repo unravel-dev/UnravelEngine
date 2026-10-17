@@ -2,6 +2,7 @@
 
 #include "../action_map.hpp"
 #include "../input_manager.hpp"
+#include "os_cursor.hpp"
 #include "os_gamepad.hpp"
 #include "os_keyboard.hpp"
 #include "os_mouse.hpp"
@@ -15,15 +16,6 @@ struct GLFWwindow;
 
 namespace input
 {
-struct zone
-{
-    int x{};
-    int y{};
-
-    int w{};
-    int h{};
-};
-
 struct input_reference_size
 {
     float w{};
@@ -43,6 +35,9 @@ class os_input_manager : public input_manager
     hpp::optional<input_reference_size> input_reference_size_;
 
     bool is_input_allowed_{true};
+
+    /// The OS cursor as the game holds it; this manager reports its input conditions and applies it.
+    os_cursor cursor_;
 
     /// Stands in for the OS cursor while set. The pointer position is polled rather than
     /// event driven, so synthesized motion has to replace the poll, not add an event.
@@ -89,6 +84,10 @@ public:
 
     /// Lets go of every key and mouse button: nothing reads as held until it is pressed again.
     void release_all();
+
+    /// The OS cursor: how scripts hold it, whether the host suspends it, what it shows.
+    auto get_cursor() -> os_cursor&;
+    auto get_cursor() const -> const os_cursor&;
 
     /// Counts calls to before_events_update, which is the boundary where a pressed state
     /// becomes down and a released state becomes up - so it is the unit a synthesized tap or

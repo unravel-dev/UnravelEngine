@@ -111,8 +111,13 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
     // change, so the common frame never touches it; relaxed because the single bump below is
     // what publishes the result, after the pool has joined.
     std::atomic<bool> static_casters_changed{false};
-    // this code should be thread safe as each task works with a whole hierarchy and
-    // there is no interleaving between tasks.
+    // Models that share an ancestor (a sword under a character's hand bone, props under one
+    // group) would resolve it lazily from several tasks at once; resolve those chains first.
+    for(const auto entity : view)
+    {
+        view.get<transform_component>(entity).resolve_shared_ancestors();
+    }
+    // Each task works with one model's hierarchy and only reads the ancestors resolved above.
     // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
     // poolstl re-walks it once per chunk (see for_each_entity_par).
     poolstl::for_each_entity_par(true,

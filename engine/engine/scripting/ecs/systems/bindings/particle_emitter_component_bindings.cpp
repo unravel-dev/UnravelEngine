@@ -897,6 +897,26 @@ void internal_m2n_particle_emitter_set_ribbon_tile_time(entt::entity id, float v
     }
 }
 
+auto internal_m2n_particle_emitter_get_ribbon_facing(entt::entity id) -> int
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        return static_cast<int>(comp->get_ribbon_facing());
+    }
+    return 0;
+}
+
+void internal_m2n_particle_emitter_set_ribbon_facing(entt::entity id, int value)
+{
+    if(auto comp = safe_get_component<particle_emitter_component>(id))
+    {
+        if(const auto valid = to_reflected_enum<ps_soa::ribbon_facing>(value, "ribbonFacing"))
+        {
+            comp->set_ribbon_facing(*valid);
+        }
+    }
+}
+
 auto internal_m2n_particle_emitter_get_trail_width_end(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<particle_emitter_component>(id))
@@ -2666,6 +2686,10 @@ void register_particle_emitter_component_script_bindings()
                             dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_tile_time));
     reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_tile_time",
                             dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_tile_time));
+    reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_facing",
+                            dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_facing));
+    reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_facing",
+                            dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_facing));
     reg.add_internal_call("internal_m2n_particle_emitter_get_trail_width_end",
                             dotnet_internal_call(internal_m2n_particle_emitter_get_trail_width_end));
     reg.add_internal_call("internal_m2n_particle_emitter_set_trail_width_end",

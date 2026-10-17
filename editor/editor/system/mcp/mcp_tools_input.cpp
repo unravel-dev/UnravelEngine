@@ -12,6 +12,8 @@
 
 #include <hpp/string_view.hpp>
 
+#include <array>
+
 #include <chrono>
 #include <cmath>
 #include <string>
@@ -286,10 +288,14 @@ auto input_state_json(rtti::context& ctx) -> std::string
     const bool real_cursor_in_view = real_cursor.x >= zone.x && real_cursor.x < zone.x + zone.w &&
                                      real_cursor.y >= zone.y && real_cursor.y < zone.y + zone.h;
     const auto game_pointer = manager->get_mouse().get_position();
+    constexpr std::array<const char*, 3> lock_names{"none", "locked", "confined"};
+    const auto& cursor = manager->get_cursor();
+    const auto lock_mode = size_t(cursor.get_lock_mode());
     return fmt::format(
         R"({{"available":true,"input_allowed":{},"play_active":{},"input_frame":{},)"
         R"("work_zone":{{"x":{},"y":{},"w":{},"h":{}}},"virtual_mouse":{},)"
-        R"("game_pointer":[{},{}],"real_cursor":[{},{}],"real_cursor_in_game_view":{}}})",
+        R"("game_pointer":[{},{}],"real_cursor":[{},{}],"real_cursor_in_game_view":{},)"
+        R"("cursor":{{"lock_state":"{}","visible":{},"lock_active":{},"hidden":{}}}}})",
         bool_to_json(manager->is_input_allowed()),
         bool_to_json(play.is_active),
         manager->get_input_frame(),
@@ -302,7 +308,11 @@ auto input_state_json(rtti::context& ctx) -> std::string
         game_pointer.y,
         real_cursor.x,
         real_cursor.y,
-        bool_to_json(real_cursor_in_view));
+        bool_to_json(real_cursor_in_view),
+        lock_mode < lock_names.size() ? lock_names[lock_mode] : "none",
+        bool_to_json(cursor.is_visible()),
+        bool_to_json(cursor.is_lock_active()),
+        bool_to_json(cursor.is_hidden()));
 }
 
 /// Moves the virtual pointer for input_send_mouse: game pixels by default, or screen pixels.
@@ -617,8 +627,10 @@ void register_input_tools(mcp_tool_registry& registry)
          .description =
              "Whether synthesized input will reach the game: input_allowed is false while the Game panel is not "
              "focused, and nothing reaches the action map then. Also reports the work zone (the Game panel's "
-             "rect), the virtual mouse position if set, and the input frame counter. Check this first when a key "
-             "or click seems to do nothing.",
+             "rect), the virtual mouse position if set, the input frame counter, and the cursor a script holds "
+             "(Cursor.lockState / visible, whether the lock applies now - play running, Game panel focused, not "
+             "freed by Escape - and whether the cursor is hidden; a virtual mouse turns the lock off). Check this "
+             "first when a key or click seems to do nothing.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result

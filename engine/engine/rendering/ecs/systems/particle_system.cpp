@@ -55,8 +55,13 @@ void particle_system::on_frame_before_render(scene& scn, delta_t dt)
     // Update all particle emitter components that have both transform and particle emitter components
     auto view = registry.view<transform_component, particle_emitter_component, active_component>();
     
-       // this code should be thread safe as each task works with a whole hierarchy and
-    // there is no interleaving between tasks.
+    // Emitters that share an ancestor (several under one moving parent) would resolve it lazily
+    // from several tasks at once; resolve those chains first.
+    for(const auto entity : view)
+    {
+        view.get<transform_component>(entity).resolve_shared_ancestors();
+    }
+    // Each task works with one emitter and only reads the ancestors resolved above.
     // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
     // poolstl re-walks it once per chunk (see for_each_entity_par).
     poolstl::for_each_entity_par(true,

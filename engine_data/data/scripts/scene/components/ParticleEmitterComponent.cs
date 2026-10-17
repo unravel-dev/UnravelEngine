@@ -161,6 +161,17 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// Which way a ribbon's width runs. Matches C++ ps_soa::ribbon_facing.
+    /// </summary>
+    public enum ParticleRibbonFacing
+    {
+        /// <summary>Across the ribbon, facing the camera.</summary>
+        Camera = 0,
+        /// <summary>Along each particle's launch direction as it was at birth (a blade's arc as one sheet).</summary>
+        LaunchDirection = 1
+    }
+
+    /// <summary>
     /// Where a mesh shape spawns. Matches C++ ps_soa::mesh_spawn_mode.
     /// </summary>
     public enum ParticleMeshSpawnMode
@@ -1038,6 +1049,15 @@ namespace Unravel.Core
         {
             get => internal_m2n_particle_emitter_get_ribbon_tile_time(owner);
             set => internal_m2n_particle_emitter_set_ribbon_tile_time(owner, value);
+        }
+
+        /// <summary>
+        /// Ribbon render mode: which way the ribbon's width runs (the camera, or each particle's launch direction).
+        /// </summary>
+        public ParticleRibbonFacing ribbonFacing
+        {
+            get => (ParticleRibbonFacing)internal_m2n_particle_emitter_get_ribbon_facing(owner);
+            set => internal_m2n_particle_emitter_set_ribbon_facing(owner, (int)value);
         }
 
         /// <summary>
@@ -2388,6 +2408,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_particle_emitter_set_ribbon_tile_time(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_particle_emitter_get_ribbon_facing(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_particle_emitter_set_ribbon_facing(Entity eid, int value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_particle_emitter_get_trail_width_end(Entity eid);

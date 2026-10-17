@@ -155,7 +155,14 @@ Look:
   oldest to youngest, into one strip: a moving emitter with a high rate (or
   rate_over_distance) leaves a ribbon behind it; ribbon_texture_mode age (the
   texture flows with the particles' age) | stretch (once head to tail) | tile
-  (repeated every ribbon_tile_time seconds of age). fixed_axis stands each
+  (repeated every ribbon_tile_time seconds of age). ribbon_facing camera (the
+  width faces the camera) | launch_direction (the width runs along each
+  particle's launch direction as it was at birth). A sword slash: a world-space
+  ribbon emitter at the blade's middle, rate_over_distance, a slow launch along
+  the blade (shape direction / start_speed ~0.01), size = blade length,
+  launch_direction - it sweeps the blade's arc as one sheet. trail never makes
+  a weapon trail: a particle that stays where it was born has no path to draw
+  (and in local space the path moves with the emitter). fixed_axis stands each
   quad along facing_axis (emitter space, [0,1,0] = vertical billboard) turning
   about it toward the camera: beams, grass, streaks along a slope.
 - stretched: stretch_camera_velocity_scale 1 stretches particles by their

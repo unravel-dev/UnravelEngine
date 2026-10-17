@@ -86,6 +86,21 @@ void os_input_manager::before_events_update()
 
     auto pos = os::mouse::get_position();
     mouse_->set_position(remap_to_work_zone({pos.x, pos.y}));
+    // This frame's motion is read; the next one is measured from where the cursor is put.
+    if(const auto held = cursor_.apply({pos.x, pos.y}, get_work_zone()))
+    {
+        mouse_->rebase_position(remap_to_work_zone(*held));
+    }
+}
+
+auto os_input_manager::get_cursor() -> os_cursor&
+{
+    return cursor_;
+}
+
+auto os_input_manager::get_cursor() const -> const os_cursor&
+{
+    return cursor_;
 }
 
 void os_input_manager::after_events_update()
@@ -212,6 +227,19 @@ void os_input_manager::on_os_event(const os::event& e)
             break;
         }
 
+        case os::events::window:
+        {
+            if(e.window.type == os::window_event_id::focus_gained)
+            {
+                cursor_.set_window_focus(true);
+            }
+            else if(e.window.type == os::window_event_id::focus_lost)
+            {
+                cursor_.set_window_focus(false);
+            }
+            break;
+        }
+
         case os::events::mouse_wheel:
         {
             if(is_inside_work_zone(mouse_->get_position()))
@@ -294,6 +322,7 @@ auto os_input_manager::remap_from_work_zone(coord work_pos) -> coord
 void os_input_manager::set_virtual_mouse_position(const hpp::optional<coord>& position)
 {
     virtual_mouse_position_ = position;
+    cursor_.set_pointer_overridden(position.has_value());
 }
 
 void os_input_manager::release_all()
@@ -343,6 +372,7 @@ auto os_input_manager::is_inside_work_zone(coord pos) -> bool
 void os_input_manager::set_is_input_allowed(bool allowed)
 {
     is_input_allowed_ = allowed;
+    cursor_.set_input_allowed(allowed);
 
     for(const auto& dev : devices_)
     {
