@@ -1,6 +1,9 @@
 #include "RmlUi_FileInterface.h"
 #include <string_utils/utils.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <filesystem/pack.h>
+
+#include <cstdio>
 
 namespace unravel
 {
@@ -12,13 +15,13 @@ namespace
     }
 }
 
-auto RmlUi_FileInterface::to_handle(FILE* f) -> Rml::FileHandle
+auto RmlUi_FileInterface::to_handle(std::istream* stream) -> Rml::FileHandle
 {
-    return reinterpret_cast<Rml::FileHandle>(f);
+    return reinterpret_cast<Rml::FileHandle>(stream);
 }
-auto RmlUi_FileInterface::to_file(Rml::FileHandle f) -> FILE*
+auto RmlUi_FileInterface::to_stream(Rml::FileHandle file) -> std::istream*
 {
-    return reinterpret_cast<FILE*>(f);
+    return reinterpret_cast<std::istream*>(file);
 }
 auto RmlUi_FileInterface::ResolveUrl(const Rml::String& url) -> Rml::String
 {
@@ -44,36 +47,53 @@ auto RmlUi_FileInterface::ResolveAssetKey(const Rml::String& url) -> Rml::String
 
 auto RmlUi_FileInterface::Open(const Rml::String& url) -> Rml::FileHandle
 {
-    auto real = ResolveUrl(url);
-    if(FILE* f = std::fopen(real.c_str(), "rb"))
-    {
-        return to_handle(f);
-    }
-    return 0; // not found
+    auto stream = fs::open_readable_stream(ResolveUrl(url));
+    return stream ? to_handle(stream.release()) : 0;
 }
 
 void RmlUi_FileInterface::Close(Rml::FileHandle file)
 {
-    if(!file)
-    {
-        return;
-    }
-    // If it was ours, it’s still just a FILE* here in this example.
-    std::fclose(to_file(file));
+    delete to_stream(file);
 }
+
+// RmlUi reads, seeks and tells on the handle of a file that failed to open (a style sheet it
+// cannot find, for one), so a null handle reads as an empty file.
 
 auto RmlUi_FileInterface::Read(void* buffer, size_t size, Rml::FileHandle file) -> size_t
 {
-    return std::fread(buffer, 1, size, to_file(file));
+    auto* stream = to_stream(file);
+    if(stream == nullptr)
+    {
+        return 0;
+    }
+    stream->read(static_cast<char*>(buffer), std::streamsize(size));
+    const auto count = size_t(stream->gcount());
+    // A short read at the end sets eof and fail; the next seek has to work.
+    stream->clear();
+    return count;
 }
 
 auto RmlUi_FileInterface::Seek(Rml::FileHandle file, long offset, int origin) -> bool
 {
-    return std::fseek(to_file(file), offset, origin) == 0;
+    auto* stream = to_stream(file);
+    if(stream == nullptr)
+    {
+        return false;
+    }
+    const auto direction = origin == SEEK_END ? std::ios::end : (origin == SEEK_CUR ? std::ios::cur : std::ios::beg);
+    stream->clear();
+    stream->seekg(offset, direction);
+    return !stream->fail();
 }
 
 auto RmlUi_FileInterface::Tell(Rml::FileHandle file) -> size_t
 {
-    return std::ftell(to_file(file));
+    auto* stream = to_stream(file);
+    if(stream == nullptr)
+    {
+        return 0;
+    }
+    const auto position = stream->tellg();
+    return position < 0 ? 0 : size_t(position);
 }
 } // namespace unravel

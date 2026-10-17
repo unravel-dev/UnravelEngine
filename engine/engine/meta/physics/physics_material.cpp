@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <filesystem/file_istream.h>
+#include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -152,12 +153,12 @@ void load_from_file(const std::string& absolute_path, physics_material::sptr& ob
 
 void load_from_file_bin(const std::string& absolute_path, physics_material::sptr& obj)
 {
-    fs::file_istream input(absolute_path, std::ios::binary);
-    if(!input.is_open())
+    auto input = fs::open_readable_stream(absolute_path);
+    if(!input)
     {
         return;
     }
-    ser20::iarchive_binary_t ar(input);
+    ser20::iarchive_binary_t ar(*input);
     try_load(ar, ser20::make_nvp("physics_material", *obj));
 }
 } // namespace unravel

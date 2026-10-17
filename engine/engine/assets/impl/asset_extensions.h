@@ -543,6 +543,13 @@ inline auto get_compiled_directory(const std::string& prefix = {}) -> std::strin
     return get_compiled_directory_no_slash(prefix + ":/");
 }
 
+/// The pack, at a protocol's root ("app:/" + this), that a deployed game reads the protocol's compiled
+/// assets and asset index from.
+inline auto get_pack_file_name() -> std::string
+{
+    return "content.pak";
+}
+
 
 inline auto get_type(const std::string& ex, bool is_directory = false) -> const std::string&
 {

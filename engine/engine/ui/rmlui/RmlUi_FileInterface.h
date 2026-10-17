@@ -4,15 +4,18 @@
 
 #include <filesystem/filesystem.h>
 
+#include <istream>
+
 namespace unravel
 {
 
-    
+
+    /// RmlUi's documents, style sheets and fonts, read from the mounted packs first, then from disk.
     class RmlUi_FileInterface : public Rml::FileInterface
     {
-        auto to_handle(FILE* f) -> Rml::FileHandle;
+        auto to_handle(std::istream* stream) -> Rml::FileHandle;
 
-        auto to_file(Rml::FileHandle f) -> FILE*;
+        auto to_stream(Rml::FileHandle file) -> std::istream*;
 
     public:
         static auto ResolveUrl(const Rml::String& url) -> Rml::String;

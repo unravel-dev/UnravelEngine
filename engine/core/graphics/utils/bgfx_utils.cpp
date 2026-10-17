@@ -32,9 +32,12 @@ namespace stl = tinystl;
 
 #include <time.h>
 
+#include <filesystem/pack.h>
+
 #include <algorithm>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 namespace entry
@@ -51,15 +54,55 @@ bx::AllocatorI* getDefaultAllocator()
 static bx::AllocatorI* g_allocator = getDefaultAllocator();
 typedef bx::StringT<&g_allocator> String;
 
-class FileReader : public bx::FileReader
+/// Reads a file from the mounted packs first, then from disk: the textures, shaders and fonts of a
+/// deployed game come out of its packs.
+class FileReader : public bx::FileReaderI
 {
-    typedef bx::FileReader super;
-
 public:
-    virtual bool open(const bx::FilePath& _filePath, bx::Error* _err) override
+    ~FileReader() override
     {
-        return super::open(_filePath, _err);
+        close();
     }
+
+    bool open(const bx::FilePath& _filePath, bx::Error* _err) override
+    {
+        close();
+        packed_ = fs::find_packed_file(fs::path(_filePath.getCPtr()));
+        if(packed_.is_found())
+        {
+            memory_.emplace(packed_.data, uint32_t(packed_.size));
+            return true;
+        }
+        is_file_open_ = file_.open(_filePath, _err);
+        return is_file_open_;
+    }
+
+    void close() override
+    {
+        memory_.reset();
+        packed_ = {};
+        if(is_file_open_)
+        {
+            file_.close();
+            is_file_open_ = false;
+        }
+    }
+
+    int64_t seek(int64_t _offset, bx::Whence::Enum _whence) override
+    {
+        return memory_ ? memory_->seek(_offset, _whence) : file_.seek(_offset, _whence);
+    }
+
+    int32_t read(void* _data, int32_t _size, bx::Error* _err) override
+    {
+        return memory_ ? memory_->read(_data, _size, _err) : file_.read(_data, _size, _err);
+    }
+
+private:
+    bx::FileReader file_;
+    bool is_file_open_{};
+    fs::packed_file packed_;
+    std::optional<bx::MemoryReader> memory_;
 };
 
 class FileWriter : public bx::FileWriter

@@ -2,6 +2,7 @@
 #include "math/transform.hpp"
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_reader.h>
+#include <filesystem/pack.h>
 #include <engine/engine.h>
 #include <graphics/utils/bgfx_utils.h>
 #include <engine/ecs/ecs_utils.h>
@@ -1730,9 +1731,8 @@ namespace
 /// source while it is not compiled. Whole frames when neither decodes. Worker thread.
 auto bake_texture_cutouts(const std::string& key, const ps_soa::cutout_sheet& sheet) -> std::vector<ps_soa::cutout_polygon>
 {
-    fs::error_code error;
     fs::path path = asset_reader::resolve_compiled_path<gfx::texture>(key);
-    if(!fs::exists(path, error))
+    if(!fs::is_readable_file(path))
     {
         path = fs::absolute(fs::resolve_protocol(key));
     }

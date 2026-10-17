@@ -49,6 +49,7 @@
 #include <engine/ecs/scene.h>
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
+#include <filesystem/pack.h>
 #include <filesystem/watcher.h>
 #include <graphics/graphics.h>
 #include <subprocess/subprocess.hpp>
@@ -1164,6 +1165,86 @@ auto describe_uncompiled_assets(const std::vector<std::string>& uncompiled) -> s
                        listed);
 }
 
+/// The asset index a protocol root holds, loose or inside the pack.
+constexpr const char* DEPLOY_ASSET_INDEX_NAME = "assets.pack";
+
+/// Files a pack does not take: the script libraries and their companions, which CoreCLR loads from
+/// disk by path.
+auto is_loose_only_file(const fs::path& file) -> bool
+{
+    return file.extension().generic_string() == ".dll" || is_debug_companion_file(file);
+}
+
+void remove_empty_directories(const fs::path& root)
+{
+    fs::error_code ec;
+    std::vector<fs::path> directories;
+    for(fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_directory(ec))
+        {
+            directories.push_back(it->path());
+        }
+    }
+    // Deepest first, so a folder emptied by removing its subfolders goes too.
+    std::sort(directories.begin(),
+              directories.end(),
+              [](const fs::path& lhs, const fs::path& rhs)
+              {
+                  return lhs.native().size() > rhs.native().size();
+              });
+    for(const auto& directory : directories)
+    {
+        if(fs::is_empty(directory, ec))
+        {
+            fs::remove(directory, ec);
+        }
+    }
+}
+
+/// Moves a protocol's staged compiled files and asset index into its pack, the file the game mounts
+/// (data/<protocol>/content.pak). Throws when the pack cannot be written: the step then fails.
+void pack_protocol_data(const fs::path& protocol_root)
+{
+    fs::error_code ec;
+    std::vector<fs::pack_input> inputs;
+    const auto compiled = protocol_root / ex::get_compiled_directory_no_slash();
+    for(fs::recursive_directory_iterator it(compiled, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_regular_file(ec) && !is_loose_only_file(it->path()))
+        {
+            inputs.push_back({fs::relative(it->path(), protocol_root, ec).generic_string(), it->path()});
+        }
+    }
+    inputs.push_back({DEPLOY_ASSET_INDEX_NAME, protocol_root / DEPLOY_ASSET_INDEX_NAME});
+    // Name order, so the same build packs to the same bytes whatever order the folder lists in.
+    std::sort(inputs.begin(),
+              inputs.end(),
+              [](const fs::pack_input& lhs, const fs::pack_input& rhs)
+              {
+                  return lhs.name < rhs.name;
+              });
+
+    const auto pack_file = protocol_root / ex::get_pack_file_name();
+    std::string error;
+    fs::pack_write_stats stats;
+    if(!fs::write_pack(pack_file, inputs, {}, error, &stats))
+    {
+        throw std::runtime_error(fmt::format("Packing {} failed: {}", protocol_root.generic_string(), error));
+    }
+    for(const auto& input : inputs)
+    {
+        fs::remove(input.source, ec);
+    }
+    remove_empty_directories(compiled);
+    constexpr double bytes_per_megabyte = 1024.0 * 1024.0;
+    APPLOG_INFO("Packed {} file(s), {:.1f} MB -> {:.1f} MB, into {}",
+                stats.entry_count,
+                double(stats.raw_bytes) / bytes_per_megabyte,
+                double(stats.stored_bytes) / bytes_per_megabyte,
+                pack_file.generic_string());
+}
+
 /// fs::copy for a deploy step: a failure fails the step instead of leaving a partial copy that
 /// reports success - a recursive copy stops at the first file it cannot write (a path past the
 /// platform's length limit, a locked file) and skips everything after it.
@@ -1921,11 +2002,13 @@ auto editor_actions::is_path_inside_project(const fs::path& path) -> bool
 
 namespace
 {
-/// True when `folder` holds a build an earlier deploy wrote: every deploy writes the asset pack.
+/// True when `folder` holds a build an earlier deploy wrote: every deploy writes the app's asset
+/// index, loose or inside its pack.
 auto is_previous_deploy(const fs::path& folder) -> bool
 {
     fs::error_code ec;
-    return fs::exists(folder / "data" / "app" / "assets.pack", ec);
+    const auto app_root = folder / "data" / "app";
+    return fs::exists(app_root / DEPLOY_ASSET_INDEX_NAME, ec) || fs::exists(app_root / ex::get_pack_file_name(), ec);
 }
 
 /// True when `folder` contains the open project, so clearing it would delete the project.
@@ -2165,6 +2248,8 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             APPLOG_TRACE("Clearing {}", cached_data.generic_string());
                             fs::remove_all(cached_data, ec);
                             fs::create_directories(cached_data, ec);
+                            // An earlier build's pack would be mounted over these files.
+                            fs::remove(cached_data.parent_path() / ex::get_pack_file_name(), ec);
 
                             APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
                             copy_for_deploy(data, cached_data, fs::copy_options::recursive);
@@ -2195,6 +2280,11 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             am.save_database("app:/", cached_data, is_shipped_location);
                         }
 
+                        if(params.deploy_packed_assets)
+                        {
+                            pack_protocol_data(params.deploy_location / "data" / "app");
+                        }
+
                         APPLOG_INFO("Deploying Project Data - Done");
                     })
                 .share();
@@ -2221,6 +2311,8 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             APPLOG_TRACE("Clearing {}", cached_data.generic_string());
                             fs::remove_all(cached_data, ec);
                             fs::create_directories(cached_data, ec);
+                            // An earlier build's pack would be mounted over these files.
+                            fs::remove(cached_data.parent_path() / ex::get_pack_file_name(), ec);
 
                             APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
                             copy_for_deploy(data, cached_data, fs::copy_options::recursive);
@@ -2247,6 +2339,11 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             fs::path cached_data = params.deploy_location / "data" / "engine" / "assets.pack";
                             APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
                             am.save_database("engine:/", cached_data, is_shipped_location);
+                        }
+
+                        if(params.deploy_packed_assets)
+                        {
+                            pack_protocol_data(params.deploy_location / "data" / "engine");
                         }
 
                         APPLOG_INFO("Deploying Engine Data - Done");

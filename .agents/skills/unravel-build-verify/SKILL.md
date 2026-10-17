@@ -85,6 +85,7 @@ build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
 | `gi bake / sdf / clipmap` | Bake pipeline; also **compiles every GI shader via shaderc** | GI shaders / SDF |
 | `fs protocols` | `convert_to_protocol` with a root in another letter case, `..` / trailing-separator roots, whole-folder matching, longest root | `engine/core/filesystem/filesystem.cpp`, asset keys |
 | `ui system lifecycle` | Releasing UI resources while RmlUi is not initialised (failed editor start-up) | `ui_system`, RmlUi backend |
+| `asset packs` | Pack write/mount/read (stored and compressed, absolute and protocol paths, Windows letter case), disk fallback, later mount wins, damaged/truncated/foreign packs refused, deterministic output, stream seek; the compression wrapper round trip | `engine/core/filesystem/pack.*`, `engine/core/compression/`, deploy packing |
 | `audio clip encoding` | Compiled clips keep the source codec and decode at load (`decode_sound`, mono, bad codec/bytes, old-format file refused); `asset_manager::save_database` filter | Audio import/load, deploy asset index |
 | `fs watcher` | Created / modified / removed / renamed reporting, non-atomic moves and safe saves pairing up, pause / resume, unwatch during a callback, per-format filters on one listener (`--bench` adds latency and fan-out timings; ~50 s) | `engine/core/filesystem/watchers/`, syncer, asset watcher |
 

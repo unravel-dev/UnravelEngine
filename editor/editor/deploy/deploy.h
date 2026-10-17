@@ -36,6 +36,11 @@ struct deploy_settings
     /// Ship the script libraries' debug companions (.pdb symbols, .xml docs). The game runs
     /// without them; with them, managed exceptions name the file and line they came from.
     bool deploy_debug_symbols{false};
+
+    /// Write each protocol's compiled assets and asset index into one compressed pack
+    /// (data/<protocol>/content.pak) instead of loose files. Off ships them loose, which is easier
+    /// to inspect; the game reads either.
+    bool deploy_packed_assets{true};
 };
 
 

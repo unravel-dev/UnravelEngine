@@ -3,6 +3,7 @@
 #include "asset_header_info.hpp"
 #include <engine/meta/core/common/basetypes.hpp>
 
+#include <filesystem/pack.h>
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -63,10 +64,11 @@ void save_to_file_bin(const std::string& absolute_path, const asset_database& ob
 }
 auto load_from_file(const std::string& absolute_path, asset_database& obj) -> bool
 {
-    std::ifstream stream(absolute_path);
-    if(stream.good())
+    // A deployed game's index travels inside its pack.
+    auto stream = fs::open_readable_stream(absolute_path);
+    if(stream)
     {
-        auto ar = ser20::create_iarchive_associative(stream);
+        auto ar = ser20::create_iarchive_associative(*stream);
         return try_load(ar, ser20::make_nvp("db", obj));
     }
     return false;

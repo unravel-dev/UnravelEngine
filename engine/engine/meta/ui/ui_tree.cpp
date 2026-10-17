@@ -1,6 +1,7 @@
 #include "ui_tree.hpp"
 #include <filesystem/filesystem.h>
 #include <filesystem/file_istream.h>
+#include <filesystem/pack.h>
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -63,12 +64,12 @@ void save_to_file_bin(const std::string& absolute_path, const ui_tree::sptr& obj
 
 void load_from_file(const std::string& absolute_path, ui_tree::sptr& obj)
 {
-    fs::file_istream input(absolute_path);
-    if(!input.is_open())
+    auto input = fs::open_readable_stream(absolute_path);
+    if(!input)
     {
         return;
     }
-    obj->content = fs::read_stream_str(input);
+    obj->content = fs::read_stream_str(*input);
 }
 
 void load_from_file_bin(const std::string& absolute_path, ui_tree::sptr& obj)

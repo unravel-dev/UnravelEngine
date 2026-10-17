@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <filesystem/filesystem.h>
 #include <filesystem/file_istream.h>
+#include <filesystem/pack.h>
 #include <graphics/shader.h>
 #include <graphics/texture.h>
 #include <logging/logging.h>
@@ -128,8 +129,8 @@ auto validate(const std::string& key, const std::string& compiled_ext, source_fa
 
     auto compiled_absolute_path = resolve_compiled_path(key).string() + compiled_ext;
 
-    fs::error_code err;
-    if(!fs::exists(compiled_absolute_path, err))
+    // A deployed game reads its compiled files from mounted packs; the editor from its cache.
+    if(!fs::is_readable_file(compiled_absolute_path))
     {
         if(fallback == source_fallback::none)
         {
@@ -141,7 +142,7 @@ auto validate(const std::string& key, const std::string& compiled_ext, source_fa
         compiled_absolute_path = resolve_path(key).string();
     }
 
-    if(!fs::exists(compiled_absolute_path, err))
+    if(!fs::is_readable_file(compiled_absolute_path))
     {
         log_missing_raw_asset_for_key(key);
         return false;
@@ -260,11 +261,15 @@ auto load_from_file<prefab>(tpp::thread_pool& pool, asset_handle<prefab>& output
                              const std::string& key, load_mode mode) -> bool
 {
     return detail::schedule_load<prefab>(pool, output, key, {}, source_fallback::allowed,
-        [](const std::string& path)
+        [](const std::string& path) -> std::shared_ptr<prefab>
         {
+            auto stream = fs::open_readable_stream(path);
+            if(!stream)
+            {
+                return nullptr;
+            }
             auto pfb = std::make_shared<prefab>();
-            auto stream = std::ifstream{path};
-            pfb->buffer = fs::read_stream_buffer(stream);
+            pfb->buffer = fs::read_stream_buffer(*stream);
             return pfb;
         }, mode);
 }
@@ -274,11 +279,15 @@ auto load_from_file<scene_prefab>(tpp::thread_pool& pool, asset_handle<scene_pre
                                    const std::string& key, load_mode mode) -> bool
 {
     return detail::schedule_load<scene_prefab>(pool, output, key, {}, source_fallback::allowed,
-        [](const std::string& path)
+        [](const std::string& path) -> std::shared_ptr<scene_prefab>
         {
+            auto stream = fs::open_readable_stream(path);
+            if(!stream)
+            {
+                return nullptr;
+            }
             auto pfb = std::make_shared<scene_prefab>();
-            auto stream = std::ifstream{path};
-            pfb->buffer = fs::read_stream_buffer(stream);
+            pfb->buffer = fs::read_stream_buffer(*stream);
             return pfb;
         }, mode);
 }

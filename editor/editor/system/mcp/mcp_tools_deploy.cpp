@@ -134,12 +134,13 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{}}})",
+        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{}}})",
         params.deploy_location.empty() ? "null" : make_json_string(params.deploy_location.generic_string()),
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
         bool_to_json(params.deploy_cooked_assets),
-        bool_to_json(params.deploy_debug_symbols));
+        bool_to_json(params.deploy_debug_symbols),
+        bool_to_json(params.deploy_packed_assets));
 }
 
 /// Sets the destination, creating the folder when asked - but never inside the project, where
@@ -219,9 +220,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "project from deploying. location is an absolute folder outside the project, created "
              "when missing; a full deploy clears it, so it must be empty or an earlier deploy. "
              "include_debug_symbols ships the scripts' .pdb/.xml so managed exceptions name file and line. "
-             "Omitted fields keep their value.",
+             "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off "
+             "ships them loose. Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -246,6 +248,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "run_after_deploy", params.deploy_and_run);
              read_bool(args, "cook_assets", params.deploy_cooked_assets);
              read_bool(args, "include_debug_symbols", params.deploy_debug_symbols);
+             read_bool(args, "pack_assets", params.deploy_packed_assets);
 
              pm->get_deploy_settings() = params;
              pm->save_deploy_settings();

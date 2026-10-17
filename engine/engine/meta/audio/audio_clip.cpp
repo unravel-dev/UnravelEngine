@@ -1,6 +1,7 @@
 #include "audio_clip.hpp"
 #include <fstream>
 #include <filesystem/file_istream.h>
+#include <filesystem/pack.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 #include <serialization/types/string.hpp>
@@ -116,12 +117,12 @@ auto save_to_file_bin(const std::string& absolute_path, const encoded_sound& obj
 
 auto load_from_file_bin(const std::string& absolute_path, encoded_sound& obj) -> bool
 {
-    fs::file_istream input(absolute_path);
-    if(!input.is_open())
+    auto input = fs::open_readable_stream(absolute_path);
+    if(!input)
     {
         return false;
     }
-    ser20::iarchive_binary_t ar(input);
+    ser20::iarchive_binary_t ar(*input);
     return try_load(ar, ser20::make_nvp("encoded_sound", obj));
 }
 } // namespace unravel

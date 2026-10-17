@@ -49,6 +49,15 @@ REFLECT(deploy_settings)
                             "The game runs without them; with them, script exceptions\n"
                             "name the file and line they came from."},
         })
+        .data<&deploy_settings::deploy_packed_assets>("deploy_packed_assets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_packed_assets"},
+            entt::attribute{"pretty_name", "Pack Assets"},
+            entt::attribute{"tooltip",
+                            "Put the compiled assets of the engine and of the game into one\n"
+                            "compressed file each (content.pak) instead of thousands of loose files.\n\n"
+                            "Off: the files ship loose, easier to inspect. The game reads either."},
+        })
         .data<&deploy_settings::deploy_and_run>("deploy_and_run"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_and_run"},
@@ -64,6 +73,7 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_save(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
     try_save(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
+    try_save(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
 }
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_binary_t);
@@ -80,6 +90,7 @@ LOAD(deploy_settings)
     try_load(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_load(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
     try_load(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
+    try_load(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
 }
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_binary_t);

@@ -11,11 +11,33 @@
 #include "runner/runner.h"
 
 #include <filesystem/filesystem.h>
+#include <filesystem/pack.h>
 #include <logging/logging.h>
 #include <reflection/registration.h>
 
 namespace unravel
 {
+namespace
+{
+/// Mounts the protocol's pack when the deploy wrote one; a deploy without packs ships loose files.
+auto mount_asset_pack(const std::string& protocol) -> bool
+{
+    const auto pack = fs::resolve_protocol(protocol + ":/" + ex::get_pack_file_name());
+    fs::error_code ec;
+    if(!fs::exists(pack, ec))
+    {
+        return true;
+    }
+    std::string error;
+    if(!fs::mount_pack(protocol, pack, error))
+    {
+        APPLOG_CRITICAL("Failed to mount asset pack: {}", error);
+        return false;
+    }
+    APPLOG_INFO("Mounted asset pack {}", pack.generic_string());
+    return true;
+}
+} // namespace
 
 REFLECTION_REGISTRATION
 {
@@ -165,6 +187,11 @@ auto game::init_settings(rtti::context& ctx) -> bool
 
 auto game::init_assets(rtti::context& ctx) -> bool
 {
+    // Before the databases: their index is inside the packs.
+    if(!mount_asset_pack("engine") || !mount_asset_pack("app"))
+    {
+        return false;
+    }
     auto& am = ctx.get_cached<asset_manager>();
     if(!am.load_database("engine:/"))
     {

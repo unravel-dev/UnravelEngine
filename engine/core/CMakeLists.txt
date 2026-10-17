@@ -1,6 +1,7 @@
 add_subdirectory(base)
 add_subdirectory(memory)
 add_subdirectory(context)
+add_subdirectory(compression)
 add_subdirectory(filesystem)
 add_subdirectory(service)
 add_subdirectory(cmd_line)
