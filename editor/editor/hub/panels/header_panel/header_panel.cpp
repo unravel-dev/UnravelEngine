@@ -752,30 +752,29 @@ void header_panel::draw_play_state_line(rtti::context& ctx)
     ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(window_min.x, window_max.y - line_height), window_max, color);
 }
 
-void header_panel::draw_deploy_button(rtti::context& ctx)
+/// Deploy and Run, beside the play controls: deploys with the project's deploy settings and starts the
+/// built game. While a deploy runs it shows its progress, and a click opens the Deploy window on it.
+void header_panel::draw_deploy_and_run_button(rtti::context& ctx)
 {
     auto& deploy = parent_->get_deploy_panel();
     const bool is_deploying = deploy.is_deploying();
-    const std::string text = is_deploying ? fmt::format(ICON_MDI_PACKAGE_VARIANT_CLOSED " Deploying {}%",
-                                                        static_cast<int>(deploy.get_progress() * 100.0f))
-                                          : std::string(ICON_MDI_PACKAGE_VARIANT_CLOSED " Deploy");
-    ImGui::BeginDisabled(is_deploying);
-    bool is_deploy_requested = panel_toolbar::button("##deploy", text.c_str(), "Deploy the project and run it");
-    ImGui::EndDisabled();
-    if(panel_toolbar::begin_dropdown("##deploy_options", nullptr, "Deploy options"))
+    const std::string tooltip =
+        is_deploying ? fmt::format("Deploying {}% - click to see the steps", static_cast<int>(deploy.get_progress() * 100.0f))
+                     : std::string("Deploy and Run");
+    panel_toolbar::begin_segment();
+    const bool is_clicked = panel_toolbar::button("##deploy_and_run",
+                                                  is_deploying ? ICON_MDI_PROGRESS_CLOCK : ICON_MDI_PACKAGE_VARIANT_CLOSED,
+                                                  tooltip.c_str(),
+                                                  false,
+                                                  ICON_MDI_PACKAGE_VARIANT_CLOSED);
+    panel_toolbar::end_segment();
+    if(!is_clicked)
     {
-        if(ImGui::MenuItem("Deploy and Run", nullptr, false, !is_deploying))
-        {
-            is_deploy_requested = true;
-        }
-        if(ImGui::MenuItem(ICON_MDI_COG " Deploy Settings..."))
-        {
-            deploy.show(true);
-        }
-        panel_toolbar::end_dropdown();
+        return;
     }
-    if(!is_deploy_requested)
+    if(is_deploying)
     {
+        deploy.show(true);
         return;
     }
     auto& pm = ctx.get_cached<project_manager>();
@@ -823,10 +822,12 @@ void header_panel::draw_transport_controls(rtti::context& ctx)
     panel_toolbar::begin_segment();
     ImGui::BeginDisabled(has_errors);
     const char* play_icon = play.is_active() ? ICON_MDI_STOP : ICON_MDI_PLAY;
+    const std::string play_tooltip =
+        fmt::format("{} ({})", play.is_active() ? "Stop" : "Run", ImGui::GetKeyChordName(play_chord));
     const bool is_play_clicked = panel_toolbar::toggle("##play",
                                                        play_icon,
                                                        play.is_active(),
-                                                       ImGui::GetKeyChordName(play_chord),
+                                                       play_tooltip.c_str(),
                                                        nullptr,
                                                        HEADER_PLAYING_COLOR);
     // A local: pausing changes the state the next toggle would read.
@@ -889,11 +890,10 @@ void header_panel::draw_play_toolbar(rtti::context& ctx)
 {
     if(panel_toolbar::begin_strip("##header_toolbar", panel_toolbar::strip_style::flat))
     {
-        draw_deploy_button(ctx);
-        panel_toolbar::separator();
         draw_play_options(ctx);
         panel_toolbar::align_center();
         draw_transport_controls(ctx);
+        draw_deploy_and_run_button(ctx);
         panel_toolbar::align_right();
         draw_time_scale(ctx);
         panel_toolbar::separator();

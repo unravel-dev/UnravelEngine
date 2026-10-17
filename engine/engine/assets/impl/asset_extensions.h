@@ -550,6 +550,13 @@ inline auto get_pack_file_name() -> std::string
     return "content.pak";
 }
 
+/// The patch of level `level` (1, 2, ...) beside a protocol's pack: "content_p1.pak". The game mounts
+/// the levels in order after the pack, from 1 up to the first one missing, so a higher level wins.
+inline auto get_patch_pack_file_name(std::uint32_t level) -> std::string
+{
+    return "content_p" + std::to_string(level) + ".pak";
+}
+
 
 inline auto get_type(const std::string& ex, bool is_directory = false) -> const std::string&
 {

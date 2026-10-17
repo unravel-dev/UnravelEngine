@@ -200,6 +200,19 @@ struct editor_actions
     /// one sentence, or empty when the compiler is idle. One of the deploy problems. Main thread.
     static auto get_pending_compile_reason(rtti::context& ctx) -> std::string;
 
+    /// Where a kept release's packs live: the project's releases/<name>, one folder per protocol.
+    static auto get_release_folder(const std::string& name) -> fs::path;
+    /// The kept releases a deploy can patch against, by name.
+    static auto list_releases() -> std::vector<std::string>;
+    /**
+     * @brief Keeps the packed build in the deploy folder as a release that later deploys can patch.
+     * @param name The release's name; empty takes the product version, and receives it.
+     * @param error Receives why nothing was kept: the folder holds no full packed build, the name is
+     * not usable as a folder, or a release of that name is already kept.
+     */
+    static auto keep_release(rtti::context& ctx, const deploy_settings& params, std::string& name, std::string& error)
+        -> bool;
+
 
     static void recompile_shaders(const std::string& group = "");
     static void recompile_textures(const std::string& group = "");

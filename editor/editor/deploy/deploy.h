@@ -41,6 +41,11 @@ struct deploy_settings
     /// (data/<protocol>/content.pak) instead of loose files. Off ships them loose, which is easier
     /// to inspect; the game reads either.
     bool deploy_packed_assets{true};
+
+    /// The kept release to patch (a folder under the project's releases/). Set: the release's packs
+    /// ship unchanged and content_p1.pak holds every change since it, so players who have the release
+    /// download only the patch. Empty: full packs.
+    std::string deploy_patch_release;
 };
 
 

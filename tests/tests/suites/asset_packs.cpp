@@ -15,7 +15,9 @@
  *   - a truncated, damaged or foreign file is refused at mount;
  *   - the same inputs write the same bytes; streams seek and tell;
  *   - a write that reuses an earlier pack copies the entries whose bytes it holds (renamed ones too) and
- *     gives exactly the bytes a fresh write gives; other compression settings reuse nothing.
+ *     gives exactly the bytes a fresh write gives; other compression settings reuse nothing;
+ *   - a patch leaves unchanged entries to its base, holds changed and added ones and deletes removed ones;
+ *     it mounts only over its base, and its deleted entries hide the base and the disk.
  * Everything lives in a temp folder under a protocol the suite registers.
  */
 
@@ -355,6 +357,63 @@ void test_reuse_of_unchanged_entries()
           "a missing earlier pack is ignored");
 }
 
+void test_patch_over_base()
+{
+    std::printf("test_patch_over_base\n");
+    fs::unmount_packs();
+    const auto kept = make_compressible_bytes(SMALL_FILE_SIZE);
+    const auto changed_before = make_compressible_bytes(MULTI_BLOCK_FILE_SIZE);
+    auto changed_after = changed_before;
+    changed_after.front() ^= 0xFF;
+    const auto removed = make_incompressible_bytes(SMALL_FILE_SIZE);
+    const auto added = make_incompressible_bytes(MULTI_BLOCK_FILE_SIZE);
+    const auto base_inputs = stage_inputs("stage_patch_base",
+                                          {{"compiled/kept.asset", kept},
+                                           {"compiled/changed.asset", changed_before},
+                                           {"compiled/removed.asset", removed}});
+    const auto next_inputs = stage_inputs("stage_patch_next",
+                                          {{"compiled/kept.asset", kept},
+                                           {"compiled/changed.asset", changed_after},
+                                           {"compiled/added.asset", added}});
+    std::string error;
+    const auto base = get_temp_folder() / "base.pak";
+    check(fs::write_pack(base, base_inputs, {}, error), "the base pack is written");
+    fs::pack_write_options patch_options;
+    patch_options.patch_base = base;
+    fs::pack_write_stats stats;
+    const auto patch = get_temp_folder() / "patch.pak";
+    check(fs::write_pack(patch, next_inputs, patch_options, error, &stats), "the patch is written: " + error);
+    check(stats.unchanged_count == 1, "the unchanged entry is left to the base");
+    check(stats.deleted_count == 1, "the removed entry becomes a deleted entry");
+    check(stats.entry_count == 3, "the patch holds the changed, the added and the deleted entry");
+    check(fs::write_pack(get_temp_folder() / "patch_again.pak", next_inputs, patch_options, error) &&
+              read_disk_file(patch) == read_disk_file(get_temp_folder() / "patch_again.pak"),
+          "the same inputs write the same patch");
+
+    // A loose file under the protocol root that the patch deletes must stay hidden as well.
+    write_file(get_protocol_root() / "compiled/removed.asset", removed);
+    check(!fs::mount_pack(TEST_PROTOCOL, patch, error), "a patch does not mount without its base");
+    check(error.find("another build") != std::string::npos, "the error says the patch is for another build");
+    check(fs::mount_pack(TEST_PROTOCOL, base, error), "the base mounts");
+    check(fs::mount_pack(TEST_PROTOCOL, patch, error), "the patch mounts over its base: " + error);
+    check(read_packed_bytes(get_protocol_path("compiled/kept.asset")) == kept, "an unchanged entry reads from the base");
+    check(read_packed_bytes(get_protocol_path("compiled/changed.asset")) == changed_after,
+          "a changed entry reads from the patch");
+    check(read_through_stream(get_protocol_path("compiled/added.asset")) == added, "an added entry reads from the patch");
+    const auto removed_path = get_protocol_path("compiled/removed.asset");
+    check(!fs::find_packed_file(removed_path).is_found(), "a deleted entry is not found");
+    check(!fs::is_readable_file(get_protocol_root() / "compiled/removed.asset"),
+          "a deleted entry hides the loose file on disk");
+    check(fs::open_readable_stream(removed_path) == nullptr, "a deleted entry opens no stream");
+    fs::unmount_packs();
+
+    check(fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "fresh.pak", error), "an unrelated pack mounts");
+    check(!fs::mount_pack(TEST_PROTOCOL, patch, error), "a patch does not mount over another base");
+    fs::unmount_packs();
+    fs::error_code ec;
+    fs::remove(get_protocol_root() / "compiled/removed.asset", ec);
+}
+
 auto run_asset_packs_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -371,6 +430,7 @@ auto run_asset_packs_suite(rtti::context&) -> int
     test_deterministic_output();
     test_stream_seek_and_tell();
     test_reuse_of_unchanged_entries();
+    test_patch_over_base();
     fs::unmount_packs();
     fs::remove_all(get_temp_folder(), ec);
     std::printf("asset packs: %d checks, %d failures\n", g_checks, g_failures);

@@ -23,7 +23,7 @@ constexpr int64_t k_default_deploy_timeout_ms = 180000;
 constexpr int64_t k_max_deploy_timeout_ms = 900000;
 constexpr auto k_deploy_poll_interval = std::chrono::milliseconds(250);
 
-/// The Deploy window owns the editor's deploy state - its toolbar button shows the same
+/// The Deploy window owns the editor's deploy state - the toolbar's Deploy and Run shows the same
 /// progress - so a deploy started here is the one the user sees, and two cannot overlap.
 auto get_deploy_panel(rtti::context& ctx) -> deploy_panel*
 {
@@ -134,13 +134,14 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{}}})",
+        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{}}})",
         params.deploy_location.empty() ? "null" : make_json_string(params.deploy_location.generic_string()),
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
         bool_to_json(params.deploy_cooked_assets),
         bool_to_json(params.deploy_debug_symbols),
-        bool_to_json(params.deploy_packed_assets));
+        bool_to_json(params.deploy_packed_assets),
+        params.deploy_patch_release.empty() ? "null" : make_json_string(params.deploy_patch_release));
 }
 
 /// Sets the destination, creating the folder when asked - but never inside the project, where
@@ -188,9 +189,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
         {.name = "deploy_get_state",
          .description =
              "Everything about deploying in one read: the settings (destination folder, runtime dependencies, run "
-             "after deploy, cooked assets, debug symbols); what keeps the project from deploying, one sentence each "
-             "(usually a missing deploy folder - deploy_set_settings - no startup scene - settings_set "
-             "standalone.startup_scene - or assets still compiling); and the progress of the current or last deploy.",
+             "after deploy, cooked assets, debug symbols, packing, the release patched against); the kept releases "
+             "a deploy can patch; what keeps the project from deploying, one sentence each (usually a missing "
+             "deploy folder - deploy_set_settings - no startup scene - settings_set standalone.startup_scene - or "
+             "assets still compiling); and the progress of the current or last deploy.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -203,8 +205,9 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              const auto& params = pm->get_deploy_settings();
              const auto problems = editor_actions::get_deploy_problems(ctx, params);
-             return {.text = fmt::format(R"({{"settings":{},"can_deploy":{},"problems":{},"deploy":{}}})",
+             return {.text = fmt::format(R"({{"settings":{},"releases":{},"can_deploy":{},"problems":{},"deploy":{}}})",
                                          deploy_settings_to_json(params),
+                                         strings_to_json_array(editor_actions::list_releases()),
                                          bool_to_json(problems.empty()),
                                          strings_to_json_array(problems),
                                          deploy_progress_json(take_snapshot(ctx))),
@@ -221,9 +224,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "when missing; it must be empty or an earlier deploy, which a deploy updates in place. "
              "include_debug_symbols ships the scripts' .pdb/.xml so managed exceptions name file and line. "
              "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off "
-             "ships them loose. Omitted fields keep their value.",
+             "ships them loose. patch_release names a kept release (deploy_keep_release): its packs ship "
+             "unchanged and content_p1.pak holds every change since; an empty string makes full builds again. "
+             "Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -249,6 +254,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "cook_assets", params.deploy_cooked_assets);
              read_bool(args, "include_debug_symbols", params.deploy_debug_symbols);
              read_bool(args, "pack_assets", params.deploy_packed_assets);
+             read_string(args, "patch_release", params.deploy_patch_release);
 
              pm->get_deploy_settings() = params;
              pm->save_deploy_settings();
@@ -262,6 +268,39 @@ void register_deploy_tools(mcp_tool_registry& registry)
          .mutates_scene = false,
          .effect = tool_effect::destructive,
          .idempotent = true});
+
+    registry.add(
+        {.name = "deploy_keep_release",
+         .description =
+             "Keep the packed build in the deploy folder as a release (in the project's releases/<name>), so later "
+             "deploys with patch_release set to its name ship only a patch for it (content_p1.pak) beside its "
+             "unchanged packs. name defaults to the product version (settings app.version). Needs a full packed "
+             "deploy in the folder; refuses a name already kept.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"name":{"type":"string","description":"Release name; default the product version"}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string error;
+             auto* pm = get_open_project(ctx, error);
+             if(pm == nullptr || !require_not_deploying(ctx, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string name;
+             read_string(args, "name", name);
+             if(!editor_actions::keep_release(ctx, pm->get_deploy_settings(), name, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             return {.text = fmt::format(R"({{"ok":true,"release":{},"folder":{},"releases":{}}})",
+                                         make_json_string(name),
+                                         make_json_string(editor_actions::get_release_folder(name).generic_string()),
+                                         strings_to_json_array(editor_actions::list_releases())),
+                     .is_error = false};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::destructive});
 
     registry.add(
         {.name = "project_deploy",

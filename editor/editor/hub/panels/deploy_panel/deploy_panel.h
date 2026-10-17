@@ -11,8 +11,9 @@ namespace unravel
 class imgui_panels;
 
 /**
- * @brief The Deploy Project window: what the game is and where it goes, what still keeps it from
- * deploying, and the steps of the deploy while it runs.
+ * @brief The Deploy Project window: tabs for what the game is and where it goes (Build), what it
+ * ships (Content) and the releases it patches (Releases); under them, always in view, what still
+ * keeps it from deploying, the steps of the deploy while it runs, and the buttons.
  */
 class deploy_panel
 {
@@ -35,14 +36,39 @@ public:
     auto get_progress() const -> float;
 
 private:
+    /// A kept release as the Releases tab lists it.
+    struct kept_release
+    {
+        std::string name;
+        /// Bytes of its packs, every protocol.
+        std::uint64_t size{};
+    };
+
+    using tab_drawer = void (deploy_panel::*)(rtti::context& ctx);
+
     void draw_ui(rtti::context& ctx);
-    void draw_settings(rtti::context& ctx);
+    void draw_tabs(rtti::context& ctx);
+    /// A tab's body: as tall as its content between a floor and a share of the screen, scrolling past it.
+    void draw_tab_body(rtti::context& ctx, tab_drawer draw);
+    void draw_build_tab(rtti::context& ctx);
+    void draw_content_tab(rtti::context& ctx);
+    void draw_releases_tab(rtti::context& ctx);
+    /// Patch Against Release as a pick of the kept releases. @return True when the pick changed.
+    auto draw_patch_release_picker(rtti::context& ctx) -> bool;
+    void draw_kept_releases(rtti::context& ctx);
     void draw_status(rtti::context& ctx);
     void draw_actions(rtti::context& ctx);
+    void keep_release(rtti::context& ctx);
+    void refresh_releases();
 
     imgui_panels* parent_{};
     bool show_request_{};
 
     std::map<std::string, tpp::shared_future<void>> deploy_jobs_;
+    /// The kept releases, read when the window opens, a release is kept or the picker opens.
+    std::vector<kept_release> releases_;
+    /// What the last Keep as Release did, shown under the releases.
+    std::string release_message_;
+    bool is_release_message_error_{};
 };
 } // namespace unravel

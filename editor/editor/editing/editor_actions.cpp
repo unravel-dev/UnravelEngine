@@ -57,7 +57,9 @@
 
 
 #include <base/platform/config.hpp>
+#include <hpp/string_view.hpp>
 #include <string_utils/utils.h>
+#include <array>
 #include <memory>
 #include <set>
 
@@ -1083,12 +1085,48 @@ auto is_shipped_compiled_file(const fs::path& file, bool with_debug_symbols) -> 
 /// The suffix of the earlier build's pack while the new one is written: the game never mounts it.
 constexpr const char* DEPLOY_PREVIOUS_PACK_SUFFIX = ".previous";
 
-/// Sets the earlier build's pack aside, so the game cannot mount it over the new files while the new
-/// pack reuses its entries. Returns where it went; empty when there was none.
-auto set_aside_previous_pack(const fs::path& protocol_root) -> fs::path
+/// The project's folder of kept releases, one subfolder per release.
+constexpr const char* DEPLOY_RELEASES_FOLDER = "releases";
+
+/// The protocols a deploy packs, each into data/<protocol>.
+constexpr std::array<const char*, 2> DEPLOY_PACKED_PROTOCOLS = {"engine", "app"};
+
+/// A release name is used as a folder name, so it holds no path separators, reserved or control
+/// characters.
+auto is_valid_release_name(const std::string& name) -> bool
+{
+    constexpr hpp::string_view reserved = "<>:\"/\\|?*";
+    constexpr unsigned char first_printable = ' ';
+    const bool has_reserved = std::any_of(name.begin(),
+                                          name.end(),
+                                          [&reserved](char c)
+                                          {
+                                              return reserved.find(c) != hpp::string_view::npos ||
+                                                     static_cast<unsigned char>(c) < first_printable;
+                                          });
+    return !name.empty() && name != "." && name != ".." && !has_reserved;
+}
+
+/// Whether a release of that name is kept, with a pack for every protocol.
+auto is_kept_release(const std::string& name) -> bool
 {
     fs::error_code ec;
-    const auto pack_file = protocol_root / ex::get_pack_file_name();
+    return is_valid_release_name(name) &&
+           std::all_of(DEPLOY_PACKED_PROTOCOLS.begin(),
+                       DEPLOY_PACKED_PROTOCOLS.end(),
+                       [&](const char* protocol)
+                       {
+                           return fs::exists(editor_actions::get_release_folder(name) / protocol /
+                                                 ex::get_pack_file_name(),
+                                             ec);
+                       });
+}
+
+/// Sets an earlier build's pack aside, so the game cannot mount it while the new one is written and
+/// reuses its entries. Returns where it went; empty when there was none.
+auto set_aside(const fs::path& pack_file) -> fs::path
+{
+    fs::error_code ec;
     auto previous = pack_file;
     previous += DEPLOY_PREVIOUS_PACK_SUFFIX;
     fs::remove(previous, ec);
@@ -1098,6 +1136,17 @@ auto set_aside_previous_pack(const fs::path& protocol_root) -> fs::path
     }
     fs::rename(pack_file, previous, ec);
     return ec ? fs::path{} : previous;
+}
+
+/// Removes a protocol's patch packs from `first_level` up: the game would mount them over a pack they
+/// were not made for.
+void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level)
+{
+    fs::error_code ec;
+    for(std::uint32_t level = first_level; fs::exists(protocol_root / ex::get_patch_pack_file_name(level), ec); ++level)
+    {
+        fs::remove(protocol_root / ex::get_patch_pack_file_name(level), ec);
+    }
 }
 
 /// The files a protocol's pack holds, read straight from the editor's compiled cache (no copy in the
@@ -1138,29 +1187,33 @@ auto collect_pack_inputs(const fs::path& compiled, const fs::path& cooked, const
     return inputs;
 }
 
-/// Writes a protocol's pack, the file the game mounts (data/<protocol>/content.pak). Entries whose
-/// bytes `previous_pack` already holds are copied from it instead of compressed again. Throws when the
-/// pack cannot be written: the step then fails.
-void write_protocol_pack(const fs::path& protocol_root,
-                         const std::vector<fs::pack_input>& inputs,
-                         const fs::path& previous_pack)
+/// fs::write_pack for a deploy step, the earlier version of `pack_file` reused and then removed. Throws
+/// when the pack cannot be written: the step then fails.
+void write_pack_for_deploy(const fs::path& pack_file,
+                           const std::vector<fs::pack_input>& inputs,
+                           fs::pack_write_options options)
 {
-    const auto pack_file = protocol_root / ex::get_pack_file_name();
-    fs::pack_write_options options;
-    options.reuse_from = previous_pack;
+    const auto previous = set_aside(pack_file);
+    options.reuse_from = previous;
     std::string error;
     fs::pack_write_stats stats;
-    if(!fs::write_pack(pack_file, inputs, options, error, &stats))
+    const bool is_written = fs::write_pack(pack_file, inputs, options, error, &stats);
+    fs::error_code ec;
+    fs::remove(previous, ec);
+    if(!is_written)
     {
-        throw std::runtime_error(fmt::format("Packing {} failed: {}", protocol_root.generic_string(), error));
+        throw std::runtime_error(fmt::format("Packing {} failed: {}", pack_file.generic_string(), error));
     }
     constexpr double bytes_per_megabyte = 1024.0 * 1024.0;
-    APPLOG_INFO("Packed {} file(s) ({} unchanged since the last deploy), {:.1f} MB -> {:.1f} MB, into {}",
+    APPLOG_INFO("Packed {} entries into {} ({} copied from the last deploy, {} deleted, {} left to the base), "
+                "{:.1f} MB -> {:.1f} MB",
                 stats.entry_count,
+                pack_file.generic_string(),
                 stats.reused_count,
+                stats.deleted_count,
+                stats.unchanged_count,
                 double(stats.raw_bytes) / bytes_per_megabyte,
-                double(stats.stored_bytes) / bytes_per_megabyte,
-                pack_file.generic_string());
+                double(stats.stored_bytes) / bytes_per_megabyte);
 }
 
 /// fs::mirror_directory for a deploy step: copies only new and changed files and removes the ones the
@@ -1254,9 +1307,29 @@ void copy_for_deploy(const fs::path& from, const fs::path& to, fs::copy_options 
     }
 }
 
-/// One protocol's compiled assets and asset index into data/<protocol>: a pack beside the loose script
-/// library, or loose files. An earlier build there is updated in place: unchanged files and pack
-/// entries are kept, what this build no longer has is removed.
+/// A full pack: data/<protocol>/content.pak, and no patch over it.
+void write_full_pack(const fs::path& protocol_root, const std::vector<fs::pack_input>& inputs)
+{
+    write_pack_for_deploy(protocol_root / ex::get_pack_file_name(), inputs, {});
+    remove_patch_packs(protocol_root, 1);
+}
+
+/// A patch over a kept release: the release's pack ships unchanged as data/<protocol>/content.pak, and
+/// content_p1.pak holds what changed since - every change since the release, not since the last patch.
+void write_patch_over_release(const fs::path& protocol_root,
+                              const std::vector<fs::pack_input>& inputs,
+                              const fs::path& release_pack)
+{
+    copy_file_for_deploy(release_pack, protocol_root / ex::get_pack_file_name());
+    fs::pack_write_options options;
+    options.patch_base = release_pack;
+    write_pack_for_deploy(protocol_root / ex::get_patch_pack_file_name(1), inputs, options);
+    remove_patch_packs(protocol_root, 2);
+}
+
+/// One protocol's compiled assets and asset index into data/<protocol>: a pack (or a patch over a
+/// kept release) beside the loose script library, or loose files. An earlier build there is updated
+/// in place: unchanged files and pack entries are kept, what this build no longer has is removed.
 void deploy_protocol_data(asset_manager& am,
                           const deploy_settings& params,
                           const std::string& protocol,
@@ -1268,24 +1341,14 @@ void deploy_protocol_data(asset_manager& am,
     const auto cooked = cook_staging / protocol;
     const auto index = protocol_root / DEPLOY_ASSET_INDEX_NAME;
     const bool with_debug_symbols = params.deploy_debug_symbols;
-    const auto previous_pack = set_aside_previous_pack(protocol_root);
     fs::error_code ec;
     fs::create_directories(protocol_root, ec);
     am.save_database(protocol + ":/", index, is_shipped_location);
-    if(params.deploy_packed_assets)
+    if(!params.deploy_packed_assets)
     {
-        // Only what CoreCLR loads from disk stays loose; the pack reads everything else from the cache.
-        mirror_for_deploy(compiled,
-                          destination,
-                          [with_debug_symbols](const fs::path& file)
-                          {
-                              return is_loose_only_file(file) && is_shipped_compiled_file(file, with_debug_symbols);
-                          });
-        write_protocol_pack(protocol_root, collect_pack_inputs(compiled, cooked, index, with_debug_symbols), previous_pack);
-        fs::remove(index, ec);
-    }
-    else
-    {
+        // The loose files are the build now; a pack left from an earlier one would be mounted over them.
+        fs::remove(protocol_root / ex::get_pack_file_name(), ec);
+        remove_patch_packs(protocol_root, 1);
         mirror_for_deploy(compiled,
                           destination,
                           [with_debug_symbols](const fs::path& file)
@@ -1297,8 +1360,28 @@ void deploy_protocol_data(asset_manager& am,
         {
             copy_for_deploy(cooked, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
         }
+        return;
     }
-    fs::remove(previous_pack, ec);
+    // Only what CoreCLR loads from disk stays loose; the pack reads everything else from the cache.
+    mirror_for_deploy(compiled,
+                      destination,
+                      [with_debug_symbols](const fs::path& file)
+                      {
+                          return is_loose_only_file(file) && is_shipped_compiled_file(file, with_debug_symbols);
+                      });
+    const auto inputs = collect_pack_inputs(compiled, cooked, index, with_debug_symbols);
+    if(params.deploy_patch_release.empty())
+    {
+        write_full_pack(protocol_root, inputs);
+    }
+    else
+    {
+        write_patch_over_release(protocol_root,
+                                 inputs,
+                                 editor_actions::get_release_folder(params.deploy_patch_release) / protocol /
+                                     ex::get_pack_file_name());
+    }
+    fs::remove(index, ec);
 }
 
 /// The player's libraries, found by the dependency scanner, which takes seconds per run: a scan is kept
@@ -2138,6 +2221,17 @@ auto editor_actions::get_deploy_problems(rtti::context& ctx, const deploy_settin
     {
         problems.emplace_back("Choose the scene the game starts with.");
     }
+    if(!params.deploy_patch_release.empty() && !params.deploy_packed_assets)
+    {
+        problems.emplace_back("A patch against a release needs Pack Assets on.");
+    }
+    else if(!params.deploy_patch_release.empty() && !is_kept_release(params.deploy_patch_release))
+    {
+        problems.emplace_back(fmt::format("Release '{}' is not kept in {}; keep one with Keep as Release, or set "
+                                          "Patch Against Release to None.",
+                                          params.deploy_patch_release,
+                                          get_release_folder(params.deploy_patch_release).generic_string()));
+    }
     auto pending_compile = get_pending_compile_reason(ctx);
     if(!pending_compile.empty())
     {
@@ -2166,6 +2260,79 @@ auto editor_actions::get_pending_compile_reason(rtti::context& ctx) -> std::stri
         return "Scripts are still compiling; the deploy can start once they finish.";
     }
     return {};
+}
+
+auto editor_actions::get_release_folder(const std::string& name) -> fs::path
+{
+    return fs::resolve_protocol("app:/") / DEPLOY_RELEASES_FOLDER / name;
+}
+
+auto editor_actions::list_releases() -> std::vector<std::string>
+{
+    std::vector<std::string> releases;
+    fs::error_code ec;
+    for(const auto& entry : fs::directory_iterator(fs::resolve_protocol("app:/") / DEPLOY_RELEASES_FOLDER, ec))
+    {
+        const auto name = entry.path().filename().string();
+        if(entry.is_directory(ec) && is_kept_release(name))
+        {
+            releases.push_back(name);
+        }
+    }
+    std::sort(releases.begin(), releases.end());
+    return releases;
+}
+
+auto editor_actions::keep_release(rtti::context& ctx, const deploy_settings& params, std::string& name, std::string& error)
+    -> bool
+{
+    if(name.empty())
+    {
+        name = ctx.get_cached<project_manager>().get_settings().app.version;
+    }
+    if(!is_valid_release_name(name))
+    {
+        error = name.empty() ? "Set the product version, or give the release a name, to keep it."
+                             : fmt::format("'{}' cannot name a release folder.", name);
+        return false;
+    }
+    const auto release = get_release_folder(name);
+    fs::error_code ec;
+    if(fs::exists(release, ec))
+    {
+        error = fmt::format("A release named {} is already kept in {}.", name, release.generic_string());
+        return false;
+    }
+    for(const auto& protocol : DEPLOY_PACKED_PROTOCOLS)
+    {
+        const auto root = params.deploy_location / "data" / protocol;
+        if(!fs::exists(root / ex::get_pack_file_name(), ec))
+        {
+            error = "The deploy folder holds no packed build: deploy with Pack Assets on first.";
+            return false;
+        }
+        if(fs::exists(root / ex::get_patch_pack_file_name(1), ec))
+        {
+            error = "The deploy folder holds a patch: keep a release from a full deploy (no Patch Against Release).";
+            return false;
+        }
+    }
+    for(const auto& protocol : DEPLOY_PACKED_PROTOCOLS)
+    {
+        bool is_copied = false;
+        fs::create_directories(release / protocol, ec);
+        if(!fs::copy_file_if_changed(params.deploy_location / "data" / protocol / ex::get_pack_file_name(),
+                                     release / protocol / ex::get_pack_file_name(),
+                                     is_copied,
+                                     ec))
+        {
+            error = fmt::format("Keeping the release failed: {}", ec.message());
+            fs::remove_all(release, ec);
+            return false;
+        }
+    }
+    APPLOG_INFO("Kept release {} in {}", name, release.generic_string());
+    return true;
 }
 
 

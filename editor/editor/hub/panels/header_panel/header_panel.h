@@ -34,11 +34,11 @@ private:
     auto draw_mcp_status(rtti::context& ctx) -> float;
     /// A line along the bottom edge of the header in the color of the play state.
     void draw_play_state_line(rtti::context& ctx);
-    // The play toolbar, a panel_toolbar strip: deploy and the play options on the left, the
-    // play controls in the middle, the simulation and frame pacing on the right.
-    void draw_deploy_button(rtti::context& ctx);
+    // The play toolbar, a panel_toolbar strip: the play options on the left, the play controls and
+    // Deploy and Run in the middle, the simulation and frame pacing on the right.
     void draw_play_options(rtti::context& ctx);
     void draw_transport_controls(rtti::context& ctx);
+    void draw_deploy_and_run_button(rtti::context& ctx);
     void draw_time_scale(rtti::context& ctx);
     void draw_frame_pacing(rtti::context& ctx);
 

@@ -34,14 +34,23 @@ struct pack_write_options
     /// its name. Used only when it was written with the same compression settings, so the output is
     /// what a fresh write would give. Empty, missing or unreadable: everything is compressed.
     path reuse_from;
+    /// Makes the pack a patch over this one (its base): an input the base holds under the same name with
+    /// the same bytes is left out, a name the base holds that no input has becomes a deleted entry, and
+    /// the patch records the base so it mounts only over that exact pack. Empty: a full pack.
+    path patch_base;
 };
 
 /// What a written pack holds.
 struct pack_write_stats
 {
+    /// Every entry, deleted ones included.
     std::size_t entry_count{};
     /// Entries taken from the pack in pack_write_options::reuse_from.
     std::size_t reused_count{};
+    /// Patch only: inputs left out because the base holds them unchanged.
+    std::size_t unchanged_count{};
+    /// Patch only: names the base holds and the inputs do not, written as deleted entries.
+    std::size_t deleted_count{};
     std::uint64_t raw_bytes{};
     std::uint64_t stored_bytes{};
 };
@@ -63,9 +72,10 @@ auto write_pack(const path& pack_file,
  * @brief Mounts a pack: its entries answer for the files under the root of `protocol`.
  *
  * The pack is memory-mapped and stays mapped until unmount_packs. A later mount of the same
- * protocol wins for the entries both hold.
- * @return False with `err` set when the file is missing, is not a pack, is damaged or was
- * compressed with a codec this build does not decode.
+ * protocol wins for the entries both hold, and its deleted entries hide the files of earlier packs
+ * and of the disk. A patch mounts only after the pack it was made against.
+ * @return False with `err` set when the file is missing, is not a pack, is damaged, was
+ * compressed with a codec this build does not decode, or is a patch whose base is not mounted.
  */
 auto mount_pack(const std::string& protocol, const path& pack_file, std::string& err) -> bool;
 
@@ -97,10 +107,11 @@ struct packed_file
  */
 auto find_packed_file(const path& file) -> packed_file;
 
-/// Whether `file` is in a mounted pack or on disk.
+/// Whether `file` is in a mounted pack or on disk (and not deleted by a mounted pack).
 auto is_readable_file(const path& file) -> bool;
 
-/// A stream over `file` from a mounted pack, else from disk (binary); null when neither has it.
+/// A stream over `file` from a mounted pack, else from disk (binary); null when neither has it or a
+/// mounted pack deletes it.
 auto open_readable_stream(const path& file) -> std::unique_ptr<std::istream>;
 
 } // namespace fs

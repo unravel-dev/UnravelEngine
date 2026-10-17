@@ -36,9 +36,14 @@ namespace
 {
 
 constexpr std::array<char, 8> PACK_MAGIC = {'U', 'N', 'R', 'V', 'P', 'A', 'K', '1'};
-constexpr std::uint32_t PACK_VERSION = 1;
-/// magic, version, write settings, toc offset, toc size, toc hash.
-constexpr std::size_t PACK_FOOTER_SIZE = 8 + 4 + 4 + 8 + 8 + 8;
+/// 2: entries carry flags (deleted), the footer the hash of the base a patch was made against.
+constexpr std::uint32_t PACK_VERSION = 2;
+/// magic, version, write settings, toc offset, toc size, toc hash, base toc hash (0: not a patch).
+constexpr std::size_t PACK_FOOTER_SIZE = 8 + 4 + 4 + 8 + 8 + 8 + 8;
+/// Entry flag: the name is deleted - it hides the file of an earlier pack and of the disk.
+constexpr std::uint8_t PACK_ENTRY_DELETED = 1;
+/// The base hash of a pack that is not a patch.
+constexpr std::uint64_t PACK_NO_BASE = 0;
 /// Write settings of an uncompressed pack; a compressed one sets bit 0, the level in bits 8-15 and the
 /// codec id in bits 16-23. Entries are reused only from a pack written with the same settings.
 constexpr std::uint32_t PACK_UNCOMPRESSED_SETTINGS = 0;
@@ -250,10 +255,13 @@ private:
 
 struct pack_entry
 {
+    /// The name as written; the entries map is keyed by its normalized form.
+    std::string name;
     std::uint64_t offset{};
     std::uint64_t raw_size{};
     std::uint64_t stored_size{};
     std::uint8_t codec{PACK_STORED_CODEC};
+    bool is_deleted{};
     std::uint64_t content_hash{};
     std::vector<std::uint32_t> stored_block_sizes;
 };
@@ -264,6 +272,10 @@ struct mounted_pack
     mapped_file file;
     std::unordered_map<std::string, pack_entry> entries;
     std::uint32_t write_settings{PACK_UNCOMPRESSED_SETTINGS};
+    /// Identifies the pack: the hash of its table of contents.
+    std::uint64_t toc_hash{};
+    /// For a patch, the toc_hash of the pack it was made against.
+    std::uint64_t base_hash{PACK_NO_BASE};
 };
 
 auto get_write_settings(const pack_write_options& options) -> std::uint32_t
@@ -370,6 +382,7 @@ void append_entry_record(byte_array_t& toc,
     append_value(toc, raw_size);
     append_value(toc, std::uint64_t(entry.stored.size()));
     append_value(toc, entry.codec);
+    append_value(toc, std::uint8_t(0));
     append_value(toc, content_hash);
     append_value(toc, std::uint32_t(entry.stored_block_sizes.size()));
     for(const auto size : entry.stored_block_sizes)
@@ -378,7 +391,22 @@ void append_entry_record(byte_array_t& toc,
     }
 }
 
-auto make_footer(std::uint64_t toc_offset, const byte_array_t& toc, std::uint32_t write_settings) -> byte_array_t
+/// A deleted entry: a name only, with no bytes.
+void append_deleted_record(byte_array_t& toc, const std::string& name)
+{
+    append_value(toc, std::uint32_t(name.size()));
+    toc.insert(toc.end(), name.begin(), name.end());
+    append_value(toc, std::uint64_t(0));
+    append_value(toc, std::uint64_t(0));
+    append_value(toc, std::uint64_t(0));
+    append_value(toc, PACK_STORED_CODEC);
+    append_value(toc, PACK_ENTRY_DELETED);
+    append_value(toc, std::uint64_t(0));
+    append_value(toc, std::uint32_t(0));
+}
+
+auto make_footer(std::uint64_t toc_offset, const byte_array_t& toc, std::uint32_t write_settings, std::uint64_t base_hash)
+    -> byte_array_t
 {
     byte_array_t footer;
     footer.insert(footer.end(), PACK_MAGIC.begin(), PACK_MAGIC.end());
@@ -387,6 +415,7 @@ auto make_footer(std::uint64_t toc_offset, const byte_array_t& toc, std::uint32_
     append_value(footer, toc_offset);
     append_value(footer, std::uint64_t(toc.size()));
     append_value(footer, std::uint64_t(XXH3_64bits(toc.data(), toc.size())));
+    append_value(footer, base_hash);
     return footer;
 }
 
@@ -402,6 +431,7 @@ auto parse_entry(byte_reader& reader, std::uint64_t data_end, std::string& name,
     entry.raw_size = reader.read<std::uint64_t>();
     entry.stored_size = reader.read<std::uint64_t>();
     entry.codec = reader.read<std::uint8_t>();
+    const auto flags = reader.read<std::uint8_t>();
     entry.content_hash = reader.read<std::uint64_t>();
     const auto block_count = reader.read<std::uint32_t>();
     if(reader.has_failed() || name_size == 0)
@@ -409,6 +439,11 @@ auto parse_entry(byte_reader& reader, std::uint64_t data_end, std::string& name,
         return false;
     }
     name.assign(reinterpret_cast<const char*>(name_bytes), name_size);
+    entry.is_deleted = (flags & PACK_ENTRY_DELETED) != 0;
+    if(entry.is_deleted)
+    {
+        return entry.raw_size == 0 && entry.stored_size == 0 && block_count == 0;
+    }
     if(entry.offset > data_end || entry.stored_size > data_end - entry.offset)
     {
         return false;
@@ -446,7 +481,9 @@ auto parse_pack(mounted_pack& pack, std::string& err) -> bool
     pack.write_settings = footer.read<std::uint32_t>();
     const auto toc_offset = footer.read<std::uint64_t>();
     const auto toc_size = footer.read<std::uint64_t>();
-    const auto toc_hash = footer.read<std::uint64_t>();
+    pack.toc_hash = footer.read<std::uint64_t>();
+    pack.base_hash = footer.read<std::uint64_t>();
+    const auto toc_hash = pack.toc_hash;
     if(magic == nullptr || std::memcmp(magic, PACK_MAGIC.data(), PACK_MAGIC.size()) != 0)
     {
         err = "not a pack (no pack footer)";
@@ -454,7 +491,7 @@ auto parse_pack(mounted_pack& pack, std::string& err) -> bool
     }
     if(version != PACK_VERSION)
     {
-        err = "pack version " + std::to_string(version) + " is not supported";
+        err = "pack version " + std::to_string(version) + " is not supported; deploy again with this engine";
         return false;
     }
     const std::uint64_t data_end = size - PACK_FOOTER_SIZE;
@@ -486,6 +523,7 @@ auto parse_pack(mounted_pack& pack, std::string& err) -> bool
                   compression::get_codec_name() + " (" + std::to_string(compression::get_codec_id()) + ")";
             return false;
         }
+        entry.name = name;
         pack.entries[normalize_name(std::move(name))] = std::move(entry);
     }
     if(toc.has_failed() || !toc.is_at_end())
@@ -494,6 +532,11 @@ auto parse_pack(mounted_pack& pack, std::string& err) -> bool
         return false;
     }
     return true;
+}
+
+auto open_pack_file(const path& file, mounted_pack& pack, std::string& err) -> bool
+{
+    return pack.file.open(file, err) && parse_pack(pack, err);
 }
 
 /// The protocol and entry name `file` maps to; false when it is under no protocol.
@@ -678,14 +721,16 @@ private:
         }
         auto pack = std::make_unique<mounted_pack>();
         std::string ignored;
-        if(!pack->file.open(options.reuse_from, ignored) || !parse_pack(*pack, ignored) ||
-           pack->write_settings != get_write_settings(options))
+        if(!open_pack_file(options.reuse_from, *pack, ignored) || pack->write_settings != get_write_settings(options))
         {
             return;
         }
         for(const auto& [name, entry] : pack->entries)
         {
-            reusable_.emplace(entry.content_hash, &entry);
+            if(!entry.is_deleted)
+            {
+                reusable_.emplace(entry.content_hash, &entry);
+            }
         }
         reuse_pack_ = std::move(pack);
     }
@@ -708,28 +753,31 @@ private:
     std::unordered_multimap<std::uint64_t, const pack_entry*> reusable_;
 };
 
-/// Writes every entry's bytes in input order and builds the table of contents that describes them.
-/// `data_size` receives where the data ends: the table of contents starts there.
-auto write_entries(std::ofstream& out,
-                   const std::vector<pack_input>& inputs,
-                   entry_encoder& encoder,
-                   byte_array_t& toc,
-                   pack_write_stats& totals,
-                   std::uint64_t& data_size,
-                   std::string& err) -> bool
+/// Writes a pack: the entries' bytes in the order they are added, then the table of contents that
+/// describes them and the footer. For a patch, an input the base holds with the same bytes is left out
+/// and the base's names no input has become deleted entries.
+class pack_writer
 {
-    append_value(toc, std::uint32_t(inputs.size()));
-    std::unordered_set<std::string> names;
-    const byte_array_t padding(PACK_ENTRY_ALIGNMENT, 0);
-    data_size = 0;
-    for(const auto& input : inputs)
+public:
+    pack_writer(std::ofstream& out, const pack_write_options& options, const mounted_pack* patch_base)
+        : out_(out)
+        , encoder_(options)
+        , write_settings_(get_write_settings(options))
+        , patch_base_(patch_base)
     {
-        byte_array_t raw;
-        if(!names.insert(normalize_name(input.name)).second || input.name.empty())
+        // The entry count, set once finish knows it.
+        append_value(toc_, std::uint32_t(0));
+    }
+
+    auto add(const pack_input& input, std::string& err) -> bool
+    {
+        const auto name = normalize_name(input.name);
+        if(input.name.empty() || !names_.insert(name).second)
         {
             err = "pack entry name is empty or repeated: " + input.name;
             return false;
         }
+        byte_array_t raw;
         if(!read_input(input.source, raw))
         {
             err = "cannot read " + input.source.generic_string();
@@ -737,27 +785,108 @@ auto write_entries(std::ofstream& out,
         }
         const std::uint64_t raw_size = raw.size();
         const std::uint64_t content_hash = XXH3_64bits(raw.data(), raw.size());
+        if(is_unchanged_in_base(name, content_hash, raw_size))
+        {
+            ++stats_.unchanged_count;
+            return true;
+        }
         encoded_entry entry;
         bool is_reused = false;
-        if(!encoder.encode(std::move(raw), content_hash, entry, is_reused, err))
+        if(!encoder_.encode(std::move(raw), content_hash, entry, is_reused, err))
         {
             err = input.name + ": " + err;
             return false;
         }
-        totals.reused_count += is_reused ? 1 : 0;
-        const std::uint64_t padding_size = (PACK_ENTRY_ALIGNMENT - data_size % PACK_ENTRY_ALIGNMENT) % PACK_ENTRY_ALIGNMENT;
-        write_bytes(out, padding, std::size_t(padding_size));
-        data_size += padding_size;
+        stats_.reused_count += is_reused ? 1 : 0;
+        write_padding();
         // The name as given keeps its case; lookups compare it normalized.
-        append_entry_record(toc, input.name, data_size, raw_size, content_hash, entry);
-        write_bytes(out, entry.stored, entry.stored.size());
-        data_size += entry.stored.size();
-        totals.raw_bytes += raw_size;
-        totals.stored_bytes += entry.stored.size();
+        append_entry_record(toc_, input.name, data_size_, raw_size, content_hash, entry);
+        write_bytes(out_, entry.stored, entry.stored.size());
+        data_size_ += entry.stored.size();
+        stats_.raw_bytes += raw_size;
+        stats_.stored_bytes += entry.stored.size();
+        ++entry_count_;
+        return true;
     }
-    totals.entry_count = inputs.size();
-    return true;
-}
+
+    /// Ends the pack: a patch's deleted entries, the table of contents and the footer.
+    auto finish(const path& file, std::string& err) -> bool
+    {
+        add_deleted_entries();
+        std::memcpy(toc_.data(), &entry_count_, sizeof(entry_count_));
+        stats_.entry_count = entry_count_;
+        write_bytes(out_, toc_, toc_.size());
+        const auto base_hash = patch_base_ != nullptr ? patch_base_->toc_hash : PACK_NO_BASE;
+        const auto footer = make_footer(data_size_, toc_, write_settings_, base_hash);
+        write_bytes(out_, footer, footer.size());
+        out_.close();
+        if(!out_.good())
+        {
+            err = "cannot write " + file.generic_string();
+            return false;
+        }
+        return true;
+    }
+
+    auto get_stats() const -> const pack_write_stats&
+    {
+        return stats_;
+    }
+
+private:
+    auto is_unchanged_in_base(const std::string& name, std::uint64_t content_hash, std::uint64_t raw_size) const -> bool
+    {
+        if(patch_base_ == nullptr)
+        {
+            return false;
+        }
+        const auto found = patch_base_->entries.find(name);
+        return found != patch_base_->entries.end() && !found->second.is_deleted &&
+               found->second.content_hash == content_hash && found->second.raw_size == raw_size;
+    }
+
+    /// The base's names that no input had, in name order so the patch is deterministic.
+    void add_deleted_entries()
+    {
+        if(patch_base_ == nullptr)
+        {
+            return;
+        }
+        std::vector<std::string> deleted;
+        for(const auto& [name, entry] : patch_base_->entries)
+        {
+            if(!entry.is_deleted && !names_.contains(name))
+            {
+                deleted.push_back(entry.name);
+            }
+        }
+        std::sort(deleted.begin(), deleted.end());
+        for(const auto& name : deleted)
+        {
+            append_deleted_record(toc_, name);
+            ++entry_count_;
+            ++stats_.deleted_count;
+        }
+    }
+
+    void write_padding()
+    {
+        static const byte_array_t padding(PACK_ENTRY_ALIGNMENT, 0);
+        const std::uint64_t size = (PACK_ENTRY_ALIGNMENT - data_size_ % PACK_ENTRY_ALIGNMENT) % PACK_ENTRY_ALIGNMENT;
+        write_bytes(out_, padding, std::size_t(size));
+        data_size_ += size;
+    }
+
+    std::ofstream& out_;
+    entry_encoder encoder_;
+    std::uint32_t write_settings_{};
+    const mounted_pack* patch_base_{};
+    byte_array_t toc_;
+    std::unordered_set<std::string> names_;
+    std::uint64_t data_size_{};
+    std::uint32_t entry_count_{};
+    pack_write_stats stats_;
+};
 
 /// Writes the whole pack into `file`.
 auto write_pack_file(const path& file,
@@ -766,29 +895,66 @@ auto write_pack_file(const path& file,
                      pack_write_stats& totals,
                      std::string& err) -> bool
 {
+    std::unique_ptr<mounted_pack> patch_base;
+    if(!options.patch_base.empty())
+    {
+        patch_base = std::make_unique<mounted_pack>();
+        if(!open_pack_file(options.patch_base, *patch_base, err))
+        {
+            err = "patch base " + options.patch_base.generic_string() + ": " + err;
+            return false;
+        }
+    }
     std::ofstream out(file, std::ios::binary | std::ios::trunc);
     if(!out.good())
     {
         err = "cannot write " + file.generic_string();
         return false;
     }
-    entry_encoder encoder(options);
-    byte_array_t toc;
-    std::uint64_t data_size = 0;
-    if(!write_entries(out, inputs, encoder, toc, totals, data_size, err))
+    pack_writer writer(out, options, patch_base.get());
+    for(const auto& input : inputs)
+    {
+        if(!writer.add(input, err))
+        {
+            return false;
+        }
+    }
+    if(!writer.finish(file, err))
     {
         return false;
     }
-    write_bytes(out, toc, toc.size());
-    const auto footer = make_footer(data_size, toc, get_write_settings(options));
-    write_bytes(out, footer, footer.size());
-    out.close();
-    if(!out.good())
-    {
-        err = "cannot write " + file.generic_string();
-        return false;
-    }
+    totals = writer.get_stats();
     return true;
+}
+
+/// Whether a pack whose table of contents hashes to `toc_hash` is mounted for `protocol`.
+/// The caller holds mounts_mutex.
+auto is_mounted_unlocked(const std::string& protocol, std::uint64_t toc_hash) -> bool
+{
+    return std::any_of(mounted_packs.begin(),
+                       mounted_packs.end(),
+                       [&](const std::shared_ptr<const mounted_pack>& pack)
+                       {
+                           return pack->protocol == protocol && pack->toc_hash == toc_hash;
+                       });
+}
+
+/// The bytes of a found, not deleted entry.
+auto read_found_entry(const entry_lookup& found) -> packed_file
+{
+    const auto& entry = *found.entry;
+    if(entry.codec == PACK_STORED_CODEC)
+    {
+        // A view of the mapping: the aliasing pointer keeps the pack mapped while it is used.
+        const auto* data = found.pack->file.data() + entry.offset;
+        return {data, std::size_t(entry.raw_size), std::shared_ptr<const void>(found.pack, data)};
+    }
+    auto decoded = decode_entry(*found.pack, entry);
+    if(!decoded)
+    {
+        return {};
+    }
+    return {decoded->data(), decoded->size(), decoded};
 }
 
 } // namespace
@@ -826,12 +992,18 @@ auto mount_pack(const std::string& protocol, const path& pack_file, std::string&
 {
     auto pack = std::make_shared<mounted_pack>();
     pack->protocol = protocol;
-    if(!pack->file.open(pack_file, err) || !parse_pack(*pack, err))
+    if(!open_pack_file(pack_file, *pack, err))
     {
         err = pack_file.generic_string() + ": " + err;
         return false;
     }
     std::unique_lock lock(mounts_mutex);
+    // Over any other base its additions and deletions would mix two builds.
+    if(pack->base_hash != PACK_NO_BASE && !is_mounted_unlocked(protocol, pack->base_hash))
+    {
+        err = pack_file.generic_string() + ": a patch for another build (the pack it was made against is not mounted)";
+        return false;
+    }
     mounted_packs.push_back(std::move(pack));
     return true;
 }
@@ -851,30 +1023,19 @@ auto has_mounted_packs() -> bool
 auto find_packed_file(const path& file) -> packed_file
 {
     const auto found = find_entry(file);
-    if(found.entry == nullptr)
+    if(found.entry == nullptr || found.entry->is_deleted)
     {
         return {};
     }
-    const auto& entry = *found.entry;
-    if(entry.codec == PACK_STORED_CODEC)
-    {
-        // A view of the mapping: the aliasing pointer keeps the pack mapped while it is used.
-        const auto* data = found.pack->file.data() + entry.offset;
-        return {data, std::size_t(entry.raw_size), std::shared_ptr<const void>(found.pack, data)};
-    }
-    auto decoded = decode_entry(*found.pack, entry);
-    if(!decoded)
-    {
-        return {};
-    }
-    return {decoded->data(), decoded->size(), decoded};
+    return read_found_entry(found);
 }
 
 auto is_readable_file(const path& file) -> bool
 {
-    if(find_entry(file).entry != nullptr)
+    const auto found = find_entry(file);
+    if(found.entry != nullptr)
     {
-        return true;
+        return !found.entry->is_deleted;
     }
     error_code ec;
     return exists(file, ec) && !is_directory(file, ec);
@@ -882,10 +1043,12 @@ auto is_readable_file(const path& file) -> bool
 
 auto open_readable_stream(const path& file) -> std::unique_ptr<std::istream>
 {
-    auto packed = find_packed_file(file);
-    if(packed.is_found())
+    const auto found = find_entry(file);
+    if(found.entry != nullptr)
     {
-        return std::make_unique<packed_istream>(std::move(packed));
+        // A deleted entry hides the disk as well as the packs under it.
+        auto packed = found.entry->is_deleted ? packed_file{} : read_found_entry(found);
+        return packed.is_found() ? std::make_unique<packed_istream>(std::move(packed)) : nullptr;
     }
     auto stream = std::make_unique<file_istream>(file, std::ios::binary);
     if(!stream->is_open())

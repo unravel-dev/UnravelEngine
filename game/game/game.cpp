@@ -19,15 +19,8 @@ namespace unravel
 {
 namespace
 {
-/// Mounts the protocol's pack when the deploy wrote one; a deploy without packs ships loose files.
-auto mount_asset_pack(const std::string& protocol) -> bool
+auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
 {
-    const auto pack = fs::resolve_protocol(protocol + ":/" + ex::get_pack_file_name());
-    fs::error_code ec;
-    if(!fs::exists(pack, ec))
-    {
-        return true;
-    }
     std::string error;
     if(!fs::mount_pack(protocol, pack, error))
     {
@@ -35,6 +28,30 @@ auto mount_asset_pack(const std::string& protocol) -> bool
         return false;
     }
     APPLOG_INFO("Mounted asset pack {}", pack.generic_string());
+    return true;
+}
+
+/// Mounts the protocol's pack when the deploy wrote one, then its patches in level order; a deploy
+/// without packs ships loose files.
+auto mount_asset_packs(const std::string& protocol) -> bool
+{
+    const auto root = fs::resolve_protocol(protocol + ":/");
+    fs::error_code ec;
+    if(!fs::exists(root / ex::get_pack_file_name(), ec))
+    {
+        return true;
+    }
+    if(!mount_pack_file(protocol, root / ex::get_pack_file_name()))
+    {
+        return false;
+    }
+    for(std::uint32_t level = 1; fs::exists(root / ex::get_patch_pack_file_name(level), ec); ++level)
+    {
+        if(!mount_pack_file(protocol, root / ex::get_patch_pack_file_name(level)))
+        {
+            return false;
+        }
+    }
     return true;
 }
 } // namespace
@@ -188,7 +205,7 @@ auto game::init_settings(rtti::context& ctx) -> bool
 auto game::init_assets(rtti::context& ctx) -> bool
 {
     // Before the databases: their index is inside the packs.
-    if(!mount_asset_pack("engine") || !mount_asset_pack("app"))
+    if(!mount_asset_packs("engine") || !mount_asset_packs("app"))
     {
         return false;
     }

@@ -145,9 +145,10 @@ returns no `MenuBar`).
 - `console_log_panel.cpp` -> `draw_toolbar` (Clear + auto-clear options, search, level filters
   with counts), `draw_log_list` (single-line rows through `draw_log_line`, which the status bar
   reuses for the last log), `draw_details`
-- `header_panel.cpp` -> `draw_play_toolbar`: flat strip - Deploy split button, play options
-  dropdown (script mode + splash, locked while playing) | play / pause / step (one segment,
-  disabled by compile errors) | time scale dropdown, frame pacing dropdown (VSync + max FPS).
+- `header_panel.cpp` -> `draw_play_toolbar`: flat strip - play options dropdown (script mode +
+  splash, locked while playing) | play / pause / step (one segment, disabled by compile errors),
+  then Deploy and Run (its own segment; shows progress while deploying and a click opens the
+  Deploy window; the Deploy menu opens it too) | time scale dropdown, frame pacing dropdown (VSync + max FPS).
   The dropdown faces show the current value (`width_text` keeps them steady while a slider in
   the popup drags). `draw_title` centers project / scene on the menu bar and yields to the
   menus; `draw_play_state_line` tints the bottom edge while playing / paused.
