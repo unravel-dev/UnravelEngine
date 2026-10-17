@@ -1,7 +1,9 @@
 #include "mcp_tools_common.h"
 
 #include <editor/deploy/deploy.h>
+#include <editor/deploy/deploy_content.h>
 #include <editor/editing/editor_actions.h>
+#include <engine/assets/asset_manager.h>
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/deploy_panel/deploy_panel.h>
 #include <editor/hub/panels/panel.h>
@@ -134,14 +136,93 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{}}})",
+        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{}}})",
         params.deploy_location.empty() ? "null" : make_json_string(params.deploy_location.generic_string()),
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
         bool_to_json(params.deploy_cooked_assets),
         bool_to_json(params.deploy_debug_symbols),
         bool_to_json(params.deploy_packed_assets),
-        params.deploy_patch_release.empty() ? "null" : make_json_string(params.deploy_patch_release));
+        params.deploy_patch_release.empty() ? "null" : make_json_string(params.deploy_patch_release),
+        bool_to_json(params.deploy_only_used_assets),
+        strings_to_json_array(params.deploy_scenes),
+        strings_to_json_array(params.deploy_included),
+        strings_to_json_array(params.deploy_excluded));
+}
+
+/// Replaces `out` with the string array at `key` when the arguments have one.
+auto read_key_list(const simdjson::dom::object& args, const char* key, std::vector<std::string>& out, std::string& error)
+    -> bool
+{
+    simdjson::dom::element element;
+    if(args[key].get(element))
+    {
+        return true;
+    }
+    std::vector<std::string> values;
+    if(!parse_string_array(element, values, error, key))
+    {
+        return false;
+    }
+    out = std::move(values);
+    return true;
+}
+
+auto get_reason_name(deploy_content_reason reason) -> const char*
+{
+    switch(reason)
+    {
+        case deploy_content_reason::scene:
+            return "scene";
+        case deploy_content_reason::referenced:
+            return "referenced";
+        case deploy_content_reason::named_in_script:
+            return "named_in_script";
+        case deploy_content_reason::included:
+            return "included";
+        case deploy_content_reason::excluded:
+            return "excluded";
+        case deploy_content_reason::unused:
+        default:
+            return "unused";
+    }
+}
+
+/// Whether an entry passes deploy_get_content's folder and show arguments.
+auto is_content_listed(const deploy_settings& params,
+                       const deploy_content_entry& entry,
+                       const std::string& folder,
+                       const std::string& show) -> bool
+{
+    if(!folder.empty() && entry.key.compare(0, folder.size(), folder) != 0)
+    {
+        return false;
+    }
+    const bool is_shipped = is_deploy_content_shipped(params, entry);
+    if(show == "shipped")
+    {
+        return is_shipped;
+    }
+    if(show == "left_out")
+    {
+        return !is_shipped;
+    }
+    if(show == "changed")
+    {
+        return find_deploy_content_rule(params, entry.key) != deploy_content_rule::none;
+    }
+    return true;
+}
+
+auto content_entry_to_json(const deploy_settings& params, const deploy_content_entry& entry) -> std::string
+{
+    return fmt::format(R"({{"key":{},"ships":{},"reason":"{}","used":{},"used_by":{},"size":{}}})",
+                       make_json_string(entry.key),
+                       bool_to_json(is_deploy_content_shipped(params, entry)),
+                       get_reason_name(get_deploy_content_reason(params, entry)),
+                       bool_to_json(entry.is_used),
+                       entry.used_by.empty() ? "null" : make_json_string(entry.used_by),
+                       entry.size);
 }
 
 /// Sets the destination, creating the folder when asked - but never inside the project, where
@@ -226,9 +307,12 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off "
              "ships them loose. patch_release names a kept release (deploy_keep_release): its packs ship "
              "unchanged and content_p1.pak holds every change since; an empty string makes full builds again. "
-             "Omitted fields keep their value.",
+             "only_used_assets ships only the project assets the startup scene, the scenes list and the scripts' "
+             "path literals reach (deploy_get_content shows the result); include / exclude are folder or asset "
+             "keys that always / never ship, the most specific rule winning. scenes, include and exclude replace "
+             "the whole list. Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -255,6 +339,13 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "include_debug_symbols", params.deploy_debug_symbols);
              read_bool(args, "pack_assets", params.deploy_packed_assets);
              read_string(args, "patch_release", params.deploy_patch_release);
+             read_bool(args, "only_used_assets", params.deploy_only_used_assets);
+             if(!read_key_list(args, "scenes", params.deploy_scenes, error) ||
+                !read_key_list(args, "include", params.deploy_included, error) ||
+                !read_key_list(args, "exclude", params.deploy_excluded, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
 
              pm->get_deploy_settings() = params;
              pm->save_deploy_settings();
@@ -296,6 +387,109 @@ void register_deploy_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"ok":true,"release":{},"folder":{},"releases":{}}})",
                                          make_json_string(name),
                                          make_json_string(editor_actions::get_release_folder(name).generic_string()),
+                                         strings_to_json_array(editor_actions::list_releases())),
+                     .is_error = false};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::destructive});
+
+    registry.add(
+        {.name = "deploy_get_content",
+         .description =
+             "What a deploy ships of the project's assets, as the Deploy window's Content tab shows it: finds what "
+             "the startup scene, the scenes list (deploy_set_settings scenes) and the scripts' path literals use, "
+             "directly or through other assets, then applies the include / exclude rules and only_used_assets. "
+             "Returns counts and sizes, deploy scenes no longer in the project, folders scripts build paths in "
+             "(worth an include rule), and one entry per asset: ships, reason (scene, referenced, named_in_script, "
+             "included, excluded, unused), used_by (what led to it) and compiled size. Engine assets always ship "
+             "and are not listed.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"folder":{"type":"string","description":"Only assets whose key starts with this, e.g. app:/data/levels/"},"show":{"type":"string","enum":["all","shipped","left_out","changed"],"description":"Default all; changed = assets under an include or exclude rule"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Default 200"}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             constexpr int64_t default_limit = 200;
+             constexpr int64_t max_limit = 2000;
+             std::string error;
+             auto* pm = get_open_project(ctx, error);
+             if(pm == nullptr)
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string folder;
+             read_string(args, "folder", folder);
+             std::string show = "all";
+             read_string(args, "show", show);
+             const auto offset = static_cast<size_t>(read_clamped_int64(args, "offset", 0, 0));
+             const auto limit = static_cast<size_t>(std::min(read_clamped_int64(args, "limit", default_limit, 1), max_limit));
+             const auto& params = pm->get_deploy_settings();
+             const auto content = detect_deploy_content(ctx.get_cached<asset_manager>(),
+                                                        params,
+                                                        pm->get_settings().standalone.startup_scene.id());
+             size_t shipped = 0;
+             std::uint64_t size = 0;
+             std::uint64_t shipped_size = 0;
+             size_t listed = 0;
+             std::string entries = "[";
+             for(const auto& entry : content.entries)
+             {
+                 const bool is_shipped = is_deploy_content_shipped(params, entry);
+                 shipped += is_shipped ? 1 : 0;
+                 size += entry.size;
+                 shipped_size += is_shipped ? entry.size : 0;
+                 if(!is_content_listed(params, entry, folder, show))
+                 {
+                     continue;
+                 }
+                 if(listed >= offset && listed < offset + limit)
+                 {
+                     entries += (entries.size() > 1 ? "," : "") + content_entry_to_json(params, entry);
+                 }
+                 ++listed;
+             }
+             entries += "]";
+             return {.text = fmt::format(
+                         R"({{"only_used_assets":{},"assets":{},"shipped":{},"left_out":{},"size":{},"shipped_size":{},"missing_scenes":{},"named_folders":{},"listed":{},"offset":{},"entries":{}}})",
+                         bool_to_json(params.deploy_only_used_assets),
+                         content.entries.size(),
+                         shipped,
+                         content.entries.size() - shipped,
+                         size,
+                         shipped_size,
+                         strings_to_json_array(content.missing_scenes),
+                         strings_to_json_array(content.named_folders),
+                         listed,
+                         offset,
+                         entries),
+                     .is_error = false};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::read_only});
+
+    registry.add(
+        {.name = "deploy_remove_release",
+         .description =
+             "Delete a kept release's packs (deploy_get_state lists the releases). Patches can no longer be made "
+             "for it; when patch_release names it, patch_release is cleared and deploys make full builds again.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"name":{"type":"string","description":"The release to delete"}},"required":["name"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string error;
+             auto* pm = get_open_project(ctx, error);
+             if(pm == nullptr || !require_not_deploying(ctx, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string name;
+             read_string(args, "name", name);
+             if(!editor_actions::remove_release(ctx, name, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             return {.text = fmt::format(R"({{"ok":true,"removed":{},"releases":{}}})",
+                                         make_json_string(name),
                                          strings_to_json_array(editor_actions::list_releases())),
                      .is_error = false};
          },

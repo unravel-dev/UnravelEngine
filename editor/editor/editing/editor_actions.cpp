@@ -5,6 +5,7 @@
 #include "threadpp/thread.h"
 
 #include <editor/assets/asset_watcher.h>
+#include <editor/deploy/deploy_content.h>
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/animation_preview.h>
 #include <editor/editing/create_scene_modal.h>
@@ -974,43 +975,6 @@ auto is_debug_companion_file(const fs::path& path) -> bool
     return fs::exists(library, ec);
 }
 
-/// True for the assets whose compiled copies the deploy removes: scripts ship as their library.
-auto is_script_location(const std::string& location) -> bool
-{
-    return ex::is_format<script>(fs::path(location).extension().generic_string());
-}
-
-/// Whether the index a deployed game gets lists the asset: every one but the scripts, whose compiled
-/// copies the deploy removes.
-auto is_shipped_location(const std::string& location) -> bool
-{
-    return !is_script_location(location);
-}
-
-/// The compiled files a deployed game reads for the asset at `location`: one per renderer of the
-/// platform for a shader, none for scripts and for assets that live outside a data folder
-/// (the embedded primitives).
-auto get_shipped_compiled_paths(const std::string& location) -> std::vector<fs::path>
-{
-    if(location.find(ex::get_data_directory()) == std::string::npos || is_script_location(location))
-    {
-        return {};
-    }
-    const auto compiled = asset_reader::resolve_compiled_path(location);
-    if(!ex::is_format<gfx::shader>(fs::path(location).extension().generic_string()))
-    {
-        return {compiled};
-    }
-    std::vector<fs::path> paths;
-    for(const auto& renderer_extension : gfx::get_renderer_platform_supported_filename_extensions())
-    {
-        auto path = compiled;
-        path.concat(renderer_extension);
-        paths.push_back(std::move(path));
-    }
-    return paths;
-}
-
 /// Indexed assets of the protocol without their compiled files. With the compiler idle that is a
 /// source it failed to compile, and a deploy without it ships a game that silently lacks the asset.
 auto find_uncompiled_assets(asset_manager& am, const std::string& protocol) -> std::vector<std::string>
@@ -1018,7 +982,7 @@ auto find_uncompiled_assets(asset_manager& am, const std::string& protocol) -> s
     std::vector<std::string> uncompiled;
     for(const auto& location : am.get_all_assets(protocol))
     {
-        const auto paths = get_shipped_compiled_paths(location);
+        const auto paths = get_deploy_compiled_paths(location);
         const bool is_missing = std::any_of(paths.begin(),
                                             paths.end(),
                                             [](const fs::path& path)
@@ -1149,12 +1113,18 @@ void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level
     }
 }
 
+/// Decides whether a deploy ships a compiled file, given the file and its path relative to the
+/// protocol's compiled folder (which names the asset it was compiled from).
+using compiled_file_filter = std::function<bool(const fs::path& file, const fs::path& relative)>;
+
 /// The files a protocol's pack holds, read straight from the editor's compiled cache (no copy in the
-/// deploy folder): its shipped compiled files, with the cooked variants in `cooked` in their place, and
-/// the asset index. In name order, so the same build packs to the same bytes. Throws when the cache
-/// cannot be listed.
-auto collect_pack_inputs(const fs::path& compiled, const fs::path& cooked, const fs::path& index, bool with_debug_symbols)
-    -> std::vector<fs::pack_input>
+/// deploy folder): the compiled files `is_shipped` keeps, with the cooked variants in `cooked` in their
+/// place, and the asset index. In name order, so the same build packs to the same bytes. Throws when the
+/// cache cannot be listed.
+auto collect_pack_inputs(const fs::path& compiled,
+                         const fs::path& cooked,
+                         const fs::path& index,
+                         const compiled_file_filter& is_shipped) -> std::vector<fs::pack_input>
 {
     std::vector<fs::pack_input> inputs;
     fs::error_code ec;
@@ -1163,11 +1133,11 @@ auto collect_pack_inputs(const fs::path& compiled, const fs::path& cooked, const
     for(const fs::recursive_directory_iterator end; !ec && it != end; it.increment(ec))
     {
         const auto& file = it->path();
-        if(!it->is_regular_file(ec) || is_loose_only_file(file) || !is_shipped_compiled_file(file, with_debug_symbols))
+        const auto relative = file.lexically_relative(compiled);
+        if(!it->is_regular_file(ec) || is_loose_only_file(file) || !is_shipped(file, relative))
         {
             continue;
         }
-        const auto relative = fs::relative(file, compiled, ec);
         const auto cooked_file = cooked / relative;
         fs::error_code exists_ec;
         inputs.push_back({compiled_folder + "/" + relative.generic_string(),
@@ -1327,13 +1297,35 @@ void write_patch_over_release(const fs::path& protocol_root,
     remove_patch_packs(protocol_root, 2);
 }
 
+/// Overlays the cooked variants the filter keeps onto the loose compiled files, in the destination
+/// only. Throws when one cannot be copied.
+void copy_cooked_for_deploy(const fs::path& cooked, const fs::path& destination, const compiled_file_filter& is_shipped)
+{
+    fs::error_code ec;
+    fs::recursive_directory_iterator it(cooked, ec);
+    for(const fs::recursive_directory_iterator end; !ec && it != end; it.increment(ec))
+    {
+        const auto relative = it->path().lexically_relative(cooked);
+        if(!it->is_regular_file(ec) || !is_shipped(it->path(), relative))
+        {
+            continue;
+        }
+        fs::error_code create_ec;
+        fs::create_directories((destination / relative).parent_path(), create_ec);
+        copy_file_for_deploy(it->path(), destination / relative);
+    }
+}
+
 /// One protocol's compiled assets and asset index into data/<protocol>: a pack (or a patch over a
 /// kept release) beside the loose script library, or loose files. An earlier build there is updated
 /// in place: unchanged files and pack entries are kept, what this build no longer has is removed.
+/// `left_out` holds the keys of the assets the content selection leaves out (deploy_content.h): their
+/// index entries, compiled and cooked files do not ship.
 void deploy_protocol_data(asset_manager& am,
                           const deploy_settings& params,
                           const std::string& protocol,
-                          const fs::path& cook_staging)
+                          const fs::path& cook_staging,
+                          const std::unordered_set<std::string>& left_out)
 {
     const auto protocol_root = params.deploy_location / "data" / protocol;
     const auto compiled = fs::resolve_protocol(ex::get_compiled_directory(protocol));
@@ -1343,7 +1335,17 @@ void deploy_protocol_data(asset_manager& am,
     const bool with_debug_symbols = params.deploy_debug_symbols;
     fs::error_code ec;
     fs::create_directories(protocol_root, ec);
-    am.save_database(protocol + ":/", index, is_shipped_location);
+    am.save_database(protocol + ":/",
+                     index,
+                     [&left_out](const std::string& location)
+                     {
+                         return !is_deploy_script_location(location) && !left_out.contains(location);
+                     });
+    const compiled_file_filter is_shipped = [&](const fs::path& file, const fs::path& relative)
+    {
+        return is_shipped_compiled_file(file, with_debug_symbols) &&
+               !left_out.contains(get_deploy_source_key(protocol, relative));
+    };
     if(!params.deploy_packed_assets)
     {
         // The loose files are the build now; a pack left from an earlier one would be mounted over them.
@@ -1351,15 +1353,11 @@ void deploy_protocol_data(asset_manager& am,
         remove_patch_packs(protocol_root, 1);
         mirror_for_deploy(compiled,
                           destination,
-                          [with_debug_symbols](const fs::path& file)
+                          [&](const fs::path& file)
                           {
-                              return is_shipped_compiled_file(file, with_debug_symbols);
+                              return is_shipped(file, file.lexically_relative(compiled));
                           });
-        // The cooked variants replace their plain-compiled counterparts, in the destination only.
-        if(fs::exists(cooked, ec))
-        {
-            copy_for_deploy(cooked, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-        }
+        copy_cooked_for_deploy(cooked, destination, is_shipped);
         return;
     }
     // Only what CoreCLR loads from disk stays loose; the pack reads everything else from the cache.
@@ -1369,7 +1367,7 @@ void deploy_protocol_data(asset_manager& am,
                       {
                           return is_loose_only_file(file) && is_shipped_compiled_file(file, with_debug_symbols);
                       });
-    const auto inputs = collect_pack_inputs(compiled, cooked, index, with_debug_symbols);
+    const auto inputs = collect_pack_inputs(compiled, cooked, index, is_shipped);
     if(params.deploy_patch_release.empty())
     {
         write_full_pack(protocol_root, inputs);
@@ -2335,6 +2333,31 @@ auto editor_actions::keep_release(rtti::context& ctx, const deploy_settings& par
     return true;
 }
 
+auto editor_actions::remove_release(rtti::context& ctx, const std::string& name, std::string& error) -> bool
+{
+    const auto release = get_release_folder(name);
+    fs::error_code ec;
+    if(!is_valid_release_name(name) || !fs::is_directory(release, ec))
+    {
+        error = fmt::format("No release named '{}' is kept.", name);
+        return false;
+    }
+    fs::remove_all(release, ec);
+    if(ec)
+    {
+        error = fmt::format("Removing release {} failed: {}", name, ec.message());
+        return false;
+    }
+    auto& pm = ctx.get_cached<project_manager>();
+    if(pm.get_deploy_settings().deploy_patch_release == name)
+    {
+        pm.get_deploy_settings().deploy_patch_release.clear();
+        pm.save_deploy_settings();
+    }
+    APPLOG_INFO("Removed release {} from {}", name, release.generic_string());
+    return true;
+}
+
 
 auto editor_actions::deploy_project(rtti::context& ctx,
                                     const deploy_settings& params) -> std::map<std::string, tpp::shared_future<void>>
@@ -2351,6 +2374,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     auto& pm = ctx.get_cached<project_manager>();
     auto project_name = pm.get_name();
     auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
+    const auto startup_scene = pm.get_settings().standalone.startup_scene.id();
 
     // Before anything touches the destination, so a refused deploy leaves the previous build there.
     // Reported as a failed step: the Deploy window and the deploy tool both show a step's error.
@@ -2467,10 +2491,21 @@ auto editor_actions::deploy_project(rtti::context& ctx,
             th.pool
                 ->schedule(
                     "Deploying Project Data",
-                    [params, &am, cook_staging]()
+                    [params, &am, cook_staging, startup_scene]()
                     {
                         APPLOG_INFO("Deploying Project Data...");
-                        deploy_protocol_data(am, params, "app", cook_staging);
+                        std::unordered_set<std::string> left_out;
+                        if(is_deploy_content_filtered(params))
+                        {
+                            const auto content = detect_deploy_content(am, params, startup_scene);
+                            left_out = get_deploy_left_out_keys(params, content);
+                            APPLOG_INFO("Deploy: shipping {} of {} project assets; {} left out (see the Deploy "
+                                        "window's Content tab).",
+                                        content.entries.size() - left_out.size(),
+                                        content.entries.size(),
+                                        left_out.size());
+                        }
+                        deploy_protocol_data(am, params, "app", cook_staging, left_out);
                         APPLOG_INFO("Deploying Project Data - Done");
                     })
                 .share();
@@ -2487,7 +2522,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                     [params, &am, cook_staging]()
                     {
                         APPLOG_INFO("Deploying Engine Data...");
-                        deploy_protocol_data(am, params, "engine", cook_staging);
+                        deploy_protocol_data(am, params, "engine", cook_staging, {});
                         APPLOG_INFO("Deploying Engine Data - Done");
                     })
                 .share();

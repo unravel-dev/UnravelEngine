@@ -63,8 +63,13 @@ Building a scene is not shipping a game. The rest of the chain:
   copies what changed. To ship updates as small patches: deploy, then
   deploy_keep_release (named by app.version), then deploy_set_settings
   patch_release to that name - later deploys ship the release's packs
-  unchanged plus content_p1.pak with every change since. While a deploy runs,
-  project and settings changes are refused.
+  unchanged plus content_p1.pak with every change since; deploy_remove_release
+  deletes a kept release. To ship only what the game uses: deploy_set_settings
+  only_used_assets true, scenes (the scenes scripts load besides the startup
+  scene) and include (folders or assets scripts load by a path built at run
+  time); deploy_get_content lists every project asset with whether it ships and
+  why, and named_folders points at folders scripts build paths in. While a
+  deploy runs, project and settings changes are refused.
 - Driving and verifying the game needs synthesized input - see the
   verification skill.
 

@@ -46,6 +46,19 @@ struct deploy_settings
     /// ship unchanged and content_p1.pak holds every change since it, so players who have the release
     /// download only the patch. Empty: full packs.
     std::string deploy_patch_release;
+
+    /// Ship only the project assets the game uses: what the startup scene and deploy_scenes reference,
+    /// directly or through other assets, with deploy_included added and deploy_excluded taken out.
+    /// Off: every project asset ships. Engine assets always ship whole, since engine code loads
+    /// them by path.
+    bool deploy_only_used_assets{false};
+    /// Scenes the game loads besides the startup scene, by asset key ("app:/data/levels/one.spfb").
+    std::vector<std::string> deploy_scenes;
+    /// Folders and assets that ship whatever the scenes use, by key: what scripts load by a path or
+    /// key built at run time. The most specific rule for a path wins over its parents' rules.
+    std::vector<std::string> deploy_included;
+    /// Folders and assets that never ship, by key, even when the scenes use them.
+    std::vector<std::string> deploy_excluded;
 };
 
 

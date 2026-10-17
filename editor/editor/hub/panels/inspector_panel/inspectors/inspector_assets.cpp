@@ -32,6 +32,7 @@
 
 
 #include <editor/assets/asset_actions.h>
+#include <editor/assets/asset_icons.h>
 #include <editor/editing/actions/lambda_actions.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
@@ -102,60 +103,6 @@ auto process_drag_drop_target(asset_manager& am, asset_handle<T>& entry) -> bool
         ImGui::EndDragDropTarget();
     }
     return result;
-}
-
-/// The icon of an asset type, for a field or a picker tile without a thumbnail.
-template<typename T>
-auto get_asset_icon() -> const char*
-{
-    if constexpr(std::is_same_v<T, gfx::texture>)
-    {
-        return ICON_MDI_IMAGE_OUTLINE;
-    }
-    else if constexpr(std::is_same_v<T, material>)
-    {
-        return ICON_MDI_CIRCLE_HALF_FULL;
-    }
-    else if constexpr(std::is_same_v<T, mesh>)
-    {
-        return ICON_MDI_CUBE_OUTLINE;
-    }
-    else if constexpr(std::is_same_v<T, animation_clip>)
-    {
-        return ICON_MDI_ANIMATION_OUTLINE;
-    }
-    else if constexpr(std::is_same_v<T, animation_controller>)
-    {
-        return ICON_MDI_STATE_MACHINE;
-    }
-    else if constexpr(std::is_same_v<T, prefab>)
-    {
-        return ICON_MDI_PACKAGE_VARIANT_CLOSED;
-    }
-    else if constexpr(std::is_same_v<T, scene_prefab>)
-    {
-        return ICON_MDI_MAP_OUTLINE;
-    }
-    else if constexpr(std::is_same_v<T, physics_material>)
-    {
-        return ICON_MDI_ATOM;
-    }
-    else if constexpr(std::is_same_v<T, audio_clip>)
-    {
-        return ICON_MDI_MUSIC_NOTE;
-    }
-    else if constexpr(std::is_same_v<T, font>)
-    {
-        return ICON_MDI_FORMAT_FONT;
-    }
-    else if constexpr(std::is_same_v<T, style_sheet>)
-    {
-        return ICON_MDI_LANGUAGE_CSS3;
-    }
-    else
-    {
-        return ICON_MDI_FILE_DOCUMENT_OUTLINE;
-    }
 }
 
 /// The thumbnail of an asset, the icon of its type when it has none, a clock while it loads.

@@ -5,6 +5,7 @@
 
 #include <serialization/types/array.hpp>
 #include <serialization/types/string.hpp>
+#include <serialization/types/vector.hpp>
 
 namespace unravel
 {
@@ -86,6 +87,10 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
     try_save(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
     try_save(ar, ser20::make_nvp("deploy_patch_release", obj.deploy_patch_release));
+    try_save(ar, ser20::make_nvp("deploy_only_used_assets", obj.deploy_only_used_assets));
+    try_save(ar, ser20::make_nvp("deploy_scenes", obj.deploy_scenes));
+    try_save(ar, ser20::make_nvp("deploy_included", obj.deploy_included));
+    try_save(ar, ser20::make_nvp("deploy_excluded", obj.deploy_excluded));
 }
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_binary_t);
@@ -104,6 +109,10 @@ LOAD(deploy_settings)
     try_load(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
     try_load(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
     try_load(ar, ser20::make_nvp("deploy_patch_release", obj.deploy_patch_release));
+    try_load(ar, ser20::make_nvp("deploy_only_used_assets", obj.deploy_only_used_assets));
+    try_load(ar, ser20::make_nvp("deploy_scenes", obj.deploy_scenes));
+    try_load(ar, ser20::make_nvp("deploy_included", obj.deploy_included));
+    try_load(ar, ser20::make_nvp("deploy_excluded", obj.deploy_excluded));
 }
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_binary_t);

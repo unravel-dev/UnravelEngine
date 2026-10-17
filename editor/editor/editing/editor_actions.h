@@ -212,6 +212,12 @@ struct editor_actions
      */
     static auto keep_release(rtti::context& ctx, const deploy_settings& params, std::string& name, std::string& error)
         -> bool;
+    /**
+     * @brief Deletes a kept release's packs. A project patching against it goes back to full builds,
+     * since a patch can no longer be made for it.
+     * @param error Receives why nothing was removed: no such release, or the folder could not be deleted.
+     */
+    static auto remove_release(rtti::context& ctx, const std::string& name, std::string& error) -> bool;
 
 
     static void recompile_shaders(const std::string& group = "");

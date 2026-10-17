@@ -33,11 +33,11 @@ namespace stl = tinystl;
 #include <time.h>
 
 #include <filesystem/pack.h>
+#include <hpp/optional.hpp>
 
 #include <algorithm>
 #include <iterator>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 namespace entry
@@ -102,7 +102,7 @@ private:
     bx::FileReader file_;
     bool is_file_open_{};
     fs::packed_file packed_;
-    std::optional<bx::MemoryReader> memory_;
+    hpp::optional<bx::MemoryReader> memory_;
 };
 
 class FileWriter : public bx::FileWriter

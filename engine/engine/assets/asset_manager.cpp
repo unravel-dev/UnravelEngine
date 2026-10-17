@@ -184,6 +184,14 @@ auto asset_manager::get_all_assets(const std::string& group) const -> std::vecto
     return result;
 }
 
+auto asset_manager::get_database_snapshot(const std::string& group) const -> asset_database::database_t
+{
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    const auto protocol = fs::extract_protocol(fs::path(group));
+    const auto it = databases_.find(protocol.generic_string());
+    return it == databases_.end() ? asset_database::database_t{} : it->second.get_database();
+}
+
 auto asset_manager::get_database(const std::string& key) -> asset_database&
 {
     auto protocol = fs::extract_protocol(fs::path(key));

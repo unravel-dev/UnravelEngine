@@ -5,6 +5,8 @@
 
 #include <editor/editing/editor_actions.h>
 
+#include "deploy_content_view.h"
+
 namespace unravel
 {
 
@@ -59,12 +61,14 @@ private:
     void draw_status(rtti::context& ctx);
     void draw_actions(rtti::context& ctx);
     void keep_release(rtti::context& ctx);
+    void remove_release(rtti::context& ctx, const std::string& name);
     void refresh_releases();
 
     imgui_panels* parent_{};
     bool show_request_{};
 
     std::map<std::string, tpp::shared_future<void>> deploy_jobs_;
+    deploy_content_view content_view_;
     /// The kept releases, read when the window opens, a release is kept or the picker opens.
     std::vector<kept_release> releases_;
     /// What the last Keep as Release did, shown under the releases.

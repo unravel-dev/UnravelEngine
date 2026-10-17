@@ -488,6 +488,13 @@ public:
     auto get_all_assets(const std::string& group) const -> std::vector<std::string>;
 
     /**
+     * @brief A copy of a protocol's asset database (uid to location and metadata), for walks that
+     * look many assets up and must not hold the database lock meanwhile.
+     * @param group A path of the protocol, such as "app:/".
+     */
+    auto get_database_snapshot(const std::string& group) const -> asset_database::database_t;
+
+    /**
      * @brief Evicts full-loaded assets not accessed within the given duration.
      * Demotes them back to deferred state so they can be re-loaded on next access.
      * @param group The group to evict assets from.

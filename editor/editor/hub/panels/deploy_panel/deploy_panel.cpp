@@ -1,6 +1,7 @@
 #include "deploy_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
+#include "deploy_panel_widgets.h"
 
 #include <editor/format/format_bytes.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h>
@@ -26,85 +27,33 @@ namespace unravel
 {
 namespace
 {
-using screen_card::to_pixels;
+using namespace deploy_widgets;
 
-// Sizes are in units of the font size, like the start page and the About window.
-constexpr float DEPLOY_WIDTH = 42.0f;
+// Sizes are in units of the font size.
+constexpr float DEPLOY_WIDTH = 54.0f;
 constexpr float DEPLOY_ROUNDING = 0.75f;
 constexpr float DEPLOY_TITLE_SCALE = 1.3f;
-constexpr float DEPLOY_TITLE_ICON_GAP = 0.45f;
-constexpr float DEPLOY_SECTION_GAP = 1.0f;
-constexpr float DEPLOY_LINE_GAP = 0.35f;
-constexpr float DEPLOY_BUTTON_HEIGHT = 2.2f;
-constexpr float DEPLOY_BUTTON_PADDING_X = 1.0f;
-constexpr float DEPLOY_BUTTON_ROUNDING = 0.4f;
 constexpr float DEPLOY_CLOSE_INSET = 0.6f;
 constexpr float DEPLOY_SCREEN_MARGIN = 1.0f;
-// A tab body is at least this tall, so switching tabs barely moves the window, and at most this
-// share of the work area, so long lists scroll inside it and the status and buttons stay in view.
-constexpr float DEPLOY_BODY_MIN_HEIGHT = 20.0f;
-constexpr float DEPLOY_BODY_MAX_SHARE = 0.5f;
-constexpr float DEPLOY_ACCENT_ACTIVE_SHADE = 0.85f;
-constexpr ImU32 DEPLOY_WARNING_COLOR = IM_COL32(255, 190, 60, 255);
-// The theme's fields are darker than a window and all but vanish on the lighter popup, so they
-// are washed light here, as on the start page.
-constexpr ImU32 DEPLOY_FIELD_COLOR = IM_COL32(255, 255, 255, 14);
-constexpr ImU32 DEPLOY_FIELD_HOVERED_COLOR = IM_COL32(255, 255, 255, 24);
-constexpr ImU32 DEPLOY_FIELD_ACTIVE_COLOR = IM_COL32(255, 255, 255, 30);
+// Every tab body has the same height, so switching tabs never moves the window: this share of the
+// work area, kept between the two limits. Longer content scrolls inside it, and the status and
+// buttons under it stay in view.
+constexpr float DEPLOY_BODY_SHARE = 0.55f;
+constexpr float DEPLOY_BODY_MIN_HEIGHT = 24.0f;
+constexpr float DEPLOY_BODY_MAX_HEIGHT = 40.0f;
 // Jobs are named "Deploying X"; the steps show X.
 constexpr hpp::string_view DEPLOY_JOB_PREFIX = "Deploying ";
 // The empty Patch Against Release.
 constexpr const char* DEPLOY_FULL_BUILD_LABEL = "None - full build";
 
-void draw_muted_text(const char* text)
-{
-    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
-    ImGui::TextWrapped("%s", text);
-    ImGui::PopStyleColor();
-}
-
-void draw_gap(float font_units)
-{
-    ImGui::Dummy(ImVec2(0.0f, to_pixels(font_units)));
-}
-
-/// An icon and a line of text, the icon centered on the line.
-void draw_icon_line(const char* icon, ImU32 icon_color, const char* text, ImU32 text_color)
-{
-    const ImVec2 min = ImGui::GetCursorScreenPos();
-    const float icon_width = ImGui::GetFontSize();
-    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
-                              ImVec2(min.x + icon_width * 0.5f, min.y + ImGui::GetTextLineHeight() * 0.5f),
-                              icon,
-                              icon_color);
-    ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width + to_pixels(DEPLOY_TITLE_ICON_GAP), min.y));
-    ImGui::PushStyleColor(ImGuiCol_Text, text_color);
-    // Long paths wrap under themselves, not under the icon.
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(text);
-    ImGui::PopTextWrapPos();
-    ImGui::PopStyleColor();
-}
-
 void draw_header()
 {
     ImGui::PushFont(ImGui::Font::Bold);
     ImGui::PushWindowFontScale(DEPLOY_TITLE_SCALE);
-    draw_icon_line(ICON_MDI_PACKAGE_VARIANT,
-                   ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color()),
-                   "Deploy Project",
-                   ImGui::GetColorU32(ImGuiCol_Text));
+    draw_icon_line(ICON_MDI_PACKAGE_VARIANT, get_accent_u32(), "Deploy Project", ImGui::GetColorU32(ImGuiCol_Text));
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
     draw_muted_text("Builds the game for this platform into a folder.");
-}
-
-void draw_section_title(const char* title)
-{
-    ImGui::PushFont(ImGui::Font::Bold);
-    ImGui::TextUnformatted(title);
-    ImGui::PopFont();
-    draw_gap(DEPLOY_LINE_GAP);
 }
 
 /// The close button in the top right corner of the window.
@@ -117,29 +66,43 @@ auto draw_close_button() -> bool
     return container_widgets::draw_icon_button({"##deploy_close", ICON_MDI_CLOSE, "Close"}, ImRect(min, min + ImVec2(side, side)));
 }
 
-auto calc_button_width(const char* label) -> float
+/// The delete button of a kept release, which asks first. True once the deletion is confirmed.
+auto draw_release_remove_button(const std::string& name, bool is_patched, bool is_enabled) -> bool
 {
-    return ImGui::CalcTextSize(label, nullptr, true).x + 2.0f * to_pixels(DEPLOY_BUTTON_PADDING_X);
-}
-
-/// A section title with a button at the right end of its line, for what acts on the section.
-auto draw_section_title_button(const char* title, const char* label, const char* tooltip, bool is_enabled) -> bool
-{
-    ImGui::AlignTextToFramePadding();
-    ImGui::PushFont(ImGui::Font::Bold);
-    ImGui::TextUnformatted(title);
-    ImGui::PopFont();
-    ImGui::SameLine();
-    const float width = calc_button_width(label);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, ImGui::GetContentRegionAvail().x - width));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, to_pixels(DEPLOY_BUTTON_ROUNDING));
+    const float side = ImGui::GetFrameHeight();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImRect rect(min, min + ImVec2(side, side));
+    ImGui::ItemSize(rect);
     ImGui::BeginDisabled(!is_enabled);
-    const bool is_pressed = ImGui::Button(label, ImVec2(width, 0.0f));
+    if(container_widgets::draw_icon_button({"##remove_release", ICON_MDI_DELETE_OUTLINE, "Delete this release", true}, rect))
+    {
+        ImGui::OpenPopup("##remove_release_confirm");
+    }
     ImGui::EndDisabled();
-    ImGui::PopStyleVar();
-    ImGui::SetItemTooltipEx("%s", tooltip);
-    draw_gap(DEPLOY_LINE_GAP);
-    return is_pressed;
+    bool is_confirmed = false;
+    if(ImGui::BeginPopup("##remove_release_confirm"))
+    {
+        ImGui::PushFont(ImGui::Font::Bold);
+        ImGui::TextUnformatted(fmt::format("Delete release {}?", name).c_str());
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::TextUnformatted(is_patched ? "Its packs are deleted, and deploys make full builds again."
+                                          : "Its packs are deleted; patches can no longer be made for it.");
+        ImGui::PopStyleColor();
+        draw_gap(LINE_GAP);
+        if(ImGui::Button(ICON_MDI_DELETE_OUTLINE " Delete"))
+        {
+            is_confirmed = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Cancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    return is_confirmed;
 }
 
 /// Bytes of the files under `folder`.
@@ -174,32 +137,6 @@ void inspect_deploy_properties(rtti::context& ctx, std::initializer_list<entt::h
     {
         pm.save_deploy_settings();
     }
-}
-
-/// A button of the window: the primary one takes the accent color.
-auto draw_button(const char* label, bool is_primary, bool is_enabled) -> bool
-{
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, to_pixels(DEPLOY_BUTTON_ROUNDING));
-    if(is_primary)
-    {
-        const ImVec4 accent = imgui_style::get_accent_color();
-        const ImVec4 active(accent.x * DEPLOY_ACCENT_ACTIVE_SHADE,
-                            accent.y * DEPLOY_ACCENT_ACTIVE_SHADE,
-                            accent.z * DEPLOY_ACCENT_ACTIVE_SHADE,
-                            1.0f);
-        ImGui::PushStyleColor(ImGuiCol_Button, accent);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(accent.x, accent.y, accent.z, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
-    }
-    ImGui::BeginDisabled(!is_enabled);
-    const bool is_pressed = ImGui::Button(label, ImVec2(calc_button_width(label), to_pixels(DEPLOY_BUTTON_HEIGHT)));
-    ImGui::EndDisabled();
-    if(is_primary)
-    {
-        ImGui::PopStyleColor(3);
-    }
-    ImGui::PopStyleVar();
-    return is_pressed;
 }
 
 auto get_step_name(hpp::string_view job_name) -> std::string
@@ -260,13 +197,16 @@ void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
         show_request_ = false;
         refresh_releases();
         release_message_.clear();
+        content_view_.invalidate();
     }
 
-    const float width = to_pixels(DEPLOY_WIDTH);
+    const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
+    const float margin = 2.0f * to_pixels(DEPLOY_SCREEN_MARGIN);
+    const float width = ImMin(to_pixels(DEPLOY_WIDTH), ImMax(work_size.x - margin, 0.0f));
     // Taller than the editor's work area, the window scrolls instead of losing its buttons off screen.
-    const float max_height = ImGui::GetMainViewport()->WorkSize.y - 2.0f * to_pixels(DEPLOY_SCREEN_MARGIN);
+    const float max_height = ImMax(work_size.y - margin, 0.0f);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, ImMax(max_height, 0.0f)));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, max_height));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, screen_card::get_padding());
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, to_pixels(DEPLOY_ROUNDING));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
@@ -341,13 +281,13 @@ void deploy_panel::deploy_and_run(rtti::context& ctx, const deploy_settings& par
 void deploy_panel::draw_ui(rtti::context& ctx)
 {
     draw_header();
-    draw_gap(DEPLOY_SECTION_GAP);
+    draw_gap(SECTION_GAP);
     draw_tabs(ctx);
-    draw_gap(DEPLOY_LINE_GAP);
+    draw_gap(LINE_GAP);
     ImGui::Separator();
-    draw_gap(DEPLOY_LINE_GAP);
+    draw_gap(LINE_GAP);
     draw_status(ctx);
-    draw_gap(DEPLOY_SECTION_GAP);
+    draw_gap(SECTION_GAP);
     draw_actions(ctx);
 }
 
@@ -380,26 +320,22 @@ void deploy_panel::draw_tabs(rtti::context& ctx)
 
 void deploy_panel::draw_tab_body(rtti::context& ctx, tab_drawer draw)
 {
-    const float min_height = to_pixels(DEPLOY_BODY_MIN_HEIGHT);
-    const float max_height = ImMax(min_height, ImGui::GetMainViewport()->WorkSize.y * DEPLOY_BODY_MAX_SHARE);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, min_height), ImVec2(FLT_MAX, max_height));
-    if(ImGui::BeginChild("##deploy_tab_body",
-                         ImVec2(0.0f, 0.0f),
-                         ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding))
+    const float height = ImClamp(ImGui::GetMainViewport()->WorkSize.y * DEPLOY_BODY_SHARE,
+                                 to_pixels(DEPLOY_BODY_MIN_HEIGHT),
+                                 to_pixels(DEPLOY_BODY_MAX_HEIGHT));
+    if(ImGui::BeginChild("##deploy_tab_body", ImVec2(0.0f, height), ImGuiChildFlags_AlwaysUseWindowPadding))
     {
         // What is being deployed does not change under a running deploy.
         ImGui::BeginDisabled(is_deploying());
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, DEPLOY_FIELD_COLOR);
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, DEPLOY_FIELD_HOVERED_COLOR);
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, DEPLOY_FIELD_ACTIVE_COLOR);
+        push_field_colors();
         (this->*draw)(ctx);
-        ImGui::PopStyleColor(3);
+        pop_field_colors();
         ImGui::EndDisabled();
     }
     ImGui::EndChild();
 }
 
-/// What the game is and where it is built.
+/// What the game is, where it is built and how its files are stored.
 void deploy_panel::draw_build_tab(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
@@ -413,19 +349,22 @@ void deploy_panel::draw_build_tab(rtti::context& ctx)
     {
         pm.save_project_settings(ctx);
     }
-    draw_gap(DEPLOY_SECTION_GAP);
+    draw_gap(SECTION_GAP);
     draw_section_title("Output");
     inspect_deploy_properties(ctx, {"deploy_location"_hs, "deploy_and_run"_hs});
+    draw_gap(SECTION_GAP);
+    draw_section_title("Packaging");
+    inspect_deploy_properties(ctx,
+                              {"deploy_packed_assets"_hs,
+                               "deploy_cooked_assets"_hs,
+                               "deploy_dependencies"_hs,
+                               "deploy_debug_symbols"_hs});
 }
 
-/// What the build ships: the assets and how they are stored, the binaries beside them.
+/// The scenes the game is built from and the assets that ship with it.
 void deploy_panel::draw_content_tab(rtti::context& ctx)
 {
-    draw_section_title("Assets");
-    inspect_deploy_properties(ctx, {"deploy_packed_assets"_hs, "deploy_cooked_assets"_hs});
-    draw_gap(DEPLOY_SECTION_GAP);
-    draw_section_title("Binaries");
-    inspect_deploy_properties(ctx, {"deploy_dependencies"_hs, "deploy_debug_symbols"_hs});
+    content_view_.draw(ctx);
 }
 
 /// The release a deploy patches and the releases kept to patch.
@@ -438,12 +377,12 @@ void deploy_panel::draw_releases_tab(rtti::context& ctx)
     {
         pm.save_deploy_settings();
     }
-    draw_gap(DEPLOY_LINE_GAP);
+    draw_gap(LINE_GAP);
     draw_muted_text(release.empty()
                         ? "Every pack is written whole."
                         : fmt::format("The packs of {} ship unchanged; content_p1.pak holds every change since.", release)
                               .c_str());
-    draw_gap(DEPLOY_SECTION_GAP);
+    draw_gap(SECTION_GAP);
     draw_kept_releases(ctx);
 }
 
@@ -490,7 +429,8 @@ auto deploy_panel::draw_patch_release_picker(rtti::context& ctx) -> bool
     return is_changed;
 }
 
-/// The kept releases with their size, and Keep as Release for the build in the deploy folder.
+/// The kept releases with their size, Keep as Release for the build in the deploy folder, and a delete
+/// button per release.
 void deploy_panel::draw_kept_releases(rtti::context& ctx)
 {
     const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
@@ -508,32 +448,47 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
     {
         draw_muted_text("None yet. Deploy a packed build, then keep it to ship patches for it.");
     }
-    else if(ImGui::BeginTable("##kept_releases", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX))
+    else if(ImGui::BeginTable("##kept_releases", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX))
     {
         ImGui::TableSetupColumn("Release", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed);
-        const ImU32 accent = ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color());
+        ImGui::TableSetupColumn("Remove", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
+        std::string removed_release;
         for(const auto& release : releases_)
         {
             const bool is_patched = release.name == params.deploy_patch_release;
+            ImGui::PushID(release.name.c_str());
+            const float text_offset = ImGui::GetStyle().FramePadding.y;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + text_offset);
             draw_icon_line(ICON_MDI_TAG_OUTLINE,
-                           is_patched ? accent : imgui_style::get_muted_text_color_u32(),
+                           is_patched ? get_accent_u32() : imgui_style::get_muted_text_color_u32(),
                            is_patched ? fmt::format("{} - patching against it", release.name).c_str() : release.name.c_str(),
                            ImGui::GetColorU32(ImGuiCol_Text));
             ImGui::TableNextColumn();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + text_offset);
             ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
             ImGui::TextUnformatted(format_bytes(release.size).c_str());
             ImGui::PopStyleColor();
+            ImGui::TableNextColumn();
+            if(draw_release_remove_button(release.name, is_patched, !is_deploying()))
+            {
+                removed_release = release.name;
+            }
+            ImGui::PopID();
         }
         ImGui::EndTable();
+        if(!removed_release.empty())
+        {
+            remove_release(ctx, removed_release);
+        }
     }
     if(!release_message_.empty())
     {
-        draw_gap(DEPLOY_LINE_GAP);
+        draw_gap(LINE_GAP);
         draw_icon_line(is_release_message_error_ ? ICON_MDI_ALERT_CIRCLE_OUTLINE : ICON_MDI_TAG_OUTLINE,
-                       is_release_message_error_ ? DEPLOY_WARNING_COLOR : ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color()),
+                       is_release_message_error_ ? WARNING_COLOR : get_accent_u32(),
                        release_message_.c_str(),
                        ImGui::GetColorU32(ImGuiCol_Text));
     }
@@ -549,6 +504,14 @@ void deploy_panel::keep_release(rtti::context& ctx)
     release_message_ = is_release_message_error_
                            ? error
                            : fmt::format("Kept release {}. Pick it in Patch Against Release to ship patches for it.", name);
+    refresh_releases();
+}
+
+void deploy_panel::remove_release(rtti::context& ctx, const std::string& name)
+{
+    std::string error;
+    is_release_message_error_ = !editor_actions::remove_release(ctx, name, error);
+    release_message_ = is_release_message_error_ ? error : fmt::format("Deleted release {}.", name);
     refresh_releases();
 }
 
@@ -579,7 +542,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
         {
             for(const auto& problem : problems)
             {
-                draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE, DEPLOY_WARNING_COLOR, problem.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+                draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE, WARNING_COLOR, problem.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
             }
             return;
         }
@@ -589,7 +552,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
     if(deploy_jobs_.empty())
     {
         draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
-                       ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color()),
+                       get_accent_u32(),
                        fmt::format("Ready to deploy to {}", location).c_str(),
                        imgui_style::get_muted_text_color_u32());
         return;
@@ -619,27 +582,26 @@ void deploy_panel::draw_status(rtti::context& ctx)
     ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
     ImGui::TextWrapped("%s", summary.c_str());
     ImGui::PopStyleColor();
-    draw_gap(DEPLOY_LINE_GAP);
+    draw_gap(LINE_GAP);
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, imgui_style::get_accent_color());
     ImGui::ProgressBar(get_progress(), ImVec2(-FLT_MIN, 0.0f), fmt::format("{} of {} steps", done_count, step_count).c_str());
     ImGui::PopStyleColor();
-    draw_gap(DEPLOY_LINE_GAP);
+    draw_gap(LINE_GAP);
 
-    const ImU32 done_color = ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color());
     for(const auto& [name, job] : deploy_jobs_)
     {
         const auto error = step_errors.find(name);
         if(error != step_errors.end())
         {
             draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
-                           DEPLOY_WARNING_COLOR,
+                           WARNING_COLOR,
                            fmt::format("{}: {}", get_step_name(name), error->second).c_str(),
                            ImGui::GetColorU32(ImGuiCol_Text));
             continue;
         }
         const bool is_done = job.is_ready();
         draw_icon_line(is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK,
-                       is_done ? done_color : imgui_style::get_muted_text_color_u32(),
+                       is_done ? get_accent_u32() : imgui_style::get_muted_text_color_u32(),
                        get_step_name(name).c_str(),
                        is_done ? ImGui::GetColorU32(ImGuiCol_Text) : imgui_style::get_muted_text_color_u32());
     }
