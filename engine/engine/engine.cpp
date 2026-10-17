@@ -45,6 +45,10 @@ namespace unravel
 namespace
 {
 
+// Written next to the executable, never into the launching shell's current directory.
+constexpr const char* LOG_FILE_NAME = "Log.txt";
+constexpr const char* CRASH_LOG_FILE_NAME = "CrashLog.txt";
+
 auto context_ptr() -> rtti::context*&
 {
     static rtti::context* ctx{};
@@ -163,18 +167,19 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     };
     serialization::init();
 
-    ctx.add<logging>();
+    ctx.add<logging>((binary_path / LOG_FILE_NAME).string());
     ctx.add<loading_screen>();
 
     // Install engine crash handlers immediately after logging is available.
     // Windows AVs go through SEH; CrashLog.txt (+ .dmp) are written crash-safely
-    // before these callbacks run.
+    // before these callbacks run. install_handlers copies the path.
+    const std::string crash_log_path = (binary_path / CRASH_LOG_FILE_NAME).string();
     crash::install_handlers(crash::crash_handlers{
         .interrupt_handler = engine_interrupt_handler,
         .termination_handler = engine_termination_handler,
         .crash_handler = engine_crash_handler,
         .exception_handler = engine_exception_handler,
-        .crash_log_path = "CrashLog.txt",
+        .crash_log_path = crash_log_path.c_str(),
         .write_minidump = true,
     });
 
