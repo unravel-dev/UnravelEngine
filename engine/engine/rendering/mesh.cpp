@@ -861,6 +861,7 @@ auto mesh::load_mesh(load_data&& data) -> bool
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
 
     default_material_uids_ = std::move(data.default_material_uids);
+    humanoid_overrides_ = std::move(data.humanoid_overrides);
     submesh_sdfs_ = std::move(data.submesh_sdfs);
     submesh_sdf_coarse_mips_ = std::move(data.submesh_sdf_coarse_mips);
     // Shared, so the card library hands a placement the compiled set itself.
@@ -3002,6 +3003,11 @@ auto mesh::get_data_groups_count() const -> size_t
 auto mesh::get_default_material_uids() const -> const std::vector<hpp::uuid>&
 {
     return default_material_uids_;
+}
+
+auto mesh::get_humanoid_overrides() const -> const std::vector<humanoid_bone_override>&
+{
+    return humanoid_overrides_;
 }
 
 

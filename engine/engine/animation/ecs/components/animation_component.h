@@ -92,10 +92,29 @@ public:
     auto get_pose_retargeting() const -> animation_pose_retargeting;
 
     /**
-     * @brief The model's skeleton prepared for rest-aligned retargeting, rebuilt when the armature
-     * version changes. `build` fills a fresh skeleton when needed.
+     * @brief The pose Rest Aligned retargeting turns this model's bones from, and measures the
+     * clip's skeleton from (see animation_retarget_pose).
      */
-    auto get_target_skeleton(uint64_t armature_version, const std::function<void(animation_target_skeleton&)>& build)
+    void set_retarget_pose(animation_retarget_pose pose);
+    auto get_retarget_pose() const -> animation_retarget_pose;
+
+    /**
+     * @brief Turns of this model's bones in its retarget pose, in character space (see
+     * humanoid_pose_offset); every retargeted pose keeps them. Raising the upper arms keeps a
+     * stocky character's arms clear of its body.
+     */
+    void set_retarget_pose_offsets(const std::vector<humanoid_pose_offset>& offsets);
+    auto get_retarget_pose_offsets() const -> const std::vector<humanoid_pose_offset>&;
+
+    /// Changes whenever a setting the retarget skeleton is built from changes.
+    auto get_retarget_revision() const -> uint64_t;
+
+    /**
+     * @brief The model's skeleton prepared for rest-aligned retargeting, in its retarget pose;
+     * rebuilt when the skeleton version (see animation_system::get_skeleton_version) or a retarget
+     * setting changes. `build` fills a fresh skeleton's bones and hand-set roles when needed.
+     */
+    auto get_target_skeleton(uint64_t skeleton_version, const std::function<void(animation_target_skeleton&)>& build)
         -> const std::shared_ptr<const animation_target_skeleton>&;
 
 private:
@@ -111,8 +130,12 @@ private:
     culling_mode culling_mode_{culling_mode::always_animate};
     animation_retargeting_mode retargeting_mode_{animation_retargeting_mode::name_based};
     animation_pose_retargeting pose_retargeting_{animation_pose_retargeting::copy};
+    animation_retarget_pose retarget_pose_{animation_retarget_pose::bind_pose};
+    std::vector<humanoid_pose_offset> retarget_pose_offsets_;
+    uint64_t retarget_revision_{};
     std::shared_ptr<const animation_target_skeleton> target_skeleton_;
     uint64_t target_skeleton_version_{};
+    uint64_t target_skeleton_revision_{};
     bool auto_play_ = true;
     bool apply_root_motion_ = false;
     float speed_ = 1.0f;

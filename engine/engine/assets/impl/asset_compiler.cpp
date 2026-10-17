@@ -1818,6 +1818,12 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                     kept_material_names.size(),
                     fmt::join(kept_material_names, ", "));
     }
+    // Hand-set humanoid roles hold for the model and for every clip of the file.
+    data.humanoid_overrides = importer->rig.humanoid_overrides;
+    for(auto& animation : animations)
+    {
+        animation.humanoid_overrides = importer->rig.humanoid_overrides;
+    }
     write_output(output, [&](const fs::path& temp) -> void
     {
         save_to_file_bin(temp.string(), data);

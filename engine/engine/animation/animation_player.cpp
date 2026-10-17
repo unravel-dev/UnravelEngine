@@ -306,6 +306,11 @@ auto hash_source_skeleton(const animation_clip& clip) -> size_t
             utils::hash_combine(seed, rotation.w);
         }
     }
+    for(const auto& entry : clip.humanoid_overrides)
+    {
+        utils::hash_combine(seed, size_t(entry.role));
+        utils::hash_combine(seed, entry.bone);
+    }
     return seed;
 }
 
@@ -406,19 +411,31 @@ auto compute_source_rest_globals(const animation_clip& clip) -> std::vector<math
     return rest;
 }
 
-/// The humanoid roles of the clip's source skeleton, as channel indices.
+/// The channel animating each channel's nearest animated ancestor, or -1: the source skeleton's parents.
+auto get_channel_parents(const animation_clip& clip) -> std::vector<int>
+{
+    std::vector<int> parents;
+    parents.reserve(clip.channels.size());
+    for(size_t c = 0; c < clip.channels.size(); ++c)
+    {
+        parents.push_back(get_parent_channel(clip, c));
+    }
+    return parents;
+}
+
+/// The humanoid roles of the clip's source skeleton, as channel indices; hand-set roles win.
 auto find_channel_roles(const animation_clip& clip, const std::vector<math::transform>& source_rest) -> humanoid_map
 {
     std::vector<std::string> names;
-    std::vector<int> parents;
     std::vector<math::vec3> positions;
     for(size_t c = 0; c < clip.channels.size(); ++c)
     {
         names.push_back(clip.channels[c].node_name);
-        parents.push_back(clip.channels[c].parent_channel);
         positions.push_back(source_rest[c].get_position());
     }
-    return find_humanoid_bones(names, parents, positions);
+    humanoid_map roles = find_humanoid_bones(names, get_channel_parents(clip), positions);
+    apply_humanoid_overrides(clip.humanoid_overrides, names, roles);
+    return roles;
 }
 
 /**
@@ -662,6 +679,19 @@ void animation_target_skeleton::compute_humanoid_bones()
         positions.push_back(rest.get_position());
     }
     humanoid = find_humanoid_bones(names, parents, positions);
+    apply_humanoid_overrides(humanoid_overrides, names, humanoid);
+}
+
+void animation_target_skeleton::compute_reference_pose(bool t_pose, const std::vector<humanoid_pose_offset>& offsets)
+{
+    aligns_to_t_pose = t_pose;
+    aligned_global = rest_global;
+    if(aligns_to_t_pose)
+    {
+        align_humanoid_to_t_pose(parents, humanoid, aligned_global);
+    }
+    reference_global = aligned_global;
+    apply_humanoid_pose_offsets(parents, humanoid, offsets, reference_global);
 }
 
 void animation_target_skeleton::set_bones(std::vector<std::string> bone_names,
@@ -688,6 +718,8 @@ void animation_target_skeleton::compute_rest_globals()
         const int parent = i < parents.size() ? parents[i] : -1;
         rest_global[i] = parent >= 0 && size_t(parent) < i ? rest_global[size_t(parent)] * bind_local[i] : bind_local[i];
     }
+    aligned_global = rest_global;
+    reference_global = rest_global;
 }
 
 auto animation_player::get_layer(size_t index) -> animation_layer&
@@ -1926,21 +1958,23 @@ void animation_player::describe_rest_aligned(const animation_clip& clip,
     {
         report.frame_axis = math::normalize(frame.w < 0.0f ? -axis : axis);
     }
+    // Compared in the poses the skeletons are laid onto each other in: after a T-pose
+    // straightening, rests that differed no longer do.
     const humanoid_map source_roles = find_channel_roles(clip, entry.source_rest_global);
     const auto source_position = [&](humanoid_bone role)
     {
-        return entry.source_rest_global[size_t(source_roles[size_t(role)])].get_position();
+        return entry.source_reference_global[size_t(source_roles[size_t(role)])].get_position();
     };
     const auto target_position = [&](humanoid_bone role)
     {
-        return skeleton.rest_global[size_t(skeleton.humanoid[size_t(role)])].get_position();
+        return skeleton.aligned_global[size_t(skeleton.humanoid[size_t(role)])].get_position();
     };
     const auto has_role = [&](humanoid_bone role)
     {
         const int source = source_roles[size_t(role)];
         const int target = skeleton.humanoid[size_t(role)];
-        return source >= 0 && size_t(source) < entry.source_rest_global.size() && target >= 0 &&
-               size_t(target) < skeleton.rest_global.size();
+        return source >= 0 && size_t(source) < entry.source_reference_global.size() && target >= 0 &&
+               size_t(target) < skeleton.aligned_global.size();
     };
     for(const auto& [from, to] : REST_SEGMENTS)
     {
@@ -2069,8 +2103,11 @@ auto animation_player::find_binding(const std::shared_ptr<animation_clip>& clip_
 
     entry->rest_aligned = has_source_rest && !entry->ordered_channels.empty() &&
                           entry->max_target_index < target->parents.size() &&
-                          entry->max_target_index < target->rest_global.size();
+                          entry->max_target_index < target->rest_global.size() &&
+                          entry->max_target_index < target->reference_global.size() &&
+                          entry->max_target_index < target->aligned_global.size();
     entry->source_rest_global.clear();
+    entry->source_reference_global.clear();
     entry->height_ratio = 1.0f;
     entry->frame_rotation = math::identity<math::quat>();
     entry->source_skeleton_hash = 0;
@@ -2080,19 +2117,35 @@ auto animation_player::find_binding(const std::shared_ptr<animation_clip>& clip_
         entry->source_rest_global = std::move(source_rest);
         entry->source_skeleton_hash = hash_source_skeleton(clip);
         entry->is_linear_retarget = is_linear_retarget(clip, entry->channel_targets, entry->target_channels, *target);
-        // Both rest poses are the same physical pose, but each skeleton may stand in its own world
-        // frame - an importer's facing correction on the model's root node, say. Joint positions do
-        // not depend on how bones label their axes, so the rotation that best lays the source rest
-        // joints onto the target's is that frame difference; it turns source world directions into
-        // target world directions.
+        const auto source_roles = find_channel_roles(clip, entry->source_rest_global);
+        // Motion is measured from the source's retarget pose: its rest, or the same skeleton
+        // straightened to a T-pose when the target is, so skeletons resting in other poses agree.
+        entry->source_reference_global = entry->source_rest_global;
+        if(target->aligns_to_t_pose)
+        {
+            align_humanoid_to_t_pose(get_channel_parents(clip), source_roles, entry->source_reference_global);
+        }
+        // Both retarget poses are the same physical pose, but each skeleton may stand in its own
+        // world frame - an importer's facing correction on the model's root node, say. Joint
+        // positions do not depend on how bones label their axes, so the rotation that best lays the
+        // source joints onto the target's is that frame difference; it turns source world
+        // directions into target world directions. The target's offsets are deliberate differences
+        // and stay out of the fit.
         std::vector<math::vec3> source_points;
         std::vector<math::vec3> target_points;
         for(const auto& [target_index, channel_index] : entry->ordered_channels)
         {
-            source_points.push_back(entry->source_rest_global[channel_index].get_position());
-            target_points.push_back(target->rest_global[target_index].get_position());
+            source_points.push_back(entry->source_reference_global[channel_index].get_position());
+            target_points.push_back(target->aligned_global[target_index].get_position());
         }
         entry->frame_rotation = fit_rotation(source_points, target_points);
+        // Humanoids stand upright in their frames (their roles are found that way), so two of them
+        // differ by a heading only. The fit tilts where their proportions differ (a leaning spine,
+        // a big head), and every carried turn would lean with it.
+        if(source_roles[size_t(humanoid_bone::hips)] >= 0 && target->humanoid[size_t(humanoid_bone::hips)] >= 0)
+        {
+            entry->frame_rotation = get_heading(entry->frame_rotation);
+        }
 
         // Motion scales with the hips' height, so a shorter skeleton takes shorter steps. Taken
         // from the skeletons alone (not from a clip's root motion), so every clip of one skeleton
@@ -2102,7 +2155,6 @@ auto animation_player::find_binding(const std::shared_ptr<animation_clip>& clip_
         {
             return (entry->frame_rotation * entry->source_rest_global[c].get_position()).y;
         };
-        const auto source_roles = find_channel_roles(clip, entry->source_rest_global);
         const int source_hips = source_roles[size_t(humanoid_bone::hips)];
         const int target_hips = target->humanoid[size_t(humanoid_bone::hips)];
         const float source_hips_height = source_hips >= 0 ? source_height_of(size_t(source_hips)) : 0.0f;
@@ -2560,15 +2612,16 @@ void animation_player::retarget_source_pose(const animation_clip& anim_clip,
             continue;
         }
         const auto& channel = channels[size_t(c)];
-        const auto& source_rest_global = clip_binding.source_rest_global[size_t(c)];
+        const math::quat source_reference = clip_binding.source_reference_global[size_t(c)].get_rotation();
+        const math::quat target_reference = target.reference_global[t].get_rotation();
 
-        // The bone turns in the world by what the source bone turned from ITS rest pose, carried
-        // from the source root frame into the target's.
+        // The bone turns in the world by what the source bone turned from ITS retarget pose,
+        // carried from the source root frame into the target's, and applied to the target's
+        // retarget pose.
         const math::quat& frame = clip_binding.frame_rotation;
-        const math::quat world_delta = frame *
-                                       (source_global[size_t(c)].get_rotation() * glm::inverse(source_rest_global.get_rotation())) *
-                                       glm::inverse(frame);
-        const math::quat global_rotation = math::normalize(world_delta * target.rest_global[t].get_rotation());
+        const math::quat world_delta =
+            frame * (source_global[size_t(c)].get_rotation() * glm::inverse(source_reference)) * glm::inverse(frame);
+        const math::quat global_rotation = math::normalize(world_delta * target_reference);
 
         // Lengths stay the target's: only the offset from the source rest moves, carried through
         // the parents' frames and scaled by the skeletons' height ratio.
@@ -2591,8 +2644,7 @@ void animation_player::retarget_source_pose(const animation_clip& anim_clip,
         const math::vec3 scale_ratio(rest_scale.x != 0.0f ? source_local[size_t(c)].get_scale().x / rest_scale.x : 1.0f,
                                      rest_scale.y != 0.0f ? source_local[size_t(c)].get_scale().y / rest_scale.y : 1.0f,
                                      rest_scale.z != 0.0f ? source_local[size_t(c)].get_scale().z / rest_scale.z : 1.0f);
-        const math::quat source_to_target =
-            glm::inverse(target.rest_global[t].get_rotation()) * frame * source_rest_global.get_rotation();
+        const math::quat source_to_target = glm::inverse(target_reference) * frame * source_reference;
         local.set_scale(target.bind_local[t].get_scale() * carry_scale_ratio(scale_ratio, source_to_target));
         target_global[t] = parent_global * local;
 

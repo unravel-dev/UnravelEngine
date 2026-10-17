@@ -18,17 +18,25 @@ the last section maps the code for engine work.
 4. Open **Retarget Check** in the Animation inspector. It shows how the clip playing (or one you
    pick) binds to this skeleton: channels matched and how, bones left unreached, the height ratio,
    the bone root motion moves, how far the two rest poses differ, and a warning for each problem
-   it finds. **Humanoid Mapping** above it lists the bone found for each role.
-5. Make sure the clip's skeleton and the character rest in the same pose (T-pose with T-pose,
-   A-pose with A-pose).
-6. For clips that travel (walks, rolls, attacks that lunge), turn on **Apply Root Motion** and
+   it finds. **Humanoid Mapping** above it lists the bone found for each role; its pencil button
+   sets a role by hand when the wrong bone was found.
+5. When the clip's skeleton and the character rest in different poses (an A-pose clip on a T-pose
+   character), set **Retarget Pose** to **T-Pose**: both skeletons are straightened before motion
+   is carried over.
+6. When a character of other proportions puts its limbs through its body (short arms beside a big
+   head and a wide body), add **Retarget Pose Offsets**: raising both upper arms 20 to 30 degrees
+   keeps them clear in every clip.
+7. For clips that travel (walks, rolls, attacks that lunge), turn on **Apply Root Motion** and
    check each clip's root motion import settings.
 
 ## Concepts
 
 - **Rest pose.** The pose a skeleton is built in, before any animation: usually a T-pose or an
-  A-pose. Rest Aligned retargeting carries how far each bone moved away from its rest pose, so both
-  rest poses must be the same physical pose.
+  A-pose.
+- **Retarget pose.** The pose Rest Aligned retargeting measures motion from on the clip's skeleton
+  and applies it to on the character. By default each skeleton's rest pose, so both must rest in
+  the same physical pose; with Retarget Pose T-Pose, both rests straightened to a T-pose; on the
+  character, turned further by its Retarget Pose Offsets.
 - **Channel.** One animated node of a clip: its name and its position, rotation and scale keys, in
   the node's local space (relative to its parent).
 - **Humanoid roles.** Twenty-two bones every humanoid has in some form: hips, spine, chest, upper
@@ -71,6 +79,8 @@ skeleton as the skinned one.
 |---|---|---|
 | Retargeting Mode | **Name Based** (default), Index Based | How channels find bones. Name Based matches bone names; Index Based uses the node order in the file and only suits clips from the same file. |
 | Pose Retargeting | **Copy** (default), Rest Aligned | How a pose reaches the bones. Copy writes the clip's local transforms as they are; Rest Aligned maps the motion from the clip's skeleton onto this one. Rest Aligned needs Name Based. |
+| Retarget Pose | **Bind Pose** (default), T-Pose | Rest Aligned only. Bind Pose measures motion from each skeleton's rest pose. T-Pose first straightens both skeletons by role: upper and lower arms level along the character's sides, upper and lower legs straight down. Copies of one skeleton play the same either way. |
+| Retarget Pose Offsets | role + rotation (degrees) | Rest Aligned only. Turns of this character's bones in its retarget pose, in its own space: about its side axis (towards its left), up and forward. Right-side roles are mirrored, so (0, 0, 20) on both upper arms raises both. Every clip keeps them. |
 | Apply Root Motion | off / on | Moves the entity by the clip's root motion. With a Character Controller in play mode the move goes through it, so it collides. |
 
 Copy is exact and fast when the skeletons really are the same. Across different skeletons it is
@@ -80,6 +90,13 @@ point along +X).
 
 The target side of Rest Aligned is built from the model: its bone names, parents and bind pose,
 and the humanoid roles found in that bind pose.
+
+**Roles set by hand.** Where the finder picks the wrong bone (a rig that animates a hand bone below
+the wrist it found), set the role in the model file's import settings: **Rig > Humanoid Overrides**,
+a role and a bone name each, an empty name taking the role away. The pencil button in Humanoid
+Mapping writes them for you. They are compiled into the model and into every clip of the file, so
+they hold where the skeleton plays clips and where its clips play on others. The model is imported
+again when they change.
 
 ## 3. Binding: done once per clip and skeleton
 
@@ -91,16 +108,21 @@ the result until the clip or the model's armature changes.
    2. the same name without its FBX namespace (`mixamorig:Hips` and `mixamorig1:Hips`);
    3. Rest Aligned only: the same humanoid role. The clip's skeleton gets its roles from its
       recorded rest pose, so `upperarm_l`, `mixamorig:LeftArm` and `DEF-upper_arm.L` all land on
-      the target's left upper arm.
+      the target's left upper arm. Roles set by hand win on both sides.
 
    Bones no channel reaches keep their bind pose.
-2. **Frame fit.** The two skeletons may stand in different frames: a Z-up export against a Y-up
-   one, or a model the importer turned to face forward. The rotation that best lays the source rest
-   joint positions onto the target's is that frame difference. Joint positions do not depend on
-   how a rig orients its bone axes, so the fit captures the frame only.
-3. **Height ratio.** The target's hip height over the source's. A shorter character takes shorter
+2. **Retarget poses.** Each skeleton's rest pose, straightened to a T-pose when Retarget Pose asks
+   for it; the character's then turned by its offsets.
+3. **Frame fit.** The two skeletons may stand in different frames: a Z-up export against a Y-up
+   one, or a model the importer turned to face forward. The rotation that best lays the source
+   joint positions onto the target's (in the retarget poses, without the offsets) is that frame
+   difference. Joint positions do not depend on how a rig orients its bone axes, so the fit
+   captures the frame only. Two humanoids both stand upright, so between them only the fit's
+   heading (its turn about the up axis) is kept: where their proportions differ (a leaning spine,
+   a big head) the fit tilts, and every carried motion would lean with it.
+4. **Height ratio.** The target's hip height over the source's. A shorter character takes shorter
    steps and jumps lower.
-4. **Root-motion target.** The root channel is matched like any other. When the target lacks that
+5. **Root-motion target.** The root channel is matched like any other. When the target lacks that
    bone (a clip with a floor-level root bone on a rig that starts at the hips), the motion reports
    through the root's first matched descendant, normally the hips.
 
@@ -111,9 +133,9 @@ the result until the clip or the model's armature changes.
 **Rest Aligned** samples the whole source pose, unmatched channels included (a root the target
 lacks still carries its children), builds it up to world space, and then poses each matched bone:
 
-- **Rotation.** How far the source bone turned from its rest pose, in world space, is carried into
-  the target's frame by the frame fit and applied on top of the target bone's own rest. Each rig
-  keeps its own bone axes; only the change is carried.
+- **Rotation.** How far the source bone turned from its retarget pose, in world space, is carried
+  into the target's frame by the frame fit and applied on top of the target bone's retarget pose.
+  Each rig keeps its own bone axes; only the change is carried.
 - **Position.** The target keeps its bone lengths. Only the source bone's move away from its rest
   (the hips bobbing, say) is carried, turned into the target's frame and scaled by the height
   ratio.
@@ -143,7 +165,9 @@ warnings name most of the causes below.
 |---|---|---|
 | Character lies down, twists or stretches | Copy with clips from another export or rig | Set Pose Retargeting to Rest Aligned. |
 | Nothing moves | Index Based with clips from another file, or no names or roles match | Use Name Based; check Humanoid Mapping on both sides. |
-| Arms held too high or too low through every clip | The rest poses differ (T-pose against A-pose); Retarget Check's Rest poses list shows the angle per limb | Use clips made for the same rest pose, or re-export one side in the other's pose. |
+| Arms held too high or too low through every clip | The rest poses differ (T-pose against A-pose); Retarget Check's Rest poses list shows the angle per limb | Set Retarget Pose to T-Pose. |
+| Limbs pass through the body or the head | The character's proportions differ (short arms, wide body, big head): human angles land inside it | Add Retarget Pose Offsets, for example raise both upper arms 20 to 30 degrees. |
+| A limb or a hand does not move, or moves the wrong bone | The finder gave the role to another bone (a hand role on the wrist while the clips animate the hand) | Set the role by hand: the pencil button in Humanoid Mapping, or the model file's Rig > Humanoid Overrides. |
 | Fingers, tail or accessory bones stay still | They match neither by name nor by role (roles cover 22 body bones) | Give them the same names on both rigs; FBX namespaces are already ignored. |
 | Left and right swapped | Side-less bone names read the wrong way | Check Humanoid Mapping; name the sides (`_l`, `.R`, `Left`). |
 | Steps too long or too short, feet slide | Proportions differ; the hips found on one side are wrong | Check that both sides found their hips; add Foot IK for contact. |
@@ -174,7 +198,22 @@ It returns the mode in effect, match counts per kind, the unmatched channels, th
 `height_ratio`, the frame turn, the root-motion channel and bone, rest differences per limb in
 degrees, and `warnings`; an empty `warnings` list is the goal.
 
-Check the roles on both sides; every role the clip uses should exist on the character:
+Straighten both skeletons, raise a stocky character's arms, and set a role by hand (the model file
+is imported again):
+
+```json
+{"name": "scene_set_component_properties_batch", "arguments": {"items": [
+  {"entity_id": "<character>", "component": "Animation",
+   "properties": {"retarget_pose": "t_pose", "retarget_pose_offsets": [
+     {"role": "left_upper_arm", "rotation": [0, 0, 25]},
+     {"role": "right_upper_arm", "rotation": [0, 0, 25]}]}}]}}
+{"name": "assets_set_import_settings", "arguments": {"wait_ms": 120000, "items": [
+  {"key": "app:/data/Characters/Pack/Pack.glb", "settings": {"rig": {"humanoid_overrides": [
+    {"role": "left_hand", "bone": "hand.l"}, {"role": "right_hand", "bone": "hand.r"}]}}}]}}
+```
+
+Check the roles on both sides; every role the clip uses should exist on the character
+(`overrides` lists the roles set by hand):
 
 ```json
 {"name": "animation_get_humanoid", "arguments": {"entity_id": "<character>"}}
@@ -200,8 +239,10 @@ against the character's proportions.
 |---|---|
 | Clip import, root-motion node, source rest pose | `engine/engine/assets/impl/importers/mesh/mesh_import_animation.cpp` |
 | Mesh-less FBX root correction | `engine/engine/assets/impl/importers/mesh_importer.cpp` |
-| Humanoid roles | `engine/engine/animation/animation_humanoid.cpp` |
+| Humanoid roles, roles set by hand, T-pose straightening, pose offsets | `engine/engine/animation/animation_humanoid.cpp` |
 | Binding, frame fit, height ratio, sampling, retargeting, root motion | `engine/engine/animation/animation_player.cpp` (`find_binding`, `retarget_source_pose`, `convert_root_delta`) |
 | Binding report | `animation_player::describe_binding` (engine), `editor/editor/editing/animation_retarget_check.cpp` (warnings; used by the inspector and the MCP tool) |
 | Target skeleton, name lookup, moving the entity | `engine/engine/animation/ecs/systems/animation_system.cpp` |
-| Tests | `tests/tests/suites/animation.cpp` (`test_rest_aligned_retargeting`, `test_humanoid_roles_of_common_rigs`, `test_binding_report_explains_a_retarget` and the retargeting tests beside them) |
+| Retarget pose settings | `animation_component` (`retarget_pose`, `retarget_pose_offsets`), `animation_target_skeleton::compute_reference_pose` |
+| Roles set by hand | model import settings `rig.humanoid_overrides`, compiled into the mesh and the clips (`asset_compiler.cpp`) |
+| Tests | `tests/tests/suites/animation.cpp` (`test_rest_aligned_retargeting`, `test_humanoid_roles_of_common_rigs`, `test_binding_report_explains_a_retarget`, `test_retarget_pose_in_playback`, `test_clip_overrides_choose_the_source_bone` and the retargeting tests beside them) |

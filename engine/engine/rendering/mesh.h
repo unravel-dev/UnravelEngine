@@ -1,5 +1,6 @@
 #pragma once
 #include <engine/engine_export.h>
+#include <engine/animation/animation_humanoid.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/gi/gi_mesh_cards.h>
 #include <engine/rendering/gi/mesh_sdf.h>
@@ -513,6 +514,9 @@ public:
 
         ///< UIDs of default materials generated during import, indexed by data_group_id.
         std::vector<hpp::uuid> default_material_uids;
+
+        ///< Humanoid roles set by hand in the model's import settings, over the found ones.
+        std::vector<humanoid_bone_override> humanoid_overrides;
 
         ///< Sparse signed distance fields baked at compile time and used by the GI tracer, ONE
         ///< PER SUBMESH and in submesh order.
@@ -1127,6 +1131,12 @@ public:
      */
     auto get_default_material_uids() const -> const std::vector<hpp::uuid>&;
 
+    /**
+     * @brief Humanoid roles set by hand in the model's import settings, applied over the ones found
+     * from the armature's shape when clips are retargeted onto it.
+     */
+    auto get_humanoid_overrides() const -> const std::vector<humanoid_bone_override>&;
+
         /**
      * @brief Gets the imported materials generated during import.
      * @return A constant reference to the vector of imported materials.
@@ -1503,6 +1513,8 @@ protected:
 
     ///< UIDs of default materials generated during import, indexed by data_group_id.
     std::vector<hpp::uuid> default_material_uids_;
+
+    std::vector<humanoid_bone_override> humanoid_overrides_;
 };
 
 } // namespace unravel

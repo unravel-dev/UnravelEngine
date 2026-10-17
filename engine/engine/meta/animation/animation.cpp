@@ -160,6 +160,188 @@ REFLECT(animation_curve)
         });
 }
 
+REFLECT(humanoid_bone)
+{
+    entt::meta_factory<humanoid_bone>{}
+        .type("humanoid_bone"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "humanoid_bone"},
+            entt::attribute{"pretty_name", "Humanoid Bone"},
+        })
+        .data<humanoid_bone::hips>("hips"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hips"},
+            entt::attribute{"pretty_name", "Hips"},
+        })
+        .data<humanoid_bone::spine>("spine"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "spine"},
+            entt::attribute{"pretty_name", "Spine"},
+        })
+        .data<humanoid_bone::chest>("chest"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "chest"},
+            entt::attribute{"pretty_name", "Chest"},
+        })
+        .data<humanoid_bone::upper_chest>("upper_chest"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "upper_chest"},
+            entt::attribute{"pretty_name", "Upper Chest"},
+        })
+        .data<humanoid_bone::neck>("neck"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "neck"},
+            entt::attribute{"pretty_name", "Neck"},
+        })
+        .data<humanoid_bone::head>("head"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "head"},
+            entt::attribute{"pretty_name", "Head"},
+        })
+        .data<humanoid_bone::left_shoulder>("left_shoulder"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_shoulder"},
+            entt::attribute{"pretty_name", "Left Shoulder"},
+        })
+        .data<humanoid_bone::left_upper_arm>("left_upper_arm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_upper_arm"},
+            entt::attribute{"pretty_name", "Left Upper Arm"},
+        })
+        .data<humanoid_bone::left_lower_arm>("left_lower_arm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_lower_arm"},
+            entt::attribute{"pretty_name", "Left Lower Arm"},
+        })
+        .data<humanoid_bone::left_hand>("left_hand"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_hand"},
+            entt::attribute{"pretty_name", "Left Hand"},
+        })
+        .data<humanoid_bone::right_shoulder>("right_shoulder"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_shoulder"},
+            entt::attribute{"pretty_name", "Right Shoulder"},
+        })
+        .data<humanoid_bone::right_upper_arm>("right_upper_arm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_upper_arm"},
+            entt::attribute{"pretty_name", "Right Upper Arm"},
+        })
+        .data<humanoid_bone::right_lower_arm>("right_lower_arm"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_lower_arm"},
+            entt::attribute{"pretty_name", "Right Lower Arm"},
+        })
+        .data<humanoid_bone::right_hand>("right_hand"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_hand"},
+            entt::attribute{"pretty_name", "Right Hand"},
+        })
+        .data<humanoid_bone::left_upper_leg>("left_upper_leg"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_upper_leg"},
+            entt::attribute{"pretty_name", "Left Upper Leg"},
+        })
+        .data<humanoid_bone::left_lower_leg>("left_lower_leg"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_lower_leg"},
+            entt::attribute{"pretty_name", "Left Lower Leg"},
+        })
+        .data<humanoid_bone::left_foot>("left_foot"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_foot"},
+            entt::attribute{"pretty_name", "Left Foot"},
+        })
+        .data<humanoid_bone::left_toes>("left_toes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "left_toes"},
+            entt::attribute{"pretty_name", "Left Toes"},
+        })
+        .data<humanoid_bone::right_upper_leg>("right_upper_leg"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_upper_leg"},
+            entt::attribute{"pretty_name", "Right Upper Leg"},
+        })
+        .data<humanoid_bone::right_lower_leg>("right_lower_leg"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_lower_leg"},
+            entt::attribute{"pretty_name", "Right Lower Leg"},
+        })
+        .data<humanoid_bone::right_foot>("right_foot"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_foot"},
+            entt::attribute{"pretty_name", "Right Foot"},
+        })
+        .data<humanoid_bone::right_toes>("right_toes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "right_toes"},
+            entt::attribute{"pretty_name", "Right Toes"},
+        });
+}
+
+REFLECT(humanoid_bone_override)
+{
+    entt::meta_factory<humanoid_bone_override>{}
+        .type("humanoid_bone_override"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "humanoid_bone_override"},
+            entt::attribute{"pretty_name", "Humanoid Role"},
+        })
+        .data<&humanoid_bone_override::role>("role"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "role"},
+            entt::attribute{"pretty_name", "Role"},
+        })
+        .data<&humanoid_bone_override::bone>("bone"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bone"},
+            entt::attribute{"pretty_name", "Bone"},
+            entt::attribute{"tooltip", "Name of the bone that plays the role; empty takes the role away."},
+        });
+}
+
+SERIALIZE(humanoid_bone_override)
+{
+    try_serialize(ar, ser20::make_nvp("role", obj.role));
+    try_serialize(ar, ser20::make_nvp("bone", obj.bone));
+}
+SERIALIZE_INSTANTIATE(humanoid_bone_override, ser20::oarchive_associative_t);
+SERIALIZE_INSTANTIATE(humanoid_bone_override, ser20::oarchive_binary_t);
+SERIALIZE_INSTANTIATE(humanoid_bone_override, ser20::iarchive_associative_t);
+SERIALIZE_INSTANTIATE(humanoid_bone_override, ser20::iarchive_binary_t);
+
+REFLECT(humanoid_pose_offset)
+{
+    entt::meta_factory<humanoid_pose_offset>{}
+        .type("humanoid_pose_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "humanoid_pose_offset"},
+            entt::attribute{"pretty_name", "Retarget Pose Offset"},
+        })
+        .data<&humanoid_pose_offset::role>("role"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "role"},
+            entt::attribute{"pretty_name", "Role"},
+        })
+        .data<&humanoid_pose_offset::rotation>("rotation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation"},
+            entt::attribute{"pretty_name", "Rotation"},
+            entt::attribute{"tooltip", "Degrees about the character's side axis (towards its left), up and forward. Right-side roles are mirrored: (0, 0, 20) on both upper arms raises both."},
+        });
+}
+
+SERIALIZE(humanoid_pose_offset)
+{
+    try_serialize(ar, ser20::make_nvp("role", obj.role));
+    try_serialize(ar, ser20::make_nvp("rotation", obj.rotation));
+}
+SERIALIZE_INSTANTIATE(humanoid_pose_offset, ser20::oarchive_associative_t);
+SERIALIZE_INSTANTIATE(humanoid_pose_offset, ser20::oarchive_binary_t);
+SERIALIZE_INSTANTIATE(humanoid_pose_offset, ser20::iarchive_associative_t);
+SERIALIZE_INSTANTIATE(humanoid_pose_offset, ser20::iarchive_binary_t);
+
 SAVE(animation_curve)
 {
     try_save(ar, ser20::make_nvp("name", obj.name));
@@ -318,6 +500,8 @@ SAVE(animation_clip)
     try_save(ar, ser20::make_nvp("root_motion", obj.root_motion));
     try_save(ar, ser20::make_nvp("events", obj.events));
     try_save(ar, ser20::make_nvp("curves", obj.curves));
+    // Fields added later go last: binary archives read by position.
+    try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
     
     // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
 }
@@ -332,6 +516,7 @@ LOAD(animation_clip)
     try_load(ar, ser20::make_nvp("root_motion", obj.root_motion));
     try_load(ar, ser20::make_nvp("events", obj.events));
     try_load(ar, ser20::make_nvp("curves", obj.curves));
+    try_load(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
     
     // Changes here should be reflected in ex::get_format_version<animation_clip>() in asset_extensions.h
 }

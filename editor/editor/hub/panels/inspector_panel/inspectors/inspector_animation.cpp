@@ -614,68 +614,6 @@ void draw_transport_controls(rtti::context& ctx, animation_component& data)
 
 /// The humanoid roles Rest Aligned retargeting found on this model: clips whose bone names differ
 /// from the model's land on bones by these roles.
-void draw_humanoid_section(rtti::context& ctx, animation_component& data)
-{
-    auto owner = data.get_owner();
-    auto* model = owner && owner.valid() ? owner.try_get<model_component>() : nullptr;
-    if(model == nullptr || data.get_pose_retargeting() != animation_pose_retargeting::rest_aligned)
-    {
-        return;
-    }
-    const auto& skeleton = animation_system::get_target_skeleton(data, *model);
-    if(!skeleton)
-    {
-        return;
-    }
-    const size_t found = count_humanoid_bones(skeleton->humanoid);
-    ImGui::Spacing();
-    const std::string title = std::string(ICON_MDI_HUMAN " Humanoid Mapping (") + std::to_string(found) + " of " +
-                              std::to_string(HUMANOID_BONE_COUNT) + ")###humanoid_mapping";
-    if(!ImGui::CollapsingHeader(title.c_str()))
-    {
-        return;
-    }
-    if(found == 0)
-    {
-        ImGui::TextWrapped("No humanoid found: clips play on bones with matching names only.");
-        return;
-    }
-    ImGui::TextWrapped("Clips whose bone names differ from this skeleton's (Mixamo, Rigify, VRM, Biped...) land on "
-                       "these bones by role. Found from the skeleton's shape; names only tell left from right.");
-    if(!ImGui::BeginTable("humanoid_roles", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
-    {
-        return;
-    }
-    ImGui::TableSetupColumn("Role", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9.0f);
-    ImGui::TableSetupColumn("Bone");
-    for(size_t role = 0; role < HUMANOID_BONE_COUNT; ++role)
-    {
-        const int bone = skeleton->humanoid[role];
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        ImGui::TextUnformatted(get_humanoid_bone_name(humanoid_bone(role)));
-        ImGui::TableNextColumn();
-        if(bone >= 0 && size_t(bone) < skeleton->names.size())
-        {
-            // Target skeleton indices are armature indices: a click selects the bone.
-            ImGui::PushID(int(role));
-            if(ImGui::Selectable(skeleton->names[size_t(bone)].c_str()))
-            {
-                if(auto entity = model->get_armature_by_index(size_t(bone)))
-                {
-                    ctx.get_cached<editing_manager>().select(entity);
-                }
-            }
-            ImGui::PopID();
-            ImGui::SetItemTooltipEx("Select the bone");
-        }
-        else
-        {
-            ImGui::TextDisabled("-");
-        }
-    }
-    ImGui::EndTable();
-}
 
 constexpr ImU32 COL_WARNING = IM_COL32(255, 185, 80, 255);
 constexpr ImU32 COL_OK = IM_COL32(70, 200, 120, 255);
@@ -703,6 +641,12 @@ void draw_retarget_summary(const animation_retarget_check& check)
     ImGui::Text("Pose Retargeting in effect: %s", report.is_rest_aligned ? "Rest Aligned" : "Copy");
     ImGui::SetItemTooltipEx("How the clip's poses reach the bones: copied as authored, or mapped rest to rest. "
                             "Index Based, or a clip without a rest pose, plays copied whatever the setting.");
+    if(report.is_rest_aligned)
+    {
+        ImGui::Text("Retarget pose: %s, %zu offsets", check.aligns_to_t_pose ? "T-Pose" : "Bind Pose", check.pose_offset_count);
+        ImGui::SetItemTooltipEx("The pose motion is measured from and applied to (Retarget Pose and Retarget Pose "
+                                "Offsets).");
+    }
     ImGui::Text("%zu of %zu channels reach a bone (%s)",
                 count_matched_channels(check),
                 report.channels.size(),
@@ -836,6 +780,151 @@ void draw_retarget_rest_poses(const animation_retarget_check& check)
 
 } // namespace
 
+void inspector_animation_component::draw_humanoid_section(rtti::context& ctx, animation_component& data)
+{
+    auto owner = data.get_owner();
+    auto* model = owner && owner.valid() ? owner.try_get<model_component>() : nullptr;
+    if(model == nullptr || data.get_pose_retargeting() != animation_pose_retargeting::rest_aligned)
+    {
+        return;
+    }
+    const auto& skeleton = animation_system::get_target_skeleton(data, *model);
+    if(!skeleton)
+    {
+        return;
+    }
+    const size_t found = count_humanoid_bones(skeleton->humanoid);
+    ImGui::Spacing();
+    const std::string title = std::string(ICON_MDI_HUMAN " Humanoid Mapping (") + std::to_string(found) + " of " +
+                              std::to_string(HUMANOID_BONE_COUNT) + ")###humanoid_mapping";
+    if(!ImGui::CollapsingHeader(title.c_str()))
+    {
+        return;
+    }
+    const std::string model_key = get_editable_model_key(*model);
+    ImGui::TextWrapped("Clips whose bone names differ from this skeleton's (Mixamo, Rigify, VRM, Biped...) land on "
+                       "these bones by role. Found from the skeleton's shape; names only tell left from right.");
+    ImGui::TextWrapped("%s",
+                       model_key.empty() ? "This model's roles cannot be set by hand: it is not a model file of the project."
+                                         : "Set a role by hand with its " ICON_MDI_PENCIL " button. It is saved in the "
+                                           "model's import settings and holds for its clips too.");
+    if(!ImGui::BeginTable("humanoid_roles", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
+    {
+        return;
+    }
+    const auto overrides = model_key.empty() ? std::vector<humanoid_bone_override>{} : get_model_humanoid_overrides(ctx, model_key);
+    ImGui::TableSetupColumn("Role", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 9.0f);
+    ImGui::TableSetupColumn("Bone");
+    ImGui::TableSetupColumn("##set", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
+    for(size_t role = 0; role < HUMANOID_BONE_COUNT; ++role)
+    {
+        ImGui::PushID(int(role));
+        const int bone = skeleton->humanoid[role];
+        const bool is_set_by_hand = std::any_of(overrides.begin(),
+                                                overrides.end(),
+                                                [role](const humanoid_bone_override& entry)
+                                                {
+                                                    return entry.role == humanoid_bone(role);
+                                                });
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(get_humanoid_bone_name(humanoid_bone(role)));
+        ImGui::TableNextColumn();
+        if(bone >= 0 && size_t(bone) < skeleton->names.size())
+        {
+            // Target skeleton indices are armature indices: a click selects the bone.
+            if(ImGui::Selectable(skeleton->names[size_t(bone)].c_str()))
+            {
+                if(auto entity = model->get_armature_by_index(size_t(bone)))
+                {
+                    ctx.get_cached<editing_manager>().select(entity);
+                }
+            }
+            ImGui::SetItemTooltipEx("Select the bone");
+        }
+        else
+        {
+            ImGui::TextDisabled("-");
+        }
+        if(is_set_by_hand)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(set by hand)");
+        }
+        ImGui::TableNextColumn();
+        if(!model_key.empty())
+        {
+            if(ImGui::SmallButton(ICON_MDI_PENCIL))
+            {
+                role_bone_filter_.Clear();
+                ImGui::OpenPopup("role_menu");
+            }
+            const ImVec2 anchor = ImGui::GetItemRectMax();
+            ImGui::SetItemTooltipEx("Set this role by hand");
+            draw_role_menu(ctx, model_key, humanoid_bone(role), *skeleton, anchor);
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndTable();
+}
+
+void inspector_animation_component::draw_role_menu(rtti::context& ctx,
+                                                   const std::string& model_key,
+                                                   humanoid_bone role,
+                                                   const animation_target_skeleton& skeleton,
+                                                   const ImVec2& anchor)
+{
+    // The buttons sit at the inspector's right edge: opening leftwards keeps the menu over it.
+    ImGui::SetNextWindowPos(anchor, ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
+    if(!ImGui::BeginPopup("role_menu"))
+    {
+        return;
+    }
+    ImGui::TextDisabled("%s", get_humanoid_bone_name(role));
+    std::optional<std::optional<std::string>> choice;
+    if(ImGui::Selectable("Automatic (found from the shape)"))
+    {
+        choice.emplace(std::nullopt);
+    }
+    if(ImGui::Selectable("None (this skeleton has no such bone)"))
+    {
+        choice.emplace(std::string{});
+    }
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14.0f);
+    if(ImGui::InputTextWithHint("##filter",
+                                ICON_MDI_MAGNIFY " Filter bones",
+                                role_bone_filter_.InputBuf,
+                                IM_ARRAYSIZE(role_bone_filter_.InputBuf)))
+    {
+        role_bone_filter_.Build();
+    }
+    if(ImGui::BeginChild("##bones", ImVec2(ImGui::GetFontSize() * 14.0f, ImGui::GetFontSize() * 16.0f)))
+    {
+        for(const auto& name : skeleton.names)
+        {
+            if(!role_bone_filter_.PassFilter(name.c_str()))
+            {
+                continue;
+            }
+            if(ImGui::Selectable(name.c_str()))
+            {
+                choice.emplace(name);
+            }
+        }
+    }
+    ImGui::EndChild();
+    if(choice)
+    {
+        if(!set_model_humanoid_override(ctx, model_key, role, *choice))
+        {
+            APPLOG_ERROR("Could not write the import settings of {}", model_key);
+        }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 void inspector_animation_component::draw_retarget_section(rtti::context& ctx, animation_component& data)
 {
     auto owner = data.get_owner();
@@ -877,7 +966,7 @@ void inspector_animation_component::draw_retarget_section(rtti::context& ctx, an
     const retarget_key key{&data,
                            handle.uid(),
                            handle.version(),
-                           model->get_armature_version(),
+                           animation_system::get_skeleton_version(*model),
                            data.get_retargeting_mode(),
                            data.get_pose_retargeting()};
     if(!(key == retarget_key_))

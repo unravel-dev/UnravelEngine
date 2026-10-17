@@ -70,6 +70,8 @@ Animation properties:
 | apply_root_motion | Move the entity by the clip's root (section 4). |
 | retargeting_mode | name_based (default) or index_based (same file only). |
 | pose_retargeting | copy (default) or rest_aligned (section 3). |
+| retarget_pose | bind_pose (default) or t_pose (section 3). |
+| retarget_pose_offsets | [{role, rotation}] turns of this character's bones (section 3). |
 | culling_mode | always_animate or renderer_based (skip off-screen). |
 
 ## 3. Clips from another rig (retargeting)
@@ -104,13 +106,29 @@ otherwise only the channels that reached no bone are listed. Read:
   real ratio means the hips were found wrongly on one side.
 - root_motion.position.bone: the bone the clip's root motion moves; null with
   a root channel means its root motion is lost.
-- rest_differences: degrees between the two rest poses per limb. Above 20 the
-  skeletons rest in different poses (T-pose against A-pose) and every pose
-  keeps that offset - use clips made for the same rest pose.
+- rest_differences: degrees between the two retarget poses per limb. Above 20
+  the skeletons rest in different poses (T-pose against A-pose) and every pose
+  keeps that offset - set retarget_pose "t_pose" to straighten both first.
 - warnings: each problem in words, with the fix. An empty list is the goal.
 
 animation_get_humanoid {"entity_id"} or {"clip"} lists the roles each side
-found, when the check points at a role.
+found, when the check points at a role, and the roles set by hand.
+
+Three fixes, smallest first:
+
+- A role on the wrong bone (the clips animate a hand below the wrist that was
+  found): set it in the model FILE's import settings; it holds for the model
+  and every clip of the file, and the file is imported again.
+  assets_set_import_settings {"items":[{"key":"<model key>","settings":
+  {"rig":{"humanoid_overrides":[{"role":"left_hand","bone":"hand.l"}]}}}],
+  "wait_ms":120000}. An empty bone takes the role away.
+- Skeletons resting in other poses: Animation retarget_pose "t_pose"
+  straightens both (arms level, legs down) before motion is carried.
+- Limbs through the body on a character of other proportions: Animation
+  retarget_pose_offsets [{"role":"left_upper_arm","rotation":[0,0,25]},
+  {"role":"right_upper_arm","rotation":[0,0,25]}] - degrees about the
+  character's side, up and forward axes; right-side roles are mirrored, so
+  equal values move both sides alike. Captures judge the amount.
 
 ## 4. Root motion
 
@@ -235,7 +253,9 @@ reach their targets.
 |---|---|
 | Character lies down, twists, limbs stretch | Copy on clips from another rig: pose_retargeting rest_aligned. animation_get_retarget warns. |
 | Nothing moves | animation_get_retarget: matched 0? index_based with another file? No clip playing (auto_play, controller default_state)? |
-| Arms too high or low in every clip | rest_differences above 20: the rest poses differ. |
+| Arms too high or low in every clip | rest_differences above 20: retarget_pose t_pose. |
+| Arms or legs through the body | retarget_pose_offsets on the upper arms / legs. |
+| A hand or limb does not move | The role is on another bone: rig.humanoid_overrides on the model file. |
 | Fingers / tail stay still | They match by name only; see unmatched channels. |
 | Left and right swapped | animation_get_humanoid on both sides; side-less names. |
 | Feet slide, steps too long | height_ratio; root motion on with keep_in_place clips, or off with travelling clips. |

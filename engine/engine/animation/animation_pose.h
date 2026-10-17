@@ -33,6 +33,19 @@ enum class animation_pose_retargeting : uint8_t
 };
 
 /**
+ * @brief The pose Rest Aligned retargeting measures motion from (on the clip's skeleton) and applies
+ * it to (on the playing one).
+ */
+enum class animation_retarget_pose : uint8_t
+{
+    /// Each skeleton's rest pose as imported: both must rest in the same pose.
+    bind_pose,
+    /// Both skeletons straightened to a T-pose by humanoid role (arms level, legs straight down), so
+    /// skeletons resting in other poses (a T-pose and an A-pose) share motion.
+    t_pose,
+};
+
+/**
  * @brief How a layer above the base layer combines with the layers below it.
  */
 enum class animation_layer_blend_mode : uint8_t

@@ -1,6 +1,8 @@
 #include "animation_humanoid.h"
+#include "animation.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <limits>
@@ -28,6 +30,38 @@ constexpr size_t MAX_CHAIN = 32;
 constexpr float LEG_REACH_TIE = 0.02f;
 /// Below this length the toes give no direction.
 constexpr float MIN_TOE_DIRECTION = 1e-4f;
+/// Below this length a limb segment or the side axis has no direction.
+constexpr float MIN_POSE_DIRECTION = 1e-5f;
+/// The up axis of the frames roles are found in.
+const math::vec3 HUMANOID_UP{0.0f, 1.0f, 0.0f};
+
+/// A limb bone a T-pose straightens: the joint it points at, and where it points (side axis, up).
+struct t_pose_segment
+{
+    humanoid_bone from;
+    humanoid_bone to;
+    float side;
+    float up;
+};
+
+/// Parents before children: an upper arm's swing moves its lower arm before that one is measured.
+constexpr std::array<t_pose_segment, 8> T_POSE_SEGMENTS{{
+    {humanoid_bone::left_upper_arm, humanoid_bone::left_lower_arm, 1.0f, 0.0f},
+    {humanoid_bone::left_lower_arm, humanoid_bone::left_hand, 1.0f, 0.0f},
+    {humanoid_bone::right_upper_arm, humanoid_bone::right_lower_arm, -1.0f, 0.0f},
+    {humanoid_bone::right_lower_arm, humanoid_bone::right_hand, -1.0f, 0.0f},
+    {humanoid_bone::left_upper_leg, humanoid_bone::left_lower_leg, 0.0f, -1.0f},
+    {humanoid_bone::left_lower_leg, humanoid_bone::left_foot, 0.0f, -1.0f},
+    {humanoid_bone::right_upper_leg, humanoid_bone::right_lower_leg, 0.0f, -1.0f},
+    {humanoid_bone::right_lower_leg, humanoid_bone::right_foot, 0.0f, -1.0f},
+}};
+
+/// The pairs the side axis is read from, most reliable first.
+constexpr std::array<std::pair<humanoid_bone, humanoid_bone>, 3> SIDE_AXIS_PAIRS{{
+    {humanoid_bone::left_upper_arm, humanoid_bone::right_upper_arm},
+    {humanoid_bone::left_shoulder, humanoid_bone::right_shoulder},
+    {humanoid_bone::left_upper_leg, humanoid_bone::right_upper_leg},
+}};
 
 constexpr const char* BONE_NAMES[HUMANOID_BONE_COUNT] = {
     "Hips",           "Spine",           "Chest",           "Upper Chest",    "Neck",
@@ -584,6 +618,161 @@ auto count_humanoid_bones(const humanoid_map& map) -> size_t
                                 {
                                     return bone >= 0;
                                 }));
+}
+
+namespace
+{
+auto is_right_side(humanoid_bone role) -> bool
+{
+    return (role >= humanoid_bone::right_shoulder && role <= humanoid_bone::right_hand) ||
+           (role >= humanoid_bone::right_upper_leg && role <= humanoid_bone::right_toes);
+}
+
+/// The bone named `name`, else the bone named so without FBX namespace, else -1.
+auto find_bone_by_name(const std::vector<std::string>& names, const std::string& name) -> int
+{
+    const auto exact = std::find(names.begin(), names.end(), name);
+    if(exact != names.end())
+    {
+        return int(exact - names.begin());
+    }
+    const hpp::string_view base = get_name_without_namespace(name);
+    const auto same_base = std::find_if(names.begin(),
+                                        names.end(),
+                                        [&](const std::string& candidate)
+                                        {
+                                            return get_name_without_namespace(candidate) == base;
+                                        });
+    return same_base != names.end() ? int(same_base - names.begin()) : -1;
+}
+
+auto is_bone_in(int bone, const std::vector<math::transform>& globals) -> bool
+{
+    return bone >= 0 && size_t(bone) < globals.size();
+}
+
+/// Turns `bone` and every bone below it about the bone's position, in the frame of `globals`.
+void turn_subtree(const std::vector<int>& parents, int bone, const math::quat& turn, std::vector<math::transform>& globals)
+{
+    const math::vec3 pivot = globals[size_t(bone)].get_position();
+    std::vector<bool> is_moved(globals.size(), false);
+    for(size_t i = size_t(bone); i < globals.size(); ++i)
+    {
+        const int parent = i < parents.size() ? parents[i] : -1;
+        is_moved[i] = i == size_t(bone) || (parent >= 0 && size_t(parent) < i && is_moved[size_t(parent)]);
+        if(!is_moved[i])
+        {
+            continue;
+        }
+        auto& global = globals[i];
+        global.set_position(pivot + turn * (global.get_position() - pivot));
+        global.set_rotation(math::normalize(turn * global.get_rotation()));
+    }
+}
+} // namespace
+
+void apply_humanoid_overrides(const std::vector<humanoid_bone_override>& overrides,
+                              const std::vector<std::string>& names,
+                              humanoid_map& map)
+{
+    for(const auto& entry : overrides)
+    {
+        if(entry.role >= humanoid_bone::count)
+        {
+            continue;
+        }
+        int& slot = map[size_t(entry.role)];
+        if(entry.bone.empty())
+        {
+            slot = -1;
+            continue;
+        }
+        const int bone = find_bone_by_name(names, entry.bone);
+        if(bone < 0)
+        {
+            continue;
+        }
+        std::replace(map.begin(), map.end(), bone, -1);
+        slot = bone;
+    }
+}
+
+auto find_humanoid_side_axis(const humanoid_map& roles, const std::vector<math::transform>& globals) -> math::vec3
+{
+    for(const auto& [left, right] : SIDE_AXIS_PAIRS)
+    {
+        const int left_bone = roles[size_t(left)];
+        const int right_bone = roles[size_t(right)];
+        if(!is_bone_in(left_bone, globals) || !is_bone_in(right_bone, globals))
+        {
+            continue;
+        }
+        math::vec3 side = globals[size_t(left_bone)].get_position() - globals[size_t(right_bone)].get_position();
+        side.y = 0.0f;
+        if(math::length(side) > MIN_POSE_DIRECTION)
+        {
+            return math::normalize(side);
+        }
+    }
+    return math::vec3(0.0f);
+}
+
+void align_humanoid_to_t_pose(const std::vector<int>& parents, const humanoid_map& roles, std::vector<math::transform>& globals)
+{
+    const math::vec3 side = find_humanoid_side_axis(roles, globals);
+    if(math::length(side) <= MIN_POSE_DIRECTION)
+    {
+        return;
+    }
+    for(const auto& segment : T_POSE_SEGMENTS)
+    {
+        const int from = roles[size_t(segment.from)];
+        const int to = roles[size_t(segment.to)];
+        if(!is_bone_in(from, globals) || !is_bone_in(to, globals))
+        {
+            continue;
+        }
+        const math::vec3 direction = globals[size_t(to)].get_position() - globals[size_t(from)].get_position();
+        if(math::length(direction) <= MIN_POSE_DIRECTION)
+        {
+            continue;
+        }
+        const math::vec3 wanted = side * segment.side + HUMANOID_UP * segment.up;
+        turn_subtree(parents, from, math::from_to_rotation(direction, wanted), globals);
+    }
+}
+
+void apply_humanoid_pose_offsets(const std::vector<int>& parents,
+                                 const humanoid_map& roles,
+                                 const std::vector<humanoid_pose_offset>& offsets,
+                                 std::vector<math::transform>& globals)
+{
+    const math::vec3 side = offsets.empty() ? math::vec3(0.0f) : find_humanoid_side_axis(roles, globals);
+    if(math::length(side) <= MIN_POSE_DIRECTION)
+    {
+        return;
+    }
+    // Character space to the skeleton's frame: x is the side axis, y up, z forward.
+    const math::mat3 axes(side, HUMANOID_UP, math::cross(side, HUMANOID_UP));
+    const math::quat basis = math::normalize(math::quat_cast(axes));
+    for(const auto& offset : offsets)
+    {
+        const int bone = offset.role < humanoid_bone::count ? roles[size_t(offset.role)] : -1;
+        if(!is_bone_in(bone, globals))
+        {
+            continue;
+        }
+        math::vec3 degrees = offset.rotation;
+        // Mirrored across the character's middle: turns about the side axis keep their sign, turns
+        // about up and forward flip it.
+        if(is_right_side(offset.role))
+        {
+            degrees.y = -degrees.y;
+            degrees.z = -degrees.z;
+        }
+        const math::quat turn = math::normalize(basis * math::quat(math::radians(degrees)) * glm::inverse(basis));
+        turn_subtree(parents, bone, turn, globals);
+    }
 }
 
 } // namespace unravel

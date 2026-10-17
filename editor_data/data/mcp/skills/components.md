@@ -305,8 +305,11 @@ controllers, IK, verification).
   humanoid role, found from each skeleton's shape (Mixamo, Rigify, VRM, Biped,
   Character Creator, Daz, KayKit-style rigs all map):
   animation_get_humanoid {"entity_id"} shows a model's roles, {"clip"} the roles
-  of the skeleton a clip was made on. Both rest poses must be the same pose
-  (T-pose to T-pose). "copy" only suits clips authored on the same skeleton.
+  of the skeleton a clip was made on. Rests in other poses (T-pose against
+  A-pose) need retarget_pose "t_pose"; retarget_pose_offsets turn a
+  character's limbs clear of its body; roles found on the wrong bone are set
+  in the model file's import settings (rig.humanoid_overrides). "copy" only
+  suits clips authored on the same skeleton.
   animation_get_retarget {"entity_id", "clip"} reports how a clip binds
   there (matches, unreached bones, rest pose differences) with warnings.
 - apply_root_motion moves the entity by the clip's root node (the skeleton's

@@ -2658,6 +2658,275 @@ void test_binding_report_names_and_copy()
     check(copied.rest_mismatches > 0, "rests turned per bone are another skeleton's");
 }
 
+/// The layout with `bone` and every bone below it turned by `turn` about the bone's joint.
+auto turn_layout(test_skeleton layout, const std::string& bone, const math::quat& turn) -> test_skeleton
+{
+    const int pivot_bone = layout.index(bone);
+    const math::vec3 pivot = layout.positions[size_t(pivot_bone)];
+    std::vector<bool> is_moved(layout.names.size(), false);
+    for(size_t i = size_t(pivot_bone); i < layout.names.size(); ++i)
+    {
+        const int parent = layout.parents[i];
+        is_moved[i] = int(i) == pivot_bone || (parent >= 0 && is_moved[size_t(parent)]);
+        if(is_moved[i])
+        {
+            layout.positions[i] = pivot + turn * (layout.positions[i] - pivot);
+        }
+    }
+    return layout;
+}
+
+/// The layout with both arms dropped `degrees` below level at the shoulder joint (an A-pose).
+/// Left bones stand on +X, so the left arm drops turning about +Z the negative way.
+auto make_a_pose(const test_skeleton& layout, const std::string& left_arm, const std::string& right_arm, float degrees)
+    -> test_skeleton
+{
+    const math::vec3 forward(0.0f, 0.0f, 1.0f);
+    const auto dropped = turn_layout(layout, left_arm, math::angleAxis(math::radians(-degrees), forward));
+    return turn_layout(dropped, right_arm, math::angleAxis(math::radians(degrees), forward));
+}
+
+/// Global transforms of a layout: its joint positions at identity rotations.
+auto make_layout_globals(const test_skeleton& layout) -> std::vector<math::transform>
+{
+    std::vector<math::transform> globals(layout.positions.size());
+    for(size_t i = 0; i < globals.size(); ++i)
+    {
+        globals[i].set_position(layout.positions[i]);
+    }
+    return globals;
+}
+
+/// Degrees the segment from bone `from` to bone `to` points below level (negative: above).
+auto get_drop_degrees(const std::vector<math::transform>& globals, int from, int to) -> float
+{
+    const math::vec3 direction = globals[size_t(to)].get_position() - globals[size_t(from)].get_position();
+    return math::degrees(std::asin(math::clamp(-direction.y / math::length(direction), -1.0f, 1.0f)));
+}
+
+/// Degrees a rotation turns by.
+auto get_turn_degrees(const math::quat& rotation) -> float
+{
+    return math::degrees(2.0f * std::acos(math::clamp(std::fabs(math::normalize(rotation).w), 0.0f, 1.0f)));
+}
+
+/// Plays `clip` on `target` for a moment and returns every target bone's global transform.
+auto pose_target_globals(const std::shared_ptr<animation_clip>& clip,
+                         const animation_skeleton_binding& binding,
+                         const animation_target_skeleton& target) -> std::vector<math::transform>
+{
+    animation_player player;
+    player.blend_to(0, make_clip_handle(clip), seconds_t{0.0f}, true);
+    player.play();
+    player.update_time(seconds_t{0.1f});
+    std::vector<math::transform> local = target.bind_local;
+    static const animation_pose empty_ref_pose{};
+    player.update_poses(empty_ref_pose,
+                        binding,
+                        true,
+                        [&](const animation_pose::node_desc& desc, const math::transform& transform, const auto&)
+                        {
+                            if(desc.index < local.size())
+                            {
+                                local[desc.index] = transform;
+                            }
+                        });
+    std::vector<math::transform> globals(local.size());
+    for(size_t i = 0; i < local.size(); ++i)
+    {
+        const int parent = target.parents[i];
+        globals[i] = parent >= 0 && size_t(parent) < i ? globals[size_t(parent)] * local[i] : local[i];
+    }
+    return globals;
+}
+
+void test_humanoid_overrides()
+{
+    std::printf("test_humanoid_overrides\n");
+    // A KayKit-style rig: the finder gives the hand role to the wrist; set by hand, the bone below it.
+    const auto chibi = make_chibi_skeleton();
+    auto roles = find_humanoid_bones(chibi.names, chibi.parents, chibi.positions);
+    check(roles[size_t(humanoid_bone::left_hand)] == chibi.index("wrist.l"), "the finder takes the wrist for the hand");
+    apply_humanoid_overrides({{humanoid_bone::left_hand, "hand.l"},
+                              {humanoid_bone::right_hand, "rig:hand.r"},
+                              {humanoid_bone::left_toes, ""},
+                              {humanoid_bone::head, "missing"}},
+                             chibi.names,
+                             roles);
+    check(roles[size_t(humanoid_bone::left_hand)] == chibi.index("hand.l"), "a role set by hand wins");
+    check(roles[size_t(humanoid_bone::right_hand)] == chibi.index("hand.r"), "names match without their namespace");
+    check(roles[size_t(humanoid_bone::left_toes)] == -1, "an empty name takes the role away");
+    check(roles[size_t(humanoid_bone::head)] == chibi.index("head"), "a bone the skeleton lacks changes nothing");
+    apply_humanoid_overrides({{humanoid_bone::left_lower_arm, "hand.l"}}, chibi.names, roles);
+    check(roles[size_t(humanoid_bone::left_lower_arm)] == chibi.index("hand.l") && roles[size_t(humanoid_bone::left_hand)] == -1,
+          "a bone moved to a role leaves the one it held");
+}
+
+void test_t_pose_alignment()
+{
+    std::printf("test_t_pose_alignment\n");
+    const auto t_pose = make_mixamo_layout("");
+    const auto a_pose = make_a_pose(t_pose, "LeftArm", "RightArm", 45.0f);
+    const auto roles = find_humanoid_bones(a_pose.names, a_pose.parents, a_pose.positions);
+    const int arm = a_pose.index("LeftArm");
+    const int forearm = a_pose.index("LeftForeArm");
+    const int hand = a_pose.index("LeftHand");
+    auto globals = make_layout_globals(a_pose);
+    check_near(get_drop_degrees(globals, arm, forearm), 45.0f, 0.01f, "the A-pose arm drops 45 degrees");
+
+    align_humanoid_to_t_pose(a_pose.parents, roles, globals);
+    check_near(get_drop_degrees(globals, arm, forearm), 0.0f, 0.01f, "straightened, the upper arm is level");
+    check_near(get_drop_degrees(globals, forearm, hand), 0.0f, 0.01f, "and the lower arm");
+    check_near(get_drop_degrees(globals, a_pose.index("RightArm"), a_pose.index("RightForeArm")), 0.0f, 0.01f,
+               "on both sides");
+    check(math::length(globals[size_t(hand)].get_position() - t_pose.positions[size_t(hand)]) < 1e-4f,
+          "the hand lands where the T-pose holds it");
+    check(get_turn_degrees(globals[size_t(arm)].get_rotation()) > 44.0f, "the bone turns with its joint");
+
+    // Legs spread 10 degrees come straight down.
+    const auto spread = turn_layout(t_pose, "LeftUpLeg", math::angleAxis(math::radians(10.0f), math::vec3(0.0f, 0.0f, 1.0f)));
+    auto leg_globals = make_layout_globals(spread);
+    align_humanoid_to_t_pose(spread.parents, find_humanoid_bones(spread.names, spread.parents, spread.positions), leg_globals);
+    const math::vec3 thigh = leg_globals[size_t(spread.index("LeftLeg"))].get_position() -
+                             leg_globals[size_t(spread.index("LeftUpLeg"))].get_position();
+    check_near(math::dot(math::normalize(thigh), math::vec3(0.0f, -1.0f, 0.0f)), 1.0f, 1e-5f, "a spread leg is straightened");
+
+    // A skeleton in a T-pose already is left as it is.
+    auto unchanged = make_layout_globals(t_pose);
+    align_humanoid_to_t_pose(t_pose.parents, find_humanoid_bones(t_pose.names, t_pose.parents, t_pose.positions), unchanged);
+    bool is_unchanged = true;
+    for(size_t i = 0; i < unchanged.size(); ++i)
+    {
+        is_unchanged = is_unchanged && math::length(unchanged[i].get_position() - t_pose.positions[i]) < 1e-5f &&
+                       get_turn_degrees(unchanged[i].get_rotation()) < 0.01f;
+    }
+    check(is_unchanged, "a T-pose stays a T-pose");
+}
+
+void test_pose_offsets_are_mirrored()
+{
+    std::printf("test_pose_offsets_are_mirrored\n");
+    const auto layout = make_mixamo_layout("");
+    const auto roles = find_humanoid_bones(layout.names, layout.parents, layout.positions);
+    const int left_arm = layout.index("LeftArm");
+    const int right_arm = layout.index("RightArm");
+    auto raised = make_layout_globals(layout);
+    apply_humanoid_pose_offsets(layout.parents,
+                                roles,
+                                {{humanoid_bone::left_upper_arm, {0.0f, 0.0f, 20.0f}}, {humanoid_bone::right_upper_arm, {0.0f, 0.0f, 20.0f}}},
+                                raised);
+    check_near(get_drop_degrees(raised, left_arm, layout.index("LeftForeArm")), -20.0f, 0.01f, "(0, 0, 20) raises the left arm");
+    check_near(get_drop_degrees(raised, right_arm, layout.index("RightForeArm")), -20.0f, 0.01f,
+               "and the right one: right-side roles are mirrored");
+    check_near(get_drop_degrees(raised, layout.index("LeftForeArm"), layout.index("LeftHand")), -20.0f, 0.01f,
+               "the lower arm goes with it");
+
+    auto swung = make_layout_globals(layout);
+    apply_humanoid_pose_offsets(layout.parents,
+                                roles,
+                                {{humanoid_bone::left_upper_arm, {0.0f, 30.0f, 0.0f}}, {humanoid_bone::right_upper_arm, {0.0f, 30.0f, 0.0f}}},
+                                swung);
+    const float left_z = (swung[size_t(layout.index("LeftForeArm"))].get_position() - swung[size_t(left_arm)].get_position()).z;
+    const float right_z = (swung[size_t(layout.index("RightForeArm"))].get_position() - swung[size_t(right_arm)].get_position()).z;
+    check(left_z * right_z > 0.0f && std::fabs(left_z - right_z) < 1e-4f, "a turn about up swings both arms the same way");
+}
+
+void test_retarget_pose_in_playback()
+{
+    std::printf("test_retarget_pose_in_playback\n");
+    // A clip of an A-pose mannequin drops its left arm 35 degrees further, to 80 below level, on a
+    // Mixamo rig resting in a T-pose.
+    const auto a_pose = make_a_pose(make_ue_skeleton(), "upperarm_l", "upperarm_r", 45.0f);
+    auto clip = make_rest_pose_clip(a_pose);
+    clip->channels[size_t(a_pose.index("upperarm_l"))].rotation_keys = {
+        {seconds_t{0.0f}, math::angleAxis(math::radians(-35.0f), math::vec3(0.0f, 0.0f, 1.0f))}};
+    const auto mixamo = make_mixamo_layout("mixamorig:");
+    const int arm = mixamo.index("mixamorig:LeftArm");
+    const int forearm = mixamo.index("mixamorig:LeftForeArm");
+
+    const auto bind_target = make_mixamo_target(mixamo);
+    auto bind_binding = make_layout_binding(mixamo, 31);
+    bind_binding.rest_aligned_target = bind_target;
+    const auto bind_globals = pose_target_globals(clip, bind_binding, *bind_target);
+    check(get_drop_degrees(bind_globals, arm, forearm) < 60.0f, "in Bind Pose the A-pose rest reads as level: the arm drops too little");
+
+    auto aligned_target = std::make_shared<animation_target_skeleton>(*bind_target);
+    aligned_target->compute_reference_pose(true, {});
+    auto aligned_binding = make_layout_binding(mixamo, 32);
+    aligned_binding.rest_aligned_target = aligned_target;
+    const auto aligned_globals = pose_target_globals(clip, aligned_binding, *aligned_target);
+    check_near(get_drop_degrees(aligned_globals, arm, forearm), 80.0f, 0.5f,
+               "in T-Pose both skeletons are straightened: the arm drops 80 degrees, as the clip's");
+    const auto report = animation_player::describe_binding(clip, aligned_binding, *aligned_target);
+    check(find_rest_difference(report, humanoid_bone::left_upper_arm) >= 0.0f &&
+              find_rest_difference(report, humanoid_bone::left_upper_arm) < 1.0f,
+          "straightened, the two skeletons rest alike");
+
+    // Offsets in the target's retarget pose: a clip holding its rest pose leaves both arms raised by
+    // them, and the frame fit ignores them (the spine stays upright).
+    const auto rest_clip = make_rest_pose_clip(make_ue_skeleton());
+    auto offset_target = std::make_shared<animation_target_skeleton>(*bind_target);
+    offset_target->compute_reference_pose(false,
+                                          {{humanoid_bone::left_upper_arm, {0.0f, 0.0f, 20.0f}},
+                                           {humanoid_bone::right_upper_arm, {0.0f, 0.0f, 20.0f}}});
+    auto offset_binding = make_layout_binding(mixamo, 33);
+    offset_binding.rest_aligned_target = offset_target;
+    const auto offset_globals = pose_target_globals(rest_clip, offset_binding, *offset_target);
+    check_near(get_drop_degrees(offset_globals, arm, forearm), -20.0f, 0.5f, "the left arm keeps its offset");
+    check_near(get_drop_degrees(offset_globals, mixamo.index("mixamorig:RightArm"), mixamo.index("mixamorig:RightForeArm")),
+               -20.0f, 0.5f, "and the right one");
+    check_near(get_drop_degrees(offset_globals, mixamo.index("mixamorig:Spine"), mixamo.index("mixamorig:Neck")), -90.0f, 0.5f,
+               "the spine stays upright");
+}
+
+void test_clip_overrides_choose_the_source_bone()
+{
+    std::printf("test_clip_overrides_choose_the_source_bone\n");
+    // A chibi clip turns its "hand" bone, below the "wrist" the finder gives the hand role to.
+    const auto chibi = make_chibi_skeleton();
+    auto clip = make_rest_pose_clip(chibi);
+    clip->channels[size_t(chibi.index("hand.l"))].rotation_keys = {
+        {seconds_t{0.0f}, math::angleAxis(math::radians(40.0f), math::vec3(1.0f, 0.0f, 0.0f))}};
+    const auto mixamo = make_mixamo_layout("mixamorig:");
+    const auto target = make_mixamo_target(mixamo);
+    auto binding = make_layout_binding(mixamo, 41);
+    binding.rest_aligned_target = target;
+    const int hand = mixamo.index("mixamorig:LeftHand");
+    const auto get_hand_turn = [&](const std::vector<math::transform>& globals)
+    {
+        return get_turn_degrees(globals[size_t(hand)].get_rotation() * glm::inverse(target->rest_global[size_t(hand)].get_rotation()));
+    };
+    check(get_hand_turn(pose_target_globals(clip, binding, *target)) < 1.0f, "found roles: the still wrist drives the hand");
+    clip->humanoid_overrides = {{humanoid_bone::left_hand, "hand.l"}};
+    check_near(get_hand_turn(pose_target_globals(clip, binding, *target)), 40.0f, 0.5f, "set by hand: the turning bone drives it");
+}
+
+void test_proportions_do_not_tilt_the_frame()
+{
+    std::printf("test_proportions_do_not_tilt_the_frame\n");
+    // A mannequin clip raises the left leg 30 degrees sideways, on a Mixamo rig whose upper body
+    // leans 30 degrees forward. The skeletons fit each other worst where they differ: a full fit
+    // tilts to share the lean, and every carried turn would lean with it.
+    auto clip = make_rest_pose_clip(make_ue_skeleton());
+    const math::vec3 forward(0.0f, 0.0f, 1.0f);
+    clip->channels[size_t(make_ue_skeleton().index("thigh_l"))].rotation_keys = {
+        {seconds_t{0.0f}, math::angleAxis(math::radians(30.0f), forward)}};
+    const auto leaning = turn_layout(make_mixamo_layout("mixamorig:"),
+                                     "mixamorig:Spine",
+                                     math::angleAxis(math::radians(30.0f), math::vec3(1.0f, 0.0f, 0.0f)));
+    const auto target = make_mixamo_target(leaning);
+    auto binding = make_layout_binding(leaning, 51);
+    binding.rest_aligned_target = target;
+
+    const auto globals = pose_target_globals(clip, binding, *target);
+    const math::vec3 thigh = math::normalize(globals[size_t(leaning.index("mixamorig:LeftLeg"))].get_position() -
+                                             globals[size_t(leaning.index("mixamorig:LeftUpLeg"))].get_position());
+    check_near(thigh.x, 0.5f, 1e-3f, "the leg rises 30 degrees to the side");
+    check_near(thigh.z, 0.0f, 1e-3f, "and stays in the side plane: the lean does not tilt the frame");
+    const auto report = animation_player::describe_binding(clip, binding, *target);
+    check_near(report.frame_degrees, 0.0f, 0.01f, "two upright humanoids facing alike share one frame");
+}
+
 void test_names_match_across_namespaces()
 {
     std::printf("test_names_match_across_namespaces\n");
@@ -3939,6 +4208,12 @@ auto run_animation_suite(rtti::context& ctx) -> int
     test_names_match_across_namespaces();
     test_binding_report_explains_a_retarget();
     test_binding_report_names_and_copy();
+    test_humanoid_overrides();
+    test_t_pose_alignment();
+    test_pose_offsets_are_mirrored();
+    test_retarget_pose_in_playback();
+    test_clip_overrides_choose_the_source_bone();
+    test_proportions_do_not_tilt_the_frame();
     test_rest_aligned_onto_own_skeleton_is_a_copy();
     test_blend_space_retargets_once_like_each_clip();
     test_root_motion_accumulates_across_loops();

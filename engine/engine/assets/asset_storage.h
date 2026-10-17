@@ -157,7 +157,9 @@ struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_me
 
     struct rig_meta
     {
-
+        /// Humanoid roles set by hand where the ones found from the skeleton's shape are wrong. They
+        /// hold for the model (played on by clips) and for every clip of the file (played on others).
+        std::vector<humanoid_bone_override> humanoid_overrides;
     } rig;
 
     struct animations_meta

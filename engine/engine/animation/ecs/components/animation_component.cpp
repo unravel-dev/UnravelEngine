@@ -143,18 +143,53 @@ auto animation_component::get_pose_retargeting() const -> animation_pose_retarge
     return pose_retargeting_;
 }
 
-auto animation_component::get_target_skeleton(uint64_t armature_version,
+void animation_component::set_retarget_pose(animation_retarget_pose pose)
+{
+    if(retarget_pose_ != pose)
+    {
+        retarget_pose_ = pose;
+        ++retarget_revision_;
+    }
+}
+
+auto animation_component::get_retarget_pose() const -> animation_retarget_pose
+{
+    return retarget_pose_;
+}
+
+void animation_component::set_retarget_pose_offsets(const std::vector<humanoid_pose_offset>& offsets)
+{
+    if(retarget_pose_offsets_ != offsets)
+    {
+        retarget_pose_offsets_ = offsets;
+        ++retarget_revision_;
+    }
+}
+
+auto animation_component::get_retarget_pose_offsets() const -> const std::vector<humanoid_pose_offset>&
+{
+    return retarget_pose_offsets_;
+}
+
+auto animation_component::get_retarget_revision() const -> uint64_t
+{
+    return retarget_revision_;
+}
+
+auto animation_component::get_target_skeleton(uint64_t skeleton_version,
                                               const std::function<void(animation_target_skeleton&)>& build)
     -> const std::shared_ptr<const animation_target_skeleton>&
 {
-    if(!target_skeleton_ || target_skeleton_version_ != armature_version)
+    if(!target_skeleton_ || target_skeleton_version_ != skeleton_version || target_skeleton_revision_ != retarget_revision_)
     {
         auto skeleton = std::make_shared<animation_target_skeleton>();
         build(*skeleton);
         skeleton->compute_rest_globals();
         skeleton->compute_humanoid_bones();
+        skeleton->compute_reference_pose(retarget_pose_ == animation_retarget_pose::t_pose, retarget_pose_offsets_);
         target_skeleton_ = std::move(skeleton);
-        target_skeleton_version_ = armature_version;
+        target_skeleton_version_ = skeleton_version;
+        target_skeleton_revision_ = retarget_revision_;
     }
     return target_skeleton_;
 }

@@ -221,14 +221,32 @@ struct animation_target_skeleton
     std::vector<math::transform> rest_global;
     /// Humanoid roles of the bones, for clips whose bone names differ from this skeleton's.
     humanoid_map humanoid = make_empty_humanoid_map();
+    /// Roles set by hand (the model's import settings), applied over the found ones.
+    std::vector<humanoid_bone_override> humanoid_overrides;
+    /**
+     * @brief The retarget pose: what Rest Aligned retargeting turns this skeleton's bones from.
+     * The rest pose until compute_reference_pose straightens or turns it.
+     */
+    std::vector<math::transform> reference_global;
+    /// The retarget pose before its offsets: what the clip's skeleton is laid onto.
+    std::vector<math::transform> aligned_global;
+    /// Clip skeletons are straightened to a T-pose too (see align_humanoid_to_t_pose).
+    bool aligns_to_t_pose{};
 
     /// Takes the bones' names and parents, and bind_local from `bind_pose` (a pose over the same
     /// bone indices); a bone the pose leaves out binds at identity.
     void set_bones(std::vector<std::string> bone_names, std::vector<int> bone_parents, const animation_pose& bind_pose);
-    /// Fills rest_global from parents and bind_local.
+    /// Fills rest_global from parents and bind_local, and makes it the retarget pose.
     void compute_rest_globals();
-    /// Fills humanoid from names, parents and rest_global (call compute_rest_globals first).
+    /// Fills humanoid from names, parents, rest_global and humanoid_overrides (call
+    /// compute_rest_globals first).
     void compute_humanoid_bones();
+    /**
+     * @brief Makes the retarget pose: the rest pose, straightened to a T-pose when `t_pose` (clip
+     * skeletons played on it are straightened as well), then turned by `offsets`. Call
+     * compute_humanoid_bones first.
+     */
+    void compute_reference_pose(bool t_pose, const std::vector<humanoid_pose_offset>& offsets);
 };
 
 /**
@@ -651,6 +669,9 @@ private:
         /// Rest-aligned retargeting data, valid when rest_aligned.
         bool rest_aligned{};
         std::vector<math::transform> source_rest_global;
+        /// The source skeleton's retarget pose: its rest, straightened to a T-pose when the target
+        /// asks for it. Motion is measured from it.
+        std::vector<math::transform> source_reference_global;
         float height_ratio{1.0f};
         /// Turns source root-frame directions into target root-frame directions.
         math::quat frame_rotation{math::identity<math::quat>()};

@@ -1,5 +1,7 @@
 #include "asset_importer_meta.hpp"
 
+#include <engine/meta/animation/animation.hpp>
+
 #include <engine/meta/core/common/basetypes.hpp>
 
 #include <serialization/associative_archive.h>
@@ -283,6 +285,13 @@ REFLECT(mesh_importer_meta)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "rig_meta"},
             entt::attribute{"pretty_name", "Rig Meta"},
+        })
+        .data<&mesh_importer_meta::rig_meta::humanoid_overrides>("humanoid_overrides"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "humanoid_overrides"},
+            entt::attribute{"pretty_name", "Humanoid Overrides"},
+            entt::attribute{"element_label", "Role"},
+            entt::attribute{"tooltip", "Humanoid roles set by hand (role + bone name; an empty name takes the role away) where the ones found from the skeleton's shape are wrong. They hold for this model and for every clip of the file."},
         });
 
     // Register mesh_importer_meta::animations_meta with entt
@@ -433,12 +442,14 @@ LOAD_INSTANTIATE(mesh_importer_meta::cards_meta, ser20::iarchive_binary_t);
 
 SAVE(mesh_importer_meta::rig_meta)
 {
+    try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
 }
 SAVE_INSTANTIATE(mesh_importer_meta::rig_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(mesh_importer_meta::rig_meta, ser20::oarchive_binary_t);
 
 LOAD(mesh_importer_meta::rig_meta)
 {
+    try_load(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
 }
 LOAD_INSTANTIATE(mesh_importer_meta::rig_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(mesh_importer_meta::rig_meta, ser20::iarchive_binary_t);

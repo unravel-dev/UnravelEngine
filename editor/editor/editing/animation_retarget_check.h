@@ -2,8 +2,11 @@
 
 #include <engine/animation/animation_player.h>
 
+#include <context/context.hpp>
+
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,6 +31,10 @@ struct animation_retarget_check
     /// Channels per animation_binding_report::match_kind.
     std::array<size_t, RETARGET_MATCH_KIND_COUNT> match_counts{};
     std::vector<std::string> warnings;
+    /// Both skeletons are straightened to a T-pose first (Retarget Pose T-Pose).
+    bool aligns_to_t_pose{};
+    /// Turns the character's retarget pose adds to its bones.
+    size_t pose_offset_count{};
 };
 
 /// Checks how `clip` binds onto `model`'s skeleton with `animation`'s retargeting settings.
@@ -49,5 +56,22 @@ auto get_retarget_bone_name(const animation_retarget_check& check, int bone) -> 
 
 /// Channels that reached a bone, whatever the match.
 auto count_matched_channels(const animation_retarget_check& check) -> size_t;
+
+/// The key of the project model file `model` shows, whose import settings can be edited; empty
+/// for engine models and models without a mesh.
+auto get_editable_model_key(const model_component& model) -> std::string;
+
+/// The humanoid roles the model's import settings set by hand.
+auto get_model_humanoid_overrides(rtti::context& ctx, const std::string& model_key) -> std::vector<humanoid_bone_override>;
+
+/**
+ * @brief Sets one humanoid role in the model's import settings: `bone` names the bone that plays it
+ * (empty: none), nullopt gives it back to the finder. The model and its clips are imported again.
+ * @return False when the settings could not be written.
+ */
+auto set_model_humanoid_override(rtti::context& ctx,
+                                 const std::string& model_key,
+                                 humanoid_bone role,
+                                 const std::optional<std::string>& bone) -> bool;
 
 } // namespace unravel

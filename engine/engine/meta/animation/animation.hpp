@@ -27,6 +27,14 @@ SAVE_EXTERN(animation_curve);
 LOAD_EXTERN(animation_curve);
 REFLECT_EXTERN(animation_curve);
 
+REFLECT_EXTERN(humanoid_bone);
+
+SERIALIZE_EXTERN(humanoid_bone_override);
+REFLECT_EXTERN(humanoid_bone_override);
+
+SERIALIZE_EXTERN(humanoid_pose_offset);
+REFLECT_EXTERN(humanoid_pose_offset);
+
 /**
  * @brief Brings authored events into a valid state: positions and weights clamped to 0..1, sorted
  * by position. Run on everything an importer meta feeds a clip.

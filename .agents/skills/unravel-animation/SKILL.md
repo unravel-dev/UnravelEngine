@@ -112,6 +112,25 @@ Daz, UE5 and the female UE mannequin layouts from their real names
 (`test_ue_clip_on_a_mixamo_rig`); add a rig there when one maps wrong. Tools:
 inspector Humanoid Mapping, MCP `animation_get_humanoid` (entity or clip).
 
+Retarget pose: rotations (world delta, scale axis mapping) are measured from the source's
+retarget pose and applied to the target's (`source_reference_global`,
+`animation_target_skeleton::reference_global`); the frame fit uses the poses
+before the target's offsets (`aligned_global`); between two humanoids (hips found on both
+sides, which needs upright frames) only its heading is kept, since differing proportions tilt
+it (`test_proportions_do_not_tilt_the_frame`). Positions, the height ratio and
+root-motion frames stay on the rest poses. `retarget_pose` t_pose straightens
+both sides (`align_humanoid_to_t_pose`, limbs only); offsets are character-space
+turns (`apply_humanoid_pose_offsets`, right side mirrored). Roles set by hand
+(`apply_humanoid_overrides`) come from the model's import settings
+`rig.humanoid_overrides`, compiled into the mesh (`mesh::get_humanoid_overrides`)
+and into every clip of the file (`animation_clip::humanoid_overrides`, part of
+the source skeleton hash); both are serialized LAST. The retarget skeleton and
+the bindings key on `animation_system::get_skeleton_version` (armature version +
+the loaded mesh object): a reimport that keeps the bones keeps the armature
+version, so the mesh is what brings changed roles in. Tests:
+`test_t_pose_alignment`, `test_pose_offsets_are_mirrored`,
+`test_retarget_pose_in_playback`, `test_clip_overrides_choose_the_source_bone`.
+
 `animation_player::describe_binding` reports a binding without playing it
 (match kind per channel, unreached bones, height ratio, frame turn, root-motion
 bones, rest differences per limb); it runs the player's own `find_binding`, so

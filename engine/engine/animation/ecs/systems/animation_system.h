@@ -20,8 +20,14 @@ class animation_system
 {
 public:
     /**
+     * @brief Changes whenever what the retarget skeleton is described from changes: the model's
+     * armature, or its mesh asset (a reimport keeps the armature's bones and can bring other roles).
+     */
+    static auto get_skeleton_version(const model_component& model) -> uint64_t;
+
+    /**
      * @brief The skeleton of `model` as a rest-aligned retargeting target - names, bind pose, rest
-     * pose and humanoid roles - built once per armature version and cached on `animation`.
+     * pose and humanoid roles - built once per skeleton version and cached on `animation`.
      */
     static auto get_target_skeleton(animation_component& animation, const model_component& model)
         -> const std::shared_ptr<const animation_target_skeleton>&;

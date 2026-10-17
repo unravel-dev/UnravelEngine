@@ -1,6 +1,8 @@
 #pragma once
 #include <engine/engine_export.h>
 
+#include <engine/animation/animation_humanoid.h>
+
 #include <entt/core/hashed_string.hpp>
 #include <hpp/string_view.hpp>
 #include <math/curve.h>
@@ -190,6 +192,10 @@ struct animation_clip
 
     /// Float tracks blended with the pose.
     std::vector<animation_curve> curves;
+
+    /// Humanoid roles set by hand for the skeleton the clip was made on (its model's import
+    /// settings), over the ones found from its shape.
+    std::vector<humanoid_bone_override> humanoid_overrides;
 };
 
 /**

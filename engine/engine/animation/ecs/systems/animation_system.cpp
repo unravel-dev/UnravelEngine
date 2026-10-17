@@ -1,4 +1,5 @@
 #include "animation_system.h"
+#include <base/hash.hpp>
 #include <engine/animation/animation.h>
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/ecs/components/id_component.h>
@@ -171,15 +172,28 @@ void describe_skeleton(const model_component& model, animation_skeleton_desc& de
 }
 /**
  * @brief The model's armature as rest-aligned retargeting needs it: parents and bind locals by
- * armature index.
+ * armature index, and the humanoid roles its import settings set by hand.
  */
 void describe_target_skeleton(const model_component& model, animation_target_skeleton& skeleton)
 {
     animation_skeleton_desc desc;
     describe_skeleton(model, desc);
     skeleton.set_bones(std::move(desc.names), std::move(desc.parents), model.get_bind_pose());
+    const auto& lod = model.get_model().get_lod(0);
+    if(const auto mesh = lod ? lod.try_get() : nullptr)
+    {
+        skeleton.humanoid_overrides = mesh->get_humanoid_overrides();
+    }
 }
 } // namespace
+
+auto animation_system::get_skeleton_version(const model_component& model) -> uint64_t
+{
+    size_t version = size_t(model.get_armature_version());
+    const auto lod = model.get_model().get_lod(0);
+    utils::hash_combine(version, lod ? lod.version() : uintptr_t{});
+    return version;
+}
 
 auto animation_system::make_skeleton_binding(animation_component& animation, const model_component& model)
     -> animation_skeleton_binding
@@ -189,7 +203,7 @@ auto animation_system::make_skeleton_binding(animation_component& animation, con
     {
         return binding;
     }
-    binding.version = model.get_armature_version() * 2;
+    binding.version = get_skeleton_version(model) * 2;
     binding.resolve = [&model](const animation_channel& channel)
     {
         const int index = model.get_armature_index_by_name_cached(channel.node_name);
@@ -198,7 +212,10 @@ auto animation_system::make_skeleton_binding(animation_component& animation, con
     };
     if(animation.get_pose_retargeting() == animation_pose_retargeting::rest_aligned)
     {
-        binding.version += 1;
+        // A changed retarget pose rebuilds the skeleton and every binding made against it.
+        size_t version = size_t(binding.version + 1);
+        utils::hash_combine(version, animation.get_retarget_revision());
+        binding.version = version;
         binding.rest_aligned_target = get_target_skeleton(animation, model);
     }
     return binding;
@@ -207,7 +224,7 @@ auto animation_system::make_skeleton_binding(animation_component& animation, con
 auto animation_system::get_target_skeleton(animation_component& animation, const model_component& model)
     -> const std::shared_ptr<const animation_target_skeleton>&
 {
-    return animation.get_target_skeleton(model.get_armature_version(),
+    return animation.get_target_skeleton(get_skeleton_version(model),
                                          [&model](animation_target_skeleton& skeleton)
                                          {
                                              describe_target_skeleton(model, skeleton);

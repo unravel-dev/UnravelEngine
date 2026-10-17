@@ -1,5 +1,7 @@
 #include "mesh.hpp"
 
+#include <engine/meta/animation/animation.hpp>
+
 #include <engine/meta/core/common/basetypes.hpp>
 #include <engine/meta/core/math/quaternion.hpp>
 #include <engine/meta/core/math/transform.hpp>
@@ -398,6 +400,8 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
     try_save(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_save(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
+    // Fields added later go last: binary archives read by position.
+    try_save(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
@@ -425,6 +429,7 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
     try_load(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
     try_load(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
+    try_load(ar, ser20::make_nvp("humanoid_overrides", obj.humanoid_overrides));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }

@@ -1,6 +1,8 @@
 #include "animation_retarget_check.h"
 
+#include <editor/editing/editor_actions.h>
 #include <engine/animation/animation_controller.h>
+#include <engine/assets/asset_manager.h>
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/animation/ecs/systems/animation_system.h>
 #include <engine/rendering/ecs/components/model_component.h>
@@ -98,13 +100,17 @@ void add_binding_warnings(animation_retarget_check& check)
     }
     for(const auto& difference : report.rest_differences)
     {
-        if(difference.degrees > REST_POSE_WARNING_DEGREES)
+        if(difference.degrees <= REST_POSE_WARNING_DEGREES)
         {
-            check.warnings.push_back(std::string(get_humanoid_bone_name(difference.role)) + " rests " +
-                                     std::to_string(int(std::lround(difference.degrees))) +
-                                     " degrees apart on the two skeletons: they rest in different poses (a T-pose "
-                                     "against an A-pose?) and every pose keeps that offset.");
+            continue;
         }
+        const std::string what = std::string(get_humanoid_bone_name(difference.role)) + " rests " +
+                                 std::to_string(int(std::lround(difference.degrees))) + " degrees apart on the two skeletons";
+        check.warnings.push_back(
+            check.aligns_to_t_pose
+                ? what + " even straightened to a T-pose: check its role in Humanoid Mapping on both sides."
+                : what + ": they rest in different poses (a T-pose against an A-pose?) and every pose keeps that "
+                         "offset. Set Retarget Pose to T-Pose to straighten both first.");
     }
     if(report.is_rest_aligned && check.skeleton)
     {
@@ -159,6 +165,8 @@ auto check_animation_retarget(animation_component& animation,
     }
     const animation_skeleton_binding binding = animation_system::make_skeleton_binding(animation, model);
     check.report = animation_player::describe_binding(clip, binding, *check.skeleton);
+    check.aligns_to_t_pose = check.skeleton->aligns_to_t_pose;
+    check.pose_offset_count = animation.get_retarget_pose_offsets().size();
     for(const auto& channel : check.report.channels)
     {
         ++check.match_counts[size_t(channel.match)];
@@ -224,6 +232,46 @@ auto get_retarget_bone_name(const animation_retarget_check& check, int bone) -> 
 auto count_matched_channels(const animation_retarget_check& check) -> size_t
 {
     return check.report.channels.size() - check.match_counts[size_t(match_kind::none)];
+}
+
+auto get_editable_model_key(const model_component& model) -> std::string
+{
+    const auto lod = model.get_model().get_lod(0);
+    std::string key = lod ? lod.id() : std::string{};
+    return key.rfind("app:", 0) == 0 ? key : std::string{};
+}
+
+auto get_model_humanoid_overrides(rtti::context& ctx, const std::string& model_key) -> std::vector<humanoid_bone_override>
+{
+    const auto meta = ctx.get_cached<asset_manager>().get_metadata_for_key(model_key);
+    const auto importer = std::dynamic_pointer_cast<mesh_importer_meta>(meta.meta.importer);
+    return importer ? importer->rig.humanoid_overrides : std::vector<humanoid_bone_override>{};
+}
+
+auto set_model_humanoid_override(rtti::context& ctx,
+                                 const std::string& model_key,
+                                 humanoid_bone role,
+                                 const std::optional<std::string>& bone) -> bool
+{
+    auto meta = ctx.get_cached<asset_manager>().get_metadata_for_key(model_key);
+    const auto importer = std::dynamic_pointer_cast<mesh_importer_meta>(meta.meta.importer);
+    if(!importer)
+    {
+        return false;
+    }
+    auto& overrides = importer->rig.humanoid_overrides;
+    overrides.erase(std::remove_if(overrides.begin(),
+                                   overrides.end(),
+                                   [role](const humanoid_bone_override& entry)
+                                   {
+                                       return entry.role == role;
+                                   }),
+                    overrides.end());
+    if(bone)
+    {
+        overrides.push_back({role, *bone});
+    }
+    return editor_actions::save_import_settings(model_key, meta.meta);
 }
 
 } // namespace unravel

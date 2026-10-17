@@ -378,6 +378,36 @@ auto retarget_channels_json(const animation_retarget_check& check, bool lists_al
     return json + "]";
 }
 
+/// Hand-set humanoid roles as JSON, roles by their reflected names (what import settings take).
+auto humanoid_overrides_json(rtti::context& ctx, const std::vector<humanoid_bone_override>& overrides) -> std::string
+{
+    std::string json = "[";
+    for(const auto& entry : overrides)
+    {
+        json += fmt::format(R"({}{{"role":{},"bone":{}}})",
+                            json.size() > 1 ? "," : "",
+                            enum_name_json(ctx, entry.role),
+                            make_json_string(entry.bone));
+    }
+    return json + "]";
+}
+
+/// A character's retarget pose offsets as JSON.
+auto pose_offsets_json(rtti::context& ctx, const std::vector<humanoid_pose_offset>& offsets) -> std::string
+{
+    std::string json = "[";
+    for(const auto& offset : offsets)
+    {
+        json += fmt::format(R"({}{{"role":{},"rotation":[{},{},{}]}})",
+                            json.size() > 1 ? "," : "",
+                            enum_name_json(ctx, offset.role),
+                            json_float(offset.rotation.x),
+                            json_float(offset.rotation.y),
+                            json_float(offset.rotation.z));
+    }
+    return json + "]";
+}
+
 auto describe_retarget_check(rtti::context& ctx,
                              const animation_component& animation,
                              const std::string& clip_key,
@@ -409,13 +439,16 @@ auto describe_retarget_check(rtti::context& ctx,
     }
     rest += "]";
     return fmt::format(
-        R"({{"clip":{},"retargeting_mode":{},"pose_retargeting":{},"rest_aligned":{},"clip_has_rest":{},)"
+        R"({{"clip":{},"retargeting_mode":{},"pose_retargeting":{},"retarget_pose":{},"retarget_pose_offsets":{},)"
+        R"("rest_aligned":{},"clip_has_rest":{},)"
         R"("channel_count":{},"matched":{},"matches":{},"{}":{},"unreached_bones":{},"height_ratio":{},)"
         R"("frame_turn_degrees":{},"frame_turn_axis":[{},{},{}],"root_motion":{{"position":{},"rotation":{}}},)"
         R"("rest_mismatches":{},"rest_differences":{},"warnings":{}}})",
         make_json_string(clip_key),
         enum_name_json(ctx, animation.get_retargeting_mode()),
         enum_name_json(ctx, animation.get_pose_retargeting()),
+        enum_name_json(ctx, animation.get_retarget_pose()),
+        pose_offsets_json(ctx, animation.get_retarget_pose_offsets()),
         bool_to_json(report.is_rest_aligned),
         bool_to_json(report.has_source_rest),
         report.channels.size(),
@@ -524,7 +557,10 @@ void register_animation_tools(mcp_tool_registry& registry)
              "toes) Rest Aligned retargeting matches bones by when their names differ (Mixamo, Rigify, VRM, "
              "Biped...): with entity_id, the bones of the entity's model (the Animation inspector's Humanoid "
              "Mapping); with clip (an animation clip key), the bones of the skeleton the clip was authored on. Each "
-             "role maps to a bone name or null; a clip imported before rest poses were recorded reports none.",
+             "role maps to a bone name or null; a clip imported before rest poses were recorded reports none. "
+             "overrides lists the roles set by hand: rig.humanoid_overrides in the model file's import settings "
+             "(assets_set_import_settings on the model key, [{\"role\":\"left_hand\",\"bone\":\"hand.l\"}]; an "
+             "empty bone takes the role away). They hold for the model and for every clip of the file.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string"},"clip":{"type":"string"}}})json",
          .handler =
@@ -532,6 +568,7 @@ void register_animation_tools(mcp_tool_registry& registry)
          {
              humanoid_map roles = make_empty_humanoid_map();
              std::vector<std::string> names;
+             std::vector<humanoid_bone_override> overrides;
              std::string key;
              std::string entity_reference;
              if(!read_string(args, "clip", key) && !read_string(args, "entity_id", entity_reference))
@@ -548,6 +585,7 @@ void register_animation_tools(mcp_tool_registry& registry)
                      return {.text = error.empty() ? "No animation clip at " + key : error, .is_error = true};
                  }
                  roles = find_clip_humanoid_bones(*clip);
+                 overrides = clip->humanoid_overrides;
                  for(const auto& channel : clip->channels)
                  {
                      names.push_back(channel.node_name);
@@ -571,6 +609,7 @@ void register_animation_tools(mcp_tool_registry& registry)
                  {
                      roles = skeleton->humanoid;
                      names = skeleton->names;
+                     overrides = skeleton->humanoid_overrides;
                  }
              }
              std::string json = "{";
@@ -584,10 +623,11 @@ void register_animation_tools(mcp_tool_registry& registry)
                                      named ? make_json_string(names[size_t(bone)]) : std::string("null"));
              }
              json += "}";
-             return {.text = fmt::format(R"({{"found":{},"of":{},"roles":{}}})",
+             return {.text = fmt::format(R"({{"found":{},"of":{},"roles":{},"overrides":{}}})",
                                          count_humanoid_bones(roles),
                                          HUMANOID_BONE_COUNT,
-                                         json),
+                                         json,
+                                         humanoid_overrides_json(ctx, overrides)),
                      .is_error = false};
          },
          .effect = tool_effect::read_only});
@@ -602,9 +642,10 @@ void register_animation_tools(mcp_tool_registry& registry)
              "Aligned or copied, how many channels reach a bone and how (index, name, name without namespace, "
              "role), the channels that reach none (or every channel with channels true), the bones no channel "
              "reaches (they keep the bind pose), height ratio and frame turn, which bone the root motion moves, "
-             "rest pose differences per limb, and warnings in words: wrong settings, a different rest pose "
-             "(T-pose against A-pose), unmatched roles, lost root motion. Check it after assigning clips from "
-             "another skeleton.",
+             "rest pose differences per limb (measured in the retarget poses), the retarget pose (bind_pose or "
+             "t_pose, and the character's offsets), and warnings in words: wrong settings, a different rest pose "
+             "(T-pose against A-pose: set retarget_pose t_pose), unmatched roles, lost root motion. Check it after "
+             "assigning clips from another skeleton.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string"},"clip":{"type":"string"},"channels":{"type":"boolean"}},"required":["entity_id"]})json",
          .handler =

@@ -1,4 +1,5 @@
 #include "animation_component.hpp"
+#include <engine/meta/animation/animation.hpp>
 #include <engine/meta/animation/animation_controller.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
 #include <engine/meta/ecs/entity.hpp>
@@ -48,6 +49,26 @@ REFLECT_INLINE(animation_pose_retargeting)
         });
 }
 
+REFLECT_INLINE(animation_retarget_pose)
+{
+    entt::meta_factory<animation_retarget_pose>{}
+        .type("animation_retarget_pose"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "animation_retarget_pose"},
+            entt::attribute{"pretty_name", "Retarget Pose"},
+        })
+        .data<animation_retarget_pose::bind_pose>("bind_pose"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bind_pose"},
+            entt::attribute{"pretty_name", "Bind Pose"},
+        })
+        .data<animation_retarget_pose::t_pose>("t_pose"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "t_pose"},
+            entt::attribute{"pretty_name", "T-Pose"},
+        });
+}
+
 REFLECT(animation_component)
 {
     entt::meta_factory<animation_component::culling_mode>{}
@@ -65,6 +86,14 @@ REFLECT(animation_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "renderer_based"},
             entt::attribute{"pretty_name", "Renderer Based"},
+        });
+
+    // The retarget pose only matters to Rest Aligned retargeting.
+    const auto is_rest_aligned = entt::property_predicate<bool>(
+        [](const entt::meta_any& object)
+        {
+            const auto* animation = object.try_cast<animation_component>();
+            return animation != nullptr && animation->get_pose_retargeting() == animation_pose_retargeting::rest_aligned;
         });
 
     // Register animation_component class with entt
@@ -126,7 +155,22 @@ REFLECT(animation_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "pose_retargeting"},
             entt::attribute{"pretty_name", "Pose Retargeting"},
-            entt::attribute{"tooltip", "Copy: clips play their local transforms as authored (clips exported with this model). Rest Aligned: clips from other exports (other root frame or unit scale) or skeletons of other proportions play correctly - each bone turns by what its source bone turned from the source rest pose, bone lengths stay this model's and motion scales with hip height. Both skeletons must rest in the same pose."},
+            entt::attribute{"tooltip", "Copy: clips play their local transforms as authored (clips exported with this model). Rest Aligned: clips from other exports (other root frame or unit scale) or skeletons of other proportions play correctly - each bone turns by what its source bone turned from the source's retarget pose, bone lengths stay this model's and motion scales with hip height."},
+        })
+        .data<&animation_component::set_retarget_pose, &animation_component::get_retarget_pose>("retarget_pose"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "retarget_pose"},
+            entt::attribute{"pretty_name", "Retarget Pose"},
+            entt::attribute{"tooltip", "The pose motion is measured from on the clip's skeleton and applied to on this one. Bind Pose: each skeleton's rest pose; both must rest in the same pose. T-Pose: both skeletons straightened to a T-pose by humanoid role first (arms level, legs straight down), so a clip of an A-pose skeleton plays right on a T-pose one."},
+            entt::attribute{"predicate", is_rest_aligned},
+        })
+        .data<&animation_component::set_retarget_pose_offsets, &animation_component::get_retarget_pose_offsets>("retarget_pose_offsets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "retarget_pose_offsets"},
+            entt::attribute{"pretty_name", "Retarget Pose Offsets"},
+            entt::attribute{"element_label", "Offset"},
+            entt::attribute{"tooltip", "Turns of this character's bones in its retarget pose, by humanoid role, in degrees about its side, up and forward axes (right-side roles mirrored). Every retargeted pose keeps them: raise both upper arms (0, 0, 20) to keep a stocky character's arms clear of its body."},
+            entt::attribute{"predicate", is_rest_aligned},
         });
 }
 
@@ -141,6 +185,8 @@ SAVE(animation_component)
     try_save(ar, ser20::make_nvp("pose_retargeting", obj.get_pose_retargeting()));
     // Fields added later go last: binary archives read by position.
     try_save(ar, ser20::make_nvp("controller", obj.get_controller()));
+    try_save(ar, ser20::make_nvp("retarget_pose", obj.get_retarget_pose()));
+    try_save(ar, ser20::make_nvp("retarget_pose_offsets", obj.get_retarget_pose_offsets()));
 }
 SAVE_INSTANTIATE(animation_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(animation_component, ser20::oarchive_binary_t);
@@ -193,6 +239,18 @@ LOAD(animation_component)
     if(try_load(ar, ser20::make_nvp("controller", controller)))
     {
         obj.set_controller(controller);
+    }
+
+    animation_retarget_pose retarget_pose{animation_retarget_pose::bind_pose};
+    if(try_load(ar, ser20::make_nvp("retarget_pose", retarget_pose)))
+    {
+        obj.set_retarget_pose(retarget_pose);
+    }
+
+    std::vector<humanoid_pose_offset> retarget_pose_offsets;
+    if(try_load(ar, ser20::make_nvp("retarget_pose_offsets", retarget_pose_offsets)))
+    {
+        obj.set_retarget_pose_offsets(retarget_pose_offsets);
     }
 }
 LOAD_INSTANTIATE(animation_component, ser20::iarchive_associative_t);
