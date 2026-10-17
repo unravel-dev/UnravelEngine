@@ -68,14 +68,6 @@ auto get_samples() -> const std::vector<sample_info>&
          "editor:/samples/sample_ui.jpg",
          ICON_MDI_VIEW_DASHBOARD_OUTLINE,
          true},
-        {"Demo Project",
-         "DemoProject",
-         "The engine at a glance",
-         "A full project with PBR rendering, animation, physics, audio, a main menu and scripting examples.",
-         {"Rendering", "Physics", "Audio"},
-         "editor:/samples/sample_demo.jpg",
-         ICON_MDI_CUBE_OUTLINE,
-         false},
     };
     return samples;
 }
