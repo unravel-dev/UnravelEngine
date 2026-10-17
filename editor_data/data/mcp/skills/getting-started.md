@@ -98,7 +98,7 @@ Building a scene is not shipping a game. The rest of the chain:
 - Give entities meaningful names at creation - scene_find_entities_batch works
   by name and future sessions depend on it.
 - Fetch the other skills (skills_list / skills_get) before scene building,
-  scripting, asset or verification work.
+  scripting, animation, asset or verification work.
 
 ## Do not
 

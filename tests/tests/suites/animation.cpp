@@ -2499,6 +2499,165 @@ void test_ue_clip_on_a_mixamo_rig()
                "the travel is scaled by hip height (1.0 against the clip's 0.95)");
 }
 
+/// A clip of `layout` holding its rest pose: one channel per bone, rest offsets from the parent,
+/// identity rotations, named as the layout's bones.
+auto make_rest_pose_clip(const test_skeleton& layout) -> std::shared_ptr<animation_clip>
+{
+    auto clip = std::make_shared<animation_clip>();
+    clip->duration = seconds_t{1.0f};
+    for(size_t i = 0; i < layout.names.size(); ++i)
+    {
+        const int parent = layout.parents[i];
+        auto& channel = clip->channels.emplace_back();
+        channel.node_name = layout.names[i];
+        channel.node_index = i;
+        channel.has_rest = true;
+        channel.parent_channel = parent;
+        channel.rest_local.set_position(layout.positions[i] - (parent >= 0 ? layout.positions[size_t(parent)] : math::vec3(0.0f)));
+        channel.position_keys = {{seconds_t{0.0f}, channel.rest_local.get_position()}};
+        channel.rotation_keys = {{seconds_t{0.0f}, math::identity<math::quat>()}};
+        channel.scaling_keys = {{seconds_t{0.0f}, {1.0f, 1.0f, 1.0f}}};
+    }
+    return clip;
+}
+
+/// Exact names first, then names without FBX namespace, as the animation system resolves them.
+auto make_layout_binding(const test_skeleton& layout, uint64_t version) -> animation_skeleton_binding
+{
+    animation_skeleton_binding binding;
+    binding.version = version;
+    binding.resolve = [&layout](const animation_channel& channel)
+    {
+        const int exact = layout.index(channel.node_name);
+        if(exact >= 0)
+        {
+            return exact;
+        }
+        for(size_t i = 0; i < layout.names.size(); ++i)
+        {
+            if(get_name_without_namespace(layout.names[i]) == get_name_without_namespace(channel.node_name))
+            {
+                return int(i);
+            }
+        }
+        return -1;
+    };
+    return binding;
+}
+
+auto find_report_channel(const animation_binding_report& report, const std::string& name)
+    -> const animation_binding_report::channel_entry*
+{
+    for(const auto& channel : report.channels)
+    {
+        if(channel.name == name)
+        {
+            return &channel;
+        }
+    }
+    return nullptr;
+}
+
+auto find_rest_difference(const animation_binding_report& report, humanoid_bone role) -> float
+{
+    for(const auto& difference : report.rest_differences)
+    {
+        if(difference.role == role)
+        {
+            return difference.degrees;
+        }
+    }
+    return -1.0f;
+}
+
+void test_binding_report_explains_a_retarget()
+{
+    std::printf("test_binding_report_explains_a_retarget\n");
+    using match_kind = animation_binding_report::match_kind;
+    // A mannequin clip (root bone on the floor) on a Mixamo-shaped rig: no name matches, so every
+    // body bone matches by role; the root the rig lacks moves it through the hips.
+    auto clip = make_rest_pose_clip(make_ue_skeleton());
+    clip->root_motion.position_node_name = "root";
+    clip->root_motion.position_node_index = 0;
+    clip->channels[0].position_keys.push_back({seconds_t{1.0f}, {0.0f, 0.0f, 1.0f}});
+    const auto mixamo = make_mixamo_layout("mixamorig:");
+    const auto target = make_mixamo_target(mixamo);
+    auto binding = make_layout_binding(mixamo, 21);
+    binding.rest_aligned_target = target;
+    const auto report = animation_player::describe_binding(clip, binding, *target);
+
+    check(report.is_rest_aligned && report.has_source_rest, "the clip retargets rest aligned");
+    const auto* pelvis = find_report_channel(report, "pelvis");
+    check(pelvis && pelvis->match == match_kind::role && pelvis->bone == mixamo.index("mixamorig:Hips"),
+          "the pelvis reaches the hips by role");
+    const auto* arm = find_report_channel(report, "upperarm_l");
+    check(arm && arm->match == match_kind::role && arm->bone == mixamo.index("mixamorig:LeftArm"),
+          "the left upper arm reaches the left arm by role");
+    const auto* root = find_report_channel(report, "root");
+    check(root && root->match == match_kind::none, "the floor root reaches no bone");
+    check(report.root_position_bone == mixamo.index("mixamorig:Hips"), "root motion reports through the hips");
+    check_near(report.height_ratio, 1.0f / 0.95f, 1e-3f, "the hips set the height ratio");
+    check(std::find(report.unreached_bones.begin(), report.unreached_bones.end(), mixamo.index("mixamorig:HeadTop_End")) !=
+              report.unreached_bones.end(),
+          "a bone no channel reaches is listed");
+    check_near(find_rest_difference(report, humanoid_bone::left_upper_arm), 0.0f, 1.0f, "both rest in a T-pose");
+
+    // The same rig resting in an A-pose: its arms point 45 degrees down.
+    auto a_pose = mixamo;
+    for(const char* side : {"Left", "Right"})
+    {
+        const int arm_bone = a_pose.index(std::string("mixamorig:") + side + "Arm");
+        const math::vec3 shoulder = a_pose.positions[size_t(arm_bone)];
+        for(const char* bone : {"ForeArm", "Hand", "HandIndex1"})
+        {
+            auto& position = a_pose.positions[size_t(a_pose.index(std::string("mixamorig:") + side + bone))];
+            const math::vec3 offset = position - shoulder;
+            position = shoulder + math::vec3(offset.x * 0.70710678f, -std::fabs(offset.x) * 0.70710678f, offset.z);
+        }
+    }
+    const auto a_pose_target = make_mixamo_target(a_pose);
+    auto a_pose_binding = make_layout_binding(a_pose, 22);
+    a_pose_binding.rest_aligned_target = a_pose_target;
+    const auto a_pose_report = animation_player::describe_binding(clip, a_pose_binding, *a_pose_target);
+    check_near(find_rest_difference(a_pose_report, humanoid_bone::left_upper_arm), 45.0f, 1.0f,
+               "an A-pose rig rests 45 degrees from the clip's T-pose");
+    check(find_rest_difference(a_pose_report, humanoid_bone::left_upper_arm) > REST_POSE_WARNING_DEGREES,
+          "which reads as a different rest pose");
+}
+
+void test_binding_report_names_and_copy()
+{
+    std::printf("test_binding_report_names_and_copy\n");
+    using match_kind = animation_binding_report::match_kind;
+    // A clip of a "mixamorig:" character on a "mixamorig1:" one: names match once the namespace
+    // drops. Played by Copy, the clip's rest is the target's own, so nothing is mismatched.
+    const auto layout = make_mixamo_layout("mixamorig1:");
+    const auto target = make_mixamo_target(layout);
+    auto clip = make_rest_pose_clip(make_mixamo_layout("mixamorig:"));
+    for(size_t i = 0; i < clip->channels.size(); ++i)
+    {
+        clip->channels[i].rest_local = target->bind_local[i];
+    }
+    const auto binding = make_layout_binding(layout, 23);
+    const auto report = animation_player::describe_binding(clip, binding, *target);
+    const auto* hips = find_report_channel(report, "mixamorig:Hips");
+    check(hips && hips->match == match_kind::name_without_namespace && hips->bone == layout.index("mixamorig1:Hips"),
+          "the hips match without their namespace");
+    check(!report.is_rest_aligned, "Copy does not retarget");
+    check(report.rest_mismatches == 0, "a clip of this skeleton rests as it does");
+
+    // A clip made on another skeleton played by Copy: its recorded rest is not the target's.
+    const auto mannequin = make_ue_skeleton();
+    const auto mannequin_clip = make_rest_pose_clip(mannequin);
+    const auto exact = make_layout_binding(mannequin, 24);
+    // The same names, but every bone turned along its child as a Mixamo export would rest.
+    const auto mismatched_target = make_mixamo_target(mannequin);
+    const auto copied = animation_player::describe_binding(mannequin_clip, exact, *mismatched_target);
+    check(copied.channels.size() == mannequin.names.size() && find_report_channel(copied, "pelvis")->match == match_kind::name,
+          "same names match by name");
+    check(copied.rest_mismatches > 0, "rests turned per bone are another skeleton's");
+}
+
 void test_names_match_across_namespaces()
 {
     std::printf("test_names_match_across_namespaces\n");
@@ -3778,6 +3937,8 @@ auto run_animation_suite(rtti::context& ctx) -> int
     test_rest_aligned_matches_humanoid_roles();
     test_ue_clip_on_a_mixamo_rig();
     test_names_match_across_namespaces();
+    test_binding_report_explains_a_retarget();
+    test_binding_report_names_and_copy();
     test_rest_aligned_onto_own_skeleton_is_a_copy();
     test_blend_space_retargets_once_like_each_clip();
     test_root_motion_accumulates_across_loops();

@@ -293,7 +293,9 @@ controller to an animation controller asset (.actrl: parameters, layers, states,
 transitions, Any State, exit times, tags) for anything that reacts to gameplay.
 Scripts and animation_set_parameters {"entity_id", "values", "triggers"} drive the
 controller; animation_get_state reports each layer's state, state_time and
-transition plus the blended clip curves - the proof a trigger took.
+transition plus the blended clip curves - the proof a trigger took. The
+animation skill walks the whole chain (import, retargeting, root motion,
+controllers, IK, verification).
 
 - Clips from another source file play through retargeting_mode "name_based"
   with pose_retargeting "rest_aligned": bones are matched by name (also across
@@ -305,6 +307,8 @@ transition plus the blended clip curves - the proof a trigger took.
   animation_get_humanoid {"entity_id"} shows a model's roles, {"clip"} the roles
   of the skeleton a clip was made on. Both rest poses must be the same pose
   (T-pose to T-pose). "copy" only suits clips authored on the same skeleton.
+  animation_get_retarget {"entity_id", "clip"} reports how a clip binds
+  there (matches, unreached bones, rest pose differences) with warnings.
 - apply_root_motion moves the entity by the clip's root node (the skeleton's
   root bone, or the hips when it has none). An entity with a Character
   Controller is moved through it in play mode, so the motion collides. Per clip,

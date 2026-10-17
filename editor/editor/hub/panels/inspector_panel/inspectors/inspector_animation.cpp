@@ -1,6 +1,7 @@
 #include "inspector_animation.h"
 #include "inspectors.h"
 
+#include <editor/editing/animation_retarget_check.h>
 #include <editor/editing/editing_manager.h>
 #include <engine/animation/animation.h>
 #include <engine/animation/animation_humanoid.h>
@@ -676,7 +677,224 @@ void draw_humanoid_section(rtti::context& ctx, animation_component& data)
     ImGui::EndTable();
 }
 
+constexpr ImU32 COL_WARNING = IM_COL32(255, 185, 80, 255);
+constexpr ImU32 COL_OK = IM_COL32(70, 200, 120, 255);
+/// Width of a Retarget Check table's first column, in font sizes.
+constexpr float RETARGET_NAME_COLUMN_FONTS = 10.0f;
+
+/// Counts per kind of match that occurred, as "name 40, role 12".
+auto describe_match_counts(const animation_retarget_check& check) -> std::string
+{
+    std::string text;
+    for(size_t kind = 1; kind < RETARGET_MATCH_KIND_COUNT; ++kind)
+    {
+        if(check.match_counts[kind] > 0)
+        {
+            text += (text.empty() ? "" : ", ") + std::string(get_match_kind_name(animation_binding_report::match_kind(kind))) +
+                    " " + std::to_string(check.match_counts[kind]);
+        }
+    }
+    return text;
+}
+
+void draw_retarget_summary(const animation_retarget_check& check)
+{
+    const auto& report = check.report;
+    ImGui::Text("Pose Retargeting in effect: %s", report.is_rest_aligned ? "Rest Aligned" : "Copy");
+    ImGui::SetItemTooltipEx("How the clip's poses reach the bones: copied as authored, or mapped rest to rest. "
+                            "Index Based, or a clip without a rest pose, plays copied whatever the setting.");
+    ImGui::Text("%zu of %zu channels reach a bone (%s)",
+                count_matched_channels(check),
+                report.channels.size(),
+                describe_match_counts(check).c_str());
+    ImGui::Text("%zu bones unreached: they keep their bind pose", report.unreached_bones.size());
+    if(report.is_rest_aligned)
+    {
+        ImGui::Text("Height ratio %.3f, frame turn %.0f deg about (%.2f, %.2f, %.2f)",
+                    report.height_ratio,
+                    report.frame_degrees,
+                    report.frame_axis.x,
+                    report.frame_axis.y,
+                    report.frame_axis.z);
+        ImGui::SetItemTooltipEx("Height ratio: this skeleton's hip height over the clip's; motion scales by it.\n"
+                                "Frame turn: how the clip's skeleton stands turned against this one (a Z-up export "
+                                "turns 90 degrees about X).");
+    }
+    if(report.root_position_channel >= 0)
+    {
+        ImGui::Text("Root motion: %s -> %s",
+                    report.channels[size_t(report.root_position_channel)].name.c_str(),
+                    get_retarget_bone_name(check, report.root_position_bone).c_str());
+    }
+    for(const auto& warning : check.warnings)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, COL_WARNING);
+        ImGui::TextWrapped(ICON_MDI_ALERT " %s", warning.c_str());
+        ImGui::PopStyleColor();
+    }
+    if(check.warnings.empty())
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, COL_OK);
+        ImGui::TextUnformatted(ICON_MDI_CHECK_CIRCLE_OUTLINE " No problems found.");
+        ImGui::PopStyleColor();
+    }
+}
+
+void draw_retarget_channels(const animation_retarget_check& check, bool& shows_unmatched_only)
+{
+    const auto& channels = check.report.channels;
+    const std::string title = "Channels (" + std::to_string(channels.size()) + ")###retarget_channels";
+    if(!ImGui::TreeNode(title.c_str()))
+    {
+        return;
+    }
+    ImGui::Checkbox("Unmatched only", &shows_unmatched_only);
+    if(ImGui::BeginTable("retarget_channels_table", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
+    {
+        ImGui::TableSetupColumn("Channel", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * RETARGET_NAME_COLUMN_FONTS);
+        ImGui::TableSetupColumn("Bone");
+        ImGui::TableSetupColumn("Match", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * RETARGET_NAME_COLUMN_FONTS * 0.6f);
+        ImGui::TableHeadersRow();
+        for(const auto& channel : channels)
+        {
+            const bool is_matched = channel.match != animation_binding_report::match_kind::none;
+            if(shows_unmatched_only && is_matched)
+            {
+                continue;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(channel.name.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(get_retarget_bone_name(check, channel.bone).c_str());
+            ImGui::TableNextColumn();
+            if(is_matched)
+            {
+                ImGui::TextUnformatted(get_match_kind_name(channel.match));
+            }
+            else
+            {
+                ImGui::TextDisabled("%s", get_match_kind_name(channel.match));
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TreePop();
+}
+
+void draw_retarget_unreached(const animation_retarget_check& check)
+{
+    const auto& bones = check.report.unreached_bones;
+    const std::string title = "Unreached bones (" + std::to_string(bones.size()) + ")###retarget_unreached";
+    if(!ImGui::TreeNode(title.c_str()))
+    {
+        return;
+    }
+    for(const int bone : bones)
+    {
+        ImGui::BulletText("%s", get_retarget_bone_name(check, bone).c_str());
+    }
+    ImGui::TreePop();
+}
+
+void draw_retarget_rest_poses(const animation_retarget_check& check)
+{
+    const auto& differences = check.report.rest_differences;
+    if(differences.empty() || !ImGui::TreeNode("Rest poses###retarget_rest"))
+    {
+        return;
+    }
+    ImGui::TextWrapped("How far each limb's rest direction differs between the clip's skeleton and this one. Above "
+                       "%.0f degrees the two rest in different poses.",
+                       REST_POSE_WARNING_DEGREES);
+    if(ImGui::BeginTable("retarget_rest_table", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV))
+    {
+        ImGui::TableSetupColumn("Role", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * RETARGET_NAME_COLUMN_FONTS);
+        ImGui::TableSetupColumn("Difference");
+        ImGui::TableHeadersRow();
+        for(const auto& difference : differences)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(get_humanoid_bone_name(difference.role));
+            ImGui::TableNextColumn();
+            const bool is_far = difference.degrees > REST_POSE_WARNING_DEGREES;
+            if(is_far)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, COL_WARNING);
+            }
+            ImGui::Text("%.1f deg", difference.degrees);
+            if(is_far)
+            {
+                ImGui::PopStyleColor();
+            }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TreePop();
+}
+
 } // namespace
+
+void inspector_animation_component::draw_retarget_section(rtti::context& ctx, animation_component& data)
+{
+    auto owner = data.get_owner();
+    auto* model = owner && owner.valid() ? owner.try_get<model_component>() : nullptr;
+    if(model == nullptr)
+    {
+        return;
+    }
+    ImGui::Spacing();
+    if(!ImGui::CollapsingHeader(ICON_MDI_CLIPBOARD_CHECK_OUTLINE " Retarget Check###retarget_check"))
+    {
+        return;
+    }
+    ImGui::PushID("retarget_check");
+    // A clip picked for another character does not carry over.
+    if(retarget_key_.component != &data)
+    {
+        retarget_clip_ = {};
+    }
+    {
+        inspect_without_undo_scope no_undo;
+        property_layout layout("Clip",
+                               "The clip to check. Empty: the clip the base layer plays, else the one the controller "
+                               "starts in, else the Animation clip.");
+        entt::meta_any clip_var = entt::forward_as_meta(retarget_clip_);
+        var_info clip_info;
+        clip_info.is_property = true;
+        inspect_var(ctx, clip_var, make_proxy(clip_var), clip_info);
+    }
+    const auto handle = retarget_clip_ ? retarget_clip_ : get_default_retarget_clip(data);
+    const auto clip = handle ? handle.try_get() : nullptr;
+    if(!clip || asset_handle<animation_clip>::is_empty(clip))
+    {
+        ImGui::TextDisabled("%s", handle ? "Loading the clip..." : "Pick a clip, or play one, to see how it lands on this skeleton.");
+        retarget_key_.component = &data;
+        ImGui::PopID();
+        return;
+    }
+    const retarget_key key{&data,
+                           handle.uid(),
+                           handle.version(),
+                           model->get_armature_version(),
+                           data.get_retargeting_mode(),
+                           data.get_pose_retargeting()};
+    if(!(key == retarget_key_))
+    {
+        retarget_check_ = check_animation_retarget(data, *model, clip);
+        retarget_key_ = key;
+    }
+    if(!retarget_clip_)
+    {
+        ImGui::TextDisabled("Checking %s, the clip this character plays.", handle.name().c_str());
+    }
+    draw_retarget_summary(retarget_check_);
+    draw_retarget_channels(retarget_check_, shows_unmatched_only_);
+    draw_retarget_unreached(retarget_check_);
+    draw_retarget_rest_poses(retarget_check_);
+    ImGui::PopID();
+}
 
 auto inspector_animation_component::inspect(rtti::context& ctx,
                                             entt::meta_any& var,
@@ -690,6 +908,7 @@ auto inspector_animation_component::inspect(rtti::context& ctx,
     draw_player_section(ctx, data);
     ImGui::PopID();
     draw_humanoid_section(ctx, data);
+    draw_retarget_section(ctx, data);
     return result;
 }
 

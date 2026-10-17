@@ -51,6 +51,9 @@ script from memory of another engine's API.
 - Fetch `scripting-api` first, and copy from `engine:/data/scripts/samples/`
   rather than starting a gameplay script from scratch.
 - Read existing source before editing it; write whole files, not diffs.
+- Put `[ScriptSourceFile]` on every class that derives from ScriptComponent
+  (directly or through a base of your own, abstract ones too), as the new-script
+  template does: the inspector's Script row, which opens the source, needs it.
 - Recompile once per batch of source edits (the default), not per file.
 - Test behavior in play mode (verification skill); script update logic does
   not run in edit mode.

@@ -87,6 +87,11 @@ private:
     void draw_validation(const animation_controller& controller);
     void draw_sidebar(rtti::context& ctx, animation_controller& controller);
     void draw_layers(animation_controller& controller);
+    /// One row of the layer list: the name, then its blend mode and weight dimmed, centred in a row
+    /// as tall as a frame. The row is the last item drawn, for its context menu.
+    void draw_layer_row(const animation_controller& controller, size_t index);
+    /// Removes a layer with its states (one undo step); a controller keeps at least one layer.
+    void remove_layer(animation_controller& controller, size_t index);
     void draw_parameters(animation_controller& controller);
     void draw_live_value(animation_parameter_def& parameter, animation_controller_instance& instance);
     void draw_parameter_default(animation_controller& controller, animation_parameter_def& parameter);

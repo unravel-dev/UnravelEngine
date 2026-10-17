@@ -3,6 +3,7 @@
 #include <hpp/utility/overload.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -1782,6 +1783,180 @@ auto find_root_motion_target(const animation_clip& clip, const Binding& binding,
     return -1;
 }
 } // namespace
+
+namespace
+{
+/// The segments whose rest directions tell rest poses apart: the spine from the hips up, and each
+/// limb bone to the next joint of its chain.
+constexpr std::array<std::pair<humanoid_bone, humanoid_bone>, 9> REST_SEGMENTS{{
+    {humanoid_bone::hips, humanoid_bone::upper_chest},
+    {humanoid_bone::left_upper_arm, humanoid_bone::left_lower_arm},
+    {humanoid_bone::left_lower_arm, humanoid_bone::left_hand},
+    {humanoid_bone::right_upper_arm, humanoid_bone::right_lower_arm},
+    {humanoid_bone::right_lower_arm, humanoid_bone::right_hand},
+    {humanoid_bone::left_upper_leg, humanoid_bone::left_lower_leg},
+    {humanoid_bone::left_lower_leg, humanoid_bone::left_foot},
+    {humanoid_bone::right_upper_leg, humanoid_bone::right_lower_leg},
+    {humanoid_bone::right_lower_leg, humanoid_bone::right_foot},
+}};
+
+/// Below this length a rest segment or a rotation axis has no direction.
+constexpr float MIN_REST_DIRECTION_LENGTH = 1e-4f;
+/// A recorded rest rotation this far (degrees) from the bone's bind rotation is another skeleton's.
+constexpr float REST_MISMATCH_DEGREES = 1.0f;
+/// So is a rest offset this far (a share of its length) from the bind offset.
+constexpr float REST_MISMATCH_LENGTH_SHARE = 0.01f;
+
+auto get_degrees_between(const math::vec3& lhs, const math::vec3& rhs) -> float
+{
+    const float cosine = math::clamp(math::dot(math::normalize(lhs), math::normalize(rhs)), -1.0f, 1.0f);
+    return math::degrees(std::acos(cosine));
+}
+
+auto get_degrees_between(const math::quat& lhs, const math::quat& rhs) -> float
+{
+    const float cosine = math::clamp(std::fabs(math::dot(math::normalize(lhs), math::normalize(rhs))), 0.0f, 1.0f);
+    return math::degrees(2.0f * std::acos(cosine));
+}
+
+/// How a channel the binding sent to `bone` matched it.
+auto get_match_kind(const animation_channel& channel,
+                    int bone,
+                    const animation_skeleton_binding& binding,
+                    const animation_target_skeleton& skeleton) -> animation_binding_report::match_kind
+{
+    using match_kind = animation_binding_report::match_kind;
+    if(bone < 0)
+    {
+        return match_kind::none;
+    }
+    if(!binding.resolve)
+    {
+        return match_kind::index;
+    }
+    // The name lookup found another bone or none: the humanoid role decided.
+    if(binding.resolve(channel) != bone)
+    {
+        return match_kind::role;
+    }
+    const bool is_named = size_t(bone) < skeleton.names.size();
+    if(is_named && channel.node_name != skeleton.names[size_t(bone)] &&
+       get_name_without_namespace(channel.node_name) == get_name_without_namespace(skeleton.names[size_t(bone)]))
+    {
+        return match_kind::name_without_namespace;
+    }
+    return match_kind::name;
+}
+
+/// The channel's recorded rest local transform is not the bone's bind transform: the clip was made
+/// on another skeleton (or another export of this one).
+auto is_rest_mismatched(const animation_channel& channel, const math::transform& bind_local) -> bool
+{
+    if(!channel.has_rest)
+    {
+        return false;
+    }
+    const math::vec3 rest_offset = channel.rest_local.get_position();
+    const math::vec3 bind_offset = bind_local.get_position();
+    const float length = std::max(math::length(bind_offset), MIN_REST_DIRECTION_LENGTH);
+    return get_degrees_between(channel.rest_local.get_rotation(), bind_local.get_rotation()) > REST_MISMATCH_DEGREES ||
+           math::length(rest_offset - bind_offset) > REST_MISMATCH_LENGTH_SHARE * length;
+}
+} // namespace
+
+auto animation_player::describe_binding(const std::shared_ptr<animation_clip>& clip,
+                                        const animation_skeleton_binding& binding,
+                                        const animation_target_skeleton& skeleton) -> animation_binding_report
+{
+    animation_binding_report report;
+    if(!clip)
+    {
+        return report;
+    }
+    animation_player probe;
+    const clip_binding& entry = probe.find_binding(clip, binding);
+    report.has_source_rest = has_rest_pose(*clip);
+    report.is_rest_aligned = entry.rest_aligned;
+    std::vector<bool> reached(skeleton.names.size(), false);
+    for(size_t c = 0; c < clip->channels.size(); ++c)
+    {
+        const auto& channel = clip->channels[c];
+        auto& out = report.channels.emplace_back();
+        out.name = channel.node_name;
+        out.bone = c < entry.channel_targets.size() ? entry.channel_targets[c] : -1;
+        out.match = get_match_kind(channel, out.bone, binding, skeleton);
+        if(out.bone < 0 || size_t(out.bone) >= reached.size())
+        {
+            continue;
+        }
+        reached[size_t(out.bone)] = true;
+        if(size_t(out.bone) < skeleton.bind_local.size() && is_rest_mismatched(channel, skeleton.bind_local[size_t(out.bone)]))
+        {
+            ++report.rest_mismatches;
+        }
+    }
+    for(size_t bone = 0; bone < reached.size(); ++bone)
+    {
+        if(!reached[bone])
+        {
+            report.unreached_bones.push_back(int(bone));
+        }
+    }
+    report.root_position_channel = entry.root_position_channel;
+    report.root_position_bone = entry.root_position_target;
+    report.root_rotation_channel = entry.root_rotation_channel;
+    report.root_rotation_bone = entry.root_rotation_target;
+    if(entry.rest_aligned)
+    {
+        describe_rest_aligned(*clip, entry, skeleton, report);
+    }
+    return report;
+}
+
+void animation_player::describe_rest_aligned(const animation_clip& clip,
+                                             const clip_binding& entry,
+                                             const animation_target_skeleton& skeleton,
+                                             animation_binding_report& report)
+{
+    report.height_ratio = entry.height_ratio;
+    const math::quat frame = math::normalize(entry.frame_rotation);
+    const math::vec3 axis(frame.x, frame.y, frame.z);
+    report.frame_degrees = math::degrees(2.0f * std::atan2(math::length(axis), std::fabs(frame.w)));
+    if(math::length(axis) > MIN_REST_DIRECTION_LENGTH)
+    {
+        report.frame_axis = math::normalize(frame.w < 0.0f ? -axis : axis);
+    }
+    const humanoid_map source_roles = find_channel_roles(clip, entry.source_rest_global);
+    const auto source_position = [&](humanoid_bone role)
+    {
+        return entry.source_rest_global[size_t(source_roles[size_t(role)])].get_position();
+    };
+    const auto target_position = [&](humanoid_bone role)
+    {
+        return skeleton.rest_global[size_t(skeleton.humanoid[size_t(role)])].get_position();
+    };
+    const auto has_role = [&](humanoid_bone role)
+    {
+        const int source = source_roles[size_t(role)];
+        const int target = skeleton.humanoid[size_t(role)];
+        return source >= 0 && size_t(source) < entry.source_rest_global.size() && target >= 0 &&
+               size_t(target) < skeleton.rest_global.size();
+    };
+    for(const auto& [from, to] : REST_SEGMENTS)
+    {
+        if(!has_role(from) || !has_role(to))
+        {
+            continue;
+        }
+        const math::vec3 source_direction = frame * (source_position(to) - source_position(from));
+        const math::vec3 target_direction = target_position(to) - target_position(from);
+        if(math::length(source_direction) <= MIN_REST_DIRECTION_LENGTH || math::length(target_direction) <= MIN_REST_DIRECTION_LENGTH)
+        {
+            continue;
+        }
+        report.rest_differences.push_back({from, get_degrees_between(source_direction, target_direction)});
+    }
+}
 
 auto animation_player::find_binding(const std::shared_ptr<animation_clip>& clip_ptr, const animation_skeleton_binding& binding)
     -> const clip_binding&

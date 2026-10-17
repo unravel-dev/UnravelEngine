@@ -693,7 +693,8 @@ void animation_panel::draw_layout(rtti::context& ctx, animation_controller& cont
     const float graph_width =
         std::max(total_width - sidebar_width_ - inspector_width_ - SPLITTER_THICKNESS * 2.0f, MIN_GRAPH_WIDTH);
     const float height = ImGui::GetContentRegionAvail().y;
-    ImGui::BeginChild("##sidebar", ImVec2(sidebar_width_, height), ImGuiChildFlags_None);
+    // The side panes keep the window padding, like the inspector panel; the graph runs to its edges.
+    ImGui::BeginChild("##sidebar", ImVec2(sidebar_width_, height), ImGuiChildFlags_AlwaysUseWindowPadding);
     draw_sidebar(ctx, controller);
     ImGui::EndChild();
     ImGui::SameLine(0.0f, 0.0f);
@@ -715,7 +716,7 @@ void animation_panel::draw_layout(rtti::context& ctx, animation_controller& cont
         inspector_width_ = inspector;
     }
     ImGui::SameLine(0.0f, 0.0f);
-    ImGui::BeginChild("##inspector", ImVec2(0.0f, height), ImGuiChildFlags_None);
+    ImGui::BeginChild("##inspector", ImVec2(0.0f, height), ImGuiChildFlags_AlwaysUseWindowPadding);
     draw_inspector(ctx, controller);
     ImGui::EndChild();
     if(clicked_selection)
@@ -961,25 +962,60 @@ void animation_panel::draw_sidebar(rtti::context& ctx, animation_controller& con
     }
 }
 
+void animation_panel::draw_layer_row(const animation_controller& controller, size_t index)
+{
+    const auto& layer = controller.layers[index];
+    const ImVec2 row_min = ImGui::GetCursorScreenPos();
+    const float row_height = ImGui::GetFrameHeight();
+    if(ImGui::Selectable("##layer_row", layer_ == index, ImGuiSelectableFlags_None, ImVec2(0.0f, row_height)))
+    {
+        layer_ = index;
+        selection_ = {animation_graph_selection::kind::layer, int(index)};
+    }
+    const float row_right = ImGui::GetItemRectMax().x;
+    const std::string name = layer.name.empty() ? std::string("Layer") : layer.name;
+    std::string details = index == 0 ? "base" : (layer.blend_mode == animation_layer_blend_mode::additive ? "additive" : "override");
+    if(index > 0)
+    {
+        char weight[16];
+        ImFormatString(weight, sizeof(weight), "  %.2f", layer.weight);
+        details += weight;
+    }
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float text_x = row_min.x + style.FramePadding.x;
+    const float text_y = row_min.y + (row_height - ImGui::GetTextLineHeight()) * 0.5f;
+    const float details_width = ImGui::CalcTextSize(details.c_str()).x;
+    const float name_room = std::max(0.0f, row_right - text_x - style.FramePadding.x - style.ItemSpacing.x - details_width);
+    const std::string fitted_name = fit_text(ImGui::GetFont(), ImGui::GetFontSize(), name, name_room);
+    auto* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddText(ImVec2(text_x, text_y), ImGui::GetColorU32(ImGuiCol_Text), fitted_name.c_str());
+    const float details_x = text_x + ImGui::CalcTextSize(fitted_name.c_str()).x + style.ItemSpacing.x;
+    draw_list->AddText(ImVec2(details_x, text_y), ImGui::GetColorU32(ImGuiCol_TextDisabled), details.c_str());
+    ImGui::SetItemTooltipEx("%s\nRight-click to move or delete it; Delete removes the selected layer.", name.c_str());
+}
+
+void animation_panel::remove_layer(animation_controller& controller, size_t index)
+{
+    if(index >= controller.layers.size() || controller.layers.size() <= 1)
+    {
+        return;
+    }
+    // The selection and a link or drag in the graph are indices into the layers before the removal.
+    begin_edit(controller);
+    controller.layers.erase(controller.layers.begin() + std::ptrdiff_t(index));
+    layer_ = index > 0 ? index - 1 : 0;
+    reset_selection();
+    graph_.cancel_interaction();
+    apply_edit(controller, true);
+}
+
 void animation_panel::draw_layers(animation_controller& controller)
 {
+    std::optional<size_t> removed;
     for(size_t i = 0; i < controller.layers.size(); ++i)
     {
-        auto& layer = controller.layers[i];
         ImGui::PushID(int(i));
-        const std::string label = layer.name.empty() ? std::string("Layer") : layer.name;
-        if(ImGui::Selectable(label.c_str(), layer_ == i, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, ImGui::GetFrameHeight())))
-        {
-            layer_ = i;
-            selection_ = {animation_graph_selection::kind::layer, int(i)};
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled(i == 0 ? "base" : (layer.blend_mode == animation_layer_blend_mode::additive ? "additive" : "override"));
-        if(i > 0)
-        {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%.2f", layer.weight);
-        }
+        draw_layer_row(controller, i);
         if(ImGui::BeginPopupContextItem("##layer_menu"))
         {
             // The moved layer is shown; the selection and a link or drag in the graph, indices into
@@ -1002,21 +1038,24 @@ void animation_panel::draw_layers(animation_controller& controller)
                 graph_.cancel_interaction();
                 apply_edit(controller, true);
             }
-            if(ImGui::MenuItem(ICON_MDI_DELETE " Delete", nullptr, false, controller.layers.size() > 1))
+            if(ImGui::MenuItem(ICON_MDI_DELETE " Delete", "Del", false, controller.layers.size() > 1))
             {
-                begin_edit(controller);
-                controller.layers.erase(controller.layers.begin() + std::ptrdiff_t(i));
-                layer_ = 0;
-                reset_selection();
-                graph_.cancel_interaction();
-                apply_edit(controller, true);
-                ImGui::EndPopup();
-                ImGui::PopID();
-                return;
+                removed = i;
             }
             ImGui::EndPopup();
         }
         ImGui::PopID();
+    }
+    if(removed)
+    {
+        remove_layer(controller, *removed);
+    }
+    // Delete removes the selected layer while this list has focus, not while the inspector's
+    // fields of it do.
+    if(ImGui::IsWindowFocused() && !ImGui::IsAnyItemActive() && ImGui::IsKeyPressed(shortcuts::delete_item, false) &&
+       selection_.what == animation_graph_selection::kind::layer && selection_.index >= 0)
+    {
+        remove_layer(controller, size_t(selection_.index));
     }
     ImGui::Spacing();
     if(ImGui::Button(ICON_MDI_PLUS " Add Layer", ImVec2(-1.0f, 0.0f)))
@@ -1036,7 +1075,8 @@ void animation_panel::draw_layers(animation_controller& controller)
         selection_ = {animation_graph_selection::kind::layer, int(layer_)};
         apply_edit(controller, true);
     }
-    ImGui::TextWrapped("Layers above the base override (or add to) the layers below, per bone of their mask.");
+    ImGui::TextWrapped("Layers above the base override (or add to) the layers below, per bone of their mask. "
+                       "Right-click a layer to move or delete it.");
 }
 
 void animation_panel::draw_parameters(animation_controller& controller)
@@ -1512,6 +1552,14 @@ void animation_panel::draw_layer_inspector(rtti::context& ctx, animation_control
     ImGui::PushID(int(index));
     draw_inspector_title(ICON_MDI_LAYERS " Layer");
     inspect_definition(ctx, controller, controller.layers[index]);
+    ImGui::Spacing();
+    ImGui::BeginDisabled(controller.layers.size() <= 1);
+    if(ImGui::Button(ICON_MDI_DELETE " Delete Layer", ImVec2(-1.0f, 0.0f)))
+    {
+        remove_layer(controller, index);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltipEx("Removes the layer and its states; undo brings it back. A controller keeps at least one layer.");
     ImGui::PopID();
     ImGui::PopID();
 }

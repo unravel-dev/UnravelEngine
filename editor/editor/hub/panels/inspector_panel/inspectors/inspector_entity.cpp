@@ -1193,16 +1193,18 @@ auto inspector_entity::inspect(rtti::context& ctx,
     inspect_result result{};
     auto data = var.cast<entt::handle>();
 
+    // An Entity field inside the inspected entity's components comes through here as well: it
+    // puts back the registry it found, so the fields after it still resolve their entities.
+    auto& registry_ctx = ctx.get_cached<inspector_context>();
+    entt::registry* previous_registry = registry_ctx.inspected_registry;
     if(data)
     {
-        auto& inspector_ctx = ctx.get_cached<inspector_context>();
-        inspector_ctx.inspected_registry = data.registry();
+        registry_ctx.inspected_registry = data.registry();
     }
 
     auto cleanup = hpp::finally([&]()
     {
-        auto& inspector_ctx = ctx.get_cached<inspector_context>();
-        inspector_ctx.inspected_registry = nullptr;
+        registry_ctx.inspected_registry = previous_registry;
     });
 
     if(info.is_property)

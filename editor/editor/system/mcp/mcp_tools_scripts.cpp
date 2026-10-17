@@ -506,7 +506,8 @@ void register_script_tools(mcp_tool_registry& registry)
          .description =
              "Write C# source files in the project (batch, atomic writes). Each item: code, plus key "
              "(app:/data/... or a path relative to app:/data; .cs is added) or entity_id + type_name. "
-             "Optional recompile (default true, once for batch). "
+             "Keep [ScriptSourceFile] on every script component class, as the template has it: the "
+             "inspector opens the source through it. Optional recompile (default true, once for batch). "
              "A batch that adds a new file builds once the asset pipeline has imported it (build: "
              "after_import); scripts_get_compile_status wait:true waits for that build.",
          .input_schema_json =

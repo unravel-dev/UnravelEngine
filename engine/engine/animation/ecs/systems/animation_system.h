@@ -13,6 +13,7 @@ namespace unravel
 {
 class animation_component;
 class model_component;
+struct animation_skeleton_binding;
 struct animation_target_skeleton;
 
 class animation_system
@@ -24,6 +25,14 @@ public:
      */
     static auto get_target_skeleton(animation_component& animation, const model_component& model)
         -> const std::shared_ptr<const animation_target_skeleton>&;
+
+    /**
+     * @brief The binding `animation`'s clips are sampled onto `model`'s skeleton with. Name Based
+     * matches channels by bone name, then by name without FBX namespace; Rest Aligned adds the
+     * target skeleton. It refers to `model`, so it is used while `model` lives.
+     */
+    static auto make_skeleton_binding(animation_component& animation, const model_component& model)
+        -> animation_skeleton_binding;
 
     auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;

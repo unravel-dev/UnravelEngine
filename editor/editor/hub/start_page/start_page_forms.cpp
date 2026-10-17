@@ -4,12 +4,14 @@
 #include <editor/editing/editing_manager.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/screen_card.h>
+#include <editor/imgui/integration/imgui_notify.h>
 #include <editor/system/project_manager.h>
 #include <filedialog/filedialog.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 #include <imgui_widgets/tooltips.h>
 #include <imgui_widgets/utils.h>
+#include <logging/logging.h>
 
 namespace unravel
 {
@@ -25,6 +27,8 @@ constexpr float FORMS_VIEW_FIELD_GAP = 0.4f;
 constexpr float FORMS_VIEW_WIDTH = 40.0f;
 constexpr float FORMS_VIEW_REMOVE_WIDTH = 56.0f;
 constexpr ImU32 FORMS_VIEW_WARNING_COLOR = IM_COL32(255, 190, 60, 255);
+/// How long the toast of a failed folder delete stays up.
+constexpr int FORMS_VIEW_ERROR_TOAST_MILLISECONDS = 4000;
 
 void draw_form_label(const char* label)
 {
@@ -148,9 +152,18 @@ void start_page::draw_remove_project_view(rtti::context& ctx)
     ImGui::SameLine();
     if(widgets::draw_button(ICON_MDI_DELETE_OUTLINE "  Delete Folder", widgets::button_kind::danger))
     {
-        remove_from_recents(pm, path);
+        // A folder that could not be deleted (a file in use) stays on the list, so it can be found again.
         fs::error_code error;
         fs::remove_all(fs::path(path), error);
+        if(error)
+        {
+            APPLOG_ERROR("Could not delete the project folder {}: {}", path, error.message());
+            ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error, FORMS_VIEW_ERROR_TOAST_MILLISECONDS, "Could not delete the project folder."));
+        }
+        else
+        {
+            remove_from_recents(pm, path);
+        }
         show_view(view_state::projects);
         return;
     }

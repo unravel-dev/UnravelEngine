@@ -258,6 +258,69 @@ struct animation_skeleton_binding
     std::shared_ptr<const animation_target_skeleton> rest_aligned_target;
 };
 
+/// Rest directions of one limb further apart than this read as skeletons resting in different
+/// poses (a T-pose against an A-pose).
+constexpr float REST_POSE_WARNING_DEGREES = 20.0f;
+
+/**
+ * @brief How one clip binds onto one skeleton, as playback binds it: the bone every channel
+ * reaches and how it matched, the bones no channel reaches, and the constants Rest Aligned
+ * retargeting works with. For tools that explain why a clip plays the way it does.
+ */
+struct animation_binding_report
+{
+    /// How a channel found its bone.
+    enum class match_kind : uint8_t
+    {
+        none,
+        /// The bone at the channel's node index (Index Based).
+        index,
+        name,
+        /// The same name once both drop their FBX namespace ("mixamorig:Hips", "mixamorig1:Hips").
+        name_without_namespace,
+        /// The same humanoid role (Rest Aligned only).
+        role,
+    };
+
+    struct channel_entry
+    {
+        std::string name;
+        /// Target bone, -1 when the channel reaches none.
+        int bone{-1};
+        match_kind match{match_kind::none};
+    };
+
+    /// A limb's rest direction on both skeletons, from `role` to the next joint of its chain.
+    struct rest_difference
+    {
+        humanoid_bone role{};
+        float degrees{};
+    };
+
+    std::vector<channel_entry> channels;
+    /// Target bones no channel reaches; they keep their bind pose.
+    std::vector<int> unreached_bones;
+    /// The clip recorded the rest pose of the skeleton it was made on.
+    bool has_source_rest{};
+    /// The binding retargets rest aligned (Rest Aligned, and the clip has its source rest pose).
+    bool is_rest_aligned{};
+    /// Reached bones whose recorded source rest differs from the target bone's bind pose: clips
+    /// made on another skeleton, which Copy plays wrong.
+    size_t rest_mismatches{};
+    /// Rest Aligned: target over source hip height, and the turn from the source skeleton's frame
+    /// to the target's (angle and axis).
+    float height_ratio{1.0f};
+    float frame_degrees{};
+    math::vec3 frame_axis{0.0f, 1.0f, 0.0f};
+    /// Root motion: the source channels and the target bones they report against, -1 without.
+    int root_position_channel{-1};
+    int root_position_bone{-1};
+    int root_rotation_channel{-1};
+    int root_rotation_bone{-1};
+    /// Rest Aligned: every limb (and the spine) whose role both skeletons have.
+    std::vector<rest_difference> rest_differences;
+};
+
 /**
  * @brief Class responsible for playing animations on a skeletal mesh.
  *
@@ -271,6 +334,15 @@ class animation_player
 {
 public:
     using seconds_t = animation_clip::seconds_t;
+
+    /**
+     * @brief How `clip` binds onto `skeleton` under `binding`, built as playback builds it (on a
+     * player of its own, so no running player changes). `skeleton` names the target bones; with
+     * Rest Aligned it is the binding's target.
+     */
+    static auto describe_binding(const std::shared_ptr<animation_clip>& clip,
+                                 const animation_skeleton_binding& binding,
+                                 const animation_target_skeleton& skeleton) -> animation_binding_report;
     using update_callback_t = std::function<void(const animation_pose::node_desc& desc,
                                                  const math::transform& abs,
                                                  const animation_pose::root_motion_result& motion_result)>;
@@ -620,6 +692,10 @@ private:
 
     auto find_binding(const std::shared_ptr<animation_clip>& clip, const animation_skeleton_binding& binding)
         -> const clip_binding&;
+    static void describe_rest_aligned(const animation_clip& clip,
+                                      const clip_binding& entry,
+                                      const animation_target_skeleton& skeleton,
+                                      animation_binding_report& report);
     static auto make_root_motion_frame(const animation_clip& clip, int channel_index) -> root_motion_frame;
 
     void sample_animation(const std::shared_ptr<animation_clip>& anim_clip,

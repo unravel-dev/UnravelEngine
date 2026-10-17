@@ -543,8 +543,11 @@ auto make_entity_handle_proxy(const meta_any_proxy& obj_proxy, const Invoker& mu
             }
             
             auto& inspector_ctx = ctx.get_cached<inspector_context>();
-            auto& registry = *inspector_ctx.inspected_registry;
-            entt::handle handle(registry, entity);
+            if(inspector_ctx.inspected_registry == nullptr)
+            {
+                return false;
+            }
+            entt::handle handle(*inspector_ctx.inspected_registry, entity);
             // Create an owned copy to avoid dangling references
             result = entt::meta_any{std::in_place_type<entt::handle>, handle};
             return true;
@@ -1356,8 +1359,11 @@ struct mono_inspector<entt::handle>
                 auto entity = dotnet_converter<entt::entity>::from_managed(dotnet::get_managed_ptr(mono_obj));                
                 // Convert entity to handle using the scene
                 auto& inspector_ctx = ctx.get_cached<inspector_context>();
-                auto& registry = *inspector_ctx.inspected_registry;
-                entt::handle handle(registry, entity);
+                if(inspector_ctx.inspected_registry == nullptr)
+                {
+                    return false;
+                }
+                entt::handle handle(*inspector_ctx.inspected_registry, entity);
                 
                 result = entt::meta_any{std::in_place_type<entt::handle>, handle};
                 return true;

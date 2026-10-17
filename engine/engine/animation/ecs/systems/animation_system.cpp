@@ -181,6 +181,29 @@ void describe_target_skeleton(const model_component& model, animation_target_ske
 }
 } // namespace
 
+auto animation_system::make_skeleton_binding(animation_component& animation, const model_component& model)
+    -> animation_skeleton_binding
+{
+    animation_skeleton_binding binding;
+    if(animation.get_retargeting_mode() != animation_retargeting_mode::name_based)
+    {
+        return binding;
+    }
+    binding.version = model.get_armature_version() * 2;
+    binding.resolve = [&model](const animation_channel& channel)
+    {
+        const int index = model.get_armature_index_by_name_cached(channel.node_name);
+        // Rigs of one family prefix their bones differently ("mixamorig:" and "mixamorig1:").
+        return index >= 0 ? index : model.get_armature_index_by_base_name_cached(channel.node_name);
+    };
+    if(animation.get_pose_retargeting() == animation_pose_retargeting::rest_aligned)
+    {
+        binding.version += 1;
+        binding.rest_aligned_target = get_target_skeleton(animation, model);
+    }
+    return binding;
+}
+
 auto animation_system::get_target_skeleton(animation_component& animation, const model_component& model)
     -> const std::shared_ptr<const animation_target_skeleton>&
 {
@@ -378,23 +401,7 @@ void animation_system::on_update(scene& scn, delta_t dt)
                           // Clips are sampled straight onto armature indices: name-based retargeting
                           // resolves each channel once per (clip, armature) instead of per bone per
                           // frame, and clips exported from different files blend bone by bone.
-                          animation_skeleton_binding binding;
-                          if(animation_comp.get_retargeting_mode() == animation_retargeting_mode::name_based)
-                          {
-                              binding.version = model_comp.get_armature_version() * 2;
-                              binding.resolve = [&model_comp](const animation_channel& channel)
-                              {
-                                  const int index = model_comp.get_armature_index_by_name_cached(channel.node_name);
-                                  // Rigs of one family prefix their bones differently ("mixamorig:"
-                                  // and "mixamorig1:").
-                                  return index >= 0 ? index : model_comp.get_armature_index_by_base_name_cached(channel.node_name);
-                              };
-                              if(animation_comp.get_pose_retargeting() == animation_pose_retargeting::rest_aligned)
-                              {
-                                  binding.version += 1;
-                                  binding.rest_aligned_target = get_target_skeleton(animation_comp, model_comp);
-                              }
-                          }
+                          const animation_skeleton_binding binding = make_skeleton_binding(animation_comp, model_comp);
 
                           animation_pose::root_motion_result root_motion;
                           bool has_root_motion = false;

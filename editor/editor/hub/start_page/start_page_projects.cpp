@@ -4,6 +4,7 @@
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/screen_art.h>
 #include <editor/imgui/screen_card.h>
+#include <editor/shortcuts.h>
 #include <editor/system/project_manager.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -56,12 +57,13 @@ constexpr const char* PROJECTS_VIEW_NEW_LABEL = ICON_MDI_PLUS "  New Project";
 constexpr const char* PROJECTS_VIEW_SAMPLES_LABEL = ICON_MDI_AUTO_FIX "  Explore Samples";
 constexpr std::array<const char*, 2> PROJECTS_VIEW_SORT_LABELS{"Last opened", "Name"};
 // The keys the projects take while they listen, away from the keyboard navigation of ImGui.
-constexpr std::array<ImGuiKey, 6> PROJECTS_VIEW_KEYS{ImGuiKey_UpArrow,
+constexpr std::array<ImGuiKey, 7> PROJECTS_VIEW_KEYS{ImGuiKey_UpArrow,
                                                      ImGuiKey_DownArrow,
                                                      ImGuiKey_LeftArrow,
                                                      ImGuiKey_RightArrow,
                                                      ImGuiKey_Enter,
-                                                     ImGuiKey_KeypadEnter};
+                                                     ImGuiKey_KeypadEnter,
+                                                     shortcuts::delete_item};
 
 /// What the meta line of a project says: when it was saved, and with which engine.
 struct project_meta
@@ -167,7 +169,8 @@ void start_page::draw_projects_header(rtti::context& ctx)
                                 widgets::calc_button_width(PROJECTS_VIEW_NEW_LABEL);
     const std::string subtitle =
         projects_.empty() ? std::string("Open a project from disk, or create a new one.")
-                          : fmt::format("{} recent project{}. Double-click one to open it, right-click it for more.",
+                          : fmt::format("{} recent project{}. Double-click one to open it, right-click it for more, "
+                                        "Delete to remove it.",
                                         projects_.size(),
                                         projects_.size() == 1 ? "" : "s");
     widgets::draw_page_title("Projects", subtitle.c_str(), avail_width - buttons_width - spacing);
@@ -496,6 +499,13 @@ void start_page::handle_projects_keys(rtti::context& ctx, const std::vector<size
     if(has_selection && (is_pressed(ImGuiKey_Enter, false) || is_pressed(ImGuiKey_KeypadEnter, false)))
     {
         open_project(ctx, selected_project_);
+        return;
+    }
+    // The Remove Project page asks first: off the list, or the folder deleted as well.
+    if(has_selection && is_pressed(shortcuts::delete_item, false))
+    {
+        project_to_remove_ = selected_project_;
+        show_view(view_state::remove_project);
         return;
     }
     const int row_step = (is_pressed(ImGuiKey_DownArrow, true) ? columns : 0) - (is_pressed(ImGuiKey_UpArrow, true) ? columns : 0);

@@ -29,6 +29,16 @@ auto is_same_name(const std::string& lhs, const std::string& rhs) -> bool
 auto get_samples() -> const std::vector<sample_info>&
 {
     static const std::vector<sample_info> samples{
+        {"Animation Gallery",
+         "UnravelEngine-Sample-Animation",
+         "Animation",
+         "A playable hero walks a plaza of exhibits: blend spaces, layers with masks and additive hits, clip "
+         "events and curves, a state machine controller, root motion, one clip retargeted onto five rigs, "
+         "foot, hand, chain and look-at IK, and spring bones.",
+         {"Animation", "IK", "Retargeting"},
+         "editor:/samples/sample_animation.jpg",
+         ICON_MDI_RUN,
+         true},
         {"Spell Arena",
          "UnravelEngine-Sample-VFX",
          "Visual effects",

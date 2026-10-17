@@ -92,6 +92,9 @@ description: >-
 
 ## Humanoid retargeting
 
+The whole pipeline, from import to the posed bones, with troubleshooting and MCP calls:
+[docs/markdown/animation-retargeting.md](../../../docs/markdown/animation-retargeting.md).
+
 `animation_humanoid.h` finds the 22 humanoid roles of any skeleton from structure
 and rest pose (hips = two legs down + a spine up, and hips the legs hang from
 directly win over a bone holding them through a pelvis; legs are the children
@@ -108,6 +111,15 @@ Daz, UE5 and the female UE mannequin layouts from their real names
 (`test_humanoid_roles_of_common_rigs`), and a UE clip on a Mixamo-shaped target
 (`test_ue_clip_on_a_mixamo_rig`); add a rig there when one maps wrong. Tools:
 inspector Humanoid Mapping, MCP `animation_get_humanoid` (entity or clip).
+
+`animation_player::describe_binding` reports a binding without playing it
+(match kind per channel, unreached bones, height ratio, frame turn, root-motion
+bones, rest differences per limb); it runs the player's own `find_binding`, so
+it cannot drift from playback. `animation_system::make_skeleton_binding` is the
+binding the system plays with. `editor/editing/animation_retarget_check` adds
+the warnings and feeds both the inspector's Retarget Check and MCP
+`animation_get_retarget`. The MCP-side workflow is the editor skill
+`editor_data/data/mcp/skills/animation.md`.
 
 ## Serialization
 

@@ -2,6 +2,7 @@
 #include "mcp_meta_properties.h"
 #include "mcp_tools_common.h"
 
+#include <editor/editing/animation_retarget_check.h>
 #include <editor/system/mcp_manager.h>
 #include <engine/animation/animation_controller_instance.h>
 #include <engine/animation/animation_humanoid.h>
@@ -337,6 +338,104 @@ auto read_parameter_request(const simdjson::dom::object& args,
            read_number_in_range(args, "normalized_time", 0.0, 1.0, "a number from 0 to 1", out.normalized_time, error);
 }
 
+/// A bone of the check's skeleton as a JSON string, or null for none.
+auto retarget_bone_json(const animation_retarget_check& check, int bone) -> std::string
+{
+    const bool is_named = check.skeleton && bone >= 0 && size_t(bone) < check.skeleton->names.size();
+    return is_named ? make_json_string(check.skeleton->names[size_t(bone)]) : std::string("null");
+}
+
+/// A root motion channel and the bone it moves, as JSON; null when the clip has none.
+auto retarget_root_json(const animation_retarget_check& check, int channel, int bone) -> std::string
+{
+    if(channel < 0 || size_t(channel) >= check.report.channels.size())
+    {
+        return "null";
+    }
+    return fmt::format(R"({{"channel":{},"bone":{}}})",
+                       make_json_string(check.report.channels[size_t(channel)].name),
+                       retarget_bone_json(check, bone));
+}
+
+/// The channels of a check as JSON: every channel when `lists_all`, else only those reaching no bone (as names).
+auto retarget_channels_json(const animation_retarget_check& check, bool lists_all) -> std::string
+{
+    std::string json = "[";
+    for(const auto& channel : check.report.channels)
+    {
+        const bool is_matched = channel.match != animation_binding_report::match_kind::none;
+        if(!lists_all && is_matched)
+        {
+            continue;
+        }
+        json += json.size() > 1 ? "," : "";
+        json += lists_all ? fmt::format(R"({{"channel":{},"bone":{},"match":{}}})",
+                                        make_json_string(channel.name),
+                                        retarget_bone_json(check, channel.bone),
+                                        make_json_string(get_match_kind_name(channel.match)))
+                          : make_json_string(channel.name);
+    }
+    return json + "]";
+}
+
+auto describe_retarget_check(rtti::context& ctx,
+                             const animation_component& animation,
+                             const std::string& clip_key,
+                             const animation_retarget_check& check,
+                             bool lists_all_channels) -> std::string
+{
+    const auto& report = check.report;
+    std::string matches = "{";
+    for(size_t kind = 0; kind < RETARGET_MATCH_KIND_COUNT; ++kind)
+    {
+        matches += fmt::format(R"({}{}:{})",
+                               kind > 0 ? "," : "",
+                               make_json_string(get_match_kind_name(animation_binding_report::match_kind(kind))),
+                               check.match_counts[kind]);
+    }
+    matches += "}";
+    std::vector<std::string> unreached;
+    for(const int bone : report.unreached_bones)
+    {
+        unreached.push_back(get_retarget_bone_name(check, bone));
+    }
+    std::string rest = "[";
+    for(const auto& difference : report.rest_differences)
+    {
+        rest += fmt::format(R"({}{{"role":{},"degrees":{}}})",
+                            rest.size() > 1 ? "," : "",
+                            make_json_string(get_humanoid_bone_name(difference.role)),
+                            json_float(difference.degrees));
+    }
+    rest += "]";
+    return fmt::format(
+        R"({{"clip":{},"retargeting_mode":{},"pose_retargeting":{},"rest_aligned":{},"clip_has_rest":{},)"
+        R"("channel_count":{},"matched":{},"matches":{},"{}":{},"unreached_bones":{},"height_ratio":{},)"
+        R"("frame_turn_degrees":{},"frame_turn_axis":[{},{},{}],"root_motion":{{"position":{},"rotation":{}}},)"
+        R"("rest_mismatches":{},"rest_differences":{},"warnings":{}}})",
+        make_json_string(clip_key),
+        enum_name_json(ctx, animation.get_retargeting_mode()),
+        enum_name_json(ctx, animation.get_pose_retargeting()),
+        bool_to_json(report.is_rest_aligned),
+        bool_to_json(report.has_source_rest),
+        report.channels.size(),
+        count_matched_channels(check),
+        matches,
+        lists_all_channels ? "channels" : "unmatched_channels",
+        retarget_channels_json(check, lists_all_channels),
+        strings_to_json_array(unreached),
+        json_float(report.height_ratio),
+        json_float(report.frame_degrees),
+        json_float(report.frame_axis.x),
+        json_float(report.frame_axis.y),
+        json_float(report.frame_axis.z),
+        retarget_root_json(check, report.root_position_channel, report.root_position_bone),
+        retarget_root_json(check, report.root_rotation_channel, report.root_rotation_bone),
+        report.rest_mismatches,
+        rest,
+        strings_to_json_array(check.warnings));
+}
+
 } // namespace
 
 void register_animation_tools(mcp_tool_registry& registry)
@@ -489,6 +588,65 @@ void register_animation_tools(mcp_tool_registry& registry)
                                          count_humanoid_bones(roles),
                                          HUMANOID_BONE_COUNT,
                                          json),
+                     .is_error = false};
+         },
+         .effect = tool_effect::read_only});
+
+    registry.add(
+        {.name = "animation_get_retarget",
+         .description =
+             "How an animation clip lands on an entity's model with its Animation component's retargeting "
+             "settings - the Animation inspector's Retarget Check. clip is an animation clip key; without it, the "
+             "clip the base layer plays, else the clip the controller starts in, else the component's Animation "
+             "clip. Reports whether it plays Rest "
+             "Aligned or copied, how many channels reach a bone and how (index, name, name without namespace, "
+             "role), the channels that reach none (or every channel with channels true), the bones no channel "
+             "reaches (they keep the bind pose), height ratio and frame turn, which bone the root motion moves, "
+             "rest pose differences per limb, and warnings in words: wrong settings, a different rest pose "
+             "(T-pose against A-pose), unmatched roles, lost root motion. Check it after assigning clips from "
+             "another skeleton.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"entity_id":{"type":"string"},"clip":{"type":"string"},"channels":{"type":"boolean"}},"required":["entity_id"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string error;
+             entt::handle entity;
+             auto* animation = resolve_animation(ctx, args, entity, error);
+             if(animation == nullptr)
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const auto* model = entity.try_get<model_component>();
+             if(model == nullptr)
+             {
+                 return {.text = "The entity has no Model component", .is_error = true};
+             }
+             std::string key;
+             asset_handle<animation_clip> handle;
+             if(read_string(args, "clip", key))
+             {
+                 handle = find_existing_asset<animation_clip>(ctx, key, error);
+             }
+             else
+             {
+                 handle = get_default_retarget_clip(*animation, true);
+             }
+             const auto clip = handle ? handle.get() : nullptr;
+             if(!clip || asset_handle<animation_clip>::is_empty(clip))
+             {
+                 const std::string missing = key.empty() ? "The component plays no clip, its controller starts in none and it has none assigned; pass clip"
+                                                         : "No animation clip at " + key;
+                 return {.text = error.empty() ? missing : error, .is_error = true};
+             }
+             if(!animation_system::get_target_skeleton(*animation, *model))
+             {
+                 return {.text = "The model has no skeleton to retarget onto (no armature yet)", .is_error = true};
+             }
+             bool lists_all_channels = false;
+             read_bool(args, "channels", lists_all_channels);
+             const auto check = check_animation_retarget(*animation, *model, clip);
+             return {.text = describe_retarget_check(ctx, *animation, handle.id(), check, lists_all_channels),
                      .is_error = false};
          },
          .effect = tool_effect::read_only});
