@@ -29,12 +29,19 @@ struct pack_write_options
     /// a block that does not shrink by 5% is kept raw, and an entry where none does is stored whole.
     bool compress{true};
     compression::level compression_level{compression::level::balanced};
+    /// An earlier pack to take entries from: an input with the same bytes (content hash and size) as
+    /// one of its entries gets that entry's stored bytes instead of being compressed again, whatever
+    /// its name. Used only when it was written with the same compression settings, so the output is
+    /// what a fresh write would give. Empty, missing or unreadable: everything is compressed.
+    path reuse_from;
 };
 
 /// What a written pack holds.
 struct pack_write_stats
 {
     std::size_t entry_count{};
+    /// Entries taken from the pack in pack_write_options::reuse_from.
+    std::size_t reused_count{};
     std::uint64_t raw_bytes{};
     std::uint64_t stored_bytes{};
 };

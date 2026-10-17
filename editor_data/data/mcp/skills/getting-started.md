@@ -59,7 +59,9 @@ Building a scene is not shipping a game. The rest of the chain:
   builds it once running compiles finish. An asset that failed to compile fails
   the deploy (failed_steps names it) before the folder is touched. Compiled
   assets ship in data/<engine|app>/content.pak (pack_assets false ships them
-  loose). While a deploy runs, project and settings changes are refused.
+  loose). Deploying again into the same folder updates it in place and only
+  copies what changed. While a deploy runs, project and settings changes are
+  refused.
 - Driving and verifying the game needs synthesized input - see the
   verification skill.
 

@@ -49,6 +49,7 @@
 #include <engine/ecs/scene.h>
 #include <filedialog/filedialog.h>
 #include <filesystem/filesystem.h>
+#include <filesystem/mirror.h>
 #include <filesystem/pack.h>
 #include <filesystem/watcher.h>
 #include <graphics/graphics.h>
@@ -58,6 +59,7 @@
 #include <base/platform/config.hpp>
 #include <string_utils/utils.h>
 #include <memory>
+#include <set>
 
 namespace unravel
 {
@@ -951,102 +953,6 @@ auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& d
     return false;
 }
 
-void try_delete_empty_parents(const fs::path& start, const fs::path& root, fs::error_code& ec)
-{
-    fs::path current = start.parent_path();
-    while(current != root && fs::is_empty(current, ec))
-    {
-        APPLOG_TRACE("Removing Empty Parent Directory {}", current.generic_string());
-        fs::remove(current, ec);
-        current = current.parent_path();
-    }
-}
-
-void remove_unreferenced_files(const fs::path& root)
-{
-    fs::error_code ec;
-    const fs::recursive_directory_iterator end;
-
-    std::vector<fs::path> deleted_dirs;
-
-    // First pass: remove matching script files
-    {
-        fs::recursive_directory_iterator it(root, ec);
-        while(it != end)
-        {
-            const fs::path current_path = it->path();
-            ++it;
-
-            for(const auto& type : ex::get_suported_formats<script>())
-            {
-                auto ext = ex::get_source_path_from_compiled(current_path).extension().generic_string();
-                if(ext == type)
-                {
-                    APPLOG_TRACE("Removing Script {}", current_path.generic_string());
-                    fs::remove(current_path, ec);
-                    deleted_dirs.push_back(current_path.parent_path());
-                    break;
-                }
-            }
-        }
-    }
-
-    // Second pass: remove manifest files
-    {
-        fs::recursive_directory_iterator it(root, ec);
-        while(it != end)
-        {
-            const fs::path current_path = it->path();
-            ++it;
-
-            if(current_path.extension().generic_string() == ".manifest")
-            {
-                APPLOG_TRACE("Removing Manifest {}", current_path.generic_string());
-                fs::remove(current_path, ec);
-            }
-
-            if(current_path.extension().generic_string() == ".temp")
-            {
-                APPLOG_TRACE("Removing Temp File {}", current_path.generic_string());
-                fs::remove(current_path, ec);
-            }
-        }
-    }
-
-    // Third pass: remove now-empty directories
-    {
-        fs::recursive_directory_iterator it(root, ec);
-        while(it != end)
-        {
-            const fs::path current_path = it->path();
-            ++it;
-
-            if(fs::is_directory(current_path, ec) && fs::is_empty(current_path, ec))
-            {
-                APPLOG_TRACE("Removing Empty Directory {}", current_path.generic_string());
-                fs::remove(current_path, ec);
-                deleted_dirs.push_back(current_path.parent_path());
-            }
-        }
-    }
-
-    // Deduplicate deleted parent paths and sort deepest first
-    std::sort(deleted_dirs.begin(), deleted_dirs.end());
-    deleted_dirs.erase(std::unique(deleted_dirs.begin(), deleted_dirs.end()), deleted_dirs.end());
-    std::sort(deleted_dirs.begin(),
-              deleted_dirs.end(),
-              [](const fs::path& a, const fs::path& b)
-              {
-                  return a.string().size() > b.string().size();
-              });
-
-    // Final cleanup: walk up and try deleting empty parents
-    for(const auto& path : deleted_dirs)
-    {
-        try_delete_empty_parents(path, root, ec);
-    }
-}
-
 /// A file a script library build leaves beside its dll for debugging: symbols (.pdb, .dll.mdb) or
 /// docs (an .xml named like a dll next to it). Compiled assets all end in .asset, so none match.
 auto is_debug_companion_file(const fs::path& path) -> bool
@@ -1064,24 +970,6 @@ auto is_debug_companion_file(const fs::path& path) -> bool
     library.replace_extension(".dll");
     fs::error_code ec;
     return fs::exists(library, ec);
-}
-
-void remove_debug_files(const fs::path& root)
-{
-    fs::error_code ec;
-    std::vector<fs::path> debug_files;
-    for(fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
-    {
-        if(it->is_regular_file(ec) && is_debug_companion_file(it->path()))
-        {
-            debug_files.push_back(it->path());
-        }
-    }
-    for(const auto& file : debug_files)
-    {
-        APPLOG_TRACE("Removing Debug File {}", file.generic_string());
-        fs::remove(file, ec);
-    }
 }
 
 /// True for the assets whose compiled copies the deploy removes: scripts ship as their library.
@@ -1175,74 +1063,181 @@ auto is_loose_only_file(const fs::path& file) -> bool
     return file.extension().generic_string() == ".dll" || is_debug_companion_file(file);
 }
 
-void remove_empty_directories(const fs::path& root)
+/// Whether a deploy ships a file of the editor's compiled cache: not the compiled copies of script
+/// sources (their library ships instead), not the compiler's manifests and temporary files, and debug
+/// companions only when asked for.
+auto is_shipped_compiled_file(const fs::path& file, bool with_debug_symbols) -> bool
 {
-    fs::error_code ec;
-    std::vector<fs::path> directories;
-    for(fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
+    const auto extension = file.extension().generic_string();
+    if(extension == ".manifest" || extension == ".temp")
     {
-        if(it->is_directory(ec))
-        {
-            directories.push_back(it->path());
-        }
+        return false;
     }
-    // Deepest first, so a folder emptied by removing its subfolders goes too.
-    std::sort(directories.begin(),
-              directories.end(),
-              [](const fs::path& lhs, const fs::path& rhs)
-              {
-                  return lhs.native().size() > rhs.native().size();
-              });
-    for(const auto& directory : directories)
+    if(is_debug_companion_file(file))
     {
-        if(fs::is_empty(directory, ec))
-        {
-            fs::remove(directory, ec);
-        }
+        return with_debug_symbols;
     }
+    return !ex::is_format<script>(ex::get_source_path_from_compiled(file).extension().generic_string());
 }
 
-/// Moves a protocol's staged compiled files and asset index into its pack, the file the game mounts
-/// (data/<protocol>/content.pak). Throws when the pack cannot be written: the step then fails.
-void pack_protocol_data(const fs::path& protocol_root)
+/// The suffix of the earlier build's pack while the new one is written: the game never mounts it.
+constexpr const char* DEPLOY_PREVIOUS_PACK_SUFFIX = ".previous";
+
+/// Sets the earlier build's pack aside, so the game cannot mount it over the new files while the new
+/// pack reuses its entries. Returns where it went; empty when there was none.
+auto set_aside_previous_pack(const fs::path& protocol_root) -> fs::path
 {
     fs::error_code ec;
-    std::vector<fs::pack_input> inputs;
-    const auto compiled = protocol_root / ex::get_compiled_directory_no_slash();
-    for(fs::recursive_directory_iterator it(compiled, ec), end; !ec && it != end; it.increment(ec))
+    const auto pack_file = protocol_root / ex::get_pack_file_name();
+    auto previous = pack_file;
+    previous += DEPLOY_PREVIOUS_PACK_SUFFIX;
+    fs::remove(previous, ec);
+    if(!fs::exists(pack_file, ec))
     {
-        if(it->is_regular_file(ec) && !is_loose_only_file(it->path()))
-        {
-            inputs.push_back({fs::relative(it->path(), protocol_root, ec).generic_string(), it->path()});
-        }
+        return {};
     }
-    inputs.push_back({DEPLOY_ASSET_INDEX_NAME, protocol_root / DEPLOY_ASSET_INDEX_NAME});
-    // Name order, so the same build packs to the same bytes whatever order the folder lists in.
+    fs::rename(pack_file, previous, ec);
+    return ec ? fs::path{} : previous;
+}
+
+/// The files a protocol's pack holds, read straight from the editor's compiled cache (no copy in the
+/// deploy folder): its shipped compiled files, with the cooked variants in `cooked` in their place, and
+/// the asset index. In name order, so the same build packs to the same bytes. Throws when the cache
+/// cannot be listed.
+auto collect_pack_inputs(const fs::path& compiled, const fs::path& cooked, const fs::path& index, bool with_debug_symbols)
+    -> std::vector<fs::pack_input>
+{
+    std::vector<fs::pack_input> inputs;
+    fs::error_code ec;
+    const auto compiled_folder = ex::get_compiled_directory_no_slash();
+    fs::recursive_directory_iterator it(compiled, ec);
+    for(const fs::recursive_directory_iterator end; !ec && it != end; it.increment(ec))
+    {
+        const auto& file = it->path();
+        if(!it->is_regular_file(ec) || is_loose_only_file(file) || !is_shipped_compiled_file(file, with_debug_symbols))
+        {
+            continue;
+        }
+        const auto relative = fs::relative(file, compiled, ec);
+        const auto cooked_file = cooked / relative;
+        fs::error_code exists_ec;
+        inputs.push_back({compiled_folder + "/" + relative.generic_string(),
+                          fs::exists(cooked_file, exists_ec) ? cooked_file : file});
+    }
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("Listing {} failed: {}", compiled.generic_string(), ec.message()));
+    }
+    inputs.push_back({DEPLOY_ASSET_INDEX_NAME, index});
     std::sort(inputs.begin(),
               inputs.end(),
               [](const fs::pack_input& lhs, const fs::pack_input& rhs)
               {
                   return lhs.name < rhs.name;
               });
+    return inputs;
+}
 
+/// Writes a protocol's pack, the file the game mounts (data/<protocol>/content.pak). Entries whose
+/// bytes `previous_pack` already holds are copied from it instead of compressed again. Throws when the
+/// pack cannot be written: the step then fails.
+void write_protocol_pack(const fs::path& protocol_root,
+                         const std::vector<fs::pack_input>& inputs,
+                         const fs::path& previous_pack)
+{
     const auto pack_file = protocol_root / ex::get_pack_file_name();
+    fs::pack_write_options options;
+    options.reuse_from = previous_pack;
     std::string error;
     fs::pack_write_stats stats;
-    if(!fs::write_pack(pack_file, inputs, {}, error, &stats))
+    if(!fs::write_pack(pack_file, inputs, options, error, &stats))
     {
         throw std::runtime_error(fmt::format("Packing {} failed: {}", protocol_root.generic_string(), error));
     }
-    for(const auto& input : inputs)
-    {
-        fs::remove(input.source, ec);
-    }
-    remove_empty_directories(compiled);
     constexpr double bytes_per_megabyte = 1024.0 * 1024.0;
-    APPLOG_INFO("Packed {} file(s), {:.1f} MB -> {:.1f} MB, into {}",
+    APPLOG_INFO("Packed {} file(s) ({} unchanged since the last deploy), {:.1f} MB -> {:.1f} MB, into {}",
                 stats.entry_count,
+                stats.reused_count,
                 double(stats.raw_bytes) / bytes_per_megabyte,
                 double(stats.stored_bytes) / bytes_per_megabyte,
                 pack_file.generic_string());
+}
+
+/// fs::mirror_directory for a deploy step: copies only new and changed files and removes the ones the
+/// source no longer has. Throws on failure, so the step fails rather than leave a partial copy.
+void mirror_for_deploy(const fs::path& from, const fs::path& to, const fs::mirror_filter& include = {})
+{
+    fs::error_code ec;
+    fs::mirror_stats stats;
+    if(!fs::mirror_directory(from, to, include, stats, ec))
+    {
+        throw std::runtime_error(
+            fmt::format("Copying {} to {} failed: {}", from.generic_string(), to.generic_string(), ec.message()));
+    }
+    APPLOG_TRACE("Mirrored {} -> {}: {} copied, {} unchanged, {} removed",
+                 from.generic_string(),
+                 to.generic_string(),
+                 stats.copied,
+                 stats.unchanged,
+                 stats.removed);
+}
+
+/// fs::copy_file_if_changed for a deploy step; throws on failure.
+void copy_file_for_deploy(const fs::path& from, const fs::path& to)
+{
+    fs::error_code ec;
+    bool is_copied = false;
+    if(!fs::copy_file_if_changed(from, to, is_copied, ec))
+    {
+        throw std::runtime_error(
+            fmt::format("Copying {} to {} failed: {}", from.generic_string(), to.generic_string(), ec.message()));
+    }
+}
+
+/// The name a shipped binary is matched by; file names compare case-insensitively on Windows.
+auto get_binary_key(const fs::path& file) -> std::string
+{
+    return string_utils::to_lower(file.filename().generic_string());
+}
+
+/// Removes the executables and libraries at the top of the deploy folder that this build no longer
+/// ships (an older build's DLLs, the exe of a renamed project). `shipped` holds get_binary_key names.
+void remove_stale_binaries(const fs::path& deploy_root, const std::set<std::string>& shipped)
+{
+    fs::error_code ec;
+    std::vector<fs::path> stale;
+    for(const auto& entry : fs::directory_iterator(deploy_root, ec))
+    {
+        const auto extension = string_utils::to_lower(entry.path().extension().generic_string());
+        const bool is_binary = extension == ".dll" || extension == ".exe";
+        if(is_binary && entry.is_regular_file(ec) && !shipped.contains(get_binary_key(entry.path())))
+        {
+            stale.push_back(entry.path());
+        }
+    }
+    for(const auto& file : stale)
+    {
+        APPLOG_TRACE("Removing {}, which this build no longer ships", file.generic_string());
+        fs::remove(file, ec);
+    }
+}
+
+/// Removes everything next to `kept` in its folder: an older runtime version beside the current one.
+void remove_siblings(const fs::path& kept)
+{
+    fs::error_code ec;
+    std::vector<fs::path> siblings;
+    for(const auto& entry : fs::directory_iterator(kept.parent_path(), ec))
+    {
+        if(entry.path().filename() != kept.filename())
+        {
+            siblings.push_back(entry.path());
+        }
+    }
+    for(const auto& sibling : siblings)
+    {
+        fs::remove_all(sibling, ec);
+    }
 }
 
 /// fs::copy for a deploy step: a failure fails the step instead of leaving a partial copy that
@@ -1257,6 +1252,90 @@ void copy_for_deploy(const fs::path& from, const fs::path& to, fs::copy_options 
         throw std::runtime_error(
             fmt::format("Copying {} to {} failed: {}", from.generic_string(), to.generic_string(), ec.message()));
     }
+}
+
+/// One protocol's compiled assets and asset index into data/<protocol>: a pack beside the loose script
+/// library, or loose files. An earlier build there is updated in place: unchanged files and pack
+/// entries are kept, what this build no longer has is removed.
+void deploy_protocol_data(asset_manager& am,
+                          const deploy_settings& params,
+                          const std::string& protocol,
+                          const fs::path& cook_staging)
+{
+    const auto protocol_root = params.deploy_location / "data" / protocol;
+    const auto compiled = fs::resolve_protocol(ex::get_compiled_directory(protocol));
+    const auto destination = protocol_root / ex::get_compiled_directory_no_slash();
+    const auto cooked = cook_staging / protocol;
+    const auto index = protocol_root / DEPLOY_ASSET_INDEX_NAME;
+    const bool with_debug_symbols = params.deploy_debug_symbols;
+    const auto previous_pack = set_aside_previous_pack(protocol_root);
+    fs::error_code ec;
+    fs::create_directories(protocol_root, ec);
+    am.save_database(protocol + ":/", index, is_shipped_location);
+    if(params.deploy_packed_assets)
+    {
+        // Only what CoreCLR loads from disk stays loose; the pack reads everything else from the cache.
+        mirror_for_deploy(compiled,
+                          destination,
+                          [with_debug_symbols](const fs::path& file)
+                          {
+                              return is_loose_only_file(file) && is_shipped_compiled_file(file, with_debug_symbols);
+                          });
+        write_protocol_pack(protocol_root, collect_pack_inputs(compiled, cooked, index, with_debug_symbols), previous_pack);
+        fs::remove(index, ec);
+    }
+    else
+    {
+        mirror_for_deploy(compiled,
+                          destination,
+                          [with_debug_symbols](const fs::path& file)
+                          {
+                              return is_shipped_compiled_file(file, with_debug_symbols);
+                          });
+        // The cooked variants replace their plain-compiled counterparts, in the destination only.
+        if(fs::exists(cooked, ec))
+        {
+            copy_for_deploy(cooked, destination, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        }
+    }
+    fs::remove(previous_pack, ec);
+}
+
+/// The player's libraries, found by the dependency scanner, which takes seconds per run: a scan is kept
+/// for the editor session until the player or one of the libraries it found changes size or write time.
+auto get_dependencies_cached(const fs::path& executable) -> std::vector<std::string>
+{
+    struct scan
+    {
+        std::string stamp;
+        std::vector<std::string> dependencies;
+    };
+    const auto make_stamp = [&executable](const std::vector<std::string>& dependencies)
+    {
+        std::string stamp;
+        fs::error_code ec;
+        const auto append = [&stamp, &ec](const fs::path& file)
+        {
+            stamp += fmt::format("{}:{}:{};",
+                                 file.generic_string(),
+                                 fs::file_size(file, ec),
+                                 fs::last_write_time(file, ec).time_since_epoch().count());
+        };
+        append(executable);
+        std::for_each(dependencies.begin(), dependencies.end(), append);
+        return stamp;
+    };
+    static std::mutex scans_mutex;
+    static std::map<std::string, scan> scans;
+    std::lock_guard<std::mutex> lock(scans_mutex);
+    const auto found = scans.find(executable.string());
+    if(found != scans.end() && found->second.stamp == make_stamp(found->second.dependencies))
+    {
+        return found->second.dependencies;
+    }
+    auto dependencies = get_dependencies(executable);
+    scans[executable.string()] = {make_stamp(dependencies), dependencies};
+    return dependencies;
 }
 
 } // namespace
@@ -2047,12 +2126,12 @@ auto editor_actions::get_deploy_problems(rtti::context& ctx, const deploy_settin
     {
         problems.emplace_back("The deploy folder does not exist.");
     }
-    else if(params.deploy_dependencies && !fs::is_empty(params.deploy_location, ec) &&
-            !is_previous_deploy(params.deploy_location))
+    else if(!fs::is_empty(params.deploy_location, ec) && !is_previous_deploy(params.deploy_location))
     {
-        // A full deploy clears the folder; only an empty one or an earlier build may be cleared.
-        problems.emplace_back("The deploy folder is not empty and holds no earlier build; deploying clears it. "
-                              "Choose an empty folder or a previous deploy.");
+        // A deploy updates an earlier build in place and removes the files it no longer ships, so
+        // only an empty folder or an earlier build is safe to deploy into.
+        problems.emplace_back("The deploy folder is not empty and holds no earlier build; a deploy replaces "
+                              "and removes files in it. Choose an empty folder or a previous deploy.");
     }
     auto& settings = ctx.get_cached<project_manager>().get_settings();
     if(!settings.standalone.startup_scene.is_valid())
@@ -2165,12 +2244,12 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
     // am.get_database("engine:/")
 
+    // An earlier build in the folder is updated in place: each step below brings its own files up to
+    // date, copying only what changed and removing what this build no longer has.
+    fs::create_directories(params.deploy_location, ec);
+
     if(params.deploy_dependencies)
     {
-        APPLOG_INFO("Clearing {}", params.deploy_location.generic_string());
-        fs::remove_all(params.deploy_location, ec);
-        fs::create_directories(params.deploy_location, ec);
-
         auto job =
             th.pool
                 ->schedule("Deploying Dependencies",
@@ -2180,21 +2259,18 @@ auto editor_actions::deploy_project(rtti::context& ctx,
 
                                fs::path app_executable =
                                    fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
-                               auto deps = get_dependencies(app_executable);
+                               auto deps = get_dependencies_cached(app_executable);
 
+                               std::set<std::string> shipped;
                                for(const auto& dep : deps)
                                {
-                                   APPLOG_TRACE("Copying {} -> {}",
-                                                fs::path(dep).generic_string(),
-                                                params.deploy_location.generic_string());
-                                   copy_for_deploy(dep, params.deploy_location, fs::copy_options::overwrite_existing);
+                                   const fs::path library(dep);
+                                   copy_file_for_deploy(library, params.deploy_location / library.filename());
+                                   shipped.insert(get_binary_key(library));
                                }
-
-
-                               APPLOG_TRACE("Copying {} -> {}",
-                                            app_executable.generic_string(),
-                                            params.deploy_location.generic_string());
-                               copy_for_deploy(app_executable, executable_path, fs::copy_options::overwrite_existing);
+                               copy_file_for_deploy(app_executable, executable_path);
+                               shipped.insert(get_binary_key(executable_path));
+                               remove_stale_binaries(params.deploy_location, shipped);
 
                                APPLOG_INFO("Deploying Dependencies - Done");
                            })
@@ -2209,19 +2285,8 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                                   [params]()
                                   {
                                       APPLOG_INFO("Deploying Project Settings...");
-
-                                      auto data = fs::resolve_protocol("app:/settings");
-                                      fs::path dst = params.deploy_location / "data" / "app" / "settings";
-
-                                      fs::error_code ec;
-
-                                      APPLOG_TRACE("Clearing {}", dst.generic_string());
-                                      fs::remove_all(dst, ec);
-                                      fs::create_directories(dst, ec);
-
-                                      APPLOG_TRACE("Copying {} -> {}", data.generic_string(), dst.generic_string());
-                                      copy_for_deploy(data, dst, fs::copy_options::recursive);
-
+                                      mirror_for_deploy(fs::resolve_protocol("app:/settings"),
+                                                        params.deploy_location / "data" / "app" / "settings");
                                       APPLOG_INFO("Deploying Project Settings - Done");
                                   })
                        .share();
@@ -2238,53 +2303,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                     [params, &am, cook_staging]()
                     {
                         APPLOG_INFO("Deploying Project Data...");
-
-                        fs::error_code ec;
-                        {
-                            auto data = fs::resolve_protocol(ex::get_compiled_directory("app"));
-                            fs::path cached_data =
-                                params.deploy_location / "data" / "app" / ex::get_compiled_directory_no_slash();
-
-                            APPLOG_TRACE("Clearing {}", cached_data.generic_string());
-                            fs::remove_all(cached_data, ec);
-                            fs::create_directories(cached_data, ec);
-                            // An earlier build's pack would be mounted over these files.
-                            fs::remove(cached_data.parent_path() / ex::get_pack_file_name(), ec);
-
-                            APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
-                            copy_for_deploy(data, cached_data, fs::copy_options::recursive);
-
-                            remove_unreferenced_files(cached_data);
-                            if(!params.deploy_debug_symbols)
-                            {
-                                remove_debug_files(cached_data);
-                            }
-
-                            // The cooked variants replace their plain-compiled counterparts,
-                            // in the destination only.
-                            const fs::path staged = cook_staging / "app";
-                            if(fs::exists(staged, ec))
-                            {
-                                APPLOG_TRACE("Overlaying cooked assets {} -> {}",
-                                             staged.generic_string(),
-                                             cached_data.generic_string());
-                                copy_for_deploy(staged,
-                                                cached_data,
-                                                fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-                            }
-                        }
-
-                        {
-                            fs::path cached_data = params.deploy_location / "data" / "app" / "assets.pack";
-                            APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
-                            am.save_database("app:/", cached_data, is_shipped_location);
-                        }
-
-                        if(params.deploy_packed_assets)
-                        {
-                            pack_protocol_data(params.deploy_location / "data" / "app");
-                        }
-
+                        deploy_protocol_data(am, params, "app", cook_staging);
                         APPLOG_INFO("Deploying Project Data - Done");
                     })
                 .share();
@@ -2301,51 +2320,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                     [params, &am, cook_staging]()
                     {
                         APPLOG_INFO("Deploying Engine Data...");
-
-                        fs::error_code ec;
-                        {
-                            fs::path cached_data =
-                                params.deploy_location / "data" / "engine" / ex::get_compiled_directory_no_slash();
-                            auto data = fs::resolve_protocol(ex::get_compiled_directory("engine"));
-
-                            APPLOG_TRACE("Clearing {}", cached_data.generic_string());
-                            fs::remove_all(cached_data, ec);
-                            fs::create_directories(cached_data, ec);
-                            // An earlier build's pack would be mounted over these files.
-                            fs::remove(cached_data.parent_path() / ex::get_pack_file_name(), ec);
-
-                            APPLOG_TRACE("Copying {} -> {}", data.generic_string(), cached_data.generic_string());
-                            copy_for_deploy(data, cached_data, fs::copy_options::recursive);
-
-                            remove_unreferenced_files(cached_data);
-                            if(!params.deploy_debug_symbols)
-                            {
-                                remove_debug_files(cached_data);
-                            }
-
-                            const fs::path staged = cook_staging / "engine";
-                            if(fs::exists(staged, ec))
-                            {
-                                APPLOG_TRACE("Overlaying cooked assets {} -> {}",
-                                             staged.generic_string(),
-                                             cached_data.generic_string());
-                                copy_for_deploy(staged,
-                                                cached_data,
-                                                fs::copy_options::recursive | fs::copy_options::overwrite_existing);
-                            }
-                        }
-
-                        {
-                            fs::path cached_data = params.deploy_location / "data" / "engine" / "assets.pack";
-                            APPLOG_TRACE("Creating Asset Pack -> {}", cached_data.generic_string());
-                            am.save_database("engine:/", cached_data, is_shipped_location);
-                        }
-
-                        if(params.deploy_packed_assets)
-                        {
-                            pack_protocol_data(params.deploy_location / "data" / "engine");
-                        }
-
+                        deploy_protocol_data(am, params, "engine", cook_staging);
                         APPLOG_INFO("Deploying Engine Data - Done");
                     })
                 .share();
@@ -2445,27 +2420,23 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                     {
                         APPLOG_INFO("Deploying .NET...");
 
-                        fs::error_code ec;
-
                         // The managed bridge payload (Clrpp.Managed.dll + runtimeconfig +
                         // optional NuGet deps) is self-contained in one folder. Ship it
                         // next to the bundled dotnet root; the game passes this location
                         // to the runtime at init (compiler_paths::assembly_dir).
                         {
                             const std::string runtime_dir = dotnet::managed_runtime_dir();
-                            fs::path src = fs::resolve_protocol("binary:/" + runtime_dir);
-                            fs::path dst = params.deploy_location / "data" / "engine" / runtime_dir;
-
-                            APPLOG_TRACE("Clearing {}", dst.generic_string());
-                            fs::remove_all(dst, ec);
-                            fs::create_directories(dst, ec);
-
-                            APPLOG_TRACE("Copying {} -> {}", src.generic_string(), dst.generic_string());
-                            copy_for_deploy(src, dst, fs::copy_options::recursive);
+                            fs::mirror_filter include;
                             if(!params.deploy_debug_symbols)
                             {
-                                remove_debug_files(dst);
+                                include = [](const fs::path& file)
+                                {
+                                    return !is_debug_companion_file(file);
+                                };
                             }
+                            mirror_for_deploy(fs::resolve_protocol("binary:/" + runtime_dir),
+                                              params.deploy_location / "data" / "engine" / runtime_dir,
+                                              include);
                         }
 
                         // Bundle a pruned dotnet root (hostfxr + shared framework) so the
@@ -2496,25 +2467,16 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             {
                                 fs::path runtime_dst = params.deploy_location / "data" / "engine" / "dotnet";
 
-                                APPLOG_TRACE("Clearing {}", runtime_dst.generic_string());
-                                fs::remove_all(runtime_dst, ec);
-
                                 fs::path fxr_dst = runtime_dst / "host" / "fxr" / fxr_src.filename();
                                 fs::path shared_dst =
                                     runtime_dst / "shared" / "Microsoft.NETCore.App" / shared_src.filename();
 
-                                fs::create_directories(fxr_dst, ec);
-                                fs::create_directories(shared_dst, ec);
-
-                                APPLOG_TRACE("Copying {} -> {}",
-                                             fxr_src.generic_string(),
-                                             fxr_dst.generic_string());
-                                copy_for_deploy(fxr_src, fxr_dst, fs::copy_options::recursive);
-
-                                APPLOG_TRACE("Copying {} -> {}",
-                                             shared_src.generic_string(),
-                                             shared_dst.generic_string());
-                                copy_for_deploy(shared_src, shared_dst, fs::copy_options::recursive);
+                                // The runtime is the largest part of a build and rarely changes:
+                                // only an updated version is copied, and the one it replaces removed.
+                                mirror_for_deploy(fxr_src, fxr_dst);
+                                remove_siblings(fxr_dst);
+                                mirror_for_deploy(shared_src, shared_dst);
+                                remove_siblings(shared_dst);
                             }
                         }
 

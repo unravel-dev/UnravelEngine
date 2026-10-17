@@ -26,7 +26,7 @@ REFLECT(deploy_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_dependencies"},
             entt::attribute{"pretty_name", "Deploy Dependencies"},
-            entt::attribute{"tooltip", "Copy the engine's runtime files as well. Slow, and only needed when they changed."},
+            entt::attribute{"tooltip", "Copy the player executable and its libraries as well.\nUnchanged files are skipped."},
         })
         .data<&deploy_settings::deploy_cooked_assets>("deploy_cooked_assets"_hs)
         .custom<entt::attributes>(entt::attributes{

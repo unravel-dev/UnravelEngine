@@ -37,8 +37,11 @@ namespace
 
 constexpr std::array<char, 8> PACK_MAGIC = {'U', 'N', 'R', 'V', 'P', 'A', 'K', '1'};
 constexpr std::uint32_t PACK_VERSION = 1;
-/// magic, version, reserved, toc offset, toc size, toc hash.
+/// magic, version, write settings, toc offset, toc size, toc hash.
 constexpr std::size_t PACK_FOOTER_SIZE = 8 + 4 + 4 + 8 + 8 + 8;
+/// Write settings of an uncompressed pack; a compressed one sets bit 0, the level in bits 8-15 and the
+/// codec id in bits 16-23. Entries are reused only from a pack written with the same settings.
+constexpr std::uint32_t PACK_UNCOMPRESSED_SETTINGS = 0;
 constexpr std::uint64_t PACK_ENTRY_ALIGNMENT = 16;
 constexpr std::size_t PACK_BLOCK_SIZE = 64 * 1024;
 /// A block is kept compressed only when it saves at least this share of its size (1/20 = 5%).
@@ -260,7 +263,17 @@ struct mounted_pack
     std::string protocol;
     mapped_file file;
     std::unordered_map<std::string, pack_entry> entries;
+    std::uint32_t write_settings{PACK_UNCOMPRESSED_SETTINGS};
 };
+
+auto get_write_settings(const pack_write_options& options) -> std::uint32_t
+{
+    if(!options.compress)
+    {
+        return PACK_UNCOMPRESSED_SETTINGS;
+    }
+    return 1u | (std::uint32_t(options.compression_level) << 8) | (std::uint32_t(compression::get_codec_id()) << 16);
+}
 
 /// The mounted packs, the latest last. Lookups take the shared lock only to copy what they need.
 std::shared_mutex mounts_mutex;
@@ -365,12 +378,12 @@ void append_entry_record(byte_array_t& toc,
     }
 }
 
-auto make_footer(std::uint64_t toc_offset, const byte_array_t& toc) -> byte_array_t
+auto make_footer(std::uint64_t toc_offset, const byte_array_t& toc, std::uint32_t write_settings) -> byte_array_t
 {
     byte_array_t footer;
     footer.insert(footer.end(), PACK_MAGIC.begin(), PACK_MAGIC.end());
     append_value(footer, PACK_VERSION);
-    append_value(footer, std::uint32_t(0));
+    append_value(footer, write_settings);
     append_value(footer, toc_offset);
     append_value(footer, std::uint64_t(toc.size()));
     append_value(footer, std::uint64_t(XXH3_64bits(toc.data(), toc.size())));
@@ -430,7 +443,7 @@ auto parse_pack(mounted_pack& pack, std::string& err) -> bool
     byte_reader footer(data + size - PACK_FOOTER_SIZE, PACK_FOOTER_SIZE);
     const auto* magic = footer.read_bytes(PACK_MAGIC.size());
     const auto version = footer.read<std::uint32_t>();
-    footer.read<std::uint32_t>();
+    pack.write_settings = footer.read<std::uint32_t>();
     const auto toc_offset = footer.read<std::uint64_t>();
     const auto toc_size = footer.read<std::uint64_t>();
     const auto toc_hash = footer.read<std::uint64_t>();
@@ -623,11 +636,83 @@ void write_bytes(std::ofstream& out, const byte_array_t& bytes, std::size_t coun
     out.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(count));
 }
 
+/// Turns an input's bytes into an entry: from an earlier pack when it holds the same bytes, else by
+/// compressing them (or storing them whole, for an uncompressed pack).
+class entry_encoder
+{
+public:
+    explicit entry_encoder(const pack_write_options& options)
+    {
+        if(options.compress)
+        {
+            compressor_ = std::make_unique<compression::compressor>(options.compression_level);
+        }
+        open_reuse_source(options);
+    }
+
+    auto encode(byte_array_t raw, std::uint64_t content_hash, encoded_entry& out, bool& is_reused, std::string& err)
+        -> bool
+    {
+        const auto* previous = find_reusable(content_hash, raw.size());
+        is_reused = previous != nullptr;
+        if(!is_reused)
+        {
+            return encode_entry(std::move(raw), compressor_.get(), out, err);
+        }
+        const auto* stored = reuse_pack_->file.data() + previous->offset;
+        out.stored.assign(stored, stored + previous->stored_size);
+        out.codec = previous->codec;
+        out.stored_block_sizes = previous->stored_block_sizes;
+        return true;
+    }
+
+private:
+    /// The earlier pack is only a shortcut: one that is missing, damaged or written with other
+    /// settings is left out, and every input is encoded afresh.
+    void open_reuse_source(const pack_write_options& options)
+    {
+        error_code ec;
+        if(options.reuse_from.empty() || !exists(options.reuse_from, ec))
+        {
+            return;
+        }
+        auto pack = std::make_unique<mounted_pack>();
+        std::string ignored;
+        if(!pack->file.open(options.reuse_from, ignored) || !parse_pack(*pack, ignored) ||
+           pack->write_settings != get_write_settings(options))
+        {
+            return;
+        }
+        for(const auto& [name, entry] : pack->entries)
+        {
+            reusable_.emplace(entry.content_hash, &entry);
+        }
+        reuse_pack_ = std::move(pack);
+    }
+
+    auto find_reusable(std::uint64_t content_hash, std::uint64_t raw_size) const -> const pack_entry*
+    {
+        const auto [first, last] = reusable_.equal_range(content_hash);
+        for(auto it = first; it != last; ++it)
+        {
+            if(it->second->raw_size == raw_size)
+            {
+                return it->second;
+            }
+        }
+        return nullptr;
+    }
+
+    std::unique_ptr<compression::compressor> compressor_;
+    std::unique_ptr<mounted_pack> reuse_pack_;
+    std::unordered_multimap<std::uint64_t, const pack_entry*> reusable_;
+};
+
 /// Writes every entry's bytes in input order and builds the table of contents that describes them.
 /// `data_size` receives where the data ends: the table of contents starts there.
 auto write_entries(std::ofstream& out,
                    const std::vector<pack_input>& inputs,
-                   compression::compressor* compressor,
+                   entry_encoder& encoder,
                    byte_array_t& toc,
                    pack_write_stats& totals,
                    std::uint64_t& data_size,
@@ -653,11 +738,13 @@ auto write_entries(std::ofstream& out,
         const std::uint64_t raw_size = raw.size();
         const std::uint64_t content_hash = XXH3_64bits(raw.data(), raw.size());
         encoded_entry entry;
-        if(!encode_entry(std::move(raw), compressor, entry, err))
+        bool is_reused = false;
+        if(!encoder.encode(std::move(raw), content_hash, entry, is_reused, err))
         {
             err = input.name + ": " + err;
             return false;
         }
+        totals.reused_count += is_reused ? 1 : 0;
         const std::uint64_t padding_size = (PACK_ENTRY_ALIGNMENT - data_size % PACK_ENTRY_ALIGNMENT) % PACK_ENTRY_ALIGNMENT;
         write_bytes(out, padding, std::size_t(padding_size));
         data_size += padding_size;
@@ -685,19 +772,15 @@ auto write_pack_file(const path& file,
         err = "cannot write " + file.generic_string();
         return false;
     }
-    std::unique_ptr<compression::compressor> compressor;
-    if(options.compress)
-    {
-        compressor = std::make_unique<compression::compressor>(options.compression_level);
-    }
+    entry_encoder encoder(options);
     byte_array_t toc;
     std::uint64_t data_size = 0;
-    if(!write_entries(out, inputs, compressor.get(), toc, totals, data_size, err))
+    if(!write_entries(out, inputs, encoder, toc, totals, data_size, err))
     {
         return false;
     }
     write_bytes(out, toc, toc.size());
-    const auto footer = make_footer(data_size, toc);
+    const auto footer = make_footer(data_size, toc, get_write_settings(options));
     write_bytes(out, footer, footer.size());
     out.close();
     if(!out.good())

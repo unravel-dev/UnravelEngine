@@ -13,7 +13,9 @@
  *   - incompressible entries are stored whole, compressible ones shrink;
  *   - a file a pack does not hold falls back to disk; a later mount wins;
  *   - a truncated, damaged or foreign file is refused at mount;
- *   - the same inputs write the same bytes; streams seek and tell.
+ *   - the same inputs write the same bytes; streams seek and tell;
+ *   - a write that reuses an earlier pack copies the entries whose bytes it holds (renamed ones too) and
+ *     gives exactly the bytes a fresh write gives; other compression settings reuse nothing.
  * Everything lives in a temp folder under a protocol the suite registers.
  */
 
@@ -304,6 +306,55 @@ void test_stream_seek_and_tell()
     fs::unmount_packs();
 }
 
+void test_reuse_of_unchanged_entries()
+{
+    std::printf("test_reuse_of_unchanged_entries\n");
+    const auto files = make_test_files();
+    const auto first_inputs = stage_inputs("stage_reuse_first", files);
+    std::string error;
+    const auto previous = get_temp_folder() / "previous.pak";
+    check(fs::write_pack(previous, first_inputs, {}, error), "the earlier pack is written");
+
+    // The next build: one asset changed, one renamed with the same bytes, the rest as they were.
+    auto next_files = files;
+    next_files[2].bytes.back() ^= 0xFF;
+    next_files[1].name = "compiled/renamed.txt.asset";
+    const auto next_inputs = stage_inputs("stage_reuse_next", next_files);
+    fs::pack_write_options options;
+    options.reuse_from = previous;
+    fs::pack_write_stats stats;
+    const auto reused_pack = get_temp_folder() / "reused.pak";
+    check(fs::write_pack(reused_pack, next_inputs, options, error, &stats), "the next pack is written: " + error);
+    check(stats.reused_count == next_files.size() - 1, "every entry but the changed one is reused, renamed ones too");
+    const auto fresh_pack = get_temp_folder() / "fresh.pak";
+    check(fs::write_pack(fresh_pack, next_inputs, {}, error), "the same inputs are written without reuse");
+    check(read_disk_file(reused_pack) == read_disk_file(fresh_pack), "reusing entries gives the bytes a fresh write gives");
+    fs::unmount_packs();
+    check(fs::mount_pack(TEST_PROTOCOL, reused_pack, error), "the pack with reused entries mounts");
+    for(const auto& file : next_files)
+    {
+        check(read_packed_bytes(get_protocol_path(file.name)) == file.bytes, file.name + " reads back from the reused pack");
+    }
+    fs::unmount_packs();
+
+    fs::pack_write_options stored;
+    stored.compress = false;
+    stored.reuse_from = previous;
+    check(fs::write_pack(get_temp_folder() / "stored_reuse.pak", next_inputs, stored, error, &stats) &&
+              stats.reused_count == 0,
+          "an uncompressed pack reuses nothing from a compressed one");
+    fs::pack_write_options best;
+    best.compression_level = compression::level::best;
+    best.reuse_from = previous;
+    check(fs::write_pack(get_temp_folder() / "best_reuse.pak", next_inputs, best, error, &stats) && stats.reused_count == 0,
+          "another compression level reuses nothing");
+    fs::pack_write_options missing;
+    missing.reuse_from = get_temp_folder() / "no_such.pak";
+    check(fs::write_pack(get_temp_folder() / "missing_reuse.pak", next_inputs, missing, error, &stats) &&
+              stats.reused_count == 0,
+          "a missing earlier pack is ignored");
+}
+
 auto run_asset_packs_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -319,6 +370,7 @@ auto run_asset_packs_suite(rtti::context&) -> int
     test_damaged_packs_are_refused();
     test_deterministic_output();
     test_stream_seek_and_tell();
+    test_reuse_of_unchanged_entries();
     fs::unmount_packs();
     fs::remove_all(get_temp_folder(), ec);
     std::printf("asset packs: %d checks, %d failures\n", g_checks, g_failures);

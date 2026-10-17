@@ -218,7 +218,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
          .description =
              "Set the project's deploy settings and save them, then report what still keeps the "
              "project from deploying. location is an absolute folder outside the project, created "
-             "when missing; a full deploy clears it, so it must be empty or an earlier deploy. "
+             "when missing; it must be empty or an earlier deploy, which a deploy updates in place. "
              "include_debug_symbols ships the scripts' .pdb/.xml so managed exceptions name file and line. "
              "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off "
              "ships them loose. Omitted fields keep their value.",
@@ -266,9 +266,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "project_deploy",
          .description =
-             "Build the game into the deploy folder, as the editor's Deploy does. With deploy_dependencies on "
-             "(default) the folder is cleared first, so it must be empty or an earlier deploy. Needs a deploy "
-             "location and a startup scene: call deploy_get_state first. Waits for running asset and script "
+             "Build the game into the deploy folder, as the editor's Deploy does. The folder must be empty or an "
+             "earlier deploy, which is updated in place: unchanged files and pack entries are kept, files the "
+             "build no longer ships are removed. Needs a deploy location and a startup scene: call "
+             "deploy_get_state first. Waits for running asset and script "
              "compiles first, then for the deploy, up to timeout_ms in all (default 180000); on timeout the deploy "
              "keeps running and deploy_get_state reports it. Assets without a compiled file fail the deploy before "
              "the folder is touched, named in failed_steps. Refuses play mode.",
