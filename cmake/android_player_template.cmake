@@ -42,8 +42,7 @@ file(COPY "${GRADLE_PROJECT}/" DESTINATION "${OUTPUT}/project"
      PATTERN ".kotlin" EXCLUDE
      PATTERN ".idea" EXCLUDE
      PATTERN "*.iml" EXCLUDE
-     PATTERN "local.properties" EXCLUDE
-     PATTERN "run_on_device.py" EXCLUDE)
+     PATTERN "local.properties" EXCLUDE)
 file(COPY "${SDL_JAVA}/" DESTINATION "${OUTPUT}/sdl/java")
 
 # The .NET runtime pack, restored into the NuGet global packages folder when it is not there yet.

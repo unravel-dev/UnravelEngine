@@ -340,7 +340,8 @@ auto get_android_toolchain_search() -> android_toolchain_search
     search.sdk_candidates.push_back(home / "Android" / "Sdk");
     add_matching_children("/opt", "android-studio", "jbr", search.jdk_candidates);
     add_matching_children(home, "android-studio", "jbr", search.jdk_candidates);
-    search.jdk_candidates.push_back("/snap/android-studio/current/jbr");
+    // The snap unpacks Android Studio one folder down: /snap/android-studio/current/android-studio.
+    add_matching_children("/snap", "android-studio", fs::path("current") / "android-studio" / "jbr", search.jdk_candidates);
 #endif
     return search;
 }

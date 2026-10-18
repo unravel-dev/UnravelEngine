@@ -4,70 +4,42 @@ plugins {
     id("com.android.application")
 }
 
-val unravelRoot: File = rootDir.resolve("../..").canonicalFile
+// The editor's deploy builds this project from its Android player template
+// (cmake/android_player_template.cmake) and passes every input as a Gradle property
+// (-P<name>=<value>): the template's folders, the game's data and the game's identity on the device.
+fun requireProperty(name: String): String = providers.gradleProperty(name).orNull
+    ?: throw GradleException(
+        "The Gradle property $name is missing. The editor's deploy builds this project from its Android player template."
+    )
 
-// The inputs come from Gradle properties (-P<name>=<value>). Without them the build uses this source
-// checkout, as run_on_device.py does. The editor's deploy passes its Android player template's
-// folders instead (cmake/android_player_template.cmake), so it needs no NDK and no checkout.
-fun pathProperty(name: String): File? = providers.gradleProperty(name).orNull?.let { file(it) }
-fun textProperty(name: String, default: String): String = providers.gradleProperty(name).orNull ?: default
+fun pathProperty(name: String): File = file(requireProperty(name))
 
-// unravel.player: the folder holding a template's libmain.so, already stripped. Default: the
-// android-arm64 CMake preset's build, stripped here (cmake --preset android-arm64 &&
-// cmake --build --preset android-arm64).
-val templatePlayerDir: File? = pathProperty("unravel.player")
-val isTemplateBuild = templatePlayerDir != null
-val playerLibraryDir: File = templatePlayerDir ?: unravelRoot.resolve("develop/build/android-arm64/bin")
+// unravel.player: the folder holding the template's libmain.so, already stripped.
+val playerLibraryDir: File = pathProperty("unravel.player")
 
 // unravel.sdlJava: SDL's Java sources, which must match the SDL linked into libmain.so.
 val sdlJavaDir: File = pathProperty("unravel.sdlJava")
-    ?: unravelRoot.resolve("deps/ospp/ospp/3rdparty/SDL/SDL/android-project/app/src/main/java")
 
-// The .NET runtime the player starts on the device: this version of the android-arm64 runtime pack.
-// unravel.dotnet: a folder holding the pack's native/ and lib/<framework>/ folders. Default: the pack
-// in the .NET SDK's global packages folder (NUGET_PACKAGES, or ~/.nuget/packages), restored there.
-val dotnetRuntimeVersion = textProperty("unravel.dotnetVersion", "10.0.13")
-val dotnetRuntimePackage = "Microsoft.NETCore.App.Runtime.android-arm64"
+// unravel.dotnet: the android-arm64 .NET runtime pack the player starts on the device, a folder
+// holding its native/ and lib/<framework>/ folders. unravel.dotnetVersion: the pack's version.
+val dotnetRuntimeDir: File = pathProperty("unravel.dotnet")
+val dotnetRuntimeVersion = requireProperty("unravel.dotnetVersion")
 val dotnetTargetFramework = "net" + dotnetRuntimeVersion.substringBeforeLast('.')
-val providedDotnetDir: File? = pathProperty("unravel.dotnet")
-val nugetPackagesDir: File = File(System.getenv("NUGET_PACKAGES") ?: System.getProperty("user.home") + "/.nuget/packages")
-val dotnetRuntimeDir: File = providedDotnetDir
-    ?: nugetPackagesDir.resolve(dotnetRuntimePackage.lowercase() + "/" + dotnetRuntimeVersion + "/runtimes/android-arm64")
 
-// The game's identity on the device, set by the deploy. unravel.orientation is an
-// android:screenOrientation value.
-val gameApplicationId = textProperty("unravel.applicationId", "com.unravel.player")
-val gameName = textProperty("unravel.appName", "Unravel Player")
-val gameVersionCode = textProperty("unravel.versionCode", "1").toInt()
-val gameVersionName = textProperty("unravel.versionName", "1.0")
-val gameOrientation = textProperty("unravel.orientation", "unspecified")
+// unravel.content: the deploy folder whose data/ the APK carries.
+val contentDir: File = pathProperty("unravel.content")
+
+// The game's identity on the device. unravel.orientation is an android:screenOrientation value.
+val gameApplicationId = requireProperty("unravel.applicationId")
+val gameName = requireProperty("unravel.appName")
+val gameVersionCode = requireProperty("unravel.versionCode").toInt()
+val gameVersionName = requireProperty("unravel.versionName")
+val gameOrientation = requireProperty("unravel.orientation")
 
 // unravel.keystore and unravel.keyAlias sign release builds; the passwords come from the
 // UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD environment variables, never from files. Debug
 // builds use the Android SDK's debug keystore (~/.android/debug.keystore), created when missing.
-val releaseKeystore: File? = pathProperty("unravel.keystore")
-
-val restoreDotnetRuntime = if (providedDotnetDir != null) null else tasks.register<Exec>("restoreDotnetRuntime") {
-    val projectFile = layout.buildDirectory.file("dotnet-runtime/restore.csproj").get().asFile
-    inputs.property("version", dotnetRuntimeVersion)
-    outputs.dir(dotnetRuntimeDir)
-    doFirst {
-        projectFile.parentFile.mkdirs()
-        projectFile.writeText(
-            """
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <TargetFramework>$dotnetTargetFramework</TargetFramework>
-              </PropertyGroup>
-              <ItemGroup>
-                <PackageDownload Include="$dotnetRuntimePackage" Version="[$dotnetRuntimeVersion]" />
-              </ItemGroup>
-            </Project>
-            """.trimIndent()
-        )
-    }
-    commandLine("dotnet", "restore", projectFile.path)
-}
+val releaseKeystore: File? = providers.gradleProperty("unravel.keystore").orNull?.let { file(it) }
 
 /**
  * Copies the native libraries into the <dir>/<abi>/ layout Gradle packages them from: libmain.so and
@@ -101,7 +73,6 @@ abstract class StagePlayerLibrary : DefaultTask() {
 }
 
 val stagePlayerLibrary = tasks.register<StagePlayerLibrary>("stagePlayerLibrary") {
-    restoreDotnetRuntime?.let { dependsOn(it) }
     library.set(playerLibraryDir.resolve("libmain.so"))
     runtimeNativeDir.set(dotnetRuntimeDir.resolve("native"))
 }
@@ -113,8 +84,7 @@ val stagePlayerLibrary = tasks.register<StagePlayerLibrary>("stagePlayerLibrary"
  * on the first line, then the loose files), which game/game/bundled_files.h reads.
  */
 abstract class StagePlayerContent : DefaultTask() {
-    /** The deploy folder (the one holding data/); without it the APK carries no content. */
-    @get:Optional
+    /** The deploy folder, the one holding data/. */
     @get:InputDirectory
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val deployDir: DirectoryProperty
@@ -135,7 +105,7 @@ abstract class StagePlayerContent : DefaultTask() {
         val output = outputDir.get().asFile
         output.deleteRecursively()
         output.mkdirs()
-        val deploy = deployDir.orNull?.asFile ?: return
+        val deploy = deployDir.get().asFile
         val deployFiles = deploy.resolve("data").walkTopDown()
             .filter { it.isFile }
             .map { it.relativeTo(deploy).invariantSeparatorsPath to it }
@@ -167,9 +137,7 @@ abstract class StagePlayerContent : DefaultTask() {
 }
 
 val stagePlayerContent = tasks.register<StagePlayerContent>("stagePlayerContent") {
-    restoreDotnetRuntime?.let { dependsOn(it) }
-    // gradlew assembleDebug -Punravel.content=<deploy folder>
-    providers.gradleProperty("unravel.content").orNull?.let { deployDir.set(file(it)) }
+    deployDir.set(contentDir)
     runtimeManagedDir.set(dotnetRuntimeDir.resolve("lib/" + dotnetTargetFramework))
     runtimeVersion.set(dotnetRuntimeVersion)
 }
@@ -177,10 +145,6 @@ val stagePlayerContent = tasks.register<StagePlayerContent>("stagePlayerContent"
 android {
     namespace = "com.unravel.player"
     compileSdk = 37
-    // A template's library is already stripped, so only the checkout's build needs the NDK.
-    if (!isTemplateBuild) {
-        ndkVersion = "30.0.16248370"
-    }
 
     defaultConfig {
         applicationId = gameApplicationId
@@ -200,17 +164,17 @@ android {
             create("release") {
                 storeFile = releaseKeystore
                 storePassword = System.getenv("UNRAVEL_KEYSTORE_PASSWORD")
-                keyAlias = textProperty("unravel.keyAlias", "")
+                keyAlias = requireProperty("unravel.keyAlias")
                 keyPassword = System.getenv("UNRAVEL_KEY_PASSWORD") ?: System.getenv("UNRAVEL_KEYSTORE_PASSWORD")
             }
         }
     }
 
+    // The template's libmain.so is already stripped and the .NET runtime's libraries ship as they
+    // are, so packaging leaves every library unchanged and needs no NDK.
     packaging {
         jniLibs {
-            if (isTemplateBuild) {
-                keepDebugSymbols += "**/*.so"
-            }
+            keepDebugSymbols += "**/*.so"
         }
     }
 
