@@ -9,6 +9,7 @@
 #include <context/context.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,11 +20,20 @@ namespace unravel
 struct ENGINE_EXPORT renderer
 {
     using render_window_t = std::unique_ptr<render_window>;
+    /// Creates the main window through create_window or create_window_for_display.
+    using main_window_factory = std::function<bool()>;
 
     renderer(rtti::context& ctx, cmd_line::parser& parser);
     ~renderer();
 
-    auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
+    /**
+     * @brief Brings up the OS layer, lets the host create its main window, then initializes the
+     *        graphics backend on that window: its backbuffer is the main window's surface, so no
+     *        other window is needed to own the device.
+     * @param create_main_window Must create the main window; init fails if it does not.
+     */
+    auto init(rtti::context& ctx, const cmd_line::parser& parser, const main_window_factory& create_main_window)
+        -> bool;
 
     /// Whether init() got as far as bringing the graphics backend up. Teardown has to know:
     /// the renderer is constructed by engine::create, and a headless run - the test runner -
@@ -34,10 +44,16 @@ struct ENGINE_EXPORT renderer
     }
     auto deinit(rtti::context& ctx) -> bool;
 
+    /**
+     * @brief Creates the main window over the usable bounds of a display. Only valid from the
+     *        init() window factory. The window starts hidden; the host shows it when it is ready
+     *        to draw, and a pending maximize or fullscreen applies then.
+     */
     auto create_window_for_display(int index, const std::string& title, uint32_t flags)
         -> const std::unique_ptr<render_window>&;
     /**
      * @brief Creates the main window at an explicit position and size (e.g. restart restore).
+     *        Only valid from the init() window factory; the window starts hidden.
      */
     auto create_window(const std::string& title,
                        int32_t x,
@@ -47,7 +63,17 @@ struct ENGINE_EXPORT renderer
                        uint32_t flags) -> const std::unique_ptr<render_window>&;
     void set_main_window(os::window&& window);
     auto get_main_window() const -> render_window*;
+    /**
+     * @brief Closes the main window: get_main_window() returns null from then on. The window
+     *        carries the backbuffer, so it is only hidden and lives until the backend shuts down.
+     */
     void close_main_window();
+    /**
+     * @brief Brings the main window's surface and the backbuffer to the window's current size.
+     *        Runs every frame, so it does not depend on a resize event reaching the renderer:
+     *        a host's loading screen polls OS events itself.
+     */
+    void sync_main_surface();
     void request_screenshot(const std::string& file);
 
     /**
@@ -81,9 +107,12 @@ protected:
     auto get_reset_flags(bool vsync) const -> uint32_t;
 
     uint32_t reset_flags_{};
-    /// engine windows
-    std::unique_ptr<os::window> init_window_{};
+    /// The main window; bgfx is initialized on it.
     std::unique_ptr<render_window> render_window_{};
+    /// The main window after close_main_window, kept hidden until the backend shuts down.
+    std::unique_ptr<render_window> closed_main_window_{};
+    /// The size the backbuffer was last initialized or reset to.
+    usize32_t backbuffer_size_{};
     std::string request_screenshot_{};
 
     /// Set once init() has brought the backend up; read by the destructor.

@@ -102,7 +102,11 @@ auto game::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
-    if(!engine::init_core(parser))
+    if(!engine::init_core(parser,
+                          [&ctx, &parser]() -> bool
+                          {
+                              return create_main_window(ctx, parser);
+                          }))
     {
         return false;
     }
@@ -118,7 +122,7 @@ auto game::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
-    if(!init_window(ctx, parser))
+    if(!show_main_window(ctx))
     {
         return false;
     }
@@ -230,21 +234,10 @@ auto game::init_assets(rtti::context& ctx) -> bool
     return load_asset_index(am, "engine") && load_asset_index(am, "app");
 }
 
-auto game::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
+auto game::create_main_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
-    auto& s = ctx.get<settings>();
-
-    auto title = fmt::format("Unravel Game <{}>", bgfx::getRendererName(bgfx::getRendererType()));
-
-    if(!s.app.product.empty())
-    {
-        title = fmt::format("{}", s.app.product);
-    }
-
-    if(!s.app.version.empty())
-    {
-        title += fmt::format("v{}", s.app.version);
-    }
+    // Settings and the backend are not loaded yet; show_main_window sets the final title.
+    const std::string title = "Unravel Game";
     auto& rend = ctx.get_cached<renderer>();
     std::string window_geometry;
     int32_t x = 0;
@@ -267,6 +260,29 @@ auto game::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     const uint32_t flags = os::window::fullscreen_desktop;
     const auto primary_display = os::display::get_primary_display_index();
     rend.create_window_for_display(primary_display, title, flags);
+    return true;
+}
+
+auto game::show_main_window(rtti::context& ctx) -> bool
+{
+    auto* main_window = ctx.get_cached<renderer>().get_main_window();
+    if(!main_window)
+    {
+        return false;
+    }
+    const auto& s = ctx.get<settings>();
+    auto title = fmt::format("Unravel Game <{}>", bgfx::getRendererName(bgfx::getRendererType()));
+    if(!s.app.product.empty())
+    {
+        title = fmt::format("{}", s.app.product);
+    }
+    if(!s.app.version.empty())
+    {
+        title += fmt::format("v{}", s.app.version);
+    }
+    auto& window = main_window->get_window();
+    window.set_title(title);
+    window.show();
     return true;
 }
 

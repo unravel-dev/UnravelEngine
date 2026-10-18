@@ -21,10 +21,24 @@ public:
     using graphics_surface_t = std::shared_ptr<gfx::frame_buffer>;
 
     /**
+     * @brief How a window presents what is drawn into its surface.
+     */
+    enum class surface_kind : std::uint8_t
+    {
+        /// The window owns a swap chain frame buffer of its own.
+        swap_chain,
+        /// The window is the one bgfx was initialized on: its surface stands for bgfx's
+        /// backbuffer, which the renderer resets when the window size changes.
+        backbuffer
+    };
+
+    /**
      * @brief Constructs a render window with the specified OS window.
      * @param win The OS window to associate with this render window.
+     * @param kind How the window presents. A backbuffer window touches no bgfx object, so it can
+     *        be constructed before bgfx is initialized and destroyed after it shut down.
      */
-    render_window(os::window&& win);
+    render_window(os::window&& win, surface_kind kind = surface_kind::swap_chain);
 
     /**
      * @brief Destructor for the render window.
@@ -32,7 +46,9 @@ public:
     ~render_window();
 
     /**
-     * @brief Prepares the rendering surface.
+     * @brief Prepares the rendering surface for the window's current size. A backbuffer window
+     *        only updates the size its surface reports; resetting the backbuffer to it is the
+     *        renderer's job.
      */
     void prepare_surface();
 
@@ -82,6 +98,8 @@ public:
 private:
     /// The associated OS window.
     os::window window_;
+    /// How the window presents.
+    surface_kind kind_{surface_kind::swap_chain};
     /// The render pass for presenting.
     std::unique_ptr<gfx::render_pass> pass_;
     /// The rendering surface for this window.

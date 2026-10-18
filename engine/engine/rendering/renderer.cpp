@@ -129,12 +129,19 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
                                      "Main window geometry as x,y,w,h[,maximized] (used across restarts).");
 }
 
-auto renderer::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
+auto renderer::init(rtti::context& ctx, const cmd_line::parser& parser, const main_window_factory& create_main_window)
+    -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     if(!os::init())
     {
+        return false;
+    }
+
+    if(!create_main_window || !create_main_window() || !render_window_)
+    {
+        APPLOG_ERROR("The main window could not be created.");
         return false;
     }
 
@@ -154,17 +161,26 @@ auto renderer::create_window_for_display(int index, const std::string& title, ui
     auto mode = os::display::get_desktop_mode(index);
     auto bounds = os::display::get_usable_bounds(index);
 
+    os::window window(title,
+                      bounds.x,
+                      bounds.y,
+                      bounds.w * mode.display_scale,
+                      bounds.h * mode.display_scale,
+                      flags | os::window::hidden);
+
     if(flags & os::window::resizable)
     {
-        auto frame_size = init_window_->get_frame_size();
+        // Fit the whole frame, not only the client area, into the usable bounds. The window
+        // measures its own borders while it is still hidden.
+        auto frame_size = window.get_frame_size();
         bounds.y += static_cast<int>(static_cast<float>(frame_size.top) / mode.display_scale);
         bounds.h -= static_cast<int>(static_cast<float>(frame_size.top + frame_size.bottom) / mode.display_scale);
         bounds.x += static_cast<int>(static_cast<float>(frame_size.left) / mode.display_scale);
         bounds.w -= static_cast<int>(static_cast<float>(frame_size.left + frame_size.right) / mode.display_scale);
+        window.set_position(bounds.x, bounds.y);
+        window.set_size(bounds.w * mode.display_scale, bounds.h * mode.display_scale);
     }
 
-    os::window window(title, bounds.x, bounds.y, bounds.w * mode.display_scale, bounds.h * mode.display_scale, flags);
-    
     set_main_window(std::move(window));
     return render_window_;
 }
@@ -176,14 +192,19 @@ auto renderer::create_window(const std::string& title,
                              uint32_t height,
                              uint32_t flags) -> const std::unique_ptr<render_window>&
 {
-    os::window window(title, x, y, width, height, flags);
+    os::window window(title, x, y, width, height, flags | os::window::hidden);
     set_main_window(std::move(window));
     return render_window_;
 }
 
 void renderer::set_main_window(os::window&& window)
 {
-    render_window_ = std::make_unique<render_window>(std::move(window));
+    if(is_initialized_)
+    {
+        APPLOG_ERROR("The main window can only be created before the rendering backend.");
+        return;
+    }
+    render_window_ = std::make_unique<render_window>(std::move(window), render_window::surface_kind::backbuffer);
 }
 
 namespace
@@ -279,19 +300,18 @@ auto renderer::deinit(rtti::context& ctx) -> bool
 
 auto renderer::init_backend(const cmd_line::parser& parser) -> bool
 {
-    init_window_.reset();
-    init_window_ =
-        std::make_unique<os::window>("INIT", os::window::centered, os::window::centered, 64, 64, os::window::hidden);
-    const auto sz = init_window_->get_size();
+    // bgfx is initialized on the main window: its backbuffer is the window's surface.
+    const auto& window = render_window_->get_window();
+    const auto size = render_window_->get_surface()->get_size();
 
     bgfx::Init init_data;
     init_data.type = get_renderer_type(parser);
     init_data.reset = get_reset_flags(parser);
-    init_data.swapChain.width = sz.w;
-    init_data.swapChain.height = sz.h;
+    init_data.swapChain.width = size.width;
+    init_data.swapChain.height = size.height;
     init_data.swapChain.flags = render_window::get_swap_chain_flags();
-    init_data.swapChain.ndt = init_window_->get_native_display();
-    init_data.swapChain.nwh = init_window_->get_native_handle();
+    init_data.swapChain.ndt = window.get_native_display();
+    init_data.swapChain.nwh = window.get_native_handle();
     std::string video_driver = os::window::get_current_video_driver();
     if(video_driver == "wayland")
     {
@@ -304,6 +324,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         APPLOG_ERROR("Could not initialize rendering backend!");
         return false;
     }
+    backbuffer_size_ = size;
     APPLOG_TRACE("Using {0} rendering backend.", bgfx::getRendererName(bgfx::getRendererType()));
 
     // Driver-compiled pipeline binaries persist here across runs. Without them, D3D12
@@ -379,7 +400,7 @@ void renderer::on_os_event(rtti::context& ctx, os::event& e)
             {
                 if(render_window_->get_window().get_id() == window_id)
                 {
-                    render_window_->prepare_surface();
+                    sync_main_surface();
                 }
             }
         }
@@ -435,7 +456,6 @@ renderer::~renderer()
     }
 
     gfx::frames(2, BGFX_FRAME_FLUSH);
-    render_window_.reset();
 
     gfx::set_trace_logger(nullptr);
     gfx::set_info_logger(nullptr);
@@ -445,7 +465,9 @@ renderer::~renderer()
     ddShutdown();
     gfx::shutdown();
 
-    init_window_.reset();
+    // bgfx presents to the main window until it shuts down.
+    render_window_.reset();
+    closed_main_window_.reset();
     os::shutdown();
 }
 
@@ -456,7 +478,12 @@ auto renderer::get_main_window() const -> render_window*
 
 void renderer::close_main_window()
 {
-    render_window_.reset();
+    if(!render_window_)
+    {
+        return;
+    }
+    render_window_->get_window().hide();
+    closed_main_window_ = std::move(render_window_);
 }
 
 void renderer::request_screenshot(const std::string& file)
@@ -479,8 +506,30 @@ void renderer::set_vsync(bool vsync)
         reset_flags_ &= ~BGFX_RESET_VSYNC;
     }
 
-    // No swap chain: the init window keeps its surface, only the device-wide flags change.
+    // No swap chain description: the main window keeps its backbuffer, only the device-wide
+    // flags change.
     bgfx::reset(reset_flags_);
+}
+
+void renderer::sync_main_surface()
+{
+    if(!render_window_)
+    {
+        return;
+    }
+    render_window_->prepare_surface();
+    const auto size = render_window_->get_surface()->get_size();
+    // A minimized window reports no area; the backbuffer keeps its size until it comes back.
+    if(size.width == 0 || size.height == 0 || size == backbuffer_size_)
+    {
+        return;
+    }
+    bgfx::SwapChain desc;
+    desc.width = size.width;
+    desc.height = size.height;
+    desc.flags = render_window::get_swap_chain_flags();
+    bgfx::reset(reset_flags_, &desc);
+    backbuffer_size_ = size;
 }
 
 void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
@@ -504,6 +553,7 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
                              particles.max_lighting});
     }
 
+    sync_main_surface();
     auto window = get_main_window();
     if(window)
     {

@@ -4,7 +4,7 @@
 namespace unravel
 {
     
-render_window::render_window(os::window&& win) : window_(std::move(win))
+render_window::render_window(os::window&& win, surface_kind kind) : window_(std::move(win)), kind_(kind)
 {
     prepare_surface();
 }
@@ -21,6 +21,11 @@ void render_window::destroy_surface(int frames)
     if(surface_)
     {
         surface_.reset();
+        // The backbuffer stand-in owns no bgfx object, and bgfx may already be shut down.
+        if(kind_ == surface_kind::backbuffer)
+        {
+            return;
+        }
 
 
         // Before we reattach a SwapChain to the window
@@ -54,6 +59,12 @@ void render_window::prepare_surface()
     {
         auto surf_size = surface_->get_size();
         needs_recreate = surf_size.width != size.w || surf_size.height != size.h;
+    }
+
+    if(needs_recreate && kind_ == surface_kind::backbuffer)
+    {
+        surface_ = gfx::frame_buffer::create_backbuffer({size.w, size.h});
+        return;
     }
 
     if(needs_recreate)

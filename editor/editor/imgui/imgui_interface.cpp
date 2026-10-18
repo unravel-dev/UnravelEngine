@@ -76,7 +76,7 @@ void imgui_interface::render_loading_frame(rtti::context& ctx, const loading_scr
 
     last_frame_time_ = now;
 
-    const auto& rend = ctx.get_cached<renderer>();
+    auto& rend = ctx.get_cached<renderer>();
     auto window = rend.get_main_window();
     if(!window)
     {
@@ -89,6 +89,8 @@ void imgui_interface::render_loading_frame(rtti::context& ctx, const loading_scr
         imguiProcessEvent(e);
     }
 
+    // The events above never reach the renderer, so a resize during loading is picked up here.
+    rend.sync_main_surface();
     auto& present_pass = window->begin_present_pass();
     present_pass.clear();
 

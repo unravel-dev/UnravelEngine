@@ -55,6 +55,10 @@ void dockspace::on_frame_ui_render(float headerSize, float footerSize)
     const ImVec2 dockspacePos = ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + headerSize);
     ImGui::SetNextWindowPos(dockspacePos);
     ImGui::SetNextWindowSize(dockspaceSize);
+    // Like the header and footer: the dock space host always lives in the main window. Left to
+    // ImGui, it gets a platform window of its own whenever the merge into the main viewport fails
+    // on the frame it appears.
+    ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
     ImGui::Begin("Engine Dock Space", nullptr, windowFlags);

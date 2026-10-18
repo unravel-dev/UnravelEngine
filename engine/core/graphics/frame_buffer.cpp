@@ -32,6 +32,13 @@ frame_buffer::frame_buffer(const bgfx::SwapChain& _desc)
     cached_size_ = {_desc.width, _desc.height};
 }
 
+auto frame_buffer::create_backbuffer(const usize32_t& size) -> ptr
+{
+    auto backbuffer = std::make_shared<frame_buffer>();
+    backbuffer->cached_size_ = size;
+    return backbuffer;
+}
+
 void frame_buffer::populate(const std::vector<texture::ptr>& textures)
 {
     std::vector<fbo_attachment> attachments;

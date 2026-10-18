@@ -84,13 +84,17 @@ auto editor::init(const cmd_line::parser& parser) -> bool
 
     // --- Phase 1: core systems (no ImGui yet, console-only progress) ---
 
-    if(!engine::init_core(parser))
+    if(!engine::init_core(parser,
+                          [&ctx, &parser]() -> bool
+                          {
+                              return create_main_window(ctx, parser);
+                          }))
     {
         return false;
     }
 
     ls.begin_module("Window");
-    if(!ls.check(init_window(ctx, parser)))
+    if(!ls.check(show_main_window(ctx)))
     {
         return false;
     }
@@ -209,9 +213,10 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     return true;
 }
 
-auto editor::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
+auto editor::create_main_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
-    auto title = fmt::format("Unravel Editor <{}> {}", bgfx::getRendererName(bgfx::getRendererType()), version::get_full());
+    // The backend is not up yet; show_main_window adds its name to the title.
+    const std::string title = "Unravel Editor";
     auto& rend = ctx.get_cached<renderer>();
     std::string window_geometry;
     int32_t x = 0;
@@ -233,6 +238,20 @@ auto editor::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> 
     const uint32_t flags = os::window::resizable | os::window::maximized;
     const auto primary_display = os::display::get_primary_display_index();
     rend.create_window_for_display(primary_display, title, flags);
+    return true;
+}
+
+auto editor::show_main_window(rtti::context& ctx) -> bool
+{
+    auto* main_window = ctx.get_cached<renderer>().get_main_window();
+    if(!main_window)
+    {
+        return false;
+    }
+    auto& window = main_window->get_window();
+    window.set_title(
+        fmt::format("Unravel Editor <{}> {}", bgfx::getRendererName(bgfx::getRendererType()), version::get_full()));
+    window.show();
     return true;
 }
 

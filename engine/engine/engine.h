@@ -5,13 +5,21 @@
 #include <cmd_line/parser.h>
 #include <context/context.hpp>
 
+#include <functional>
+
 namespace unravel
 {
 
 struct engine
 {
     static auto create(rtti::context& ctx, cmd_line::parser& parser) -> bool;
-    static auto init_core(const cmd_line::parser& parser) -> bool;
+    /**
+     * @brief Initializes threading, the renderer, audio and the asset manager.
+     * @param create_main_window Creates the host's main window through the renderer
+     *        (create_window / create_window_for_display). It runs before the graphics backend,
+     *        which is then initialized on that window.
+     */
+    static auto init_core(const cmd_line::parser& parser, const std::function<bool()>& create_main_window) -> bool;
     static auto init_systems(const cmd_line::parser& parser) -> bool;
 
     /**

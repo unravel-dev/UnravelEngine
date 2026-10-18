@@ -74,6 +74,16 @@ struct frame_buffer : public handle_impl<frame_buffer, bgfx::FrameBufferHandle>
     frame_buffer(const bgfx::SwapChain& _desc);
 
     //-----------------------------------------------------------------------------
+    //  Name : create_backbuffer ()
+    /// <summary>
+    /// Stands for the backbuffer of the window bgfx was initialized on. It owns no
+    /// bgfx frame buffer, so binding it targets the backbuffer, and it reports the
+    /// size the backbuffer was last reset to.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    static auto create_backbuffer(const usize32_t& size) -> ptr;
+
+    //-----------------------------------------------------------------------------
     //  Name : populate ()
     /// <summary>
     ///

@@ -255,7 +255,7 @@ void engine::select_raytracing_backend(const cmd_line::parser& parser)
     APPLOG_INFO("Ray tracer for bakes: {}", raytracing::to_string(raytracing::get_default_backend()));
 }
 
-auto engine::init_core(const cmd_line::parser& parser) -> bool
+auto engine::init_core(const cmd_line::parser& parser, const std::function<bool()>& create_main_window) -> bool
 {
     auto& ctx = engine::context();
     auto& ls = ctx.get_cached<loading_screen>();
@@ -269,7 +269,7 @@ auto engine::init_core(const cmd_line::parser& parser) -> bool
     }
 
     ls.begin_module("Renderer");
-    if(!ls.check(ctx.get_cached<renderer>().init(ctx, parser)))
+    if(!ls.check(ctx.get_cached<renderer>().init(ctx, parser, create_main_window)))
     {
         return false;
     }
