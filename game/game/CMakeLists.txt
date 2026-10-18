@@ -6,7 +6,12 @@ if(WIN32 AND NOT MINGW)
     list(APPEND libsrc "${CMAKE_CURRENT_SOURCE_DIR}/../../rc/UnravelEngine.rc")
 endif()
 
-add_executable(${target_name} ${libsrc})
+if(ANDROID)
+    # SDL's Java activity loads libmain.so and calls its SDL_main.
+    add_library(${target_name} SHARED ${libsrc})
+else()
+    add_executable(${target_name} ${libsrc})
+endif()
 
 target_include_directories(${target_name}
     PUBLIC
@@ -15,7 +20,11 @@ target_include_directories(${target_name}
 add_dependencies(${target_name} engine)
 target_link_libraries(${target_name} PUBLIC engine)
 
-set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-player")
+if(ANDROID)
+    set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "main")
+else()
+    set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-player")
+endif()
 unravel_set_default_thread_stack(${target_name})
 add_definitions(-DPLAYER_NAME="unravel-player")
 
@@ -41,6 +50,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     )
 endif()
 
-if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32)
+if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32 AND NOT ANDROID)
   target_link_options(${target_name} PRIVATE -no-pie)
 endif()

@@ -61,6 +61,12 @@ add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_VERTEX_BUFFER_SIZE=6<<24)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_INDEX_BUFFER_SIZE=2<<24)
 add_definitions(-DBGFX_CONFIG_DEBUG_UNIFORM=0)
 
+# Android renders through Vulkan only. Defining one renderer leaves the others out of the build
+# (src/config.h), the OpenGL ES backend and its EGL dependency included.
+if(ANDROID)
+    add_definitions(-DBGFX_CONFIG_RENDERER_VULKAN=1)
+endif()
+
 add_subdirectory(bgfx)
 
 set_target_properties(bgfx PROPERTIES

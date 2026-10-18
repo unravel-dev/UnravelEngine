@@ -56,3 +56,6 @@
 	path = deps/3rdparty/zstd/zstd
 	url = https://github.com/facebook/zstd.git
 	shallow = true
+[submodule "deps/3rdparty/freetype/freetype"]
+	path = deps/3rdparty/freetype/freetype
+	url = https://github.com/freetype/freetype.git

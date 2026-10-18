@@ -142,7 +142,9 @@ inline auto filetime_to_system_clock(fs::file_time_type ft) -> std::chrono::syst
     const auto now_file = fs::file_time_type::clock::now();
     const auto now_sys  = system_clock::now();
 
-    return now_sys + (ft - now_file);
+    // The file clock can count in finer or wider units than the system clock (128-bit
+    // nanoseconds in libc++), so the offset is converted explicitly.
+    return now_sys + duration_cast<system_clock::duration>(ft - now_file);
 }
 
 } // namespace fs

@@ -6,11 +6,19 @@
 #define ENTRY_APP_NAME "app"
 #endif
 
+#if defined(__ANDROID__)
+// SDL's Java activity loads the app's shared library and calls SDL_main by name, so it is exported.
+extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char* argv[])
+{
+    return service_main(ENTRY_APP_NAME, argc, argv);
+}
+#else
 // 1) Standard Unix-style entry:
 int main(int argc, char* argv[])
 {
     return service_main(ENTRY_APP_NAME, argc, argv);
 }
+#endif
 
 #if defined(_WIN32)
 
