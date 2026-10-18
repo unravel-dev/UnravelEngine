@@ -22,8 +22,9 @@ auto get_muted_color() -> ImU32;
 
 void draw_muted_text(const char* text);
 void draw_gap(float font_units);
-/// An icon and a line of text, the icon centered on the line; long text wraps under itself.
-void draw_icon_line(const char* icon, ImU32 icon_color, const char* text, ImU32 text_color);
+/// An icon and a line of text, the icon centered on the line; long text wraps under itself, at
+/// `wrap_pos_x` (window coordinates; 0: the window's edge).
+void draw_icon_line(const char* icon, ImU32 icon_color, const char* text, ImU32 text_color, float wrap_pos_x = 0.0f);
 void draw_section_title(const char* title);
 /// A section title with a button at the right end of its line, for what acts on the section.
 auto draw_section_title_button(const char* title, const char* label, const char* tooltip, bool is_enabled) -> bool;

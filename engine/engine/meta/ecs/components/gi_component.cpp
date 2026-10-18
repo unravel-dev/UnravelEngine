@@ -79,7 +79,7 @@ REFLECT_INLINE(gi_settings::diffuse_settings)
             entt::attribute{"step", 1.0f},
             entt::attribute{"tooltip",
                             "The farthest distance, in metres, that indirect lighting and reflection rays travel. "
-                            "Distances that are too short let light leak into large enclosed spaces; longer "
+                            "Distances that are too short let light leak into large enclosed spaces. Longer "
                             "distances cost more GPU time."},
         });
 }
@@ -146,7 +146,7 @@ REFLECT_INLINE(gi_settings::reflection_settings)
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip",
-                            "Surfaces smoother than this roughness trace their own reflection ray; rougher surfaces "
+                            "Surfaces smoother than this roughness trace their own reflection ray. Rougher surfaces "
                             "take their reflections from the screen probes. Higher values sharpen glossy reflections "
                             "at a higher GPU cost."},
         });
@@ -285,7 +285,7 @@ REFLECT_INLINE(gi_settings::distance_field_settings)
             entt::attribute{"tooltip",
                             "Maximum number of distance field levels rebuilt in one frame. Lower values spread the "
                             "rebuild cost over several frames, so moved geometry can take a few frames to appear in "
-                            "the field; higher values react sooner with larger frame-time spikes."},
+                            "the field. Higher values react sooner with larger frame-time spikes."},
         })
         .data<&settings::level_blend_band>("level_blend_band"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -297,7 +297,7 @@ REFLECT_INLINE(gi_settings::distance_field_settings)
             entt::attribute{"tooltip",
                             "Width of the cross-fade between neighbouring distance field levels, in voxels of the "
                             "finer level. Levels are built independently, so their surfaces can differ by about one "
-                            "coarse voxel; a band wider than that hides the seam. 0 switches levels abruptly, which "
+                            "coarse voxel. A band wider than that hides the seam. 0 switches levels abruptly, which "
                             "can pop as the camera moves."},
         });
 }

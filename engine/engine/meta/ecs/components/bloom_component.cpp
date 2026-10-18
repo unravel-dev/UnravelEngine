@@ -125,7 +125,7 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Dirt Texture"},
             entt::attribute{"group", "Lens Dirt"},
             entt::attribute{"tooltip", "Screen-space smudge/scratch mask for the lens dirt effect. Bright "
-                "areas of the mask catch bloom; unassigned = no dirt."},
+                "areas of the mask catch bloom. Unassigned = no dirt."},
         });
 }
 

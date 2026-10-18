@@ -848,7 +848,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "auto_play"},
             entt::attribute{"pretty_name", "Auto Play"},
-            entt::attribute{"tooltip", "Play from the moment the emitter is created (scene load, play start, instantiation). Off, it waits for a script or the inspector to play it; bursts (Emit) work either way."},
+            entt::attribute{"tooltip", "Play from the moment the emitter is created (scene load, play start, instantiation). Off, it waits for a script or the inspector to play it. Bursts (Emit) work either way."},
         })
         .data<&particle_emitter_component::set_lifetime, &particle_emitter_component::get_lifetime>("lifetime"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -862,7 +862,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_particles"},
             entt::attribute{"pretty_name", "Max Particles"},
-            entt::attribute{"tooltip", "Most particles alive at once; spawns beyond it are skipped."},
+            entt::attribute{"tooltip", "Most particles alive at once. Spawns beyond it are skipped."},
         })
         .data<&particle_emitter_component::set_simulation_space, &particle_emitter_component::get_simulation_space>("simulation_space"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1039,7 +1039,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "motion_easing"},
             entt::attribute{"pretty_name", "Motion Easing"},
-            entt::attribute{"tooltip", "Remaps the particle's life before its motion is evaluated: Linear = physical timing; Out curves rush first and settle (explosions), In curves start slowly."},
+            entt::attribute{"tooltip", "Remaps the particle's life before its motion is evaluated: Linear = physical timing. Out curves rush first and settle (explosions), In curves start slowly."},
             entt::attribute{"group", "Motion"},
             entt::attribute{"former_name", "position_easing"},
         })
@@ -1120,7 +1120,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "collision_planes"},
             entt::attribute{"pretty_name", "Planes"},
-            entt::attribute{"tooltip", "Planes the particles collide with: a world normal (x, y, z) and an offset (w) from the emitter's origin along it; particles live on the normal's side. (0, 1, 0, 0) is the ground at the emitter's height."},
+            entt::attribute{"tooltip", "Planes the particles collide with: a world normal (x, y, z) and an offset (w) from the emitter's origin along it. Particles live on the normal's side. (0, 1, 0, 0) is the ground at the emitter's height."},
             entt::attribute{"group", "Collision"},
             entt::attribute{"predicate", has_collision},
         })
@@ -1232,7 +1232,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "color_gradient_b"},
             entt::attribute{"pretty_name", "Color Over Life B"},
-            entt::attribute{"tooltip", "The second color over life; each particle mixes the two by its own random amount."},
+            entt::attribute{"tooltip", "The second color over life. Each particle mixes the two by its own random amount."},
             entt::attribute{"group", "Color"},
             entt::attribute{"predicate", has_two_gradients},
         })
@@ -1323,7 +1323,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture"},
             entt::attribute{"pretty_name", "Texture"},
-            entt::attribute{"tooltip", "What each particle draws; unset, a plain white square."},
+            entt::attribute{"tooltip", "What each particle draws. Unset, a plain white square."},
             entt::attribute{"group", "Texture"},
             entt::attribute{"predicate", is_sprite_mode},
         })
@@ -1423,7 +1423,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "trail_width_end"},
             entt::attribute{"pretty_name", "Trail Width End"},
-            entt::attribute{"tooltip", "The trail's width at its tail as a share of the particle's size (0 = a point); it fades out toward the tail too."},
+            entt::attribute{"tooltip", "The trail's width at its tail as a share of the particle's size (0 = a point). It fades out toward the tail too."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_trail},
@@ -1488,7 +1488,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "facing_axis"},
             entt::attribute{"pretty_name", "Facing Axis"},
-            entt::attribute{"tooltip", "The axis each quad stands along, in the emitter's space; the quad turns about it toward the camera. (0, 1, 0) is the Vertical Billboard."},
+            entt::attribute{"tooltip", "The axis each quad stands along, in the emitter's space. The quad turns about it toward the camera. (0, 1, 0) is the Vertical Billboard."},
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_fixed_axis},
         })
@@ -1504,7 +1504,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "render_material"},
             entt::attribute{"pretty_name", "Material"},
-            entt::attribute{"tooltip", "The material of every part of the mesh; unset, the mesh keeps its own. The color's alpha and Opacity fade the meshes by dithering; the color does not tint them."},
+            entt::attribute{"tooltip", "The material of every part of the mesh. Unset, the mesh keeps its own. The color's alpha and Opacity fade the meshes by dithering. The color does not tint them."},
             entt::attribute{"group", "Renderer"},
             entt::attribute{"predicate", is_mesh_mode},
         })
@@ -1559,7 +1559,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "lighting"},
             entt::attribute{"pretty_name", "Lighting"},
-            entt::attribute{"tooltip", "Unlit: the color is the light the particle gives off (fire, magic, sparks). Volumetric: lit once per particle like a small cloud by the sky, the sun (with its shadow) and up to 4 nearby lights, the same from every side (smoke, dust, steam). Surface: lit like a small sphere facing the camera, the sun per pixel (debris, snow, leaves). Lit particles take their color as albedo; Multiply blend stays unlit."},
+            entt::attribute{"tooltip", "Unlit: the color is the light the particle gives off (fire, magic, sparks). Volumetric: lit once per particle like a small cloud by the sky, the sun (with its shadow) and up to 4 nearby lights, the same from every side (smoke, dust, steam). Surface: lit like a small sphere facing the camera, the sun per pixel (debris, snow, leaves). Lit particles take their color as albedo. Multiply blend stays unlit."},
             entt::attribute{"group", "Lighting"},
             entt::attribute{"predicate", is_sprite_mode},
         })
@@ -1601,7 +1601,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light_intensity"},
             entt::attribute{"pretty_name", "Intensity (cd)"},
-            entt::attribute{"tooltip", "A light's intensity when its particle is at full brightness; it follows the particle's luminance x alpha, so fading particles dim their light."},
+            entt::attribute{"tooltip", "A light's intensity when its particle is at full brightness. It follows the particle's luminance x alpha, so fading particles dim their light."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"group", "Particle Lights"},
             entt::attribute{"predicate", has_particle_lights},
@@ -1610,7 +1610,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light_range"},
             entt::attribute{"pretty_name", "Range (m)"},
-            entt::attribute{"tooltip", "How far a particle light reaches; its falloff ends smoothly there."},
+            entt::attribute{"tooltip", "How far a particle light reaches. Its falloff ends smoothly there."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"group", "Particle Lights"},
             entt::attribute{"predicate", has_particle_lights},
@@ -1619,7 +1619,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light_color_from_particle"},
             entt::attribute{"pretty_name", "Color From Particle"},
-            entt::attribute{"tooltip", "The lights take their particle's color; off, they are white."},
+            entt::attribute{"tooltip", "The lights take their particle's color. Off, they are white."},
             entt::attribute{"group", "Particle Lights"},
             entt::attribute{"predicate", has_particle_lights},
         })
@@ -1635,7 +1635,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "sort_priority"},
             entt::attribute{"pretty_name", "Sort Priority"},
-            entt::attribute{"tooltip", "Draw order against other emitters: lower values draw first, higher ones on top; equal priorities draw back to front by distance. Keeps a ground decal under the fire standing on it."},
+            entt::attribute{"tooltip", "Draw order against other emitters: lower values draw first, higher ones on top. Equal priorities draw back to front by distance. Keeps a ground decal under the fire standing on it."},
             entt::attribute{"group", "Sorting"},
             entt::attribute{"predicate", is_sprite_mode},
         })
@@ -1719,7 +1719,7 @@ REFLECT(particle_emitter_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "primitive"},
             entt::attribute{"pretty_name", "Primitive"},
-            entt::attribute{"tooltip", "Geometry each particle draws. Quad: the whole texture. Octagon: the octagon around the texture's inscribed circle, 17% fewer pixels for round textures; the corners are cut off. Cutout: an 8-sided polygon around each frame's texels above Cutout Alpha Threshold, baked from the texture (the whole quad until the bake is in)."},
+            entt::attribute{"tooltip", "Geometry each particle draws. Quad: the whole texture. Octagon: the octagon around the texture's inscribed circle, 17% fewer pixels for round textures. The corners are cut off. Cutout: an 8-sided polygon around each frame's texels above Cutout Alpha Threshold, baked from the texture (the whole quad until the bake is in)."},
             entt::attribute{"group", "Performance"},
             entt::attribute{"predicate", is_sprite_mode},
         })

@@ -302,16 +302,12 @@ bool has_known_protocol(const path& _path)
     return (protocols.find(root) != std::end(protocols));
 }
 
-path convert_to_protocol(const path& _path)
+namespace
 {
-    fs::error_code ec;
-    auto canonical_path = fs::weakly_canonical(_path, ec);
-    if(ec || canonical_path.empty())
-    {
-        canonical_path = _path.lexically_normal();
-    }
-    const auto string_path = fs::path(canonical_path).make_preferred().string();
-
+/// The protocol path of `string_path` (absolute, normalized, preferred separators) by its longest
+/// matching root; `fallback` when no root matches.
+auto match_protocol_root(const std::string& string_path, const path& fallback) -> path
+{
     const auto& protocols = get_path_protocols();
 
     const protocols_t::value_type* best_protocol{};
@@ -329,7 +325,7 @@ path convert_to_protocol(const path& _path)
     }
     if(!best_protocol)
     {
-        return _path;
+        return fallback;
     }
     // The matched root is replaced by length: it may differ from the path in letter case.
     auto relative = path(string_path.substr(best_protocol->second.size())).generic_string();
@@ -338,6 +334,44 @@ path convert_to_protocol(const path& _path)
         relative.insert(relative.begin(), '/');
     }
     return path(best_protocol->first + ":" + relative);
+}
+} // namespace
+
+path convert_to_protocol(const path& _path)
+{
+    fs::error_code ec;
+    auto canonical_path = fs::weakly_canonical(_path, ec);
+    if(ec || canonical_path.empty())
+    {
+        canonical_path = _path.lexically_normal();
+    }
+    return match_protocol_root(fs::path(canonical_path).make_preferred().string(), _path);
+}
+
+path convert_to_protocol_lexically(const path& _path)
+{
+    return match_protocol_root(_path.lexically_normal().make_preferred().string(), _path);
+}
+
+std::string make_path_key(std::string text)
+{
+    std::replace(text.begin(), text.end(), '\\', '/');
+    if(detail::is_case_insensitive())
+    {
+        std::transform(text.begin(), text.end(), text.begin(), detail::fold_ascii_case);
+    }
+    return text;
+}
+
+std::string to_utf8_string(const path& _path)
+{
+    const auto text = _path.generic_u8string();
+    return std::string(text.begin(), text.end());
+}
+
+path from_utf8_string(const std::string& text)
+{
+    return path(std::u8string(text.begin(), text.end()));
 }
 
 path replace(const path& _path, const path& _sequence, const path& _new_sequence)

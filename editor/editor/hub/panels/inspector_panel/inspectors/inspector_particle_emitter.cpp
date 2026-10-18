@@ -53,7 +53,7 @@ void draw_status(const particle_emitter_component& data)
     {
         ImGui::SameLine();
         ImGui::TextColored(k_full_color, "(full)");
-        ImGui::SetItemTooltip("The emitter is at its capacity and skips new particles; raise Max Particles or lower the rates.");
+        ImGui::SetItemTooltip("The emitter is at its capacity and skips new particles. Raise Max Particles or lower the rates.");
     }
 }
 
@@ -85,7 +85,7 @@ auto draw_playback(particle_emitter_component& data) -> bool
             is_changed = true;
         }
     }
-    else if(draw_playback_button("Pause", is_playing, "Freeze the particles where they are; they stay visible."))
+    else if(draw_playback_button("Pause", is_playing, "Freeze the particles where they are. They stay visible."))
     {
         data.pause();
         if(with_children)
@@ -94,7 +94,7 @@ auto draw_playback(particle_emitter_component& data) -> bool
         }
         is_changed = true;
     }
-    if(draw_playback_button("Stop", is_playing, "Stop emitting; the particles alive live out their lives."))
+    if(draw_playback_button("Stop", is_playing, "Stop emitting. The particles alive live out their lives."))
     {
         data.stop();
         if(with_children)
@@ -113,8 +113,8 @@ auto draw_playback(particle_emitter_component& data) -> bool
         is_changed = true;
     }
     ImGui::Checkbox("With Child Emitters", &g_with_child_emitters);
-    ImGui::SetItemTooltip("The buttons drive every emitter in the entity's children too (the hierarchy below it; "
-                          "sub emitters fire on their own).");
+    ImGui::SetItemTooltip("The buttons drive every emitter in the entity's children too (the hierarchy below it). "
+                          "Sub emitters fire on their own.");
     return is_changed;
 }
 

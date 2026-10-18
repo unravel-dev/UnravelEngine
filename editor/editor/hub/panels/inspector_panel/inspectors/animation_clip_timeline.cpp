@@ -412,7 +412,7 @@ void animation_clip_timeline::draw_preview_bar(rtti::context& ctx, const asset_h
     {
         playing_ = !playing_;
     }
-    ImGui::SetItemTooltipEx("Play the playhead; markers it crosses light up.");
+    ImGui::SetItemTooltipEx("Play the playhead. Markers it crosses light up.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("%.3fs / %.3fs", playhead_ * duration, duration);
@@ -707,7 +707,7 @@ auto animation_clip_timeline::draw_curves(rtti::context& ctx,
     advance_playback(importer, duration);
     draw_preview_bar(ctx, clip, duration);
     draw_track("##curve_track", importer, duration, false);
-    draw_hint("A controller float parameter with a curve's name follows it; IK components take a curve name as "
+    draw_hint("A controller float parameter with a curve's name follows it. IK components take a curve name as "
               "their weight curve.");
     if(ImGui::Button(ICON_MDI_PLUS " Add Curve"))
     {

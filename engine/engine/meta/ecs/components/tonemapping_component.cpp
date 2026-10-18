@@ -162,21 +162,21 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"name", "lift"},
             entt::attribute{"pretty_name", "Lift (Shadows)"},
             entt::attribute{"tooltip", "Shadow color. Neutral is mid-gray (0.5, 0.5, 0.5). "
-                "Brighter lifts blacks; a color tint tints the shadows."},
+                "Brighter lifts blacks. A color tint tints the shadows."},
         })
         .data<&tonemapping_pass::settings::gamma>("gamma"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gamma"},
             entt::attribute{"pretty_name", "Gamma (Midtones)"},
             entt::attribute{"tooltip", "Midtone color. Neutral is mid-gray (0.5, 0.5, 0.5). "
-                "Brighter raises mids; a color tint tints the midtones."},
+                "Brighter raises mids. A color tint tints the midtones."},
         })
         .data<&tonemapping_pass::settings::gain>("gain"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gain"},
             entt::attribute{"pretty_name", "Gain (Highlights)"},
             entt::attribute{"tooltip", "Highlight color. Neutral is mid-gray (0.5, 0.5, 0.5). "
-                "Brighter boosts highlights; a color tint tints the highlights."},
+                "Brighter boosts highlights. A color tint tints the highlights."},
         })
         .data<&tonemapping_pass::settings::vignette_intensity>("vignette_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{

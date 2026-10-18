@@ -162,7 +162,7 @@ REFLECT(two_bone_ik_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "smoothing"},
             entt::attribute{"pretty_name", "Smoothing"},
-            entt::attribute{"tooltip", "Time constant the goal and the weight ease with, in seconds. 0 follows the target exactly; above it a moving, swapped or lost target does not snap the limb."},
+            entt::attribute{"tooltip", "Time constant the goal and the weight ease with, in seconds. 0 follows the target exactly. Above it a moving, swapped or lost target does not snap the limb."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
         })
@@ -276,7 +276,7 @@ REFLECT(chain_ik_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "smoothing"},
             entt::attribute{"pretty_name", "Smoothing"},
-            entt::attribute{"tooltip", "Time constant the goal and the weight ease with, in seconds. 0 follows the target exactly; above it a moving, swapped or lost target does not snap the limb."},
+            entt::attribute{"tooltip", "Time constant the goal and the weight ease with, in seconds. 0 follows the target exactly. Above it a moving, swapped or lost target does not snap the limb."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
         })
@@ -328,7 +328,7 @@ REFLECT(look_at_ik_component)
             entt::attribute{"name", "look_at_ik_component"},
             entt::attribute{"category", "Animation/IK"},
             entt::attribute{"pretty_name", "Look At IK"},
-            entt::attribute{"tooltip", "Turns this bone and its parents (head, neck, chest) toward a target, the lower bones taking a smaller share, each limited to a cone; smoothed, and faded out when the target goes behind."},
+            entt::attribute{"tooltip", "Turns this bone and its parents (head, neck, chest) toward a target, the lower bones taking a smaller share, each limited to a cone. The turn is smoothed, and fades out when the target goes behind."},
         })
         .func<&component_meta<look_at_ik_component>::exists>("component_exists"_hs)
         .func<&component_meta<look_at_ik_component>::add>("component_add"_hs)
@@ -367,7 +367,7 @@ REFLECT(look_at_ik_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "root_share"},
             entt::attribute{"pretty_name", "Root Share"},
-            entt::attribute{"tooltip", "Share of the turn the lowest bone takes; the tip always completes the rest."},
+            entt::attribute{"tooltip", "Share of the turn the lowest bone takes. The tip always completes the rest."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
@@ -449,7 +449,7 @@ REFLECT(foot_ik_component)
             entt::attribute{"name", "foot_ik_component"},
             entt::attribute{"category", "Animation/IK"},
             entt::attribute{"pretty_name", "Foot IK"},
-            entt::attribute{"tooltip", "Plants the feet on uneven ground: probes under each foot, lowers the pelvis to the lowest planted foot, solves each leg and tilts the feet onto the slope. Sits on the character root (feet level); needs physics, so it runs in play mode."},
+            entt::attribute{"tooltip", "Plants the feet on uneven ground: probes under each foot, lowers the pelvis to the lowest planted foot, solves each leg and tilts the feet onto the slope. Sits on the character root (feet level). It needs physics, so it runs in play mode."},
         })
         .func<&component_meta<foot_ik_component>::exists>("component_exists"_hs)
         .func<&component_meta<foot_ik_component>::add>("component_add"_hs)

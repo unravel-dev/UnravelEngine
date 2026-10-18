@@ -25,18 +25,19 @@ struct pack_input
 
 struct pack_write_options
 {
-    /// Compress entries in independent 64 KB blocks, so a part of an entry decodes without the rest;
-    /// a block that does not shrink by 5% is kept raw, and an entry where none does is stored whole.
+    /// Compress entries in independent 64 KB blocks; a block that does not shrink by 5% is kept raw,
+    /// and an entry where none does is stored whole. An open decodes the whole entry.
     bool compress{true};
     compression::level compression_level{compression::level::balanced};
-    /// An earlier pack to take entries from: an input with the same bytes (content hash and size) as
-    /// one of its entries gets that entry's stored bytes instead of being compressed again, whatever
-    /// its name. Used only when it was written with the same compression settings, so the output is
-    /// what a fresh write would give. Empty, missing or unreadable: everything is compressed.
+    /// An earlier pack to take entries from, which may be `pack_file` itself: an input with the same
+    /// bytes (content hash and size) as one of its intact entries gets that entry's stored bytes instead
+    /// of being compressed again, whatever its name. Used only when it was written with the same
+    /// settings (compression level, codec and its version, block size), so the output is what a fresh
+    /// write would give. Empty, missing or unreadable: everything is compressed.
     path reuse_from;
-    /// Makes the pack a patch over this one (its base): an input the base holds under the same name with
-    /// the same bytes is left out, a name the base holds that no input has becomes a deleted entry, and
-    /// the patch records the base so it mounts only over that exact pack. Empty: a full pack.
+    /// Makes the pack a patch over this full pack (its base): an input the base holds under the same name
+    /// with the same bytes is left out, a name the base holds that no input has becomes a deleted entry,
+    /// and the patch records the base so it mounts only right over that exact pack. Empty: a full pack.
     path patch_base;
 };
 
@@ -73,9 +74,10 @@ auto write_pack(const path& pack_file,
  *
  * The pack is memory-mapped and stays mapped until unmount_packs. A later mount of the same
  * protocol wins for the entries both hold, and its deleted entries hide the files of earlier packs
- * and of the disk. A patch mounts only after the pack it was made against.
+ * and of the disk. A patch mounts only right over the pack it was made against.
  * @return False with `err` set when the file is missing, is not a pack, is damaged, was
- * compressed with a codec this build does not decode, or is a patch whose base is not mounted.
+ * compressed with a codec this build does not decode, or is a patch whose base is not the
+ * protocol's topmost pack.
  */
 auto mount_pack(const std::string& protocol, const path& pack_file, std::string& err) -> bool;
 
@@ -99,12 +101,34 @@ struct packed_file
     }
 };
 
+/// What the mounted packs say about a file.
+enum class packed_status
+{
+    /// No mounted pack holds it: the disk decides.
+    absent,
+    found,
+    /// The topmost pack holding it deletes it: it hides the packs under it and the disk.
+    deleted,
+    /// A pack holds it but its bytes do not decode (logged).
+    damaged,
+};
+
+struct packed_lookup
+{
+    packed_status status{packed_status::absent};
+    /// The bytes when found.
+    packed_file file;
+};
+
 /**
- * @brief The bytes of `file` from the mounted packs; empty (is_found false) when none holds it.
+ * @brief What the mounted packs hold for `file`.
  *
  * `file` is absolute or a protocol path ("app:/compiled/a.png.asset"). A stored entry is a view of
  * the mapping; a compressed one is decoded into an owned buffer.
  */
+auto lookup_packed_file(const path& file) -> packed_lookup;
+
+/// The bytes of `file` from the mounted packs; empty (is_found false) unless it is found there.
 auto find_packed_file(const path& file) -> packed_file;
 
 /// Whether `file` is in a mounted pack or on disk (and not deleted by a mounted pack).

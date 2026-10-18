@@ -26,6 +26,10 @@ auto get_codec_id() -> std::uint8_t;
 /// The codec's name, for logs and errors.
 auto get_codec_name() -> const char*;
 
+/// The version of the codec's library. Another version decodes the same data but may compress to other
+/// bytes, so a cache of compressed output keys on it.
+auto get_codec_version() -> std::uint32_t;
+
 /// Compresses blocks. Reusing one compressor for many blocks avoids reallocating its state; one
 /// compressor is not safe to use from two threads at once.
 class compressor

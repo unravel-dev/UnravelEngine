@@ -121,17 +121,61 @@ auto read_value(hpp::string_view text, size_t pos) -> hpp::string_view
     return text.substr(pos, end - pos);
 }
 
-/// Adds the value after every `marker` in `text` (`href=`, `src:`, `url(`, ...).
+void add_link(hpp::string_view value, unique_paths& paths)
+{
+    value = trim(value);
+    if(is_file_link(value))
+    {
+        paths.add(value);
+    }
+}
+
+/// Adds the value after every `marker` in `text` (`url(`, `image(`, `@import`).
 void add_values_after(hpp::string_view text, hpp::string_view marker, unique_paths& paths)
 {
     for(size_t pos = text.find(marker); pos != hpp::string_view::npos; pos = text.find(marker, pos + marker.size()))
     {
-        const auto value = trim(read_value(text, pos + marker.size()));
-        if(is_file_link(value))
+        add_link(read_value(text, pos + marker.size()), paths);
+    }
+}
+
+auto is_name_char(char c) -> bool
+{
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_';
+}
+
+/// Adds the value of every attribute or property `name` in `text`: `name="..."` in a document,
+/// `name: ...;` in a style sheet, spaces allowed around the '=' or ':'. `data-src` is not `src`.
+void add_named_values(hpp::string_view text, hpp::string_view name, unique_paths& paths)
+{
+    for(size_t pos = text.find(name); pos != hpp::string_view::npos; pos = text.find(name, pos + name.size()))
+    {
+        const size_t name_end = pos + name.size();
+        const bool is_whole_name =
+            (pos == 0 || !is_name_char(text[pos - 1])) && (name_end == text.size() || !is_name_char(text[name_end]));
+        size_t separator = name_end;
+        while(separator < text.size() && is_space(text[separator]))
         {
-            paths.add(value);
+            ++separator;
+        }
+        if(is_whole_name && separator < text.size() && (text[separator] == '=' || text[separator] == ':'))
+        {
+            add_link(read_value(text, separator + 1), paths);
         }
     }
+}
+
+/// Where the quoted text that starts at `begin` ends: the next `quote` not escaped by a backslash.
+auto find_closing_quote(hpp::string_view text, size_t begin, char quote) -> size_t
+{
+    for(size_t end = text.find(quote, begin); end != hpp::string_view::npos; end = text.find(quote, end + 1))
+    {
+        if(text[end - 1] != '\\')
+        {
+            return end;
+        }
+    }
+    return hpp::string_view::npos;
 }
 } // namespace
 
@@ -171,8 +215,7 @@ auto find_quoted_protocol_paths(hpp::string_view text, hpp::string_view protocol
         {
             continue;
         }
-        const char quote = text[pos - 1];
-        const size_t end = text.find(quote, pos);
+        const size_t end = find_closing_quote(text, pos, text[pos - 1]);
         if(end == hpp::string_view::npos)
         {
             break;
@@ -189,7 +232,12 @@ auto find_quoted_protocol_paths(hpp::string_view text, hpp::string_view protocol
 auto find_ui_linked_paths(hpp::string_view text) -> std::vector<std::string>
 {
     unique_paths paths;
-    constexpr std::array<hpp::string_view, 6> markers = {"href=", "src=", "src:", "url(", "image(", "@import"};
+    constexpr std::array<hpp::string_view, 2> names = {"href", "src"};
+    for(const auto& name : names)
+    {
+        add_named_values(text, name, paths);
+    }
+    constexpr std::array<hpp::string_view, 3> markers = {"url(", "image(", "@import"};
     for(const auto& marker : markers)
     {
         add_values_after(text, marker, paths);

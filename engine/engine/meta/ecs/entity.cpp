@@ -2305,15 +2305,15 @@ struct scoped_prefab_expansion
 
         if(expanding_prefabs.size() >= max_prefab_nesting_depth)
         {
-            APPLOG_ERROR("Prefab nesting deeper than {} levels; refusing to expand further.",
+            APPLOG_ERROR("Prefab nesting deeper than {} levels. Refusing to expand further.",
                          max_prefab_nesting_depth);
             return;
         }
 
         if(std::find(expanding_prefabs.begin(), expanding_prefabs.end(), uid) != expanding_prefabs.end())
         {
-            APPLOG_ERROR("Prefab {} contains itself, directly or through another prefab; "
-                         "refusing to expand it again.",
+            APPLOG_ERROR("Prefab {} contains itself, directly or through another prefab. "
+                         "Refusing to expand it again.",
                          hpp::to_string(uid));
             return;
         }

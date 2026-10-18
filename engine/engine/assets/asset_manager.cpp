@@ -1,5 +1,6 @@
 #include "asset_manager.h"
 #include "filesystem/filesystem.h"
+#include "impl/asset_extensions.h"
 #include "impl/asset_reader.h"
 #include "impl/importers/mesh_importer.h"
 
@@ -208,11 +209,11 @@ void asset_manager::remove_database(const std::string& key)
 
 auto asset_manager::load_database(const std::string& protocol) -> bool
 {
-    auto assets_pack = fs::resolve_protocol(protocol + "assets.pack");
+    const auto index_file = fs::resolve_protocol(protocol + ex::get_asset_index_file_name());
 
     std::lock_guard<std::mutex> lock(db_mutex_);
     auto& db = get_database(protocol);
-    return load_from_file(assets_pack.string(), db);
+    return load_from_file(index_file.string(), db);
 }
 
 void asset_manager::save_database(const std::string& protocol, const fs::path& path, const database_filter& include)

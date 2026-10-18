@@ -47,7 +47,7 @@ void draw_gap(float font_units)
     ImGui::Dummy(ImVec2(0.0f, to_pixels(font_units)));
 }
 
-void draw_icon_line(const char* icon, ImU32 icon_color, const char* text, ImU32 text_color)
+void draw_icon_line(const char* icon, ImU32 icon_color, const char* text, ImU32 text_color, float wrap_pos_x)
 {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const float icon_width = ImGui::GetFontSize();
@@ -57,7 +57,7 @@ void draw_icon_line(const char* icon, ImU32 icon_color, const char* text, ImU32 
                               icon_color);
     ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width + to_pixels(ICON_GAP), min.y));
     ImGui::PushStyleColor(ImGuiCol_Text, text_color);
-    ImGui::PushTextWrapPos(0.0f);
+    ImGui::PushTextWrapPos(wrap_pos_x);
     ImGui::TextUnformatted(text);
     ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();

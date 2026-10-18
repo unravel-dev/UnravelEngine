@@ -459,7 +459,7 @@ void draw_addition_rows(const prefab_instance_changes& group, pending_ops& ops, 
         }
         else
         {
-            ImGui::SetItemTooltipEx("Added here; no prefab file contains it.\n"
+            ImGui::SetItemTooltipEx("Added here. No prefab file contains it.\n"
                                     "It is never touched by a sync, and Revert All keeps it.");
             draw_row_control(small_button_width("Delete"),
                              [&]()
@@ -687,7 +687,7 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
     }
     ImGui::EndDisabled();
     ImGui::SetItemTooltipEx("Set %s - and everything nested in it - back to what the prefabs say.\n"
-                            "Entities added here are kept; delete those individually.",
+                            "Entities added here are kept. Delete those individually.",
                             subject);
 
     // ------------------------------------------------------------------ apply what was asked

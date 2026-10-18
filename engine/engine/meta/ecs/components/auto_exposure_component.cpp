@@ -54,7 +54,7 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"name", "compensation_curve"},
             entt::attribute{"pretty_name", "Exposure Compensation Curve"},
             entt::attribute{"tooltip", "Extra compensation by scene brightness. A key's position "
-                "is the metered brightness in EV100 and its value the stops added; past the first "
+                "is the metered brightness in EV100 and its value the stops added. Past the first "
                 "and last key the end values hold. Empty adds nothing. "
                 "Example: a key at (-6, -2) and one at (0, 0) keep night scenes darker."},
         })
@@ -166,7 +166,7 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.05f},
             entt::attribute{"tooltip", "How much fine detail survives the local contrast change. "
-                "1 keeps it exactly; above 1 sharpens local contrast, below 1 flattens it."},
+                "1 keeps it exactly. Above 1 sharpens local contrast, below 1 flattens it."},
         })
         .data<&auto_exposure_pass::settings::local_blurred_blend>("local_blurred_blend"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -176,7 +176,7 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.05f},
             entt::attribute{"tooltip", "Blends the edge-aware local level toward a plain blur. "
-                "Higher hides halos around strong edges; lower keeps more local contrast."},
+                "Higher hides halos around strong edges. Lower keeps more local contrast."},
         })
         .data<&auto_exposure_pass::settings::local_blurred_kernel_percent>("local_blurred_kernel_percent"_hs)
         .custom<entt::attributes>(entt::attributes{

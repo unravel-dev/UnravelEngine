@@ -660,7 +660,7 @@ void draw_retarget_summary(const animation_retarget_check& check)
                     report.frame_axis.x,
                     report.frame_axis.y,
                     report.frame_axis.z);
-        ImGui::SetItemTooltipEx("Height ratio: this skeleton's hip height over the clip's; motion scales by it.\n"
+        ImGui::SetItemTooltipEx("Height ratio: this skeleton's hip height over the clip's. Motion scales by it.\n"
                                 "Frame turn: how the clip's skeleton stands turned against this one (a Z-up export "
                                 "turns 90 degrees about X).");
     }
@@ -803,7 +803,7 @@ void inspector_animation_component::draw_humanoid_section(rtti::context& ctx, an
     }
     const std::string model_key = get_editable_model_key(*model);
     ImGui::TextWrapped("Clips whose bone names differ from this skeleton's (Mixamo, Rigify, VRM, Biped...) land on "
-                       "these bones by role. Found from the skeleton's shape; names only tell left from right.");
+                       "these bones by role. Found from the skeleton's shape. Names only tell left from right.");
     ImGui::TextWrapped("%s",
                        model_key.empty() ? "This model's roles cannot be set by hand: it is not a model file of the project."
                                          : "Set a role by hand with its " ICON_MDI_PENCIL " button. It is saved in the "

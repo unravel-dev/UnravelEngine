@@ -48,7 +48,7 @@ REFLECT(deploy_settings)
             entt::attribute{"pretty_name", "Deploy Debug Symbols"},
             entt::attribute{"tooltip",
                             "Ship the scripts' debug symbols (.pdb) and docs (.xml).\n\n"
-                            "The game runs without them; with them, script exceptions\n"
+                            "The game runs without them. With them, script exceptions\n"
                             "name the file and line they came from."},
         })
         .data<&deploy_settings::deploy_packed_assets>("deploy_packed_assets"_hs)
@@ -80,7 +80,7 @@ REFLECT(deploy_settings)
 
 SAVE(deploy_settings)
 {
-    try_save(ar, ser20::make_nvp("deploy_location", obj.deploy_location.generic_string()));
+    try_save(ar, ser20::make_nvp("deploy_location", fs::to_utf8_string(obj.deploy_location)));
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
     try_save(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
@@ -100,7 +100,7 @@ LOAD(deploy_settings)
     std::string deploy_location;
     if(try_load(ar, ser20::make_nvp("deploy_location", deploy_location)))
     {
-        obj.deploy_location = deploy_location;
+        obj.deploy_location = fs::from_utf8_string(deploy_location);
     }
 
     try_load(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));

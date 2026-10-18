@@ -15,6 +15,7 @@ target_include_directories(${target_name}
 add_dependencies(${target_name} engine)
 target_link_libraries(${target_name} PUBLIC 
     engine
+    deploy
     imgui 
     filedialog 
     httplib

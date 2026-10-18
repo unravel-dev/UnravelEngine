@@ -550,6 +550,13 @@ inline auto get_pack_file_name() -> std::string
     return "content.pak";
 }
 
+/// The asset index at a protocol's root ("app:/" + this): every asset's uid, location and import data, which
+/// the game loads before any asset. A deployed game reads it from the protocol's pack, or loose.
+inline auto get_asset_index_file_name() -> std::string
+{
+    return "assets.index";
+}
+
 /// The patch of level `level` (1, 2, ...) beside a protocol's pack: "content_p1.pak". The game mounts
 /// the levels in order after the pack, from 1 up to the first one missing, so a higher level wins.
 inline auto get_patch_pack_file_name(std::uint32_t level) -> std::string

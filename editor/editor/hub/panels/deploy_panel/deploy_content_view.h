@@ -2,26 +2,29 @@
 
 #include <context/context.hpp>
 
-#include <editor/deploy/deploy_content.h>
+#include <deploy/content.h>
+#include <deploy/content_tree.h>
 #include <engine/threading/threader.h>
 
 #include <imgui/imgui.h>
 
 #include <chrono>
-#include <cstdint>
+#include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace unravel
 {
 
 /**
- * @brief The Deploy window's Content tab: the scenes the game is built from, and every project asset
- * in a folder tree with whether it ships and why.
+ * @brief The Deploy window's Content tab: the scenes the game is built from, and every project asset in
+ * a folder tree with whether it ships and why.
  *
- * The tree comes from detect_deploy_content, run off the main thread when the tab first shows, when
- * the scenes change and on Detect. A checkbox sets an include or exclude rule on its folder or asset;
- * the rules are applied every frame, so the tree always shows what a deploy would ship.
+ * The content comes from deployment::detect_content, run off the main thread whenever what it was detected
+ * from (the project, the startup scene, the scene list) changes, when the window opens and on Detect.
+ * A checkbox sets an include or exclude rule on its folder or asset; the tree model recounts only when
+ * the rules or the view change, and only the visible rows are drawn.
  */
 class deploy_content_view
 {
@@ -31,68 +34,54 @@ public:
     void invalidate();
 
 private:
-    /// A folder or an asset row of the tree.
-    struct tree_node
-    {
-        std::string name;
-        /// The asset key, or the folder's key without a trailing slash.
-        std::string key;
-        /// The asset's index in content_.entries; -1 for a folder.
-        int entry{-1};
-        /// Folders first, then assets, each by name.
-        std::vector<size_t> children;
-        // Recomputed every frame from the rules.
-        size_t asset_count{};
-        size_t shipped_count{};
-        std::uint64_t shipped_size{};
-        std::uint64_t total_size{};
-        bool has_rule_inside{};
-        bool is_visible{};
-    };
-
-    enum class row_filter
-    {
-        all,
-        shipped,
-        left_out,
-        changed,
-    };
+    void update_content(rtti::context& ctx);
+    void start_detection(rtti::context& ctx, const std::string& signature);
+    void poll_detection();
 
     void draw_scenes(rtti::context& ctx);
-    void draw_scene_row(rtti::context& ctx, const std::string& key, bool is_startup, std::string& removed);
-    void draw_add_scene_button(rtti::context& ctx);
+    void draw_scene_row(const std::string& key, bool is_startup, std::string& removed);
+    void draw_scene_buttons(rtti::context& ctx);
+    void draw_scene_picker(rtti::context& ctx);
+    void add_scenes(rtti::context& ctx, const std::vector<std::string>& keys);
+
     void draw_assets_header(rtti::context& ctx);
     void draw_mode(rtti::context& ctx);
     void draw_toolbar(rtti::context& ctx);
+    void draw_reset_menu(rtti::context& ctx);
     void draw_summary();
     void draw_notes(rtti::context& ctx);
-    void draw_tree(rtti::context& ctx);
-    void draw_node(rtti::context& ctx, size_t index);
-    void draw_node_menu(rtti::context& ctx, const tree_node& node);
-    void draw_status_cell(const tree_node& node, const deploy_settings& params);
-    auto draw_ship_checkbox(const tree_node& node) -> bool;
+    void draw_named_folder_notes(rtti::context& ctx);
+    void draw_orphan_rule_note(rtti::context& ctx);
 
-    void start_detection(rtti::context& ctx);
-    void poll_detection();
-    void build_tree();
-    void update_tree(const deploy_settings& params);
-    auto is_row_shown(const tree_node& node, const deploy_settings& params) const -> bool;
-    auto get_use_chain(const deploy_content_entry& entry) const -> std::string;
+    void draw_tree(rtti::context& ctx);
+    void draw_row(rtti::context& ctx, std::size_t index, float row_height);
+    void draw_row_menu(rtti::context& ctx, const deployment::tree_node& node);
+    void draw_status_cell(const deployment::tree_node& node, const deploy_settings& params) const;
+    auto draw_ship_checkbox(const deployment::tree_node& node) const -> bool;
+    void toggle_folder(const std::string& key);
+
+    auto get_use_chain(const deployment::content_entry& entry) const -> std::string;
     void set_shipped(rtti::context& ctx, const std::string& key, bool is_shipped);
     void reset_rules(rtti::context& ctx, const std::string& key);
 
-    tpp::shared_future<deploy_content> detect_job_;
-    deploy_content content_;
-    bool has_content_{};
-    bool is_detection_requested_{true};
-    /// The startup scene the content was detected from; another one makes it stale.
-    std::string detected_startup_scene_;
+    tpp::shared_future<deployment::content> detect_job_;
+    /// What the running job detects from.
+    std::string detect_signature_;
+    /// Kept at one address: the tree points into it.
+    std::unique_ptr<deployment::content> content_;
+    /// What content_ was detected from: the project root, the startup scene and the scene list.
+    std::string content_signature_;
+    std::string content_root_;
     std::chrono::steady_clock::time_point detected_at_{};
-    std::vector<tree_node> nodes_;
+    bool is_invalidated_{true};
+
+    deployment::content_tree tree_;
+    deployment::tree_view view_;
+    std::unordered_set<std::string> open_folders_;
+    std::vector<std::size_t> rows_;
     ImGuiTextFilter search_;
-    row_filter filter_{row_filter::all};
-    /// The project's scenes, listed while the Add Scene picker is open.
-    std::vector<std::string> scene_choices_;
+
+    /// The search of the Add Scene picker.
     ImGuiTextFilter scene_search_;
 };
 

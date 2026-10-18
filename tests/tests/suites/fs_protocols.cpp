@@ -13,7 +13,8 @@
  *   - a root spelled with ".." or a trailing separator matches;
  *   - a root only matches whole folder names: "Data" is not a prefix of "DataExtra";
  *   - the longest matching root wins;
- *   - a path that does not exist yet converts, and resolve_protocol maps the result back to the same file.
+ *   - a path that does not exist yet converts, and resolve_protocol maps the result back to the same file;
+ *   - a path with letters outside the system code page survives to_utf8_string / from_utf8_string.
  *
  * Environment: UNRAVEL_PROTOCOL_TEST_DIR overrides the scratch folder. Every run writes into a fresh subfolder
  * and nothing is deleted; the protocols it registers are removed again.
@@ -207,6 +208,19 @@ void test_missing_file_round_trip(const fs::path& run_root)
           "resolve_protocol maps the converted path back to the same file");
 }
 
+void test_utf8_round_trip(const fs::path& run_root)
+{
+    std::printf("test_utf8_round_trip\n");
+    // "Caf<e-acute>/<Cyrillic d><Cyrillic a>.txt" in UTF-8: no single code page holds both.
+    const std::string name = "Caf\xc3\xa9/\xd0\x94\xd0\xb0.txt";
+    const auto file = run_root / fs::from_utf8_string(name);
+    write_file(file);
+    fs::error_code err;
+    check(fs::exists(file, err), "a file named from UTF-8 text is created under that name");
+    check_equal(fs::to_utf8_string(fs::from_utf8_string(name)), name, "UTF-8 text survives the round trip");
+    check(fs::to_utf8_string(fs::path("a") / "b") == "a/b", "separators are written as '/'");
+}
+
 auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
@@ -218,6 +232,7 @@ auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
     test_whole_folder_names(run_root);
     test_longest_root_wins(run_root);
     test_missing_file_round_trip(run_root);
+    test_utf8_round_trip(run_root);
     std::printf("fs protocols: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

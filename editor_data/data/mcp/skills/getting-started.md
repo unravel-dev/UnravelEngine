@@ -67,9 +67,10 @@ Building a scene is not shipping a game. The rest of the chain:
   deletes a kept release. To ship only what the game uses: deploy_set_settings
   only_used_assets true, scenes (the scenes scripts load besides the startup
   scene) and include (folders or assets scripts load by a path built at run
-  time); deploy_get_content lists every project asset with whether it ships and
-  why, and named_folders points at folders scripts build paths in. While a
-  deploy runs, project and settings changes are refused.
+  time); keys that name nothing come back as warnings. deploy_get_content lists
+  every project asset with whether it ships and why, named_folders points at
+  folders scripts build asset paths in (with the scripts that do), and
+  orphan_rules lists rules on paths that are gone. While a deploy runs, project and settings changes are refused.
 - Driving and verifying the game needs synthesized input - see the
   verification skill.
 

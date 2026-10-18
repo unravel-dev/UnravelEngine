@@ -161,7 +161,7 @@ REFLECT(animation_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "retarget_pose"},
             entt::attribute{"pretty_name", "Retarget Pose"},
-            entt::attribute{"tooltip", "The pose motion is measured from on the clip's skeleton and applied to on this one. Bind Pose: each skeleton's rest pose; both must rest in the same pose. T-Pose: both skeletons straightened to a T-pose by humanoid role first (arms level, legs straight down), so a clip of an A-pose skeleton plays right on a T-pose one."},
+            entt::attribute{"tooltip", "The pose motion is measured from on the clip's skeleton and applied to on this one. Bind Pose: each skeleton's rest pose. Both must rest in the same pose. T-Pose: both skeletons straightened to a T-pose by humanoid role first (arms level, legs straight down), so a clip of an A-pose skeleton plays right on a T-pose one."},
             entt::attribute{"predicate", is_rest_aligned},
         })
         .data<&animation_component::set_retarget_pose_offsets, &animation_component::get_retarget_pose_offsets>("retarget_pose_offsets"_hs)

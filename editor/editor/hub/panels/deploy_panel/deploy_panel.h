@@ -3,9 +3,15 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 
-#include <editor/editing/editor_actions.h>
+#include <deploy/deploy_settings.h>
+#include <editor/deploy/deploy_pipeline.h>
+#include <editor/deploy/deploy_preflight.h>
 
 #include "deploy_content_view.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace unravel
 {
@@ -32,7 +38,7 @@ public:
     /// @return True when it started.
     auto start_deploy(rtti::context& ctx, const deploy_settings& params) -> bool;
     /// The steps of the running or most recent deploy; empty after the window is closed.
-    auto get_jobs() const -> const std::map<std::string, tpp::shared_future<void>>&;
+    auto get_jobs() const -> const deployment::deploy_jobs&;
     auto is_deploying() const -> bool;
     /// Share of the deploy steps that are done, 0 to 1; 1 while nothing deploys.
     auto get_progress() const -> float;
@@ -67,10 +73,14 @@ private:
     imgui_panels* parent_{};
     bool show_request_{};
 
-    std::map<std::string, tpp::shared_future<void>> deploy_jobs_;
+    deployment::deploy_jobs deploy_jobs_;
+    /// What keeps the project from deploying, checked again a moment after the settings change.
+    deployment::problems_cache problems_;
     deploy_content_view content_view_;
-    /// The kept releases, read when the window opens, a release is kept or the picker opens.
+    /// The kept releases, read when the Releases tab comes into view, a release is kept or the picker opens.
     std::vector<kept_release> releases_;
+    /// The frame the Releases tab was last drawn in: a tab drawn again after a gap reads the releases anew.
+    int releases_tab_frame_{-1};
     /// What the last Keep as Release did, shown under the releases.
     std::string release_message_;
     bool is_release_message_error_{};

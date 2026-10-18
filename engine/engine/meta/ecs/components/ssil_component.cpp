@@ -55,7 +55,7 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"pretty_name", "Full-Res Passes"},
             entt::attribute{"min", 0},
             entt::attribute{"max", 5},
-            entt::attribute{"tooltip", "Mixed-resolution split: how many a-trous passes run at the trace resolution. The\nREMAINING (wide) passes run at half res (cache-coherent, ~4x cheaper); a bilateral\nupsample then restores sharp silhouettes from the full-res G-buffer. 0 lets the pass\nchoose the cheapest split; when temporal moments exist it is promoted to one full-res\npass so stable variance is consumed before the half-res tier. >= Passes = all full res."},
+            entt::attribute{"tooltip", "Mixed-resolution split: how many a-trous passes run at the trace resolution. The\nREMAINING (wide) passes run at half res (cache-coherent, ~4x cheaper). A bilateral\nupsample then restores sharp silhouettes from the full-res G-buffer. 0 lets the pass\nchoose the cheapest split. When temporal moments exist it is promoted to one full-res\npass so stable variance is consumed before the half-res tier. >= Passes = all full res."},
         })
         .data<&spatial_denoise_settings::max_step>("max_step"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -63,7 +63,7 @@ REFLECT_INLINE(ssil_pass::spatial_denoise_settings)
             entt::attribute{"pretty_name", "Max Step"},
             entt::attribute{"min", 1},
             entt::attribute{"max", 16},
-            entt::attribute{"tooltip", "Caps the a-trous dilation (trace texels). The step normally doubles each pass\n(1,2,4,8,16); the widely-dilated late passes scatter taps and thrash the texture\ncache, costing far more than early passes. Lower this (e.g. 8) to flatten that\ncost spike with minimal quality loss; 16 = uncapped doubling."},
+            entt::attribute{"tooltip", "Caps the a-trous dilation (trace texels). The step normally doubles each pass\n(1,2,4,8,16). The widely-dilated late passes scatter taps and thrash the texture\ncache, costing far more than early passes. Lower this (e.g. 8) to flatten that\ncost spike with minimal quality loss. 16 = uncapped doubling."},
         });
 }
 
@@ -91,7 +91,7 @@ REFLECT_INLINE(ssil_pass::temporal_settings)
             entt::attribute{"pretty_name", "Edge Threshold"},
             entt::attribute{"min", 0.000f},
             entt::attribute{"max", 0.200f},
-            entt::attribute{"tooltip", "Relative depth tolerance for temporal disocclusion (fraction of linear\ndepth). Lower = more ghosting rejected but less accumulation; higher =\nsmoother but more ghosting."},
+            entt::attribute{"tooltip", "Relative depth tolerance for temporal disocclusion (fraction of linear\ndepth). Lower = more ghosting rejected but less accumulation. Higher =\nsmoother but more ghosting."},
         })
         .data<&temporal_settings::normal_dot_threshold>("normal_dot_threshold"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -99,7 +99,7 @@ REFLECT_INLINE(ssil_pass::temporal_settings)
             entt::attribute{"pretty_name", "Normal Threshold"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Minimum dot(n_current, n_at_reprojected_uv) to accept history. Catches the common\ndisocclusion case where reprojection lands on a different surface (rotated geometry,\nanimated foliage) which the depth-only test misses. 0.85 ~ 32 deg tolerance; lower\nallows wider surface mismatch (more ghosting), higher rejects more aggressively."},
+            entt::attribute{"tooltip", "Minimum dot(n_current, n_at_reprojected_uv) to accept history. Catches the common\ndisocclusion case where reprojection lands on a different surface (rotated geometry,\nanimated foliage) which the depth-only test misses. 0.85 ~ 32 deg tolerance. Lower\nallows wider surface mismatch (more ghosting), higher rejects more aggressively."},
         })
         .data<&temporal_settings::max_accum_frames>("max_accum_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -178,7 +178,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"pretty_name", "Thickness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
-            entt::attribute{"tooltip", "Extra view-space hit-acceptance band added on top of Depth Tolerance, scaled by hit\ndistance. Far hits resolve against coarser Hi-Z depth, so a fixed band over-rejects\nthem and leaks the environment fallback through occluders; raising thickness closes\nthat leak. Too high over-occludes (darkening). 0 = fixed band only."},
+            entt::attribute{"tooltip", "Extra view-space hit-acceptance band added on top of Depth Tolerance, scaled by hit\ndistance. Far hits resolve against coarser Hi-Z depth, so a fixed band over-rejects\nthem and leaks the environment fallback through occluders. Raising thickness closes\nthat leak. Too high over-occludes (darkening). 0 = fixed band only."},
         })
         .data<&ssil_settings::brightness>("brightness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -194,7 +194,7 @@ REFLECT_INLINE(ssil_pass::ssil_settings)
             entt::attribute{"pretty_name", "Max Distance"},
             entt::attribute{"min", 0.5f},
             entt::attribute{"max", 500.0f},
-            entt::attribute{"tooltip", "Maximum ray distance in world units. SSIL captures local bounce; distant GI comes from probes"},
+            entt::attribute{"tooltip", "Maximum ray distance in world units. SSIL captures local bounce. Distant GI comes from probes."},
         })
         .data<&ssil_settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{

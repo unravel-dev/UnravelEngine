@@ -10,7 +10,9 @@
  *   - quoted protocol paths are found in single and double quotes, other protocols and unquoted
  *     mentions are not;
  *   - UI documents and style sheets yield their href / src attributes, src properties, url() and
- *     image() arguments and @import targets, without fragments, inline data or web addresses.
+ *     image() arguments and @import targets, without fragments, inline data or web addresses; spaces
+ *     around '=' and ':' are allowed, and data-src is not src;
+ *   - C# verbatim and interpolated strings are found, and an escaped quote does not end a string.
  */
 
 #include "../tests.h"
@@ -125,6 +127,28 @@ void test_ui_linked_paths()
     check(!contains(style_paths, "creation"), "shader decorator skipped");
 }
 
+void test_scan_edge_cases()
+{
+    const std::string script = R"(
+        var verbatim = @"app:/data/verbatim.png";
+        var interpolated = $"app:/data/levels/{index}.spfb";
+        var escaped = "app:/data/a\"b.png";
+    )";
+    const auto paths = unravel::asset_references::find_quoted_protocol_paths(script, "app");
+    check(contains(paths, "app:/data/verbatim.png"), "a C# verbatim string is found");
+    check(contains(paths, "app:/data/levels/{index}.spfb"), "an interpolated string is found as written");
+    check(contains(paths, R"(app:/data/a\"b.png)"), "an escaped quote does not end the string");
+
+    const std::string document = R"(<link href = "Spaced.rcss"/><img data-src="lazy.png"/><img src ="Late.png"/>)";
+    const auto document_paths = unravel::asset_references::find_ui_linked_paths(document);
+    check(contains(document_paths, "Spaced.rcss"), "spaces around '=' are allowed");
+    check(contains(document_paths, "Late.png"), "a space before '=' is allowed");
+    check(!contains(document_paths, "lazy.png"), "data-src is not src");
+    const std::string style = "@font-face { src : \"fonts/Spaced.ttf\"; }";
+    check(contains(unravel::asset_references::find_ui_linked_paths(style), "fonts/Spaced.ttf"),
+          "a style property with a space before ':' is found");
+}
+
 auto run_asset_references_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -132,6 +156,7 @@ auto run_asset_references_suite(rtti::context&) -> int
     test_quoted_uids();
     test_quoted_protocol_paths();
     test_ui_linked_paths();
+    test_scan_edge_cases();
     std::printf("asset references: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

@@ -75,6 +75,22 @@ struct restart_result
 [[nodiscard]] auto wait_for_process_exit(std::uint64_t process_id) -> bool;
 
 /**
+ * @brief Starts another program and returns without waiting for it.
+ *
+ * The child shares no pipes or files with the caller (its standard streams go nowhere, a console
+ * program's console stays hidden), runs in its own process group (POSIX: its own session), and keeps
+ * running when the caller exits. For launching an application, such as a built game, from a tool that
+ * must stay responsive.
+ *
+ * @param arguments The program, by path (UTF-8; POSIX does not look it up on PATH), followed by its
+ * arguments.
+ * @param working_directory The child's working directory (UTF-8); empty keeps the caller's.
+ * @return Empty when the program started.
+ */
+[[nodiscard]] auto spawn_detached(const std::vector<std::string>& arguments, const std::string& working_directory)
+    -> std::error_code;
+
+/**
  * @brief Quotes a single argument for Windows CreateProcess command lines.
  */
 [[nodiscard]] auto quote_windows_argument(std::string_view argument) -> std::string;

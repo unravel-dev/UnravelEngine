@@ -8,6 +8,7 @@
 #endif
 #include <windows.h>
 
+#include <filesystem>
 #include <limits>
 #include <vector>
 
@@ -131,6 +132,49 @@ auto spawn_replacement(const std::vector<std::string>& arguments,
     result.resources_released = true;
     result.success = true;
     return result;
+}
+
+auto spawn_detached(const std::vector<std::string>& arguments, const std::string& working_directory) -> std::error_code
+{
+    if(arguments.empty() || arguments.front().empty())
+    {
+        return make_windows_error(ERROR_FILE_NOT_FOUND);
+    }
+    std::wstring command_line = build_windows_command_line(arguments);
+    const std::wstring directory =
+        std::filesystem::path(std::u8string(working_directory.begin(), working_directory.end())).wstring();
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    PROCESS_INFORMATION process_info{};
+    // No inherited handles, so the child holds none of the caller's pipes or files; a console program
+    // gets a console of its own that stays hidden. It leaves the caller's job when the job allows it, so
+    // a job that kills its processes with the caller does not take it along.
+    const DWORD flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    const auto create = [&](DWORD creation_flags)
+    {
+        return CreateProcessW(nullptr,
+                              command_line.data(),
+                              nullptr,
+                              nullptr,
+                              FALSE,
+                              creation_flags,
+                              nullptr,
+                              directory.empty() ? nullptr : directory.c_str(),
+                              &startup_info,
+                              &process_info);
+    };
+    BOOL created = create(flags | CREATE_BREAKAWAY_FROM_JOB);
+    if(!created && GetLastError() == ERROR_ACCESS_DENIED)
+    {
+        created = create(flags);
+    }
+    if(!created)
+    {
+        return make_windows_error(GetLastError());
+    }
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+    return {};
 }
 
 auto wait_for_process_exit(std::uint64_t process_id) -> bool

@@ -1,6 +1,7 @@
 #include "project_manager.h"
 #include "version/version.h"
 #include <editor/assets/asset_watcher.h>
+#include <editor/deploy/deploy_pipeline.h>
 #include <editor/events.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
@@ -126,6 +127,12 @@ void project_manager::close_project(rtti::context& ctx)
 
 auto project_manager::open_project(rtti::context& ctx, const fs::path& project_path) -> bool
 {
+    // A running deploy reads the open project as it runs.
+    if(deployment::is_deploy_running())
+    {
+        APPLOG_WARNING("A deploy is running; open {} once it finishes.", project_path.generic_string());
+        return false;
+    }
     fs::error_code err;
     if(!fs::exists(project_path, err))
     {

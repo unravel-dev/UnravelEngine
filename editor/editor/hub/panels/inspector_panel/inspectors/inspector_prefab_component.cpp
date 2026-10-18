@@ -77,7 +77,7 @@ auto resolve_inspected_entity(const meta_any_proxy& var_proxy, prefab_component&
         if(!owner_is_live || owner != inspected)
         {
             APPLOG_WARNING("prefab_component owner handle (registry {}, entity {}) does not match the inspected "
-                           "entity (registry {}, entity {}); using the inspected entity.",
+                           "entity (registry {}, entity {}). Using the inspected entity.",
                            fmt::ptr(owner.registry()),
                            static_cast<uint32_t>(owner.entity()),
                            fmt::ptr(inspected.registry()),
@@ -104,8 +104,8 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
     if(!root_prefab_entity)
     {
         // Nothing below may run through a handle that cannot be trusted - least of all a save.
-        APPLOG_ERROR("prefab_component inspector: no live entity for this component; owner handle registry {} "
-                     "entity {}. Skipping.",
+        APPLOG_ERROR("prefab_component inspector: no live entity for this component (owner handle: registry {}, "
+                     "entity {}). Skipping.",
                      fmt::ptr(data.get_owner().registry()),
                      static_cast<uint32_t>(data.get_owner().entity()));
         ImGui::TextDisabled("This prefab component is not attached to a live entity.");

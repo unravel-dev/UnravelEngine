@@ -34,7 +34,7 @@ REFLECT_INLINE(taa_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.5f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Scales subpixel camera jitter (1 = full +-0.5 px); lower covers less of the pixel and aliases more."},
+            entt::attribute{"tooltip", "Scales subpixel camera jitter (1 = full +-0.5 px). Lower covers less of the pixel and aliases more."},
         })
         .data<&taa_pass::settings::history_blend>("history_blend"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -146,7 +146,7 @@ REFLECT(taa_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
-            entt::attribute{"tooltip", "HDR temporal anti-aliasing (before tonemap); disables FXAA when on"},
+            entt::attribute{"tooltip", "HDR temporal anti-aliasing (before tonemap). Disables FXAA when on."},
         })
         .data<&taa_component::settings>("settings"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -7,6 +7,7 @@
 
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
+#include <editor/editing/prefab_bake.h>
 #include <editor/shortcuts.h>
 #include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
@@ -393,7 +394,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             {
                 if(ImGui::MenuItem("Validate Prefab Graph"))
                 {
-                    const auto report = editor_actions::validate_prefab_graph(ctx);
+                    const auto report = validate_prefab_graph(ctx);
                     if(report.is_valid())
                     {
                         ImGui::PushNotification(

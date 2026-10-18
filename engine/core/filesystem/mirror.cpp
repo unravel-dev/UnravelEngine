@@ -9,21 +9,12 @@ namespace fs
 {
 namespace
 {
+/// The suffix of a copy on its way into place.
+constexpr const char* MIRROR_TEMP_SUFFIX = ".mirror-tmp";
 
-/// The key two names of one file compare equal under: case-insensitive on Windows.
-auto make_name_key(const path& relative_path) -> std::string
+auto make_relative_key(const path& relative_path) -> std::string
 {
-    auto key = relative_path.generic_string();
-#ifdef _WIN32
-    std::transform(key.begin(),
-                   key.end(),
-                   key.begin(),
-                   [](char c)
-                   {
-                       return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
-                   });
-#endif
-    return key;
+    return make_path_key(relative_path.generic_string());
 }
 
 auto has_same_size_and_time(const path& from, const path& to) -> bool
@@ -44,29 +35,46 @@ auto has_same_size_and_time(const path& from, const path& to) -> bool
     return !ec && from_time == to_time;
 }
 
-/// Removes the files under `to` whose names `kept` does not hold, then the folders left empty.
-void remove_unmirrored(const path& to, const std::unordered_set<std::string>& kept, mirror_stats& stats)
+/// Lists the files under `to` whose names `kept` does not hold, and every folder.
+auto find_unmirrored(const path& to,
+                     const std::unordered_set<std::string>& kept,
+                     std::vector<path>& stale_files,
+                     std::vector<path>& directories,
+                     error_code& ec) -> bool
 {
-    error_code ec;
-    std::vector<path> stale_files;
-    std::vector<path> directories;
     for(recursive_directory_iterator it(to, ec), end; !ec && it != end; it.increment(ec))
     {
         if(it->is_directory(ec))
         {
             directories.push_back(it->path());
+            continue;
         }
-        else if(!kept.contains(make_name_key(relative(it->path(), to, ec))))
+        const auto relative_path = it->path().lexically_relative(to);
+        if(!ec && !kept.contains(make_relative_key(relative_path)))
         {
             stale_files.push_back(it->path());
         }
     }
+    return !ec;
+}
+
+/// Removes the files under `to` whose names `kept` does not hold, then the folders left empty.
+auto remove_unmirrored(const path& to, const std::unordered_set<std::string>& kept, mirror_stats& stats, error_code& ec)
+    -> bool
+{
+    std::vector<path> stale_files;
+    std::vector<path> directories;
+    if(!find_unmirrored(to, kept, stale_files, directories, ec))
+    {
+        return false;
+    }
     for(const auto& file : stale_files)
     {
-        if(remove(file, ec))
+        if(!remove(file, ec))
         {
-            ++stats.removed;
+            return false;
         }
+        ++stats.removed;
     }
     // Deepest first, so a folder emptied by removing its subfolders goes too.
     std::sort(directories.begin(),
@@ -77,13 +85,39 @@ void remove_unmirrored(const path& to, const std::unordered_set<std::string>& ke
               });
     for(const auto& directory : directories)
     {
-        if(is_empty(directory, ec))
+        error_code empty_ec;
+        if(is_empty(directory, empty_ec) && !remove(directory, ec))
         {
-            remove(directory, ec);
+            return false;
         }
     }
+    return true;
 }
 
+/// Copies `from` to a temporary file beside `to` with the source's write time, then renames it into
+/// place: a file in use (a running game's library or pack) is replaced, never rewritten under it.
+auto copy_through_temp(const path& from, const path& to, error_code& ec) -> bool
+{
+    path temp = to;
+    temp += MIRROR_TEMP_SUFFIX;
+    const bool is_copied = copy_file(from, temp, copy_options::overwrite_existing, ec);
+    const auto time = is_copied ? last_write_time(from, ec) : file_time_type{};
+    if(is_copied && !ec)
+    {
+        last_write_time(temp, time, ec);
+    }
+    if(is_copied && !ec)
+    {
+        rename(temp, to, ec);
+    }
+    if(ec)
+    {
+        error_code cleanup_ec;
+        remove(temp, cleanup_ec);
+        return false;
+    }
+    return true;
+}
 } // namespace
 
 auto copy_file_if_changed(const path& from, const path& to, bool& is_copied, error_code& ec) -> bool
@@ -95,18 +129,12 @@ auto copy_file_if_changed(const path& from, const path& to, bool& is_copied, err
         return true;
     }
     create_directories(to.parent_path(), ec);
-    if(ec || !copy_file(from, to, copy_options::overwrite_existing, ec))
+    if(ec || !copy_through_temp(from, to, ec))
     {
         return false;
     }
-    const auto time = last_write_time(from, ec);
-    if(ec)
-    {
-        return false;
-    }
-    last_write_time(to, time, ec);
-    is_copied = !ec;
-    return is_copied;
+    is_copied = true;
+    return true;
 }
 
 auto mirror_directory(const path& from,
@@ -118,31 +146,22 @@ auto mirror_directory(const path& from,
     stats = {};
     ec.clear();
     std::unordered_set<std::string> kept;
-    for(recursive_directory_iterator it(from, ec), end; it != end; it.increment(ec))
+    for(recursive_directory_iterator it(from, ec), end; !ec && it != end; it.increment(ec))
     {
-        if(ec)
-        {
-            return false;
-        }
         if(!it->is_regular_file(ec) || (include && !include(it->path())))
         {
             continue;
         }
-        const auto relative_path = relative(it->path(), from, ec);
+        const auto relative_path = it->path().lexically_relative(from);
         bool is_copied = false;
-        if(ec || !copy_file_if_changed(it->path(), to / relative_path, is_copied, ec))
+        if(!copy_file_if_changed(it->path(), to / relative_path, is_copied, ec))
         {
             return false;
         }
         ++(is_copied ? stats.copied : stats.unchanged);
-        kept.insert(make_name_key(relative_path));
+        kept.insert(make_relative_key(relative_path));
     }
-    if(ec)
-    {
-        return false;
-    }
-    remove_unmirrored(to, kept, stats);
-    return true;
+    return !ec && remove_unmirrored(to, kept, stats, ec);
 }
 
 } // namespace fs

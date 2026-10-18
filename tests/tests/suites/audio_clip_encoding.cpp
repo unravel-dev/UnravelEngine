@@ -18,6 +18,7 @@
 #include "../tests.h"
 
 #include <engine/assets/asset_manager.h>
+#include <engine/assets/impl/asset_extensions.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/audio/audio_clip.hpp>
@@ -209,7 +210,7 @@ void test_filtered_database_save(rtti::context& ctx)
     const std::string dropped_key = std::string(TEST_PROTOCOL) + "data/dropped.cs";
     am.add_asset(kept_key, true);
     am.add_asset(dropped_key, true);
-    const auto path = (get_temp_folder() / "assets.pack").string();
+    const auto path = (get_temp_folder() / ex::get_asset_index_file_name()).string();
     am.save_database(TEST_PROTOCOL,
                      path,
                      [&dropped_key](const std::string& location)

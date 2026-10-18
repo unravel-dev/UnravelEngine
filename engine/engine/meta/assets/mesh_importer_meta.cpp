@@ -108,7 +108,7 @@ REFLECT(mesh_importer_meta)
             entt::attribute{"pretty_name", "Generate Distance Field"},
             entt::attribute{"tooltip",
                             "Bake a signed distance field for this mesh at compile time.\n"
-                            "The surface cache GI tracer needs it to see this mesh; without one the\n"
+                            "The surface cache GI tracer needs it to see this mesh. Without one the\n"
                             "mesh neither occludes nor bounces indirect light."},
         })
         .data<&mesh_importer_meta::sdf_meta::target_voxel_size>("target_voxel_size"_hs)
@@ -121,9 +121,9 @@ REFLECT(mesh_importer_meta)
                             "\n"
                             "The setting worth reaching for, because everything else follows from it:\n"
                             "  detail  - the field resolves features about this size and cannot\n"
-                            "            represent thinner geometry at all;\n"
+                            "            represent thinner geometry at all.\n"
                             "  range   - it can report a distance out to 4x this, and saturates\n"
-                            "            past that, so finer is NOT simply better;\n"
+                            "            past that, so finer is NOT simply better.\n"
                             "  cost    - a surface is 2D, so halving this costs about 4x, not 8x.\n"
                             "\n"
                             "Set it to the smallest feature you need this mesh to occlude with:\n"
@@ -291,7 +291,7 @@ REFLECT(mesh_importer_meta)
             entt::attribute{"name", "humanoid_overrides"},
             entt::attribute{"pretty_name", "Humanoid Overrides"},
             entt::attribute{"element_label", "Role"},
-            entt::attribute{"tooltip", "Humanoid roles set by hand (role + bone name; an empty name takes the role away) where the ones found from the skeleton's shape are wrong. They hold for this model and for every clip of the file."},
+            entt::attribute{"tooltip", "Humanoid roles set by hand (role + bone name, where an empty name takes the role away) where the ones found from the skeleton's shape are wrong. They hold for this model and for every clip of the file."},
         });
 
     // Register mesh_importer_meta::animations_meta with entt

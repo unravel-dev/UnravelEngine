@@ -31,7 +31,7 @@ auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
     return true;
 }
 
-/// Mounts the protocol's pack when the deploy wrote one, then its patches in level order; a deploy
+/// Mounts the protocol's pack when the deploy wrote one, then its patches in level order. A deploy
 /// without packs ships loose files.
 auto mount_asset_packs(const std::string& protocol) -> bool
 {
@@ -190,6 +190,23 @@ auto game::prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parse
     return true;
 }
 
+/// Loads a protocol's asset index. Without a readable one the build is incomplete or does not match the
+/// game, so the log names the index, says what is wrong with it and how to fix it.
+auto load_asset_index(asset_manager& am, const std::string& protocol) -> bool
+{
+    if(am.load_database(protocol + ":/"))
+    {
+        return true;
+    }
+    const auto index = fs::resolve_protocol(protocol + ":/" + ex::get_asset_index_file_name());
+    APPLOG_CRITICAL("The {} asset index {} {}. The build is incomplete or does not match this version of the "
+                    "game. Deploy the game again.",
+                    protocol,
+                    index.generic_string(),
+                    fs::is_readable_file(index) ? "could not be read" : "is missing");
+    return false;
+}
+
 auto game::init_settings(rtti::context& ctx) -> bool
 {
     auto& s = ctx.add<settings>();
@@ -210,17 +227,7 @@ auto game::init_assets(rtti::context& ctx) -> bool
         return false;
     }
     auto& am = ctx.get_cached<asset_manager>();
-    if(!am.load_database("engine:/"))
-    {
-        APPLOG_CRITICAL("Failed to load engine asset pack.");
-        return false;
-    }
-    if(!am.load_database("app:/"))
-    {
-        APPLOG_CRITICAL("Failed to load app asset pack.");
-        return false;
-    }
-    return true;
+    return load_asset_index(am, "engine") && load_asset_index(am, "app");
 }
 
 auto game::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool

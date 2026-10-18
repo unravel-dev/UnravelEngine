@@ -1,8 +1,11 @@
 #include "mcp_tools_common.h"
 
-#include <editor/deploy/deploy.h>
-#include <editor/deploy/deploy_content.h>
-#include <editor/editing/editor_actions.h>
+#include <deploy/content.h>
+#include <deploy/deploy_settings.h>
+#include <deploy/keys.h>
+#include <editor/deploy/deploy_pipeline.h>
+#include <editor/deploy/deploy_preflight.h>
+#include <editor/deploy/project_releases.h>
 #include <engine/assets/asset_manager.h>
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/deploy_panel/deploy_panel.h>
@@ -36,8 +39,7 @@ auto get_deploy_panel(rtti::context& ctx) -> deploy_panel*
     return &ctx.get_cached<hub>().get_panels().get_deploy_panel();
 }
 
-/// One step's state. A ready future rethrows its job's exception on get(), which is the only
-/// way a failed step is told apart from a finished one.
+/// One step's state; a failed step is ready and has an error.
 struct step_status
 {
     std::string name;
@@ -59,22 +61,8 @@ auto collect_step_status(rtti::context& ctx, std::vector<step_status>& out) -> s
         step_status status;
         status.name = kvp.first;
         status.ready = kvp.second.is_ready();
-        if(status.ready)
-        {
-            ++ready;
-            try
-            {
-                kvp.second.get();
-            }
-            catch(const std::exception& ex)
-            {
-                status.error = ex.what();
-            }
-            catch(...)
-            {
-                status.error = "unknown error";
-            }
-        }
+        status.error = deployment::get_step_error(kvp.second);
+        ready += status.ready ? 1 : 0;
         out.push_back(std::move(status));
     }
     return ready;
@@ -113,7 +101,7 @@ auto take_snapshot(rtti::context& ctx) -> deploy_snapshot
     snapshot.ready = collect_step_status(ctx, snapshot.steps);
     if(ctx.has<project_manager>())
     {
-        snapshot.location = ctx.get_cached<project_manager>().get_deploy_settings().deploy_location.generic_string();
+        snapshot.location = fs::to_utf8_string(ctx.get_cached<project_manager>().get_deploy_settings().deploy_location);
     }
     return snapshot;
 }
@@ -123,7 +111,7 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
 {
     if(snapshot.steps.empty())
     {
-        return R"({"deploying":false,"steps":[],"note":"No deploy is tracked (none started, or the Deploy window was closed)."})";
+        return R"({"deploying":false,"steps":[],"note":"No deploy was started in this editor session."})";
     }
     return fmt::format(R"({{"deploying":{},"done":{},"total":{},"location":{},"steps":{}}})",
                        bool_to_json(snapshot.ready < snapshot.steps.size()),
@@ -137,7 +125,7 @@ auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
         R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{}}})",
-        params.deploy_location.empty() ? "null" : make_json_string(params.deploy_location.generic_string()),
+        params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(params.deploy_location)),
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
         bool_to_json(params.deploy_cooked_assets),
@@ -168,76 +156,52 @@ auto read_key_list(const simdjson::dom::object& args, const char* key, std::vect
     return true;
 }
 
-auto get_reason_name(deploy_content_reason reason) -> const char*
-{
-    switch(reason)
-    {
-        case deploy_content_reason::scene:
-            return "scene";
-        case deploy_content_reason::referenced:
-            return "referenced";
-        case deploy_content_reason::named_in_script:
-            return "named_in_script";
-        case deploy_content_reason::included:
-            return "included";
-        case deploy_content_reason::excluded:
-            return "excluded";
-        case deploy_content_reason::unused:
-        default:
-            return "unused";
-    }
-}
-
 /// Whether an entry passes deploy_get_content's folder and show arguments.
 auto is_content_listed(const deploy_settings& params,
-                       const deploy_content_entry& entry,
+                       const deployment::content_entry& entry,
                        const std::string& folder,
-                       const std::string& show) -> bool
+                       deployment::content_filter filter) -> bool
 {
-    if(!folder.empty() && entry.key.compare(0, folder.size(), folder) != 0)
-    {
-        return false;
-    }
-    const bool is_shipped = is_deploy_content_shipped(params, entry);
-    if(show == "shipped")
-    {
-        return is_shipped;
-    }
-    if(show == "left_out")
-    {
-        return !is_shipped;
-    }
-    if(show == "changed")
-    {
-        return find_deploy_content_rule(params, entry.key) != deploy_content_rule::none;
-    }
-    return true;
+    return (folder.empty() || deployment::is_key_under(entry.key, folder)) && deployment::passes_filter(params, entry, filter);
 }
 
-auto content_entry_to_json(const deploy_settings& params, const deploy_content_entry& entry) -> std::string
+auto named_folders_to_json(const std::vector<deployment::named_folder>& folders) -> std::string
+{
+    std::string json = "[";
+    for(const auto& folder : folders)
+    {
+        json += fmt::format(R"({}{{"folder":{},"scripts":{}}})",
+                            json.size() > 1 ? "," : "",
+                            make_json_string(folder.key),
+                            strings_to_json_array(folder.scripts));
+    }
+    return json + "]";
+}
+
+auto content_entry_to_json(const deploy_settings& params, const deployment::content_entry& entry) -> std::string
 {
     return fmt::format(R"({{"key":{},"ships":{},"reason":"{}","used":{},"used_by":{},"size":{}}})",
                        make_json_string(entry.key),
-                       bool_to_json(is_deploy_content_shipped(params, entry)),
-                       get_reason_name(get_deploy_content_reason(params, entry)),
+                       bool_to_json(deployment::is_shipped(params, entry)),
+                       deployment::get_reason_name(deployment::get_reason(params, entry)),
                        bool_to_json(entry.is_used),
                        entry.used_by.empty() ? "null" : make_json_string(entry.used_by),
                        entry.size);
 }
 
 /// Sets the destination, creating the folder when asked - but never inside the project, where
-/// get_deploy_problems refuses it anyway.
+/// deployment::get_problems refuses it anyway.
 auto apply_location(deploy_settings& params, const std::string& location, bool create_location, std::string& error)
     -> bool
 {
-    const fs::path target(location);
+    const fs::path target = fs::from_utf8_string(location);
     if(!target.is_absolute())
     {
         error = "location must be absolute: " + location;
         return false;
     }
     fs::error_code ec;
-    if(create_location && !fs::exists(target, ec) && !editor_actions::is_path_inside_project(target))
+    if(create_location && !fs::exists(target, ec) && !deployment::is_inside_project(target))
     {
         fs::create_directories(target, ec);
         if(ec)
@@ -250,12 +214,33 @@ auto apply_location(deploy_settings& params, const std::string& location, bool c
     return true;
 }
 
+/// Tidies the scene list and the rules as the Deploy window stores them; the keys that name nothing in
+/// the project come back as warnings.
+auto normalize_deploy_keys(rtti::context& ctx, deploy_settings& params) -> std::vector<std::string>
+{
+    const auto found = deployment::list_content(deployment::make_project_content_source(ctx.get_cached<asset_manager>()));
+    std::vector<std::string> warnings;
+    for(const auto& key : deployment::normalize_keys(params, found))
+    {
+        warnings.push_back(key + " names no asset or folder of the project; it matches nothing");
+    }
+    return warnings;
+}
+
+/// What deploy_get_content walks from, taken on the main thread.
+struct content_request
+{
+    deployment::content_source source;
+    deploy_settings params;
+    std::string startup_scene;
+};
+
 } // namespace
 
 auto require_not_deploying(rtti::context& ctx, std::string& error) -> bool
 {
     const auto* panel = get_deploy_panel(ctx);
-    if(panel != nullptr && panel->is_deploying())
+    if(deployment::is_deploy_running() || (panel != nullptr && panel->is_deploying()))
     {
         error = "A deploy is running; wait for it to finish (deploy_get_state) before changing the "
                 "project or its settings";
@@ -285,10 +270,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              const auto& params = pm->get_deploy_settings();
-             const auto problems = editor_actions::get_deploy_problems(ctx, params);
+             const auto problems = deployment::get_problems(ctx, params);
              return {.text = fmt::format(R"({{"settings":{},"releases":{},"can_deploy":{},"problems":{},"deploy":{}}})",
                                          deploy_settings_to_json(params),
-                                         strings_to_json_array(editor_actions::list_releases()),
+                                         strings_to_json_array(deployment::list_project_releases()),
                                          bool_to_json(problems.empty()),
                                          strings_to_json_array(problems),
                                          deploy_progress_json(take_snapshot(ctx))),
@@ -309,8 +294,9 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "unchanged and content_p1.pak holds every change since; an empty string makes full builds again. "
              "only_used_assets ships only the project assets the startup scene, the scenes list and the scripts' "
              "path literals reach (deploy_get_content shows the result); include / exclude are folder or asset "
-             "keys that always / never ship, the most specific rule winning. scenes, include and exclude replace "
-             "the whole list. Omitted fields keep their value.",
+             "keys that always / never ship, the most specific rule winning (exclude on a tie). scenes, include and "
+             "exclude replace the whole list; keys are stored as the project spells them, and keys that name "
+             "nothing come back as warnings. Omitted fields keep their value.",
          .input_schema_json =
              R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
@@ -346,13 +332,15 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
+             const auto warnings = normalize_deploy_keys(ctx, params);
 
              pm->get_deploy_settings() = params;
              pm->save_deploy_settings();
 
-             const auto problems = editor_actions::get_deploy_problems(ctx, params);
-             return {.text = fmt::format(R"({{"ok":true,"settings":{},"problems":{}}})",
+             const auto problems = deployment::get_problems(ctx, params);
+             return {.text = fmt::format(R"({{"ok":true,"settings":{},"warnings":{},"problems":{}}})",
                                          deploy_settings_to_json(params),
+                                         strings_to_json_array(warnings),
                                          strings_to_json_array(problems)),
                      .is_error = false};
          },
@@ -379,15 +367,19 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              std::string name;
-             read_string(args, "name", name);
-             if(!editor_actions::keep_release(ctx, pm->get_deploy_settings(), name, error))
+             if(!read_string(args, "name", name) || name.empty())
              {
-                 return {.text = error, .is_error = true};
+                 name = deployment::get_default_release_name(ctx);
+             }
+             const auto result = deployment::keep_project_release(pm->get_deploy_settings(), name);
+             if(!result.is_ok())
+             {
+                 return {.text = result.error, .is_error = true};
              }
              return {.text = fmt::format(R"({{"ok":true,"release":{},"folder":{},"releases":{}}})",
                                          make_json_string(name),
-                                         make_json_string(editor_actions::get_release_folder(name).generic_string()),
-                                         strings_to_json_array(editor_actions::list_releases())),
+                                         make_json_string(fs::to_utf8_string(deployment::get_project_release_folder(name))),
+                                         strings_to_json_array(deployment::list_project_releases())),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -399,33 +391,55 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "What a deploy ships of the project's assets, as the Deploy window's Content tab shows it: finds what "
              "the startup scene, the scenes list (deploy_set_settings scenes) and the scripts' path literals use, "
              "directly or through other assets, then applies the include / exclude rules and only_used_assets. "
-             "Returns counts and sizes, deploy scenes no longer in the project, folders scripts build paths in "
-             "(worth an include rule), and one entry per asset: ships, reason (scene, referenced, named_in_script, "
-             "included, excluded, unused), used_by (what led to it) and compiled size. Engine assets always ship "
-             "and are not listed.",
+             "Returns counts and sizes, deploy scenes no longer in the project, named_folders: folders scripts build "
+             "asset paths in at run time, each with those scripts (worth an include rule), and one entry per asset: ships, reason (scene, referenced, named_in_script, "
+             "included, excluded, unused), used_by (what led to it) and compiled size, plus orphan_rules: rules on "
+             "keys that name nothing in the project (deploy_set_settings drops them when given the lists without "
+             "them). Engine assets always ship and are not listed. The walk runs off the main thread.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"folder":{"type":"string","description":"Only assets whose key starts with this, e.g. app:/data/levels/"},"show":{"type":"string","enum":["all","shipped","left_out","changed"],"description":"Default all; changed = assets under an include or exclude rule"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Default 200"}}})json",
+             R"json({"type":"object","properties":{"folder":{"type":"string","description":"Only assets in this folder (or this one asset), e.g. app:/data/levels"},"show":{"type":"string","enum":["all","shipped","left_out","changed"],"description":"Default all; changed = assets under an include or exclude rule"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Default 200"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              constexpr int64_t default_limit = 200;
              constexpr int64_t max_limit = 2000;
-             std::string error;
-             auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr)
-             {
-                 return {.text = error, .is_error = true};
-             }
              std::string folder;
-             read_string(args, "folder", folder);
+             if(read_string(args, "folder", folder) && !folder.empty())
+             {
+                 folder = deployment::normalize_key(folder);
+             }
              std::string show = "all";
              read_string(args, "show", show);
+             deployment::content_filter filter{};
+             if(!deployment::parse_filter(show, filter))
+             {
+                 return {.text = "show must be all, shipped, left_out or changed, not '" + show + "'", .is_error = true};
+             }
              const auto offset = static_cast<size_t>(read_clamped_int64(args, "offset", 0, 0));
              const auto limit = static_cast<size_t>(std::min(read_clamped_int64(args, "limit", default_limit, 1), max_limit));
-             const auto& params = pm->get_deploy_settings();
-             const auto content = detect_deploy_content(ctx.get_cached<asset_manager>(),
-                                                        params,
-                                                        pm->get_settings().standalone.startup_scene.id());
+             std::string error;
+             auto request = ctx.get_cached<mcp_manager>().invoke_on_main(
+                 [&ctx, &error]() -> hpp::optional<content_request>
+                 {
+                     auto* pm = get_open_project(ctx, error);
+                     if(pm == nullptr)
+                     {
+                         return hpp::nullopt;
+                     }
+                     return content_request{deployment::make_project_content_source(ctx.get_cached<asset_manager>()),
+                                            pm->get_deploy_settings(),
+                                            pm->get_settings().standalone.startup_scene.id()};
+                 });
+             if(!request || !*request)
+             {
+                 return {.text = error.empty() ? "Timed out reading the project on the main thread" : error, .is_error = true};
+             }
+             const auto& params = (*request)->params;
+             const auto content = deployment::detect_content((*request)->source, params, (*request)->startup_scene);
+             if(!folder.empty() && !content.has_folder(folder) && content.find(folder) == nullptr)
+             {
+                 return {.text = "folder " + folder + " names no folder or asset of the project", .is_error = true};
+             }
              size_t shipped = 0;
              std::uint64_t size = 0;
              std::uint64_t shipped_size = 0;
@@ -433,11 +447,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
              std::string entries = "[";
              for(const auto& entry : content.entries)
              {
-                 const bool is_shipped = is_deploy_content_shipped(params, entry);
+                 const bool is_shipped = deployment::is_shipped(params, entry);
                  shipped += is_shipped ? 1 : 0;
                  size += entry.size;
                  shipped_size += is_shipped ? entry.size : 0;
-                 if(!is_content_listed(params, entry, folder, show))
+                 if(!is_content_listed(params, entry, folder, filter))
                  {
                      continue;
                  }
@@ -449,7 +463,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              entries += "]";
              return {.text = fmt::format(
-                         R"({{"only_used_assets":{},"assets":{},"shipped":{},"left_out":{},"size":{},"shipped_size":{},"missing_scenes":{},"named_folders":{},"listed":{},"offset":{},"entries":{}}})",
+                         R"({{"only_used_assets":{},"assets":{},"shipped":{},"left_out":{},"size":{},"shipped_size":{},"missing_scenes":{},"named_folders":{},"orphan_rules":{},"listed":{},"offset":{},"entries":{}}})",
                          bool_to_json(params.deploy_only_used_assets),
                          content.entries.size(),
                          shipped,
@@ -457,13 +471,15 @@ void register_deploy_tools(mcp_tool_registry& registry)
                          size,
                          shipped_size,
                          strings_to_json_array(content.missing_scenes),
-                         strings_to_json_array(content.named_folders),
+                         named_folders_to_json(content.named_folders),
+                         strings_to_json_array(deployment::find_orphan_rules(params, content)),
                          listed,
                          offset,
                          entries),
                      .is_error = false};
          },
          .mutates_scene = false,
+         .requires_main_thread = false,
          .effect = tool_effect::read_only});
 
     registry.add(
@@ -484,13 +500,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              std::string name;
              read_string(args, "name", name);
-             if(!editor_actions::remove_release(ctx, name, error))
+             const auto result = deployment::remove_project_release(ctx, name);
+             if(!result.is_ok())
              {
-                 return {.text = error, .is_error = true};
+                 return {.text = result.error, .is_error = true};
              }
              return {.text = fmt::format(R"({{"ok":true,"removed":{},"releases":{}}})",
                                          make_json_string(name),
-                                         strings_to_json_array(editor_actions::list_releases())),
+                                         strings_to_json_array(deployment::list_project_releases())),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -528,7 +545,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  auto pending = mcp.invoke_on_main(
                      [&ctx]() -> std::string
                      {
-                         return editor_actions::get_pending_compile_reason(ctx);
+                         return deployment::get_pending_compile_reason(ctx);
                      });
                  if(!pending || pending->empty())
                  {
@@ -568,7 +585,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      pm->get_deploy_settings() = params;
                      pm->save_deploy_settings();
 
-                     const auto problems = editor_actions::get_deploy_problems(ctx, params);
+                     const auto problems = deployment::get_problems(ctx, params);
                      if(!problems.empty())
                      {
                          return {.text = fmt::format(R"({{"ok":false,"problems":{}}})",
@@ -608,7 +625,6 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      snapshot = std::move(*taken);
                  }
                  const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
-                 // No steps after a start means the Deploy window was closed, which drops its progress.
                  const bool is_untracked = taken && snapshot.steps.empty();
                  if(finished || is_untracked || std::chrono::steady_clock::now() >= deadline)
                  {
@@ -618,8 +634,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              if(snapshot.steps.empty())
              {
-                 return {.text = "The deploy's progress is no longer tracked (the Deploy window was closed); "
-                                 "check the deploy folder and logs_get_recent",
+                 return {.text = "The deploy's steps are no longer tracked; check the deploy folder and logs_get_recent",
                          .is_error = true};
              }
 

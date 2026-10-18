@@ -10,9 +10,9 @@ set(process_sources
 if(WIN32)
     list(APPEND process_sources process_windows.cpp)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    list(APPEND process_sources process_linux.cpp)
+    list(APPEND process_sources process_linux.cpp process_posix.cpp)
 else()
-    list(APPEND process_sources process_fallback.cpp)
+    list(APPEND process_sources process_fallback.cpp process_posix.cpp)
 endif()
 
 add_library(${target_name} ${process_sources})

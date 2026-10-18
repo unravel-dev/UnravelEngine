@@ -87,7 +87,7 @@ void draw_plain_rig_hint(rtti::context& ctx, entt::handle owner)
     {
         return;
     }
-    draw_rig_hint(ICON_MDI_INFORMATION_OUTLINE " Plain hierarchy: the solved pose shows in play mode; the gizmo previews it.");
+    draw_rig_hint(ICON_MDI_INFORMATION_OUTLINE " Plain hierarchy: the solved pose shows in play mode. The gizmo previews it.");
 }
 
 /// The entity with the character's skinned model: the character itself or the first one under it.

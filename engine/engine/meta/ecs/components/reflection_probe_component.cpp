@@ -61,7 +61,7 @@ REFLECT(reflection_probe_component)
             entt::attribute{"tooltip",
                 "Number of cubemap faces to refresh per frame while a bake is in progress. "
                 "Higher values finish bakes faster but cost more per frame. "
-                "Only applies while the probe is dirty; probes at rest cost nothing."},
+                "Only applies while the probe is dirty. Probes at rest cost nothing."},
             entt::attribute{"min", 1},
             entt::attribute{"max", 6},
         })

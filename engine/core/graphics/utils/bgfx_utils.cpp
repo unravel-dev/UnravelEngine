@@ -67,11 +67,18 @@ public:
     bool open(const bx::FilePath& _filePath, bx::Error* _err) override
     {
         close();
-        packed_ = fs::find_packed_file(fs::path(_filePath.getCPtr()));
-        if(packed_.is_found())
+        auto lookup = fs::lookup_packed_file(fs::path(_filePath.getCPtr()));
+        if(lookup.status == fs::packed_status::found)
         {
+            packed_ = std::move(lookup.file);
             memory_.emplace(packed_.data, uint32_t(packed_.size));
             return true;
+        }
+        if(lookup.status != fs::packed_status::absent)
+        {
+            // A deleted entry hides the disk as well; a damaged one was logged.
+            BX_ERROR_SET(_err, bx::kErrorReaderWriterOpen, "FileReader: deleted or damaged in its pack.");
+            return false;
         }
         is_file_open_ = file_.open(_filePath, _err);
         return is_file_open_;

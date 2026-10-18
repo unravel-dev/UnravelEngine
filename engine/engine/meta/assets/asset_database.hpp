@@ -23,6 +23,9 @@ LOAD_EXTERN(asset_database);
 
 void save_to_file(const std::string& absolute_path, const asset_database& obj);
 void save_to_file_bin(const std::string& absolute_path, const asset_database& obj);
+/// save_to_file by path, so a folder name in any script survives (a std::string path is narrowed through
+/// the system code page on Windows). False when the file cannot be written.
+auto save_database_to_file(const fs::path& file, const asset_database& obj) -> bool;
 auto load_from_file(const std::string& absolute_path, asset_database& obj) -> bool;
 auto load_from_file_bin(const std::string& absolute_path, asset_database& obj) -> bool;
 

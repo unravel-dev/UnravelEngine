@@ -1,5 +1,5 @@
 #pragma once
-#include <editor/deploy/deploy.h>
+#include <deploy/deploy_settings.h>
 #include <reflection/reflection.h>
 #include <serialization/serialization.h>
 

@@ -156,7 +156,7 @@ REFLECT_INLINE(eviction_settings)
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Evict down to this fraction of the maximum (hysteresis; keep < budget)."},
+            entt::attribute{"tooltip", "Evict down to this fraction of the maximum (hysteresis: keep it below the budget)."},
         })
         .data<&eviction_settings::manual_budget_mb>("manual_budget_mb"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -391,7 +391,7 @@ REFLECT_INLINE(settings::graphics_settings)
             entt::attribute{"name", "renderer"},
             entt::attribute{"pretty_name", "Renderer Backend"},
             entt::attribute{"tooltip",
-                            "Per-platform preferred graphics backend. Applied at process start; requires restart."},
+                            "Per-platform preferred graphics backend. Applied at process start. Requires a restart."},
         })
         .data<&settings::graphics_settings::static_mesh_batching>("static_mesh_batching"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -833,7 +833,7 @@ REFLECT_INLINE(settings::physics_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "backend"},
             entt::attribute{"pretty_name", "Physics Backend"},
-            entt::attribute{"tooltip", "Physics engine adapter. Applied at process start; requires editor restart."},
+            entt::attribute{"tooltip", "Physics engine adapter. Applied at process start. Requires an editor restart."},
         })
         .data<&settings::physics_settings::fixed_timestep>("fixed_timestep"_hs)
         .custom<entt::attributes>(entt::attributes{

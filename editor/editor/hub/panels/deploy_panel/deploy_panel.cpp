@@ -3,6 +3,7 @@
 #include "../panels_defs.h"
 #include "deploy_panel_widgets.h"
 
+#include <editor/deploy/project_releases.h>
 #include <editor/format/format_bytes.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
@@ -18,8 +19,6 @@
 #include <imgui_widgets/tooltips.h>
 #include <imgui_widgets/utils.h>
 
-#include <hpp/string_view.hpp>
-
 #include <algorithm>
 #include <initializer_list>
 
@@ -27,7 +26,7 @@ namespace unravel
 {
 namespace
 {
-using namespace deploy_widgets;
+namespace widgets = deploy_widgets;
 
 // Sizes are in units of the font size.
 constexpr float DEPLOY_WIDTH = 54.0f;
@@ -41,8 +40,6 @@ constexpr float DEPLOY_SCREEN_MARGIN = 1.0f;
 constexpr float DEPLOY_BODY_SHARE = 0.55f;
 constexpr float DEPLOY_BODY_MIN_HEIGHT = 24.0f;
 constexpr float DEPLOY_BODY_MAX_HEIGHT = 40.0f;
-// Jobs are named "Deploying X"; the steps show X.
-constexpr hpp::string_view DEPLOY_JOB_PREFIX = "Deploying ";
 // The empty Patch Against Release.
 constexpr const char* DEPLOY_FULL_BUILD_LABEL = "None - full build";
 
@@ -50,16 +47,16 @@ void draw_header()
 {
     ImGui::PushFont(ImGui::Font::Bold);
     ImGui::PushWindowFontScale(DEPLOY_TITLE_SCALE);
-    draw_icon_line(ICON_MDI_PACKAGE_VARIANT, get_accent_u32(), "Deploy Project", ImGui::GetColorU32(ImGuiCol_Text));
+    widgets::draw_icon_line(ICON_MDI_PACKAGE_VARIANT, widgets::get_accent_u32(), "Deploy Project", ImGui::GetColorU32(ImGuiCol_Text));
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
-    draw_muted_text("Builds the game for this platform into a folder.");
+    widgets::draw_muted_text("Builds the game for this platform into a folder.");
 }
 
 /// The close button in the top right corner of the window.
 auto draw_close_button() -> bool
 {
-    const float inset = to_pixels(DEPLOY_CLOSE_INSET);
+    const float inset = widgets::to_pixels(DEPLOY_CLOSE_INSET);
     const float side = ImGui::GetFrameHeight();
     const ImVec2 window_min = ImGui::GetWindowPos();
     const ImVec2 min(window_min.x + ImGui::GetWindowWidth() - inset - side, window_min.y + inset);
@@ -85,11 +82,11 @@ auto draw_release_remove_button(const std::string& name, bool is_patched, bool i
         ImGui::PushFont(ImGui::Font::Bold);
         ImGui::TextUnformatted(fmt::format("Delete release {}?", name).c_str());
         ImGui::PopFont();
-        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
         ImGui::TextUnformatted(is_patched ? "Its packs are deleted, and deploys make full builds again."
-                                          : "Its packs are deleted; patches can no longer be made for it.");
+                                          : "Its packs are deleted. Patches can no longer be made for it.");
         ImGui::PopStyleColor();
-        draw_gap(LINE_GAP);
+        widgets::draw_gap(widgets::LINE_GAP);
         if(ImGui::Button(ICON_MDI_DELETE_OUTLINE " Delete"))
         {
             is_confirmed = true;
@@ -139,39 +136,23 @@ void inspect_deploy_properties(rtti::context& ctx, std::initializer_list<entt::h
     }
 }
 
-auto get_step_name(hpp::string_view job_name) -> std::string
+/// A deploy step and its state: failed with the reason, done, or still running.
+void draw_step(const std::string& name, const tpp::shared_future<void>& job)
 {
-    if(job_name.starts_with(DEPLOY_JOB_PREFIX))
+    const auto error = deployment::get_step_error(job);
+    if(!error.empty())
     {
-        job_name.remove_prefix(DEPLOY_JOB_PREFIX.size());
+        widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                                widgets::WARNING_COLOR,
+                                fmt::format("{}: {}", name, error).c_str(),
+                                ImGui::GetColorU32(ImGuiCol_Text));
+        return;
     }
-    while(job_name.ends_with('.'))
-    {
-        job_name.remove_suffix(1);
-    }
-    return std::string(job_name);
-}
-
-/// The error of a finished step, empty when it succeeded: a ready future rethrows its job's exception.
-auto get_step_error(const tpp::shared_future<void>& job) -> std::string
-{
-    if(!job.is_ready())
-    {
-        return {};
-    }
-    try
-    {
-        job.get();
-    }
-    catch(const std::exception& ex)
-    {
-        return ex.what();
-    }
-    catch(...)
-    {
-        return "unknown error";
-    }
-    return {};
+    const bool is_done = job.is_ready();
+    widgets::draw_icon_line(is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK,
+                            is_done ? widgets::get_accent_u32() : widgets::get_muted_color(),
+                            name.c_str(),
+                            is_done ? ImGui::GetColorU32(ImGuiCol_Text) : widgets::get_muted_color());
 }
 } // namespace
 
@@ -195,20 +176,20 @@ void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
     {
         ImGui::OpenPopup(name);
         show_request_ = false;
-        refresh_releases();
         release_message_.clear();
         content_view_.invalidate();
+        problems_.invalidate();
     }
 
     const ImVec2 work_size = ImGui::GetMainViewport()->WorkSize;
-    const float margin = 2.0f * to_pixels(DEPLOY_SCREEN_MARGIN);
-    const float width = ImMin(to_pixels(DEPLOY_WIDTH), ImMax(work_size.x - margin, 0.0f));
+    const float margin = 2.0f * widgets::to_pixels(DEPLOY_SCREEN_MARGIN);
+    const float width = ImMin(widgets::to_pixels(DEPLOY_WIDTH), ImMax(work_size.x - margin, 0.0f));
     // Taller than the editor's work area, the window scrolls instead of losing its buttons off screen.
     const float max_height = ImMax(work_size.y - margin, 0.0f);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, max_height));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, screen_card::get_padding());
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, to_pixels(DEPLOY_ROUNDING));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, widgets::to_pixels(DEPLOY_ROUNDING));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
     const bool is_open = ImGui::BeginPopupModal(name, nullptr, flags);
@@ -235,37 +216,36 @@ auto deploy_panel::get_progress() const -> float
     {
         return 1.0f;
     }
-
-    size_t ready = 0;
-    for(const auto& kvp : deploy_jobs_)
-    {
-        if(kvp.second.is_ready())
-        {
-            ready++;
-        }
-    }
-
+    const auto ready = std::count_if(deploy_jobs_.begin(),
+                                     deploy_jobs_.end(),
+                                     [](const auto& step)
+                                     {
+                                         return step.second.is_ready();
+                                     });
     return float(ready) / float(deploy_jobs_.size());
 }
 
 auto deploy_panel::is_deploying() const -> bool
 {
-    float progress = get_progress();
-    bool is_in_progress = progress < 0.99f;
-    return is_in_progress;
+    return std::any_of(deploy_jobs_.begin(),
+                       deploy_jobs_.end(),
+                       [](const auto& step)
+                       {
+                           return !step.second.is_ready();
+                       });
 }
 
 auto deploy_panel::start_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
 {
-    if(is_deploying() || !editor_actions::can_deploy_project(ctx, params))
+    if(is_deploying() || !deployment::can_deploy(ctx, params))
     {
         return false;
     }
-    deploy_jobs_ = editor_actions::deploy_project(ctx, params);
+    deploy_jobs_ = deployment::deploy_project(ctx, params);
     return true;
 }
 
-auto deploy_panel::get_jobs() const -> const std::map<std::string, tpp::shared_future<void>>&
+auto deploy_panel::get_jobs() const -> const deployment::deploy_jobs&
 {
     return deploy_jobs_;
 }
@@ -281,13 +261,13 @@ void deploy_panel::deploy_and_run(rtti::context& ctx, const deploy_settings& par
 void deploy_panel::draw_ui(rtti::context& ctx)
 {
     draw_header();
-    draw_gap(SECTION_GAP);
+    widgets::draw_gap(widgets::SECTION_GAP);
     draw_tabs(ctx);
-    draw_gap(LINE_GAP);
+    widgets::draw_gap(widgets::LINE_GAP);
     ImGui::Separator();
-    draw_gap(LINE_GAP);
+    widgets::draw_gap(widgets::LINE_GAP);
     draw_status(ctx);
-    draw_gap(SECTION_GAP);
+    widgets::draw_gap(widgets::SECTION_GAP);
     draw_actions(ctx);
 }
 
@@ -321,15 +301,15 @@ void deploy_panel::draw_tabs(rtti::context& ctx)
 void deploy_panel::draw_tab_body(rtti::context& ctx, tab_drawer draw)
 {
     const float height = ImClamp(ImGui::GetMainViewport()->WorkSize.y * DEPLOY_BODY_SHARE,
-                                 to_pixels(DEPLOY_BODY_MIN_HEIGHT),
-                                 to_pixels(DEPLOY_BODY_MAX_HEIGHT));
+                                 widgets::to_pixels(DEPLOY_BODY_MIN_HEIGHT),
+                                 widgets::to_pixels(DEPLOY_BODY_MAX_HEIGHT));
     if(ImGui::BeginChild("##deploy_tab_body", ImVec2(0.0f, height), ImGuiChildFlags_AlwaysUseWindowPadding))
     {
         // What is being deployed does not change under a running deploy.
         ImGui::BeginDisabled(is_deploying());
-        push_field_colors();
+        widgets::push_field_colors();
         (this->*draw)(ctx);
-        pop_field_colors();
+        widgets::pop_field_colors();
         ImGui::EndDisabled();
     }
     ImGui::EndChild();
@@ -340,7 +320,7 @@ void deploy_panel::draw_build_tab(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& settings = pm.get_settings();
-    draw_section_title("Product");
+    widgets::draw_section_title("Product");
     if(inspect(ctx, settings.app).edit_finished)
     {
         pm.save_project_settings(ctx);
@@ -349,11 +329,11 @@ void deploy_panel::draw_build_tab(rtti::context& ctx)
     {
         pm.save_project_settings(ctx);
     }
-    draw_gap(SECTION_GAP);
-    draw_section_title("Output");
+    widgets::draw_gap(widgets::SECTION_GAP);
+    widgets::draw_section_title("Output");
     inspect_deploy_properties(ctx, {"deploy_location"_hs, "deploy_and_run"_hs});
-    draw_gap(SECTION_GAP);
-    draw_section_title("Packaging");
+    widgets::draw_gap(widgets::SECTION_GAP);
+    widgets::draw_section_title("Packaging");
     inspect_deploy_properties(ctx,
                               {"deploy_packed_assets"_hs,
                                "deploy_cooked_assets"_hs,
@@ -370,19 +350,25 @@ void deploy_panel::draw_content_tab(rtti::context& ctx)
 /// The release a deploy patches and the releases kept to patch.
 void deploy_panel::draw_releases_tab(rtti::context& ctx)
 {
+    // Releases can be kept or deleted from elsewhere (MCP) while the window is open.
+    if(releases_tab_frame_ != ImGui::GetFrameCount() - 1)
+    {
+        refresh_releases();
+    }
+    releases_tab_frame_ = ImGui::GetFrameCount();
     auto& pm = ctx.get_cached<project_manager>();
     const auto& release = pm.get_deploy_settings().deploy_patch_release;
-    draw_section_title("Patching");
+    widgets::draw_section_title("Patching");
     if(draw_patch_release_picker(ctx))
     {
         pm.save_deploy_settings();
     }
-    draw_gap(LINE_GAP);
-    draw_muted_text(release.empty()
-                        ? "Every pack is written whole."
-                        : fmt::format("The packs of {} ship unchanged; content_p1.pak holds every change since.", release)
-                              .c_str());
-    draw_gap(SECTION_GAP);
+    widgets::draw_gap(widgets::LINE_GAP);
+    widgets::draw_muted_text(release.empty()
+                                 ? "Every pack is written whole."
+                                 : fmt::format("The packs of {} ship unchanged, and content_p1.pak holds every change since.", release)
+                                       .c_str());
+    widgets::draw_gap(widgets::SECTION_GAP);
     draw_kept_releases(ctx);
 }
 
@@ -436,17 +422,17 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
     const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
     fs::error_code ec;
     const bool has_folder = fs::is_directory(params.deploy_location, ec);
-    if(draw_section_title_button("Kept Releases",
-                                 ICON_MDI_TAG_PLUS_OUTLINE " Keep as Release",
-                                 "Keep the build in the deploy folder as a release named by the product version,\n"
-                                 "so later deploys can ship patches for it.",
-                                 has_folder && !is_deploying()))
+    if(widgets::draw_section_title_button("Kept Releases",
+                                          ICON_MDI_TAG_PLUS_OUTLINE " Keep as Release",
+                                          "Keep the build in the deploy folder as a release named by the product version,\n"
+                                          "so later deploys can ship patches for it.",
+                                          has_folder && !is_deploying()))
     {
         keep_release(ctx);
     }
     if(releases_.empty())
     {
-        draw_muted_text("None yet. Deploy a packed build, then keep it to ship patches for it.");
+        widgets::draw_muted_text("None yet. Deploy a packed build, then keep it to ship patches for it.");
     }
     else if(ImGui::BeginTable("##kept_releases", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX))
     {
@@ -462,13 +448,14 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + text_offset);
-            draw_icon_line(ICON_MDI_TAG_OUTLINE,
-                           is_patched ? get_accent_u32() : imgui_style::get_muted_text_color_u32(),
-                           is_patched ? fmt::format("{} - patching against it", release.name).c_str() : release.name.c_str(),
-                           ImGui::GetColorU32(ImGuiCol_Text));
+            widgets::draw_icon_line(ICON_MDI_TAG_OUTLINE,
+                                    is_patched ? widgets::get_accent_u32() : widgets::get_muted_color(),
+                                    is_patched ? fmt::format("{} - Deploys create a patch for it.", release.name).c_str()
+                                               : release.name.c_str(),
+                                    ImGui::GetColorU32(ImGuiCol_Text));
             ImGui::TableNextColumn();
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + text_offset);
-            ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+            ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
             ImGui::TextUnformatted(format_bytes(release.size).c_str());
             ImGui::PopStyleColor();
             ImGui::TableNextColumn();
@@ -486,11 +473,11 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
     }
     if(!release_message_.empty())
     {
-        draw_gap(LINE_GAP);
-        draw_icon_line(is_release_message_error_ ? ICON_MDI_ALERT_CIRCLE_OUTLINE : ICON_MDI_TAG_OUTLINE,
-                       is_release_message_error_ ? WARNING_COLOR : get_accent_u32(),
-                       release_message_.c_str(),
-                       ImGui::GetColorU32(ImGuiCol_Text));
+        widgets::draw_gap(widgets::LINE_GAP);
+        widgets::draw_icon_line(is_release_message_error_ ? ICON_MDI_ALERT_CIRCLE_OUTLINE : ICON_MDI_TAG_OUTLINE,
+                                is_release_message_error_ ? widgets::WARNING_COLOR : widgets::get_accent_u32(),
+                                release_message_.c_str(),
+                                ImGui::GetColorU32(ImGuiCol_Text));
     }
 }
 
@@ -498,29 +485,29 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
 void deploy_panel::keep_release(rtti::context& ctx)
 {
     const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
-    std::string name;
-    std::string error;
-    is_release_message_error_ = !editor_actions::keep_release(ctx, params, name, error);
+    const auto name = deployment::get_default_release_name(ctx);
+    const auto result = deployment::keep_project_release(params, name);
+    is_release_message_error_ = !result.is_ok();
     release_message_ = is_release_message_error_
-                           ? error
+                           ? result.error
                            : fmt::format("Kept release {}. Pick it in Patch Against Release to ship patches for it.", name);
     refresh_releases();
 }
 
 void deploy_panel::remove_release(rtti::context& ctx, const std::string& name)
 {
-    std::string error;
-    is_release_message_error_ = !editor_actions::remove_release(ctx, name, error);
-    release_message_ = is_release_message_error_ ? error : fmt::format("Deleted release {}.", name);
+    const auto result = deployment::remove_project_release(ctx, name);
+    is_release_message_error_ = !result.is_ok();
+    release_message_ = is_release_message_error_ ? result.error : fmt::format("Deleted release {}.", name);
     refresh_releases();
 }
 
 void deploy_panel::refresh_releases()
 {
     releases_.clear();
-    for(auto& name : editor_actions::list_releases())
+    for(auto& name : deployment::list_project_releases())
     {
-        const auto size = get_folder_size(editor_actions::get_release_folder(name));
+        const auto size = get_folder_size(deployment::get_project_release_folder(name));
         releases_.push_back({std::move(name), size});
     }
 }
@@ -537,13 +524,16 @@ void deploy_panel::draw_status(rtti::context& ctx)
     const bool is_in_progress = is_deploying();
     if(!is_in_progress)
     {
-        const auto problems = editor_actions::get_deploy_problems(ctx, params);
+        const auto& problems = problems_.get(ctx, params);
+        for(const auto& problem : problems)
+        {
+            widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                                    widgets::WARNING_COLOR,
+                                    problem.c_str(),
+                                    ImGui::GetColorU32(ImGuiCol_Text));
+        }
         if(!problems.empty())
         {
-            for(const auto& problem : problems)
-            {
-                draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE, WARNING_COLOR, problem.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
-            }
             return;
         }
     }
@@ -551,23 +541,19 @@ void deploy_panel::draw_status(rtti::context& ctx)
     const std::string location = params.deploy_location.generic_string();
     if(deploy_jobs_.empty())
     {
-        draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
-                       get_accent_u32(),
-                       fmt::format("Ready to deploy to {}", location).c_str(),
-                       imgui_style::get_muted_text_color_u32());
+        widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
+                                widgets::get_accent_u32(),
+                                fmt::format("Ready to deploy to {}", location).c_str(),
+                                widgets::get_muted_color());
         return;
     }
 
-    std::map<std::string, std::string> step_errors;
-    for(const auto& [name, job] : deploy_jobs_)
-    {
-        auto error = get_step_error(job);
-        if(!error.empty())
-        {
-            step_errors.emplace(name, std::move(error));
-        }
-    }
-
+    const bool has_failed = std::any_of(deploy_jobs_.begin(),
+                                        deploy_jobs_.end(),
+                                        [](const auto& step)
+                                        {
+                                            return !deployment::get_step_error(step.second).empty();
+                                        });
     const auto step_count = deploy_jobs_.size();
     const auto done_count = static_cast<std::size_t>(get_progress() * static_cast<float>(step_count) + 0.5f);
     std::string summary = fmt::format("Deployed to {}", location);
@@ -575,61 +561,54 @@ void deploy_panel::draw_status(rtti::context& ctx)
     {
         summary = fmt::format("Deploying to {}", location);
     }
-    else if(!step_errors.empty())
+    else if(has_failed)
     {
         summary = fmt::format("Deploy to {} failed", location);
     }
-    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+    ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
     ImGui::TextWrapped("%s", summary.c_str());
     ImGui::PopStyleColor();
-    draw_gap(LINE_GAP);
+    widgets::draw_gap(widgets::LINE_GAP);
     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, imgui_style::get_accent_color());
     ImGui::ProgressBar(get_progress(), ImVec2(-FLT_MIN, 0.0f), fmt::format("{} of {} steps", done_count, step_count).c_str());
     ImGui::PopStyleColor();
-    draw_gap(LINE_GAP);
-
+    widgets::draw_gap(widgets::LINE_GAP);
     for(const auto& [name, job] : deploy_jobs_)
     {
-        const auto error = step_errors.find(name);
-        if(error != step_errors.end())
-        {
-            draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
-                           WARNING_COLOR,
-                           fmt::format("{}: {}", get_step_name(name), error->second).c_str(),
-                           ImGui::GetColorU32(ImGuiCol_Text));
-            continue;
-        }
-        const bool is_done = job.is_ready();
-        draw_icon_line(is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK,
-                       is_done ? get_accent_u32() : imgui_style::get_muted_text_color_u32(),
-                       get_step_name(name).c_str(),
-                       is_done ? ImGui::GetColorU32(ImGuiCol_Text) : imgui_style::get_muted_text_color_u32());
+        draw_step(name, job);
     }
 }
 
-/// Open Folder and Deploy, at the right end.
+/// Close at the left end; Open Folder and Deploy at the right end.
 void deploy_panel::draw_actions(rtti::context& ctx)
 {
     auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
-    const bool can_deploy = !is_deploying() && editor_actions::can_deploy_project(ctx, params);
+    const bool can_deploy = !is_deploying() && problems_.get(ctx, params).empty();
     fs::error_code ec;
     const bool has_folder = fs::is_directory(params.deploy_location, ec);
 
     const char* open_label = ICON_MDI_FOLDER_OPEN_OUTLINE " Open Folder";
     const char* deploy_label = params.deploy_and_run ? ICON_MDI_PLAY " Deploy and Run" : ICON_MDI_PACKAGE_VARIANT " Deploy";
     const float buttons_width =
-        calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x + calc_button_width(deploy_label);
+        widgets::calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x + widgets::calc_button_width(deploy_label);
+    if(widgets::draw_button("Close", false, true))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SetItemTooltipEx("%s", "Close the window. A running deploy goes on, and the toolbar shows its progress.");
+    ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, ImGui::GetContentRegionAvail().x - buttons_width));
 
-    if(draw_button(open_label, false, has_folder))
+    if(widgets::draw_button(open_label, false, has_folder))
     {
         ImGui::OpenInShell(params.deploy_location.string().c_str());
     }
-    ImGui::SetItemTooltipEx("%s", "Show the deploy folder in the file browser");
+    ImGui::SetItemTooltipEx("%s", "Show the deploy folder in the file browser.");
     ImGui::SameLine();
-    if(draw_button(deploy_label, true, can_deploy))
+    // The cached answer may be a moment old: the deploy itself checks again.
+    if(widgets::draw_button(deploy_label, true, can_deploy) && start_deploy(ctx, params))
     {
-        deploy_jobs_ = editor_actions::deploy_project(ctx, params);
+        problems_.invalidate();
     }
     if(!can_deploy && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {

@@ -17,7 +17,14 @@
  *   - a write that reuses an earlier pack copies the entries whose bytes it holds (renamed ones too) and
  *     gives exactly the bytes a fresh write gives; other compression settings reuse nothing;
  *   - a patch leaves unchanged entries to its base, holds changed and added ones and deletes removed ones;
- *     it mounts only over its base, and its deleted entries hide the base and the disk.
+ *     it mounts only right over its base, and its deleted entries hide the base and the disk; a patch is
+ *     never a patch base, and two patches of one base do not stack;
+ *   - entries mixing compressed and raw blocks, and exact block multiples, read back;
+ *   - found files and open streams outlive unmount_packs; reads on other threads while packs mount and
+ *     unmount return the whole entry or nothing;
+ *   - the parser refuses huge counts and sizes before allocating, other codecs and versions;
+ *   - a pack can be replaced reusing itself; a damaged entry is reported (lookup status) and never reused;
+ *   - a protocol path no pack holds is read from disk.
  * Everything lives in a temp folder under a protocol the suite registers.
  */
 
@@ -27,10 +34,17 @@
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 
+#define XXH_INLINE_ALL
+#include <filesystem/xxhash.h>
+
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -46,6 +60,18 @@ constexpr std::size_t MULTI_BLOCK_FILE_SIZE = 200 * 1024 + 123;
 constexpr std::size_t INCOMPRESSIBLE_FILE_SIZE = 80 * 1024;
 constexpr std::uint32_t RANDOM_SEED = 12345u;
 constexpr std::streamoff SEEK_PROBE_OFFSET = 70000;
+constexpr int PARALLEL_READERS = 4;
+constexpr int PARALLEL_MOUNT_ROUNDS = 200;
+constexpr auto PARALLEL_ROUND_TIMEOUT = std::chrono::milliseconds(200);
+// The format's layout, as the tests that edit a pack by hand need it (tasks/pack_v1_plan.md).
+constexpr std::size_t PACK_TEST_BLOCK_SIZE = 64 * 1024;
+constexpr std::size_t PACK_TEST_FOOTER_SIZE = 48;
+constexpr std::size_t PACK_TEST_FOOTER_VERSION = 8;
+constexpr std::size_t PACK_TEST_FOOTER_TOC_OFFSET = 16;
+constexpr std::size_t PACK_TEST_FOOTER_TOC_SIZE = 24;
+constexpr std::size_t PACK_TEST_FOOTER_TOC_HASH = 32;
+constexpr std::uint8_t PACK_TEST_FOREIGN_CODEC = 99;
+constexpr std::uint8_t PACK_TEST_OTHER_VERSION = 9;
 
 void check(bool condition, const std::string& what)
 {
@@ -149,7 +175,7 @@ auto make_test_files() -> std::vector<test_input>
         {"compiled/small.txt.asset", make_compressible_bytes(SMALL_FILE_SIZE)},
         {"compiled/textures/multi_block.png.asset", make_compressible_bytes(MULTI_BLOCK_FILE_SIZE)},
         {"compiled/audio/noise.ogg.asset", make_incompressible_bytes(INCOMPRESSIBLE_FILE_SIZE)},
-        {"assets.pack", make_compressible_bytes(SMALL_FILE_SIZE)},
+        {"assets.index", make_compressible_bytes(SMALL_FILE_SIZE)},
     };
 }
 
@@ -414,6 +440,275 @@ void test_patch_over_base()
     fs::remove(get_protocol_root() / "compiled/removed.asset", ec);
 }
 
+void test_mixed_and_exact_blocks()
+{
+    std::printf("test_mixed_and_exact_blocks\n");
+    fs::unmount_packs();
+    // One block that compresses and one that does not: the second is kept raw inside a compressed entry.
+    auto mixed = make_compressible_bytes(PACK_TEST_BLOCK_SIZE);
+    const auto noise = make_incompressible_bytes(PACK_TEST_BLOCK_SIZE);
+    mixed.insert(mixed.end(), noise.begin(), noise.end());
+    const auto exact = make_compressible_bytes(2 * PACK_TEST_BLOCK_SIZE);
+    const auto inputs = stage_inputs("stage_blocks", {{"compiled/mixed.asset", mixed}, {"compiled/exact.asset", exact}});
+    std::string error;
+    fs::pack_write_stats stats;
+    check(fs::write_pack(get_temp_folder() / "blocks.pak", inputs, {}, error, &stats), "the pack is written: " + error);
+    check(stats.stored_bytes < stats.raw_bytes, "the compressible blocks shrink");
+    check(fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "blocks.pak", error), "the pack mounts");
+    check(read_packed_bytes(get_protocol_path("compiled/mixed.asset")) == mixed,
+          "an entry mixing compressed and raw blocks reads back");
+    check(read_packed_bytes(get_protocol_path("compiled/exact.asset")) == exact,
+          "an entry of exactly two blocks reads back");
+    fs::unmount_packs();
+}
+
+void test_lifetime_after_unmount()
+{
+    std::printf("test_lifetime_after_unmount\n");
+    fs::unmount_packs();
+    const auto compressed = make_compressible_bytes(MULTI_BLOCK_FILE_SIZE);
+    const auto stored = make_incompressible_bytes(SMALL_FILE_SIZE);
+    const auto inputs =
+        stage_inputs("stage_lifetime", {{"compiled/compressed.asset", compressed}, {"compiled/stored.asset", stored}});
+    std::string error;
+    check(fs::write_pack(get_temp_folder() / "lifetime.pak", inputs, {}, error), "the pack is written");
+    check(fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "lifetime.pak", error), "the pack mounts");
+    const auto compressed_file = fs::find_packed_file(get_protocol_path("compiled/compressed.asset"));
+    const auto stored_file = fs::find_packed_file(get_protocol_path("compiled/stored.asset"));
+    auto stream = fs::open_readable_stream(get_protocol_path("compiled/stored.asset"));
+    fs::unmount_packs();
+    check(compressed_file.is_found() && fs::byte_array_t(compressed_file.data, compressed_file.data + compressed_file.size) ==
+                                            compressed,
+          "a decoded entry stays readable after unmount");
+    check(stored_file.is_found() && fs::byte_array_t(stored_file.data, stored_file.data + stored_file.size) == stored,
+          "a view of a stored entry keeps the pack mapped after unmount");
+    check(stream != nullptr && fs::read_stream(*stream) == stored, "an open stream stays readable after unmount");
+}
+
+void test_parallel_reads_during_mounts()
+{
+    std::printf("test_parallel_reads_during_mounts\n");
+    fs::unmount_packs();
+    const auto compressed = make_compressible_bytes(MULTI_BLOCK_FILE_SIZE);
+    const auto inputs = stage_inputs("stage_parallel", {{"compiled/parallel.asset", compressed}});
+    std::string error;
+    check(fs::write_pack(get_temp_folder() / "parallel.pak", inputs, {}, error), "the pack is written");
+    std::atomic<bool> is_done{false};
+    std::atomic<int> found_count{0};
+    std::atomic<int> torn_count{0};
+    std::vector<std::thread> readers;
+    for(int i = 0; i < PARALLEL_READERS; ++i)
+    {
+        readers.emplace_back(
+            [&]()
+            {
+                while(!is_done.load())
+                {
+                    const auto file = fs::find_packed_file(get_protocol_path("compiled/parallel.asset"));
+                    if(!file.is_found())
+                    {
+                        continue;
+                    }
+                    ++found_count;
+                    const bool is_whole = file.size == compressed.size() && std::memcmp(file.data, compressed.data(), file.size) == 0;
+                    torn_count += is_whole ? 0 : 1;
+                }
+            });
+    }
+    for(int round = 0; round < PARALLEL_MOUNT_ROUNDS; ++round)
+    {
+        fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "parallel.pak", error);
+        // Unmount only once a reader found the entry, so reads and unmounts overlap every round.
+        const int found_before = found_count.load();
+        const auto deadline = std::chrono::steady_clock::now() + PARALLEL_ROUND_TIMEOUT;
+        while(found_count.load() == found_before && std::chrono::steady_clock::now() < deadline)
+        {
+            std::this_thread::yield();
+        }
+        fs::unmount_packs();
+    }
+    is_done = true;
+    for(auto& reader : readers)
+    {
+        reader.join();
+    }
+    check(found_count.load() >= PARALLEL_MOUNT_ROUNDS, "readers found the entry in every round");
+    check(torn_count.load() == 0, "every read during mounts and unmounts returns the whole entry or nothing");
+}
+
+/// Reads the footer field at `offset` from the end-of-file footer.
+auto read_footer_value(const fs::byte_array_t& pack, std::size_t offset) -> std::uint64_t
+{
+    std::uint64_t value = 0;
+    std::memcpy(&value, pack.data() + pack.size() - PACK_TEST_FOOTER_SIZE + offset, sizeof(value));
+    return value;
+}
+
+/// A copy of `pack` with `edit` applied to its table of contents and the footer's hash updated, so the
+/// parser's own checks are what refuses it.
+template<typename Edit>
+auto edit_toc(fs::byte_array_t pack, const Edit& edit) -> fs::byte_array_t
+{
+    const auto toc_offset = std::size_t(read_footer_value(pack, PACK_TEST_FOOTER_TOC_OFFSET));
+    const auto toc_size = std::size_t(read_footer_value(pack, PACK_TEST_FOOTER_TOC_SIZE));
+    edit(pack.data() + toc_offset);
+    const std::uint64_t hash = XXH3_64bits(pack.data() + toc_offset, toc_size);
+    std::memcpy(pack.data() + pack.size() - PACK_TEST_FOOTER_SIZE + PACK_TEST_FOOTER_TOC_HASH, &hash, sizeof(hash));
+    return pack;
+}
+
+auto mount_bytes(const std::string& name, const fs::byte_array_t& bytes, std::string& error) -> bool
+{
+    write_file(get_temp_folder() / name, bytes);
+    error.clear();
+    const bool is_mounted = fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / name, error);
+    fs::unmount_packs();
+    return is_mounted;
+}
+
+void test_parser_errors()
+{
+    std::printf("test_parser_errors\n");
+    fs::unmount_packs();
+    const auto inputs = stage_inputs("stage_parser", {{"compiled/a.asset", make_compressible_bytes(MULTI_BLOCK_FILE_SIZE)}});
+    std::string error;
+    check(fs::write_pack(get_temp_folder() / "parser.pak", inputs, {}, error), "the pack is written");
+    const auto intact = read_disk_file(get_temp_folder() / "parser.pak");
+    check(mount_bytes("parser_intact.pak", edit_toc(intact, [](std::uint8_t*) {}), error), "a rehashed, unedited pack mounts");
+    const auto huge_count = edit_toc(intact,
+                                     [](std::uint8_t* toc)
+                                     {
+                                         const std::uint32_t count = 0xFFFFFFFFu;
+                                         std::memcpy(toc, &count, sizeof(count));
+                                     });
+    check(!mount_bytes("parser_count.pak", huge_count, error) && error.find("entry count") != std::string::npos,
+          "an entry count larger than the table is refused before allocating: " + error);
+    const auto name_size = std::size_t(std::string("compiled/a.asset").size());
+    const auto codec_offset = sizeof(std::uint32_t) + sizeof(std::uint32_t) + name_size + 3 * sizeof(std::uint64_t);
+    const auto foreign_codec = edit_toc(intact,
+                                        [codec_offset](std::uint8_t* toc)
+                                        {
+                                            toc[codec_offset] = PACK_TEST_FOREIGN_CODEC;
+                                        });
+    check(!mount_bytes("parser_codec.pak", foreign_codec, error) && error.find("codec") != std::string::npos,
+          "an entry of another codec is refused: " + error);
+    const auto raw_size_offset = sizeof(std::uint32_t) + sizeof(std::uint32_t) + name_size + sizeof(std::uint64_t);
+    const auto huge_size = edit_toc(intact,
+                                    [raw_size_offset](std::uint8_t* toc)
+                                    {
+                                        const std::uint64_t size = std::uint64_t(1) << 62;
+                                        std::memcpy(toc + raw_size_offset, &size, sizeof(size));
+                                    });
+    check(!mount_bytes("parser_size.pak", huge_size, error), "an absurd entry size is refused");
+    auto other_version = intact;
+    other_version[other_version.size() - PACK_TEST_FOOTER_SIZE + PACK_TEST_FOOTER_VERSION] = PACK_TEST_OTHER_VERSION;
+    check(!mount_bytes("parser_version.pak", other_version, error) && error.find("version") != std::string::npos,
+          "a pack of another version is refused: " + error);
+}
+
+void test_replace_with_self_reuse()
+{
+    std::printf("test_replace_with_self_reuse\n");
+    fs::unmount_packs();
+    auto files = make_test_files();
+    const auto pack_file = get_temp_folder() / "self_reuse.pak";
+    std::string error;
+    check(fs::write_pack(pack_file, stage_inputs("stage_self_first", files), {}, error), "the first pack is written");
+    files[2].bytes.front() ^= 0xFF;
+    const auto next_inputs = stage_inputs("stage_self_next", files);
+    fs::pack_write_options options;
+    options.reuse_from = pack_file;
+    fs::pack_write_stats stats;
+    check(fs::write_pack(pack_file, next_inputs, options, error, &stats), "the pack is replaced reusing itself: " + error);
+    check(stats.reused_count == files.size() - 1, "every unchanged entry is reused from the pack being replaced");
+    check(fs::write_pack(get_temp_folder() / "self_fresh.pak", next_inputs, {}, error) &&
+              read_disk_file(pack_file) == read_disk_file(get_temp_folder() / "self_fresh.pak"),
+          "the replaced pack equals a fresh write");
+}
+
+void test_lookup_status_and_damaged_reuse()
+{
+    std::printf("test_lookup_status_and_damaged_reuse\n");
+    fs::unmount_packs();
+    const auto bytes = make_compressible_bytes(MULTI_BLOCK_FILE_SIZE);
+    const auto inputs = stage_inputs("stage_status", {{"compiled/first.asset", bytes}});
+    std::string error;
+    check(fs::write_pack(get_temp_folder() / "status.pak", inputs, {}, error), "the pack is written");
+    // The first entry starts at offset 0: breaking its frame header leaves the table intact.
+    auto damaged = read_disk_file(get_temp_folder() / "status.pak");
+    damaged[0] ^= 0xFF;
+    write_file(get_temp_folder() / "status_damaged.pak", damaged);
+    check(fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "status_damaged.pak", error), "a pack with damaged data mounts");
+    const auto path = get_protocol_path("compiled/first.asset");
+    check(fs::lookup_packed_file(path).status == fs::packed_status::damaged, "an entry that does not decode is damaged");
+    check(!fs::find_packed_file(path).is_found() && fs::open_readable_stream(path) == nullptr,
+          "a damaged entry is neither found nor opened");
+    check(fs::lookup_packed_file(get_protocol_path("compiled/none.asset")).status == fs::packed_status::absent,
+          "a name no pack holds is absent");
+    fs::unmount_packs();
+
+    fs::pack_write_options options;
+    options.reuse_from = get_temp_folder() / "status_damaged.pak";
+    fs::pack_write_stats stats;
+    check(fs::write_pack(get_temp_folder() / "status_reuse.pak", inputs, options, error, &stats) && stats.reused_count == 0,
+          "a damaged entry of the earlier pack is not reused");
+    check(read_disk_file(get_temp_folder() / "status_reuse.pak") == read_disk_file(get_temp_folder() / "status.pak"),
+          "the pack written instead equals a fresh write");
+}
+
+void test_patch_rules()
+{
+    std::printf("test_patch_rules\n");
+    fs::unmount_packs();
+    const auto base_inputs = stage_inputs("stage_rules_base",
+                                          {{"compiled/a.asset", make_compressible_bytes(SMALL_FILE_SIZE)},
+                                           {"compiled/b.asset", make_compressible_bytes(MULTI_BLOCK_FILE_SIZE)}});
+    const auto next_inputs = stage_inputs("stage_rules_next", {{"compiled/a.asset", make_incompressible_bytes(SMALL_FILE_SIZE)}});
+    std::string error;
+    const auto base = get_temp_folder() / "rules_base.pak";
+    const auto patch = get_temp_folder() / "rules_patch.pak";
+    check(fs::write_pack(base, base_inputs, {}, error), "the base is written");
+    fs::pack_write_options patch_options;
+    patch_options.patch_base = base;
+    check(fs::write_pack(patch, next_inputs, patch_options, error), "the patch is written");
+
+    fs::pack_write_options reuse_patch = patch_options;
+    reuse_patch.reuse_from = patch;
+    fs::pack_write_stats stats;
+    check(fs::write_pack(get_temp_folder() / "rules_patch_again.pak", next_inputs, reuse_patch, error, &stats) &&
+              read_disk_file(get_temp_folder() / "rules_patch_again.pak") == read_disk_file(patch),
+          "a patch reusing the last patch equals a fresh patch");
+
+    fs::pack_write_options stacked;
+    stacked.patch_base = patch;
+    check(!fs::write_pack(get_temp_folder() / "rules_stacked.pak", next_inputs, stacked, error) &&
+              error.find("patch itself") != std::string::npos,
+          "a patch is never the base of another patch: " + error);
+
+    check(fs::mount_pack(TEST_PROTOCOL, base, error) && fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "fresh.pak", error),
+          "the base and another pack mount");
+    check(!fs::mount_pack(TEST_PROTOCOL, patch, error), "a patch does not mount when its base is not the topmost pack");
+    fs::unmount_packs();
+    check(fs::mount_pack(TEST_PROTOCOL, base, error) && fs::mount_pack(TEST_PROTOCOL, patch, error), "the patch mounts over its base");
+    check(!fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "rules_patch_again.pak", error),
+          "a second patch of the same base does not stack over the first");
+    fs::unmount_packs();
+}
+
+void test_protocol_path_disk_fallback()
+{
+    std::printf("test_protocol_path_disk_fallback\n");
+    fs::unmount_packs();
+    const auto loose = make_compressible_bytes(SMALL_FILE_SIZE);
+    write_file(get_protocol_root() / "compiled/loose_protocol.asset", loose);
+    std::string error;
+    check(fs::mount_pack(TEST_PROTOCOL, get_temp_folder() / "first.pak", error), "a pack mounts");
+    const auto path = get_protocol_path("compiled/loose_protocol.asset");
+    check(fs::is_readable_file(path), "a protocol path no pack holds is found on disk");
+    check(read_through_stream(path) == loose, "a protocol path no pack holds is read from disk");
+    fs::unmount_packs();
+}
+
 auto run_asset_packs_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -431,6 +726,14 @@ auto run_asset_packs_suite(rtti::context&) -> int
     test_stream_seek_and_tell();
     test_reuse_of_unchanged_entries();
     test_patch_over_base();
+    test_mixed_and_exact_blocks();
+    test_lifetime_after_unmount();
+    test_parallel_reads_during_mounts();
+    test_parser_errors();
+    test_replace_with_self_reuse();
+    test_lookup_status_and_damaged_reuse();
+    test_patch_rules();
+    test_protocol_path_disk_fallback();
     fs::unmount_packs();
     fs::remove_all(get_temp_folder(), ec);
     std::printf("asset packs: %d checks, %d failures\n", g_checks, g_failures);

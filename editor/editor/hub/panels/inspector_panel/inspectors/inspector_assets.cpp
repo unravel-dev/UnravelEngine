@@ -1,5 +1,6 @@
 #include "inspector_assets.h"
 #include "inspector_asset_picker.h"
+#include "inspector_asset_preview.h"
 #include <editor/editing/authoring_root.h>
 #include "inspectors.h"
 
@@ -105,28 +106,6 @@ auto process_drag_drop_target(asset_manager& am, asset_handle<T>& entry) -> bool
     return result;
 }
 
-/// The thumbnail of an asset, the icon of its type when it has none, a clock while it loads.
-template<typename T>
-auto make_preview(thumbnail_manager& tm, const asset_handle<T>& asset) -> asset_picker::preview
-{
-    asset_picker::preview result{};
-    result.icon = get_asset_icon<T>();
-    if(!asset)
-    {
-        return result;
-    }
-    // Asking for the thumbnail is also what starts loading an asset nobody uses yet.
-    const auto& thumbnail = tm.get_thumbnail(asset);
-    if(!asset.is_ready())
-    {
-        result.is_loading = true;
-        return result;
-    }
-    result.texture = ImGui::ToId(thumbnail);
-    result.texture_size = ImGui::GetSize(thumbnail);
-    return result;
-}
-
 /// What the picker offers: the empty handle first (get_assets_with_predicate always puts it
 /// there), then the assets of the project that pass the search.
 template<typename T>
@@ -159,7 +138,7 @@ auto pick_asset(ImGuiTextFilter& filter,
     inspect_result result{};
 
     asset_picker::field_content content{};
-    content.thumbnail = make_preview(tm, data);
+    content.thumbnail = asset_picker::make_preview(tm, data);
     content.type = type;
     if(data)
     {
@@ -206,7 +185,7 @@ auto pick_asset(ImGuiTextFilter& filter,
             tile.is_selected = !data;
             return tile;
         }
-        tile.thumbnail = make_preview(tm, asset);
+        tile.thumbnail = asset_picker::make_preview(tm, asset);
         tile.name = asset.name();
         tile.is_selected = data && asset.uid() == data.uid();
         return tile;
@@ -940,7 +919,7 @@ void inspector_asset_handle_animation::draw_unapplied_bar(rtti::context& ctx)
         return;
     }
     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), ICON_MDI_ALERT " Unapplied import changes");
-    ImGui::SetItemTooltipEx("Apply reimports the clip with them; showing anything else in the inspector applies them too.");
+    ImGui::SetItemTooltipEx("Apply reimports the clip with them. Showing anything else in the inspector applies them too.");
     ImGui::SameLine();
     if(ImGui::SmallButton("Apply##unapplied"))
     {

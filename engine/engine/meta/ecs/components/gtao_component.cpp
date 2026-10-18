@@ -42,7 +42,7 @@ REFLECT_INLINE(gtao_pass::settings)
             entt::attribute{"pretty_name", "Radius"},
             entt::attribute{"min", 0.05f},
             entt::attribute{"max", 4.0f},
-            entt::attribute{"tooltip", "World-space radius of the occlusion search. 4 m adds the room-scale term the GI's\nprobe lattice under-delivers; the search is capped on screen by Max Screen Radius, so\nlarger values mostly affect far geometry. 0.5-1 m for a contact-only term."},
+            entt::attribute{"tooltip", "World-space radius of the occlusion search. 4 m adds the room-scale term the GI's\nprobe lattice under-delivers. The search is capped on screen by Max Screen Radius, so\nlarger values mostly affect far geometry. 0.5-1 m for a contact-only term."},
         })
         .data<&settings::falloff_range>("falloff_range"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -50,7 +50,7 @@ REFLECT_INLINE(gtao_pass::settings)
             entt::attribute{"pretty_name", "Falloff Range"},
             entt::attribute{"min", 0.05f},
             entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Portion of the radius over which an occluder's influence fades to zero. 0.3 keeps most\nof the radius at full weight; below 0.2 occluders pop when they cross the boundary."},
+            entt::attribute{"tooltip", "Portion of the radius over which an occluder's influence fades to zero. 0.3 keeps most\nof the radius at full weight. Below 0.2 occluders pop when they cross the boundary."},
         })
         .data<&settings::max_screen_radius>("max_screen_radius"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -66,7 +66,7 @@ REFLECT_INLINE(gtao_pass::settings)
             entt::attribute{"pretty_name", "Final Power"},
             entt::attribute{"min", 0.5f},
             entt::attribute{"max", 5.0f},
-            entt::attribute{"tooltip", "Power applied to the visibility. 1 = ground truth for the depth buffer; higher\ndarkens for taste (1.6 pairs with the wide radius, 2.2 with a contact-only one)."},
+            entt::attribute{"tooltip", "Power applied to the visibility. 1 = ground truth for the depth buffer. Higher\ndarkens for taste (1.6 pairs with the wide radius, 2.2 with a contact-only one)."},
         })
         .data<&settings::intensity>("intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -96,7 +96,7 @@ REFLECT_INLINE(gtao_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "resolution"},
             entt::attribute{"pretty_name", "Resolution"},
-            entt::attribute{"tooltip", "Resolution the visibility is computed at. Half is the default for the wide-radius look\n(a quarter of the cost); Full for contact-scale reference quality."},
+            entt::attribute{"tooltip", "Resolution the visibility is computed at. Half is the default for the wide-radius look\n(a quarter of the cost). Full for contact-scale reference quality."},
         })
         .data<&settings::denoise_passes>("denoise_passes"_hs)
         .custom<entt::attributes>(entt::attributes{

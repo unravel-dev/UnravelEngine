@@ -95,6 +95,28 @@ auto resolve_protocol(const path& _path) -> path;
 //-----------------------------------------------------------------------------
 auto convert_to_protocol(const path& _path) -> path;
 
+/**
+ * @brief convert_to_protocol by the path's spelling alone: the path is made lexically normal, not
+ * canonical, so no file system call is made. For hot lookups of paths built from protocol roots;
+ * returns the path unchanged when no root matches as written.
+ */
+auto convert_to_protocol_lexically(const path& _path) -> path;
+
+/**
+ * @brief The form two path names compare equal in on this file system: '\\' becomes '/', and ASCII
+ * letters fold to lower case where the file system ignores case. For keys of maps and sets of paths.
+ */
+auto make_path_key(std::string text) -> std::string;
+
+/**
+ * @brief A path as UTF-8 text with '/' separators, for settings files and process arguments. The
+ * narrow string() form goes through the system code page on Windows and loses what it cannot hold.
+ */
+auto to_utf8_string(const path& _path) -> std::string;
+
+/// The path UTF-8 text names (to_utf8_string's inverse).
+auto from_utf8_string(const std::string& text) -> path;
+
 //-----------------------------------------------------------------------------
 //  Name : has_known_protocol()
 /// <summary>

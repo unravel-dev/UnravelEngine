@@ -665,7 +665,7 @@ REFLECT(light)
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Ray length in world units along the light. Longer rays catch occluders farther from the contact; near the camera the ray is shortened to a bounded number of pixels."},
+            entt::attribute{"tooltip", "Ray length in world units along the light. Longer rays catch occluders farther from the contact. Near the camera the ray is shortened to a bounded number of pixels."},
             entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
         })
         .data<&light::contact_shadow_params::thickness>("thickness"_hs)

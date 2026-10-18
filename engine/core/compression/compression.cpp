@@ -40,6 +40,11 @@ auto get_codec_name() -> const char*
     return "zstd";
 }
 
+auto get_codec_version() -> std::uint32_t
+{
+    return ZSTD_versionNumber();
+}
+
 struct compressor::impl
 {
     ZSTD_CCtx* context = ZSTD_createCCtx();

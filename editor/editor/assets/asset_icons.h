@@ -35,7 +35,7 @@ auto get_asset_icon() -> const char*
     }
     else if constexpr(std::is_same_v<T, prefab>)
     {
-        return ICON_MDI_PACKAGE_VARIANT_CLOSED;
+        return ICON_MDI_CUBE;
     }
     else if constexpr(std::is_same_v<T, scene_prefab>)
     {

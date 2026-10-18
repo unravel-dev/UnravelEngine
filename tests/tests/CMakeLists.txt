@@ -9,7 +9,7 @@ target_include_directories(${target_name}
         ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 add_dependencies(${target_name} engine)
-target_link_libraries(${target_name} PUBLIC engine)
+target_link_libraries(${target_name} PUBLIC engine deploy)
 
 # The GI constants parity test parses the shader mirror from the source tree, so the suite
 # fails when gi_constants.h and gi_constants.sh drift (tasks/gi_rewrite_plan.md, R9), and the

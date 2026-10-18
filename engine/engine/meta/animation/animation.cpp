@@ -90,7 +90,7 @@ REFLECT(animation_event)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "name"},
             entt::attribute{"pretty_name", "Name"},
-            entt::attribute{"tooltip", "Name scripts receive in OnAnimationEvent; a public script method with this exact name is called too."},
+            entt::attribute{"tooltip", "Name scripts receive in OnAnimationEvent. A public script method with this exact name is called too."},
         })
         .data<&animation_event::position>("position"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -151,7 +151,7 @@ REFLECT(animation_curve)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "name"},
             entt::attribute{"pretty_name", "Name"},
-            entt::attribute{"tooltip", "Scripts read the blended value with GetCurve(name); a controller float parameter of the same name follows it; IK components can scale their weight by it."},
+            entt::attribute{"tooltip", "Scripts read the blended value with GetCurve(name). A controller float parameter of the same name follows it. IK components can scale their weight by it."},
         })
         .data<&animation_curve::curve>("curve"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -298,7 +298,7 @@ REFLECT(humanoid_bone_override)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bone"},
             entt::attribute{"pretty_name", "Bone"},
-            entt::attribute{"tooltip", "Name of the bone that plays the role; empty takes the role away."},
+            entt::attribute{"tooltip", "Name of the bone that plays the role. Empty takes the role away."},
         });
 }
 

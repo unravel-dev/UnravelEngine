@@ -2,7 +2,7 @@
 #include <context/context.hpp>
 #include <engine/settings/settings.h>
 #include <editor/settings/settings.h>
-#include <editor/deploy/deploy.h>
+#include <deploy/deploy_settings.h>
 #include <editor/project/project_editor_settings.h>
 #include <editor/project/project_info.h>
 #include <filesystem/syncer.h>

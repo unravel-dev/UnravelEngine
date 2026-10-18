@@ -165,7 +165,7 @@ REFLECT(animation_parameter_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "type"},
             entt::attribute{"pretty_name", "Type"},
-            entt::attribute{"tooltip", "Float and Int drive blends and compare with thresholds; Bool is on or off; a "
+            entt::attribute{"tooltip", "Float and Int drive blends and compare with thresholds. Bool is on or off. A "
                                        "Trigger is set once and consumed by the transition it fires."},
         })
         .data<&animation_parameter_def::default_float>("default_float"_hs)
@@ -257,7 +257,7 @@ REFLECT(animation_blend_point_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "position"},
             entt::attribute{"pretty_name", "Position"},
-            entt::attribute{"tooltip", "Place on the blend axes; a 1D blend uses X only."},
+            entt::attribute{"tooltip", "Place on the blend axes. A 1D blend uses X only."},
         });
 }
 
@@ -369,7 +369,7 @@ REFLECT(animation_state_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "loop"},
             entt::attribute{"pretty_name", "Loop"},
-            entt::attribute{"tooltip", "Play the motion in cycles; off holds its last frame."},
+            entt::attribute{"tooltip", "Play the motion in cycles. Off holds its last frame."},
             entt::attribute{"group", "Playback"},
         })
         .data<&animation_state_def::cycle_offset>("cycle_offset"_hs)
@@ -456,7 +456,7 @@ REFLECT(animation_transition_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "source"},
             entt::attribute{"pretty_name", "Source"},
-            entt::attribute{"tooltip", "Source state; empty = Any State."},
+            entt::attribute{"tooltip", "Source state. Empty = Any State."},
         })
         .data<&animation_transition_def::destination>("destination"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -481,7 +481,7 @@ REFLECT(animation_transition_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "exit_time"},
             entt::attribute{"pretty_name", "Exit Time"},
-            entt::attribute{"tooltip", "Normalized source time; above 1 counts whole loops."},
+            entt::attribute{"tooltip", "Normalized source time. Above 1 counts whole loops."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"group", "Timing"},
             entt::attribute{"readonly_predicate", without_exit_time},
@@ -600,7 +600,7 @@ REFLECT(animation_layer_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "weight"},
             entt::attribute{"pretty_name", "Weight"},
-            entt::attribute{"tooltip", "Starting weight; scripts change it with SetLayerWeight."},
+            entt::attribute{"tooltip", "Starting weight. Scripts change it with SetLayerWeight."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
@@ -608,14 +608,14 @@ REFLECT(animation_layer_def)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "blend_mode"},
             entt::attribute{"pretty_name", "Blend Mode"},
-            entt::attribute{"tooltip", "Override replaces the pose below; Additive adds its clips' change from their "
+            entt::attribute{"tooltip", "Override replaces the pose below. Additive adds its clips' change from their "
                                        "first frame."},
         })
         .data<&animation_layer_def::mask>("mask"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "mask"},
             entt::attribute{"pretty_name", "Mask"},
-            entt::attribute{"tooltip", "Bones the layer affects; empty = every bone."},
+            entt::attribute{"tooltip", "Bones the layer affects. Empty = every bone."},
             entt::attribute{"element_label", "Bone"},
         })
         .data<&animation_layer_def::default_state>("default_state"_hs)

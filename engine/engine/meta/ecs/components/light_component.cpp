@@ -305,7 +305,7 @@ REFLECT(skylight_component)
             entt::attribute{"min", 0.1f},
             entt::attribute{"max", 4.0f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Multiplier on the scattered cloud light (sun and ambient). 1 keeps clouds on the sky's light scale; higher pushes them toward white."},
+            entt::attribute{"tooltip", "Multiplier on the scattered cloud light (sun and ambient). 1 keeps clouds on the sky's light scale. Higher pushes them toward white."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_cloud_shadows, &skylight_component::get_cloud_shadows>("cloud_shadows"_hs)
@@ -346,7 +346,7 @@ REFLECT(skylight_component)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Small-scale Worley erosion of the edges. Higher adds holes and wisps; stronger toward the cloud tops."},
+            entt::attribute{"tooltip", "Small-scale Worley erosion of the edges. Higher adds holes and wisps, more so toward the cloud tops."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)

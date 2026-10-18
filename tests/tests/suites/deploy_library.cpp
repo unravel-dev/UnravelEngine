@@ -1,0 +1,821 @@
+/*
+ * Validation suite for the deploy library (editor/core/deploy), which decides what a deploy ships and
+ * writes it.
+ *
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite "deploy library"
+ *
+ * This pins:
+ *   - keys: separators and trailing slashes normalized, "a" does not cover "ab", display paths;
+ *   - rules: the most specific rule wins, exclude wins a tie whatever the trailing slash, set_shipped
+ *     keeps a rule only where use alone would decide otherwise, keys are respelled and deduped, rules
+ *     on nothing are reported, filter names round-trip;
+ *   - the walk over a project folder: scenes, uids, quoted paths, UI links, generated assets, the
+ *     project settings, script literals (with and without an extension, interpolated, folders),
+ *     binary files not read, missing scenes reported, compiled sizes;
+ *   - the content tree: counts, folders first, rows of open folders only, search and filter rows,
+ *     left out but used assets counted;
+ *   - files: classification, compiled paths, pack inputs with cooked variants, stale binaries, older
+ *     runtime versions;
+ *   - a protocol shipped packed, loose, packed again, as a patch over a kept release and full again,
+ *     with left out assets;
+ *   - releases: names, keep / list / remove, and their refusals;
+ *   - dependency scanner output parsed; a failed scan throws every time;
+ *   - folder checks: earlier deploys, inside / outside, an executable in use;
+ *   - unravel::process::spawn_detached runs a program and reports one that does not start.
+ * Everything lives in a temp folder.
+ */
+
+#include "../tests.h"
+
+#include <deploy/content.h>
+#include <deploy/content_tree.h>
+#include <deploy/dependencies.h>
+#include <deploy/files.h>
+#include <deploy/folders.h>
+#include <deploy/keys.h>
+#include <deploy/protocol_data.h>
+#include <deploy/releases.h>
+#include <engine/assets/impl/asset_extensions.h>
+#include <filesystem/filesystem.h>
+#include <filesystem/pack.h>
+#include <process/process.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <set>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace
+{
+namespace deployment = unravel::deployment;
+using unravel::asset_database;
+using unravel::deploy_settings;
+
+constexpr const char* TEST_PROTOCOL = "unravel-tests-deploy";
+constexpr std::size_t COMPILED_WALL_SIZE = 123;
+constexpr auto SPAWN_WAIT = std::chrono::seconds(10);
+constexpr auto SPAWN_POLL = std::chrono::milliseconds(50);
+
+int g_checks = 0;
+int g_failures = 0;
+
+void check(bool condition, const std::string& what)
+{
+    ++g_checks;
+    if(!condition)
+    {
+        ++g_failures;
+        std::printf("  FAIL: %s\n", what.c_str());
+    }
+}
+
+auto get_temp_folder() -> fs::path
+{
+    return fs::temp_directory_path() / "unravel-tests-deploy-library";
+}
+
+/// Whether paths in another letter case name the same file here, as the game's lookups see it.
+auto is_case_folded() -> bool
+{
+    return fs::make_path_key("A") == fs::make_path_key("a");
+}
+
+void write_text(const fs::path& file, const std::string& text)
+{
+    fs::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    out << text;
+}
+
+auto read_text(const fs::path& file) -> std::string
+{
+    std::ifstream in(file, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+auto is_present(const fs::path& path) -> bool
+{
+    fs::error_code ec;
+    return fs::exists(path, ec);
+}
+
+auto make_uid(const char* text) -> hpp::uuid
+{
+    return hpp::uuid::from_string(std::string(text)).value();
+}
+
+auto quote(const hpp::uuid& uid) -> std::string
+{
+    return "\"" + hpp::to_string(uid) + "\"";
+}
+
+void add_asset(asset_database::database_t& database, const hpp::uuid& uid, const std::string& key, const hpp::uuid& source = {})
+{
+    asset_database::meta entry;
+    entry.location = key;
+    entry.meta.uid = uid;
+    entry.meta.generated.source_uid = source;
+    database.emplace(uid, entry);
+}
+
+auto get_entry(const deployment::content& found, const std::string& key) -> const deployment::content_entry*
+{
+    return found.find(key);
+}
+
+auto is_used_by(const deployment::content& found, const std::string& key, deployment::content_reason use, const std::string& used_by)
+    -> bool
+{
+    const auto* entry = get_entry(found, key);
+    return entry != nullptr && entry->is_used && entry->use == use && entry->used_by == used_by;
+}
+
+auto is_unused(const deployment::content& found, const std::string& key) -> bool
+{
+    const auto* entry = get_entry(found, key);
+    return entry != nullptr && !entry->is_used;
+}
+
+auto contains(const std::vector<std::string>& values, const std::string& value) -> bool
+{
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+/// Whether the walk names `folder` as one `script` builds asset paths in.
+auto is_named_by(const deployment::content& found, const std::string& folder, const std::string& script) -> bool
+{
+    return std::any_of(found.named_folders.begin(),
+                       found.named_folders.end(),
+                       [&](const deployment::named_folder& named)
+                       {
+                           return named.key == folder && named.scripts == std::vector<std::string>{script};
+                       });
+}
+
+//-----------------------------------------------------------------------------
+// keys
+//-----------------------------------------------------------------------------
+
+void test_keys()
+{
+    std::printf("test_keys\n");
+    check(deployment::normalize_key("app:/data/levels/") == "app:/data/levels", "a trailing slash is dropped");
+    check(deployment::normalize_key("app:/data\\levels\\one.spfb") == "app:/data/levels/one.spfb", "backslashes become slashes");
+    check(deployment::normalize_key("app:/") == "app:/", "a protocol's root keeps its slash");
+    check(deployment::is_key_under("app:/data/ab/x.png", "app:/data/ab"), "a key lies under its folder");
+    check(deployment::is_key_under("app:/data/ab", "app:/data/ab/"), "a folder covers itself, with or without a slash");
+    check(!deployment::is_key_under("app:/data/ab", "app:/data/a"), "app:/data/a does not cover app:/data/ab");
+    check(deployment::is_key_under("app:/data/a.png", "app:/"), "the protocol's root covers everything in it");
+    check(deployment::is_key_under("app:/Data/Levels/One.spfb", "app:/data/levels") == is_case_folded(),
+          "letter case counts only where the file system counts it");
+    check(deployment::get_key_without_extension("app:/data/levels/one.spfb") == "app:/data/levels/one", "the extension is cut");
+    check(deployment::get_key_without_extension("app:/data/a.b/c") == "app:/data/a.b/c", "a dot in a folder is no extension");
+    check(deployment::get_key_name("app:/data/levels/") == "levels", "a folder's name");
+    check(deployment::get_display_path("app:/data/levels/one.spfb") == "levels/one.spfb", "display paths drop the data folder");
+    check(deployment::get_display_path("engine:/data/x.png") == "engine:/data/x.png", "other protocols keep their key");
+}
+
+//-----------------------------------------------------------------------------
+// rules
+//-----------------------------------------------------------------------------
+
+/// A content of six assets with no files behind them: what the rules work on.
+auto make_listed_content(const fs::path& project_root) -> deployment::content
+{
+    deployment::content_source source;
+    source.project_root = project_root;
+    add_asset(source.database, make_uid("10000000-0000-4000-8000-000000000001"), "app:/data/levels/one.spfb");
+    add_asset(source.database, make_uid("10000000-0000-4000-8000-000000000002"), "app:/data/levels/two.spfb");
+    add_asset(source.database, make_uid("10000000-0000-4000-8000-000000000003"), "app:/data/textures/wall.png");
+    add_asset(source.database, make_uid("10000000-0000-4000-8000-000000000004"), "app:/data/textures/floor.png");
+    add_asset(source.database, make_uid("10000000-0000-4000-8000-000000000005"), "app:/data/scripts/game.cs");
+    add_asset(source.database, make_uid("10000000-0000-4000-8000-000000000006"), "app:/data/readme.txt");
+    return deployment::list_content(source);
+}
+
+void test_rule_precedence(const deployment::content& found)
+{
+    std::printf("test_rule_precedence\n");
+    check(found.entries.size() == 5, "scripts are not content: they ship as their library");
+    check(found.find("app:/data/levels/one.spfb") != nullptr, "an asset is found by key");
+    check(found.has_folder("app:/data/levels") && !found.has_folder("app:/data/level"), "folders are found whole");
+    deploy_settings params;
+    params.deploy_included = {"app:/data/levels/"};
+    params.deploy_excluded = {"app:/data/levels"};
+    check(deployment::find_rule(params, "app:/data/levels/one.spfb") == deployment::content_rule::exclude,
+          "exclude wins a tie, whatever the trailing slash");
+    params.deploy_included = {"app:/data/textures/wall.png"};
+    params.deploy_excluded = {"app:/data/textures"};
+    check(deployment::find_rule(params, "app:/data/textures/wall.png") == deployment::content_rule::include,
+          "the most specific rule wins");
+    check(deployment::find_rule(params, "app:/data/textures/floor.png") == deployment::content_rule::exclude,
+          "the folder's rule covers the rest");
+    check(deployment::find_rule(params, "app:/data/levels/one.spfb") == deployment::content_rule::none, "no rule elsewhere");
+    check(deployment::has_own_rule(params, "app:/data/textures/") && !deployment::has_own_rule(params, "app:/data"),
+          "has_own_rule names the key itself");
+    params.deploy_only_used_assets = true;
+    const auto* wall = found.find("app:/data/textures/wall.png");
+    const auto* one = found.find("app:/data/levels/one.spfb");
+    check(deployment::is_shipped(params, *wall), "an included asset ships though nothing uses it");
+    check(!deployment::is_shipped(params, *one), "an unused asset is left out when only used assets ship");
+    check(deployment::get_reason(params, *wall) == deployment::content_reason::included, "its reason is the rule");
+    check(deployment::passes_filter(params, *wall, deployment::content_filter::changed) &&
+              !deployment::passes_filter(params, *one, deployment::content_filter::changed),
+          "the changed filter shows assets under a rule");
+    check(deployment::is_filtered(params) && deployment::needs_walk(params), "only used assets need the walk");
+    params.deploy_only_used_assets = false;
+    check(deployment::is_filtered(params) && !deployment::needs_walk(params), "exclude rules alone filter without the walk");
+}
+
+void test_set_shipped(const deployment::content& found)
+{
+    std::printf("test_set_shipped\n");
+    deploy_settings params;
+    deployment::set_shipped(params, found, "app:/data/textures/", false);
+    check(params.deploy_excluded == std::vector<std::string>{"app:/data/textures"}, "leaving a folder out adds one exclude rule");
+    deployment::set_shipped(params, found, "app:/data/textures/wall.png", true);
+    check(params.deploy_included == std::vector<std::string>{"app:/data/textures/wall.png"}, "shipping one asset back includes it");
+    deployment::set_shipped(params, found, "app:/data/textures", true);
+    check(params.deploy_included.empty() && params.deploy_excluded.empty(),
+          "shipping the folder again drops every rule in it: everything ships anyway");
+    params.deploy_only_used_assets = true;
+    deployment::set_shipped(params, found, "app:/data/levels", false);
+    check(params.deploy_excluded.empty(), "no rule where use alone already leaves the folder out");
+    deployment::set_shipped(params, found, "app:/data/levels", true);
+    check(params.deploy_included == std::vector<std::string>{"app:/data/levels"}, "an include rule where use would leave it out");
+    deployment::reset_rules(params, "app:/data");
+    check(params.deploy_included.empty(), "reset_rules drops the rules under the key");
+    check(deployment::get_left_out_keys(params, found).size() == found.entries.size(),
+          "with nothing used and no rule, nothing ships");
+}
+
+void test_normalize_and_orphans(const deployment::content& found)
+{
+    std::printf("test_normalize_and_orphans\n");
+    deploy_settings params;
+    params.deploy_scenes = {"app:/data\\levels\\one.spfb", "app:/data/levels/one.spfb/", "app:/data/levels/gone.spfb"};
+    params.deploy_included = {"app:/data/textures/", "app:/data/textures"};
+    params.deploy_excluded = {"app:/data/nothing"};
+    if(is_case_folded())
+    {
+        params.deploy_scenes.push_back("app:/data/LEVELS/Two.spfb");
+    }
+    const auto unknown = deployment::normalize_keys(params, found);
+    auto expected_scenes = std::vector<std::string>{"app:/data/levels/one.spfb", "app:/data/levels/gone.spfb"};
+    if(is_case_folded())
+    {
+        expected_scenes.push_back("app:/data/levels/two.spfb");
+    }
+    check(params.deploy_scenes == expected_scenes, "scene keys are normalized, respelled as the project spells them, deduped");
+    check(params.deploy_included == std::vector<std::string>{"app:/data/textures"}, "rules are deduped");
+    check(unknown == std::vector<std::string>{"app:/data/levels/gone.spfb", "app:/data/nothing"}, "keys on nothing are reported");
+    const auto orphans = deployment::find_orphan_rules(params, found);
+    check(orphans == std::vector<std::string>{"app:/data/nothing"}, "rules on nothing are orphans");
+    deployment::content_filter filter{};
+    check(deployment::parse_filter("left_out", filter) && filter == deployment::content_filter::left_out, "filter names parse");
+    check(!deployment::parse_filter("bogus", filter), "an unknown filter name is refused");
+    check(std::string(deployment::get_filter_name(deployment::content_filter::changed)) == "changed", "filter names round-trip");
+}
+
+//-----------------------------------------------------------------------------
+// the walk
+//-----------------------------------------------------------------------------
+
+struct walk_project
+{
+    deployment::content_source source;
+    std::string startup_scene = "app:/data/levels/one.spfb";
+};
+
+/// A project folder whose files reference one another in every way the walk follows.
+auto make_walk_project(const fs::path& root) -> walk_project
+{
+    walk_project project;
+    project.source.project_root = root;
+    auto& database = project.source.database;
+    const auto one = make_uid("20000000-0000-4000-8000-000000000001");
+    const auto wall = make_uid("20000000-0000-4000-8000-000000000002");
+    const auto hero = make_uid("20000000-0000-4000-8000-000000000003");
+    const auto logo = make_uid("20000000-0000-4000-8000-000000000004");
+    add_asset(database, one, "app:/data/levels/one.spfb");
+    add_asset(database, make_uid("20000000-0000-4000-8000-000000000005"), "app:/data/levels/level_1.spfb");
+    add_asset(database, make_uid("20000000-0000-4000-8000-000000000006"), "app:/data/levels/level_2.spfb");
+    add_asset(database, wall, "app:/data/textures/wall.png");
+    add_asset(database, make_uid("20000000-0000-4000-8000-000000000007"), "app:/data/textures/floor.png");
+    add_asset(database, make_uid("20000000-0000-4000-8000-000000000008"), "app:/data/textures/secret.png");
+    add_asset(database, make_uid("20000000-0000-4000-8000-000000000009"), "app:/data/textures/icon.png");
+    add_asset(database, make_uid("20000000-0000-4000-8000-00000000000a"), "app:/data/textures/frame.png");
+    add_asset(database, make_uid("20000000-0000-4000-8000-00000000000b"), "app:/data/textures/unused.png");
+    add_asset(database, logo, "app:/data/textures/logo.png");
+    add_asset(database, hero, "app:/data/models/hero.fbx");
+    add_asset(database, make_uid("20000000-0000-4000-8000-00000000000c"), "app:/data/models/hero_material.mat", hero);
+    add_asset(database, make_uid("20000000-0000-4000-8000-00000000000d"), "app:/data/ui/hud.rhtml");
+    add_asset(database, make_uid("20000000-0000-4000-8000-00000000000e"), "app:/data/ui/hud.rcss");
+    add_asset(database, make_uid("20000000-0000-4000-8000-00000000000f"), "app:/data/music/theme.ogg");
+    add_asset(database, make_uid("20000000-0000-4000-8000-000000000010"), "app:/data/scripts/game.cs");
+    write_text(root / "data/levels/one.spfb",
+               "{\"mesh\": {\"uid\": " + quote(wall) + "}, \"model\": " + quote(hero) +
+                   ", \"document\": \"app:/data/ui/hud.rhtml\"}");
+    write_text(root / "data/ui/hud.rhtml",
+               "<rml><head><link type=\"text/rcss\" href=\"hud.rcss\"/></head>"
+               "<body><img src=\"../textures/icon.png\"/></body></rml>");
+    write_text(root / "data/ui/hud.rcss", "body { decorator: image(\"app:/data/textures/frame.png\"); }");
+    // Binary: the path after the zero byte must not be followed.
+    write_text(root / "data/textures/wall.png", std::string("PNG\0\0 \"app:/data/textures/secret.png\"", 37));
+    write_text(root / "settings/settings.cfg", "{\"splash\": " + quote(logo) + "}");
+    write_text(root / "data/scripts/game.cs",
+               "class Game {\n"
+               "  void Load(int n, string name) {\n"
+               "    Scene.Load($\"app:/data/levels/level_{n}.spfb\");\n"
+               "    var floor = \"app:/data/Textures/floor\";\n"
+               "    var music = \"app:/data/music/\" + name;\n"
+               "  }\n"
+               "}\n");
+    write_text(root / "compiled/textures/wall.png.asset", std::string(COMPILED_WALL_SIZE, 'w'));
+    return project;
+}
+
+void test_walk(const deployment::content& found)
+{
+    std::printf("test_walk\n");
+    using reason = deployment::content_reason;
+    check(is_used_by(found, "app:/data/levels/one.spfb", reason::scene, ""), "the startup scene is reached as a scene");
+    check(is_used_by(found, "app:/data/textures/wall.png", reason::referenced, "app:/data/levels/one.spfb"),
+          "a quoted uid is followed");
+    check(is_used_by(found, "app:/data/ui/hud.rhtml", reason::referenced, "app:/data/levels/one.spfb"),
+          "a quoted path is followed");
+    check(is_used_by(found, "app:/data/ui/hud.rcss", reason::referenced, "app:/data/ui/hud.rhtml"),
+          "a UI document's link is followed, relative to it");
+    check(is_used_by(found, "app:/data/textures/icon.png", reason::referenced, "app:/data/ui/hud.rhtml"),
+          "a link out of the document's folder is followed");
+    check(is_used_by(found, "app:/data/textures/frame.png", reason::referenced, "app:/data/ui/hud.rcss"),
+          "a style sheet's quoted path is followed");
+    check(is_used_by(found, "app:/data/models/hero_material.mat", reason::referenced, "app:/data/models/hero.fbx"),
+          "what an import generates beside its source ships with it");
+    check(is_used_by(found, "app:/data/textures/logo.png", reason::referenced, "Project Settings"),
+          "the project settings' handles are followed");
+    check(is_unused(found, "app:/data/textures/secret.png"), "a binary file is not read for references");
+    check(is_unused(found, "app:/data/textures/unused.png"), "what nothing uses is unused");
+    check(is_unused(found, "app:/data/levels/level_1.spfb"), "an interpolated path names no asset");
+    check(is_named_by(found, "app:/data/levels", "app:/data/scripts/game.cs"),
+          "an interpolated path names the folder before it, and the script");
+    check(is_named_by(found, "app:/data/music", "app:/data/scripts/game.cs"), "a path built from a folder names that folder");
+    if(is_case_folded())
+    {
+        check(is_used_by(found, "app:/data/textures/floor.png", reason::named_in_script, "app:/data/scripts/game.cs"),
+              "a script path without its extension, in another case, finds the asset");
+    }
+    check(found.missing_scenes == std::vector<std::string>{"app:/data/levels/gone.spfb"}, "a scene no longer there is reported");
+    const auto* wall = found.find("app:/data/textures/wall.png");
+    check(wall != nullptr && wall->size == COMPILED_WALL_SIZE, "an asset's size is its compiled file's");
+}
+
+void test_tree(const deployment::content& found)
+{
+    std::printf("test_tree\n");
+    deploy_settings params;
+    params.deploy_only_used_assets = true;
+    deployment::content_tree tree;
+    tree.build(found);
+    deployment::tree_view view;
+    tree.update(params, view);
+    const auto& root = tree.get_root();
+    const auto shipped = found.entries.size() - deployment::get_left_out_keys(params, found).size();
+    check(root.asset_count == found.entries.size() && root.shipped_count == shipped, "the root counts every asset");
+    std::vector<std::size_t> rows;
+    const auto get_names = [&]()
+    {
+        std::vector<std::string> names;
+        for(const auto row : rows)
+        {
+            names.push_back(tree.get_nodes()[row].name);
+        }
+        return names;
+    };
+    tree.collect_rows([](const deployment::tree_node&) { return false; }, rows);
+    check(get_names() == std::vector<std::string>{"levels", "models", "music", "textures", "ui"},
+          "closed, only the top folders show, by name");
+    tree.collect_rows([](const deployment::tree_node& node) { return node.key == "app:/data/ui"; }, rows);
+    check(get_names() == std::vector<std::string>{"levels", "models", "music", "textures", "ui", "hud.rcss", "hud.rhtml"},
+          "an open folder's assets follow it");
+    view.search = "WALL";
+    tree.update(params, view);
+    tree.collect_rows([](const deployment::tree_node&) { return false; }, rows);
+    check(get_names() == std::vector<std::string>{"textures", "wall.png"}, "a search shows the matches inside their folders");
+    view.search.clear();
+    view.filter = deployment::content_filter::left_out;
+    tree.update(params, view);
+    tree.collect_rows([](const deployment::tree_node&) { return false; }, rows);
+    check(!contains(get_names(), "ui") && contains(get_names(), "textures"), "the left out filter hides folders that all ship");
+    check(tree.get_left_out_used_count() == 0, "nothing used is left out");
+    params.deploy_excluded = {"app:/data/textures/wall.png"};
+    tree.update(params, view);
+    check(tree.get_left_out_used_count() == 1, "an excluded asset the scenes use is counted");
+    check(tree.get_root().has_rule_inside, "a rule inside marks its folders");
+}
+
+//-----------------------------------------------------------------------------
+// files
+//-----------------------------------------------------------------------------
+
+void test_file_classification(const fs::path& root)
+{
+    std::printf("test_file_classification\n");
+    check(deployment::is_script_key("app:/data/scripts/game.cs") && !deployment::is_script_key("app:/data/a.png"),
+          "scripts are told by their extension");
+    const auto compiled = deployment::get_compiled_paths("app:/data/a/b.png", root);
+    check(compiled == std::vector<fs::path>{root / "compiled/a/b.png.asset"}, "an asset compiles to one file");
+    check(deployment::get_compiled_paths("app:/settings/settings.cfg", root).empty(), "a key outside the data folder has none");
+    check(deployment::get_compiled_paths("app:/data/scripts/game.cs", root).empty(), "a script has none");
+    check(!deployment::get_compiled_paths("app:/data/shaders/fs_a.sc", root).empty(), "a shader compiles once per renderer");
+    check(deployment::get_source_key("app", "a/b.png.asset") == "app:/data/a/b.png", "a compiled file names its source");
+    write_text(root / "libs/game.dll", "dll");
+    write_text(root / "libs/game.xml", "docs");
+    write_text(root / "libs/other.xml", "data");
+    check(deployment::is_debug_companion_file(root / "libs/game.pdb"), "symbols are debug companions");
+    check(deployment::is_debug_companion_file(root / "libs/game.xml"), "docs beside a dll are debug companions");
+    check(!deployment::is_debug_companion_file(root / "libs/other.xml"), "other xml files are not");
+    check(deployment::is_loose_only_file(root / "libs/game.dll"), "libraries stay loose");
+    check(!deployment::is_shipped_compiled_file(root / "x.manifest", true), "manifests never ship");
+    check(!deployment::is_shipped_compiled_file(root / "game.cs.asset", true), "compiled scripts never ship");
+    check(!deployment::is_shipped_compiled_file(root / "libs/game.pdb", false) &&
+              deployment::is_shipped_compiled_file(root / "libs/game.pdb", true),
+          "symbols ship only when asked for");
+}
+
+void test_pack_inputs(const fs::path& root)
+{
+    std::printf("test_pack_inputs\n");
+    const auto compiled = root / "compiled";
+    const auto cooked = root / "cooked";
+    write_text(compiled / "a.png.asset", "a");
+    write_text(compiled / "prefabs/b.pfb.asset", "plain");
+    write_text(compiled / "scripts/game.dll", "dll");
+    write_text(cooked / "prefabs/b.pfb.asset", "cooked");
+    write_text(root / ex::get_asset_index_file_name(), "index");
+    const auto inputs = deployment::collect_pack_inputs(compiled,
+                                                        cooked,
+                                                        root / ex::get_asset_index_file_name(),
+                                                        [](const fs::path&, const fs::path& relative)
+                                                        {
+                                                            return relative.generic_string() != "a.png.asset";
+                                                        });
+    std::vector<std::string> names;
+    for(const auto& input : inputs)
+    {
+        names.push_back(input.name);
+    }
+    check(names == std::vector<std::string>{ex::get_asset_index_file_name(), "compiled/prefabs/b.pfb.asset"},
+          "the pack takes the shipped compiled files and the index, by name, but no library");
+    check(inputs.size() == 2 && read_text(inputs[1].source) == "cooked", "a cooked variant replaces its compiled file");
+}
+
+void test_stale_binaries(const fs::path& root)
+{
+    std::printf("test_stale_binaries\n");
+#ifdef _WIN32
+    const std::vector<std::string> kept = {"Game.exe", "keep.dll"};
+    const std::string stale = "old.dll";
+#else
+    const std::vector<std::string> kept = {"libkeep.so"};
+    const std::string stale = "libold.so.1";
+#endif
+    std::set<std::string> shipped;
+    for(const auto& name : kept)
+    {
+        write_text(root / name, "binary");
+        shipped.insert(deployment::get_binary_key(root / name));
+    }
+    write_text(root / stale, "binary");
+    write_text(root / "notes.txt", "text");
+    deployment::remove_stale_binaries(root, shipped);
+    check(!is_present(root / stale), "a binary this build no longer ships is removed");
+    check(std::all_of(kept.begin(), kept.end(), [&](const std::string& name) { return is_present(root / name); }),
+          "the shipped binaries stay");
+    check(is_present(root / "notes.txt"), "other files stay");
+    write_text(root / "runtime/1.0/a.txt", "old");
+    write_text(root / "runtime/2.0/a.txt", "new");
+    write_text(root / "runtime/stray.txt", "stray");
+    deployment::remove_siblings(root / "runtime/2.0");
+    check(is_present(root / "runtime/2.0/a.txt") && !is_present(root / "runtime/1.0") && !is_present(root / "runtime/stray.txt"),
+          "remove_siblings keeps only the current version");
+}
+
+//-----------------------------------------------------------------------------
+// protocol data
+//-----------------------------------------------------------------------------
+
+auto read_packed_text(const std::string& name) -> std::string
+{
+    const auto packed = fs::find_packed_file(fs::path(std::string(TEST_PROTOCOL) + ":/" + name));
+    return packed.is_found() ? std::string(packed.data, packed.data + packed.size) : std::string{};
+}
+
+auto is_packed(const std::string& name) -> bool
+{
+    return fs::find_packed_file(fs::path(std::string(TEST_PROTOCOL) + ":/" + name)).is_found();
+}
+
+auto make_protocol_job(const fs::path& root) -> deployment::protocol_job
+{
+    deployment::protocol_job job;
+    job.protocol = "app";
+    job.compiled_root = root / "project/compiled";
+    job.cooked_root = root / "cooked/app";
+    job.protocol_root = root / "deploy/data/app";
+    add_asset(job.database, make_uid("30000000-0000-4000-8000-000000000001"), "app:/data/textures/wall.png");
+    add_asset(job.database, make_uid("30000000-0000-4000-8000-000000000002"), "app:/data/textures/floor.png");
+    add_asset(job.database, make_uid("30000000-0000-4000-8000-000000000003"), "app:/data/prefabs/a.pfb");
+    add_asset(job.database, make_uid("30000000-0000-4000-8000-000000000004"), "app:/data/scripts/game.cs");
+    job.left_out = {fs::make_path_key("app:/data/textures/floor.png")};
+    write_text(job.compiled_root / "textures/wall.png.asset", "wall");
+    write_text(job.compiled_root / "textures/floor.png.asset", "floor");
+    write_text(job.compiled_root / "prefabs/a.pfb.asset", "plain prefab");
+    write_text(job.compiled_root / "scripts/game.dll", "library");
+    write_text(job.compiled_root / "scripts/game.pdb", "symbols");
+    write_text(job.cooked_root / "prefabs/a.pfb.asset", "cooked prefab");
+    return job;
+}
+
+auto mount_deployed(const fs::path& protocol_root, bool with_patch) -> bool
+{
+    std::string error;
+    fs::unmount_packs();
+    bool is_mounted = fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_pack_file_name(), error);
+    if(with_patch)
+    {
+        is_mounted = is_mounted && fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_patch_pack_file_name(1), error);
+    }
+    check(is_mounted, "the deployed packs mount: " + error);
+    return is_mounted;
+}
+
+void test_packed_protocol(deployment::protocol_job& job)
+{
+    std::printf("test_packed_protocol\n");
+    write_text(job.protocol_root / deployment::LEGACY_ASSET_INDEX_NAME, "index of an older build");
+    deployment::deploy_protocol_data(job);
+    const auto& protocol_root = job.protocol_root;
+    check(!is_present(protocol_root / deployment::LEGACY_ASSET_INDEX_NAME), "the index under its older name is removed");
+    check(is_present(protocol_root / ex::get_pack_file_name()), "a packed protocol writes its pack");
+    check(!is_present(protocol_root / ex::get_asset_index_file_name()), "the index travels inside the pack");
+    check(read_text(protocol_root / "compiled/scripts/game.dll") == "library", "libraries stay loose");
+    check(!is_present(protocol_root / "compiled/scripts/game.pdb"), "symbols ship only when asked for");
+    fs::add_path_protocol(TEST_PROTOCOL, protocol_root);
+    if(mount_deployed(protocol_root, false))
+    {
+        check(read_packed_text("compiled/textures/wall.png.asset") == "wall", "a shipped asset is packed");
+        check(!is_packed("compiled/textures/floor.png.asset"), "a left out asset is not packed");
+        check(read_packed_text("compiled/prefabs/a.pfb.asset") == "cooked prefab", "the cooked variant is packed");
+        const auto index = read_packed_text(ex::get_asset_index_file_name());
+        check(index.find("wall.png") != std::string::npos && index.find("floor.png") == std::string::npos &&
+                  index.find("game.cs") == std::string::npos,
+              "the index lists what ships, without left out assets and scripts");
+    }
+    fs::unmount_packs();
+}
+
+void test_loose_protocol(deployment::protocol_job& job)
+{
+    std::printf("test_loose_protocol\n");
+    job.is_packed = false;
+    deployment::deploy_protocol_data(job);
+    const auto& protocol_root = job.protocol_root;
+    check(!is_present(protocol_root / ex::get_pack_file_name()), "a loose build removes the pack an earlier build left");
+    check(is_present(protocol_root / ex::get_asset_index_file_name()), "the index ships loose");
+    check(read_text(protocol_root / "compiled/textures/wall.png.asset") == "wall", "shipped assets are copied");
+    check(!is_present(protocol_root / "compiled/textures/floor.png.asset"), "left out assets are not");
+    check(read_text(protocol_root / "compiled/prefabs/a.pfb.asset") == "cooked prefab", "cooked variants replace compiled files");
+    job.is_packed = true;
+}
+
+void test_patch_over_release(deployment::protocol_job& job, const fs::path& root)
+{
+    std::printf("test_patch_over_release\n");
+    deployment::deploy_protocol_data(job);
+    check(!is_present(job.protocol_root / "compiled/textures/wall.png.asset") &&
+              !is_present(job.protocol_root / ex::get_asset_index_file_name()),
+          "packing again removes the loose files a loose build left");
+    const auto release_pack = root / "release/app" / ex::get_pack_file_name();
+    fs::error_code ec;
+    fs::create_directories(release_pack.parent_path(), ec);
+    fs::copy_file(job.protocol_root / ex::get_pack_file_name(), release_pack, fs::copy_options::overwrite_existing, ec);
+    write_text(job.compiled_root / "textures/wall.png.asset", "wall, changed");
+    job.patch_release_pack = release_pack;
+    deployment::deploy_protocol_data(job);
+    check(read_text(job.protocol_root / ex::get_pack_file_name()) == read_text(release_pack), "the release's pack ships unchanged");
+    check(is_present(job.protocol_root / ex::get_patch_pack_file_name(1)), "the patch holds the changes");
+    if(mount_deployed(job.protocol_root, true))
+    {
+        check(read_packed_text("compiled/textures/wall.png.asset") == "wall, changed", "the patch serves the changed asset");
+        check(read_packed_text("compiled/prefabs/a.pfb.asset") == "cooked prefab", "the release serves the rest");
+    }
+    fs::unmount_packs();
+    job.patch_release_pack.clear();
+    deployment::deploy_protocol_data(job);
+    check(!is_present(job.protocol_root / ex::get_patch_pack_file_name(1)), "a full build removes the patch");
+}
+
+//-----------------------------------------------------------------------------
+// releases
+//-----------------------------------------------------------------------------
+
+void test_release_names()
+{
+    std::printf("test_release_names\n");
+    check(deployment::is_valid_release_name("1.0.0") && deployment::is_valid_release_name("com10"), "plain names are valid");
+    for(const std::string name : {"", ".", "..", "a/b", "a\\b", "a:b", "name.", "name ", "con", "CON.txt", "COM1", "lpt9"})
+    {
+        check(!deployment::is_valid_release_name(name), "'" + name + "' cannot name a release folder");
+    }
+    check(!deployment::is_valid_release_name(std::string("a\tb")), "control characters are refused");
+}
+
+void test_keep_and_remove_release(const fs::path& root)
+{
+    std::printf("test_keep_and_remove_release\n");
+    const auto project = root / "project";
+    const auto build = root / "build";
+    check(!deployment::keep_release(project, build, "1.0").is_ok(), "a folder without a packed build cannot be kept");
+    for(const auto* protocol : deployment::PACKED_PROTOCOLS)
+    {
+        write_text(build / deployment::DATA_FOLDER / protocol / ex::get_pack_file_name(), std::string("pack of ") + protocol);
+    }
+    check(!deployment::keep_release(project, build, "a/b").is_ok(), "an invalid name is refused");
+    check(deployment::keep_release(project, build, "1.0").is_ok(), "a full packed build is kept");
+    check(deployment::is_kept_release(project, "1.0"), "the release is kept");
+    check(deployment::list_releases(project) == std::vector<std::string>{"1.0"}, "it is listed");
+    check(read_text(deployment::get_release_pack(project, "1.0", "app")) == "pack of app", "its packs are copied");
+    check(!deployment::keep_release(project, build, "1.0").is_ok(), "a name already kept is refused");
+    write_text(build / deployment::DATA_FOLDER / "app" / ex::get_patch_pack_file_name(1), "patch");
+    check(!deployment::keep_release(project, build, "1.1").is_ok(), "a patched build cannot be kept");
+    check(!deployment::remove_release(project, "2.0").is_ok(), "removing a release that is not kept fails");
+    check(deployment::remove_release(project, "1.0").is_ok() && deployment::list_releases(project).empty(),
+          "a removed release is gone");
+}
+
+//-----------------------------------------------------------------------------
+// dependencies, folders, processes
+//-----------------------------------------------------------------------------
+
+void test_dependency_parse(const fs::path& root)
+{
+    std::printf("test_dependency_parse\n");
+#ifdef _WIN32
+    const auto absolute = (root / "sub/abs.dll").string();
+    const std::string output = "[ApplicationDirectory] game.dll : game.dll\r\n"
+                               "[ApplicationDirectory] abs.dll : " + absolute + "\r\n"
+                               "[WindowsFolder] kernel32.dll : C:\\Windows\\system32\\kernel32.dll\r\n"
+                               "[NotFound] missing.dll : \r\n";
+    const auto found = deployment::parse_dependencies(output, root);
+    check(found == std::vector<std::string>{(root / "game.dll").string(), absolute},
+          "the libraries of the application's folder are listed, relative ones resolved against it");
+#else
+    write_text(root / "libgame.so", "library");
+    const std::string output = "\tlinux-vdso.so.1 (0x00007ffd)\n"
+                               "\tlibgame.so => " + (root / "libgame.so").string() + " (0x00007f00)\n"
+                               "\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f01)\n";
+    const auto found = deployment::parse_dependencies(output, root);
+    check(found == std::vector<std::string>{(root / "libgame.so").string()}, "only the libraries beside the player are listed");
+#endif
+}
+
+void test_failed_scan_throws(const fs::path& root)
+{
+    std::printf("test_failed_scan_throws\n");
+    for(int attempt = 0; attempt < 2; ++attempt)
+    {
+        bool is_thrown = false;
+        try
+        {
+            deployment::find_dependencies(root / "no_such_player.exe", root / "no_such_scanner.exe");
+        }
+        catch(const std::exception&)
+        {
+            is_thrown = true;
+        }
+        check(is_thrown, "a scan that does not run throws, and is not kept for the next deploy");
+    }
+}
+
+void test_folders(const fs::path& root)
+{
+    std::printf("test_folders\n");
+    const auto build = root / "build";
+    fs::error_code ec;
+    fs::create_directories(build, ec);
+    check(!deployment::is_previous_deploy(build), "an empty folder holds no earlier deploy");
+    write_text(build / deployment::DATA_FOLDER / "app" / ex::get_pack_file_name(), "pack");
+    check(deployment::is_previous_deploy(build), "a packed build is an earlier deploy");
+    const auto loose_build = root / "loose_build";
+    write_text(loose_build / deployment::DATA_FOLDER / "app" / ex::get_asset_index_file_name(), "index");
+    check(deployment::is_previous_deploy(loose_build), "a loose build is an earlier deploy");
+    const auto older_build = root / "older_build";
+    write_text(older_build / deployment::DATA_FOLDER / "app" / deployment::LEGACY_ASSET_INDEX_NAME, "index");
+    check(deployment::is_previous_deploy(older_build), "a loose build of an older engine version is an earlier deploy");
+    const auto project = root / "project";
+    check(deployment::is_inside(project / "a/b", project), "a path below a folder is inside it");
+    check(deployment::is_inside(project, project), "a folder is inside itself");
+    check(!deployment::is_inside(root / "projectX", project), "a sibling with a longer name is not inside");
+    check(!deployment::is_inside(project / "a/../..", project), "'..' cannot slip out");
+    if(is_case_folded())
+    {
+        check(deployment::is_inside(root / "PROJECT/a", project), "letter case does not slip past");
+    }
+    check(!deployment::is_executable_in_use(root / "no_such_game.exe"), "a missing executable is not in use");
+#ifdef _WIN32
+    const auto runner = fs::resolve_protocol("binary:/unravel-tests" + fs::executable_extension());
+    if(is_present(runner))
+    {
+        check(deployment::is_executable_in_use(runner), "the running test runner is in use");
+    }
+#endif
+}
+
+auto wait_for_file(const fs::path& file) -> bool
+{
+    const auto deadline = std::chrono::steady_clock::now() + SPAWN_WAIT;
+    while(std::chrono::steady_clock::now() < deadline)
+    {
+        if(read_text(file).find("spawned") != std::string::npos)
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(SPAWN_POLL);
+    }
+    return false;
+}
+
+void test_spawn_detached(const fs::path& root)
+{
+    std::printf("test_spawn_detached\n");
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+#ifdef _WIN32
+    const char* shell = std::getenv("ComSpec");
+    const std::vector<std::string> arguments = {shell == nullptr ? "cmd.exe" : shell, "/c", "echo spawned> marker.txt"};
+#else
+    const std::vector<std::string> arguments = {"/bin/sh", "-c", "echo spawned > marker.txt"};
+#endif
+    const auto error = unravel::process::spawn_detached(arguments, root.string());
+    check(!error, "a program starts: " + error.message());
+    check(!error && wait_for_file(root / "marker.txt"), "it runs in the working directory given");
+    const auto failed = unravel::process::spawn_detached({(root / "no_such_program.exe").string()}, root.string());
+    check(static_cast<bool>(failed), "a program that does not exist reports an error");
+}
+
+auto run_deploy_library_suite(rtti::context&) -> int
+{
+    g_checks = 0;
+    g_failures = 0;
+    const auto temp = get_temp_folder();
+    fs::error_code ec;
+    fs::remove_all(temp, ec);
+    try
+    {
+        test_keys();
+        const auto listed = make_listed_content(temp / "listed");
+        test_rule_precedence(listed);
+        test_set_shipped(listed);
+        test_normalize_and_orphans(listed);
+        const auto project = make_walk_project(temp / "walk");
+        deploy_settings params;
+        params.deploy_scenes = {"app:/data/levels/gone.spfb"};
+        const auto walked = deployment::detect_content(project.source, params, project.startup_scene);
+        test_walk(walked);
+        test_tree(walked);
+        test_file_classification(temp / "files");
+        test_pack_inputs(temp / "inputs");
+        test_stale_binaries(temp / "binaries");
+        auto job = make_protocol_job(temp / "protocol");
+        test_packed_protocol(job);
+        test_loose_protocol(job);
+        test_patch_over_release(job, temp / "protocol");
+        test_release_names();
+        test_keep_and_remove_release(temp / "releases");
+        test_dependency_parse(temp / "dependencies");
+        test_failed_scan_throws(temp / "dependencies");
+        test_folders(temp / "folders");
+        test_spawn_detached(temp / "spawn");
+    }
+    catch(const std::exception& ex)
+    {
+        check(false, std::string("unexpected exception: ") + ex.what());
+    }
+    fs::unmount_packs();
+    fs::remove_all(temp, ec);
+    std::printf("deploy library: %d checks, %d failures\n", g_checks, g_failures);
+    return g_failures;
+}
+
+} // namespace
+
+REGISTER_TEST_SUITE("deploy library", run_deploy_library_suite)
