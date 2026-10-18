@@ -1,123 +1,38 @@
 #pragma once
+#include "environment.h"
 #include "subprocess.h"
+#include <functional>
+#include <memory>
 #include <string>
-#include <cstring>
+#include <thread>
 #include <vector>
 
 namespace subprocess
 {
+/// Gets one line of a process's output (stdout and stderr together), without its line break.
+using line_callback = std::function<void(const std::string& line)>;
+
 struct call_result
 {
-    int retcode{};
+    /// The exit code; 1 when the process did not start.
+    int retcode{1};
+    /// Everything it printed, stdout and stderr together; the reason when it did not start.
     std::string out_output;
     std::string err_output;
+    /// Whether the process started.
+    bool started{};
 };
 
-inline auto call(const std::vector<std::string>& args_array, const std::vector<std::string>& environment_array = {}) -> call_result
-{
-    call_result result;
-    result.retcode = 1;
-
-    std::vector<const char*> args;
-    std::vector<const char*> environment;
-    args.reserve(args_array.size());
-    for(const auto& arg : args_array)
-    {
-        args.emplace_back(arg.c_str());
-    }
-    args.emplace_back(nullptr);
-
-    environment.reserve(environment_array.size());
-    for(const auto& env : environment_array)
-    {
-        environment.emplace_back(env.c_str());
-    }
-    environment.emplace_back(nullptr);
-
-
-
-    subprocess_s subprocess;
-    std::memset(&subprocess, 0, sizeof(subprocess));
-    {
-        // No window: a process started without a console (detached, or from a shortcut) would
-        // otherwise open a console window for every tool it runs; the output is read from pipes.
-        int options = /*subprocess_option_enable_async |*/ subprocess_option_inherit_environment |
-                      subprocess_option_search_user_path | subprocess_option_combined_stdout_stderr |
-                      subprocess_option_no_window;
-        int op_code = -1;
-        
-        if(environment_array.empty())
-        {
-            op_code = subprocess_create(args.data(), options, &subprocess);
-        }
-        else
-        {
-            op_code = subprocess_create_ex(args.data(), options, environment.data(), &subprocess);
-        }
-        
-        if(0 != op_code)
-        {
-            // an error occurred!
-            result.out_output = "Failed to create subprocess for " + args_array.front();
-            return result;
-        }
-    }
-
-    {
-        // Buffer for reading the output
-        char out_buffer[1024];
-        char err_buffer[1024];
-
-        auto read_all_stdout = [&]()
-        {
-            unsigned bytes_read;
-            while((bytes_read = subprocess_read_stdout(&subprocess, out_buffer, sizeof(out_buffer) - 1)) > 0)
-            {
-                out_buffer[bytes_read] = '\0'; // Null-terminate the buffer
-                result.out_output += out_buffer;
-            }
-        };
-
-        auto read_all_stderr = [&]()
-        {
-            unsigned bytes_read;
-            while((bytes_read = subprocess_read_stderr(&subprocess, err_buffer, sizeof(err_buffer) - 1)) > 0)
-            {
-                err_buffer[bytes_read] = '\0'; // Null-terminate the buffer
-                result.err_output += err_buffer;
-            }
-        };
-
-        // Read output from the process continuously
-        while(subprocess_alive(&subprocess))
-        {
-            read_all_stdout();
-            read_all_stderr();
-        }
-
-        // Ensure all remaining output is drained after the process finishes
-        read_all_stdout();
-        read_all_stderr();
-    }
-
-    {
-        int op_code = subprocess_join(&subprocess, &result.retcode);
-        if(0 != op_code)
-        {
-            // an error occurred!
-        }
-    }
-
-    {
-        int op_code = subprocess_destroy(&subprocess);
-        if(0 != op_code)
-        {
-            // an error occurred!
-        }
-    }
-
-    return result;
-}
+/**
+ * @brief Runs a process to completion and returns what it printed.
+ *
+ * @param args_array The program, then its arguments.
+ * @param environment_array "NAME=value" entries that add to or replace this process's environment.
+ * @param on_line Gets every output line as it arrives, on this thread; may be empty.
+ */
+auto call(const std::vector<std::string>& args_array,
+          const std::vector<std::string>& environment_array = {},
+          const line_callback& on_line = {}) -> call_result;
 
 inline auto call(const std::string& process, const std::vector<std::string>& args_array = {}) -> call_result
 {
@@ -126,4 +41,30 @@ inline auto call(const std::string& process, const std::vector<std::string>& arg
 
     return call(merged);
 }
+
+/**
+ * @brief A process that runs until it exits or is stopped, such as a log follower.
+ *
+ * Its output lines are handed over from a thread of its own. Stopping, or destroying the stream, ends the
+ * process and waits for that thread.
+ */
+class stream
+{
+public:
+    stream() = default;
+    ~stream();
+    stream(const stream&) = delete;
+    auto operator=(const stream&) -> stream& = delete;
+
+    /// Starts the process, stopping one this stream still runs. False when it does not start.
+    auto start(const std::vector<std::string>& args_array, line_callback on_line) -> bool;
+    void stop();
+    /// Whether the process still prints: false once it exited or was stopped.
+    auto is_running() const -> bool;
+
+private:
+    struct state;
+    std::shared_ptr<state> state_;
+    std::thread reader_;
+};
 } // namespace subprocess
