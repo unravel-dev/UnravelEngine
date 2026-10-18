@@ -38,6 +38,9 @@ struct pack_image
 /// compressed with a codec this build does not decode.
 auto open_pack_image(const path& file, pack_image& image, std::string& err) -> bool;
 
+/// Maps and parses a pack that is a region of an open file (see mapped_file::open).
+auto open_pack_image(file_region region, pack_image& image, std::string& err) -> bool;
+
 /**
  * @brief The raw bytes of an entry stored in compressed blocks.
  * @return Null when a block does not decode. Throws std::bad_alloc when the size cannot be allocated.

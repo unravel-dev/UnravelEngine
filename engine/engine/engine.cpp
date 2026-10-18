@@ -27,7 +27,9 @@
 #include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <ospp/event.h>
+#include <ospp/paths.h>
 
+#include <base/platform/config.hpp>
 #include <crash/crash.hpp>
 #include <cstdlib>
 #include <exception>
@@ -45,9 +47,22 @@ namespace unravel
 namespace
 {
 
-// Written next to the executable, never into the launching shell's current directory.
+// Written into the binary folder, never into the launching shell's current directory.
 constexpr const char* LOG_FILE_NAME = "Log.txt";
 constexpr const char* CRASH_LOG_FILE_NAME = "CrashLog.txt";
+
+/// The binary folder (binary:/): the application's own files, and where the engine writes its log,
+/// crash log and caches. On desktop it is the executable's folder. An Android application runs in
+/// the system's app_process, whose folder is read-only, so its internal storage takes that place.
+auto get_binary_path(const cmd_line::parser& parser) -> fs::path
+{
+#if UNRAVEL_PLATFORM_ANDROID
+    (void)parser;
+    return fs::path(os::paths::get_preferences_path({}, {})).parent_path();
+#else
+    return fs::executable_path(parser.app_name().c_str()).parent_path();
+#endif
+}
 
 auto context_ptr() -> rtti::context*&
 {
@@ -167,7 +182,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
     context_ptr() = &ctx;
 
-    fs::path binary_path = fs::executable_path(parser.app_name().c_str()).parent_path();
+    const fs::path binary_path = get_binary_path(parser);
     fs::add_path_protocol("binary", binary_path);
 
     fs::path engine_data = binary_path / "data" / "engine";

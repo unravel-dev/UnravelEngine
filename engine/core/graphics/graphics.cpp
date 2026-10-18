@@ -408,6 +408,11 @@ bool init(bgfx::Init init_data)
     }
     s_context.frame = 0;
     s_context.initted = bgfx::init(init_data);
+    if(!s_context.initted)
+    {
+        log("error", "The graphics backend failed to start.", __FILE__, __LINE__);
+        return false;
+    }
     s_context.u_world = bgfx::createUniform("u_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
     s_context.u_prev_world = bgfx::createUniform("u_prev_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
 

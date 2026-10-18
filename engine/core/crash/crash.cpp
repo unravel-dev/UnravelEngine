@@ -53,6 +53,8 @@ bool g_write_minidump{true};
 #if !UNRAVEL_PLATFORM_WINDOWS
 // Fixed alt-stack (avoid SIGSTKSZ — not a constant on newer glibc).
 alignas(16) unsigned char g_alt_stack_storage[256 * 1024];
+// The handlers installed before ours for the crash signals, which get the signal after it is reported.
+struct sigaction g_previous_crash_actions[NSIG]{};
 #endif
 
 constexpr std::size_t k_max_frames = 128;
@@ -547,7 +549,12 @@ auto handle_signal(int sig) -> void
         case signal_type::crash:
         {
             report_fatal_crash(sig_info, nullptr);
+#if UNRAVEL_PLATFORM_WINDOWS
             std::_Exit(128 + sig);
+#else
+            // posix_signal_handler hands the signal on to the previous handler.
+            return;
+#endif
         }
     }
 }
@@ -576,9 +583,26 @@ LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS* info)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 #else
-auto posix_signal_handler(int sig, siginfo_t* /*info*/, void* /*ucontext*/) -> void
+/// Hands a reported crash signal to the handler installed before ours: on Android the system's crash
+/// reporter, which writes the tombstone; elsewhere usually the default action, which ends the process
+/// and may write a core dump. A fault comes back by itself when the faulting instruction runs again
+/// after this handler returns; a signal that was sent (abort, kill) is sent again.
+void chain_crash_signal(int sig, const siginfo_t* info)
+{
+    (void)sigaction(sig, &g_previous_crash_actions[sig], nullptr);
+    if(info == nullptr || info->si_code <= 0)
+    {
+        (void)raise(sig);
+    }
+}
+
+auto posix_signal_handler(int sig, siginfo_t* info, void* /*ucontext*/) -> void
 {
     handle_signal(sig);
+    if(get_signal_type(sig) == signal_type::crash)
+    {
+        chain_crash_signal(sig, info);
+    }
 }
 #endif
 
@@ -674,7 +698,7 @@ auto install_platform_handlers() -> void
     };
     for(int sig : crash_signals)
     {
-        (void)sigaction(sig, &action, nullptr);
+        (void)sigaction(sig, &action, &g_previous_crash_actions[sig]);
     }
     struct sigaction soft_action
     {

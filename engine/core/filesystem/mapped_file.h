@@ -8,6 +8,18 @@
 namespace fs
 {
 
+/// A byte range of a file that is already open: a file packaged inside the application's package,
+/// such as an asset stored uncompressed in an APK.
+struct file_region
+{
+    /// The open file; the mapped_file that maps the region takes it over.
+    int descriptor{-1};
+    std::uint64_t offset{};
+    std::uint64_t size{};
+    /// What errors call the region.
+    std::string name;
+};
+
 /**
  * @brief A whole file mapped read-only into memory, unmapped and closed on destruction.
  *
@@ -24,6 +36,10 @@ public:
 
     /// Maps `file`; false with `err` set when it cannot be opened, is empty or cannot be mapped.
     auto open(const path& file, std::string& err) -> bool;
+
+    /// Maps `region` and takes over its descriptor, closed on destruction (also after a failure);
+    /// false with `err` set when it is empty or cannot be mapped. Not supported on Windows.
+    auto open(file_region region, std::string& err) -> bool;
 
     auto data() const -> const std::uint8_t*
     {
@@ -44,6 +60,9 @@ private:
     void* mapping_{};
     const std::uint8_t* data_{};
     std::uint64_t size_{};
+    /// The bytes between the start of the mapping and data_: a region is mapped from the page boundary
+    /// below its offset.
+    std::uint64_t page_offset_{};
 };
 
 } // namespace fs

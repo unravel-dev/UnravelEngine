@@ -1,6 +1,7 @@
 #pragma once
 
 #include "filesystem.h"
+#include "mapped_file.h"
 
 #include <compression/compression.h>
 
@@ -80,6 +81,10 @@ auto write_pack(const path& pack_file,
  * protocol's topmost pack.
  */
 auto mount_pack(const std::string& protocol, const path& pack_file, std::string& err) -> bool;
+
+/// Mounts a pack that is a region of an open file, such as a pack stored uncompressed in an APK, as
+/// mount_pack above does a pack file. Not supported on Windows.
+auto mount_pack(const std::string& protocol, file_region pack_region, std::string& err) -> bool;
 
 /// Unmounts every pack. Files found in them before stay readable.
 void unmount_packs();

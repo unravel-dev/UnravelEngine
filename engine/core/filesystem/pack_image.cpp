@@ -1,6 +1,7 @@
 #include "pack_image.h"
 
 #include <array>
+#include <utility>
 
 namespace fs::pack_detail
 {
@@ -78,6 +79,11 @@ auto pack_image::find(const std::string& name) const -> const pack_record*
 auto open_pack_image(const path& file, pack_image& image, std::string& err) -> bool
 {
     return image.file.open(file, err) && parse_pack(image, err);
+}
+
+auto open_pack_image(file_region region, pack_image& image, std::string& err) -> bool
+{
+    return image.file.open(std::move(region), err) && parse_pack(image, err);
 }
 
 auto decode_entry(const pack_image& image, const pack_record& entry) -> std::shared_ptr<const byte_array_t>

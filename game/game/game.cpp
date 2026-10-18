@@ -8,11 +8,13 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/settings/boot_config.h>
+#include "bundled_files.h"
 #include "runner/runner.h"
 
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <logging/logging.h>
+#include <ospp/bundle.h>
 #include <reflection/registration.h>
 
 namespace unravel
@@ -31,11 +33,42 @@ auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
     return true;
 }
 
+/// A pack in the application's package, as a region of the package file; descriptor -1 when absent.
+auto open_bundled_pack(const fs::path& pack) -> fs::file_region
+{
+    const std::string name = get_bundled_name(pack);
+    const auto region = os::bundle::open_region(name);
+    return {region.descriptor, region.offset, region.size, name};
+}
+
+/// mount_asset_packs for packs inside the application's package, which are mapped in place there.
+auto mount_bundled_packs(const std::string& protocol, const fs::path& root) -> bool
+{
+    auto region = open_bundled_pack(root / ex::get_pack_file_name());
+    for(std::uint32_t level = 1; region.descriptor >= 0; ++level)
+    {
+        const std::string name = region.name;
+        std::string error;
+        if(!fs::mount_pack(protocol, std::move(region), error))
+        {
+            APPLOG_CRITICAL("Failed to mount asset pack: {}", error);
+            return false;
+        }
+        APPLOG_INFO("Mounted asset pack {} from the application package", name);
+        region = open_bundled_pack(root / ex::get_patch_pack_file_name(level));
+    }
+    return true;
+}
+
 /// Mounts the protocol's pack when the deploy wrote one, then its patches in level order. A deploy
 /// without packs ships loose files.
 auto mount_asset_packs(const std::string& protocol) -> bool
 {
     const auto root = fs::resolve_protocol(protocol + ":/");
+    if(os::bundle::is_supported())
+    {
+        return mount_bundled_packs(protocol, root);
+    }
     fs::error_code ec;
     if(!fs::exists(root / ex::get_pack_file_name(), ec))
     {
@@ -87,6 +120,11 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
 auto game::init(const cmd_line::parser& parser) -> bool
 {
+    if(!extract_bundled_files())
+    {
+        return false;
+    }
+
     if(!init_protocols(parser))
     {
         return false;

@@ -8,6 +8,7 @@
 #include <mutex>
 #include <new>
 #include <shared_mutex>
+#include <utility>
 
 namespace fs::pack_detail
 {
@@ -192,6 +193,26 @@ private:
 
 namespace fs
 {
+namespace
+{
+/// Puts an opened pack on top of the protocol's mounts; `label` names it in errors.
+auto mount_image(const std::string& protocol,
+                 std::shared_ptr<pack_detail::pack_image> image,
+                 const std::string& label,
+                 std::string& err) -> bool
+{
+    std::unique_lock lock(pack_detail::mounts_mutex);
+    // Over any other pack its additions and deletions would mix two builds.
+    const auto* top = pack_detail::find_top_mount_unlocked(protocol);
+    if(image->is_patch() && (top == nullptr || top->image->toc_hash != image->base_hash))
+    {
+        err = label + ": a patch for another build (it mounts only right over the pack it was made against)";
+        return false;
+    }
+    pack_detail::mounts.push_back({protocol, std::move(image)});
+    return true;
+}
+} // namespace
 
 auto mount_pack(const std::string& protocol, const path& pack_file, std::string& err) -> bool
 {
@@ -201,17 +222,19 @@ auto mount_pack(const std::string& protocol, const path& pack_file, std::string&
         err = pack_file.generic_string() + ": " + err;
         return false;
     }
-    std::unique_lock lock(pack_detail::mounts_mutex);
-    // Over any other pack its additions and deletions would mix two builds.
-    const auto* top = pack_detail::find_top_mount_unlocked(protocol);
-    if(image->is_patch() && (top == nullptr || top->image->toc_hash != image->base_hash))
+    return mount_image(protocol, std::move(image), pack_file.generic_string(), err);
+}
+
+auto mount_pack(const std::string& protocol, file_region pack_region, std::string& err) -> bool
+{
+    const std::string label = pack_region.name;
+    auto image = std::make_shared<pack_detail::pack_image>();
+    if(!pack_detail::open_pack_image(std::move(pack_region), *image, err))
     {
-        err = pack_file.generic_string() +
-              ": a patch for another build (it mounts only right over the pack it was made against)";
+        err = label + ": " + err;
         return false;
     }
-    pack_detail::mounts.push_back({protocol, std::move(image)});
-    return true;
+    return mount_image(protocol, std::move(image), label, err);
 }
 
 void unmount_packs()

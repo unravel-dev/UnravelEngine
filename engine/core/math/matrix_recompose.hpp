@@ -13,8 +13,8 @@ namespace
 template<typename genType>
 GLM_FUNC_QUALIFIER GLM_CONSTEXPR genType lowest_scale()
 {
-    GLM_STATIC_ASSERT(std::numeric_limits<genType>::is_iec559 || GLM_CONFIG_UNRESTRICTED_FLOAT,
-                      "'pi' only accepts floating-point inputs");
+    static_assert(std::numeric_limits<genType>::is_iec559 || GLM_CONFIG_UNRESTRICTED_FLOAT,
+                  "'lowest_scale' only accepts floating-point inputs");
     return static_cast<genType>(0.0001);
 }
 

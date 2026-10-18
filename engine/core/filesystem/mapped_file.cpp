@@ -70,13 +70,19 @@ auto mapped_file::map(const path& file, std::string& err) -> bool
     return true;
 }
 
+auto mapped_file::open(file_region region, std::string& err) -> bool
+{
+    err = "cannot map " + region.name + ": mapping a file region is not supported on Windows";
+    return false;
+}
+
 #else
 
 mapped_file::~mapped_file()
 {
     if(data_ != nullptr)
     {
-        munmap(const_cast<std::uint8_t*>(data_), std::size_t(size_));
+        munmap(const_cast<std::uint8_t*>(data_ - page_offset_), std::size_t(size_ + page_offset_));
     }
     if(file_ >= 0)
     {
@@ -101,6 +107,34 @@ auto mapped_file::map(const path& file, std::string& err) -> bool
     size_ = std::uint64_t(info.st_size);
     void* mapped = mmap(nullptr, std::size_t(size_), PROT_READ, MAP_PRIVATE, int(file_), 0);
     data_ = mapped == MAP_FAILED ? nullptr : static_cast<const std::uint8_t*>(mapped);
+    return true;
+}
+
+auto mapped_file::open(file_region region, std::string& err) -> bool
+{
+    file_ = region.descriptor;
+    if(file_ < 0 || region.size == 0)
+    {
+        err = "cannot open " + region.name;
+        return false;
+    }
+    // A mapping starts at a page boundary; the region need not.
+    const auto page_size = std::uint64_t(sysconf(_SC_PAGESIZE));
+    const std::uint64_t page_offset = region.offset % page_size;
+    void* mapped = mmap(nullptr,
+                        std::size_t(region.size + page_offset),
+                        PROT_READ,
+                        MAP_PRIVATE,
+                        int(file_),
+                        off_t(region.offset - page_offset));
+    if(mapped == MAP_FAILED)
+    {
+        err = "cannot map " + region.name;
+        return false;
+    }
+    page_offset_ = page_offset;
+    data_ = static_cast<const std::uint8_t*>(mapped) + page_offset;
+    size_ = region.size;
     return true;
 }
 

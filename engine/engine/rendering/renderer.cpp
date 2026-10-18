@@ -11,6 +11,7 @@
 #include <engine/rendering/particles/ps/particle_system_soa.h>
 
 #include <base/assert.hpp>
+#include <base/platform/config.hpp>
 #include <filesystem/filesystem.h>
 #include <graphics/debugdraw.h>
 #include <graphics/graphics.h>
@@ -312,6 +313,11 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     init_data.swapChain.flags = render_window::get_swap_chain_flags();
     init_data.swapChain.ndt = window.get_native_display();
     init_data.swapChain.nwh = window.get_native_handle();
+#if UNRAVEL_PLATFORM_ANDROID
+    // Android's Vulkan surfaces present RGBA8, not bgfx's default BGRA8: a BGRA8 swap chain is
+    // created, but every frame it shows is black. Later resizes keep the main swap chain's format.
+    init_data.swapChain.formatColor = bgfx::TextureFormat::RGBA8;
+#endif
     std::string video_driver = os::window::get_current_video_driver();
     if(video_driver == "wayland")
     {
