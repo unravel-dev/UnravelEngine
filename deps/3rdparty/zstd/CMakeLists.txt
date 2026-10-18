@@ -18,7 +18,10 @@ target_include_directories(zstd PUBLIC ${ZSTD_LIB_DIR})
 # from other copies linked into the same binary.
 target_compile_definitions(zstd PRIVATE ZSTD_DISABLE_ASM XXH_NAMESPACE=ZSTD_ ZSTD_LEGACY_SUPPORT=0)
 
+# OUTPUT_NAME: every static library lands in the build's lib folder, and on Linux cpptrace builds its own
+# zstd for libdwarf there as libzstd.a; two rules writing one file stop ninja.
 set_target_properties(zstd PROPERTIES
     C_STANDARD 99
     POSITION_INDEPENDENT_CODE ON
+    OUTPUT_NAME unravel_zstd
 )
