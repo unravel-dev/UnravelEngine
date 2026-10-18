@@ -1,0 +1,4 @@
+# The wrapper script runs under sh, which rejects CR line endings.
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary

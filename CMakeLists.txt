@@ -212,6 +212,10 @@ add_subdirectory(game)
 if(UNRAVEL_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
+# The Android player the editor's deploy packages (cmake/android_player.cmake).
+if(UNRAVEL_BUILD_EDITOR AND NOT ANDROID)
+    include(cmake/android_player.cmake)
+endif()
 
 
 file(GLOB_RECURSE SOURCES ${PROJECT_SOURCE_DIR}/engine_data/data/shaders/* ${PROJECT_SOURCE_DIR}/engine_data/data/scripts/*)
