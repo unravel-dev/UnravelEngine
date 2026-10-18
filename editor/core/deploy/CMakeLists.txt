@@ -10,7 +10,7 @@ target_include_directories(${target_name}
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
-target_link_libraries(${target_name} PUBLIC engine)
+target_link_libraries(${target_name} PUBLIC engine subprocess)
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

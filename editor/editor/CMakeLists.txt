@@ -32,6 +32,8 @@ add_definitions(-DPLAYER_NAME="unravel-player")
 target_compile_definitions(${target_name} PRIVATE
     $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:UNRAVEL_DEVELOPER_BUILD=1>
 )
+# The configuration the Android player beside the editor must have been built in (cmake/android_player.cmake).
+target_compile_definitions(${target_name} PRIVATE UNRAVEL_BUILD_CONFIGURATION="$<CONFIG>")
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

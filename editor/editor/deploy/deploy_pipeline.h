@@ -5,15 +5,22 @@
 #include <engine/threading/threader.h>
 #include <filesystem/filesystem.h>
 
-#include <map>
 #include <string>
+#include <vector>
 
 /// Building the game into the deploy folder.
 namespace unravel::deployment
 {
 
-/// A deploy's steps by name, each done or failed (a failed step's future rethrows its error).
-using deploy_jobs = std::map<std::string, tpp::shared_future<void>>;
+/// One step of a deploy: its name and its job, done or failed (a failed job's future rethrows its error).
+struct deploy_job
+{
+    std::string name;
+    tpp::shared_future<void> job;
+};
+
+/// A deploy's steps, in the order they run.
+using deploy_jobs = std::vector<deploy_job>;
 
 /**
  * @brief Starts a deploy with these settings and returns its steps at once.

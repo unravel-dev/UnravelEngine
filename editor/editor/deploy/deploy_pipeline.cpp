@@ -1,4 +1,5 @@
 #include "deploy_pipeline.h"
+#include "deploy_android.h"
 #include "deploy_preflight.h"
 #include "deploy_runtime.h"
 
@@ -12,6 +13,7 @@
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <process/process.h>
 
@@ -34,6 +36,7 @@ constexpr const char* STEP_DEPENDENCIES = "Dependencies";
 constexpr const char* STEP_SETTINGS = "Project Settings";
 constexpr const char* STEP_PROJECT_DATA = "Project Data";
 constexpr const char* STEP_ENGINE_DATA = "Engine Data";
+constexpr const char* STEP_ANDROID_PACKAGE = "Android Package";
 /// Uncompiled assets named in the failed step before "and N more".
 constexpr std::size_t LISTED_UNCOMPILED_MAX = 10;
 constexpr const char* COOK_STAGING_PREFIX = "unravel-deploy-cook-";
@@ -46,6 +49,8 @@ std::atomic<int> running_deploys{0};
 struct deploy_plan
 {
     deploy_settings params;
+    /// The platform's folder in the deploy folder.
+    fs::path output;
     fs::path executable;
     fs::path player;
     fs::path dependency_scanner;
@@ -55,7 +60,14 @@ struct deploy_plan
     protocol_job engine;
     runtime_plan runtime;
     fs::path cook_staging;
+    /// Android deploys only: the package built from the deployed data.
+    android_package_plan android;
 };
+
+auto is_android(const deploy_plan& plan) -> bool
+{
+    return plan.params.deploy_target == deploy_platform::android;
+}
 
 struct deploy_step
 {
@@ -63,19 +75,29 @@ struct deploy_step
     std::function<void()> run;
 };
 
+/// The compiled shader variants a deploy ships: Android renders with Vulkan only; the desktop ships every
+/// variant its platform compiles, since the game picks its renderer when it starts.
+auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>
+{
+    if(params.deploy_target == deploy_platform::android)
+    {
+        return {gfx::get_renderer_filename_extension(bgfx::RendererType::Vulkan)};
+    }
+    return {};
+}
+
 /// A deploy refused before the folder is touched: one step that fails with the reason.
 auto make_failed_step(threader& th, const std::string& name, const std::string& reason) -> deploy_jobs
 {
     APPLOG_ERROR("Deploy aborted: {}", reason);
-    deploy_jobs jobs;
-    jobs[name] = th.pool
-                     ->schedule(name,
-                                [reason]()
-                                {
-                                    throw std::runtime_error(reason);
-                                })
-                     .share();
-    return jobs;
+    auto job = th.pool
+                   ->schedule(name,
+                              [reason]()
+                              {
+                                  throw std::runtime_error(reason);
+                              })
+                   .share();
+    return {{name, job}};
 }
 
 /// Shipped assets of a protocol's index without their compiled files. With the compiler idle that is a
@@ -83,6 +105,7 @@ auto make_failed_step(threader& th, const std::string& name, const std::string& 
 void find_uncompiled_assets(const asset_database::database_t& database,
                             const fs::path& protocol_root,
                             const std::unordered_set<std::string>& left_out,
+                            const std::set<std::string>& shader_variants,
                             std::vector<std::string>& uncompiled)
 {
     for(const auto& [uid, meta] : database)
@@ -91,7 +114,7 @@ void find_uncompiled_assets(const asset_database::database_t& database,
         {
             continue;
         }
-        const auto paths = get_compiled_paths(meta.location, protocol_root);
+        const auto paths = get_compiled_paths(meta.location, protocol_root, shader_variants);
         const bool is_missing = std::any_of(paths.begin(),
                                             paths.end(),
                                             [](const fs::path& path)
@@ -182,7 +205,9 @@ auto make_protocol_job(asset_manager& am,
     job.left_out = std::move(left_out);
     job.is_packed = params.deploy_packed_assets;
     job.with_debug_symbols = params.deploy_debug_symbols;
-    if(!params.deploy_patch_release.empty())
+    job.shader_variants = get_shader_variants(params);
+    // An Android package carries every pack whole: patches are for desktop deploys.
+    if(!params.deploy_patch_release.empty() && params.deploy_target != deploy_platform::android)
     {
         job.patch_release_pack = get_release_pack(get_project_root(), params.deploy_patch_release, protocol);
     }
@@ -195,15 +220,27 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     auto& am = ctx.get_cached<asset_manager>();
     deploy_plan plan;
     plan.params = params;
+    plan.output = get_output_location(params);
+    // The data steps write data/ into the platform's folder; for Android into the build folder, where
+    // Gradle packages it, so the platform's folder holds the package only.
+    auto data_params = params;
+    data_params.deploy_location = params.deploy_target == deploy_platform::android ? get_android_content_dir() : plan.output;
     plan.executable = get_deployed_executable(ctx, params);
     plan.player = fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
     plan.dependency_scanner = fs::resolve_protocol(DEPENDENCY_SCANNER);
     plan.settings_source = fs::resolve_protocol(std::string(CONTENT_PROTOCOL) + ":/" + SETTINGS_FOLDER);
-    plan.settings_destination = params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
-    plan.app = make_protocol_job(am, params, CONTENT_PROTOCOL, staging, std::move(left_out));
-    plan.engine = make_protocol_job(am, params, ENGINE_PROTOCOL, staging, {});
-    plan.runtime = make_runtime_plan(ctx, params);
+    plan.settings_destination = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
+    plan.app = make_protocol_job(am, data_params, CONTENT_PROTOCOL, staging, std::move(left_out));
+    plan.engine = make_protocol_job(am, data_params, ENGINE_PROTOCOL, staging, {});
+    plan.runtime = make_runtime_plan(ctx, data_params);
     plan.cook_staging = staging;
+    if(is_android(plan))
+    {
+        // The managed bridge ships as for the desktop; the .NET runtime comes with the Android player.
+        plan.runtime.host_source.clear();
+        plan.runtime.framework_source.clear();
+        plan.android = make_android_package_plan(ctx, params);
+    }
     return plan;
 }
 
@@ -215,18 +252,19 @@ void deploy_dependencies(const deploy_plan& plan)
     for(const auto& dependency : find_dependencies(plan.player, plan.dependency_scanner))
     {
         const fs::path library(dependency);
-        copy_file_or_throw(library, plan.params.deploy_location / library.filename());
+        copy_file_or_throw(library, plan.output / library.filename());
         shipped.insert(get_binary_key(library));
     }
     copy_file_or_throw(plan.player, plan.executable);
     shipped.insert(get_binary_key(plan.executable));
-    remove_stale_binaries(plan.params.deploy_location, shipped);
+    remove_stale_binaries(plan.output, shipped);
 }
 
 auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<deploy_step>
 {
     std::vector<deploy_step> steps;
-    if(plan->params.deploy_dependencies)
+    // The player executable and its libraries are the desktop's; Android's come with the package.
+    if(plan->params.deploy_dependencies && !is_android(*plan))
     {
         steps.push_back({STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }});
     }
@@ -256,15 +294,54 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
     --running_deploys;
     if(has_failed_step(steps))
     {
-        APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", plan.params.deploy_location.generic_string());
+        APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", get_output_location(plan.params).generic_string());
         return;
     }
     if(plan.params.deploy_and_run)
     {
-        run_game(plan.executable);
+        // An Android game was started by the package step, and its session finishes the device steps.
+        if(!is_android(plan))
+        {
+            run_game(plan.executable);
+        }
         return;
     }
-    fs::show_in_graphical_env(plan.params.deploy_location);
+    fs::show_in_graphical_env(get_output_location(plan.params));
+}
+
+/// The Android package step: it builds from what the other steps deployed, so it starts once they all
+/// succeeded.
+auto schedule_android_package(const std::shared_ptr<const deploy_plan>& plan, const std::vector<tpp::shared_future<void>>& steps)
+    -> tpp::shared_future<void>
+{
+    return tpp::when_all(steps.begin(), steps.end())
+        .then(
+            [plan](auto all)
+            {
+                const std::string skipped = "Skipped: an earlier step failed.";
+                if(has_failed_step(all.get()))
+                {
+                    fail_device_steps(plan->android, skipped);
+                    throw std::runtime_error(skipped);
+                }
+                APPLOG_INFO("Deploying {}...", STEP_ANDROID_PACKAGE);
+                try
+                {
+                    build_android_package(plan->android);
+                }
+                catch(...)
+                {
+                    fail_device_steps(plan->android, skipped);
+                    throw;
+                }
+                APPLOG_INFO("Deploying {} - Done", STEP_ANDROID_PACKAGE);
+                // Deploy and Run: the session installs and starts the game and finishes the device steps.
+                if(plan->params.deploy_and_run)
+                {
+                    run_android_game(plan->android);
+                }
+            })
+        .share();
 }
 } // namespace
 
@@ -276,8 +353,9 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
     auto left_out = find_left_out_assets(am, params, startup_scene);
     // Before anything touches the destination, so a refused deploy leaves the previous build there.
     std::vector<std::string> uncompiled;
-    find_uncompiled_assets(am.get_database_snapshot("engine:/"), fs::resolve_protocol("engine:/"), {}, uncompiled);
-    find_uncompiled_assets(am.get_database_snapshot("app:/"), get_project_root(), left_out, uncompiled);
+    const auto shader_variants = get_shader_variants(params);
+    find_uncompiled_assets(am.get_database_snapshot("engine:/"), fs::resolve_protocol("engine:/"), {}, shader_variants, uncompiled);
+    find_uncompiled_assets(am.get_database_snapshot("app:/"), get_project_root(), left_out, shader_variants, uncompiled);
     if(!uncompiled.empty())
     {
         return make_failed_step(th, STEP_CHECK_ASSETS, describe_uncompiled_assets(uncompiled));
@@ -291,7 +369,11 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
         return make_failed_step(th, STEP_COOK, cook_error);
     }
     fs::error_code ec;
-    fs::create_directories(params.deploy_location, ec);
+    fs::create_directories(get_output_location(params), ec);
+    if(params.deploy_target == deploy_platform::android)
+    {
+        fs::create_directories(get_android_content_dir(), ec);
+    }
     const auto plan = std::make_shared<const deploy_plan>(make_plan(ctx, params, staging, std::move(left_out)));
     ++running_deploys;
     deploy_jobs jobs;
@@ -307,8 +389,19 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
                                       APPLOG_INFO("Deploying {} - Done", step.name);
                                   })
                        .share();
-        jobs[step.name] = job;
+        jobs.push_back({step.name, job});
         futures.push_back(job);
+    }
+    if(is_android(*plan))
+    {
+        auto package = schedule_android_package(plan, futures);
+        jobs.push_back({STEP_ANDROID_PACKAGE, package});
+        futures.push_back(package);
+        for(auto& device_job : get_device_jobs(plan->android))
+        {
+            futures.push_back(device_job.job);
+            jobs.push_back(std::move(device_job));
+        }
     }
     tpp::when_all(futures.begin(), futures.end())
         .then(tpp::this_thread::get_id(),

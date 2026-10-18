@@ -2,6 +2,7 @@
 #include "imgui_widgets/utils.h"
 #include <editor/events.h>
 #include "panels/panels_defs.h"
+#include <editor/deploy/deploy_android.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/project/project_info.h>
 #include <editor/system/project_manager.h>
@@ -57,6 +58,7 @@ auto hub::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
+    deployment::end_android_game_session();
     panels_.deinit(ctx);
     start_page_.release();
 

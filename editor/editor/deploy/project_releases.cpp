@@ -24,7 +24,8 @@ auto get_project_release_folder(const std::string& name) -> fs::path
 
 auto keep_project_release(const deploy_settings& params, const std::string& name) -> result
 {
-    return keep_release(get_project_root(), params.deploy_location, name);
+    // Releases are desktop builds: their packs ship beside the player, and patches update them.
+    return keep_release(get_project_root(), get_platform_location(params, deploy_platform::desktop), name);
 }
 
 auto remove_project_release(rtti::context& ctx, const std::string& name) -> result

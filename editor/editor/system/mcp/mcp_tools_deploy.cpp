@@ -3,6 +3,7 @@
 #include <deploy/content.h>
 #include <deploy/deploy_settings.h>
 #include <deploy/keys.h>
+#include <editor/deploy/deploy_android.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/deploy/deploy_preflight.h>
 #include <editor/deploy/project_releases.h>
@@ -56,12 +57,12 @@ auto collect_step_status(rtti::context& ctx, std::vector<step_status>& out) -> s
         return 0;
     }
     size_t ready = 0;
-    for(const auto& kvp : panel->get_jobs())
+    for(const auto& step : panel->get_jobs())
     {
         step_status status;
-        status.name = kvp.first;
-        status.ready = kvp.second.is_ready();
-        status.error = deployment::get_step_error(kvp.second);
+        status.name = step.name;
+        status.ready = step.job.is_ready();
+        status.error = deployment::get_step_error(step.job);
         ready += status.ready ? 1 : 0;
         out.push_back(std::move(status));
     }
@@ -101,7 +102,7 @@ auto take_snapshot(rtti::context& ctx) -> deploy_snapshot
     snapshot.ready = collect_step_status(ctx, snapshot.steps);
     if(ctx.has<project_manager>())
     {
-        snapshot.location = fs::to_utf8_string(ctx.get_cached<project_manager>().get_deploy_settings().deploy_location);
+        snapshot.location = fs::to_utf8_string(get_output_location(ctx.get_cached<project_manager>().get_deploy_settings()));
     }
     return snapshot;
 }
@@ -121,11 +122,104 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
                        steps_to_json(snapshot.steps));
 }
 
+constexpr const char* PLATFORM_NAMES[] = {"desktop", "android"};
+constexpr const char* ORIENTATION_NAMES[] = {"landscape", "portrait", "automatic"};
+
+/// Sets `out` from the name at `key` when the arguments have one; false (with `error`) for an unknown name.
+template<typename Enum, std::size_t Count>
+auto read_enum_name(const simdjson::dom::object& args, const char* key, const char* const (&names)[Count], Enum& out, std::string& error)
+    -> bool
+{
+    std::string name;
+    if(!read_string(args, key, name))
+    {
+        return true;
+    }
+    for(std::size_t i = 0; i < Count; ++i)
+    {
+        if(name == names[i])
+        {
+            out = static_cast<Enum>(i);
+            return true;
+        }
+    }
+    error = fmt::format("Unknown {} '{}'", key, name);
+    return false;
+}
+
+auto android_settings_to_json(const deploy_settings& params) -> std::string
+{
+    return fmt::format(
+        R"({{"application_id":{},"version_code":{},"orientation":{},"release":{},"keystore":{},"key_alias":{},"device":{}}})",
+        params.android_application_id.empty() ? "null" : make_json_string(params.android_application_id),
+        params.android_version_code,
+        make_json_string(ORIENTATION_NAMES[static_cast<int>(params.android_screen_orientation)]),
+        bool_to_json(params.android_release),
+        params.android_keystore.empty() ? "null" : make_json_string(fs::to_utf8_string(params.android_keystore)),
+        params.android_key_alias.empty() ? "null" : make_json_string(params.android_key_alias),
+        params.android_device.empty() ? "null" : make_json_string(params.android_device));
+}
+
+/// The Android side of deploy_get_state: the editor's player, this machine's tools, the devices from the
+/// last listing (which this call starts again) and whether a game runs on one.
+auto android_state_to_json(rtti::context& ctx, const deploy_settings& params) -> std::string
+{
+    deployment::refresh_android_devices(ctx);
+    const auto& player = deployment::get_android_template();
+    const auto tools = deployment::get_android_toolchain();
+    std::string devices = "[";
+    for(const auto& device : deployment::get_android_devices())
+    {
+        devices += fmt::format(R"({}{{"serial":{},"model":{},"state":{}}})",
+                               devices.size() > 1 ? "," : "",
+                               make_json_string(device.serial),
+                               make_json_string(device.model),
+                               make_json_string(device.state));
+    }
+    devices += "]";
+    const auto conflict = deployment::get_android_install_conflict();
+    return fmt::format(
+        R"({{"player":{{"found":{},"error":{}}},"tools":{{"sdk":{},"java":{},"error":{}}},"application_id":{},"devices":{},"game_running":{},"install_conflict":{}}})",
+        bool_to_json(player.is_found()),
+        player.error.empty() ? "null" : make_json_string(player.error),
+        tools.sdk.empty() ? "null" : make_json_string(fs::to_utf8_string(tools.sdk)),
+        tools.java.empty() ? "null" : make_json_string(fs::to_utf8_string(tools.java)),
+        tools.error.empty() ? "null" : make_json_string(tools.error),
+        make_json_string(deployment::get_android_application_id(ctx, params)),
+        devices,
+        bool_to_json(deployment::is_android_game_running()),
+        conflict.empty() ? "null" : make_json_string(conflict));
+}
+
+/// Reads the platform and Android settings deploy_set_settings takes.
+auto read_android_settings(const simdjson::dom::object& args, deploy_settings& params, std::string& error) -> bool
+{
+    if(!read_enum_name(args, "platform", PLATFORM_NAMES, params.deploy_target, error) ||
+       !read_enum_name(args, "android_orientation", ORIENTATION_NAMES, params.android_screen_orientation, error))
+    {
+        return false;
+    }
+    read_string(args, "android_application_id", params.android_application_id);
+    const auto version_code = read_int64_or(args, "android_version_code", params.android_version_code);
+    params.android_version_code = static_cast<std::uint32_t>(std::max<int64_t>(1, version_code));
+    read_bool(args, "android_release", params.android_release);
+    std::string keystore;
+    if(read_string(args, "android_keystore", keystore))
+    {
+        params.android_keystore = fs::from_utf8_string(keystore);
+    }
+    read_string(args, "android_key_alias", params.android_key_alias);
+    read_string(args, "android_device", params.android_device);
+    return true;
+}
+
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"location":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{}}})",
+        R"({{"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{}}})",
+        make_json_string(PLATFORM_NAMES[static_cast<int>(params.deploy_target)]),
         params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(params.deploy_location)),
+        params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(get_output_location(params))),
         bool_to_json(params.deploy_dependencies),
         bool_to_json(params.deploy_and_run),
         bool_to_json(params.deploy_cooked_assets),
@@ -135,7 +229,8 @@ auto deploy_settings_to_json(const deploy_settings& params) -> std::string
         bool_to_json(params.deploy_only_used_assets),
         strings_to_json_array(params.deploy_scenes),
         strings_to_json_array(params.deploy_included),
-        strings_to_json_array(params.deploy_excluded));
+        strings_to_json_array(params.deploy_excluded),
+        android_settings_to_json(params));
 }
 
 /// Replaces `out` with the string array at `key` when the arguments have one.
@@ -191,8 +286,7 @@ auto content_entry_to_json(const deploy_settings& params, const deployment::cont
 
 /// Sets the destination, creating the folder when asked - but never inside the project, where
 /// deployment::get_problems refuses it anyway.
-auto apply_location(deploy_settings& params, const std::string& location, bool create_location, std::string& error)
-    -> bool
+auto apply_location(fs::path& destination, const std::string& location, bool create_location, std::string& error) -> bool
 {
     const fs::path target = fs::from_utf8_string(location);
     if(!target.is_absolute())
@@ -210,7 +304,7 @@ auto apply_location(deploy_settings& params, const std::string& location, bool c
             return false;
         }
     }
-    params.deploy_location = target;
+    destination = target;
     return true;
 }
 
@@ -258,7 +352,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "after deploy, cooked assets, debug symbols, packing, the release patched against); the kept releases "
              "a deploy can patch; what keeps the project from deploying, one sentence each (usually a missing "
              "deploy folder - deploy_set_settings - no startup scene - settings_set standalone.startup_scene - or "
-             "assets still compiling); and the progress of the current or last deploy.",
+             "assets still compiling); and the progress of the current or last deploy. With platform android it "
+             "also reports android: whether the editor has its Android player, the Android SDK and Java found, the "
+             "application id used, the devices adb listed (each call lists them again in the background, so call "
+             "again for a fresh list) and whether a game started by Deploy and Run still runs; the game's log goes "
+             "to the editor log ([Device] lines, logs_get_recent).",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -271,12 +369,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              const auto& params = pm->get_deploy_settings();
              const auto problems = deployment::get_problems(ctx, params);
-             return {.text = fmt::format(R"({{"settings":{},"releases":{},"can_deploy":{},"problems":{},"deploy":{}}})",
+             const bool is_android = params.deploy_target == deploy_platform::android;
+             return {.text = fmt::format(R"({{"settings":{},"releases":{},"can_deploy":{},"problems":{},"deploy":{},"android":{}}})",
                                          deploy_settings_to_json(params),
                                          strings_to_json_array(deployment::list_project_releases()),
                                          bool_to_json(problems.empty()),
                                          strings_to_json_array(problems),
-                                         deploy_progress_json(take_snapshot(ctx))),
+                                         deploy_progress_json(take_snapshot(ctx)),
+                                         is_android ? android_state_to_json(ctx, params) : std::string("null")),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -296,9 +396,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "path literals reach (deploy_get_content shows the result); include / exclude are folder or asset "
              "keys that always / never ship, the most specific rule winning (exclude on a tie). scenes, include and "
              "exclude replace the whole list; keys are stored as the project spells them, and keys that name "
-             "nothing come back as warnings. Omitted fields keep their value.",
+             "nothing come back as warnings. Each platform builds into a folder of its own under location: "
+             "<location>/desktop, or <location>/android for platform android, which holds <project>.apk only (the "
+             "data stays in the editor's build folder); deploy_get_state reports what an Android deploy still "
+             "needs. android_device is an "
+             "adb serial from deploy_get_state's device list, used by run_after_deploy and not saved. Omitted "
+             "fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"platform":{"type":"string","enum":["desktop","android"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Absolute destination folder, outside the project"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -314,7 +419,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  bool create_location = true;
                  read_bool(args, "create_location", create_location);
-                 if(!apply_location(params, location, create_location, error))
+                 if(!apply_location(params.deploy_location, location, create_location, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -326,7 +431,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "pack_assets", params.deploy_packed_assets);
              read_string(args, "patch_release", params.deploy_patch_release);
              read_bool(args, "only_used_assets", params.deploy_only_used_assets);
-             if(!read_key_list(args, "scenes", params.deploy_scenes, error) ||
+             if(!read_android_settings(args, params, error) ||
+                !read_key_list(args, "scenes", params.deploy_scenes, error) ||
                 !read_key_list(args, "include", params.deploy_included, error) ||
                 !read_key_list(args, "exclude", params.deploy_excluded, error))
              {
@@ -522,9 +628,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "deploy_get_state first. Waits for running asset and script "
              "compiles first, then for the deploy, up to timeout_ms in all (default 180000); on timeout the deploy "
              "keeps running and deploy_get_state reports it. Assets without a compiled file fail the deploy before "
-             "the folder is touched, named in failed_steps. Refuses play mode.",
+             "the folder is touched, named in failed_steps. Refuses play mode. With platform android the last step "
+             "builds <project>.apk with Gradle from the editor's Android player; run_after_deploy then installs and "
+             "starts it on android_device, and the game's log goes to the editor log ([Device] lines).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Destination folder; also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Deploy folder; the platform builds into <location>/desktop or <location>/android. Also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean"},"platform":{"type":"string","enum":["desktop","android"],"description":"Also saved into the deploy settings. android builds an .apk; with run_after_deploy it is installed and started on android_device"},"android_device":{"type":"string","description":"adb serial from deploy_get_state's android.devices"},"android_replace_installed":{"type":"boolean","description":"When the game on the device was signed with another key (debug vs release), uninstall it first, which removes its saved data; default false reports android.install_conflict instead"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -532,6 +640,23 @@ void register_deploy_tools(mcp_tool_registry& registry)
 
              std::string location;
              read_string(args, "location", location);
+             deploy_platform platform{};
+             std::string argument_error;
+             std::string platform_name;
+             const bool has_platform = read_string(args, "platform", platform_name);
+             if(!read_enum_name(args, "platform", PLATFORM_NAMES, platform, argument_error))
+             {
+                 return {.text = argument_error, .is_error = true};
+             }
+             std::string android_device;
+             const bool has_device = read_string(args, "android_device", android_device);
+             bool replace_installed = false;
+             read_bool(args, "android_replace_installed", replace_installed);
+             // The device check below reads the last listing; this call may be the first of the session.
+             if(has_device || (has_platform && platform == deploy_platform::android))
+             {
+                 deployment::update_android_devices();
+             }
              bool run_after_deploy = false;
              const bool has_run_flag = read_bool(args, "run_after_deploy", run_after_deploy);
              const auto timeout =
@@ -555,7 +680,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
 
              auto start = mcp.invoke_on_main(
-                 [&ctx, location, run_after_deploy, has_run_flag]() -> tool_result
+                 [&ctx, location, run_after_deploy, has_run_flag, platform, has_platform, android_device, has_device, replace_installed]() -> tool_result
                  {
                      std::string error;
                      if(!require_not_play_mode(ctx, error))
@@ -574,7 +699,11 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      }
 
                      auto params = pm->get_deploy_settings();
-                     if(!location.empty() && !apply_location(params, location, true, error))
+                     if(has_platform)
+                     {
+                         params.deploy_target = platform;
+                     }
+                     if(!location.empty() && !apply_location(params.deploy_location, location, true, error))
                      {
                          return {.text = error, .is_error = true};
                      }
@@ -582,8 +711,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      {
                          params.deploy_and_run = run_after_deploy;
                      }
+                     if(has_device)
+                     {
+                         params.android_device = android_device;
+                     }
                      pm->get_deploy_settings() = params;
                      pm->save_deploy_settings();
+                     // For this deploy only: it may uninstall the game from the device.
+                     params.android_replace_installed = replace_installed;
 
                      const auto problems = deployment::get_problems(ctx, params);
                      if(!problems.empty())

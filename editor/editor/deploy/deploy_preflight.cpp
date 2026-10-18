@@ -1,4 +1,5 @@
 #include "deploy_preflight.h"
+#include "deploy_android.h"
 #include "deploy_runtime.h"
 
 #include <deploy/folders.h>
@@ -16,9 +17,10 @@ namespace
 /// How long a problems_cache answer is kept while the settings stay the same.
 constexpr auto PROBLEMS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
 
-/// The deploy folder's problem, if any: it must exist outside the project and be empty or an earlier
-/// build, since a deploy replaces and removes files in it.
-auto get_folder_problem(const fs::path& location) -> std::string
+/// The deploy folder's problem, if any: it must exist outside the project. The platform builds into a
+/// folder of its own in it, created when missing, which must be empty or an earlier build of that
+/// platform, since a deploy replaces and removes files in it. An Android folder holds packages only.
+auto get_folder_problem(const fs::path& location, const fs::path& output, bool is_android) -> std::string
 {
     fs::error_code ec;
     if(location.empty())
@@ -37,10 +39,24 @@ auto get_folder_problem(const fs::path& location) -> std::string
     {
         return "The deploy folder does not exist.";
     }
-    if(!fs::is_empty(location, ec) && !is_previous_deploy(location))
+    if(!fs::exists(output, ec))
     {
-        return "The deploy folder is not empty and holds no earlier build. A deploy replaces and removes files in it. "
-               "Choose an empty folder or a previous deploy.";
+        return {};
+    }
+    const auto folder = output.filename().generic_string();
+    if(is_android)
+    {
+        return is_android_package_folder(output)
+                   ? std::string{}
+                   : fmt::format("The {} folder in the deploy folder holds other files. A deploy replaces the package "
+                                 "in it. Empty it, or choose another deploy folder.",
+                                 folder);
+    }
+    if(!fs::is_empty(output, ec) && !is_previous_deploy(output))
+    {
+        return fmt::format("The {} folder in the deploy folder holds files of no earlier build. A deploy replaces "
+                           "and removes files in it. Empty it, or choose another deploy folder.",
+                           folder);
     }
     return {};
 }
@@ -97,7 +113,7 @@ auto is_inside_project(const fs::path& path) -> bool
 
 auto get_deployed_executable(rtti::context& ctx, const deploy_settings& params) -> fs::path
 {
-    return params.deploy_location / (ctx.get_cached<project_manager>().get_name() + fs::executable_extension());
+    return get_platform_location(params, deploy_platform::desktop) / (ctx.get_cached<project_manager>().get_name() + fs::executable_extension());
 }
 
 auto get_pending_compile_reason(rtti::context& ctx) -> std::string
@@ -120,9 +136,10 @@ auto get_pending_compile_reason(rtti::context& ctx) -> std::string
 auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
 {
     std::vector<std::string> problems;
-    const auto folder_problem = get_folder_problem(params.deploy_location);
+    const bool is_android = params.deploy_target == deploy_platform::android;
+    const auto folder_problem = get_folder_problem(params.deploy_location, get_output_location(params), is_android);
     add_problem(problems, folder_problem);
-    if(folder_problem.empty() && is_executable_in_use(get_deployed_executable(ctx, params)))
+    if(folder_problem.empty() && !is_android && is_executable_in_use(get_deployed_executable(ctx, params)))
     {
         add_problem(problems, "The game in the deploy folder is running. Close it first.");
     }
@@ -134,8 +151,20 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     {
         add_problem(problems, "Stop play mode first: prefabs cannot be cooked while the game runs.");
     }
-    add_problem(problems, get_runtime_problem());
-    add_problem(problems, get_patch_problem(params));
+    // An Android game carries the runtime of the editor's Android player, not the editor's own.
+    if(is_android)
+    {
+        for(auto& problem : get_android_problems(ctx, params))
+        {
+            add_problem(problems, std::move(problem));
+        }
+    }
+    else
+    {
+        add_problem(problems, get_runtime_problem());
+        // An Android package carries every pack whole, so only desktop deploys patch.
+        add_problem(problems, get_patch_problem(params));
+    }
     add_problem(problems, get_compile_problem(ctx));
     return problems;
 }
@@ -147,11 +176,18 @@ auto can_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
 
 auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> const std::vector<std::string>&
 {
-    const auto signature = fmt::format("{}|{}|{}|{}",
+    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                                        params.deploy_location.generic_string(),
                                        params.deploy_patch_release,
                                        params.deploy_packed_assets,
-                                       params.deploy_cooked_assets);
+                                       params.deploy_cooked_assets,
+                                       static_cast<int>(params.deploy_target),
+                                       params.deploy_and_run,
+                                       params.android_device,
+                                       params.android_application_id,
+                                       params.android_release,
+                                       params.android_keystore.generic_string(),
+                                       params.android_key_alias);
     const auto now = std::chrono::steady_clock::now();
     if(signature != signature_ || now - checked_at_ >= PROBLEMS_REFRESH_INTERVAL)
     {

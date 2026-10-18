@@ -3,6 +3,7 @@
 #include <engine/assets/asset_storage.h>
 #include <filesystem/filesystem.h>
 
+#include <set>
 #include <string>
 #include <unordered_set>
 
@@ -27,6 +28,9 @@ struct protocol_job
     std::unordered_set<std::string> left_out;
     bool is_packed{true};
     bool with_debug_symbols{};
+    /// The renderer extensions of the compiled shaders to ship (".spirv" for Android); empty ships every
+    /// variant.
+    std::set<std::string> shader_variants;
     /// The kept release's pack to patch; empty for a full pack.
     fs::path patch_release_pack;
 };

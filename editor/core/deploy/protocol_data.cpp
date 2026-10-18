@@ -12,7 +12,7 @@ auto make_shipped_filter(const protocol_job& job) -> compiled_file_filter
 {
     return [&job](const fs::path& file, const fs::path& relative)
     {
-        return is_shipped_compiled_file(file, job.with_debug_symbols) &&
+        return is_shipped_compiled_file(file, job.with_debug_symbols) && !is_other_shader_variant(file, job.shader_variants) &&
                !job.left_out.contains(fs::make_path_key(get_source_key(job.protocol, relative)));
     };
 }

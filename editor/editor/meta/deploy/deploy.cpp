@@ -11,6 +11,45 @@ namespace unravel
 {
 REFLECT(deploy_settings)
 {
+    entt::meta_factory<deploy_platform>{}
+        .type("deploy_platform"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_platform"},
+            entt::attribute{"pretty_name", "Platform"},
+        })
+        .data<deploy_platform::desktop>("desktop"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop"},
+            entt::attribute{"pretty_name", "Desktop"},
+        })
+        .data<deploy_platform::android>("android"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android"},
+            entt::attribute{"pretty_name", "Android"},
+        });
+
+    entt::meta_factory<android_orientation>{}
+        .type("android_orientation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_orientation"},
+            entt::attribute{"pretty_name", "Orientation"},
+        })
+        .data<android_orientation::landscape>("landscape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "landscape"},
+            entt::attribute{"pretty_name", "Landscape"},
+        })
+        .data<android_orientation::portrait>("portrait"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "portrait"},
+            entt::attribute{"pretty_name", "Portrait"},
+        })
+        .data<android_orientation::automatic>("automatic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "automatic"},
+            entt::attribute{"pretty_name", "Automatic"},
+        });
+
     entt::meta_factory<deploy_settings>{}
         .type("deploy_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -18,11 +57,23 @@ REFLECT(deploy_settings)
             entt::attribute{"category", "EDITOR"},
             entt::attribute{"pretty_name", "Deploy Options"},
         })
+        .data<&deploy_settings::deploy_target>("deploy_target"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_target"},
+            entt::attribute{"pretty_name", "Platform"},
+            entt::attribute{"tooltip",
+                            "What the game is built for.\n\n"
+                            "Desktop: this computer's player executable beside the data.\n"
+                            "Android: an installable package (.apk) built from the editor's\n"
+                            "Android player."},
+        })
         .data<&deploy_settings::deploy_location>("deploy_location"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_location"},
             entt::attribute{"pretty_name", "Deploy Location"},
-            entt::attribute{"tooltip", "The folder the game is built into."},
+            entt::attribute{"tooltip",
+                            "The folder the game is built into. Each platform builds into a folder\n"
+                            "of its own in it: desktop for this computer, android for the package."},
         })
         .data<&deploy_settings::deploy_dependencies>("deploy_dependencies"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -74,12 +125,75 @@ REFLECT(deploy_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_and_run"},
             entt::attribute{"pretty_name", "Run After Deploy"},
-            entt::attribute{"tooltip", "Start the game once the deploy is done."},
+            entt::attribute{"tooltip",
+                            "Start the game once the deploy is done.\n"
+                            "Android: install it on the chosen device and start it there."},
+        })
+        .data<&deploy_settings::android_device>("android_device"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_device"},
+            entt::attribute{"pretty_name", "Device"},
+            entt::attribute{"tooltip",
+                            "The device Deploy and Run installs the game on and starts it.\n\n"
+                            "Connect a phone over USB with USB debugging on, or pair it for\n"
+                            "wireless debugging, then refresh the list."},
+        })
+        .data<&deploy_settings::android_application_id>("android_application_id"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_application_id"},
+            entt::attribute{"pretty_name", "Application Id"},
+            entt::attribute{"tooltip",
+                            "The game's id on Android devices and in stores, such as com.company.game.\n"
+                            "Empty: com.<company>.<product> from the project settings.\n\n"
+                            "Changing it later installs a separate app."},
+        })
+        .data<&deploy_settings::android_version_code>("android_version_code"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_version_code"},
+            entt::attribute{"pretty_name", "Version Code"},
+            entt::attribute{"tooltip",
+                            "Android's version number of the game.\n"
+                            "Stores need a larger one for every release they get."},
+            entt::attribute{"min", 1},
+        })
+        .data<&deploy_settings::android_screen_orientation>("android_screen_orientation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_screen_orientation"},
+            entt::attribute{"pretty_name", "Orientation"},
+            entt::attribute{"tooltip",
+                            "How the game turns with the phone.\n\n"
+                            "Landscape and Portrait allow both directions of that orientation.\n"
+                            "Automatic follows the phone."},
+        })
+        .data<&deploy_settings::android_release>("android_release"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_release"},
+            entt::attribute{"pretty_name", "Release Build"},
+            entt::attribute{"tooltip",
+                            "Build a release package signed with the keystore below, for stores.\n\n"
+                            "Off: a debug package, signed with the Android SDK's debug keystore.\n"
+                            "It installs on your devices, and stores refuse it."},
+        })
+        .data<&deploy_settings::android_keystore>("android_keystore"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_keystore"},
+            entt::attribute{"pretty_name", "Keystore"},
+            entt::attribute{"tooltip",
+                            "The keystore that signs release packages.\n"
+                            "Its passwords are never saved. The deploy reads them from the\n"
+                            "UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD environment variables."},
+        })
+        .data<&deploy_settings::android_key_alias>("android_key_alias"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_key_alias"},
+            entt::attribute{"pretty_name", "Key Alias"},
+            entt::attribute{"tooltip", "The key in the keystore that signs release packages."},
         });
 }
 
 SAVE(deploy_settings)
 {
+    try_save(ar, ser20::make_nvp("deploy_target", obj.deploy_target));
     try_save(ar, ser20::make_nvp("deploy_location", fs::to_utf8_string(obj.deploy_location)));
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
@@ -91,12 +205,19 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_scenes", obj.deploy_scenes));
     try_save(ar, ser20::make_nvp("deploy_included", obj.deploy_included));
     try_save(ar, ser20::make_nvp("deploy_excluded", obj.deploy_excluded));
+    try_save(ar, ser20::make_nvp("android_application_id", obj.android_application_id));
+    try_save(ar, ser20::make_nvp("android_version_code", obj.android_version_code));
+    try_save(ar, ser20::make_nvp("android_screen_orientation", obj.android_screen_orientation));
+    try_save(ar, ser20::make_nvp("android_release", obj.android_release));
+    try_save(ar, ser20::make_nvp("android_keystore", fs::to_utf8_string(obj.android_keystore)));
+    try_save(ar, ser20::make_nvp("android_key_alias", obj.android_key_alias));
 }
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_binary_t);
 
 LOAD(deploy_settings)
 {
+    try_load(ar, ser20::make_nvp("deploy_target", obj.deploy_target));
     std::string deploy_location;
     if(try_load(ar, ser20::make_nvp("deploy_location", deploy_location)))
     {
@@ -113,6 +234,16 @@ LOAD(deploy_settings)
     try_load(ar, ser20::make_nvp("deploy_scenes", obj.deploy_scenes));
     try_load(ar, ser20::make_nvp("deploy_included", obj.deploy_included));
     try_load(ar, ser20::make_nvp("deploy_excluded", obj.deploy_excluded));
+    try_load(ar, ser20::make_nvp("android_application_id", obj.android_application_id));
+    try_load(ar, ser20::make_nvp("android_version_code", obj.android_version_code));
+    try_load(ar, ser20::make_nvp("android_screen_orientation", obj.android_screen_orientation));
+    try_load(ar, ser20::make_nvp("android_release", obj.android_release));
+    std::string android_keystore;
+    if(try_load(ar, ser20::make_nvp("android_keystore", android_keystore)))
+    {
+        obj.android_keystore = fs::from_utf8_string(android_keystore);
+    }
+    try_load(ar, ser20::make_nvp("android_key_alias", obj.android_key_alias));
 }
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_binary_t);

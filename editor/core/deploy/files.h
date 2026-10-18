@@ -26,10 +26,17 @@ auto is_script_key(const std::string& key) -> bool;
 
 /**
  * @brief The compiled files a deployed game reads for the asset at `key`, in the protocol whose folder
- * is `protocol_root`: one per renderer of the platform for a shader; none for scripts and for keys
- * outside the protocol's data folder (the embedded primitives).
+ * is `protocol_root`: one per renderer for a shader; none for scripts and for keys outside the protocol's
+ * data folder (the embedded primitives).
+ *
+ * @param shader_variants The renderer extensions of the target (".spirv"); empty: every renderer this
+ * platform compiles shaders for.
  */
-auto get_compiled_paths(const std::string& key, const fs::path& protocol_root) -> std::vector<fs::path>;
+auto get_compiled_paths(const std::string& key, const fs::path& protocol_root, const std::set<std::string>& shader_variants = {})
+    -> std::vector<fs::path>;
+
+/// Whether `file` is a compiled shader for a renderer outside `shader_variants`; never when that is empty.
+auto is_other_shader_variant(const fs::path& file, const std::set<std::string>& shader_variants) -> bool;
 
 /// The asset key ("app:/data/a/b.png") of a file in a protocol's compiled folder, from its path relative
 /// to that folder ("a/b.png.asset").

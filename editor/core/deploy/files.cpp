@@ -32,7 +32,8 @@ auto is_script_key(const std::string& key) -> bool
     return ex::is_format<script>(fs::path(key).extension().generic_string());
 }
 
-auto get_compiled_paths(const std::string& key, const fs::path& protocol_root) -> std::vector<fs::path>
+auto get_compiled_paths(const std::string& key, const fs::path& protocol_root, const std::set<std::string>& shader_variants)
+    -> std::vector<fs::path>
 {
     const auto protocol = fs::extract_protocol(fs::path(key)).generic_string();
     const auto data_prefix = get_data_prefix(protocol);
@@ -47,13 +48,35 @@ auto get_compiled_paths(const std::string& key, const fs::path& protocol_root) -
         return {compiled};
     }
     std::vector<fs::path> paths;
-    for(const auto& renderer_extension : gfx::get_renderer_platform_supported_filename_extensions())
+    const auto& variants = shader_variants.empty() ? gfx::get_renderer_platform_supported_filename_extensions() : shader_variants;
+    for(const auto& renderer_extension : variants)
     {
         auto path = compiled;
         path.concat(renderer_extension);
         paths.push_back(std::move(path));
     }
     return paths;
+}
+
+auto is_other_shader_variant(const fs::path& file, const std::set<std::string>& shader_variants) -> bool
+{
+    if(shader_variants.empty())
+    {
+        return false;
+    }
+    const auto extension = file.extension().generic_string();
+    if(shader_variants.contains(extension))
+    {
+        return false;
+    }
+    for(int type = bgfx::RendererType::Noop; type < bgfx::RendererType::Count; ++type)
+    {
+        if(gfx::get_renderer_filename_extension(bgfx::RendererType::Enum(type)) == extension)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 auto get_source_key(const std::string& protocol, const fs::path& compiled_relative) -> std::string

@@ -32,6 +32,10 @@ auto calc_button_width(const char* label) -> float;
 /// A button of the window's size: the primary one takes the accent color.
 auto draw_button(const char* label, bool is_primary, bool is_enabled) -> bool;
 
+/// A progress bar across the window with `left_text` at its left end and `right_text` at its right
+/// end; ImGui's own text would move with the bar's fill.
+void draw_progress_bar(float fraction, const char* left_text, const char* right_text);
+
 /// The theme's fields are darker than a window and all but vanish on the lighter popup, so the
 /// window washes them light, as the start page does. Pair with pop_field_colors.
 void push_field_colors();

@@ -117,6 +117,24 @@ auto draw_button(const char* label, bool is_primary, bool is_enabled) -> bool
     return is_pressed;
 }
 
+void draw_progress_bar(float fraction, const char* left_text, const char* right_text)
+{
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, imgui_style::get_accent_color());
+    ImGui::ProgressBar(fraction, ImVec2(-FLT_MIN, 0.0f), "");
+    ImGui::PopStyleColor();
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const float padding = ImGui::GetStyle().FramePadding.x;
+    const float text_y = min.y + (max.y - min.y - ImGui::GetTextLineHeight()) * 0.5f;
+    const float right_width = ImGui::CalcTextSize(right_text).x;
+    auto* draw_list = ImGui::GetWindowDrawList();
+    const ImU32 text_color = ImGui::GetColorU32(ImGuiCol_Text);
+    // The summary gives way to the count when both do not fit.
+    const ImVec4 clip(min.x + padding, min.y, max.x - padding - right_width - padding, max.y);
+    draw_list->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(min.x + padding, text_y), text_color, left_text, nullptr, 0.0f, &clip);
+    draw_list->AddText(ImVec2(max.x - padding - right_width, text_y), text_color, right_text);
+}
+
 void push_field_colors()
 {
     ImGui::PushStyleColor(ImGuiCol_FrameBg, FIELD_COLOR);

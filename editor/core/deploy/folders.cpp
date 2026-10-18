@@ -2,6 +2,7 @@
 #include "files.h"
 
 #include <engine/assets/impl/asset_extensions.h>
+#include <string_utils/utils.h>
 
 #include <algorithm>
 #include <fstream>
@@ -15,6 +16,31 @@ auto is_previous_deploy(const fs::path& folder) -> bool
     const auto app_root = folder / DATA_FOLDER / "app";
     return fs::exists(app_root / ex::get_asset_index_file_name(), ec) || fs::exists(app_root / ex::get_pack_file_name(), ec) ||
            fs::exists(app_root / LEGACY_ASSET_INDEX_NAME, ec);
+}
+
+auto is_android_package_folder(const fs::path& folder) -> bool
+{
+    fs::error_code ec;
+    bool has_package = false;
+    bool has_earlier_data = false;
+    for(const auto& entry : fs::directory_iterator(folder, ec))
+    {
+        const auto& path = entry.path();
+        if(entry.is_regular_file(ec) && string_utils::to_lower(path.extension().generic_string()) == ".apk")
+        {
+            has_package = true;
+        }
+        else if(entry.is_directory(ec) && path.filename() == DATA_FOLDER && is_previous_deploy(folder))
+        {
+            has_earlier_data = true;
+        }
+        else
+        {
+            return false;
+        }
+    }
+    // data/ alone is a desktop build without its player, not an Android deploy's.
+    return !ec && (has_package || !has_earlier_data);
 }
 
 auto is_inside(const fs::path& path, const fs::path& folder) -> bool

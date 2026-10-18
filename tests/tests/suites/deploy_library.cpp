@@ -16,19 +16,25 @@
  *     binary files not read, missing scenes reported, compiled sizes;
  *   - the content tree: counts, folders first, rows of open folders only, search and filter rows,
  *     left out but used assets counted;
- *   - files: classification, compiled paths, pack inputs with cooked variants, stale binaries, older
- *     runtime versions;
+ *   - files: classification, compiled paths, a target's shader variants, pack inputs with cooked
+ *     variants, stale binaries, older runtime versions;
+ *   - platform folders under the deploy folder;
+ *   - Android: default and invalid application ids, adb device lists, logcat lines, the player template's
+ *     stamp checks, Gradle's command line;
+ *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
+ *     its process at once;
  *   - a protocol shipped packed, loose, packed again, as a patch over a kept release and full again,
  *     with left out assets;
  *   - releases: names, keep / list / remove, and their refusals;
  *   - dependency scanner output parsed; a failed scan throws every time;
- *   - folder checks: earlier deploys, inside / outside, an executable in use;
+ *   - folder checks: earlier deploys, Android package folders, inside / outside, an executable in use;
  *   - unravel::process::spawn_detached runs a program and reports one that does not start.
  * Everything lives in a temp folder.
  */
 
 #include "../tests.h"
 
+#include <deploy/android.h>
 #include <deploy/content.h>
 #include <deploy/content_tree.h>
 #include <deploy/dependencies.h>
@@ -41,6 +47,7 @@
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <process/process.h>
+#include <subprocess/subprocess.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -451,6 +458,194 @@ void test_file_classification(const fs::path& root)
           "symbols ship only when asked for");
 }
 
+void test_shader_variants(const fs::path& root)
+{
+    std::printf("test_shader_variants\n");
+    const std::set<std::string> vulkan{".spirv"};
+    const auto paths = deployment::get_compiled_paths("app:/data/shaders/fs_a.sc", root, vulkan);
+    check(paths.size() == 1 && paths.front().extension() == ".spirv", "a target's shader has its renderer's variant only");
+    check(deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.sc.asset.dxbc", vulkan),
+          "another renderer's variant is told apart");
+    check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.sc.asset.spirv", vulkan), "the target's variant ships");
+    check(!deployment::is_other_shader_variant(root / "compiled/a.png.asset", vulkan), "other compiled files are no variant");
+    check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.sc.asset.dxbc", {}), "no target ships every variant");
+}
+
+//-----------------------------------------------------------------------------
+// Android
+//-----------------------------------------------------------------------------
+
+void test_platform_locations()
+{
+    std::printf("test_platform_locations\n");
+    deploy_settings params;
+    check(unravel::get_output_location(params).empty(), "without a deploy folder there is no platform folder");
+    params.deploy_location = fs::path("/builds/game");
+    check(unravel::get_output_location(params) == fs::path("/builds/game/desktop"), "desktop builds go to desktop/");
+    params.deploy_target = unravel::deploy_platform::android;
+    check(unravel::get_output_location(params) == fs::path("/builds/game/android"), "Android builds go to android/");
+    check(unravel::get_platform_location(params, unravel::deploy_platform::desktop) == fs::path("/builds/game/desktop"),
+          "releases read the desktop folder whatever the platform");
+}
+
+void test_application_ids()
+{
+    std::printf("test_application_ids\n");
+    check(deployment::make_default_application_id("Unravel", "Sample 2048") == "com.unravel.sample_2048",
+          "company and product become lowercase parts");
+    check(deployment::make_default_application_id("", "") == "com.unravel.game", "empty names fall back");
+    check(deployment::make_default_application_id("My Co.", "2048!") == "com.my_co.app2048",
+          "a part starting with a digit gets letters in front, and no '_' at the edges");
+    check(deployment::check_application_id("com.company.game").empty(), "a valid id passes");
+    check(!deployment::check_application_id("").empty(), "an empty id is refused");
+    check(!deployment::check_application_id("game").empty(), "one part is refused");
+    check(!deployment::check_application_id("com.2game").empty(), "a part starting with a digit is refused");
+    check(!deployment::check_application_id("com..game").empty(), "an empty part is refused");
+    check(!deployment::check_application_id("com.game.").empty(), "a trailing '.' is refused");
+    check(!deployment::check_application_id("com.ga-me").empty(), "other characters are refused");
+}
+
+void test_android_devices()
+{
+    std::printf("test_android_devices\n");
+    const std::string output = "* daemon not running; starting now at tcp:5037\n"
+                               "* daemon started successfully\n"
+                               "List of devices attached\n"
+                               "R3GL508T4SY            device usb:1-1 product:e3q model:SM_S948B device:e3q transport_id:1\r\n"
+                               "adb-R3GL-x._adb-tls-connect._tcp device product:e3q model:SM_S948B device:e3q transport_id:2\n"
+                               "emulator-5554          unauthorized transport_id:3\n"
+                               "\n";
+    const auto devices = deployment::parse_android_devices(output);
+    check(devices.size() == 3, "every device line is read, the server's messages are not");
+    check(devices.size() == 3 && devices[0].serial == "R3GL508T4SY" && devices[0].is_ready() && devices[0].model == "SM S948B",
+          "a USB device with its model");
+    check(devices.size() == 3 && devices[1].serial == "adb-R3GL-x._adb-tls-connect._tcp", "a wireless debugging device");
+    check(devices.size() == 3 && devices[2].state == "unauthorized" && !devices[2].is_ready() && devices[2].model.empty(),
+          "a device that does not allow this computer yet");
+    check(devices.size() == 3 && devices[0].get_label() == "SM S948B (R3GL508T4SY)" && devices[2].get_label() == "emulator-5554",
+          "labels name the model when there is one");
+}
+
+void test_logcat_lines()
+{
+    std::printf("test_logcat_lines\n");
+    deployment::logcat_line line;
+    check(deployment::parse_logcat_line("10-18 20:44:29.426 25848 25903 I spdlog  : [info] ready: yes", line) &&
+              line.pid == "25848" && line.level == 'I' && line.tag == "spdlog" && line.message == "[info] ready: yes",
+          "a threadtime line gives its process, level, tag and message");
+    check(deployment::parse_logcat_line("10-18 20:44:30.001 30000 30000 F DEBUG   :   #00 pc 0000 /lib/libmain.so", line) &&
+              line.tag == "DEBUG" && line.message == "  #00 pc 0000 /lib/libmain.so",
+          "a crash report line keeps its indentation");
+    check(!deployment::parse_logcat_line("--------- beginning of main", line), "markers are no log lines");
+}
+
+void write_android_template(const fs::path& root, const std::string& version, const std::string& configuration)
+{
+    write_text(root / "template.stamp",
+               "engine_version=" + version + "\nconfiguration=" + configuration +
+                   "\nabi=arm64-v8a\ndotnet_runtime=10.0.13\nsymbols=/build/bin\n");
+    write_text(root / "lib/arm64-v8a/libmain.so", "elf");
+    write_text(root / "project/gradle/wrapper/gradle-wrapper.jar", "jar");
+    write_text(root / "sdl/java/org/libsdl/app/SDLActivity.java", "java");
+    write_text(root / "dotnet/native/libcoreclr.so", "elf");
+}
+
+void test_android_template(const fs::path& root)
+{
+    std::printf("test_android_template\n");
+    check(!deployment::find_android_template(root / "none", "v1", "Release").is_found(), "a missing template is reported");
+    write_android_template(root / "template", "v1", "Release");
+    const auto found = deployment::find_android_template(root / "template", "v1", "Release");
+    check(found.is_found() && found.found.abi == "arm64-v8a" && found.found.dotnet_runtime == "10.0.13" &&
+              found.found.symbols_dir == fs::path("/build/bin"),
+          "a complete template of this build is found with its stamp");
+    check(found.found.get_player_dir() == root / "template/lib/arm64-v8a", "the player sits under lib/<abi>");
+    check(!deployment::find_android_template(root / "template", "v2", "Release").is_found(), "another engine version is refused");
+    check(!deployment::find_android_template(root / "template", "v1", "Debug").is_found(), "another configuration is refused");
+    fs::error_code ec;
+    fs::remove(root / "template/lib/arm64-v8a/libmain.so", ec);
+    check(!deployment::find_android_template(root / "template", "v1", "Release").is_found(), "an incomplete template is refused");
+}
+
+auto contains_argument(const std::vector<std::string>& arguments, const std::string& argument) -> bool
+{
+    return std::find(arguments.begin(), arguments.end(), argument) != arguments.end();
+}
+
+void test_gradle_arguments()
+{
+    std::printf("test_gradle_arguments\n");
+    deployment::android_toolchain tools;
+    tools.java = "/jdk/bin/java";
+    deployment::android_package_params params;
+    params.player.root = "/editor/players/android-arm64";
+    params.player.abi = "arm64-v8a";
+    params.player.dotnet_runtime = "10.0.13";
+    params.project_dir = "/tmp/project";
+    params.content_dir = "/deploy";
+    params.application_id = "com.company.game";
+    params.name = "Game";
+    params.version_name = "1.2";
+    params.version_code = 7;
+    params.orientation = unravel::android_orientation::portrait;
+    auto arguments = deployment::make_gradle_arguments(tools, params);
+    check(!arguments.empty() && arguments.front() == tools.java.string(), "Java runs Gradle's wrapper");
+    check(contains_argument(arguments, "assembleDebug") && !contains_argument(arguments, "assembleRelease"), "a debug build");
+    check(contains_argument(arguments, "-Punravel.applicationId=com.company.game") &&
+              contains_argument(arguments, "-Punravel.versionCode=7") &&
+              contains_argument(arguments, "-Punravel.orientation=sensorPortrait") &&
+              contains_argument(arguments, "-Punravel.player=/editor/players/android-arm64/lib/arm64-v8a") &&
+              contains_argument(arguments, "-Punravel.content=/deploy"),
+          "the game's identity and the template's folders are passed");
+    params.is_release = true;
+    params.keystore = "/keys/game.jks";
+    params.key_alias = "game";
+    arguments = deployment::make_gradle_arguments(tools, params);
+    check(contains_argument(arguments, "assembleRelease") && contains_argument(arguments, "-Punravel.keystore=/keys/game.jks") &&
+              contains_argument(arguments, "-Punravel.keyAlias=game"),
+          "a release build names its keystore and key");
+    check(deployment::make_gradle_local_properties("C:/Android/Sdk") == "sdk.dir=C\\:/Android/Sdk\n",
+          "local.properties escapes the drive colon");
+    check(deployment::get_built_package("/p", false) == fs::path("/p/app/build/outputs/apk/debug/app-debug.apk"),
+          "the debug package's place");
+}
+
+//-----------------------------------------------------------------------------
+// subprocess
+//-----------------------------------------------------------------------------
+
+void test_subprocess(const fs::path& root)
+{
+    std::printf("test_subprocess\n");
+#ifdef _WIN32
+    const char* shell = std::getenv("ComSpec");
+    const std::vector<std::string> echo = {shell == nullptr ? "cmd.exe" : shell, "/c", "echo first&& echo %UNRAVEL_TEST_VALUE%"};
+    const std::vector<std::string> waiting = {"ping", "-n", "60", "127.0.0.1"};
+#else
+    const std::vector<std::string> echo = {"/bin/sh", "-c", "echo first; echo $UNRAVEL_TEST_VALUE"};
+    const std::vector<std::string> waiting = {"sleep", "60"};
+#endif
+    std::vector<std::string> lines;
+    const auto result = subprocess::call(echo,
+                                         {"UNRAVEL_TEST_VALUE=second"},
+                                         [&lines](const std::string& line)
+                                         {
+                                             lines.push_back(line);
+                                         });
+    check(result.started && result.retcode == 0, "a process runs with a changed environment");
+    check(lines.size() >= 2 && lines[0].rfind("first", 0) == 0 && lines[1].rfind("second", 0) == 0,
+          "its output arrives line by line, without line breaks, and sees the added variable");
+    check(result.out_output.find("second") != std::string::npos, "its whole output is kept too");
+    check(!subprocess::call({(root / "no_such_program.exe").string()}).started, "a program that does not exist does not start");
+    subprocess::stream stream;
+    check(stream.start(waiting, {}), "a stream starts a process");
+    check(stream.is_running(), "it runs");
+    const auto stop_begin = std::chrono::steady_clock::now();
+    stream.stop();
+    check(!stream.is_running() && std::chrono::steady_clock::now() - stop_begin < std::chrono::seconds(20),
+          "stopping ends it at once");
+}
+
 void test_pack_inputs(const fs::path& root)
 {
     std::printf("test_pack_inputs\n");
@@ -721,6 +916,17 @@ void test_folders(const fs::path& root)
     const auto older_build = root / "older_build";
     write_text(older_build / deployment::DATA_FOLDER / "app" / deployment::LEGACY_ASSET_INDEX_NAME, "index");
     check(deployment::is_previous_deploy(older_build), "a loose build of an older engine version is an earlier deploy");
+    const auto android = root / "android";
+    fs::create_directories(android, ec);
+    check(deployment::is_android_package_folder(android), "an empty folder takes an Android package");
+    write_text(android / "Game.apk", "apk");
+    write_text(android / "Other.APK", "apk");
+    check(deployment::is_android_package_folder(android), "a folder of packages is an Android deploy's");
+    write_text(android / deployment::DATA_FOLDER / "app" / ex::get_pack_file_name(), "pack");
+    check(deployment::is_android_package_folder(android), "the data an earlier Android deploy left beside its package belongs to it");
+    check(!deployment::is_android_package_folder(build), "data without a package is a desktop build without its player");
+    write_text(android / "Game.exe", "exe");
+    check(!deployment::is_android_package_folder(android), "any other file keeps the folder from an Android deploy");
     const auto project = root / "project";
     check(deployment::is_inside(project / "a/b", project), "a path below a folder is inside it");
     check(deployment::is_inside(project, project), "a folder is inside itself");
@@ -793,6 +999,14 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_walk(walked);
         test_tree(walked);
         test_file_classification(temp / "files");
+        test_shader_variants(temp / "variants");
+        test_platform_locations();
+        test_application_ids();
+        test_android_devices();
+        test_logcat_lines();
+        test_android_template(temp / "android");
+        test_gradle_arguments();
+        test_subprocess(temp / "subprocess");
         test_pack_inputs(temp / "inputs");
         test_stale_binaries(temp / "binaries");
         auto job = make_protocol_job(temp / "protocol");

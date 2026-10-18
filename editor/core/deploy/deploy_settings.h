@@ -4,15 +4,38 @@
 
 #include <filesystem/filesystem.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace unravel
 {
 
+/// The platform a deploy builds the game for.
+enum class deploy_platform : std::uint8_t
+{
+    /// This computer's platform: the player executable beside the data.
+    desktop,
+    /// An Android package (.apk) built from the editor's Android player.
+    android,
+};
+
+/// How an Android game turns with the phone.
+enum class android_orientation : std::uint8_t
+{
+    /// Both landscape directions.
+    landscape,
+    /// Both portrait directions.
+    portrait,
+    /// Every direction, following the phone.
+    automatic,
+};
+
 /// How the project is deployed; saved with the project (app:/deploy/deploy.cfg).
 struct deploy_settings
 {
+    deploy_platform deploy_target{deploy_platform::desktop};
+    /// The folder builds go to, each platform into a folder of its own in it (get_output_location).
     fs::path deploy_location{};
     bool deploy_dependencies{true};
     bool deploy_and_run{};
@@ -60,6 +83,41 @@ struct deploy_settings
     std::vector<std::string> deploy_included;
     /// Folders and assets that never ship, by key, even when the scenes use them.
     std::vector<std::string> deploy_excluded;
+
+    /// The game's id on Android devices and in stores. Empty: com.<company>.<product> from the project
+    /// settings. Changing it later installs a separate app.
+    std::string android_application_id;
+    /// Android's version number of the game, which must grow with every release a store gets.
+    std::uint32_t android_version_code{1};
+    android_orientation android_screen_orientation{android_orientation::landscape};
+    /// A release package signed with android_keystore; otherwise a debug package, signed with the
+    /// Android SDK's debug keystore.
+    bool android_release{};
+    fs::path android_keystore;
+    std::string android_key_alias;
+    /// The device Deploy and Run installs on (an adb serial). Not saved: devices belong to a computer.
+    std::string android_device;
+    /// Uninstall the game from the device when its installed copy was signed with another key, which
+    /// removes its saved data. Not saved: asked for each time.
+    bool android_replace_installed{};
 };
+
+/// The folder of a platform's builds under the deploy location: "desktop" or "android".
+inline auto get_platform_folder_name(deploy_platform platform) -> const char*
+{
+    return platform == deploy_platform::android ? "android" : "desktop";
+}
+
+/// The folder `platform` builds into: <deploy location>/<platform folder>. Empty while no deploy location is set.
+inline auto get_platform_location(const deploy_settings& params, deploy_platform platform) -> fs::path
+{
+    return params.deploy_location.empty() ? fs::path{} : params.deploy_location / get_platform_folder_name(platform);
+}
+
+/// The folder a deploy with these settings builds into: the chosen platform's under the deploy location.
+inline auto get_output_location(const deploy_settings& params) -> fs::path
+{
+    return get_platform_location(params, params.deploy_target);
+}
 
 } // namespace unravel

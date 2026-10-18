@@ -15,6 +15,7 @@ target_link_libraries(${target_name}
         engine
     PRIVATE
         assimp
+        subprocess
 )
 
 set_target_properties(${target_name} PROPERTIES

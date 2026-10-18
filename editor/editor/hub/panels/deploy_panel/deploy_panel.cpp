@@ -3,6 +3,7 @@
 #include "../panels_defs.h"
 #include "deploy_panel_widgets.h"
 
+#include <editor/deploy/deploy_android.h>
 #include <editor/deploy/project_releases.h>
 #include <editor/format/format_bytes.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h>
@@ -29,7 +30,12 @@ namespace
 namespace widgets = deploy_widgets;
 
 // Sizes are in units of the font size.
-constexpr float DEPLOY_WIDTH = 54.0f;
+// Wide enough for the Build tab's two columns side by side.
+constexpr float DEPLOY_WIDTH = 84.0f;
+// Space each side of the line between the Build tab's columns.
+constexpr float DEPLOY_COLUMN_GUTTER = 0.75f;
+// Space between the step labels in the status row.
+constexpr float DEPLOY_STEP_SPACING = 1.25f;
 constexpr float DEPLOY_ROUNDING = 0.75f;
 constexpr float DEPLOY_TITLE_SCALE = 1.3f;
 constexpr float DEPLOY_CLOSE_INSET = 0.6f;
@@ -37,9 +43,9 @@ constexpr float DEPLOY_SCREEN_MARGIN = 1.0f;
 // Every tab body has the same height, so switching tabs never moves the window: this share of the
 // work area, kept between the two limits. Longer content scrolls inside it, and the status and
 // buttons under it stay in view.
-constexpr float DEPLOY_BODY_SHARE = 0.55f;
-constexpr float DEPLOY_BODY_MIN_HEIGHT = 24.0f;
-constexpr float DEPLOY_BODY_MAX_HEIGHT = 40.0f;
+constexpr float DEPLOY_BODY_SHARE = 0.5f;
+constexpr float DEPLOY_BODY_MIN_HEIGHT = 22.0f;
+constexpr float DEPLOY_BODY_MAX_HEIGHT = 30.0f;
 // The empty Patch Against Release.
 constexpr const char* DEPLOY_FULL_BUILD_LABEL = "None - full build";
 
@@ -50,7 +56,7 @@ void draw_header()
     widgets::draw_icon_line(ICON_MDI_PACKAGE_VARIANT, widgets::get_accent_u32(), "Deploy Project", ImGui::GetColorU32(ImGuiCol_Text));
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
-    widgets::draw_muted_text("Builds the game for this platform into a folder.");
+    widgets::draw_muted_text("Builds the game into a folder, for this computer or an Android device.");
 }
 
 /// The close button in the top right corner of the window.
@@ -136,23 +142,51 @@ void inspect_deploy_properties(rtti::context& ctx, std::initializer_list<entt::h
     }
 }
 
-/// A deploy step and its state: failed with the reason, done, or still running.
-void draw_step(const std::string& name, const tpp::shared_future<void>& job)
+/// A deploy step's name with its state: done, failed or still running.
+void draw_step_label(const deployment::deploy_job& step)
 {
-    const auto error = deployment::get_step_error(job);
-    if(!error.empty())
-    {
-        widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
-                                widgets::WARNING_COLOR,
-                                fmt::format("{}: {}", name, error).c_str(),
-                                ImGui::GetColorU32(ImGuiCol_Text));
-        return;
-    }
-    const bool is_done = job.is_ready();
-    widgets::draw_icon_line(is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK,
-                            is_done ? widgets::get_accent_u32() : widgets::get_muted_color(),
-                            name.c_str(),
+    const bool has_failed = !deployment::get_step_error(step.job).empty();
+    const bool is_done = step.job.is_ready();
+    const char* icon = has_failed ? ICON_MDI_ALERT_CIRCLE_OUTLINE : (is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK);
+    const ImU32 icon_color = has_failed ? widgets::WARNING_COLOR : (is_done ? widgets::get_accent_u32() : widgets::get_muted_color());
+    widgets::draw_icon_line(icon,
+                            icon_color,
+                            step.name.c_str(),
                             is_done ? ImGui::GetColorU32(ImGuiCol_Text) : widgets::get_muted_color());
+}
+
+/// The steps in one row, in the order they run, wrapping when the window is too narrow; the reason of
+/// each failed step under them.
+void draw_step_row(const deployment::deploy_jobs& steps)
+{
+    const float spacing = widgets::to_pixels(DEPLOY_STEP_SPACING);
+    const float right_edge = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+    for(std::size_t i = 0; i < steps.size(); ++i)
+    {
+        const float width = ImGui::GetFontSize() + widgets::to_pixels(widgets::ICON_GAP) +
+                            ImGui::CalcTextSize(steps[i].name.c_str()).x;
+        if(i > 0)
+        {
+            ImGui::SameLine(0.0f, spacing);
+            if(ImGui::GetCursorPosX() + width > right_edge)
+            {
+                ImGui::NewLine();
+            }
+        }
+        draw_step_label(steps[i]);
+    }
+    for(const auto& step : steps)
+    {
+        const auto error = deployment::get_step_error(step.job);
+        if(!error.empty())
+        {
+            widgets::draw_gap(widgets::LINE_GAP);
+            widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                                    widgets::WARNING_COLOR,
+                                    fmt::format("{}: {}", step.name, error).c_str(),
+                                    ImGui::GetColorU32(ImGuiCol_Text));
+        }
+    }
 }
 } // namespace
 
@@ -168,10 +202,24 @@ void deploy_panel::show(bool s)
     {
         deploy_jobs_.clear();
     }
+    else
+    {
+        has_listed_android_devices_ = false;
+    }
 }
 
 void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
 {
+    // A Deploy and Run that could not replace the game on the device waits for a choice here.
+    const auto conflict_count = deployment::get_android_install_conflict_count();
+    if(conflict_count != seen_install_conflicts_)
+    {
+        seen_install_conflicts_ = conflict_count;
+        if(!deployment::get_android_install_conflict().empty())
+        {
+            show(true);
+        }
+    }
     if(show_request_)
     {
         ImGui::OpenPopup(name);
@@ -220,7 +268,7 @@ auto deploy_panel::get_progress() const -> float
                                      deploy_jobs_.end(),
                                      [](const auto& step)
                                      {
-                                         return step.second.is_ready();
+                                         return step.job.is_ready();
                                      });
     return float(ready) / float(deploy_jobs_.size());
 }
@@ -231,7 +279,7 @@ auto deploy_panel::is_deploying() const -> bool
                        deploy_jobs_.end(),
                        [](const auto& step)
                        {
-                           return !step.second.is_ready();
+                           return !step.job.is_ready();
                        });
 }
 
@@ -242,6 +290,7 @@ auto deploy_panel::start_deploy(rtti::context& ctx, const deploy_settings& param
         return false;
     }
     deploy_jobs_ = deployment::deploy_project(ctx, params);
+    deployed_location_ = get_output_location(params);
     return true;
 }
 
@@ -315,11 +364,30 @@ void deploy_panel::draw_tab_body(rtti::context& ctx, tab_drawer draw)
     ImGui::EndChild();
 }
 
-/// What the game is, where it is built and how its files are stored.
+/// Two columns: what every platform shares on the left - the product, where builds go, how files are
+/// stored - and the platform, with only its own settings, on the right.
 void deploy_panel::draw_build_tab(rtti::context& ctx)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(widgets::to_pixels(DEPLOY_COLUMN_GUTTER), 0.0f));
+    const ImGuiTableFlags flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame;
+    if(ImGui::BeginTable("##build_columns", 2, flags))
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        draw_common_settings(ctx);
+        ImGui::TableSetColumnIndex(1);
+        draw_platform_tabs(ctx);
+        ImGui::EndTable();
+    }
+    ImGui::PopStyleVar();
+}
+
+/// The settings every platform shares: the product, the deploy folder and running the game, packaging.
+void deploy_panel::draw_common_settings(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& settings = pm.get_settings();
+    const auto& params = pm.get_deploy_settings();
     widgets::draw_section_title("Product");
     if(inspect(ctx, settings.app).edit_finished)
     {
@@ -331,14 +399,173 @@ void deploy_panel::draw_build_tab(rtti::context& ctx)
     }
     widgets::draw_gap(widgets::SECTION_GAP);
     widgets::draw_section_title("Output");
-    inspect_deploy_properties(ctx, {"deploy_location"_hs, "deploy_and_run"_hs});
+    inspect_deploy_properties(ctx, {"deploy_location"_hs});
+    if(!params.deploy_location.empty())
+    {
+        widgets::draw_muted_text(fmt::format("{} builds go to {}.",
+                                             params.deploy_target == deploy_platform::android ? "Android" : "Desktop",
+                                             get_output_location(params).generic_string())
+                                     .c_str());
+    }
+    inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
     widgets::draw_gap(widgets::SECTION_GAP);
     widgets::draw_section_title("Packaging");
-    inspect_deploy_properties(ctx,
-                              {"deploy_packed_assets"_hs,
-                               "deploy_cooked_assets"_hs,
-                               "deploy_dependencies"_hs,
-                               "deploy_debug_symbols"_hs});
+    inspect_deploy_properties(ctx, {"deploy_packed_assets"_hs, "deploy_cooked_assets"_hs, "deploy_debug_symbols"_hs});
+}
+
+/// A tab per platform; the selected one is what the deploy builds for, and shows that platform's settings.
+void deploy_panel::draw_platform_tabs(rtti::context& ctx)
+{
+    struct platform_tab
+    {
+        deploy_platform platform;
+        const char* label;
+        const char* tooltip;
+        tab_drawer draw;
+    };
+    static constexpr platform_tab tabs[] = {
+        {deploy_platform::desktop, ICON_MDI_MONITOR " Desktop", "Build the game for this computer.", &deploy_panel::draw_desktop_section},
+        {deploy_platform::android, ICON_MDI_ANDROID " Android", "Build an Android package from the editor's Android player.", &deploy_panel::draw_android_section},
+    };
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& params = pm.get_deploy_settings();
+    widgets::draw_section_title("Platform");
+    // The setting can change elsewhere (MCP): its tab is selected until the tab bar shows it, and clicks on
+    // the tab still shown meanwhile change nothing.
+    const bool is_selecting = !shown_platform_ || *shown_platform_ != params.deploy_target;
+    if(!ImGui::BeginTabBar("##deploy_platforms"))
+    {
+        return;
+    }
+    for(const auto& tab : tabs)
+    {
+        const ImGuiTabItemFlags flags = is_selecting && tab.platform == params.deploy_target ? ImGuiTabItemFlags_SetSelected : 0;
+        const bool is_open = ImGui::BeginTabItem(tab.label, nullptr, flags);
+        ImGui::SetItemTooltipEx("%s", tab.tooltip);
+        if(!is_open)
+        {
+            continue;
+        }
+        if(tab.platform != params.deploy_target && !is_selecting)
+        {
+            params.deploy_target = tab.platform;
+            pm.save_deploy_settings();
+            problems_.invalidate();
+        }
+        if(tab.platform == params.deploy_target)
+        {
+            shown_platform_ = tab.platform;
+        }
+        widgets::draw_gap(widgets::LINE_GAP);
+        (this->*tab.draw)(ctx);
+        ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+}
+
+void deploy_panel::draw_desktop_section(rtti::context& ctx)
+{
+    widgets::draw_muted_text("The player for this computer, with the game's data beside it. Run After Deploy starts it.");
+    widgets::draw_gap(widgets::LINE_GAP);
+    inspect_deploy_properties(ctx, {"deploy_dependencies"_hs});
+}
+
+void deploy_panel::draw_android_section(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& params = pm.get_deploy_settings();
+    widgets::draw_muted_text("An Android package (.apk). Run After Deploy installs it on the device and starts it there.");
+    widgets::draw_gap(widgets::LINE_GAP);
+    if(!has_listed_android_devices_)
+    {
+        has_listed_android_devices_ = true;
+        deployment::refresh_android_devices(ctx);
+    }
+    if(draw_android_device_picker(ctx))
+    {
+        problems_.invalidate();
+    }
+    inspect_deploy_properties(ctx, {"android_application_id"_hs});
+    if(params.android_application_id.empty())
+    {
+        widgets::draw_muted_text(
+            fmt::format("Uses {} from the product settings.", deployment::get_android_application_id(ctx, params)).c_str());
+    }
+    inspect_deploy_properties(ctx, {"android_version_code"_hs, "android_screen_orientation"_hs, "android_release"_hs});
+    if(params.android_release)
+    {
+        inspect_deploy_properties(ctx, {"android_keystore"_hs, "android_key_alias"_hs});
+    }
+}
+
+auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
+{
+    auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto devices = deployment::get_android_devices();
+    // The only device ready is the one to use; the choice is not saved, since devices belong to a computer.
+    const auto ready_count = std::count_if(devices.begin(),
+                                           devices.end(),
+                                           [](const deployment::android_device& device)
+                                           {
+                                               return device.is_ready();
+                                           });
+    bool is_changed = false;
+    if(params.android_device.empty() && ready_count == 1)
+    {
+        params.android_device = std::find_if(devices.begin(),
+                                             devices.end(),
+                                             [](const deployment::android_device& device)
+                                             {
+                                                 return device.is_ready();
+                                             })
+                                    ->serial;
+        is_changed = true;
+    }
+    const auto chosen = std::find_if(devices.begin(),
+                                     devices.end(),
+                                     [&params](const deployment::android_device& device)
+                                     {
+                                         return device.serial == params.android_device;
+                                     });
+    std::string preview = "Choose a device";
+    if(chosen != devices.end())
+    {
+        preview = chosen->get_label();
+    }
+    else if(!params.android_device.empty())
+    {
+        preview = ICON_MDI_ALERT " " + params.android_device;
+    }
+    entt::meta_any object = entt::forward_as_meta(params);
+    property_layout layout(entt::resolve<deploy_settings>().data("android_device"_hs), object);
+    const float refresh_width = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - refresh_width));
+    if(ImGui::BeginCombo("##android_device", preview.c_str()))
+    {
+        if(devices.empty())
+        {
+            ImGui::TextDisabled("%s", "No device found. Connect one and refresh the list.");
+        }
+        for(const auto& device : devices)
+        {
+            const auto label = device.is_ready() ? device.get_label() : fmt::format("{} - {}", device.get_label(), device.state);
+            if(ImGui::Selectable(label.c_str(), device.serial == params.android_device))
+            {
+                params.android_device = device.serial;
+                is_changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(deployment::is_refreshing_android_devices());
+    if(ImGui::Button(ICON_MDI_REFRESH "##refresh_android_devices"))
+    {
+        deployment::refresh_android_devices(ctx);
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltipEx("%s", "List the connected devices again.");
+    return is_changed;
 }
 
 /// The scenes the game is built from and the assets that ship with it.
@@ -368,6 +595,11 @@ void deploy_panel::draw_releases_tab(rtti::context& ctx)
                                  ? "Every pack is written whole."
                                  : fmt::format("The packs of {} ship unchanged, and content_p1.pak holds every change since.", release)
                                        .c_str());
+    if(pm.get_deploy_settings().deploy_target == deploy_platform::android)
+    {
+        widgets::draw_muted_text("Patches and releases are for desktop deploys. An Android package always carries every "
+                                 "pack whole.");
+    }
     widgets::draw_gap(widgets::SECTION_GAP);
     draw_kept_releases(ctx);
 }
@@ -421,7 +653,8 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
 {
     const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
     fs::error_code ec;
-    const bool has_folder = fs::is_directory(params.deploy_location, ec);
+    // Releases are desktop builds: their packs ship beside the player, and patches update them.
+    const bool has_folder = fs::is_directory(get_platform_location(params, deploy_platform::desktop), ec);
     if(widgets::draw_section_title_button("Kept Releases",
                                           ICON_MDI_TAG_PLUS_OUTLINE " Keep as Release",
                                           "Keep the build in the deploy folder as a release named by the product version,\n"
@@ -518,10 +751,53 @@ void deploy_panel::refresh_releases()
 /// deploying, the steps of the last deploy, or that it is ready.
 /// </summary>
 //-----------------------------------------------------------------------------
+void deploy_panel::draw_install_conflict()
+{
+    const auto device = deployment::get_android_install_conflict();
+    if(device.empty())
+    {
+        return;
+    }
+    widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                            widgets::WARNING_COLOR,
+                            "The game on the device was signed with another key, so this build cannot replace it. Debug "
+                            "and release builds are signed with different keys.",
+                            ImGui::GetColorU32(ImGuiCol_Text));
+    widgets::draw_gap(widgets::LINE_GAP);
+    if(ImGui::Button(ICON_MDI_DELETE_OUTLINE " Uninstall and Install"))
+    {
+        ImGui::OpenPopup("##replace_installed_confirm");
+    }
+    ImGui::SetItemTooltipEx("%s", "Uninstall the game from the device, then install and start this build.");
+    if(ImGui::BeginPopup("##replace_installed_confirm"))
+    {
+        ImGui::PushFont(ImGui::Font::Bold);
+        ImGui::TextUnformatted("Uninstall the game from the device?");
+        ImGui::PopFont();
+        ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
+        ImGui::TextUnformatted("Its saved data on the device is removed with it.");
+        ImGui::PopStyleColor();
+        widgets::draw_gap(widgets::LINE_GAP);
+        if(ImGui::Button(ICON_MDI_DELETE_OUTLINE " Uninstall and Install"))
+        {
+            deploy_jobs_ = deployment::replace_android_game();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if(ImGui::Button("Cancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    widgets::draw_gap(widgets::LINE_GAP);
+}
+
 void deploy_panel::draw_status(rtti::context& ctx)
 {
     const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
     const bool is_in_progress = is_deploying();
+    draw_install_conflict();
     if(!is_in_progress)
     {
         const auto& problems = problems_.get(ctx, params);
@@ -538,7 +814,8 @@ void deploy_panel::draw_status(rtti::context& ctx)
         }
     }
 
-    const std::string location = params.deploy_location.generic_string();
+    // The steps shown are of the last deploy, which may have gone to another platform's folder.
+    const std::string location = (deploy_jobs_.empty() ? get_output_location(params) : deployed_location_).generic_string();
     if(deploy_jobs_.empty())
     {
         widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
@@ -552,7 +829,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
                                         deploy_jobs_.end(),
                                         [](const auto& step)
                                         {
-                                            return !deployment::get_step_error(step.second).empty();
+                                            return !deployment::get_step_error(step.job).empty();
                                         });
     const auto step_count = deploy_jobs_.size();
     const auto done_count = static_cast<std::size_t>(get_progress() * static_cast<float>(step_count) + 0.5f);
@@ -565,18 +842,10 @@ void deploy_panel::draw_status(rtti::context& ctx)
     {
         summary = fmt::format("Deploy to {} failed", location);
     }
-    ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
-    ImGui::TextWrapped("%s", summary.c_str());
-    ImGui::PopStyleColor();
+    // One bar says what the deploy does and how far it is; the steps follow in a row under it.
+    widgets::draw_progress_bar(get_progress(), summary.c_str(), fmt::format("{} of {} steps", done_count, step_count).c_str());
     widgets::draw_gap(widgets::LINE_GAP);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, imgui_style::get_accent_color());
-    ImGui::ProgressBar(get_progress(), ImVec2(-FLT_MIN, 0.0f), fmt::format("{} of {} steps", done_count, step_count).c_str());
-    ImGui::PopStyleColor();
-    widgets::draw_gap(widgets::LINE_GAP);
-    for(const auto& [name, job] : deploy_jobs_)
-    {
-        draw_step(name, job);
-    }
+    draw_step_row(deploy_jobs_);
 }
 
 /// Close at the left end; Open Folder and Deploy at the right end.
@@ -585,12 +854,18 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
     const bool can_deploy = !is_deploying() && problems_.get(ctx, params).empty();
     fs::error_code ec;
-    const bool has_folder = fs::is_directory(params.deploy_location, ec);
+    const bool has_folder = fs::is_directory(get_output_location(params), ec);
 
     const char* open_label = ICON_MDI_FOLDER_OPEN_OUTLINE " Open Folder";
     const char* deploy_label = params.deploy_and_run ? ICON_MDI_PLAY " Deploy and Run" : ICON_MDI_PACKAGE_VARIANT " Deploy";
-    const float buttons_width =
+    const char* stop_label = ICON_MDI_STOP " Stop Game";
+    const bool is_game_running = deployment::is_android_game_running();
+    float buttons_width =
         widgets::calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x + widgets::calc_button_width(deploy_label);
+    if(is_game_running)
+    {
+        buttons_width += widgets::calc_button_width(stop_label) + ImGui::GetStyle().ItemSpacing.x;
+    }
     if(widgets::draw_button("Close", false, true))
     {
         ImGui::CloseCurrentPopup();
@@ -601,10 +876,19 @@ void deploy_panel::draw_actions(rtti::context& ctx)
 
     if(widgets::draw_button(open_label, false, has_folder))
     {
-        ImGui::OpenInShell(params.deploy_location.string().c_str());
+        ImGui::OpenInShell(get_output_location(params).string().c_str());
     }
     ImGui::SetItemTooltipEx("%s", "Show the deploy folder in the file browser.");
     ImGui::SameLine();
+    if(is_game_running)
+    {
+        if(widgets::draw_button(stop_label, false, true))
+        {
+            deployment::stop_android_game();
+        }
+        ImGui::SetItemTooltipEx("%s", "Stop the game on the device.");
+        ImGui::SameLine();
+    }
     // The cached answer may be a moment old: the deploy itself checks again.
     if(widgets::draw_button(deploy_label, true, can_deploy) && start_deploy(ctx, params))
     {
