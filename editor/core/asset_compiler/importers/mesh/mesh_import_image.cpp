@@ -1,6 +1,6 @@
 #include "mesh_import_image.h"
 
-#include "../../asset_writer.h"
+#include <engine/assets/impl/asset_writer.h>
 
 #include <graphics/utils/bgfx_utils.h>
 #include <logging/logging.h>

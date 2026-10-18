@@ -7,7 +7,7 @@
 #include <editor/system/project_manager.h>
 #include <editor/system/mcp_manager.h>
 #include <engine/assets/asset_manager.h>
-#include <engine/assets/impl/asset_compiler.h>
+#include <asset_compiler/asset_compiler.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/play_mode.h>

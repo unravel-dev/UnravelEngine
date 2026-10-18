@@ -19,8 +19,10 @@ struct runtime_plan
     /// The managed bridge payload (CoreCLR) or the runtime's assemblies (Mono), and where they go.
     fs::path managed_source;
     fs::path managed_destination;
-    /// CoreCLR: the hostfxr and shared framework version folders to bundle; empty when none was found (the
-    /// game then needs an installed runtime). Mono: the folder holding the native libraries.
+    /// CoreCLR: the hostfxr and shared framework version folders to bundle. The framework is empty when none
+    /// was found (the game then needs an installed runtime); the host alone is empty when no hostfxr was
+    /// found (the game then starts the bundled framework through the coreclr host). Mono: the folder holding
+    /// the native libraries.
     fs::path host_source;
     fs::path host_destination;
     fs::path framework_source;

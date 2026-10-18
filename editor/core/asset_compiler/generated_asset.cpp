@@ -1,5 +1,5 @@
 #include "generated_asset.h"
-#include "asset_writer.h"
+#include <engine/assets/impl/asset_writer.h>
 
 #include <engine/meta/assets/asset_database.hpp>
 

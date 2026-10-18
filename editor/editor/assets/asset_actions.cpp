@@ -3,7 +3,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
-#include <engine/assets/impl/generated_asset.h>
+#include <asset_compiler/generated_asset.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/animation/animation_controller.hpp>

@@ -3,7 +3,7 @@
 #include "mesh_import_image.h"
 #include "mesh_import_paths.h"
 
-#include "../../asset_writer.h"
+#include <engine/assets/impl/asset_writer.h>
 
 #include <logging/logging.h>
 #include <math/math.h>

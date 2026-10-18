@@ -10,7 +10,7 @@
 
 #include <vector>
 
-#include "asset_extensions.h"
+#include <engine/assets/impl/asset_extensions.h>
 
 
 

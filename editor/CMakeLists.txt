@@ -1,2 +1,4 @@
 add_subdirectory(core)
-add_subdirectory(editor)
+if(UNRAVEL_BUILD_EDITOR)
+    add_subdirectory(editor)
+endif()

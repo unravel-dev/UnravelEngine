@@ -5,8 +5,8 @@
 #include "mesh_import_paths.h"
 #include "mesh_import_texture_jobs.h"
 
-#include "../../asset_extensions.h"
-#include "../../asset_writer.h"
+#include <engine/assets/impl/asset_extensions.h>
+#include <engine/assets/impl/asset_writer.h>
 
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>

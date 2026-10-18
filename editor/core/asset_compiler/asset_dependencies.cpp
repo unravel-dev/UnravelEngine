@@ -1,5 +1,5 @@
 #include "asset_dependencies.h"
-#include "asset_extensions.h"
+#include <engine/assets/impl/asset_extensions.h>
 #include "importers/mesh_importer.h"
 
 #include <engine/rendering/mesh.h>

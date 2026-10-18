@@ -15,7 +15,6 @@
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
-#include <engine/assets/impl/asset_compiler.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/ecs/ecs.h>
 #include <engine/events.h>

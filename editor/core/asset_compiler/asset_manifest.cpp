@@ -1,9 +1,8 @@
 #include "asset_manifest.h"
-#include "asset_extensions.h"
+#include <engine/assets/impl/asset_extensions.h>
 #include <logging/logging.h>
 #include <fstream>
 #include <vector>
-#include <engine/assets/impl/asset_extensions.h>
 #include <serialization/serialization.h>
 #include <serialization/associative_archive.h>
 #include <serialization/types/chrono.hpp>

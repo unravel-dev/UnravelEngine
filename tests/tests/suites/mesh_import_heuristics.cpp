@@ -24,12 +24,12 @@
 #include "../tests.h"
 
 #include <engine/assets/impl/asset_extensions.h>
-#include <engine/assets/impl/importers/mesh/mesh_import_animation.h>
-#include <engine/assets/impl/importers/mesh/mesh_import_geometry.h>
-#include <engine/assets/impl/importers/mesh/mesh_import_image.h>
-#include <engine/assets/impl/importers/mesh/mesh_import_material_workflow.h>
-#include <engine/assets/impl/importers/mesh/mesh_import_paths.h>
-#include <engine/assets/impl/importers/mesh/mesh_import_texture_jobs.h>
+#include <asset_compiler/importers/mesh/mesh_import_animation.h>
+#include <asset_compiler/importers/mesh/mesh_import_geometry.h>
+#include <asset_compiler/importers/mesh/mesh_import_image.h>
+#include <asset_compiler/importers/mesh/mesh_import_material_workflow.h>
+#include <asset_compiler/importers/mesh/mesh_import_paths.h>
+#include <asset_compiler/importers/mesh/mesh_import_texture_jobs.h>
 
 #include <graphics/vertex_decl.h>
 

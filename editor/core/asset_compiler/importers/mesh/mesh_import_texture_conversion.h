@@ -1,6 +1,6 @@
 #pragma once
 
-#include <engine/assets/impl/importers/mesh_importer.h>
+#include <asset_compiler/importers/mesh_importer.h>
 
 #include <filesystem/filesystem.h>
 

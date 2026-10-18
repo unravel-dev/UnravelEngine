@@ -16,6 +16,9 @@ else()
     set(BGFX_LIBRARY_TYPE "STATIC" CACHE STRING "Linking type for library" FORCE)
 endif()
 
+# shaderc, texturec and geometryc are run by the editor's asset compiler and by the tests; a
+# player-only build leaves them out.
+set(BGFX_BUILD_TOOLS ${UNRAVEL_BUILD_ASSET_TOOLS} CACHE BOOL "Build bgfx tools." FORCE)
 set(BGFX_BUILD_TOOLS_BIN2C ON CACHE BOOL "Build bx binary to c converter." FORCE)
 set(BGFX_BUILD_TOOLS_SHADER ON CACHE BOOL "Build bgfx shader tools." FORCE)
 set(BGFX_BUILD_TOOLS_GEOMETRY ON CACHE BOOL "Build bgfx geometry tools." FORCE)

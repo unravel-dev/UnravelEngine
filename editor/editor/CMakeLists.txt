@@ -16,6 +16,7 @@ add_dependencies(${target_name} engine)
 target_link_libraries(${target_name} PUBLIC 
     engine
     deploy
+    asset_compiler
     imgui 
     filedialog 
     httplib

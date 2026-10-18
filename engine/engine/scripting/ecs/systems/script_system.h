@@ -13,6 +13,7 @@
 
 #include <dotnetpp/dotnetpp.h>
 
+#include <functional>
 #include <map>
 #include <set>
 #include <variant>
@@ -20,8 +21,20 @@
 namespace unravel
 {
 
+class asset_manager;
+
 struct script_system
 {
+    /// Builds the script library at key into output (flags: script_library::compilation_flags).
+    using library_builder =
+        std::function<bool(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags)>;
+
+    /**
+     * @brief Installs what builds script libraries. The engine owns no compiler: the editor
+     *        installs its asset compiler's script build before the engine's systems initialize,
+     *        and a host without one (the player) only loads libraries built beforehand.
+     */
+    static void set_library_builder(library_builder builder);
     static void set_needs_recompile(const std::string& protocol, bool now = false);
     static auto get_script_debug_mode() -> bool;
     static void set_script_debug_mode(bool debug);

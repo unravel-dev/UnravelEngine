@@ -2,7 +2,6 @@
 #include "filesystem/filesystem.h"
 #include "impl/asset_extensions.h"
 #include "impl/asset_reader.h"
-#include "impl/importers/mesh_importer.h"
 
 #include <engine/animation/animation.h>
 #include <engine/animation/animation_controller.h>
@@ -38,7 +37,6 @@ auto asset_manager::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    importer::mesh_importer_init();
     init_fonts();
     {
         auto& storage = add_storage<gfx::shader>();

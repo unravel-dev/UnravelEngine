@@ -1,7 +1,7 @@
 #include "script_system.h"
 #include <engine/animation/ecs/components/animation_component.h>
 #include "engine/assets/impl/asset_extensions.h"
-#include <engine/assets/impl/asset_compiler.h>
+#include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
@@ -139,6 +139,9 @@ auto get_sources_stamp(asset_manager& am, const std::string& protocol) -> uint64
 // latest change and nothing older overwrites it. One lock for every protocol: app builds also
 // read the engine library that engine domain loads copy into place.
 std::mutex library_files_mutex;
+
+/// Builds script libraries; installed by the editor through set_library_builder, empty elsewhere.
+script_system::library_builder script_library_builder;
 
 /// Files that belong to one build of a script library dll: its debug symbols (portable pdb
 /// from csc and newer mcs, mdb from older mcs) and its XML docs.
@@ -371,6 +374,28 @@ auto select_interpreter_config(const cmd_line::parser& parser) -> dotnet::interp
     return config;
 }
 
+#if !DOTNETPP_BACKEND_MONO
+/*
+ * auto: hostfxr when the dotnet root has one (every desktop install and the default deploy),
+ * the coreclr host otherwise. coreclr: start the runtime without hostfxr, as platforms that ship
+ * no hostfxr must (--clr-host coreclr exercises that path on desktop).
+ */
+auto select_runtime_host(const cmd_line::parser& parser) -> dotnet::runtime_host
+{
+    std::string host;
+    parser.try_get("clr-host", host);
+    if(host == "hostfxr")
+    {
+        return dotnet::runtime_host::hostfxr;
+    }
+    if(host == "coreclr")
+    {
+        return dotnet::runtime_host::coreclr;
+    }
+    return dotnet::runtime_host::automatic;
+}
+#endif
+
 script_system::script_system(rtti::context& ctx, cmd_line::parser& parser)
 {
     (void)ctx;
@@ -378,6 +403,10 @@ script_system::script_system(rtti::context& ctx, cmd_line::parser& parser)
                                      "interpreter",
                                      "auto",
                                      "CoreCLR interpreter mode (auto|forced).");
+    parser.set_optional<std::string>("",
+                                     "clr-host",
+                                     "auto",
+                                     "How the .NET runtime is started (auto|hostfxr|coreclr).");
 }
 
 auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) -> bool
@@ -454,8 +483,16 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
                               APPLOG_ERROR("{}", msg);
                           });
 
+#if !DOTNETPP_BACKEND_MONO
+    mono_paths.host = select_runtime_host(parser);
+#endif
+
     if(dotnet::init(mono_paths, debug_config_, select_interpreter_config(parser)))
     {
+#if !DOTNETPP_BACKEND_MONO
+        APPLOG_INFO(".NET runtime started through {}",
+                    dotnet::get_runtime_host() == dotnet::runtime_host::coreclr ? "coreclr" : "hostfxr");
+#endif
         bind_internal_calls(ctx);
 
         dotnet::domain::set_assemblies_path(fs::resolve_protocol(ex::get_compiled_directory("engine")).string());
@@ -1464,7 +1501,7 @@ auto script_system::create_compilation_job(rtti::context& ctx,
 
     return thr.pool->schedule(
         tpp::job_desc{"Compiling " + ex::get_type<script_library>(), protocol},
-        [&am, flags, protocol, debug]()
+        [&am, flags, protocol, debug, builder = script_library_builder]()
         {
             auto key = get_lib_data_key(protocol);
             auto output = get_lib_temp_compiled_key(protocol);
@@ -1474,7 +1511,11 @@ auto script_system::create_compilation_job(rtti::context& ctx,
             // queued or saved after this point leaves the library out of date.
             const uint64_t generation = get_source_generation(protocol);
             const uint64_t sources_stamp = get_sources_stamp(am, protocol);
-            const bool is_built = asset_compiler::compile<script_library>(am, key, fs::resolve_protocol(output), flags);
+            if(!builder)
+            {
+                APPLOG_ERROR("The {} script library cannot be built: no script compiler is installed.", protocol);
+            }
+            const bool is_built = builder && builder(am, key, fs::resolve_protocol(output), flags);
             record_library_build(protocol, generation, sources_stamp, debug, is_built);
             return is_built;
         });
@@ -1501,6 +1542,11 @@ auto script_system::is_library_current(rtti::context& ctx, const std::string& pr
     fs::error_code ec;
     return fs::exists(fs::resolve_protocol(get_lib_temp_compiled_key(protocol)), ec) ||
            fs::exists(fs::resolve_protocol(get_lib_compiled_key(protocol)), ec);
+}
+
+void script_system::set_library_builder(library_builder builder)
+{
+    script_library_builder = std::move(builder);
 }
 
 void script_system::set_needs_recompile(const std::string& protocol, bool now)

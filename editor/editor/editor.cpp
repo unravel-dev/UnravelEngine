@@ -1,9 +1,11 @@
 #include "editor.h"
 
+#include <asset_compiler/asset_compiler.h>
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/loading_screen.h>
 #include <engine/rendering/renderer.h>
+#include <engine/scripting/ecs/systems/script_system.h>
 #include <simulation/simulation.h>
 #include <version/version.h>
 
@@ -48,6 +50,9 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     {
         return false;
     }
+
+    // The engine's first script build runs while its systems initialize.
+    script_system::set_library_builder(&asset_compiler::compile<script_library>);
 
     fs::path binary_path = fs::resolve_protocol("binary:/");
     fs::path editor_data = binary_path / "data" / "editor";

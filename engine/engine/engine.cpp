@@ -410,6 +410,11 @@ auto engine::deinit() -> bool
         return false;
     }
 
+    // The scene's entities hold the script instances and their component wrappers. Release them
+    // while every system is still up, so their destroy callbacks run, and before the script domains
+    // unload, so nothing keeps the domains alive. A host that closed its scene already (the editor
+    // closes the project first) makes this a no-op.
+    ctx.get_cached<ecs>().unload_scene();
 
     if(!ctx.get_cached<ui_system>().deinit(ctx))
     {

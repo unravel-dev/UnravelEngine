@@ -192,12 +192,26 @@ endif()
 
 set(UNRAVEL_UNITY_BUILD ON)
 
+# A player-only build turns both off: it leaves out the editor, the test runner, the editor
+# libraries they share and the asset tools, which a cross-compiled player cannot use.
+option(UNRAVEL_BUILD_EDITOR "Build the editor." ON)
+option(UNRAVEL_BUILD_TESTS "Build the test runner." ON)
+if(UNRAVEL_BUILD_EDITOR OR UNRAVEL_BUILD_TESTS)
+    set(UNRAVEL_BUILD_ASSET_TOOLS ON)
+else()
+    set(UNRAVEL_BUILD_ASSET_TOOLS OFF)
+endif()
+
 add_subdirectory(deps)
 #add_subdirectory(version)
 add_subdirectory(engine)
-add_subdirectory(editor)
+if(UNRAVEL_BUILD_ASSET_TOOLS)
+    add_subdirectory(editor)
+endif()
 add_subdirectory(game)
-add_subdirectory(tests)
+if(UNRAVEL_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
 
 
 file(GLOB_RECURSE SOURCES ${PROJECT_SOURCE_DIR}/engine_data/data/shaders/* ${PROJECT_SOURCE_DIR}/engine_data/data/scripts/*)
@@ -214,16 +228,18 @@ add_custom_target(engine_data
 
 
 
-file(GLOB_RECURSE SOURCES ${PROJECT_SOURCE_DIR}/editor_data/data/shaders/* )
-add_custom_target(editor_data
-                  ALL
-                  COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/editor_data ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/data/editor
+if(UNRAVEL_BUILD_EDITOR)
+    file(GLOB_RECURSE SOURCES ${PROJECT_SOURCE_DIR}/editor_data/data/shaders/* )
+    add_custom_target(editor_data
+                      ALL
+                      COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/editor_data ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/data/editor
 
-                  SOURCES
-                  ${SOURCES}
-                  COMMENT "Copying editor data..."
-                  VERBATIM
-)
+                      SOURCES
+                      ${SOURCES}
+                      COMMENT "Copying editor data..."
+                      VERBATIM
+    )
+endif()
 
 
 

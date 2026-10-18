@@ -4,10 +4,10 @@
 #include "threadpp/thread.h"
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_manager.h>
-#include <engine/assets/impl/asset_compiler.h>
-#include <engine/assets/impl/asset_dependencies.h>
+#include <asset_compiler/asset_compiler.h>
+#include <asset_compiler/asset_dependencies.h>
 #include <engine/assets/impl/asset_extensions.h>
-#include <engine/assets/impl/asset_manifest.h>
+#include <asset_compiler/asset_manifest.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/assets/asset_dependency_graph.h>
 #include <engine/audio/audio_clip.h>

@@ -40,7 +40,6 @@ target_link_libraries (${target_name}
     math
     uuidpp
     threadpp
-    assimp
     string_utils
     dotnetpp
     seq

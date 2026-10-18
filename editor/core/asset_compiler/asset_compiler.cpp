@@ -1,6 +1,6 @@
 #include "asset_compiler.h"
 #include "asset_dependencies.h"
-#include "asset_writer.h"
+#include <engine/assets/impl/asset_writer.h>
 #include "asset_manifest.h"
 #include "generated_asset.h"
 #include "bimg/bimg.h"

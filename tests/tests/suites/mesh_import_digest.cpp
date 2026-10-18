@@ -28,7 +28,7 @@
 #include "../tests.h"
 
 #include <engine/assets/asset_manager.h>
-#include <engine/assets/impl/importers/mesh_importer.h>
+#include <asset_compiler/importers/mesh_importer.h>
 #include <engine/rendering/material.h>
 #include <logging/logging.h>
 

@@ -167,13 +167,16 @@ auto make_runtime_plan(rtti::context&, const deploy_settings& params) -> runtime
     plan.framework_source = pick_highest_version_folder(dotnet_root / SHARED_FRAMEWORK_FOLDER, preferred_major);
     plan.host_destination = engine_root / DOTNET_FOLDER / HOST_FXR_FOLDER / plan.host_source.filename();
     plan.framework_destination = engine_root / DOTNET_FOLDER / SHARED_FRAMEWORK_FOLDER / plan.framework_source.filename();
-    if(plan.host_source.empty() || plan.framework_source.empty())
+    if(plan.framework_source.empty())
     {
-        APPLOG_WARNING("Deploy: no hostfxr or shared framework under {}; the deployed game will need an installed .NET "
-                       "runtime",
+        APPLOG_WARNING("Deploy: no shared framework under {}; the deployed game will need an installed .NET runtime",
                        dotnet_root.generic_string());
         plan.host_source.clear();
-        plan.framework_source.clear();
+    }
+    else if(plan.host_source.empty())
+    {
+        APPLOG_INFO("Deploy: no hostfxr under {}; the game starts the bundled framework through the coreclr host",
+                    dotnet_root.generic_string());
     }
     return plan;
 }
@@ -189,14 +192,17 @@ void deploy_runtime(const runtime_plan& plan)
         };
     }
     mirror_or_throw(plan.managed_source, plan.managed_destination, include);
-    if(plan.host_source.empty())
+    if(plan.framework_source.empty())
     {
         return;
     }
     // The runtime is the largest part of a build and rarely changes: only an updated version is copied,
     // and the one it replaces removed.
-    mirror_or_throw(plan.host_source, plan.host_destination);
-    remove_siblings(plan.host_destination);
+    if(!plan.host_source.empty())
+    {
+        mirror_or_throw(plan.host_source, plan.host_destination);
+        remove_siblings(plan.host_destination);
+    }
     mirror_or_throw(plan.framework_source, plan.framework_destination);
     remove_siblings(plan.framework_destination);
 }

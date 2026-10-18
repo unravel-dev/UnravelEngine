@@ -21,8 +21,8 @@
 #include "../tests.h"
 
 #include <engine/assets/asset_manager.h>
-#include <engine/assets/impl/asset_compiler.h>
-#include <engine/assets/impl/generated_asset.h>
+#include <asset_compiler/asset_compiler.h>
+#include <asset_compiler/generated_asset.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/rendering/mesh.h>

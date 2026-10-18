@@ -1,6 +1,6 @@
 #include "mesh_import_paths.h"
 
-#include "../../asset_extensions.h"
+#include <engine/assets/impl/asset_extensions.h>
 
 #include <logging/logging.h>
 #include <string_utils/utils.h>
