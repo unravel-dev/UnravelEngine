@@ -490,8 +490,10 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
     if(dotnet::init(mono_paths, debug_config_, select_interpreter_config(parser)))
     {
 #if !DOTNETPP_BACKEND_MONO
-        APPLOG_INFO(".NET runtime started through {}",
-                    dotnet::get_runtime_host() == dotnet::runtime_host::coreclr ? "coreclr" : "hostfxr");
+        APPLOG_INFO(".NET runtime {} started through {} from {}",
+                    dotnet::get_runtime_version(),
+                    dotnet::get_runtime_host() == dotnet::runtime_host::coreclr ? "coreclr" : "hostfxr",
+                    dotnet::get_runtime_framework_dir());
 #endif
         bind_internal_calls(ctx);
 

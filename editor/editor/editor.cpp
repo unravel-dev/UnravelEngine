@@ -13,12 +13,14 @@
 #include <string>
 
 #include "assets/asset_watcher.h"
+#include "deploy/deploy_runtime.h"
 #include "editing/editing_manager.h"
 #include "editing/picking_manager.h"
 #include "editing/thumbnail_manager.h"
 #include "events.h"
 #include "hub/hub.h"
 #include "imgui/imgui_interface.h"
+#include "imgui/integration/imgui_notify.h"
 #include "system/mcp_manager.h"
 #include "system/project_manager.h"
 #include "system/project_thumbnail.h"
@@ -28,6 +30,27 @@
 
 namespace unravel
 {
+namespace
+{
+/// The toast about a runtime that deploys cannot ship stays until it is dismissed (an hour at most); the
+/// deploy panel keeps listing the problem either way.
+constexpr int RUNTIME_PROBLEM_TOAST_DURATION_MS = 60 * 60 * 1000;
+
+/// Tells the user when the editor runs on a .NET runtime a deploy cannot ship: scripts work, but deploys
+/// stay blocked until the preferred runtime is installed.
+void warn_about_runtime_problem()
+{
+    const auto problem = deployment::get_runtime_problem();
+    if(problem.empty())
+    {
+        return;
+    }
+    APPLOG_WARNING("{}", problem);
+    ImGuiToast toast(ImGuiToastType_Warning, RUNTIME_PROBLEM_TOAST_DURATION_MS, "%s", problem.c_str());
+    toast.set_show_dismiss_button(true);
+    ImGui::PushNotification(toast);
+}
+} // namespace
 
 REFLECTION_REGISTRATION
 {
@@ -215,6 +238,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     }
 
     ls.end_session();
+    warn_about_runtime_problem();
     return true;
 }
 

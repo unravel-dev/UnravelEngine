@@ -42,4 +42,8 @@ auto make_runtime_plan(rtti::context& ctx, const deploy_settings& params) -> run
 /// current one. Throws on failure.
 void deploy_runtime(const runtime_plan& plan);
 
+/// Why the editor's runtime cannot ship, if it cannot: a deployed game carries the runtime the editor runs
+/// on, which must be of the preferred .NET major. Empty when it can.
+auto get_runtime_problem() -> std::string;
+
 } // namespace unravel::deployment

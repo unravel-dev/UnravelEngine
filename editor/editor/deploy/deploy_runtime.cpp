@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
+#include <string>
 
 namespace unravel::deployment
 {
@@ -27,6 +28,7 @@ constexpr const char* MONO_FOLDER = "mono";
 constexpr const char* DOTNET_FOLDER = "dotnet";
 constexpr const char* HOST_FXR_FOLDER = "host/fxr";
 constexpr const char* SHARED_FRAMEWORK_FOLDER = "shared/Microsoft.NETCore.App";
+constexpr const char* DOTNET_DOWNLOAD_URL = "https://dotnet.microsoft.com/download";
 
 /// A leading dotted version from a directory name ("8.0.4" -> {8, 0, 4}).
 auto parse_version_name(const std::string& name) -> std::vector<int>
@@ -93,6 +95,18 @@ auto get_version_major(const std::string& version) -> int
     return major > 0 ? major : -1;
 }
 
+/// Whether a bridge folder file stays out of a deploy: the reference assemblies only the compiler reads
+/// and the runtimeconfig a start may write to pin the runtime it selected.
+auto is_editor_only_bridge_file(const fs::path& bridge_folder, const fs::path& file) -> bool
+{
+    if(file.filename() == dotnet::pinned_runtimeconfig_name())
+    {
+        return true;
+    }
+    const auto relative = file.lexically_relative(bridge_folder);
+    return !relative.empty() && *relative.begin() == dotnet::reference_assemblies_dir_name();
+}
+
 #endif
 } // namespace
 
@@ -146,6 +160,11 @@ void deploy_runtime(const runtime_plan& plan)
     mirror_or_throw(plan.config_source, plan.config_destination);
 }
 
+auto get_runtime_problem() -> std::string
+{
+    return {};
+}
+
 #else
 
 auto make_runtime_plan(rtti::context&, const deploy_settings& params) -> runtime_plan
@@ -160,17 +179,18 @@ auto make_runtime_plan(rtti::context&, const deploy_settings& params) -> runtime
     plan.managed_source = fs::resolve_protocol("binary:/" + managed_folder);
     plan.managed_destination = engine_root / managed_folder;
     // A pruned dotnet root (hostfxr and the shared framework) lets the game run without an installed
-    // .NET; the runtime major the scripts target is preferred, the newest installed one is the fallback.
+    // .NET. It carries the runtime the editor runs on, which get_runtime_problem requires to be the
+    // preferred one, and the hostfxr of that runtime's installation.
     const fs::path dotnet_root = dotnet::get_core_assembly_path();
-    const int preferred_major = get_version_major(dotnet::get_dotnet_version());
-    plan.host_source = pick_highest_version_folder(dotnet_root / HOST_FXR_FOLDER, preferred_major);
-    plan.framework_source = pick_highest_version_folder(dotnet_root / SHARED_FRAMEWORK_FOLDER, preferred_major);
+    const int runtime_major = get_version_major(dotnet::get_runtime_version());
+    plan.host_source = pick_highest_version_folder(dotnet_root / HOST_FXR_FOLDER, runtime_major);
+    plan.framework_source = dotnet::get_runtime_framework_dir();
     plan.host_destination = engine_root / DOTNET_FOLDER / HOST_FXR_FOLDER / plan.host_source.filename();
     plan.framework_destination = engine_root / DOTNET_FOLDER / SHARED_FRAMEWORK_FOLDER / plan.framework_source.filename();
     if(plan.framework_source.empty())
     {
-        APPLOG_WARNING("Deploy: no shared framework under {}; the deployed game will need an installed .NET runtime",
-                       dotnet_root.generic_string());
+        APPLOG_WARNING("Deploy: the folder of the editor's .NET runtime is unknown, so the deployed game will need an "
+                       "installed .NET runtime.");
         plan.host_source.clear();
     }
     else if(plan.host_source.empty())
@@ -183,14 +203,11 @@ auto make_runtime_plan(rtti::context&, const deploy_settings& params) -> runtime
 
 void deploy_runtime(const runtime_plan& plan)
 {
-    fs::mirror_filter include;
-    if(!plan.with_debug_symbols)
+    const fs::mirror_filter include = [&plan](const fs::path& file)
     {
-        include = [](const fs::path& file)
-        {
-            return !is_debug_companion_file(file);
-        };
-    }
+        return !is_editor_only_bridge_file(plan.managed_source, file) &&
+               (plan.with_debug_symbols || !is_debug_companion_file(file));
+    };
     mirror_or_throw(plan.managed_source, plan.managed_destination, include);
     if(plan.framework_source.empty())
     {
@@ -205,6 +222,20 @@ void deploy_runtime(const runtime_plan& plan)
     }
     mirror_or_throw(plan.framework_source, plan.framework_destination);
     remove_siblings(plan.framework_destination);
+}
+
+auto get_runtime_problem() -> std::string
+{
+    if(dotnet::is_preferred_runtime())
+    {
+        return {};
+    }
+    const auto preferred_major = get_version_major(dotnet::get_preferred_dotnet_version());
+    return fmt::format("Deploys need .NET {0}, and the editor runs on .NET {1}. Install .NET {0} from {2} and restart "
+                       "the editor.",
+                       preferred_major,
+                       dotnet::get_runtime_version(),
+                       DOTNET_DOWNLOAD_URL);
 }
 
 #endif

@@ -1,4 +1,5 @@
 #include "deploy_preflight.h"
+#include "deploy_runtime.h"
 
 #include <deploy/folders.h>
 #include <deploy/keys.h>
@@ -133,6 +134,7 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     {
         add_problem(problems, "Stop play mode first: prefabs cannot be cooked while the game runs.");
     }
+    add_problem(problems, get_runtime_problem());
     add_problem(problems, get_patch_problem(params));
     add_problem(problems, get_compile_problem(ctx));
     return problems;
