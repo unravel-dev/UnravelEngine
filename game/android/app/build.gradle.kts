@@ -36,6 +36,9 @@ val gameVersionCode = requireProperty("unravel.versionCode").toInt()
 val gameVersionName = requireProperty("unravel.versionName")
 val gameOrientation = requireProperty("unravel.orientation")
 
+// unravel.icon: the launcher icon's resources, an adaptive icon the deploy makes from the game's icon image.
+val iconResourceDir: File = pathProperty("unravel.icon")
+
 // unravel.keystore and unravel.keyAlias sign release builds; the passwords come from the
 // UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD environment variables, never from files. Debug
 // builds use the Android SDK's debug keystore (~/.android/debug.keystore), created when missing.
@@ -186,6 +189,7 @@ android {
     sourceSets {
         getByName("main") {
             java.directories.add(sdlJavaDir.path)
+            res.directories.add(iconResourceDir.path)
         }
     }
 

@@ -106,6 +106,10 @@ protected:
     auto start_backend(bgfx::Init& init_data) -> bool;
 
     void on_os_event(rtti::context& ctx, os::event& e);
+    /// Follows the fingers on the screen: the fourth one down switches the statistics overlay, once per touch.
+    void on_finger_event(const os::event& e);
+    /// Sets the graphics backend's debug features: the statistics overlay and the per-pass GPU timers.
+    void set_debug_flags(uint32_t flags);
     void on_app_enter_background(rtti::context& ctx);
     void frame_begin(rtti::context& ctx, delta_t dt);
     void frame_end(rtti::context& ctx, delta_t dt);
@@ -132,6 +136,15 @@ protected:
     /// Logs the GPU time of every render pass (--gfx-profile) or the frame times alone (--gfx-frame-log);
     /// null when off.
     std::unique_ptr<gpu_pass_log> gpu_pass_log_{};
+    /// The graphics backend's debug features (BGFX_DEBUG_*) and the scale of the overlay's text.
+    uint32_t debug_flags_{};
+    uint8_t debug_text_scale_{1};
+    /// Whether a four-finger tap switches the statistics overlay (--gfx-stats-gesture).
+    bool can_toggle_stats_by_touch_{};
+    /// The fingers on the screen, while a four-finger tap can switch the overlay.
+    std::vector<uint64_t> touching_fingers_;
+    /// Whether the fingers on the screen switched the overlay already: lifting them all allows the next switch.
+    bool has_toggled_stats_{};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };

@@ -19,6 +19,11 @@ auto is_android_package_folder(const fs::path& folder) -> bool;
 /// slip past; works for paths that do not exist yet.
 auto is_inside(const fs::path& path, const fs::path& folder) -> bool;
 
+/// The folder of the project that `path` lies in, when the editor manages that folder: the assets, their
+/// compiled files, the settings, the kept releases or the scripts' build. Empty for any other path. A
+/// deploy folder in the project stays out of them, since the deploy replaces and removes files in it.
+auto get_managed_project_folder(const fs::path& path, const fs::path& project_root) -> std::string;
+
 /// Whether a running program holds `executable` (Windows locks a running executable against writes).
 /// Always false where the platform does not lock it, since replacing it there is safe.
 auto is_executable_in_use(const fs::path& executable) -> bool;

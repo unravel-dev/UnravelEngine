@@ -415,4 +415,25 @@ bool is_any_parent_path(const path& parent, const path& child)
 {
     return detail::is_parent_path(parent, child) || detail::is_indirect_parent_path(parent, child);
 }
+
+auto resolve_relative_to(const path& _path, const path& base) -> path
+{
+    if(_path.empty() || base.empty() || _path.has_root_path())
+    {
+        return _path;
+    }
+    return (base / _path).lexically_normal();
+}
+
+auto make_relative_if_inside(const path& _path, const path& base) -> path
+{
+    if(_path.empty() || base.empty() || !_path.has_root_path())
+    {
+        return _path;
+    }
+    error_code ec;
+    const auto relative = weakly_canonical(_path, ec).lexically_relative(weakly_canonical(base, ec));
+    const bool is_inside = !relative.empty() && *relative.begin() != "..";
+    return is_inside ? relative : _path;
+}
 } // namespace fs

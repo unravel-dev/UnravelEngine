@@ -1,8 +1,11 @@
 #pragma once
 
 #include <base/basetypes.hpp>
+#include <engine/assets/asset_handle.h>
 
 #include <filesystem/filesystem.h>
+#include <graphics/texture.h>
+#include <math/math.h>
 
 #include <cstdint>
 #include <string>
@@ -31,12 +34,18 @@ enum class android_orientation : std::uint8_t
     automatic,
 };
 
+/// The open project's folder, which a relative deploy location lies in.
+constexpr const char* PROJECT_ROOT_KEY = "app:/";
+/// The deploy location a project starts with: a folder of its own in the project.
+constexpr const char* DEFAULT_DEPLOY_LOCATION = ".deploy";
+
 /// How the project is deployed; saved with the project (app:/deploy/deploy.cfg).
 struct deploy_settings
 {
     deploy_platform deploy_target{deploy_platform::desktop};
-    /// The folder builds go to, each platform into a folder of its own in it (get_output_location).
-    fs::path deploy_location{};
+    /// The folder builds go to, each platform into a folder of its own in it (get_output_location). A
+    /// relative location lies in the project's folder.
+    fs::path deploy_location{DEFAULT_DEPLOY_LOCATION};
     bool deploy_dependencies{true};
     bool deploy_and_run{};
     /// The command line options Deploy and Run starts the game with, separated by whitespace
@@ -93,6 +102,10 @@ struct deploy_settings
     /// Android's version number of the game, which must grow with every release a store gets.
     std::uint32_t android_version_code{1};
     android_orientation android_screen_orientation{android_orientation::landscape};
+    /// The image the game's launcher icon is made from, square at best. None: the engine's logo.
+    asset_handle<gfx::texture> android_icon;
+    /// The opaque color behind the icon's image, seen around it and through its transparent parts.
+    math::color android_icon_background{math::color::white()};
     /// A release package signed with android_keystore; otherwise a debug package, signed with the
     /// Android SDK's debug keystore.
     bool android_release{};
@@ -111,10 +124,18 @@ inline auto get_platform_folder_name(deploy_platform platform) -> const char*
     return platform == deploy_platform::android ? "android" : "desktop";
 }
 
-/// The folder `platform` builds into: <deploy location>/<platform folder>. Empty while no deploy location is set.
+/// The folder the deploy location names, a relative one in the open project's folder. Empty while no
+/// deploy location is set.
+inline auto get_deploy_folder(const deploy_settings& params) -> fs::path
+{
+    return fs::resolve_relative_to(params.deploy_location, fs::resolve_protocol(PROJECT_ROOT_KEY));
+}
+
+/// The folder `platform` builds into: <deploy folder>/<platform folder>. Empty while no deploy location is set.
 inline auto get_platform_location(const deploy_settings& params, deploy_platform platform) -> fs::path
 {
-    return params.deploy_location.empty() ? fs::path{} : params.deploy_location / get_platform_folder_name(platform);
+    const auto folder = get_deploy_folder(params);
+    return folder.empty() ? fs::path{} : folder / get_platform_folder_name(platform);
 }
 
 /// The folder a deploy with these settings builds into: the chosen platform's under the deploy location.

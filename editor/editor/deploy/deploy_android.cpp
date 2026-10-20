@@ -1,6 +1,7 @@
 #include "deploy_android.h"
 #include "deploy_preflight.h"
 
+#include <deploy/android_icon.h>
 #include <deploy/files.h>
 #include <deploy/folders.h>
 #include <deploy/run_arguments.h>
@@ -51,6 +52,14 @@ constexpr const char* CRASH_REPORT_TAG = "DEBUG";
 // Deploy and Run's steps on the device, as the Deploy window lists them.
 constexpr const char* STEP_INSTALL = "Install on Device";
 constexpr const char* STEP_START = "Start on Device";
+/// The engine's logo, the icon of a game that chooses none.
+constexpr const char* DEFAULT_ICON_KEY = "editor:/data/icons/unravel_logo.png";
+
+/// The image the game's icon is made from: the chosen texture's source image, or the engine's logo.
+auto get_icon_image(const deploy_settings& params) -> fs::path
+{
+    return fs::resolve_protocol(params.android_icon ? params.android_icon.id() : std::string(DEFAULT_ICON_KEY));
+}
 
 auto get_project_name(rtti::context& ctx) -> std::string
 {
@@ -160,24 +169,27 @@ auto strip_engine_prefix(const std::string& message) -> std::string
     return time_end == std::string::npos ? message : message.substr(time_end + 2);
 }
 
+/// Logs a line of the game's process: the game's own as [Device], the device system's as [Device System],
+/// which the Console hides until asked to show them.
 void log_device_line(const logcat_line& line)
 {
+    const char* prefix = is_game_log_line(line) ? DEVICE_LOG_PREFIX : DEVICE_SYSTEM_LOG_PREFIX;
     const auto message = strip_engine_prefix(line.message);
     switch(line.level)
     {
         case 'V':
         case 'D':
-            APPLOG_TRACE("[Device] {}", message);
+            APPLOG_TRACE("{}{}", prefix, message);
             break;
         case 'W':
-            APPLOG_WARNING("[Device] {}", message);
+            APPLOG_WARNING("{}{}", prefix, message);
             break;
         case 'E':
         case 'F':
-            APPLOG_ERROR("[Device] {}", message);
+            APPLOG_ERROR("{}{}", prefix, message);
             break;
         default:
-            APPLOG_INFO("[Device] {}", message);
+            APPLOG_INFO("{}{}", prefix, message);
             break;
     }
 }
@@ -447,7 +459,7 @@ private:
                       }
                       if(line.tag == CRASH_REPORT_TAG)
                       {
-                          APPLOG_ERROR("[Device] {}", line.message);
+                          APPLOG_ERROR("{}{}", DEVICE_LOG_PREFIX, line.message);
                           std::lock_guard<std::mutex> lock(report_mutex);
                           crash_report.push_back(text);
                           return;
@@ -650,9 +662,14 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
     {
         problems.push_back(id_problem);
     }
+    fs::error_code ec;
+    if(!fs::exists(get_icon_image(params), ec))
+    {
+        problems.push_back(fmt::format("The icon image {} is missing. Choose another one, or none for the engine's logo.",
+                                       get_icon_image(params).generic_string()));
+    }
     if(params.android_release)
     {
-        fs::error_code ec;
         if(params.android_keystore.empty() || !fs::exists(params.android_keystore, ec))
         {
             problems.push_back("A release build needs the keystore that signs it. Choose one, or turn off Release Build.");
@@ -725,6 +742,9 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     package.version_name = app.version.empty() ? DEFAULT_VERSION_NAME : app.version;
     package.version_code = std::max<std::uint32_t>(1, params.android_version_code);
     package.orientation = params.android_screen_orientation;
+    package.icon_image = get_icon_image(params);
+    package.icon_background = params.android_icon_background;
+    package.icon_dir = get_build_dir() / "icon";
     package.is_release = params.android_release;
     package.keystore = params.android_keystore;
     package.key_alias = params.android_key_alias;
@@ -736,6 +756,11 @@ void build_android_package(const android_package_plan& plan)
     const auto& package = plan.package;
     update_gradle_project(package.player.get_project_dir(), package.project_dir);
     write_text_or_throw(package.project_dir / "local.properties", make_gradle_local_properties(plan.tools.sdk));
+    const auto icon = write_android_icon(package.icon_image, package.icon_background, package.icon_dir);
+    if(!icon.is_ok())
+    {
+        throw std::runtime_error(icon.error);
+    }
     APPLOG_INFO("Deploy: building the Android package with Gradle in {}.", package.project_dir.generic_string());
     const auto result = subprocess::call(make_gradle_arguments(plan.tools, package),
                                          {},

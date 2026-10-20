@@ -116,6 +116,21 @@ struct logcat_line
 /// markers).
 auto parse_logcat_line(const std::string& text, logcat_line& line) -> bool;
 
+/// The prefixes of the device lines in the editor's log: the game's own lines, and the device system's
+/// lines of the game's process, which the Console hides until asked to show them.
+constexpr const char* DEVICE_LOG_PREFIX = "[Device] ";
+constexpr const char* DEVICE_SYSTEM_LOG_PREFIX = "[Device System] ";
+
+/**
+ * @brief Whether a line of the game's process is the game's own log or the system's report of a crash,
+ * rather than the device system's chatter.
+ *
+ * The game's own log has the tags of the engine, SDL, OpenAL and the Vulkan loader. A crash shows as a
+ * fatal line or a Java exception. The rest of the process' log, such as the window system's and the
+ * graphics allocator's messages, is the device system's.
+ */
+auto is_game_log_line(const logcat_line& line) -> bool;
+
 /// Where this machine's Android tools are looked for.
 struct android_toolchain_search
 {
@@ -161,6 +176,11 @@ struct android_package_params
     std::string version_name;
     std::uint32_t version_code{1};
     android_orientation orientation{android_orientation::landscape};
+    /// The image the launcher icon is made from, and the opaque color behind it.
+    fs::path icon_image;
+    math::color icon_background{math::color::white()};
+    /// The folder the icon's Android resources are written to (write_android_icon), which Gradle packages.
+    fs::path icon_dir;
     /// A release build, signed with `keystore`; otherwise a debug build, signed with the SDK's debug keystore.
     bool is_release{};
     fs::path keystore;

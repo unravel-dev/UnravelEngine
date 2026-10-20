@@ -134,6 +134,10 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
     parser.set_optional<std::string>("r", "renderer", "auto", "Select preferred renderer.");
     parser.set_optional<bool>("n", "novsync", false, "Disable vsync.");
     parser.set_optional<bool>("", "gfx-stats", false, "Show the graphics backend's statistics over the frame.");
+    parser.set_optional<bool>("",
+                              "gfx-stats-gesture",
+                              false,
+                              "Let a four-finger tap switch the graphics backend's statistics on and off.");
     parser.set_optional<bool>("", "gfx-profile", false, "Log the GPU time of every render pass every few seconds.");
     parser.set_optional<bool>("",
                               "gfx-frame-log",
@@ -238,13 +242,28 @@ constexpr const char* NO_VULKAN_MESSAGE = "The game needs Vulkan graphics, which
 #endif
 /// The largest scale bgfx draws its debug text at.
 constexpr float MAX_DEBUG_TEXT_SCALE = 4.0f;
+/// The fingers on the screen at once that switch the statistics overlay (--gfx-stats-gesture). Games
+/// rarely use four, so a game's own touches do not switch it by accident.
+constexpr std::size_t STATS_TOGGLE_FINGERS = 4;
 
-/// Turns on the graphics backend's statistics overlay and its per-pass GPU timers when the command
-/// line asks for them; returns whether the frame log runs (--gfx-profile, or --gfx-frame-log for the
-/// frame times alone). The per-pass timers end the render pass at every view, so on a tile-based GPU
-/// they add attachment loads and stores the frame does not otherwise have. The overlay text grows
-/// with the display scale, so it stays readable on a phone's dense screen.
-auto apply_debug_options(const cmd_line::parser& parser, const os::window& window) -> bool
+/// What the command line asks of the graphics backend's debug features.
+struct debug_options
+{
+    /// The statistics overlay (BGFX_DEBUG_STATS) and the per-pass GPU timers (BGFX_DEBUG_PROFILER).
+    uint32_t flags{};
+    /// The overlay's text scale.
+    uint8_t text_scale{1};
+    /// Whether the frame log runs (--gfx-profile, or --gfx-frame-log for the frame times alone).
+    bool logs_frames{};
+    /// Whether a four-finger tap switches the statistics overlay (--gfx-stats-gesture).
+    bool can_toggle_stats{};
+};
+
+/// The statistics overlay and the per-pass GPU timers the command line asks for. The per-pass timers end
+/// the render pass at every view, so on a tile-based GPU they add attachment loads and stores the frame
+/// does not otherwise have. The overlay text grows with the display scale, so it stays readable on a
+/// phone's dense screen.
+auto read_debug_options(const cmd_line::parser& parser, const os::window& window) -> debug_options
 {
     bool show_stats = false;
     parser.try_get("gfx-stats", show_stats);
@@ -252,26 +271,28 @@ auto apply_debug_options(const cmd_line::parser& parser, const os::window& windo
     parser.try_get("gfx-profile", log_passes);
     bool log_frames = false;
     parser.try_get("gfx-frame-log", log_frames);
+    debug_options options;
+    parser.try_get("gfx-stats-gesture", options.can_toggle_stats);
+    options.flags = (show_stats ? BGFX_DEBUG_STATS : 0u) | (log_passes ? BGFX_DEBUG_PROFILER : 0u);
+    options.text_scale = static_cast<uint8_t>(std::clamp(std::floor(window.get_display_scale()), 1.0f, MAX_DEBUG_TEXT_SCALE));
+    options.logs_frames = log_passes || log_frames;
     if(log_frames && !log_passes)
     {
         APPLOG_INFO("Logging the frame times.");
     }
-    if(!show_stats && !log_passes)
-    {
-        return log_frames;
-    }
-    const uint32_t flags = (show_stats ? BGFX_DEBUG_STATS : 0u) | (log_passes ? BGFX_DEBUG_PROFILER : 0u);
-    const float text_scale = std::clamp(std::floor(window.get_display_scale()), 1.0f, MAX_DEBUG_TEXT_SCALE);
-    bgfx::setDebug(flags, BGFX_INVALID_HANDLE, static_cast<uint8_t>(text_scale));
     if(show_stats)
     {
-        APPLOG_INFO("Showing the graphics statistics at text scale {}.", text_scale);
+        APPLOG_INFO("Showing the graphics statistics at text scale {}.", options.text_scale);
+    }
+    if(options.can_toggle_stats)
+    {
+        APPLOG_INFO("A four-finger tap switches the graphics statistics on and off.");
     }
     if(log_passes)
     {
         APPLOG_INFO("Logging the GPU time of every render pass.");
     }
-    return log_passes || log_frames;
+    return options;
 }
 
 /// The native window to start the graphics backend on. Android can destroy the window's surface
@@ -457,7 +478,14 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     backbuffer_size_ = {init_data.swapChain.width, init_data.swapChain.height};
     backbuffer_window_ = init_data.swapChain.nwh;
     APPLOG_TRACE("Using {0} rendering backend.", bgfx::getRendererName(bgfx::getRendererType()));
-    if(apply_debug_options(parser, window))
+    const auto debug = read_debug_options(parser, window);
+    debug_text_scale_ = debug.text_scale;
+    can_toggle_stats_by_touch_ = debug.can_toggle_stats;
+    if(debug.flags != 0)
+    {
+        set_debug_flags(debug.flags);
+    }
+    if(debug.logs_frames)
     {
         gpu_pass_log_ = std::make_unique<gpu_pass_log>();
     }
@@ -511,8 +539,44 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     return true;
 }
 
+void renderer::set_debug_flags(uint32_t flags)
+{
+    debug_flags_ = flags;
+    bgfx::setDebug(debug_flags_, BGFX_INVALID_HANDLE, debug_text_scale_);
+}
+
+void renderer::on_finger_event(const os::event& e)
+{
+    const auto finger = std::find(touching_fingers_.begin(), touching_fingers_.end(), e.finger.finger_id);
+    if(e.type != os::events::finger_down)
+    {
+        if(finger != touching_fingers_.end())
+        {
+            touching_fingers_.erase(finger);
+        }
+        has_toggled_stats_ = has_toggled_stats_ && !touching_fingers_.empty();
+        return;
+    }
+    if(finger == touching_fingers_.end())
+    {
+        touching_fingers_.push_back(e.finger.finger_id);
+    }
+    if(touching_fingers_.size() == STATS_TOGGLE_FINGERS && !has_toggled_stats_)
+    {
+        has_toggled_stats_ = true;
+        set_debug_flags(debug_flags_ ^ BGFX_DEBUG_STATS);
+        APPLOG_INFO("Graphics statistics {}.", (debug_flags_ & BGFX_DEBUG_STATS) != 0 ? "on" : "off");
+    }
+}
+
 void renderer::on_os_event(rtti::context& ctx, os::event& e)
 {
+    const bool is_finger_change =
+        e.type == os::events::finger_down || e.type == os::events::finger_up || e.type == os::events::finger_canceled;
+    if(can_toggle_stats_by_touch_ && is_finger_change)
+    {
+        on_finger_event(e);
+    }
     if(e.type == os::events::window)
     {
         if(e.window.type == os::window_event_id::close)

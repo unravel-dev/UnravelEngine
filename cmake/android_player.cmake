@@ -163,7 +163,7 @@ if(NOT UNRAVEL_ANDROID_PLAYER STREQUAL "OFF")
                 "-DWORK_DIR=${android_build_dir}/template"
                 "-DOUTPUT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/players/android-arm64"
                 -P "${CMAKE_CURRENT_LIST_DIR}/android_player_template.cmake"
-            COMMENT "Assembling the Android player template..."
+            COMMENT "Assembling the Android Player Template..."
             VERBATIM
         )
         add_dependencies(android_player android_player_build)

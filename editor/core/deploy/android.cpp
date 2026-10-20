@@ -2,6 +2,7 @@
 #include "run_arguments.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
@@ -21,6 +22,14 @@ constexpr const char* GRADLE_WRAPPER_MAIN = "org.gradle.wrapper.GradleWrapperMai
 constexpr const char* PLAYER_ACTIVITY = "com.unravel.player.UnravelActivity";
 /// The start intent's extra that UnravelActivity reads the game's command line options from.
 constexpr const char* ARGUMENTS_EXTRA = "arguments";
+/// The tags of the game's own libraries: the engine (spdlog's Android sink), SDL's Java side and its HID
+/// support, OpenAL Soft and the Vulkan loader.
+constexpr std::array<const char*, 4> GAME_LOG_TAGS = {"spdlog", "hidapi", "openal", "vulkan"};
+/// SDL's tags all start with it: SDL, SDL/<category>, SDLAudio and the like.
+constexpr const char* SDL_TAG_PREFIX = "SDL";
+/// The tag of Java's uncaught exceptions.
+constexpr const char* JAVA_CRASH_TAG = "AndroidRuntime";
+constexpr char FATAL_LEVEL = 'F';
 
 auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>
 {
@@ -301,6 +310,20 @@ auto parse_logcat_line(const std::string& text, logcat_line& line) -> bool
     return true;
 }
 
+auto is_game_log_line(const logcat_line& line) -> bool
+{
+    if(line.level == FATAL_LEVEL || line.tag == JAVA_CRASH_TAG || line.tag.rfind(SDL_TAG_PREFIX, 0) == 0)
+    {
+        return true;
+    }
+    return std::any_of(GAME_LOG_TAGS.begin(),
+                       GAME_LOG_TAGS.end(),
+                       [&line](const char* tag)
+                       {
+                           return line.tag == tag;
+                       });
+}
+
 auto get_android_toolchain_search() -> android_toolchain_search
 {
     android_toolchain_search search;
@@ -406,6 +429,7 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
         "-Punravel.versionCode=" + std::to_string(params.version_code),
         "-Punravel.versionName=" + params.version_name,
         "-Punravel.orientation=" + get_screen_orientation(params.orientation),
+        "-Punravel.icon=" + params.icon_dir.generic_string(),
     };
     if(params.is_release && !params.keystore.empty())
     {

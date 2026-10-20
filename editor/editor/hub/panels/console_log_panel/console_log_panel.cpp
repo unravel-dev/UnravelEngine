@@ -2,6 +2,7 @@
 #include "../panel_toolbar.h"
 #include "../panels_defs.h"
 
+#include <deploy/android.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/system/project_manager.h>
@@ -48,6 +49,9 @@ constexpr std::array<level::level_enum, 5> LOG_FILTERED_LEVELS{level::trace,
                                                                level::err};
 // Trace and debug are the chatty levels: their toggles stay small and keep the count for the tooltip.
 constexpr level::level_enum LOG_FIRST_COUNTED_LEVEL = level::info;
+
+// The device system toggle's color while it shows those lines.
+constexpr ImU32 DEVICE_SYSTEM_FILTER_COLOR = IM_COL32(150, 200, 120, 255);
 
 constexpr float CONSOLE_SEARCH_FIELD_WIDTH = 220.0f;
 constexpr float CONSOLE_SEARCH_FIELD_MIN_WIDTH = 70.0f;
@@ -203,6 +207,9 @@ void console_log_panel::sink_it_(const details::log_msg& msg)
         }
 
         entry.level = msg.level;
+        const hpp::string_view payload(msg.payload.data(), msg.payload.size());
+        entry.is_device_system = payload.compare(0, hpp::string_view(deployment::DEVICE_SYSTEM_LOG_PREFIX).size(),
+                                                 deployment::DEVICE_SYSTEM_LOG_PREFIX) == 0;
 
         entry.id = current_id_++;
 
@@ -243,6 +250,7 @@ auto console_log_panel::snapshot_logs(level::level_enum min_level, size_t max_co
         snap.filename = entry.source.filename;
         snap.funcname = entry.source.funcname;
         snap.line = entry.source.line;
+        snap.is_device_system = entry.is_device_system;
         matched.push_back(std::move(snap));
     }
     if(matched.size() > max_count)
@@ -274,22 +282,29 @@ void console_log_panel::set_has_new_entries(bool val)
 
 auto console_log_panel::is_entry_visible(const log_entry& entry) const -> bool
 {
-    if(!enabled_categories_[entry.level])
+    if(!is_source_shown(entry) || !enabled_categories_[entry.level])
     {
         return false;
     }
     return filter_.PassFilter(entry.formatted.data(), entry.formatted.data() + entry.formatted.size());
 }
 
+auto console_log_panel::is_source_shown(const log_entry& entry) const -> bool
+{
+    return shows_device_system_ || !entry.is_device_system;
+}
+
 auto console_log_panel::collect_visible_entries() -> display_entries_t
 {
     display_entries_t visible_entries;
     level_counts_.fill(0);
+    device_system_count_ = 0;
     std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
     for(size_t i = 0; i < entries_.size(); ++i)
     {
         const log_entry& entry = entries_[i];
-        ++level_counts_[entry.level];
+        device_system_count_ += entry.is_device_system ? 1 : 0;
+        level_counts_[entry.level] += is_source_shown(entry) ? 1 : 0;
         if(is_entry_visible(entry))
         {
             visible_entries.emplace_back(entry);
@@ -322,7 +337,7 @@ void console_log_panel::notify_new_errors()
         std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
         for(size_t i = new_entries_begin_idx_; i < entries_.size(); ++i)
         {
-            if(entries_[i].level == level::err)
+            if(entries_[i].level == level::err && is_source_shown(entries_[i]))
             {
                 errors_count++;
             }
@@ -408,6 +423,7 @@ void console_log_panel::draw_search_field()
 
 void console_log_panel::draw_level_filters()
 {
+    draw_device_system_filter();
     for(const level::level_enum log_level : LOG_FILTERED_LEVELS)
     {
         const log_level_style& style = LOG_LEVEL_STYLES[size_t(log_level)];
@@ -421,6 +437,28 @@ void console_log_panel::draw_level_filters()
         {
             is_enabled = !is_enabled;
         }
+    }
+}
+
+void console_log_panel::draw_device_system_filter()
+{
+    // A desktop project never logs such lines, so its console has no toggle for them.
+    if(device_system_count_ == 0 && !shows_device_system_)
+    {
+        return;
+    }
+    const std::string text = fmt::format("{} {}", ICON_MDI_CELLPHONE_COG, device_system_count_);
+    const std::string tooltip =
+        fmt::format("Show / hide the device system's logs ({}): the messages Android itself writes in the game's "
+                    "process, such as the window system's and the graphics allocator's.",
+                    device_system_count_);
+    if(panel_toolbar::filter_toggle("##device_system",
+                                    text.c_str(),
+                                    shows_device_system_,
+                                    DEVICE_SYSTEM_FILTER_COLOR,
+                                    tooltip.c_str()))
+    {
+        shows_device_system_ = !shows_device_system_;
     }
 }
 

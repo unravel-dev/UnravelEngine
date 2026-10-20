@@ -776,9 +776,11 @@ void register_editor_tools(mcp_tool_registry& registry)
              "With after_id (the next_after_id of an earlier call): the entries logged since, oldest "
              "first, max_count at a time - has_more says another page waits. min_level filters by "
              "severity (default info), contains by text (case-insensitive). The console keeps the last "
-             "~1000 entries.",
+             "~1000 entries. A game running on an Android device logs its own lines as [Device]; the device "
+             "system's lines of its process ([Device System]) are left out unless include_device_system is true, "
+             "as the console hides them by default.",
          .input_schema_json =
-             R"({"type":"object","properties":{"min_level":{"type":"string","enum":["trace","debug","info","warn","warning","error","critical"]},"max_count":{"type":"integer","minimum":1,"maximum":1024},"after_id":{"type":"integer","minimum":0,"description":"Return entries after this id, oldest first"},"contains":{"type":"string","description":"Only entries whose text contains this"}}})",
+             R"({"type":"object","properties":{"min_level":{"type":"string","enum":["trace","debug","info","warn","warning","error","critical"]},"max_count":{"type":"integer","minimum":1,"maximum":1024},"after_id":{"type":"integer","minimum":0,"description":"Return entries after this id, oldest first"},"contains":{"type":"string","description":"Only entries whose text contains this"},"include_device_system":{"type":"boolean","description":"Also return the device system's lines of a game on an Android device; default false"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -793,13 +795,16 @@ void register_editor_tools(mcp_tool_registry& registry)
                  const auto after_id = static_cast<uint64_t>(std::max<int64_t>(read_int64_or(args, "after_id", 0), 0));
                  std::string contains;
                  read_string(args, "contains", contains);
+                 bool include_device_system = false;
+                 read_bool(args, "include_device_system", include_device_system);
                  // The console's id 0 is a real entry: without a cursor nothing is skipped.
                  auto logs = editor_actions::get_recent_logs(ctx, min_level, std::numeric_limits<size_t>::max(), 0);
                  std::erase_if(logs,
                                [&](const auto& entry)
                                {
                                    return (has_cursor && entry.id <= after_id) ||
-                                          (!contains.empty() && !contains_ci(entry.text, contains));
+                                          (!contains.empty() && !contains_ci(entry.text, contains)) ||
+                                          (entry.is_device_system && !include_device_system);
                                });
                  const bool has_more = has_cursor && logs.size() > max_count;
                  // A cursor pages forward from the oldest; a plain call wants the newest.

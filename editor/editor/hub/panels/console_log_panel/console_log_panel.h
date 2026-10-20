@@ -37,6 +37,8 @@ public:
         log_source source;
 
         uint64_t id{};
+        /// A device system's line of a game on a device ([Device System]), hidden until asked for.
+        bool is_device_system{};
     };
 
     struct log_snapshot_entry
@@ -47,6 +49,7 @@ public:
         std::string filename;
         std::string funcname;
         int line{0};
+        bool is_device_system{};
     };
 
     using display_entries_t = hpp::small_vector<log_entry, 1024>;
@@ -85,8 +88,10 @@ private:
     auto has_new_entries() const -> bool;
     void set_has_new_entries(bool val);
 
-    /// True when the entry passes the level toggles and the search.
+    /// True when the entry passes the device system toggle, the level toggles and the search.
     auto is_entry_visible(const log_entry& entry) const -> bool;
+    /// False for a device system's line while those are hidden.
+    auto is_source_shown(const log_entry& entry) const -> bool;
     /// Copies the visible entries out from under the lock, and recounts every level on the way.
     auto collect_visible_entries() -> display_entries_t;
     auto find_last_visible_entry() const -> hpp::optional<log_entry>;
@@ -97,14 +102,21 @@ private:
     void draw_clear_controls();
     void draw_search_field();
     void draw_level_filters();
+    /// The device system toggle, once a game on a device logged such lines.
+    void draw_device_system_filter();
     void draw_log_list(const display_entries_t& entries);
     void draw_log_row(const log_entry& entry, int row_index);
     void draw_list_context_menu();
     void draw_details();
 
     std::array<bool, size_t(level::n_levels)> enabled_categories_{};
-    /// How many entries of each level the buffer holds, whatever the toggles and the search say.
+    /// How many entries of each level the buffer holds, whatever the level toggles and the search say;
+    /// hidden device system lines are left out.
     level_counts_t level_counts_{};
+    /// Whether the device system's lines show; off at first, since they are rarely about the game.
+    bool shows_device_system_{};
+    /// How many device system lines the buffer holds.
+    size_t device_system_count_{};
 
     mutable std::recursive_mutex entries_mutex_;
     ///

@@ -38,7 +38,7 @@ public:
     /// Starts a deploy unless one is already running or the project cannot deploy. No UI.
     /// @return True when it started.
     auto start_deploy(rtti::context& ctx, const deploy_settings& params) -> bool;
-    /// The steps of the running or most recent deploy; empty after the window is closed.
+    /// The steps of the running deploy, or of the last one until the window is closed.
     auto get_jobs() const -> const deployment::deploy_jobs&;
     auto is_deploying() const -> bool;
     /// Share of the deploy steps that are done, 0 to 1; 1 while nothing deploys.
@@ -55,6 +55,9 @@ private:
 
     using tab_drawer = void (deploy_panel::*)(rtti::context& ctx);
 
+    /// Closes the window. A finished deploy's steps go with it; a running deploy keeps them, since the
+    /// toolbar shows its progress.
+    void close_window();
     void draw_ui(rtti::context& ctx);
     void draw_tabs(rtti::context& ctx);
     /// A tab's body: as tall as its content between a floor and a share of the screen, scrolling past it.

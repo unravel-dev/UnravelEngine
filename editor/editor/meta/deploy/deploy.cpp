@@ -1,5 +1,7 @@
 #include "deploy.hpp"
 
+#include <engine/meta/assets/asset_handle.hpp>
+#include <engine/meta/core/math/vector.hpp>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -73,7 +75,11 @@ REFLECT(deploy_settings)
             entt::attribute{"pretty_name", "Deploy Location"},
             entt::attribute{"tooltip",
                             "The folder the game is built into. Each platform builds into a folder\n"
-                            "of its own in it: desktop for this computer, android for the package."},
+                            "of its own in it: desktop for this computer, android for the package.\n\n"
+                            "A relative path is in the project's folder, such as .deploy, which the\n"
+                            "deploy creates. A folder picked inside the project is kept relative, so\n"
+                            "the setting moves with the project."},
+            entt::attribute{"relative_to", std::string(PROJECT_ROOT_KEY)},
         })
         .data<&deploy_settings::deploy_dependencies>("deploy_dependencies"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -136,7 +142,9 @@ REFLECT(deploy_settings)
             entt::attribute{"tooltip",
                             "Command line options the game starts with after the deploy, separated by spaces.\n"
                             "--gfx-stats shows the graphics statistics over the game.\n"
-                            "--novsync turns off vsync."},
+                            "--novsync turns off vsync.\n\n"
+                            "In Android debug packages a four-finger tap switches the\n"
+                            "graphics statistics on and off."},
         })
         .data<&deploy_settings::android_device>("android_device"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -173,6 +181,27 @@ REFLECT(deploy_settings)
                             "How the game turns with the phone.\n\n"
                             "Landscape and Portrait allow both directions of that orientation.\n"
                             "Automatic follows the phone."},
+        })
+        .data<&deploy_settings::android_icon>("android_icon"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_icon"},
+            entt::attribute{"pretty_name", "Icon"},
+            entt::attribute{"tooltip",
+                            "The image the game's icon on the phone is made from. Square images\n"
+                            "fit best, at 512 x 512 pixels or more.\n\n"
+                            "The image fills the part of the icon every launcher shows, and the\n"
+                            "launcher cuts it to its shape: a circle, a rounded square or another.\n\n"
+                            "None: the engine's logo."},
+        })
+        .data<&deploy_settings::android_icon_background>("android_icon_background"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_icon_background"},
+            entt::attribute{"pretty_name", "Icon Background"},
+            entt::attribute{"tooltip",
+                            "The color behind the icon's image. It shows through the image's\n"
+                            "transparent parts and at the icon's edges, which launchers reveal\n"
+                            "when they move or grow the icon."},
+            entt::attribute{"opaque", true},
         })
         .data<&deploy_settings::android_release>("android_release"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -218,6 +247,8 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("android_application_id", obj.android_application_id));
     try_save(ar, ser20::make_nvp("android_version_code", obj.android_version_code));
     try_save(ar, ser20::make_nvp("android_screen_orientation", obj.android_screen_orientation));
+    try_save(ar, ser20::make_nvp("android_icon", obj.android_icon));
+    try_save(ar, ser20::make_nvp("android_icon_background", obj.android_icon_background));
     try_save(ar, ser20::make_nvp("android_release", obj.android_release));
     try_save(ar, ser20::make_nvp("android_keystore", fs::to_utf8_string(obj.android_keystore)));
     try_save(ar, ser20::make_nvp("android_key_alias", obj.android_key_alias));
@@ -248,6 +279,8 @@ LOAD(deploy_settings)
     try_load(ar, ser20::make_nvp("android_application_id", obj.android_application_id));
     try_load(ar, ser20::make_nvp("android_version_code", obj.android_version_code));
     try_load(ar, ser20::make_nvp("android_screen_orientation", obj.android_screen_orientation));
+    try_load(ar, ser20::make_nvp("android_icon", obj.android_icon));
+    try_load(ar, ser20::make_nvp("android_icon_background", obj.android_icon_background));
     try_load(ar, ser20::make_nvp("android_release", obj.android_release));
     std::string android_keystore;
     if(try_load(ar, ser20::make_nvp("android_keystore", android_keystore)))

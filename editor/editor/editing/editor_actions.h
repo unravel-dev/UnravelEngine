@@ -49,6 +49,8 @@ struct log_query_entry
     std::string filename;
     std::string funcname;
     int line{0};
+    /// A device system's line of a game on a device, which the Console hides by default.
+    bool is_device_system{};
 };
 
 /**

@@ -1774,6 +1774,7 @@ auto editor_actions::get_recent_logs(rtti::context& ctx,
         item.filename = std::move(entry.filename);
         item.funcname = std::move(entry.funcname);
         item.line = entry.line;
+        item.is_device_system = entry.is_device_system;
         out.push_back(std::move(item));
     }
     return out;

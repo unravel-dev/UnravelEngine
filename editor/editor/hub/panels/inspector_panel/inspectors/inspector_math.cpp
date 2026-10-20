@@ -384,9 +384,13 @@ auto inspector_color::inspect(rtti::context& ctx,
     auto& data = var.cast<math::color&>();
     inspect_result result{};
 
-    if(ImGui::ColorEdit4("##",
-                         math::value_ptr(data.value),
-                         ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf))
+    // "opaque": the property uses no alpha, so none is shown.
+    const bool is_opaque = entt::get_attribute_as<bool>(custom, "opaque");
+    const bool is_edited = is_opaque ? ImGui::ColorEdit3("##", math::value_ptr(data.value))
+                                     : ImGui::ColorEdit4("##",
+                                                         math::value_ptr(data.value),
+                                                         ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+    if(is_edited)
     {
         result.changed = true;
     }

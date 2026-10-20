@@ -18,8 +18,10 @@
  *     left out but used assets counted;
  *   - files: classification, compiled paths, a target's shader variants, pack inputs with cooked
  *     variants, stale binaries, older runtime versions;
- *   - platform folders under the deploy folder;
- *   - Android: default and invalid application ids, adb device lists, logcat lines, the player template's
+ *   - platform folders under the deploy folder; deploy locations relative to the project, and the
+ *     project folders the editor manages;
+ *   - Android: default and invalid application ids, adb device lists, logcat lines and which are the
+ *     game's or the device system's, the player template's
  *     stamp checks, Gradle's command line, the start command with the game's options;
  *   - run arguments: split on whitespace, quoted for a device shell;
  *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
@@ -36,6 +38,7 @@
 #include "../tests.h"
 
 #include <deploy/android.h>
+#include <deploy/android_icon.h>
 #include <deploy/content.h>
 #include <deploy/content_tree.h>
 #include <deploy/dependencies.h>
@@ -51,11 +54,17 @@
 #include <process/process.h>
 #include <subprocess/subprocess.hpp>
 
+#include <bimg/bimg.h>
+#include <bimg/decode.h>
+#include <bx/allocator.h>
+#include <bx/file.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <string>
 #include <thread>
@@ -481,6 +490,8 @@ void test_platform_locations()
 {
     std::printf("test_platform_locations\n");
     deploy_settings params;
+    check(params.deploy_location == fs::path(unravel::DEFAULT_DEPLOY_LOCATION), "a project starts with .deploy");
+    params.deploy_location.clear();
     check(unravel::get_output_location(params).empty(), "without a deploy folder there is no platform folder");
     params.deploy_location = fs::path("/builds/game");
     check(unravel::get_output_location(params) == fs::path("/builds/game/desktop"), "desktop builds go to desktop/");
@@ -488,6 +499,31 @@ void test_platform_locations()
     check(unravel::get_output_location(params) == fs::path("/builds/game/android"), "Android builds go to android/");
     check(unravel::get_platform_location(params, unravel::deploy_platform::desktop) == fs::path("/builds/game/desktop"),
           "releases read the desktop folder whatever the platform");
+}
+
+void test_deploy_locations(const fs::path& root)
+{
+    std::printf("test_deploy_locations\n");
+    const auto project = root / "project";
+    fs::error_code ec;
+    fs::create_directories(project, ec);
+    check(fs::resolve_relative_to(".deploy", project) == (project / ".deploy").lexically_normal(),
+          "a relative location lies in the project");
+    check(fs::resolve_relative_to("../builds", project) == (root / "builds").lexically_normal(),
+          "a relative location may lead out of the project");
+    check(fs::resolve_relative_to(root / "out", project) == root / "out", "an absolute location stays as it is");
+    check(fs::make_relative_if_inside(project / "builds", project) == fs::path("builds"), "a folder in the project is kept relative");
+    check(fs::make_relative_if_inside(root / "out", project) == root / "out", "a folder outside the project stays absolute");
+    check(deployment::get_managed_project_folder(project / "data" / "out", project) == "data" &&
+              deployment::get_managed_project_folder(project / "releases", project) == "releases" &&
+              deployment::get_managed_project_folder(project / "temp" / "bin", project) == "temp",
+          "the folders the editor manages are named");
+    check(deployment::get_managed_project_folder(project / ".deploy", project).empty() &&
+              deployment::get_managed_project_folder(project / "builds" / "data", project).empty(),
+          "other folders of the project are free");
+    check(deployment::get_managed_project_folder(root / "data", project).empty() &&
+              deployment::get_managed_project_folder(project, project).empty(),
+          "neither a folder outside the project nor the project itself is a managed folder");
 }
 
 void test_application_ids()
@@ -541,6 +577,31 @@ void test_logcat_lines()
     check(!deployment::parse_logcat_line("--------- beginning of main", line), "markers are no log lines");
 }
 
+void test_game_log_lines()
+{
+    std::printf("test_game_log_lines\n");
+    const auto is_game_line = [](const std::string& text)
+    {
+        deployment::logcat_line line;
+        return deployment::parse_logcat_line(text, line) && deployment::is_game_log_line(line);
+    };
+    check(is_game_line("10-20 22:16:20.700 23862 23899 I spdlog  : [info] ready"), "the engine's log is the game's");
+    check(is_game_line("10-20 22:16:20.700 23862 23899 V SDL     : nativeResume()") &&
+              is_game_line("10-20 22:16:20.700 23862 23899 E SDL/APP : failed") &&
+              is_game_line("10-20 22:16:20.700 23862 23899 W SDLAudio: no device"),
+          "every SDL tag is the game's");
+    check(is_game_line("10-20 22:16:20.766 23862 23917 W openal  : [ALSOFT] (WW) D-Bus not supported") &&
+              is_game_line("10-20 22:16:20.599 23862 23899 D vulkan  : searching for layers"),
+          "the audio and Vulkan libraries are the game's");
+    check(is_game_line("10-20 22:16:21.000 23862 23862 E AndroidRuntime: FATAL EXCEPTION: main") &&
+              is_game_line("10-20 22:16:21.000 23862 23899 F libc    : Fatal signal 11 (SIGSEGV)"),
+          "a Java exception and any fatal line count as the game's");
+    check(!is_game_line("10-20 22:06:26.203 23862 23880 E gralloc4: ERROR: Format allocation info not found for format: 38") &&
+              !is_game_line("10-20 22:06:26.203 23862 23880 E AHardwareBuffer: GraphicBuffer(w=4, h=4, lc=1) failed") &&
+              !is_game_line("10-20 22:06:26.205 23862 23862 I VRI[UnravelActivity]@f4e723e: onWindowFocusChanged(): true"),
+          "the system's own messages are the device system's");
+}
+
 void write_android_template(const fs::path& root, const std::string& version, const std::string& configuration)
 {
     write_text(root / "template.stamp",
@@ -590,6 +651,7 @@ void test_gradle_arguments()
     params.version_name = "1.2";
     params.version_code = 7;
     params.orientation = unravel::android_orientation::portrait;
+    params.icon_dir = "/tmp/icon";
     auto arguments = deployment::make_gradle_arguments(tools, params);
     check(!arguments.empty() && arguments.front() == tools.java.string(), "Java runs Gradle's wrapper");
     check(contains_argument(arguments, "assembleDebug") && !contains_argument(arguments, "assembleRelease"), "a debug build");
@@ -597,8 +659,8 @@ void test_gradle_arguments()
               contains_argument(arguments, "-Punravel.versionCode=7") &&
               contains_argument(arguments, "-Punravel.orientation=sensorPortrait") &&
               contains_argument(arguments, "-Punravel.player=/editor/players/android-arm64/lib/arm64-v8a") &&
-              contains_argument(arguments, "-Punravel.content=/deploy"),
-          "the game's identity and the template's folders are passed");
+              contains_argument(arguments, "-Punravel.content=/deploy") && contains_argument(arguments, "-Punravel.icon=/tmp/icon"),
+          "the game's identity, its icon and the template's folders are passed");
     params.is_release = true;
     params.keystore = "/keys/game.jks";
     params.key_alias = "game";
@@ -610,6 +672,69 @@ void test_gradle_arguments()
           "local.properties escapes the drive colon");
     check(deployment::get_built_package("/p", false) == fs::path("/p/app/build/outputs/apk/debug/app-debug.apk"),
           "the debug package's place");
+}
+
+/// A `width` x `height` PNG of one opaque color.
+void write_solid_png(const fs::path& file, std::uint32_t width, std::uint32_t height)
+{
+    constexpr std::uint8_t OPAQUE_RED[] = {255, 0, 0, 255};
+    std::vector<std::uint8_t> texels;
+    for(std::uint32_t i = 0; i < width * height; ++i)
+    {
+        texels.insert(texels.end(), std::begin(OPAQUE_RED), std::end(OPAQUE_RED));
+    }
+    bx::FileWriter writer;
+    bx::Error error;
+    if(bx::open(&writer, bx::FilePath(file.string().c_str()), false, &error))
+    {
+        bimg::imageWritePng(&writer, width, height, width * 4, texels.data(), bimg::TextureFormat::RGBA8, false, &error);
+        bx::close(&writer);
+    }
+}
+
+/// The alpha of the texel at (x, y) of a PNG; -1 when it cannot be read.
+auto read_png_alpha(const fs::path& file, std::uint32_t x, std::uint32_t y, std::uint32_t& width) -> int
+{
+    std::ifstream stream(file, std::ios::binary);
+    const std::vector<char> bytes{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+    bx::DefaultAllocator allocator;
+    auto* image = bimg::imageParse(&allocator, bytes.data(), static_cast<std::uint32_t>(bytes.size()), bimg::TextureFormat::RGBA8);
+    if(image == nullptr)
+    {
+        return -1;
+    }
+    width = image->m_width;
+    const auto* texels = static_cast<const std::uint8_t*>(image->m_data);
+    const int alpha = x < image->m_width && y < image->m_height ? texels[(std::size_t(y) * image->m_width + x) * 4 + 3] : -1;
+    bimg::imageFree(image);
+    return alpha;
+}
+
+void test_android_icon(const fs::path& root)
+{
+    std::printf("test_android_icon\n");
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    // Twice as wide as tall: at xxxhdpi it fits the 288 px visible square as 288 x 144, centered in the
+    // 432 px layer, so rows 144 to 287 hold it.
+    write_solid_png(root / "icon.png", 64, 32);
+    const auto res = root / "res";
+    check(deployment::write_android_icon(root / "icon.png", math::color(0.0f, 0.5f, 1.0f, 1.0f), res).is_ok(),
+          "an icon is made from an image");
+    check(fs::exists(res / "mipmap-anydpi-v26/ic_launcher.xml", ec) && fs::exists(res / "mipmap-mdpi/ic_launcher_foreground.png", ec) &&
+              fs::exists(res / "mipmap-xxxhdpi/ic_launcher_foreground.png", ec),
+          "the adaptive icon and a foreground per density are written");
+    check(read_text(res / "values/ic_launcher_background.xml").find(">#0080FF<") != std::string::npos,
+          "the background is an opaque color resource");
+    check(read_text(res / "mipmap-anydpi-v26/ic_launcher.xml").find("@mipmap/ic_launcher_foreground") != std::string::npos,
+          "the adaptive icon names its foreground");
+    std::uint32_t width = 0;
+    const auto foreground = res / "mipmap-xxxhdpi/ic_launcher_foreground.png";
+    check(read_png_alpha(foreground, 216, 216, width) == 255 && width == 432, "the image fills the middle of a 432 px layer");
+    check(read_png_alpha(foreground, 216, 100, width) == 0 && read_png_alpha(foreground, 20, 216, width) == 0,
+          "the layer is clear around the visible square and the image");
+    check(!deployment::write_android_icon(root / "missing.png", math::color::white(), res).is_ok(), "a missing image is reported");
+    check(deployment::make_android_color(math::color(1.0f, 0.0f, 0.0f, 0.2f)) == "#FF0000", "colors are written without alpha");
 }
 
 void test_run_arguments()
@@ -1026,11 +1151,14 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_file_classification(temp / "files");
         test_shader_variants(temp / "variants");
         test_platform_locations();
+        test_deploy_locations(temp / "locations");
         test_application_ids();
         test_android_devices();
         test_logcat_lines();
+        test_game_log_lines();
         test_android_template(temp / "android");
         test_gradle_arguments();
+        test_android_icon(temp / "icon");
         test_run_arguments();
         test_subprocess(temp / "subprocess");
         test_pack_inputs(temp / "inputs");

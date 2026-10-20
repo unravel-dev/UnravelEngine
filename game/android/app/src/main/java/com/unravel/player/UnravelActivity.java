@@ -1,6 +1,12 @@
 package com.unravel.player;
 
+import android.content.pm.ApplicationInfo;
+
 import org.libsdl.app.SDLActivity;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * The player's activity. SDL is linked statically into libmain.so, so that is the only native
@@ -14,6 +20,12 @@ public class UnravelActivity extends SDLActivity {
      */
     private static final String ARGUMENTS_EXTRA = "arguments";
 
+    /**
+     * Debug packages (the deploy's packages without Release Build) let a four-finger tap switch the
+     * graphics statistics on and off. Store packages are not debuggable, so players never see it.
+     */
+    private static final String STATS_GESTURE_OPTION = "--gfx-stats-gesture";
+
     @Override
     protected String[] getLibraries() {
         return new String[] { "main" };
@@ -21,11 +33,15 @@ public class UnravelActivity extends SDLActivity {
 
     @Override
     protected String[] getArguments() {
+        List<String> options = new ArrayList<>();
         String arguments = getIntent() != null ? getIntent().getStringExtra(ARGUMENTS_EXTRA) : null;
-        if (arguments == null || arguments.trim().isEmpty()) {
-            return new String[0];
+        if (arguments != null && !arguments.trim().isEmpty()) {
+            options.addAll(Arrays.asList(arguments.trim().split("\\s+")));
         }
-        return arguments.trim().split("\\s+");
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            options.add(STATS_GESTURE_OPTION);
+        }
+        return options.toArray(new String[0]);
     }
 
     /**

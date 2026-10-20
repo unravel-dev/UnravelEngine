@@ -108,6 +108,14 @@ auto draw_release_remove_button(const std::string& name, bool is_patched, bool i
     return is_confirmed;
 }
 
+/// A deploy folder as the window names it: relative to the project when it lies in it, which reads
+/// shorter and the same on every machine.
+auto describe_folder(const fs::path& folder) -> std::string
+{
+    const auto shown = fs::make_relative_if_inside(folder, deployment::get_project_root());
+    return shown.is_relative() ? shown.generic_string() + " in the project" : shown.generic_string();
+}
+
 /// Bytes of the files under `folder`.
 auto get_folder_size(const fs::path& folder) -> std::uint64_t
 {
@@ -253,9 +261,18 @@ void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
     const bool is_escape_pressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::IsAnyItemActive();
     if(draw_close_button() || is_escape_pressed)
     {
-        ImGui::CloseCurrentPopup();
+        close_window();
     }
     ImGui::EndPopup();
+}
+
+void deploy_panel::close_window()
+{
+    ImGui::CloseCurrentPopup();
+    if(!is_deploying())
+    {
+        deploy_jobs_.clear();
+    }
 }
 
 auto deploy_panel::get_progress() const -> float
@@ -404,7 +421,7 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
     {
         widgets::draw_muted_text(fmt::format("{} builds go to {}.",
                                              params.deploy_target == deploy_platform::android ? "Android" : "Desktop",
-                                             get_output_location(params).generic_string())
+                                             describe_folder(get_output_location(params)))
                                      .c_str());
     }
     inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
@@ -495,7 +512,12 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
         widgets::draw_muted_text(
             fmt::format("Uses {} from the product settings.", deployment::get_android_application_id(ctx, params)).c_str());
     }
-    inspect_deploy_properties(ctx, {"android_version_code"_hs, "android_screen_orientation"_hs, "android_release"_hs});
+    inspect_deploy_properties(ctx, {"android_version_code"_hs, "android_screen_orientation"_hs, "android_icon"_hs});
+    if(!params.android_icon)
+    {
+        widgets::draw_muted_text("Without an image, the icon is the engine's logo.");
+    }
+    inspect_deploy_properties(ctx, {"android_icon_background"_hs, "android_release"_hs});
     if(params.android_release)
     {
         inspect_deploy_properties(ctx, {"android_keystore"_hs, "android_key_alias"_hs});
@@ -542,8 +564,9 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
     }
     entt::meta_any object = entt::forward_as_meta(params);
     property_layout layout(entt::resolve<deploy_settings>().data("android_device"_hs), object);
-    const float refresh_width = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
-    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - refresh_width));
+    // A square button, so the width kept for it beside the list is exactly what it takes.
+    const ImVec2 refresh_size(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - refresh_size.x - ImGui::GetStyle().ItemSpacing.x));
     if(ImGui::BeginCombo("##android_device", preview.c_str()))
     {
         if(devices.empty())
@@ -563,7 +586,13 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(deployment::is_refreshing_android_devices());
-    if(ImGui::Button(ICON_MDI_REFRESH "##refresh_android_devices"))
+    // The icon is drawn centered by its own shape: as button text it sits off center.
+    const bool is_refresh_pressed = ImGui::Button("##refresh_android_devices", refresh_size);
+    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
+                              ImGui::GetItemRectMin() + refresh_size * 0.5f,
+                              ICON_MDI_REFRESH,
+                              ImGui::GetColorU32(ImGuiCol_Text));
+    if(is_refresh_pressed)
     {
         deployment::refresh_android_devices(ctx);
     }
@@ -819,7 +848,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
     }
 
     // The steps shown are of the last deploy, which may have gone to another platform's folder.
-    const std::string location = (deploy_jobs_.empty() ? get_output_location(params) : deployed_location_).generic_string();
+    const std::string location = describe_folder(deploy_jobs_.empty() ? get_output_location(params) : deployed_location_);
     if(deploy_jobs_.empty())
     {
         widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
@@ -872,7 +901,7 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     }
     if(widgets::draw_button("Close", false, true))
     {
-        ImGui::CloseCurrentPopup();
+        close_window();
     }
     ImGui::SetItemTooltipEx("%s", "Close the window. A running deploy goes on, and the toolbar shows its progress.");
     ImGui::SameLine();

@@ -1,5 +1,6 @@
 #include "folders.h"
 #include "files.h"
+#include "releases.h"
 
 #include <engine/assets/impl/asset_extensions.h>
 #include <string_utils/utils.h>
@@ -9,6 +10,15 @@
 
 namespace unravel::deployment
 {
+namespace
+{
+// The project folders the project manager creates for its settings, and the scripts' build folder
+// (the project's .csproj builds into temp/bin and temp/obj).
+constexpr const char* PROJECT_SETTINGS_FOLDER = "settings";
+constexpr const char* PROJECT_DEPLOY_SETTINGS_FOLDER = "deploy";
+constexpr const char* PROJECT_EDITOR_FOLDER = "editor";
+constexpr const char* SCRIPT_BUILD_FOLDER = "temp";
+} // namespace
 
 auto is_previous_deploy(const fs::path& folder) -> bool
 {
@@ -56,6 +66,30 @@ auto is_inside(const fs::path& path, const fs::path& folder) -> bool
     const auto path_key = fs::make_path_key(canonical_path.generic_string());
     return path_key.compare(0, folder_key.size(), folder_key) == 0 &&
            (path_key.size() == folder_key.size() || path_key[folder_key.size()] == '/' || folder_key.back() == '/');
+}
+
+auto get_managed_project_folder(const fs::path& path, const fs::path& project_root) -> std::string
+{
+    const auto relative = fs::make_relative_if_inside(path, project_root);
+    if(relative.empty() || relative.has_root_path() || relative == ".")
+    {
+        return {};
+    }
+    const std::string managed[] = {ex::get_data_directory_no_slash(),
+                                   ex::get_compiled_directory_no_slash(),
+                                   PROJECT_SETTINGS_FOLDER,
+                                   PROJECT_DEPLOY_SETTINGS_FOLDER,
+                                   PROJECT_EDITOR_FOLDER,
+                                   RELEASES_FOLDER,
+                                   SCRIPT_BUILD_FOLDER};
+    const auto top = fs::make_path_key(relative.begin()->generic_string());
+    const auto found = std::find_if(std::begin(managed),
+                                    std::end(managed),
+                                    [&top](const std::string& folder)
+                                    {
+                                        return fs::make_path_key(folder) == top;
+                                    });
+    return found == std::end(managed) ? std::string{} : *found;
 }
 
 auto is_executable_in_use(const fs::path& executable) -> bool

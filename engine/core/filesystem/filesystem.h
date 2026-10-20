@@ -165,4 +165,12 @@ auto reduce_trailing_extensions(const path& _path) -> path;
 
 auto is_any_parent_path(const path& parent, const path& child) -> bool;
 
+/// `_path` placed in `base` when it is relative. An absolute or empty path, or an empty base, leaves it
+/// as it is. For settings that store paths relative to a folder, such as the project's.
+auto resolve_relative_to(const path& _path, const path& base) -> path;
+
+/// An absolute `_path` relative to `base` when it lies inside it, so a setting holding it moves with
+/// the folder; otherwise `_path` as it is.
+auto make_relative_if_inside(const path& _path, const path& base) -> path;
+
 } // namespace fs

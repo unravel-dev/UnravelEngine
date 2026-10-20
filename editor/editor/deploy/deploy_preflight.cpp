@@ -17,27 +17,37 @@ namespace
 /// How long a problems_cache answer is kept while the settings stay the same.
 constexpr auto PROBLEMS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
 
-/// The deploy folder's problem, if any: it must exist outside the project. The platform builds into a
-/// folder of its own in it, created when missing, which must be empty or an earlier build of that
-/// platform, since a deploy replaces and removes files in it. An Android folder holds packages only.
+/// The deploy folder's problem, if any. In the project it stays out of the folders the editor manages;
+/// it never holds the project. It is created when missing, in a folder that exists. The platform builds
+/// into a folder of its own in it, created when missing, which must be empty or an earlier build of
+/// that platform, since a deploy replaces and removes files in it. An Android folder holds packages only.
 auto get_folder_problem(const fs::path& location, const fs::path& output, bool is_android) -> std::string
 {
     fs::error_code ec;
     if(location.empty())
     {
-        return "Choose a folder to deploy to.";
-    }
-    if(is_inside_project(location))
-    {
-        return "The deploy folder is inside the project. Choose one outside it.";
+        return fmt::format("Choose a folder to deploy to, such as {} in the project.", DEFAULT_DEPLOY_LOCATION);
     }
     if(is_inside(get_project_root(), location))
     {
-        return "The deploy folder contains the project. Choose one outside it.";
+        return fmt::format("The deploy folder contains the project. Choose another one, such as {} in the project.",
+                           DEFAULT_DEPLOY_LOCATION);
     }
-    if(!fs::is_directory(location, ec))
+    const auto managed = get_managed_project_folder(location, get_project_root());
+    if(!managed.empty())
     {
-        return "The deploy folder does not exist.";
+        return fmt::format("The deploy folder is in the project's {} folder, which the editor manages. Choose "
+                           "another one, such as {} in the project.",
+                           managed,
+                           DEFAULT_DEPLOY_LOCATION);
+    }
+    if(fs::exists(location, ec) && !fs::is_directory(location, ec))
+    {
+        return fmt::format("The deploy location {} is a file, not a folder.", location.generic_string());
+    }
+    if(!fs::exists(location, ec) && !fs::is_directory(location.parent_path(), ec))
+    {
+        return fmt::format("The deploy folder's parent {} does not exist.", location.parent_path().generic_string());
     }
     if(!fs::exists(output, ec))
     {
@@ -103,7 +113,7 @@ void add_problem(std::vector<std::string>& problems, std::string problem)
 
 auto get_project_root() -> fs::path
 {
-    return fs::resolve_protocol("app:/");
+    return fs::resolve_protocol(PROJECT_ROOT_KEY);
 }
 
 auto is_inside_project(const fs::path& path) -> bool
@@ -137,7 +147,7 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
 {
     std::vector<std::string> problems;
     const bool is_android = params.deploy_target == deploy_platform::android;
-    const auto folder_problem = get_folder_problem(params.deploy_location, get_output_location(params), is_android);
+    const auto folder_problem = get_folder_problem(get_deploy_folder(params), get_output_location(params), is_android);
     add_problem(problems, folder_problem);
     if(folder_problem.empty() && !is_android && is_executable_in_use(get_deployed_executable(ctx, params)))
     {
@@ -176,7 +186,7 @@ auto can_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
 
 auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> const std::vector<std::string>&
 {
-    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                                        params.deploy_location.generic_string(),
                                        params.deploy_patch_release,
                                        params.deploy_packed_assets,
@@ -187,7 +197,8 @@ auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> c
                                        params.android_application_id,
                                        params.android_release,
                                        params.android_keystore.generic_string(),
-                                       params.android_key_alias);
+                                       params.android_key_alias,
+                                       params.android_icon.id());
     const auto now = std::chrono::steady_clock::now();
     if(signature != signature_ || now - checked_at_ >= PROBLEMS_REFRESH_INTERVAL)
     {

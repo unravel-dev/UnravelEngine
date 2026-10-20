@@ -286,10 +286,9 @@ void project_manager::load_deploy_settings()
 {
     load_from_file(fs::resolve_protocol(app_deploy_cfg).string(), deploy_settings_);
 
-    fs::error_code ec;
-    if(!fs::exists(deploy_settings_.deploy_location, ec))
+    if(deploy_settings_.deploy_location.empty())
     {
-        deploy_settings_.deploy_location.clear();
+        deploy_settings_.deploy_location = DEFAULT_DEPLOY_LOCATION;
     }
 }
 

@@ -471,6 +471,11 @@ auto inspector_path::inspect(rtti::context& ctx,
     inspect_result result{};
 
     std::string picked = data.generic_string();
+    // "relative_to" names the folder a relative path lies in (a protocol root such as app:/). The dialogs
+    // start from the full path, and a picked path inside that folder is kept relative to it.
+    const auto relative_to = entt::get_attribute_as<std::string>(custom, "relative_to");
+    const fs::path base = relative_to.empty() ? fs::path{} : fs::resolve_protocol(relative_to);
+    std::string dialog_path = fs::resolve_relative_to(data, base).generic_string();
 
     if(!info.read_only)
     {
@@ -485,9 +490,9 @@ auto inspector_path::inspect(rtti::context& ctx,
         {
             if(ImGui::Button(ICON_MDI_FILE_SEARCH))
             {
-                if(native::open_file_dialog(picked, {}))
+                if(native::open_file_dialog(dialog_path, {}))
                 {
-                    data = picked;
+                    data = fs::make_relative_if_inside(dialog_path, base);
                     picked = data.generic_string();
                     result.changed = true;
                     result.edit_finished |= true;
@@ -499,9 +504,9 @@ auto inspector_path::inspect(rtti::context& ctx,
         {
             if(ImGui::Button(ICON_MDI_FOLDER_SEARCH))
             {
-                if(native::pick_folder_dialog(picked))
+                if(native::pick_folder_dialog(dialog_path))
                 {
-                    data = picked;
+                    data = fs::make_relative_if_inside(dialog_path, base);
                     picked = data.generic_string();
                     result.changed = true;
                     result.edit_finished |= true;
@@ -514,7 +519,7 @@ auto inspector_path::inspect(rtti::context& ctx,
                 ImGui::SameLine();
                 if(ImGui::Button(ICON_MDI_FOLDER_OPEN))
                 {
-                    fs::show_in_graphical_env(data);
+                    fs::show_in_graphical_env(fs::resolve_relative_to(data, base));
                 }
                 ImGui::SetItemTooltipEx("Open in Explorer");
             }
