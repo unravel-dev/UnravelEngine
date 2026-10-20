@@ -36,10 +36,21 @@ SAMPLER2D(s_ssil, 8);
 // Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
 // normal * 0.5 + 0.5.
 SAMPLER2D(s_screen_ao, 9);
+#if PROBE_LAYER_INLINE
+// The view's only reflection probe, a sphere probe, sampled here in place of the layer the probe
+// pass would have drawn (deferred::run_reflection_probe_pass): u_probe_sphere = its position and
+// influence radius; u_probe_sample = x the cubemap's mip count, y its intensity in the buffers'
+// pre-exposed space, z 1 when the mips hold the prefiltered lobes, w the source validity.
+SAMPLERCUBE(s_probe_cube, 10);
+uniform vec4 u_probe_sphere;
+uniform vec4 u_probe_sample;
+#include "reflection_probe/sphere_probe.sh"
+#else
 // The untraced reflection layer (u_probe_layer_params): PBUFFER (probes, sky), or the GI's rough
 // specular history where the GI's reflections own the view. s_tex5 is RBUFFER, the traced
 // layers (ComposeIndirectSpecular).
 SAMPLER2D(s_probe_layer, 10);
+#endif
 // The GTSO specular occlusion table (specular_occlusion_lut). Stage 11 is the directional
 // light's cloud shadow sampler.
 SAMPLER3D(s_specular_occlusion, 12);
@@ -1026,8 +1037,16 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
         ComputeIndirectSpecularOcclusion(s_specular_occlusion, N, dominant_dir, indirect_filtered_roughness, data.specular_color,
                                          material_ao, visibility, occlusion_axis, u_screen_ao_multi_bounce);
     vec3 environment_specular = environment.radiance * u_pre_exposure_value;
-    vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(texture2D(s_probe_layer, texcoord0), u_probe_layer_params),
-                                          environment_specular);
+#if PROBE_LAYER_INLINE
+    // What the layer would hold for one probe over its clear: rgb premultiplied by the coverage.
+    vec4 probe_texel = SampleSphereProbe(s_probe_cube, world_position, reflect(-V, N), data.roughness, u_probe_sphere,
+                                         u_probe_sample.x, u_probe_sample.y, u_probe_sample.z);
+    probe_texel.w *= u_probe_sample.w;
+    probe_texel.xyz *= probe_texel.w;
+#else
+    vec4 probe_texel = texture2D(s_probe_layer, texcoord0);
+#endif
+    vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(probe_texel, u_probe_layer_params), environment_specular);
     vec3 indirect_specular = ComposeIndirectSpecular(texture2D(s_tex5, texcoord0), probe_layer, specular_occlusion);
 
     // The subsurface colour joins the diffuse lobe for indirect light (black without one), as the surface cache's

@@ -2586,7 +2586,8 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     pass.bind(lbuffer.get());
     pass.set_view_proj(view, proj);
 
-    const auto& iprogram = indirect_lighting_program_;
+    const bool samples_probe_inline = apply_reflection && inline_probe_.cubemap;
+    const auto& iprogram = samples_probe_inline ? indirect_lighting_probe_program_ : indirect_lighting_program_;
     iprogram.program->begin();
 
     float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
@@ -2637,11 +2638,21 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
     gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
-    const auto probe_layer = get_probe_layer_inputs(rview, apply_reflection ? get_probe_reflection_layer(rview) : nullptr);
-    gfx::set_texture(iprogram.s_probe_layer,
-                     10,
-                     probe_layer.texture ? probe_layer.texture : default_textures::get().black_texture());
-    gfx::set_uniform(iprogram.u_probe_layer_params, probe_layer.params.data());
+    if(samples_probe_inline)
+    {
+        gfx::set_texture(iprogram.s_probe_cube, 10, inline_probe_.cubemap);
+        gfx::set_uniform(iprogram.u_probe_sphere, inline_probe_.sphere);
+        gfx::set_uniform(iprogram.u_probe_sample, inline_probe_.sample);
+        gfx::set_uniform(iprogram.u_probe_layer_params, probe_layer_inputs{}.params.data());
+    }
+    else
+    {
+        const auto probe_layer = get_probe_layer_inputs(rview, apply_reflection ? get_probe_reflection_layer(rview) : nullptr);
+        gfx::set_texture(iprogram.s_probe_layer,
+                         10,
+                         probe_layer.texture ? probe_layer.texture : default_textures::get().black_texture());
+        gfx::set_uniform(iprogram.u_probe_layer_params, probe_layer.params.data());
+    }
     gfx::set_texture(iprogram.s_specular_occlusion, 12, default_textures::get().specular_occlusion().texture.get());
     gfx::set_uniform(iprogram.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
     
@@ -2703,6 +2714,7 @@ void deferred::run_reflection_probe_pass(scene& scn,
                                          delta_t dt)
 {
     probe_layer_written_ = false;
+    inline_probe_ = {};
     if(!apply_probes)
     {
         return;
@@ -2749,6 +2761,16 @@ void deferred::run_reflection_probe_pass(scene& scn,
     if(sorted_probes.empty() && !is_layer_read_by_gi)
     {
         return;
+    }
+
+    // A single probe the layer would only pass on to the indirect pass is sampled there instead.
+    if(sorted_probes.size() == 1 && !is_layer_read_by_gi && !is_probe_layer_debug_view())
+    {
+        inline_probe_ = make_inline_probe(scn, sorted_probes.front(), rview);
+        if(inline_probe_.cubemap)
+        {
+            return;
+        }
     }
 
     const auto& view = camera.get_view();
@@ -2860,6 +2882,35 @@ void deferred::run_reflection_probe_pass(scene& scn,
     }
 
     bgfx::discard();
+}
+
+auto deferred::make_inline_probe(scene& scn, entt::entity probe, gfx::render_view& rview) const -> inline_probe
+{
+    auto& probe_comp = scn.registry->get<reflection_probe_component>(probe);
+    const auto& settings = probe_comp.get_probe();
+    const auto& cubemap = probe_comp.get_cubemap_prefiltered();
+    if(settings.type != probe_type::sphere || !cubemap || !indirect_lighting_probe_program_.program ||
+       !indirect_lighting_probe_program_.program->is_valid())
+    {
+        return {};
+    }
+    const auto& world_transform = scn.registry->get<transform_component>(probe).get_transform_global();
+    const auto& scale = world_transform.get_scale();
+    // The same probe the layer pass would draw (fs_sphere_reflection_probe: u_data0, u_data1, u_capture).
+    inline_probe result;
+    result.cubemap = cubemap;
+    result.sphere = math::vec4(world_transform.get_position(),
+                               math::max(scale.x, math::max(scale.y, scale.z)) * settings.sphere_data.range);
+    result.sample = math::vec4(float(cubemap->info.numMips),
+                               settings.intensity * get_pre_exposure(rview).value,
+                               probe_comp.get_apply_prefilter() ? 1.0f : 0.0f,
+                               1.0f);
+    return result;
+}
+
+auto deferred::is_probe_layer_debug_view() const -> bool
+{
+    return debug_pass_ == debug_pass_ao_bent_normals || (debug_pass_ >= 0 && debug_pass_ < debug_pass_gbuffer_modes);
 }
 
 namespace
@@ -3911,6 +3962,9 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     indirect_lighting_program_.cache_uniforms();
     indirect_lighting_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light");
+
+    indirect_lighting_probe_program_.cache_uniforms();
+    indirect_lighting_probe_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light_probe");
 
     auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.sc");
     if(cs_irradiance)

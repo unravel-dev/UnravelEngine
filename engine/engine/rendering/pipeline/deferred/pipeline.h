@@ -133,7 +133,8 @@ public:
      * @brief Draws the captured reflection probes into PBUFFER, the untraced reflection layer.
      *
      * Without a captured probe the layer is left unwritten (probe_layer_written_ stays false), unless
-     * @p is_layer_read_by_gi: the GI reflections read it as the open sky, so it is cleared for them.
+     * @p is_layer_read_by_gi: the GI reflections read it as the open sky, so it is cleared for them. A single
+     * sphere probe nothing else reads the layer for is left to the indirect pass (inline_probe_).
      */
     void run_reflection_probe_pass(scene& scn,
                                    const camera& camera,
@@ -616,6 +617,9 @@ private:
             cache_uniform(program.get(), u_indirect_params, "u_indirect_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_probe_layer_params, "u_probe_layer_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_probe_cube, "s_probe_cube", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_probe_sphere, "u_probe_sphere", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_probe_sample, "u_probe_sample", bgfx::UniformType::Vec4);
         }
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_light_data;
@@ -637,10 +641,37 @@ private:
         /// environment SH back in (fs_pbr_lighting.sh, pbr_indirect). y = 1 when that source is
         /// SSIL, which resolved the screen-space visibility per pixel and takes no screen AO.
         gfx::program::uniform_ptr u_indirect_params;
+        /// The inline probe of the program that samples it in place of the layer (inline_probe).
+        gfx::program::uniform_ptr s_probe_cube;
+        gfx::program::uniform_ptr u_probe_sphere;
+        gfx::program::uniform_ptr u_probe_sample;
 
         std::unique_ptr<gpu_program> program;
 
     } indirect_lighting_program_;
+
+    /// The indirect pass that samples the view's only probe itself (PROBE_LAYER_INLINE) instead of reading the
+    /// probe layer.
+    indirect_lighting_program indirect_lighting_probe_program_;
+
+    /// The view's only reflection probe when the indirect pass samples it itself; no cubemap otherwise. Drawing
+    /// a single probe into the layer first costs a full-screen pass that reads the G-buffer, and a layer the
+    /// indirect pass reads back (run_reflection_probe_pass decides).
+    struct inline_probe
+    {
+        gfx::texture::ptr cubemap;
+        /// u_probe_sphere: position and influence radius.
+        math::vec4 sphere{0.0f};
+        /// u_probe_sample: mip count, pre-exposed intensity, prefiltered mips (0/1), source validity.
+        math::vec4 sample{0.0f};
+    };
+    inline_probe inline_probe_{};
+
+    /// The inline probe for @p probe, or none for a probe the indirect pass cannot sample itself.
+    auto make_inline_probe(scene& scn, entt::entity probe, gfx::render_view& rview) const -> inline_probe;
+
+    /// Whether the active debug view reads the probe layer (run_debug_visualization_pass).
+    auto is_probe_layer_debug_view() const -> bool;
 
     struct debug_visualization_program : uniforms_cache
     {
