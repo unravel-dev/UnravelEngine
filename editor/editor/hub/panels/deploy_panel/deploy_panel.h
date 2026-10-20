@@ -38,6 +38,9 @@ public:
     /// Starts a deploy unless one is already running or the project cannot deploy. No UI.
     /// @return True when it started.
     auto start_deploy(rtti::context& ctx, const deploy_settings& params) -> bool;
+    /// Run Last Build: installs the package of an earlier Android deploy on the chosen device and starts
+    /// it, its steps shown as a deploy's. @return False while a deploy runs.
+    auto run_last_android_build(rtti::context& ctx, const deploy_settings& params) -> bool;
     /// The steps of the running deploy, or of the last one until the window is closed.
     auto get_jobs() const -> const deployment::deploy_jobs&;
     auto is_deploying() const -> bool;
@@ -65,6 +68,8 @@ private:
     void draw_build_tab(rtti::context& ctx);
     /// The Build tab's left column: the product, the deploy folder and running the game, packaging.
     void draw_common_settings(rtti::context& ctx);
+    /// No deploy folder is set: says so, with a button that sets the project's own (.deploy).
+    void draw_missing_location_notice(rtti::context& ctx);
     void draw_content_tab(rtti::context& ctx);
     void draw_releases_tab(rtti::context& ctx);
     /// Patch Against Release as a pick of the kept releases. @return True when the pick changed.
@@ -78,6 +83,8 @@ private:
     void draw_android_section(rtti::context& ctx);
     /// The device Deploy and Run installs on, as a pick of the devices adb lists. @return True when the pick changed.
     auto draw_android_device_picker(rtti::context& ctx) -> bool;
+    /// Run Last Build, Follow Log, Clear Data and Uninstall for the game on the chosen device.
+    void draw_android_device_actions(rtti::context& ctx);
     /// The game on the device was signed with another key: Uninstall and Install, after a confirmation.
     void draw_install_conflict();
     void draw_status(rtti::context& ctx);

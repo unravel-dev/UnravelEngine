@@ -80,6 +80,7 @@ REFLECT(deploy_settings)
                             "deploy creates. A folder picked inside the project is kept relative, so\n"
                             "the setting moves with the project."},
             entt::attribute{"relative_to", std::string(PROJECT_ROOT_KEY)},
+            entt::attribute{"hint", "A folder, or a path in the project such as .deploy"},
         })
         .data<&deploy_settings::deploy_dependencies>("deploy_dependencies"_hs)
         .custom<entt::attributes>(entt::attributes{

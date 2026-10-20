@@ -100,11 +100,14 @@ public:
     void mark_as_changed();
     void clear_changes() noexcept;
     void set_recording_changes(bool recording) noexcept;
+    /// The storage slot of `idx`, wrapped into [0, capacity).
     size_type clamp_index(std::ptrdiff_t idx) const;
 
+    /// The element at position `idx` from the front, 0 being the oldest; positions wrap around.
     reference at(std::ptrdiff_t idx) noexcept;
     const_reference at(std::ptrdiff_t idx) const noexcept;
 
+    /// The element at position `idx` from the front, 0 being the oldest; positions wrap around.
     reference operator[](std::ptrdiff_t idx) noexcept;
     const_reference operator[](std::ptrdiff_t idx) const noexcept;
 
@@ -139,6 +142,9 @@ public:
     using reference = typename std::conditional_t<is_const, const value_type, value_type>&;
     using iterator_category = std::random_access_iterator_tag;
 
+    /// An iterator of no ring, as standard iterators allow (std::reverse_iterator needs one).
+    ring_iterator() noexcept = default;
+
     operator ring_iterator<Ring, true>() const noexcept;
 
     template <bool C>
@@ -172,8 +178,8 @@ private:
     friend class ring_iterator<Ring, !is_const>;
     using size_type = std::ptrdiff_t;
     ring_iterator(size_type idx, std::conditional_t<is_const, const Ring, Ring>* rv) noexcept;
-    size_type m_idx;
-    std::conditional_t<is_const, const Ring, Ring>* m_rv;
+    size_type m_idx{};
+    std::conditional_t<is_const, const Ring, Ring>* m_rv{};
 };
 
 template <typename Ring, bool C>
@@ -317,27 +323,25 @@ typename hpp::ring_span<T, Popper>::const_reference hpp::ring_span<T, Popper>::b
 template <typename T, class Popper>
 typename hpp::ring_span<T, Popper>::iterator hpp::ring_span<T, Popper>::begin() noexcept
 {
-    auto idx = front_idx_;
-    return iterator(idx, this);
+    return iterator(0, this);
 }
 
 template <typename T, class Popper>
 typename hpp::ring_span<T, Popper>::const_iterator hpp::ring_span<T, Popper>::begin() const noexcept
 {
-    return const_iterator(front_idx_, this);
+    return const_iterator(0, this);
 }
 
 template <typename T, class Popper>
 typename hpp::ring_span<T, Popper>::iterator hpp::ring_span<T, Popper>::end() noexcept
 {
-    auto idx = size() + front_idx_;
-    return iterator(idx, this);
+    return iterator(std::ptrdiff_t(size()), this);
 }
 
 template <typename T, class Popper>
 typename hpp::ring_span<T, Popper>::const_iterator hpp::ring_span<T, Popper>::end() const noexcept
 {
-    return const_iterator(size() + front_idx_, this);
+    return const_iterator(std::ptrdiff_t(size()), this);
 }
 
 template <typename T, class Popper>
@@ -433,8 +437,8 @@ template <typename T, class Popper>
 auto hpp::ring_span<T, Popper>::pop_back()
 {
     assert(size_ != 0);
-    // back_idx returns one past the current back
-    auto old_back_idx = back_idx() - 1;
+    // back_idx returns one past the current back, which is slot 0 when the back is the last slot.
+    auto old_back_idx = clamp_index(std::ptrdiff_t(back_idx()) - 1);
     --size_;
     return popper_(data_[old_back_idx]);
 }
@@ -464,7 +468,7 @@ void hpp::ring_span<T, Popper>::swap(
 template <typename T, class Popper>
 typename hpp::ring_span<T, Popper>::reference hpp::ring_span<T, Popper>::at(std::ptrdiff_t i) noexcept
 {
-    auto idx = clamp_index(i);
+    auto idx = clamp_index(std::ptrdiff_t(front_idx_) + i);
     on_change(idx);
     return data_[idx];
 }
@@ -472,7 +476,7 @@ typename hpp::ring_span<T, Popper>::reference hpp::ring_span<T, Popper>::at(std:
 template <typename T, class Popper>
 typename hpp::ring_span<T, Popper>::const_reference hpp::ring_span<T, Popper>::at(std::ptrdiff_t i) const noexcept
 {
-    auto idx = clamp_index(i);
+    auto idx = clamp_index(std::ptrdiff_t(front_idx_) + i);
     return data_[idx];
 }
 

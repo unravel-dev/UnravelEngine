@@ -527,7 +527,15 @@ auto inspector_path::inspect(rtti::context& ctx,
         ImGui::SameLine();
     }
 
-    result.changed |= ImGui::InputTextWidget<256>("##", picked, false, flags);
+    // The buttons share the row, so the field takes the width they leave. "hint" shows in the empty field.
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x));
+    const auto hint = entt::get_attribute_as<std::string>(custom, "hint");
+    auto buffer = ImGui::CreateInputTextBuffer<256>(picked);
+    if(ImGui::InputTextWithHint("##", hint.c_str(), buffer.data(), buffer.size(), flags))
+    {
+        picked = buffer.data();
+        result.changed = true;
+    }
     result.edit_finished |= ImGui::IsItemDeactivatedAfterEdit();
     if(result.edit_finished)
     {

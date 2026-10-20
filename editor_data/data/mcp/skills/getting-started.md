@@ -55,7 +55,8 @@ Building a scene is not shipping a game. The rest of the chain:
 - input_list_actions / input_map_action define the action names scripts query.
 - deploy_get_state reports the deploy settings, what still blocks a build (one
   sentence each) and the progress of a running deploy; deploy_set_settings
-  picks the destination folder (outside the project), and project_deploy
+  picks the destination folder (default .deploy in the project; relative paths are in the
+  project folder, outside the folders the editor manages), and project_deploy
   builds it once running compiles finish. An asset that failed to compile fails
   the deploy (failed_steps names it) before the folder is touched. Compiled
   assets ship in data/<engine|app>/content.pak (pack_assets false ships them
@@ -71,6 +72,11 @@ Building a scene is not shipping a game. The rest of the chain:
   every project asset with whether it ships and why, named_folders points at
   folders scripts build asset paths in (with the scripts that do), and
   orphan_rules lists rules on paths that are gone. While a deploy runs, project and settings changes are refused.
+- Android: deploy_set_settings platform android and project_deploy build <project>.apk; with
+  run_after_deploy it is installed and started on android_device, and the game's log reaches the
+  editor log as [Device] lines (logs_get_recent include_device_system adds the device system's own
+  [Device System] lines). android_device_action acts without a new deploy: run_last_build,
+  follow_log, clear_data, uninstall.
 - Driving and verifying the game needs synthesized input - see the
   verification skill.
 

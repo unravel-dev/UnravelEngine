@@ -84,6 +84,11 @@ auto get_device_jobs(const android_package_plan& plan) -> deploy_jobs;
 /// Fails the plan's device steps that did not finish, with `reason`.
 void fail_device_steps(const android_package_plan& plan, const std::string& reason);
 
+/// The package an Android deploy with these settings writes: <project>.apk in the platform's folder.
+auto get_android_package_path(rtti::context& ctx, const deploy_settings& params) -> fs::path;
+/// Whether an earlier Android deploy left its package in the deploy folder.
+auto has_android_package(rtti::context& ctx, const deploy_settings& params) -> bool;
+
 auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params) -> android_package_plan;
 
 /// Builds the package with Gradle and puts it into the deploy folder. Throws on failure.
@@ -111,6 +116,22 @@ auto get_android_install_conflict_count() -> std::uint32_t;
 /// Uninstalls the conflicting game, which removes its saved data, then installs and starts the build
 /// the conflict stopped. Returns the steps of that, for the Deploy window.
 auto replace_android_game() -> deploy_jobs;
+
+/**
+ * @brief Run Last Build: installs the package an earlier deploy left in the deploy folder on the chosen
+ * device and starts it, without building. Its log then follows, as after Deploy and Run.
+ * @return The device steps, for the Deploy window.
+ */
+auto run_last_android_build(rtti::context& ctx, const deploy_settings& params) -> deploy_jobs;
+/// Follows the log of the game already running on the chosen device, as after Deploy and Run, until it
+/// ends or Stop Game; logs a warning when it does not run.
+void follow_android_game(rtti::context& ctx, const deploy_settings& params);
+/// Removes the game's saved data on the chosen device (pm clear), which also stops it; in the background.
+void clear_android_game_data(rtti::context& ctx, const deploy_settings& params);
+/// Uninstalls the game from the chosen device, with its saved data; in the background.
+void uninstall_android_game(rtti::context& ctx, const deploy_settings& params);
+/// Whether Clear Data or Uninstall still runs.
+auto is_android_device_busy() -> bool;
 
 /// The devices adb listed at the last refresh.
 auto get_android_devices() -> std::vector<android_device>;

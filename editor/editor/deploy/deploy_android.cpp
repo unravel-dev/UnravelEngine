@@ -158,28 +158,20 @@ auto get_game_process(const android_toolchain& tools, const std::string& device,
     return trim(run_adb(tools, device, {"shell", "pidof", application_id}).out_output);
 }
 
-/// The engine's own log lines carry their time and level again: "[2026-10-18 20:44:29.426] [info] text".
-auto strip_engine_prefix(const std::string& message) -> std::string
-{
-    if(message.size() < 2 || message[0] != '[' || message[1] < '0' || message[1] > '9')
-    {
-        return message;
-    }
-    const auto time_end = message.find("] ");
-    return time_end == std::string::npos ? message : message.substr(time_end + 2);
-}
-
 /// Logs a line of the game's process: the game's own as [Device], the device system's as [Device System],
-/// which the Console hides until asked to show them.
+/// which the Console hides until asked to show them. The engine's lines keep their level, which its
+/// Android sink wrote as the line's priority.
 void log_device_line(const logcat_line& line)
 {
     const char* prefix = is_game_log_line(line) ? DEVICE_LOG_PREFIX : DEVICE_SYSTEM_LOG_PREFIX;
-    const auto message = strip_engine_prefix(line.message);
+    const auto message = get_device_log_message(line);
     switch(line.level)
     {
         case 'V':
-        case 'D':
             APPLOG_TRACE("{}{}", prefix, message);
+            break;
+        case 'D':
+            APPLOG_DEBUG("{}{}", prefix, message);
             break;
         case 'W':
             APPLOG_WARNING("{}{}", prefix, message);
@@ -250,22 +242,17 @@ public:
         end();
     }
 
+    /// Installs and starts the game, then follows it.
     void start(const android_package_plan& plan)
     {
-        end();
         clear_conflict();
-        leave_requested_ = false;
-        stop_requested_ = false;
-        running_ = true;
-        worker_ = std::thread(
-            [this, plan]()
-            {
-                // The session completes the deploy's device steps, whose futures need a registered thread.
-                tpp::this_thread::register_this_thread(SESSION_THREAD_NAME, true);
-                run(plan);
-                running_ = false;
-                tpp::this_thread::unregister_this_thread();
-            });
+        launch(plan, &game_session::run);
+    }
+
+    /// Follows the game already running on the plan's device; logs a warning when it does not run.
+    void follow(const android_package_plan& plan)
+    {
+        launch(plan, &game_session::follow_running);
     }
 
     /// Asks the session to end the game on the device; returns at once.
@@ -323,6 +310,39 @@ public:
     }
 
 private:
+    using session_body = void (game_session::*)(const android_package_plan& plan);
+
+    void launch(const android_package_plan& plan, session_body body)
+    {
+        end();
+        leave_requested_ = false;
+        stop_requested_ = false;
+        running_ = true;
+        worker_ = std::thread(
+            [this, plan, body]()
+            {
+                // The session completes the deploy's device steps, whose futures need a registered thread.
+                tpp::this_thread::register_this_thread(SESSION_THREAD_NAME, true);
+                (this->*body)(plan);
+                running_ = false;
+                tpp::this_thread::unregister_this_thread();
+            });
+    }
+
+    void follow_running(const android_package_plan& plan)
+    {
+        const auto process = get_game_process(plan.tools, plan.device, plan.package.application_id);
+        if(process.empty())
+        {
+            APPLOG_WARNING("Deploy: {} does not run on {}. Run Last Build or Deploy and Run starts it.",
+                           plan.package.application_id,
+                           plan.device);
+            return;
+        }
+        APPLOG_INFO("Deploy: following the game on {} (process {}). Its log follows.", plan.device, process);
+        follow_log(plan, process);
+    }
+
     void run(const android_package_plan& plan)
     {
         // Every way out finishes the device steps: a deploy waits on them.
@@ -520,6 +540,20 @@ bool has_searched_tools{false};
 std::atomic<bool> is_listing_devices{false};
 std::atomic<bool> has_listed_devices{false};
 
+/// One entry per phone: each ready device's own serial number tells the connections to one phone apart
+/// from other phones.
+auto merge_connections(const std::string& adb, std::vector<android_device> devices) -> std::vector<android_device>
+{
+    for(auto& device : devices)
+    {
+        if(device.is_ready())
+        {
+            device.hardware_serial = trim(subprocess::call({adb, "-s", device.serial, "shell", "getprop", "ro.serialno"}).out_output);
+        }
+    }
+    return merge_android_devices(std::move(devices));
+}
+
 /// The devices adb lists; wireless debugging devices that paired before are connected first when none is.
 auto list_devices(const android_toolchain& tools) -> std::vector<android_device>
 {
@@ -531,7 +565,7 @@ auto list_devices(const android_toolchain& tools) -> std::vector<android_device>
     auto devices = parse_android_devices(subprocess::call({adb, "devices", "-l"}).out_output);
     if(!devices.empty())
     {
-        return devices;
+        return merge_connections(adb, std::move(devices));
     }
     std::stringstream services(subprocess::call({adb, "mdns", "services"}).out_output);
     std::string line;
@@ -546,7 +580,44 @@ auto list_devices(const android_toolchain& tools) -> std::vector<android_device>
             subprocess::call({adb, "connect", address});
         }
     }
-    return parse_android_devices(subprocess::call({adb, "devices", "-l"}).out_output);
+    return merge_connections(adb, parse_android_devices(subprocess::call({adb, "devices", "-l"}).out_output));
+}
+/// A device command runs in the background: Clear Data or Uninstall.
+std::atomic<bool> is_running_device_command{false};
+
+/// The chosen device and the game on it, without the deploy's steps: what the device actions read.
+auto make_device_plan(rtti::context& ctx, const deploy_settings& params) -> android_package_plan
+{
+    auto plan = make_android_package_plan(ctx, params);
+    plan.install_step.reset();
+    plan.start_step.reset();
+    return plan;
+}
+
+/// Runs adb with `arguments` on the plan's device in the background; logs `done` when adb answers
+/// Success, and adb's answer otherwise. One command at a time.
+void schedule_device_command(rtti::context& ctx, const android_package_plan& plan, std::vector<std::string> arguments, std::string done)
+{
+    if(is_running_device_command.exchange(true))
+    {
+        return;
+    }
+    auto& th = ctx.get_cached<threader>();
+    th.pool->schedule("Android device command",
+                      [plan, arguments = std::move(arguments), done = std::move(done)]()
+                      {
+                          const auto result = run_adb(plan.tools, plan.device, arguments);
+                          const auto answer = trim(result.out_output);
+                          if(result.retcode == 0 && answer.find("Success") != std::string::npos)
+                          {
+                              APPLOG_INFO("Deploy: {}", done);
+                          }
+                          else
+                          {
+                              APPLOG_ERROR("Deploy: adb {} on {} failed: {}", fmt::join(arguments, " "), plan.device, answer);
+                          }
+                          is_running_device_command = false;
+                      });
 }
 } // namespace
 
@@ -692,7 +763,7 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
                                          devices.end(),
                                          [&params](const android_device& listed)
                                          {
-                                             return listed.serial == params.android_device;
+                                             return listed.is_named(params.android_device);
                                          });
         if(params.android_device.empty())
         {
@@ -719,6 +790,17 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
     return problems;
 }
 
+auto get_android_package_path(rtti::context& ctx, const deploy_settings& params) -> fs::path
+{
+    return get_output_location(params) / (get_project_name(ctx) + ".apk");
+}
+
+auto has_android_package(rtti::context& ctx, const deploy_settings& params) -> bool
+{
+    fs::error_code ec;
+    return fs::exists(get_android_package_path(ctx, params), ec);
+}
+
 auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params) -> android_package_plan
 {
     const auto& app = ctx.get_cached<project_manager>().get_settings().app;
@@ -727,7 +809,7 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     plan.device = params.android_device;
     plan.run_arguments = split_run_arguments(params.deploy_run_arguments);
     plan.replace_installed = params.android_replace_installed;
-    plan.output = get_output_location(params) / (get_project_name(ctx) + ".apk");
+    plan.output = get_android_package_path(ctx, params);
     if(params.deploy_and_run)
     {
         plan.install_step = std::make_shared<device_step>();
@@ -825,6 +907,43 @@ auto get_android_install_conflict_count() -> std::uint32_t
 auto replace_android_game() -> deploy_jobs
 {
     return get_session().replace_conflicting();
+}
+
+auto run_last_android_build(rtti::context& ctx, const deploy_settings& params) -> deploy_jobs
+{
+    auto plan = make_android_package_plan(ctx, params);
+    plan.install_step = std::make_shared<device_step>();
+    plan.start_step = std::make_shared<device_step>();
+    APPLOG_INFO("Deploy: running the last build, {}.", plan.output.generic_string());
+    run_android_game(plan);
+    return get_device_jobs(plan);
+}
+
+void follow_android_game(rtti::context& ctx, const deploy_settings& params)
+{
+    get_session().follow(make_device_plan(ctx, params));
+}
+
+void clear_android_game_data(rtti::context& ctx, const deploy_settings& params)
+{
+    const auto plan = make_device_plan(ctx, params);
+    const auto& id = plan.package.application_id;
+    schedule_device_command(ctx,
+                            plan,
+                            {"shell", "pm", "clear", id},
+                            fmt::format("cleared the saved data of {} on {}.", id, plan.device));
+}
+
+void uninstall_android_game(rtti::context& ctx, const deploy_settings& params)
+{
+    const auto plan = make_device_plan(ctx, params);
+    const auto& id = plan.package.application_id;
+    schedule_device_command(ctx, plan, {"uninstall", id}, fmt::format("uninstalled {} from {}, with its saved data.", id, plan.device));
+}
+
+auto is_android_device_busy() -> bool
+{
+    return is_running_device_command;
 }
 
 auto get_android_devices() -> std::vector<android_device>

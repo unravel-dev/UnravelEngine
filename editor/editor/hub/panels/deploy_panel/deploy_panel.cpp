@@ -69,6 +69,31 @@ auto draw_close_button() -> bool
     return container_widgets::draw_icon_button({"##deploy_close", ICON_MDI_CLOSE, "Close"}, ImRect(min, min + ImVec2(side, side)));
 }
 
+/// The popup `id` asking for a confirmation: the question, what it costs, and the confirm and Cancel
+/// buttons. True once confirmed.
+auto draw_confirmation(const char* id, const std::string& question, const char* consequence, const char* confirm_label) -> bool
+{
+    if(!ImGui::BeginPopup(id))
+    {
+        return false;
+    }
+    ImGui::PushFont(ImGui::Font::Bold);
+    ImGui::TextUnformatted(question.c_str());
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
+    ImGui::TextUnformatted(consequence);
+    ImGui::PopStyleColor();
+    widgets::draw_gap(widgets::LINE_GAP);
+    const bool is_confirmed = ImGui::Button(confirm_label);
+    ImGui::SameLine();
+    if(is_confirmed || ImGui::Button("Cancel"))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+    return is_confirmed;
+}
+
 /// The delete button of a kept release, which asks first. True once the deletion is confirmed.
 auto draw_release_remove_button(const std::string& name, bool is_patched, bool is_enabled) -> bool
 {
@@ -82,30 +107,34 @@ auto draw_release_remove_button(const std::string& name, bool is_patched, bool i
         ImGui::OpenPopup("##remove_release_confirm");
     }
     ImGui::EndDisabled();
-    bool is_confirmed = false;
-    if(ImGui::BeginPopup("##remove_release_confirm"))
+    return draw_confirmation("##remove_release_confirm",
+                             fmt::format("Delete release {}?", name),
+                             is_patched ? "Its packs are deleted, and deploys make full builds again."
+                                        : "Its packs are deleted. Patches can no longer be made for it.",
+                             ICON_MDI_DELETE_OUTLINE " Delete");
+}
+
+/// A button of the device row, which starts a new line when the row has no room left for it. The tooltip
+/// says what it does, or why it cannot run now.
+auto draw_device_action(const char* label, const std::string& tooltip, bool is_enabled, bool is_first) -> bool
+{
+    const float width = ImGui::CalcTextSize(label, nullptr, true).x + 2.0f * ImGui::GetStyle().FramePadding.x;
+    if(!is_first)
     {
-        ImGui::PushFont(ImGui::Font::Bold);
-        ImGui::TextUnformatted(fmt::format("Delete release {}?", name).c_str());
-        ImGui::PopFont();
-        ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
-        ImGui::TextUnformatted(is_patched ? "Its packs are deleted, and deploys make full builds again."
-                                          : "Its packs are deleted. Patches can no longer be made for it.");
-        ImGui::PopStyleColor();
-        widgets::draw_gap(widgets::LINE_GAP);
-        if(ImGui::Button(ICON_MDI_DELETE_OUTLINE " Delete"))
-        {
-            is_confirmed = true;
-            ImGui::CloseCurrentPopup();
-        }
         ImGui::SameLine();
-        if(ImGui::Button("Cancel"))
+        if(ImGui::GetContentRegionAvail().x < width)
         {
-            ImGui::CloseCurrentPopup();
+            ImGui::NewLine();
         }
-        ImGui::EndPopup();
     }
-    return is_confirmed;
+    ImGui::BeginDisabled(!is_enabled);
+    const bool is_pressed = ImGui::Button(label);
+    ImGui::EndDisabled();
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("%s", tooltip.c_str());
+    }
+    return is_pressed;
 }
 
 /// A deploy folder as the window names it: relative to the project when it lies in it, which reads
@@ -311,6 +340,17 @@ auto deploy_panel::start_deploy(rtti::context& ctx, const deploy_settings& param
     return true;
 }
 
+auto deploy_panel::run_last_android_build(rtti::context& ctx, const deploy_settings& params) -> bool
+{
+    if(is_deploying())
+    {
+        return false;
+    }
+    deploy_jobs_ = deployment::run_last_android_build(ctx, params);
+    deployed_location_ = get_output_location(params);
+    return true;
+}
+
 auto deploy_panel::get_jobs() const -> const deployment::deploy_jobs&
 {
     return deploy_jobs_;
@@ -417,7 +457,11 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
     widgets::draw_gap(widgets::SECTION_GAP);
     widgets::draw_section_title("Output");
     inspect_deploy_properties(ctx, {"deploy_location"_hs});
-    if(!params.deploy_location.empty())
+    if(params.deploy_location.empty())
+    {
+        draw_missing_location_notice(ctx);
+    }
+    else
     {
         widgets::draw_muted_text(fmt::format("{} builds go to {}.",
                                              params.deploy_target == deploy_platform::android ? "Android" : "Desktop",
@@ -432,6 +476,35 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
     widgets::draw_gap(widgets::SECTION_GAP);
     widgets::draw_section_title("Packaging");
     inspect_deploy_properties(ctx, {"deploy_packed_assets"_hs, "deploy_cooked_assets"_hs, "deploy_debug_symbols"_hs});
+}
+
+/// Where the deploy folder line goes once one is set: that none is, and a button that sets the project's own.
+void deploy_panel::draw_missing_location_notice(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    const std::string label = fmt::format(ICON_MDI_FOLDER_PLUS_OUTLINE " Use {}", DEFAULT_DEPLOY_LOCATION);
+    // The icon and the text sit on the button's line, centered on its frame.
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float icon_width = ImGui::GetFontSize();
+    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
+                              ImVec2(min.x + icon_width * 0.5f, min.y + ImGui::GetFrameHeight() * 0.5f),
+                              ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                              widgets::WARNING_COLOR);
+    ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width + widgets::to_pixels(widgets::ICON_GAP), min.y));
+    ImGui::AlignTextToFramePadding();
+    ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
+    ImGui::TextUnformatted("No deploy folder is set.");
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    if(ImGui::Button(label.c_str()))
+    {
+        pm.get_deploy_settings().deploy_location = DEFAULT_DEPLOY_LOCATION;
+        pm.save_deploy_settings();
+        problems_.invalidate();
+    }
+    ImGui::SetItemTooltipEx("Deploy into %s in the project folder, which the deploy creates. Each platform builds "
+                            "into a folder of its own in it.",
+                            DEFAULT_DEPLOY_LOCATION);
 }
 
 /// A tab per platform; the selected one is what the deploy builds for, and shows that platform's settings.
@@ -506,6 +579,7 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
     {
         problems_.invalidate();
     }
+    draw_android_device_actions(ctx);
     inspect_deploy_properties(ctx, {"android_application_id"_hs});
     if(params.android_application_id.empty())
     {
@@ -551,12 +625,18 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
                                      devices.end(),
                                      [&params](const deployment::android_device& device)
                                      {
-                                         return device.serial == params.android_device;
+                                         return device.is_named(params.android_device);
                                      });
     std::string preview = "Choose a device";
     if(chosen != devices.end())
     {
         preview = chosen->get_label();
+        // A second connection to the phone was folded into this entry: the entry's own serial is used.
+        if(chosen->serial != params.android_device)
+        {
+            params.android_device = chosen->serial;
+            is_changed = true;
+        }
     }
     else if(!params.android_device.empty())
     {
@@ -599,6 +679,72 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
     ImGui::EndDisabled();
     ImGui::SetItemTooltipEx("%s", "List the connected devices again.");
     return is_changed;
+}
+
+void deploy_panel::draw_android_device_actions(rtti::context& ctx)
+{
+    auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto devices = deployment::get_android_devices();
+    const bool is_device_ready = std::any_of(devices.begin(),
+                                             devices.end(),
+                                             [&params](const deployment::android_device& device)
+                                             {
+                                                 return device.is_named(params.android_device) && device.is_ready();
+                                             });
+    std::string blocker;
+    if(!is_device_ready)
+    {
+        blocker = "Choose a connected device first.";
+    }
+    else if(is_deploying() || deployment::is_android_device_busy())
+    {
+        blocker = "Wait until the deploy or the device command ends.";
+    }
+    const bool can_act = blocker.empty();
+    const bool has_package = deployment::has_android_package(ctx, params);
+    const bool is_following = deployment::is_android_game_running();
+    const auto describe = [&blocker](const char* what)
+    {
+        return blocker.empty() ? std::string(what) : blocker;
+    };
+    property_layout layout("On Device", "The game on the chosen device, without a new deploy.");
+    const std::string run_tooltip =
+        has_package ? describe("Install the package in the deploy folder on the device and start it, without a new "
+                               "build. Its log follows in the Console.")
+                    : std::string("No package yet. Deploy for Android first.");
+    if(draw_device_action(ICON_MDI_PLAY_CIRCLE_OUTLINE " Run Last Build", run_tooltip, can_act && has_package, true))
+    {
+        run_last_android_build(ctx, params);
+    }
+    const std::string follow_tooltip = is_following ? std::string("The Console follows the game already. Stop Game ends it.")
+                                                    : describe("Follow the log of the game already running on the "
+                                                               "device in the Console.");
+    if(draw_device_action(ICON_MDI_TEXT_BOX_SEARCH_OUTLINE " Follow Log", follow_tooltip, can_act && !is_following, false))
+    {
+        deployment::follow_android_game(ctx, params);
+    }
+    if(draw_device_action(ICON_MDI_ERASER " Clear Data", describe("Remove the game's saved data on the device. The game stops."), can_act, false))
+    {
+        ImGui::OpenPopup("##clear_game_data_confirm");
+    }
+    if(draw_confirmation("##clear_game_data_confirm",
+                         "Clear the game's saved data on the device?",
+                         "The game stops, and starts without its saved data the next time.",
+                         ICON_MDI_ERASER " Clear Data"))
+    {
+        deployment::clear_android_game_data(ctx, params);
+    }
+    if(draw_device_action(ICON_MDI_DELETE_OUTLINE " Uninstall", describe("Uninstall the game from the device, with its saved data."), can_act, false))
+    {
+        ImGui::OpenPopup("##uninstall_game_confirm");
+    }
+    if(draw_confirmation("##uninstall_game_confirm",
+                         "Uninstall the game from the device?",
+                         "Its saved data on the device is removed with it.",
+                         ICON_MDI_DELETE_OUTLINE " Uninstall"))
+    {
+        deployment::uninstall_android_game(ctx, params);
+    }
 }
 
 /// The scenes the game is built from and the assets that ship with it.
@@ -802,26 +948,12 @@ void deploy_panel::draw_install_conflict()
         ImGui::OpenPopup("##replace_installed_confirm");
     }
     ImGui::SetItemTooltipEx("%s", "Uninstall the game from the device, then install and start this build.");
-    if(ImGui::BeginPopup("##replace_installed_confirm"))
+    if(draw_confirmation("##replace_installed_confirm",
+                         "Uninstall the game from the device?",
+                         "Its saved data on the device is removed with it.",
+                         ICON_MDI_DELETE_OUTLINE " Uninstall and Install"))
     {
-        ImGui::PushFont(ImGui::Font::Bold);
-        ImGui::TextUnformatted("Uninstall the game from the device?");
-        ImGui::PopFont();
-        ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
-        ImGui::TextUnformatted("Its saved data on the device is removed with it.");
-        ImGui::PopStyleColor();
-        widgets::draw_gap(widgets::LINE_GAP);
-        if(ImGui::Button(ICON_MDI_DELETE_OUTLINE " Uninstall and Install"))
-        {
-            deploy_jobs_ = deployment::replace_android_game();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if(ImGui::Button("Cancel"))
-        {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+        deploy_jobs_ = deployment::replace_android_game();
     }
     widgets::draw_gap(widgets::LINE_GAP);
 }

@@ -17,6 +17,7 @@
 #include <imgui_widgets/utils.h>
 
 #include <filesystem/filesystem.h>
+#include <algorithm>
 #include <map>
 
 namespace unravel
@@ -213,9 +214,9 @@ void console_log_panel::sink_it_(const details::log_msg& msg)
 
         entry.id = current_id_++;
 
-        if(new_entries_begin_idx_ == -1)
+        if(first_unnotified_id_ == NO_ENTRY_ID)
         {
-            new_entries_begin_idx_ = int64_t(entries_.size());
+            first_unnotified_id_ = int64_t(entry.id);
         }
         entries_.emplace_back(std::move(entry));
     }
@@ -232,9 +233,8 @@ auto console_log_panel::snapshot_logs(level::level_enum min_level, size_t max_co
     std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
     std::vector<log_snapshot_entry> matched;
     matched.reserve(std::min(max_count, entries_.size()));
-    for(size_t i = 0; i < entries_.size(); ++i)
+    for(const auto& entry : entries_)
     {
-        const auto& entry = entries_[i];
         if(entry.id <= after_id)
         {
             continue;
@@ -300,9 +300,8 @@ auto console_log_panel::collect_visible_entries() -> display_entries_t
     level_counts_.fill(0);
     device_system_count_ = 0;
     std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
-    for(size_t i = 0; i < entries_.size(); ++i)
+    for(const log_entry& entry : entries_)
     {
-        const log_entry& entry = entries_[i];
         device_system_count_ += entry.is_device_system ? 1 : 0;
         level_counts_[entry.level] += is_source_shown(entry) ? 1 : 0;
         if(is_entry_visible(entry))
@@ -328,21 +327,23 @@ auto console_log_panel::find_last_visible_entry() const -> hpp::optional<log_ent
 
 void console_log_panel::notify_new_errors()
 {
-    if(new_entries_begin_idx_ == -1)
+    if(first_unnotified_id_ == NO_ENTRY_ID)
     {
         return;
     }
     uint64_t errors_count = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(entries_mutex_);
-        for(size_t i = new_entries_begin_idx_; i < entries_.size(); ++i)
-        {
-            if(entries_[i].level == level::err && is_source_shown(entries_[i]))
-            {
-                errors_count++;
-            }
-        }
-        new_entries_begin_idx_ = -1;
+        // By id, not by position: once the ring is full, every new entry pushes the oldest out.
+        const auto first_id = uint64_t(first_unnotified_id_.load());
+        errors_count = uint64_t(std::count_if(entries_.begin(),
+                                              entries_.end(),
+                                              [this, first_id](const log_entry& entry)
+                                              {
+                                                  return entry.id >= first_id && entry.level == level::err &&
+                                                         is_source_shown(entry);
+                                              }));
+        first_unnotified_id_ = NO_ENTRY_ID;
     }
     if(errors_count > 0)
     {

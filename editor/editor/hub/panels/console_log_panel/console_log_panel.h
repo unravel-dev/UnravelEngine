@@ -124,7 +124,10 @@ private:
     ///
     std::atomic<bool> has_new_entries_ = {false};
 
-    std::atomic<int64_t> new_entries_begin_idx_{-1};
+    /// No entry waits for the error toast.
+    static constexpr int64_t NO_ENTRY_ID = -1;
+    /// The id of the first entry since the last error toast; NO_ENTRY_ID when none arrived.
+    std::atomic<int64_t> first_unnotified_id_{NO_ENTRY_ID};
 
     ImGuiTextFilter filter_;
 

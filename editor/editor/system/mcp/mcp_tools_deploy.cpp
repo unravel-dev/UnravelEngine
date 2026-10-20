@@ -174,11 +174,12 @@ auto android_state_to_json(rtti::context& ctx, const deploy_settings& params) ->
     std::string devices = "[";
     for(const auto& device : deployment::get_android_devices())
     {
-        devices += fmt::format(R"({}{{"serial":{},"model":{},"state":{}}})",
+        devices += fmt::format(R"({}{{"serial":{},"model":{},"state":{},"aliases":{}}})",
                                devices.size() > 1 ? "," : "",
                                make_json_string(device.serial),
                                make_json_string(device.model),
-                               make_json_string(device.state));
+                               make_json_string(device.state),
+                               strings_to_json_array(device.aliases));
     }
     devices += "]";
     const auto conflict = deployment::get_android_install_conflict();
@@ -852,6 +853,125 @@ void register_deploy_tools(mcp_tool_registry& registry)
                                          make_json_string(snapshot.location),
                                          steps_to_json(snapshot.steps)),
                      .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false,
+         .effect = tool_effect::destructive});
+
+    registry.add(
+        {.name = "android_device_action",
+         .description =
+             "Act on the game on an Android device without a new deploy, as the Deploy window's On Device row "
+             "does. run_last_build installs <location>/android/<project>.apk (from an earlier project_deploy with "
+             "platform android) and starts it; its steps show in deploy_get_state and the game's log goes to the "
+             "editor log as [Device] lines. follow_log follows the log of the game already running. clear_data "
+             "removes the game's saved data (pm clear), which stops it. uninstall removes the game with its saved "
+             "data. clear_data and uninstall finish in the background; logs_get_recent shows the outcome. "
+             "android_device is an adb serial from deploy_get_state's android.devices; default the deploy "
+             "settings' device, or the only ready one.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"action":{"type":"string","enum":["run_last_build","follow_log","clear_data","uninstall"]},"android_device":{"type":"string","description":"adb serial; default the deploy settings' device, or the only ready one"}},"required":["action"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             std::string action;
+             read_string(args, "action", action);
+             std::string android_device;
+             const bool has_device = read_string(args, "android_device", android_device);
+             // The device check reads the last listing; this call may be the first of the session.
+             if(has_device || !deployment::has_listed_android_devices())
+             {
+                 deployment::update_android_devices();
+             }
+             auto done = mcp.invoke_on_main(
+                 [&ctx, action, android_device, has_device]() -> tool_result
+                 {
+                     std::string error;
+                     auto* pm = get_open_project(ctx, error);
+                     auto* panel = get_deploy_panel(ctx);
+                     if(pm == nullptr || panel == nullptr)
+                     {
+                         return {.text = pm == nullptr ? error : "Deploy window unavailable", .is_error = true};
+                     }
+                     auto params = pm->get_deploy_settings();
+                     params.deploy_target = deploy_platform::android;
+                     if(has_device)
+                     {
+                         params.android_device = android_device;
+                     }
+                     const auto devices = deployment::get_android_devices();
+                     // As in the Deploy window, the only ready device is the one to use.
+                     const auto ready_count = std::count_if(devices.begin(),
+                                                            devices.end(),
+                                                            [](const deployment::android_device& device)
+                                                            {
+                                                                return device.is_ready();
+                                                            });
+                     if(params.android_device.empty() && ready_count == 1)
+                     {
+                         params.android_device = std::find_if(devices.begin(),
+                                                              devices.end(),
+                                                              [](const deployment::android_device& device)
+                                                              {
+                                                                  return device.is_ready();
+                                                              })
+                                                     ->serial;
+                     }
+                     const bool is_ready = std::any_of(devices.begin(),
+                                                       devices.end(),
+                                                       [&params](const deployment::android_device& device)
+                                                       {
+                                                           return device.is_named(params.android_device) && device.is_ready();
+                                                       });
+                     if(!is_ready)
+                     {
+                         return {.text = fmt::format("'{}' is no connected, ready device; deploy_get_state lists them",
+                                                     params.android_device),
+                                 .is_error = true};
+                     }
+                     if(panel->is_deploying() || deployment::is_android_device_busy())
+                     {
+                         return {.text = "A deploy or a device command is running; poll deploy_get_state", .is_error = true};
+                     }
+                     if(action == "run_last_build")
+                     {
+                         if(!deployment::has_android_package(ctx, params))
+                         {
+                             return {.text = fmt::format("No package at {}; run project_deploy with platform android first",
+                                                         fs::to_utf8_string(deployment::get_android_package_path(ctx, params))),
+                                     .is_error = true};
+                         }
+                         panel->run_last_android_build(ctx, params);
+                         return {.text = fmt::format(R"({{"started":true,"steps":{}}})", panel->get_jobs().size()), .is_error = false};
+                     }
+                     if(action == "follow_log")
+                     {
+                         if(deployment::is_android_game_running())
+                         {
+                             return {.text = "The editor follows a game already; it ends with the game or Stop Game", .is_error = true};
+                         }
+                         deployment::follow_android_game(ctx, params);
+                         return {.text = R"({"started":true})", .is_error = false};
+                     }
+                     if(action == "clear_data")
+                     {
+                         deployment::clear_android_game_data(ctx, params);
+                         return {.text = R"({"started":true})", .is_error = false};
+                     }
+                     if(action == "uninstall")
+                     {
+                         deployment::uninstall_android_game(ctx, params);
+                         return {.text = R"({"started":true})", .is_error = false};
+                     }
+                     return {.text = "Unknown action: " + action, .is_error = true};
+                 },
+                 std::chrono::milliseconds(30000));
+             if(!done)
+             {
+                 return {.text = "Timed out on the main thread", .is_error = true};
+             }
+             return *done;
          },
          .mutates_scene = false,
          .requires_main_thread = false,

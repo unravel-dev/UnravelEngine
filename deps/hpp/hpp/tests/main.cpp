@@ -5,10 +5,13 @@
 
 /// Defined in type_name_tests.cpp, where the type name checks live.
 void run_type_name_tests();
+/// Defined in ring_buffer_tests.cpp; returns how many checks failed.
+auto run_ring_buffer_tests() -> int;
 
 int main()
 {
 	run_type_name_tests();
+	const int ring_buffer_failures = run_ring_buffer_tests();
 
 	constexpr int i = 0;
 	if_constexpr(i == 0)
@@ -39,5 +42,5 @@ int main()
 	auto res1 = hpp::apply(invokeable, tup);
 	std::cout << "apply returned " << res1 << std::endl;
 
-	return 0;
+	return ring_buffer_failures == 0 ? 0 : 1;
 }

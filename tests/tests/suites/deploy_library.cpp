@@ -20,8 +20,8 @@
  *     variants, stale binaries, older runtime versions;
  *   - platform folders under the deploy folder; deploy locations relative to the project, and the
  *     project folders the editor manages;
- *   - Android: default and invalid application ids, adb device lists, logcat lines and which are the
- *     game's or the device system's, the player template's
+ *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
+ *     lines, which are the game's or the device system's and the engine lines' text, the player template's
  *     stamp checks, Gradle's command line, the start command with the game's options;
  *   - run arguments: split on whitespace, quoted for a device shell;
  *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
@@ -562,6 +562,14 @@ void test_android_devices()
           "a device that does not allow this computer yet");
     check(devices.size() == 3 && devices[0].get_label() == "SM S948B (R3GL508T4SY)" && devices[2].get_label() == "emulator-5554",
           "labels name the model when there is one");
+    const std::string spaced = "adb-R5CR11EH5XE-jIeKII (2)._adb-tls-connect._tcp device product:p3sxeea model:SM_G998B "
+                               "device:p3s transport_id:4\n"
+                               "usb-0001 no permissions (missing udev rules?); see [http://developer.android.com]\n";
+    const auto more = deployment::parse_android_devices(spaced);
+    check(more.size() == 2 && more[0].serial == "adb-R5CR11EH5XE-jIeKII (2)._adb-tls-connect._tcp" && more[0].is_ready() &&
+              more[0].model == "SM G998B",
+          "a serial with a space ends at the state word");
+    check(more.size() == 2 && more[1].serial == "usb-0001" && more[1].state == "no permissions", "the two-word state is read");
 }
 
 void test_logcat_lines()
@@ -600,6 +608,54 @@ void test_game_log_lines()
               !is_game_line("10-20 22:06:26.203 23862 23880 E AHardwareBuffer: GraphicBuffer(w=4, h=4, lc=1) failed") &&
               !is_game_line("10-20 22:06:26.205 23862 23862 I VRI[UnravelActivity]@f4e723e: onWindowFocusChanged(): true"),
           "the system's own messages are the device system's");
+}
+
+void test_device_log_messages()
+{
+    std::printf("test_device_log_messages\n");
+    const auto get_message = [](const std::string& text)
+    {
+        deployment::logcat_line line;
+        return deployment::parse_logcat_line(text, line) ? deployment::get_device_log_message(line) : std::string("?");
+    };
+    check(get_message("10-20 23:02:48.100 23862 23899 I spdlog  : [2026-10-20 23:02:48.099] [info] [Log] Loaded font face.") ==
+              "Loaded font face.",
+          "an engine line loses the time, level and logger the Console shows anyway");
+    check(get_message("10-20 23:02:48.100 23862 23899 I spdlog  : [2026-10-20 23:02:48.099] [info] [Log] [UI] Ready.") ==
+              "[UI] Ready.",
+          "brackets in the engine's own text stay");
+    check(get_message("10-20 23:02:48.100 23862 23899 I spdlog  : plain text") == "plain text",
+          "an engine line without the prefix stays as it is");
+    check(get_message("10-20 22:16:20.766 23862 23917 W openal  : [ALSOFT] (WW) D-Bus not supported") ==
+              "[ALSOFT] (WW) D-Bus not supported",
+          "other libraries' lines stay as they are");
+}
+
+auto make_device(const std::string& serial, const std::string& hardware_serial) -> deployment::android_device
+{
+    deployment::android_device device;
+    device.serial = serial;
+    device.state = hardware_serial.empty() ? "unauthorized" : "device";
+    device.hardware_serial = hardware_serial;
+    return device;
+}
+
+void test_merged_devices()
+{
+    std::printf("test_merged_devices\n");
+    const std::string repeated = "adb-R5CR11EH5XE-jIeKII (2)._adb-tls-connect._tcp";
+    const std::string wireless = "adb-R5CR11EH5XE-jIeKII._adb-tls-connect._tcp";
+    auto merged = deployment::merge_android_devices({make_device(repeated, "R5CR11EH5XE"), make_device(wireless, "R5CR11EH5XE")});
+    check(merged.size() == 1 && merged[0].serial == wireless && merged[0].is_named(repeated) && merged[0].is_wireless(),
+          "a phone announced twice over wireless debugging is one entry, under its plain name");
+    merged = deployment::merge_android_devices(
+        {make_device(wireless, "R5CR11EH5XE"), make_device("R5CR11EH5XE", "R5CR11EH5XE"), make_device("192.168.1.7:5555", "R5CR11EH5XE")});
+    check(merged.size() == 1 && merged[0].serial == "R5CR11EH5XE" && !merged[0].is_wireless() && merged[0].aliases.size() == 2,
+          "USB wins over wireless, and the other connections become aliases");
+    merged = deployment::merge_android_devices(
+        {make_device("R3GL508T4SY", "R3GL508T4SY"), make_device(wireless, "R5CR11EH5XE"), make_device("emulator-5554", "")});
+    check(merged.size() == 3 && !merged[1].is_named("R3GL508T4SY") && merged[2].aliases.empty(),
+          "other phones and devices without a hardware serial stay apart");
 }
 
 void write_android_template(const fs::path& root, const std::string& version, const std::string& configuration)
@@ -1156,6 +1212,8 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_android_devices();
         test_logcat_lines();
         test_game_log_lines();
+        test_device_log_messages();
+        test_merged_devices();
         test_android_template(temp / "android");
         test_gradle_arguments();
         test_android_icon(temp / "icon");

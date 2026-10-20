@@ -89,11 +89,21 @@ struct android_device
     std::string state;
     /// The model adb reports, '_' read as ' '; empty when it reports none.
     std::string model;
+    /// The phone's own serial number (ro.serialno), the same over every connection; empty when unknown.
+    std::string hardware_serial;
+    /// The serials of the other connections to the same phone, which merge_android_devices folded in.
+    std::vector<std::string> aliases;
 
     auto is_ready() const -> bool
     {
         return state == "device";
     }
+
+    /// Whether adb reaches it over wireless debugging rather than USB.
+    auto is_wireless() const -> bool;
+
+    /// Whether `name` is its serial or the serial of another connection to it.
+    auto is_named(const std::string& name) const -> bool;
 
     /// The model and serial, for a device list.
     auto get_label() const -> std::string;
@@ -101,6 +111,16 @@ struct android_device
 
 /// The devices in the output of `adb devices -l`.
 auto parse_android_devices(const std::string& adb_output) -> std::vector<android_device>;
+
+/**
+ * @brief One entry per phone: the ready devices with the same hardware serial become one.
+ *
+ * adb can reach a phone twice, over USB and wireless debugging, or twice over wireless when its service
+ * was announced again ("adb-<serial>-<id> (2)._adb-tls-connect._tcp"). The kept entry is the USB one, then
+ * the wireless one with the plain name; the others become its aliases. Devices without a hardware serial
+ * stay as they are.
+ */
+auto merge_android_devices(std::vector<android_device> devices) -> std::vector<android_device>;
 
 /// One line of `adb logcat -v threadtime`.
 struct logcat_line
@@ -130,6 +150,11 @@ constexpr const char* DEVICE_SYSTEM_LOG_PREFIX = "[Device System] ";
  * graphics allocator's messages, is the device system's.
  */
 auto is_game_log_line(const logcat_line& line) -> bool;
+
+/// The line's text as the Console shows it. The engine's own lines carry their time, level and logger
+/// again ("[2026-10-18 20:44:29.426] [info] [Log] text"), which the Console shows anyway, so only the text
+/// is kept; other lines come back as they are.
+auto get_device_log_message(const logcat_line& line) -> std::string;
 
 /// Where this machine's Android tools are looked for.
 struct android_toolchain_search

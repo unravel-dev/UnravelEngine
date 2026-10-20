@@ -22,9 +22,33 @@ constexpr const char* GRADLE_WRAPPER_MAIN = "org.gradle.wrapper.GradleWrapperMai
 constexpr const char* PLAYER_ACTIVITY = "com.unravel.player.UnravelActivity";
 /// The start intent's extra that UnravelActivity reads the game's command line options from.
 constexpr const char* ARGUMENTS_EXTRA = "arguments";
-/// The tags of the game's own libraries: the engine (spdlog's Android sink), SDL's Java side and its HID
-/// support, OpenAL Soft and the Vulkan loader.
-constexpr std::array<const char*, 4> GAME_LOG_TAGS = {"spdlog", "hidapi", "openal", "vulkan"};
+/// The engine's tag: spdlog's Android sink.
+constexpr const char* ENGINE_LOG_TAG = "spdlog";
+/// The tags of the game's own libraries: the engine, SDL's Java side and its HID support, OpenAL Soft and
+/// the Vulkan loader.
+constexpr std::array<const char*, 4> GAME_LOG_TAGS = {ENGINE_LOG_TAG, "hidapi", "openal", "vulkan"};
+/// The bracketed groups before the text of an engine line: its time, level and logger.
+constexpr int ENGINE_LOG_PREFIX_GROUPS = 3;
+/// What a serial of a phone on wireless debugging holds: an mDNS service name, or an address with a port.
+constexpr const char* WIRELESS_SERVICE_MARKER = "._adb-tls-connect._tcp";
+constexpr char ADDRESS_PORT_SEPARATOR = ':';
+/// adb's suffix for a service name announced again: "adb-<serial>-<id> (2)._adb-tls-connect._tcp".
+constexpr const char* REPEATED_SERVICE_MARKER = " (";
+/// The states `adb devices` prints after a serial; "no permissions" is two words.
+constexpr std::array<const char*, 12> DEVICE_STATES = {"device",
+                                                       "unauthorized",
+                                                       "offline",
+                                                       "authorizing",
+                                                       "connecting",
+                                                       "bootloader",
+                                                       "recovery",
+                                                       "rescue",
+                                                       "sideload",
+                                                       "host",
+                                                       "unknown",
+                                                       "no"};
+constexpr const char* NO_PERMISSIONS_STATE_WORD = "no";
+constexpr const char* NO_PERMISSIONS_STATE = "no permissions";
 /// SDL's tags all start with it: SDL, SDL/<category>, SDLAudio and the like.
 constexpr const char* SDL_TAG_PREFIX = "SDL";
 /// The tag of Java's uncaught exceptions.
@@ -118,6 +142,26 @@ void add_matching_children(const fs::path& parent, const std::string& prefix, co
     }
     std::sort(found.rbegin(), found.rend());
     out.insert(out.end(), found.begin(), found.end());
+}
+
+auto is_device_state(const std::string& word) -> bool
+{
+    return std::any_of(DEVICE_STATES.begin(),
+                       DEVICE_STATES.end(),
+                       [&word](const char* state)
+                       {
+                           return word == state;
+                       });
+}
+
+/// Which connection to a phone the device list keeps: USB first, then wireless under its plain name.
+auto get_connection_rank(const android_device& device) -> int
+{
+    if(!device.is_wireless())
+    {
+        return 0;
+    }
+    return device.serial.find(REPEATED_SERVICE_MARKER) == std::string::npos ? 1 : 2;
 }
 
 auto get_executable_name(const std::string& name) -> std::string
@@ -245,9 +289,50 @@ auto get_screen_orientation(android_orientation orientation) -> std::string
     }
 }
 
+auto android_device::is_wireless() const -> bool
+{
+    return serial.find(WIRELESS_SERVICE_MARKER) != std::string::npos || serial.find(ADDRESS_PORT_SEPARATOR) != std::string::npos;
+}
+
+auto android_device::is_named(const std::string& name) const -> bool
+{
+    return serial == name || std::find(aliases.begin(), aliases.end(), name) != aliases.end();
+}
+
 auto android_device::get_label() const -> std::string
 {
     return model.empty() ? serial : model + " (" + serial + ")";
+}
+
+auto merge_android_devices(std::vector<android_device> devices) -> std::vector<android_device>
+{
+    std::vector<android_device> merged;
+    for(auto& device : devices)
+    {
+        const auto same = device.hardware_serial.empty()
+                              ? merged.end()
+                              : std::find_if(merged.begin(),
+                                             merged.end(),
+                                             [&device](const android_device& kept)
+                                             {
+                                                 return kept.hardware_serial == device.hardware_serial;
+                                             });
+        if(same == merged.end())
+        {
+            merged.push_back(std::move(device));
+        }
+        else if(get_connection_rank(device) < get_connection_rank(*same))
+        {
+            device.aliases = std::move(same->aliases);
+            device.aliases.push_back(same->serial);
+            *same = std::move(device);
+        }
+        else
+        {
+            same->aliases.push_back(device.serial);
+        }
+    }
+    return merged;
 }
 
 auto parse_android_devices(const std::string& adb_output) -> std::vector<android_device>
@@ -258,22 +343,29 @@ auto parse_android_devices(const std::string& adb_output) -> std::vector<android
     while(std::getline(lines, line))
     {
         std::stringstream words(line);
+        std::vector<std::string> tokens;
+        for(std::string word; words >> word;)
+        {
+            tokens.push_back(word);
+        }
+        // The serial can hold spaces, so the state word ends it. The header and the server's start
+        // messages ("* daemon started successfully") have none.
+        const auto state = tokens.empty() ? tokens.end() : std::find_if(tokens.begin() + 1, tokens.end(), is_device_state);
+        if(state == tokens.end())
+        {
+            continue;
+        }
         android_device device;
-        if(!(words >> device.serial >> device.state))
+        for(auto it = tokens.begin(); it != state; ++it)
         {
-            continue;
+            device.serial += device.serial.empty() ? *it : " " + *it;
         }
-        // The header and the server's start messages ("* daemon started successfully").
-        if(device.serial == "List" || device.serial == "*")
+        device.state = *state == NO_PERMISSIONS_STATE_WORD ? NO_PERMISSIONS_STATE : *state;
+        for(auto it = state + 1; it != tokens.end(); ++it)
         {
-            continue;
-        }
-        std::string word;
-        while(words >> word)
-        {
-            if(word.rfind("model:", 0) == 0)
+            if(it->rfind("model:", 0) == 0)
             {
-                device.model = word.substr(6);
+                device.model = it->substr(6);
                 std::replace(device.model.begin(), device.model.end(), '_', ' ');
             }
         }
@@ -322,6 +414,27 @@ auto is_game_log_line(const logcat_line& line) -> bool
                        {
                            return line.tag == tag;
                        });
+}
+
+auto get_device_log_message(const logcat_line& line) -> std::string
+{
+    const auto& message = line.message;
+    const bool has_time = message.size() > 1 && message[0] == '[' && std::isdigit(static_cast<unsigned char>(message[1])) != 0;
+    if(line.tag != ENGINE_LOG_TAG || !has_time)
+    {
+        return message;
+    }
+    std::size_t begin = 0;
+    for(int group = 0; group < ENGINE_LOG_PREFIX_GROUPS && begin < message.size() && message[begin] == '['; ++group)
+    {
+        const auto end = message.find("] ", begin);
+        if(end == std::string::npos)
+        {
+            break;
+        }
+        begin = end + 2;
+    }
+    return message.substr(begin);
 }
 
 auto get_android_toolchain_search() -> android_toolchain_search
