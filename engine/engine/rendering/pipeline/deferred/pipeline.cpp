@@ -78,6 +78,21 @@ auto get_pcf_tent_slot(const light& l) -> hpp::optional<size_t>
     return hpp::nullopt;
 }
 
+/// Whether a light of @p intensity and @p linear_color adds anything to a pixel. One that does not still costs a
+/// full G-buffer read per covered pixel, and its shadow maps a pass per caster.
+auto is_adding_light(float intensity, const math::vec3& linear_color) -> bool
+{
+    return intensity > 0.0f && std::max({linear_color.x, linear_color.y, linear_color.z}) > 0.0f;
+}
+
+/// Whether the light pass and the shadow maps need @p l: it adds light, or the shadow coverage view shows its
+/// shadow maps, which that view draws whatever the intensity.
+auto is_light_needed(const light& l, const math::vec3& linear_color) -> bool
+{
+    const bool shows_coverage = l.casts_shadows && l.shadow_params.show_coverage;
+    return shows_coverage || is_adding_light(l.intensity, linear_color);
+}
+
 /// The cloud_shadow.sh uniforms of @p shadow (u_cloudShadow, u_cloudShadow2) and whether the lights apply it.
 struct cloud_shadow_uniforms
 {
@@ -760,8 +775,9 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer
             generator.update(camera, light, world_transform, is_active);
 
             // Camera independent: no view of this frame wants shadow maps from this light. A disabled
-            // light keeps its maps allocated so switching it back on is cheap.
-            if(!is_active || !light_comp.is_enabled() || !light.casts_shadows)
+            // light, or one that adds no light, keeps its maps allocated so switching it back on is cheap.
+            if(!is_active || !light_comp.is_enabled() || !light.casts_shadows ||
+               !ANONYMOUS::is_light_needed(light, light_comp.get_linear_color()))
             {
                 generator.mark_resolved();
                 return;
@@ -2362,6 +2378,10 @@ void deferred::submit_light(const light& light,
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& camera_pos = camera.get_position();
+    if(!ANONYMOUS::is_light_needed(light, linear_color))
+    {
+        return;
+    }
     const auto& light_position = world_transform.get_position();
     const auto& light_direction = world_transform.z_unit_axis();
     const math::bsphere reach = light.compute_world_bounds_sphere(light_position, light_direction);
@@ -2507,12 +2527,16 @@ void deferred::submit_particle_lights(scene& scn, const light_submit_context& co
                 ps_soa::collect_particle_lights(emitter.get_emitter_handle(), particle_lights_);
             }
         });
-    // Lights that reach nothing in view do not take a place in the budget.
+    // Lights that add nothing or reach nothing in view do not take a place in the budget.
     const camera& view_camera = *context.cam;
     particle_lights_.erase(std::remove_if(particle_lights_.begin(),
                                           particle_lights_.end(),
                                           [&](const ps_soa::particle_light& particle)
                                           {
+                                              if(!ANONYMOUS::is_adding_light(particle.intensity, particle.color))
+                                              {
+                                                  return true;
+                                              }
                                               const math::vec3 reach(particle.range);
                                               return !view_camera.test_aabb(
                                                   math::bbox(particle.position - reach, particle.position + reach));
