@@ -956,8 +956,15 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 
     vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, filtered_roughness, area_light, V, N, data.ambient_occlusion);
     // The hue follows the shadow map's transmittance alone; contact and cloud shadows only dim it.
-    vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, area_light.DiffuseL, V, N,
-                                                 shadow.transmission);
+    // Zero without a subsurface colour (both of its colours are black), which most receivers have: it is skipped
+    // for them.
+    vec3 subsurface_lighting = vec3_splat(0.0);
+    BRANCH
+    if(has_subsurface)
+    {
+        subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion,
+                                                area_light.DiffuseL, V, N, shadow.transmission);
+    }
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
     vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
