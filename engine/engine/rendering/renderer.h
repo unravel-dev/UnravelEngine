@@ -129,7 +129,8 @@ protected:
 
     /// Set once init() has brought the backend up; read by the destructor.
     bool is_initialized_{};
-    /// Logs the GPU time of every render pass (--gfx-profile); null when off.
+    /// Logs the GPU time of every render pass (--gfx-profile) or the frame times alone (--gfx-frame-log);
+    /// null when off.
     std::unique_ptr<gpu_pass_log> gpu_pass_log_{};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);

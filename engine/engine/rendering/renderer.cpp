@@ -135,6 +135,10 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
     parser.set_optional<bool>("n", "novsync", false, "Disable vsync.");
     parser.set_optional<bool>("", "gfx-stats", false, "Show the graphics backend's statistics over the frame.");
     parser.set_optional<bool>("", "gfx-profile", false, "Log the GPU time of every render pass every few seconds.");
+    parser.set_optional<bool>("",
+                              "gfx-frame-log",
+                              false,
+                              "Log the frame and GPU frame times every few seconds, without the per-pass timers.");
     parser.set_optional<std::string>("W",
                                      "window",
                                      "",
@@ -236,17 +240,25 @@ constexpr const char* NO_VULKAN_MESSAGE = "The game needs Vulkan graphics, which
 constexpr float MAX_DEBUG_TEXT_SCALE = 4.0f;
 
 /// Turns on the graphics backend's statistics overlay and its per-pass GPU timers when the command
-/// line asks for them; returns whether the timers are on. The overlay text grows with the display
-/// scale, so it stays readable on a phone's dense screen.
+/// line asks for them; returns whether the frame log runs (--gfx-profile, or --gfx-frame-log for the
+/// frame times alone). The per-pass timers end the render pass at every view, so on a tile-based GPU
+/// they add attachment loads and stores the frame does not otherwise have. The overlay text grows
+/// with the display scale, so it stays readable on a phone's dense screen.
 auto apply_debug_options(const cmd_line::parser& parser, const os::window& window) -> bool
 {
     bool show_stats = false;
     parser.try_get("gfx-stats", show_stats);
     bool log_passes = false;
     parser.try_get("gfx-profile", log_passes);
+    bool log_frames = false;
+    parser.try_get("gfx-frame-log", log_frames);
+    if(log_frames && !log_passes)
+    {
+        APPLOG_INFO("Logging the frame times.");
+    }
     if(!show_stats && !log_passes)
     {
-        return false;
+        return log_frames;
     }
     const uint32_t flags = (show_stats ? BGFX_DEBUG_STATS : 0u) | (log_passes ? BGFX_DEBUG_PROFILER : 0u);
     const float text_scale = std::clamp(std::floor(window.get_display_scale()), 1.0f, MAX_DEBUG_TEXT_SCALE);
@@ -259,7 +271,7 @@ auto apply_debug_options(const cmd_line::parser& parser, const os::window& windo
     {
         APPLOG_INFO("Logging the GPU time of every render pass.");
     }
-    return log_passes;
+    return log_passes || log_frames;
 }
 
 /// The native window to start the graphics backend on. Android can destroy the window's surface

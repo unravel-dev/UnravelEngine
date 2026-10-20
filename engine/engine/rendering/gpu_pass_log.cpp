@@ -38,6 +38,7 @@ void gpu_pass_log::collect()
         pass_gpu_ms_[view.name] += static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * gpu_to_ms;
     }
     frame_gpu_ms_ += static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * gpu_to_ms;
+    collect_pacing(*stats, gpu_to_ms);
     ++frames_;
     const double window_seconds = std::chrono::duration<double>(now - window_start_).count();
     if(window_seconds >= LOG_INTERVAL_SECONDS)
@@ -45,9 +46,38 @@ void gpu_pass_log::collect()
         report(window_seconds);
         pass_gpu_ms_.clear();
         frame_gpu_ms_ = 0.0;
+        cpu_frame_ms_ = 0.0;
+        wait_render_ms_ = 0.0;
+        wait_submit_ms_ = 0.0;
+        render_submit_ms_ = 0.0;
+        gpu_idle_ms_ = 0.0;
+        gpu_idle_frames_ = 0;
         frames_ = 0;
         window_start_ = now;
     }
+}
+
+void gpu_pass_log::collect_pacing(const bgfx::Stats& stats, double gpu_to_ms)
+{
+    if(stats.cpuTimerFreq > 0)
+    {
+        const double cpu_to_ms = MS_PER_SECOND / static_cast<double>(stats.cpuTimerFreq);
+        cpu_frame_ms_ += static_cast<double>(stats.cpuTimeFrame) * cpu_to_ms;
+        wait_render_ms_ += static_cast<double>(stats.waitRender) * cpu_to_ms;
+        wait_submit_ms_ += static_cast<double>(stats.waitSubmit) * cpu_to_ms;
+        render_submit_ms_ += static_cast<double>(stats.cpuTimeEnd - stats.cpuTimeBegin) * cpu_to_ms;
+    }
+    if(stats.gpuFrameNum == last_gpu_frame_num_)
+    {
+        return;
+    }
+    if(stats.gpuFrameNum == last_gpu_frame_num_ + 1 && last_gpu_time_end_ != 0 && stats.gpuTimeBegin > last_gpu_time_end_)
+    {
+        gpu_idle_ms_ += static_cast<double>(stats.gpuTimeBegin - last_gpu_time_end_) * gpu_to_ms;
+        ++gpu_idle_frames_;
+    }
+    last_gpu_frame_num_ = stats.gpuFrameNum;
+    last_gpu_time_end_ = stats.gpuTimeEnd;
 }
 
 void gpu_pass_log::report(double window_seconds)
@@ -76,6 +106,13 @@ void gpu_pass_log::report(double window_seconds)
                 window_seconds * MS_PER_SECOND / frames_,
                 frame_gpu_ms_ / frames_,
                 passes_ms);
+    APPLOG_INFO("Frame pacing: CPU frame {:.2f} ms, render thread submit {:.2f} ms, main thread waits for it {:.2f} ms, "
+                "render thread waits for the next frame {:.2f} ms, GPU idle between frames {:.2f} ms",
+                cpu_frame_ms_ / frames_,
+                render_submit_ms_ / frames_,
+                wait_render_ms_ / frames_,
+                wait_submit_ms_ / frames_,
+                gpu_idle_frames_ > 0 ? gpu_idle_ms_ / gpu_idle_frames_ : 0.0);
     for(const auto& [name, average_ms] : passes)
     {
         if(average_ms >= MIN_LOGGED_PASS_MS)
