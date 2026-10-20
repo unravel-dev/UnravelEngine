@@ -78,6 +78,8 @@ void os_input_manager::before_events_update()
 
     mouse_->update();
 
+    touches_.update();
+
     if(virtual_mouse_position_)
     {
         mouse_->set_position(remap_to_work_zone(*virtual_mouse_position_));
@@ -227,6 +229,15 @@ void os_input_manager::on_os_event(const os::event& e)
             break;
         }
 
+        case os::events::finger_down:
+        case os::events::finger_motion:
+        case os::events::finger_up:
+        case os::events::finger_canceled:
+        {
+            on_finger_event(e);
+            break;
+        }
+
         case os::events::window:
         {
             if(e.window.type == os::window_event_id::focus_gained)
@@ -329,6 +340,52 @@ void os_input_manager::release_all()
 {
     keyboard_->get_key_state_map().clear();
     mouse_->get_button_state_map().clear();
+    touches_.cancel_all();
+}
+
+auto os_input_manager::get_touches() const -> const os_touches&
+{
+    return touches_;
+}
+
+auto os_input_manager::map_window_position(coord window_position) -> coord
+{
+    const zone window = window_input_zone_ ? *window_input_zone_ : get_work_zone();
+    return remap_to_work_zone({window.x + window_position.x, window.y + window_position.y});
+}
+
+auto os_input_manager::map_finger_position(const os::touch_finger_event& finger) -> coord
+{
+    const zone window = window_input_zone_ ? *window_input_zone_ : get_work_zone();
+    return map_window_position({static_cast<int>(finger.x * static_cast<float>(window.w)),
+                                static_cast<int>(finger.y * static_cast<float>(window.h))});
+}
+
+void os_input_manager::on_finger_event(const os::event& e)
+{
+    const os::touch_finger_event& finger = e.finger;
+    const coord position = map_finger_position(finger);
+    switch(e.type)
+    {
+        case os::events::finger_down:
+            // As a mouse press, a finger that lands outside the work zone is not the game's.
+            if(is_inside_work_zone(position))
+            {
+                touches_.begin(finger.touch_id, finger.finger_id, position, finger.pressure);
+            }
+            break;
+        case os::events::finger_motion:
+            touches_.move(finger.touch_id, finger.finger_id, position, finger.pressure);
+            break;
+        case os::events::finger_up:
+            touches_.end(finger.touch_id, finger.finger_id, position, false);
+            break;
+        case os::events::finger_canceled:
+            touches_.end(finger.touch_id, finger.finger_id, position, true);
+            break;
+        default:
+            break;
+    }
 }
 
 auto os_input_manager::get_virtual_mouse_position() const -> const hpp::optional<coord>&

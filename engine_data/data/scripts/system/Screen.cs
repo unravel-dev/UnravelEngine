@@ -66,6 +66,17 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// The part of the game view that display cutouts, rounded corners and system bars leave
+        /// clear, in the same pixels as <see cref="width"/> and <see cref="height"/>, from the top-left
+        /// corner. Keep buttons and text inside it on phones. The whole view where nothing covers it,
+        /// as on desktops and in the editor.
+        /// </summary>
+        public static Rect safeArea
+        {
+            get => internal_m2n_screen_get_safe_area();
+        }
+
+        /// <summary>
         /// Raised at the start of a frame, before the scripts update, when <see cref="width"/> or
         /// <see cref="height"/> changed since the previous frame. Ends with the subscribing script.
         /// </summary>
@@ -140,6 +151,9 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_screen_get_dpi();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Rect internal_m2n_screen_get_safe_area();
     }
 
 }

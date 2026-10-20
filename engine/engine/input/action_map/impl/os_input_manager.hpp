@@ -6,6 +6,7 @@
 #include "os_gamepad.hpp"
 #include "os_keyboard.hpp"
 #include "os_mouse.hpp"
+#include "os_touches.hpp"
 
 #include <ospp/event.h>
 #include <hpp/optional.hpp>
@@ -38,6 +39,9 @@ class os_input_manager : public input_manager
 
     /// The OS cursor as the game holds it; this manager reports its input conditions and applies it.
     os_cursor cursor_;
+    /// The fingers on the touch screen. The platform also makes mouse events from them, so the mouse
+    /// keeps working for touch.
+    os_touches touches_;
 
     /// Stands in for the OS cursor while set. The pointer position is polled rather than
     /// event driven, so synthesized motion has to replace the poll, not add an event.
@@ -88,12 +92,22 @@ public:
     /// The OS cursor: how scripts hold it, whether the host suspends it, what it shows.
     auto get_cursor() -> os_cursor&;
     auto get_cursor() const -> const os_cursor&;
+    /// The fingers on the touch screen this frame, in work zone pixels.
+    auto get_touches() const -> const os_touches&;
 
     /// Counts calls to before_events_update, which is the boundary where a pressed state
     /// becomes down and a released state becomes up - so it is the unit a synthesized tap or
     /// hold has to be measured in.
     auto get_input_frame() const -> uint64_t;
 
+    /// A position in the main window's pixels, in work zone pixels. The window zone places the window
+    /// in the global space the mouse reports.
+    auto map_window_position(coord window_position) -> coord;
+    /// A finger's position in work zone pixels. Fingers come normalized to the window under them.
+    auto map_finger_position(const os::touch_finger_event& finger) -> coord;
+
+private:
+    void on_finger_event(const os::event& e);
 };
 
 } // namespace input

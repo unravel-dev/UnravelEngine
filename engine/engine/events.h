@@ -67,6 +67,13 @@ struct events
     /// os events
     hpp::event<void(rtti::context&, os::event& e)> on_os_event;
 
+    /// Application lifecycle (mobile platforms), raised as the platform reports it. On Android no
+    /// frame runs between on_app_enter_background and on_app_enter_foreground: the event loop waits
+    /// inside the platform until the application returns.
+    hpp::event<void(rtti::context&)> on_app_enter_background;
+    hpp::event<void(rtti::context&)> on_app_enter_foreground;
+    hpp::event<void(rtti::context&)> on_app_low_memory;
+
     hpp::event<void(rtti::context&, const std::string& protocol, uint64_t version)> on_script_recompile;
 
     void toggle_play_mode(rtti::context& ctx);

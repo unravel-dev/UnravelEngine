@@ -48,7 +48,9 @@ public:
     RmlUi_RenderLayerStack();
     ~RmlUi_RenderLayerStack();
 
-    auto push_layer() -> Rml::LayerHandle;
+    /// Pushes a layer cleared to transparent. @p clears_depth_stencil also clears the shared depth-stencil,
+    /// for the frame's base layer.
+    auto push_layer(bool clears_depth_stencil = false) -> Rml::LayerHandle;
     void pop_layer();
 
     auto get_layer(Rml::LayerHandle layer) const -> const RmlUi_LayerFramebuffer&;

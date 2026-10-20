@@ -38,6 +38,7 @@ enum class renderer_platform : uint8_t
     windows = 0,
     linux,
     macos,
+    android,
 };
 
 /**
@@ -48,6 +49,8 @@ struct platform_renderer_settings
     preferred_renderer windows{preferred_renderer::auto_detect};
     preferred_renderer linux{preferred_renderer::auto_detect};
     preferred_renderer macos{preferred_renderer::auto_detect};
+    /// Vulkan is the only backend built for Android; auto picks it.
+    preferred_renderer android{preferred_renderer::auto_detect};
 
     friend auto operator==(const platform_renderer_settings& lhs, const platform_renderer_settings& rhs) -> bool =
         default;
@@ -63,6 +66,8 @@ struct platform_renderer_settings
         return linux;
 #elif UNRAVEL_PLATFORM_OSX
         return macos;
+#elif UNRAVEL_PLATFORM_ANDROID
+        return android;
 #else
         return preferred_renderer::auto_detect;
 #endif

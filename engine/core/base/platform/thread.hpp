@@ -142,17 +142,23 @@ inline auto get_thread_cpu_time_ns() -> int64_t
     return 0;
 }
 } // namespace platform
-#elif UNRAVEL_PLATFORM_LINUX
+#elif UNRAVEL_PLATFORM_LINUX || UNRAVEL_PLATFORM_ANDROID
 #include <pthread.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
+
+#include <cstring>
 namespace platform
 {
 inline void set_thread_name(const char* threadName)
 {
-    pthread_setname_np(pthread_self(), threadName);
+    // The kernel keeps 15 characters and the terminator, and refuses a longer name instead of cutting it.
+    constexpr size_t MAX_THREAD_NAME_LENGTH = 15;
+    char name[MAX_THREAD_NAME_LENGTH + 1]{};
+    std::strncpy(name, threadName, MAX_THREAD_NAME_LENGTH);
+    pthread_setname_np(pthread_self(), name);
 }
 
 /// Drops the calling thread below normal priority, for background work that should yield the cores to the frame.
@@ -217,4 +223,59 @@ inline auto get_thread_cpu_time_ns() -> int64_t
 }
 } // namespace platform
 #endif
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <vector>
+
+namespace platform
+{
+/**
+ * @brief The cores fast enough for frame work: the size for worker pools.
+ *
+ * Phones pair fast cores with slow, efficient ones (big.LITTLE), and work split evenly across all of
+ * them waits for the slow ones. On Android a core counts when the scheduler rates its capacity at least
+ * half the fastest core's (4 of 8 on a phone with 4 little cores). Elsewhere, and where the capacities
+ * are unknown, every core counts.
+ */
+inline auto get_performance_core_count() -> uint32_t
+{
+    static const uint32_t count = []() -> uint32_t
+    {
+        const uint32_t cores = std::max(1u, std::thread::hardware_concurrency());
+#if UNRAVEL_PLATFORM_ANDROID
+        std::vector<int> capacities;
+        for(uint32_t core = 0; core < cores; ++core)
+        {
+            char path[64]{};
+            std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpu_capacity", core);
+            std::FILE* file = std::fopen(path, "r");
+            int capacity = 0;
+            const bool is_read = file != nullptr && std::fscanf(file, "%d", &capacity) == 1;
+            if(file != nullptr)
+            {
+                std::fclose(file);
+            }
+            if(!is_read || capacity <= 0)
+            {
+                return cores;
+            }
+            capacities.push_back(capacity);
+        }
+        const int fastest = *std::max_element(capacities.begin(), capacities.end());
+        const auto fast_cores = std::count_if(capacities.begin(),
+                                              capacities.end(),
+                                              [fastest](int capacity)
+                                              {
+                                                  return capacity * 2 >= fastest;
+                                              });
+        return std::max(1u, static_cast<uint32_t>(fast_cores));
+#else
+        return cores;
+#endif
+    }();
+    return count;
+}
+} // namespace platform
 

@@ -74,6 +74,8 @@ auto audio_system::init(rtti::context& ctx) -> bool
     ev.on_play_end.connect(sentinel_, -10, this, &audio_system::on_play_end);
     ev.on_pause.connect(sentinel_, 10, this, &audio_system::on_pause);
     ev.on_resume.connect(sentinel_, -10, this, &audio_system::on_resume);
+    ev.on_app_enter_background.connect(sentinel_, this, &audio_system::on_app_enter_background);
+    ev.on_app_enter_foreground.connect(sentinel_, this, &audio_system::on_app_enter_foreground);
 
     audio::set_info_logger(
         [](const std::string& s)
@@ -245,6 +247,23 @@ void audio_system::on_pause(rtti::context& /*ctx*/)
 void audio_system::on_resume(rtti::context& /*ctx*/)
 {
     voices_.resume_all();
+}
+
+void audio_system::on_app_enter_background(rtti::context& /*ctx*/)
+{
+    // The device stops mixing, so every source keeps its position until the application returns.
+    if(device_ && !device_->pause())
+    {
+        APPLOG_WARNING("The audio device cannot pause. The game stays audible in the background.");
+    }
+}
+
+void audio_system::on_app_enter_foreground(rtti::context& /*ctx*/)
+{
+    if(device_)
+    {
+        device_->resume();
+    }
 }
 
 void audio_system::update_fades(rtti::context& ctx, float seconds)

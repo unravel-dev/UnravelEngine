@@ -11,6 +11,7 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 
+#include <base/platform/thread.hpp>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <math/transform.hpp>
@@ -1240,7 +1241,7 @@ auto create_world() -> world
     def.restitutionCallback = &combined_restitution_callback;
 
     // Box3D spins up its own scheduler when no task callbacks are provided.
-    const unsigned int hardware_threads = std::thread::hardware_concurrency();
+    const uint32_t hardware_threads = platform::get_performance_core_count();
     const int workers = static_cast<int>(hardware_threads > 1 ? hardware_threads - 1 : 1);
     def.workerCount = static_cast<uint32_t>(std::clamp(workers, 1, B3_MAX_WORKERS));
 

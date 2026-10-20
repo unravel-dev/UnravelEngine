@@ -39,6 +39,9 @@ struct deploy_settings
     fs::path deploy_location{};
     bool deploy_dependencies{true};
     bool deploy_and_run{};
+    /// The command line options Deploy and Run starts the game with, separated by whitespace
+    /// (split_run_arguments), such as --gfx-stats.
+    std::string deploy_run_arguments;
 
     /**
      * @brief Resolve nested prefab instances into the deployed assets.

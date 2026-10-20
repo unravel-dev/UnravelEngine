@@ -879,6 +879,17 @@ vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
     return eval_irradiance_sh_scaled(coeff_tex, N, vec3_splat(1.0));
 }
 
+/// The band factors of eval_irradiance_sh_cone: the cosine lobe restricted to the cone whose cosine-weighted solid
+/// angle is @p visibility.
+vec3 sh_cone_band_scale(float visibility)
+{
+    float cos_aperture = sqrt(saturate(1.0 - visibility));
+    float sin2_aperture = 1.0 - cos_aperture * cos_aperture;
+    return vec3(sin2_aperture,
+                1.0 - cos_aperture * cos_aperture * cos_aperture,
+                sin2_aperture * (1.0 + 3.0 * cos_aperture * cos_aperture));
+}
+
 /// Irradiance over a visibility cone: the cosine lobe around @p axis restricted to the cone
 /// whose cosine-weighted solid angle is @p visibility, i.e. AO = sin^2(aperture). Relative to the full lobe the zonal factors are
 /// Z0 = sin^2 a, Z1 = 1 - cos^3 a and Z2 = sin^2 a (1 + 3 cos^2 a): band 0 carries exactly the
@@ -886,12 +897,7 @@ vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
 /// light arriving along the axis than a plain AO multiply does.
 vec3 eval_irradiance_sh_cone(sampler2D coeff_tex, vec3 axis, float visibility)
 {
-    float cos_aperture = sqrt(saturate(1.0 - visibility));
-    float sin2_aperture = 1.0 - cos_aperture * cos_aperture;
-    vec3 band_scale = vec3(sin2_aperture,
-                           1.0 - cos_aperture * cos_aperture * cos_aperture,
-                           sin2_aperture * (1.0 + 3.0 * cos_aperture * cos_aperture));
-    return max(eval_irradiance_sh_scaled(coeff_tex, axis, band_scale), vec3_splat(0.0));
+    return max(eval_irradiance_sh_scaled(coeff_tex, axis, sh_cone_band_scale(visibility)), vec3_splat(0.0));
 }
 
 // Evaluate environment RADIANCE L(dir) from the same SH coefficients used by
@@ -919,22 +925,78 @@ vec3 eval_radiance_sh(sampler2D coeff_tex, vec3 dir)
     return max(radiance, vec3_splat(0.0));
 }
 
-/// Environment radiance prefiltered by the GGX lobe of perceptual @p roughness around @p dir -
-/// what a reflection sees of the environment where no probe covers it (the sky light fills that
-/// weight). The lobe's zonal factors are those of the GGX reflected-direction
-/// distribution at normal incidence (the split-sum assumption the prefiltered probes make),
-/// measured by importance sampling it (the specular_occlusion_lut lobe) and fitted as rational
-/// functions of alpha: max error 0.004 in band 1, 0.01 in band 2. A mirror reads the SH
-/// radiance itself; alpha 1 gives 0.63 / 0.19 (a cosine lobe: 0.67 / 0.25).
-vec3 eval_radiance_sh_lobe(sampler2D coeff_tex, vec3 dir, float roughness)
+/// The band factors of eval_radiance_sh_lobe: the zonal factors of the GGX reflected-direction
+/// distribution of perceptual @p roughness at normal incidence (the split-sum assumption the
+/// prefiltered probes make), measured by importance sampling it (the specular_occlusion_lut lobe)
+/// and fitted as rational functions of alpha: max error 0.004 in band 1, 0.01 in band 2. A mirror
+/// reads the SH radiance itself; alpha 1 gives 0.63 / 0.19 (a cosine lobe: 0.67 / 0.25).
+vec3 sh_lobe_band_scale(float roughness)
 {
     float alpha = roughness * roughness;
     float alpha_squared = alpha * alpha;
     float band1 = (1.0 + 0.32098 * alpha + 4.57985 * alpha_squared) / (1.0 + 0.69684 * alpha + 7.67135 * alpha_squared);
     float band2 = (1.0 - 0.19861 * alpha + 1.21497 * alpha_squared) / (1.0 + 0.81477 * alpha + 9.02891 * alpha_squared);
     // eval_irradiance_sh_scaled weights band l by its cosine constant A_l; divide it out.
-    vec3 band_scale = vec3(1.0, band1, band2) / vec3(PI, (2.0 * PI) / 3.0, PI * 0.25);
-    return max(eval_irradiance_sh_scaled(coeff_tex, dir, band_scale), vec3_splat(0.0));
+    return vec3(1.0, band1, band2) / vec3(PI, (2.0 * PI) / 3.0, PI * 0.25);
+}
+
+/// Environment radiance prefiltered by the GGX lobe of perceptual @p roughness around @p dir -
+/// what a reflection sees of the environment where no probe covers it (the sky light fills that
+/// weight).
+vec3 eval_radiance_sh_lobe(sampler2D coeff_tex, vec3 dir, float roughness)
+{
+    return max(eval_irradiance_sh_scaled(coeff_tex, dir, sh_lobe_band_scale(roughness)), vec3_splat(0.0));
+}
+
+/// The two environment SH terms of the indirect lighting.
+struct SHIndirectTerms
+{
+    /// eval_irradiance_sh_cone of the diffuse axis.
+    vec3 irradiance;
+    /// eval_radiance_sh_lobe of the specular direction.
+    vec3 radiance;
+};
+
+/// eval_irradiance_sh_cone and eval_radiance_sh_lobe together, each coefficient fetched once and used at once. Two
+/// separate evaluations read the same nine coefficients: the compiler shares the fetches and keeps all nine live from
+/// the first evaluation to the second, which pushes the indirect lighting shader past a phone GPU's register budget
+/// (5-7x slower on a Mali-G78).
+SHIndirectTerms eval_sh_cone_and_lobe(sampler2D coeff_tex, vec3 axis, float visibility, vec3 dir, float roughness)
+{
+    // The cosine constants A_l times each term's band factors, as eval_irradiance_sh_scaled weights them.
+    vec3 cone = vec3(PI, (2.0 * PI) / 3.0, PI * 0.25) * sh_cone_band_scale(visibility);
+    vec3 lobe = vec3(PI, (2.0 * PI) / 3.0, PI * 0.25) * sh_lobe_band_scale(roughness);
+    SHIndirectTerms terms;
+    vec3 c = texelFetch(coeff_tex, ivec2(0, 0), 0).rgb;
+    terms.irradiance = c * (cone.x * 0.282095);
+    terms.radiance = c * (lobe.x * 0.282095);
+    c = texelFetch(coeff_tex, ivec2(1, 0), 0).rgb;
+    terms.irradiance += c * (cone.y * 0.488603 * axis.y);
+    terms.radiance += c * (lobe.y * 0.488603 * dir.y);
+    c = texelFetch(coeff_tex, ivec2(2, 0), 0).rgb;
+    terms.irradiance += c * (cone.y * 0.488603 * axis.z);
+    terms.radiance += c * (lobe.y * 0.488603 * dir.z);
+    c = texelFetch(coeff_tex, ivec2(3, 0), 0).rgb;
+    terms.irradiance += c * (cone.y * 0.488603 * axis.x);
+    terms.radiance += c * (lobe.y * 0.488603 * dir.x);
+    c = texelFetch(coeff_tex, ivec2(4, 0), 0).rgb;
+    terms.irradiance += c * (cone.z * 1.092548 * axis.x * axis.z);
+    terms.radiance += c * (lobe.z * 1.092548 * dir.x * dir.z);
+    c = texelFetch(coeff_tex, ivec2(5, 0), 0).rgb;
+    terms.irradiance += c * (cone.z * 1.092548 * axis.y * axis.z);
+    terms.radiance += c * (lobe.z * 1.092548 * dir.y * dir.z);
+    c = texelFetch(coeff_tex, ivec2(6, 0), 0).rgb;
+    terms.irradiance += c * (cone.z * 1.092548 * axis.x * axis.y);
+    terms.radiance += c * (lobe.z * 1.092548 * dir.x * dir.y);
+    c = texelFetch(coeff_tex, ivec2(7, 0), 0).rgb;
+    terms.irradiance += c * (cone.z * 0.315392 * (3.0 * axis.z * axis.z - 1.0));
+    terms.radiance += c * (lobe.z * 0.315392 * (3.0 * dir.z * dir.z - 1.0));
+    c = texelFetch(coeff_tex, ivec2(8, 0), 0).rgb;
+    terms.irradiance += c * (cone.z * 0.546274 * (axis.x * axis.x - axis.y * axis.y));
+    terms.radiance += c * (lobe.z * 0.546274 * (dir.x * dir.x - dir.y * dir.y));
+    terms.irradiance = max(terms.irradiance, vec3_splat(0.0));
+    terms.radiance = max(terms.radiance, vec3_splat(0.0));
+    return terms;
 }
 
 /*=============================================================================

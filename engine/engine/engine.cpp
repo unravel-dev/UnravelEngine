@@ -160,6 +160,46 @@ void engine_exception_handler(const crash::exception_info& info, const crash::tr
     APPLOG_FLUSH();
 }
 
+/// Application lifecycle events, as the platform reports them. On Android the event pump blocks
+/// right after the application enters the background, so the systems react here, not in the
+/// frame loop, which sees these events only after the application returns.
+void on_app_event(os::events type)
+{
+    auto* ctx = engine::try_context();
+    if(ctx == nullptr)
+    {
+        return;
+    }
+    auto& ev = ctx->get_cached<events>();
+    switch(type)
+    {
+        case os::events::app_will_enter_background:
+            APPLOG_INFO("The application enters the background.");
+            ev.on_app_enter_background(*ctx);
+            APPLOG_FLUSH();
+            break;
+        case os::events::app_did_enter_foreground:
+            APPLOG_INFO("The application is back in the foreground.");
+            // The time spent in the background is not a frame.
+            ctx->get_cached<simulation>().reset_delta_clock();
+            ev.on_app_enter_foreground(*ctx);
+            break;
+        case os::events::app_low_memory:
+            // Android reports every memory trim request this way, the routine one on entering the
+            // background included.
+            APPLOG_INFO("The system asks the application to use less memory.");
+            ev.on_app_low_memory(*ctx);
+            break;
+        case os::events::app_terminating:
+            APPLOG_INFO("The system ends the application.");
+            engine::interrupt();
+            APPLOG_FLUSH();
+            break;
+        default:
+            break;
+    }
+}
+
 } // namespace
 
 auto engine::context() -> rtti::context&
@@ -276,6 +316,7 @@ auto engine::init_core(const cmd_line::parser& parser, const std::function<bool(
     auto& ls = ctx.get_cached<loading_screen>();
 
     select_raytracing_backend(parser);
+    os::set_app_event_callback(on_app_event);
 
     ls.begin_module("Threading");
     if(!ls.check(ctx.get_cached<threader>().init(ctx)))
@@ -414,6 +455,7 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
 auto engine::deinit() -> bool
 {
     auto& ctx = engine::context();
+    os::set_app_event_callback({});
 
     if(!defaults::deinit(ctx))
     {
@@ -701,6 +743,11 @@ auto engine::interrupt() -> bool
 {
     is_shutting_down = true;
     return true;
+}
+
+auto engine::is_interrupted() -> bool
+{
+    return is_shutting_down;
 }
 
 auto engine::request_restart() -> bool

@@ -3,6 +3,7 @@
 
 #include <deploy/files.h>
 #include <deploy/folders.h>
+#include <deploy/run_arguments.h>
 #include <editor/system/project_manager.h>
 #include <engine/threading/threader.h>
 #include <logging/logging.h>
@@ -38,6 +39,7 @@ constexpr const char* TEMPLATE_FOLDER = "binary:/players/";
 constexpr const char* GRADLE_STAGING_FOLDER = "unravel-android";
 constexpr const char* KEYSTORE_PASSWORD_VARIABLE = "UNRAVEL_KEYSTORE_PASSWORD";
 constexpr const char* DEFAULT_VERSION_NAME = "1.0";
+constexpr const char* SESSION_THREAD_NAME = "Android Game Session";
 /// Gradle output lines kept in a failed step's message.
 constexpr std::size_t GRADLE_ERROR_LINES = 25;
 constexpr auto PROCESS_POLL_INTERVAL = std::chrono::milliseconds(1000);
@@ -246,8 +248,11 @@ public:
         worker_ = std::thread(
             [this, plan]()
             {
+                // The session completes the deploy's device steps, whose futures need a registered thread.
+                tpp::this_thread::register_this_thread(SESSION_THREAD_NAME, true);
                 run(plan);
                 running_ = false;
+                tpp::this_thread::unregister_this_thread();
             });
     }
 
@@ -345,7 +350,7 @@ private:
         complete_step(plan.install_step);
         run_adb(tools, device, {"shell", "am", "force-stop", application_id});
         run_adb(tools, device, {"logcat", "-c"});
-        const auto started = subprocess::call(make_start_arguments(tools, device, application_id));
+        const auto started = subprocess::call(make_start_arguments(tools, device, application_id, plan.run_arguments));
         const auto process = wait_for_process(tools, device, application_id);
         if(process.empty())
         {
@@ -703,6 +708,7 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     android_package_plan plan;
     plan.tools = get_android_toolchain();
     plan.device = params.android_device;
+    plan.run_arguments = split_run_arguments(params.deploy_run_arguments);
     plan.replace_installed = params.android_replace_installed;
     plan.output = get_output_location(params) / (get_project_name(ctx) + ".apk");
     if(params.deploy_and_run)

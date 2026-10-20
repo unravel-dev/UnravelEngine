@@ -32,6 +32,11 @@ struct engine
     static auto interrupt() -> bool;
 
     /**
+     * @brief Whether interrupt() or request_restart() asked the frame loop to end.
+     */
+    static auto is_interrupted() -> bool;
+
+    /**
      * @brief Requests a graceful application restart after the current frame.
      *
      * The running process shuts down normally, then service_main spawns a

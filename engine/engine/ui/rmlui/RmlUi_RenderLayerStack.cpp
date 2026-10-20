@@ -8,9 +8,17 @@
 #include <logging/logging.h>
 #include <string_utils/utils.h>
 #include <graphics/render_pass.h>
+#include <base/platform/config.hpp>
 
+// Samples per pixel of the UI layers: smoother edges, especially under transforms. bgfx stores every
+// sample of a multisampled target and resolves it in a separate copy, so on a phone the full-screen
+// layer costs more memory traffic than the smoother edges are worth.
 #ifndef RMLUI_NUM_MSAA_SAMPLES
+#if UNRAVEL_PLATFORM_ANDROID
+#define RMLUI_NUM_MSAA_SAMPLES 1
+#else
 #define RMLUI_NUM_MSAA_SAMPLES 2
+#endif
 #endif
 
 namespace unravel
@@ -26,7 +34,7 @@ RmlUi_RenderLayerStack::~RmlUi_RenderLayerStack()
     destroy_framebuffers();
 }
 
-auto RmlUi_RenderLayerStack::push_layer() -> Rml::LayerHandle
+auto RmlUi_RenderLayerStack::push_layer(bool clears_depth_stencil) -> Rml::LayerHandle
 {
     RMLUI_ASSERT(layers_size_ <= static_cast<int>(fb_layers_.size()));
 
@@ -54,7 +62,11 @@ auto RmlUi_RenderLayerStack::push_layer() -> Rml::LayerHandle
     auto view = Rml::Matrix4f::Identity();
     auto proj = Rml::Matrix4f::Identity();
     layer_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
-    layer_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
+    // The layers share one depth-stencil: only the frame's base layer starts it cleared, so a nested
+    // layer keeps the clip mask of the layer it was pushed from.
+    const uint16_t clear_flags =
+        clears_depth_stencil ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL : BGFX_CLEAR_COLOR;
+    layer_pass.clear(clear_flags, 0x00000000, 1.0f, 0);
 
     return layer_handle;
 }
@@ -124,7 +136,7 @@ void RmlUi_RenderLayerStack::begin_frame(int new_width, int new_height)
     }
 
     gfx::render_pass::push_scope(fmt::format("RmlUi").c_str());
-    push_layer();
+    push_layer(true);
 }
 
 void RmlUi_RenderLayerStack::end_frame()

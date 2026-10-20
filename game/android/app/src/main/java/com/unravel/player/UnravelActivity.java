@@ -7,9 +7,25 @@ import org.libsdl.app.SDLActivity;
  * library to load; SDL then calls its SDL_main.
  */
 public class UnravelActivity extends SDLActivity {
+    /**
+     * The start intent's extra with the game's command line options, separated by whitespace. The
+     * editor's Deploy and Run sets it from Run Arguments, as does
+     * "adb shell am start -n <application id>/com.unravel.player.UnravelActivity --es arguments '--gfx-stats'".
+     */
+    private static final String ARGUMENTS_EXTRA = "arguments";
+
     @Override
     protected String[] getLibraries() {
         return new String[] { "main" };
+    }
+
+    @Override
+    protected String[] getArguments() {
+        String arguments = getIntent() != null ? getIntent().getStringExtra(ARGUMENTS_EXTRA) : null;
+        if (arguments == null || arguments.trim().isEmpty()) {
+            return new String[0];
+        }
+        return arguments.trim().split("\\s+");
     }
 
     /**

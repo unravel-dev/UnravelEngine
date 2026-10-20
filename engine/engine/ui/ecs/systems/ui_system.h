@@ -12,7 +12,9 @@
 #include <vector>
 #include <entt/entt.hpp>
 #include <graphics/frame_buffer.h>
+#include <engine/input/action_map/coord.hpp>
 #include <engine/ui/rmlui/RmlUi_RenderLayerStack.h>
+#include <functional>
 
 // Forward declarations
 namespace Rml
@@ -168,6 +170,26 @@ struct ui_system
     void apply_mouse_press_focus(scene& scn, os::event& event, Rml::Context* target_context, bool input_allowed);
 
     void blur_ui_context(Rml::Context* context) const;
+
+    /// Receives a document and the pointer's position in its pixels; is_over is false for a world-space
+    /// document the pointer misses.
+    using pointer_visitor = std::function<void(Rml::Context* context, bool is_over, Rml::Vector2f position)>;
+    /**
+     * @brief Visits the debugger and each enabled document with a pointer position in work zone pixels
+     * mapped to the document: a screen-space overlay takes it as it is, a world-space document through
+     * the scene camera onto its quad.
+     */
+    void visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit);
+    /**
+     * @brief Hands a finger to the documents as an RmlUi touch, which presses, drags scroll containers
+     * and releases. A finger that lands on an element is the UI's: the event is cleared for the game.
+     */
+    void dispatch_touch_event(rtti::context& ctx, scene& scn, os::event& event);
+    /**
+     * @brief The platform's mouse copy of a finger. The documents take the finger itself, so this only
+     * clears a press that lands on an element, which keeps the game from acting on a tap on the UI.
+     */
+    void consume_touch_mouse_press(rtti::context& ctx, scene& scn, os::event& event);
     void refresh_mouse_state(rtti::context& ctx, scene& scn);
     auto process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool;
     auto process_event(scene& scn, Rml::Context* context, os::event& event) -> bool;

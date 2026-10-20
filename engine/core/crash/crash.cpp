@@ -399,7 +399,14 @@ auto report_fatal_crash(const signal_info& sig_info, void* platform_context) noe
     (void)platform_context;
 #endif
     char trace_buf[k_emergency_buf];
+#if UNRAVEL_PLATFORM_ANDROID
+    // Unwinding inside a signal handler faults there, and the nested fault would end the process
+    // before the system's crash reporter writes the tombstone, which has the stack.
+    std::size_t trace_len = 0;
+    append_cstr(trace_buf, sizeof(trace_buf), trace_len, "Stack trace: in the system crash report (tombstone).\n");
+#else
     const std::size_t trace_len = capture_trace_text(trace_buf, sizeof(trace_buf));
+#endif
     emergency_write(trace_buf, trace_len);
     emergency_write_cstr("========== END CRASH ==========\n");
     if(g_crash_handler != nullptr)

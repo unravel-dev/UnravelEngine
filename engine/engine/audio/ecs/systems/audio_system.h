@@ -131,6 +131,18 @@ private:
      */
     void on_resume(rtti::context& ctx);
 
+    /**
+     * @brief Pauses the audio device while the application is in the background.
+     * @param ctx The engine context.
+     */
+    void on_app_enter_background(rtti::context& ctx);
+
+    /**
+     * @brief Resumes the audio device when the application is back in the foreground.
+     * @param ctx The engine context.
+     */
+    void on_app_enter_foreground(rtti::context& ctx);
+
     /// Sentinel value to manage shared resources.
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     /// The audio device used for playback.

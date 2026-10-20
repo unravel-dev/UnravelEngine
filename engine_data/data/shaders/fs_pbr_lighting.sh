@@ -49,6 +49,23 @@ SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
 SAMPLER2D(s_shadowMap2, 9);
 SAMPLER2D(s_shadowMap3, 10);
+#if SM_PCF_COMPARE
+// The maps' depth attachments for the PCF comparisons (after the cloud shadow at 11); the stored
+// depth maps above stay bound for the subsurface transmittance, which needs the depth itself.
+SAMPLER2DSHADOW(s_shadowDepth0, 12);
+SAMPLER2DSHADOW(s_shadowDepth1, 13);
+SAMPLER2DSHADOW(s_shadowDepth2, 14);
+SAMPLER2DSHADOW(s_shadowDepth3, 15);
+#endif
+#endif
+
+// The comparison sampler travels next to the stored-depth sampler where PCF compares.
+#if SM_PCF_COMPARE
+#define SHADOW_COMPARE_PARAM , sampler2DShadow _compareSampler
+#define SHADOW_COMPARE_ARG(_sampler) , _sampler
+#else
+#define SHADOW_COMPARE_PARAM
+#define SHADOW_COMPARE_ARG(_sampler)
 #endif
 
 // Screen-space AO: x = intensity, y = bent normal strength (0 without GTAO), z = multi-bounce
@@ -255,7 +272,7 @@ vec2 omniPlaneGradient(mat4 faceMtx, vec4 faceClip, vec3 N, float maxGrad)
 }
 #endif
 
-float computeVisibility(sampler2D _sampler
+float computeVisibility(sampler2D _sampler SHADOW_COMPARE_PARAM
                       , vec4 _shadowCoord
                       , float _bias
                       , vec2 _planeGrad
@@ -279,6 +296,8 @@ float computeVisibility(sampler2D _sampler
 
 #if SM_HARD
     visibility = hardShadow(_sampler, shadowcoord, _bias, _planeGrad);
+#elif SM_PCF_COMPARE
+    visibility = PCFCompare(_compareSampler, shadowcoord, _bias, _planeGrad);
 #elif SM_PCF
     visibility = PCF(_sampler, shadowcoord, _bias, _planeGrad, _samplingParams, _texelSize, _fragCoord, _cascadeScale, minRadiusUV);
 #elif SM_PCSS
@@ -362,7 +381,7 @@ ShadowDepthModel makePerspectiveDepthModel(float _numerator, float _receiverZ)
 #if SM_CSM
 // One cascade: offset the receiver along its normal by this cascade's texel, project, bias, filter; the
 // transmission only for a subsurface receiver (_density above 0).
-ShadowTerms csmCascadeShadow(sampler2D _sampler, mat4 _mtx, float _texelWorld, float _cascadeScale, vec2 _texelSize,
+ShadowTerms csmCascadeShadow(sampler2D _sampler SHADOW_COMPARE_PARAM, mat4 _mtx, float _texelWorld, float _cascadeScale, vec2 _texelSize,
                              vec3 _worldPos, vec3 _N, ShadowReceiver _r, vec2 _fragCoord, float _density)
 {
     vec4 wpos = vec4(_worldPos + _N * (u_shadowMapOffset * _texelWorld * _r.sinT), 1.0);
@@ -374,7 +393,7 @@ ShadowTerms csmCascadeShadow(sampler2D _sampler, mat4 _mtx, float _texelWorld, f
     float mapExtent = _texelWorld / u_shadowMapTexelSize;
     float bias = shadowDepthBias(_r, _texelWorld, depthScale);
     vec2 planeGrad = shadowPlaneGradient(_r, vec2_splat(mapExtent), depthScale);
-    ShadowTerms terms = makeShadowTerms(computeVisibility(_sampler
+    ShadowTerms terms = makeShadowTerms(computeVisibility(_sampler SHADOW_COMPARE_ARG(_compareSampler)
                                                         , shadowcoord
                                                         , bias
                                                         , planeGrad
@@ -455,7 +474,7 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
 
         float coverage = texcoordInRange(texcoord1) * 0.4;
         colorCoverage = vec3(-coverage, coverage, -coverage);
-        terms = csmCascadeShadow(s_shadowMap0, u_shadowMapMtx0, u_csmTexelWorld.x, cascadeScale, texelSize,
+        terms = csmCascadeShadow(s_shadowMap0 SHADOW_COMPARE_ARG(s_shadowDepth0), u_shadowMapMtx0, u_csmTexelWorld.x, cascadeScale, texelSize,
                                  world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
     else if (selection1 && u_numSplits > 1)
@@ -464,7 +483,7 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
 
         float coverage = texcoordInRange(texcoord2) * 0.4;
         colorCoverage = vec3(coverage, coverage, -coverage);
-        terms = csmCascadeShadow(s_shadowMap1, u_shadowMapMtx1, u_csmTexelWorld.y, cascadeScale, texelSize/2.0,
+        terms = csmCascadeShadow(s_shadowMap1 SHADOW_COMPARE_ARG(s_shadowDepth1), u_shadowMapMtx1, u_csmTexelWorld.y, cascadeScale, texelSize/2.0,
                                  world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
     else if (selection2 && u_numSplits > 2)
@@ -473,7 +492,7 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
 
         float coverage = texcoordInRange(texcoord3) * 0.4;
         colorCoverage = vec3(-coverage, -coverage, coverage);
-        terms = csmCascadeShadow(s_shadowMap2, u_shadowMapMtx2, u_csmTexelWorld.z, cascadeScale, texelSize/3.0,
+        terms = csmCascadeShadow(s_shadowMap2 SHADOW_COMPARE_ARG(s_shadowDepth2), u_shadowMapMtx2, u_csmTexelWorld.z, cascadeScale, texelSize/3.0,
                                  world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
     else if (selection3 && u_numSplits > 3)
@@ -482,7 +501,7 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
 
         float coverage = texcoordInRange(texcoord4) * 0.4;
         colorCoverage = vec3(coverage, -coverage, -coverage);
-        terms = csmCascadeShadow(s_shadowMap3, u_shadowMapMtx3, u_csmTexelWorld.w, cascadeScale, texelSize/4.0,
+        terms = csmCascadeShadow(s_shadowMap3 SHADOW_COMPARE_ARG(s_shadowDepth3), u_shadowMapMtx3, u_csmTexelWorld.w, cascadeScale, texelSize/4.0,
                                  world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
 
@@ -547,7 +566,7 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = coverageSign * coverage;
 
-    terms.surface = computeVisibility(s_shadowMap0
+    terms.surface = computeVisibility(s_shadowMap0 SHADOW_COMPARE_ARG(s_shadowDepth0)
                     , shadowcoord
                     , bias
                     , planeGrad
@@ -590,7 +609,7 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = vec3(coverage, -coverage, -coverage);
 
-    terms.surface = computeVisibility(s_shadowMap0
+    terms.surface = computeVisibility(s_shadowMap0 SHADOW_COMPARE_ARG(s_shadowDepth0)
                     , shadowcoord
                     , bias
                     , planeGrad
@@ -883,6 +902,14 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     // Receivers with a subsurface colour also get the light that crossed the material in front of
     // them, attenuated by its extinction.
     bool has_subsurface = max(data.subsurface_color.x, max(data.subsurface_color.y, data.subsurface_color.z)) > 0.0;
+    // Outside the light's range and cone, or facing away without a subsurface colour to carry
+    // light through, the light adds nothing whatever the shadow says: skip the shadow map taps.
+    // The cascade coverage view still needs them.
+    BRANCH
+    if(u_shadowMapShowCoverage <= 0.0 && (light_mask <= 0.0 || (NoL <= 0.0 && !has_subsurface)))
+    {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
     float subsurface_density = 0.0;
     if(has_subsurface)
     {
@@ -976,7 +1003,14 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // The SH is evaluated over the visibility cone (band 0 carries the visibility), around an
     // axis that follows the bent normal as far as the bent normal strength allows.
     vec3 diffuse_axis = normalize(mix(N, occlusion_axis, u_screen_ao_bent_strength));
-    vec3 ambient_sh = eval_irradiance_sh_cone(s_irradiance, diffuse_axis, visibility) * bounce_gain * (RECIP_PI * u_pre_exposure_value);
+    // The specular cone always follows the bent normal: the directional part is what separates
+    // a reflection into the open side from one into the occluder. Where no probe covers the
+    // pixel, the untraced layer sees the environment SH prefiltered by the lobe. Both SH terms
+    // come from one evaluation (eval_sh_cone_and_lobe says why).
+    float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
+    vec3 dominant_dir = normalize(GetSpecularDominantDir(N, reflect(-V, N), indirect_filtered_roughness));
+    SHIndirectTerms environment = eval_sh_cone_and_lobe(s_irradiance, diffuse_axis, visibility, dominant_dir, indirect_filtered_roughness);
+    vec3 ambient_sh = environment.irradiance * bounce_gain * (RECIP_PI * u_pre_exposure_value);
     bool gi_is_ssil = u_indirect_params.y > 0.5;
     vec4 gi_sample = gi_is_ssil || is_surface ? texture2D(s_ssil, texcoord0) : vec4_splat(0.0);
     float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (is_surface ? 1.0 : 0.0);
@@ -988,15 +1022,10 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
         IndirectDiffuseOcclusion(material_ao, traced_screen_ao, u_screen_ao_multi_bounce, gi_is_ssil, multi_bounce_albedo);
     vec3 indirect_diffuse = mix(ambient_sh, gi_diffuse * traced_diffuse_occlusion, gi_served);
 
-    // The specular cone always follows the bent normal: the directional part is what separates
-    // a reflection into the open side from one into the occluder. Where no probe covers the
-    // pixel, the untraced layer sees the environment SH prefiltered by the lobe.
-    float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
-    vec3 dominant_dir = normalize(GetSpecularDominantDir(N, reflect(-V, N), indirect_filtered_roughness));
     IndirectSpecularOcclusion specular_occlusion =
         ComputeIndirectSpecularOcclusion(s_specular_occlusion, N, dominant_dir, indirect_filtered_roughness, data.specular_color,
                                          material_ao, visibility, occlusion_axis, u_screen_ao_multi_bounce);
-    vec3 environment_specular = eval_radiance_sh_lobe(s_irradiance, dominant_dir, indirect_filtered_roughness) * u_pre_exposure_value;
+    vec3 environment_specular = environment.radiance * u_pre_exposure_value;
     vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(texture2D(s_probe_layer, texcoord0), u_probe_layer_params),
                                           environment_specular);
     vec3 indirect_specular = ComposeIndirectSpecular(texture2D(s_tex5, texcoord0), probe_layer, specular_occlusion);

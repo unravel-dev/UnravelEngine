@@ -8,6 +8,7 @@
 #include <RmlUi/Core/StringUtilities.h>
 #include <RmlUi/Core/Context.h>
 
+#include <base/platform/config.hpp>
 #include <logging/logging.h>
 #include <engine/engine.h>
 #include <engine/rendering/renderer.h>
@@ -144,25 +145,34 @@ void RmlUi_SystemInterface::ActivateKeyboard(Rml::Vector2f caret_position, float
 {
 
 #if UNRAVEL_PLATFORM_OS_MOBILE
-    // For desktop platforms, this is typically a no-op
-    // On mobile platforms, this would show the virtual keyboard
+    // Desktops keep text input on all the time; a phone shows its on-screen keyboard while a text
+    // field has focus.
     auto& ctx = engine::context();
-    auto& window = ctx.get_cached<renderer>().get_main_window();
-    os::set_text_input_area(window->get_window(), os::point(caret_position.x, caret_position.y), os::area(1, line_height), 0);
+    auto* window = ctx.get_cached<renderer>().get_main_window();
+    if(window == nullptr)
+    {
+        return;
+    }
+    os::set_text_input_area(window->get_window(),
+                            os::point(static_cast<int32_t>(caret_position.x), static_cast<int32_t>(caret_position.y)),
+                            os::area(1, static_cast<uint32_t>(line_height)),
+                            0);
     os::start_text_input(window->get_window());
+#else
+    (void)caret_position;
+    (void)line_height;
 #endif
 }
 
 void RmlUi_SystemInterface::DeactivateKeyboard()
 {
 #if UNRAVEL_PLATFORM_OS_MOBILE
-
-    // For desktop platforms, this is typically a no-op
-    // On mobile platforms, this would hide the virtual keyboard
-    APPLOG_TRACE("DeactivateKeyboard");
     auto& ctx = engine::context();
-    auto& window = ctx.get_cached<renderer>().get_main_window();
-    os::stop_text_input(window->get_window());
+    auto* window = ctx.get_cached<renderer>().get_main_window();
+    if(window != nullptr)
+    {
+        os::stop_text_input(window->get_window());
+    }
 #endif
 }
 

@@ -281,6 +281,12 @@ REFLECT_INLINE(platform_renderer_settings)
             entt::attribute{"name", "macos"},
             entt::attribute{"pretty_name", "macOS"},
             entt::attribute{"tooltip", "Preferred renderer when running on macOS. Requires editor restart."},
+        })
+        .data<&platform_renderer_settings::android>("android"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android"},
+            entt::attribute{"pretty_name", "Android"},
+            entt::attribute{"tooltip", "Preferred renderer when running on Android. Vulkan is the only one there."},
         });
 }
 
@@ -289,6 +295,7 @@ SAVE_INLINE(platform_renderer_settings)
     try_save(ar, ser20::make_nvp("windows", obj.windows));
     try_save(ar, ser20::make_nvp("linux", obj.linux));
     try_save(ar, ser20::make_nvp("macos", obj.macos));
+    try_save(ar, ser20::make_nvp("android", obj.android));
 }
 
 LOAD_INLINE(platform_renderer_settings)
@@ -296,6 +303,7 @@ LOAD_INLINE(platform_renderer_settings)
     try_load(ar, ser20::make_nvp("windows", obj.windows));
     try_load(ar, ser20::make_nvp("linux", obj.linux));
     try_load(ar, ser20::make_nvp("macos", obj.macos));
+    try_load(ar, ser20::make_nvp("android", obj.android));
 }
 
 REFLECT_INLINE(settings::graphics_settings::particle_settings)

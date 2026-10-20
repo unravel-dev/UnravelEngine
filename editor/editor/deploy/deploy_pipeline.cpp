@@ -9,6 +9,7 @@
 #include <deploy/keys.h>
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
+#include <deploy/run_arguments.h>
 #include <editor/editing/prefab_bake.h>
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
@@ -302,7 +303,7 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
         // An Android game was started by the package step, and its session finishes the device steps.
         if(!is_android(plan))
         {
-            run_game(plan.executable);
+            run_game(plan.executable, split_run_arguments(plan.params.deploy_run_arguments));
         }
         return;
     }
@@ -439,11 +440,13 @@ auto get_step_error(const tpp::shared_future<void>& step) -> std::string
     return {};
 }
 
-void run_game(const fs::path& executable)
+void run_game(const fs::path& executable, const std::vector<std::string>& arguments)
 {
+    std::vector<std::string> command{fs::to_utf8_string(executable)};
+    command.insert(command.end(), arguments.begin(), arguments.end());
     // The game runs on its own: the editor neither waits for it nor reads its output, and the game writes
     // its log beside itself rather than into the editor's folder.
-    const auto error = process::spawn_detached({fs::to_utf8_string(executable)}, fs::to_utf8_string(executable.parent_path()));
+    const auto error = process::spawn_detached(command, fs::to_utf8_string(executable.parent_path()));
     if(error)
     {
         APPLOG_ERROR("Running {} failed: {}", executable.generic_string(), error.message());

@@ -28,11 +28,6 @@
 #include <string_utils/utils.h>
 
 #include <array>
-// Determines the anti-aliasing quality when creating layers. Enables better-looking visuals, especially when transforms
-// are applied.
-#ifndef RMLUI_NUM_MSAA_SAMPLES
-#define RMLUI_NUM_MSAA_SAMPLES 2
-#endif
 
 namespace unravel
 {

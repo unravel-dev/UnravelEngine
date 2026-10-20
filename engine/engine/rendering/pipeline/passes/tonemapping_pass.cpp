@@ -83,6 +83,8 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     gfx::render_pass pass("Tonemapping/Pass");
     pass.bind(output.get());
+    // Every pixel is drawn below: a clear instead of a load spares a tile-based GPU reading the old contents.
+    pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
 
     const auto output_size = output->get_size();
 

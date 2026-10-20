@@ -16,6 +16,7 @@
 
 namespace unravel
 {
+class gpu_pass_log;
 
 struct ENGINE_EXPORT renderer
 {
@@ -69,9 +70,10 @@ struct ENGINE_EXPORT renderer
      */
     void close_main_window();
     /**
-     * @brief Brings the main window's surface and the backbuffer to the window's current size.
-     *        Runs every frame, so it does not depend on a resize event reaching the renderer:
-     *        a host's loading screen polls OS events itself.
+     * @brief Brings the main window's surface and the backbuffer to the window's current size and
+     *        native window. Runs every frame, so it does not depend on a resize event reaching the
+     *        renderer: a host's loading screen polls OS events itself. Android gives the window a
+     *        new native window when the application returns from the background.
      */
     void sync_main_surface();
     void request_screenshot(const std::string& file);
@@ -97,8 +99,14 @@ struct ENGINE_EXPORT renderer
 
 protected:
     auto init_backend(const cmd_line::parser& parser) -> bool;
+    /**
+     * @brief Starts the graphics backend on the main window's current native window and size,
+     *        again when the window lost its surface during the start (Android).
+     */
+    auto start_backend(bgfx::Init& init_data) -> bool;
 
     void on_os_event(rtti::context& ctx, os::event& e);
+    void on_app_enter_background(rtti::context& ctx);
     void frame_begin(rtti::context& ctx, delta_t dt);
     void frame_end(rtti::context& ctx, delta_t dt);
 
@@ -113,10 +121,16 @@ protected:
     std::unique_ptr<render_window> closed_main_window_{};
     /// The size the backbuffer was last initialized or reset to.
     usize32_t backbuffer_size_{};
+    /// The native window the backbuffer was last initialized or reset on.
+    void* backbuffer_window_{};
+    /// How many times the application entered the background.
+    uint32_t background_count_{};
     std::string request_screenshot_{};
 
     /// Set once init() has brought the backend up; read by the destructor.
     bool is_initialized_{};
+    /// Logs the GPU time of every render pass (--gfx-profile); null when off.
+    std::unique_ptr<gpu_pass_log> gpu_pass_log_{};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };

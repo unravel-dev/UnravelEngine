@@ -61,6 +61,12 @@ auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
     // 3) Begin a named render pass for clarity/debug (optional)
     gfx::render_pass pass("Blit/Pass");
     pass.bind(actual_output.get());
+    // Without blending every pixel is drawn below: a clear instead of a load spares a tile-based GPU
+    // reading the old contents.
+    if(!params.alpha_blend)
+    {
+        pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
+    }
 
     // 4) Bind our GPU program and set the source texture
     blit_program_.program->begin();

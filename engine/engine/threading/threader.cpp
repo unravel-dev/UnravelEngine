@@ -3,6 +3,8 @@
 #include <base/platform/thread.hpp>
 #include <logging/logging.h>
 #include <engine/profiler/profiler.h>
+
+#include <map>
 namespace unravel
 {
 threader::threader()
@@ -25,7 +27,9 @@ threader::threader()
 
     tpp::init(data);
 
-    pool = std::make_unique<tpp::thread_pool>();
+    const size_t worker_count = platform::get_performance_core_count();
+    pool = std::make_unique<tpp::thread_pool>(
+        std::map<tpp::priority::category, size_t>{{tpp::priority::category::low, worker_count}});
 }
 
 auto threader::init(rtti::context& ctx) -> bool

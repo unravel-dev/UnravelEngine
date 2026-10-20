@@ -1,6 +1,6 @@
 #pragma once
 
-// The engine's parallel algorithms, on poolSTL's thread pools: the default pool, which the frame's
+// The engine's parallel algorithms, on two poolSTL thread pools: the frame pool, which the frame's
 // loops use, and a background pool for work that may hold every thread it gets for minutes, such as
 // an asset compile (see background_scope).
 //
@@ -24,9 +24,12 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdio>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 // Extends poolSTL's own namespace: this is an extension of that library rather than a wrapper
@@ -37,25 +40,25 @@ namespace poolstl
 namespace detail
 {
 
-/// The pool this thread's parallel loops run on instead of the default one, set by background_scope.
+/// The pool this thread's parallel loops run on instead of the frame pool, set by background_scope.
 inline thread_local ttp::task_thread_pool* current_pool = nullptr;
 
-/// Starts the background pool with every one of its threads below normal priority.
-inline auto create_background_pool() -> std::unique_ptr<ttp::task_thread_pool>
+/// Starts a pool of @a thread_count threads and runs @a setup(index) once on each, as a thread can only name
+/// itself and lower its own priority.
+inline auto create_pool(unsigned int thread_count, const std::function<void(unsigned int)>& setup)
+    -> std::unique_ptr<ttp::task_thread_pool>
 {
-    auto pool = std::make_unique<ttp::task_thread_pool>();
-    const unsigned int thread_count = pool->get_num_threads();
-    // A thread can only lower its own priority, so each worker runs one of these. Each holds its thread until all
-    // have started, which is what makes every thread take exactly one.
+    auto pool = std::make_unique<ttp::task_thread_pool>(thread_count);
+    // Each setup holds its thread until all have started, which is what makes every thread take exactly one.
     std::mutex mutex;
     std::condition_variable all_started;
     unsigned int started_count = 0;
     for(unsigned int i = 0; i < thread_count; ++i)
     {
         pool->submit_detach(
-            [&]()
+            [&, i]()
             {
-                platform::set_thread_background_priority();
+                setup(i);
                 std::unique_lock<std::mutex> lock(mutex);
                 ++started_count;
                 all_started.notify_all();
@@ -70,11 +73,40 @@ inline auto create_background_pool() -> std::unique_ptr<ttp::task_thread_pool>
     return pool;
 }
 
+/// Names the calling pool thread "<prefix> <index>".
+inline void set_pool_thread_name(const char* prefix, unsigned int index)
+{
+    char name[32]{};
+    std::snprintf(name, sizeof(name), "%s %u", prefix, index);
+    platform::set_thread_name(name);
+}
+
+/// Starts the background pool, one thread per core, every one below normal priority.
+inline auto create_background_pool() -> std::unique_ptr<ttp::task_thread_pool>
+{
+    return create_pool(std::max(1u, std::thread::hardware_concurrency()),
+                       [](unsigned int index)
+                       {
+                           set_pool_thread_name("background", index);
+                           platform::set_thread_background_priority();
+                       });
+}
+
+/// Starts the frame pool, one thread per performance core.
+inline auto create_frame_pool() -> std::unique_ptr<ttp::task_thread_pool>
+{
+    return create_pool(platform::get_performance_core_count(),
+                       [](unsigned int index)
+                       {
+                           set_pool_thread_name("frame worker", index);
+                       });
+}
+
 } // namespace detail
 
 /// @brief The pool for work that may hold every thread it gets for minutes, such as an asset compile and its bakes.
 ///
-/// Kept apart from the default pool because the frame's loops wait on that one, and it serves one queue in order: a
+/// Kept apart from the frame pool because the frame's loops wait on that one, and it serves one queue in order: a
 /// bake there leaves a frame's loop waiting for a free thread until the bake ends. Its threads run below normal
 /// priority, so a frame that needs the cores gets them first and the bake takes what is left.
 inline auto get_background_pool() -> ttp::task_thread_pool&
@@ -83,11 +115,19 @@ inline auto get_background_pool() -> ttp::task_thread_pool&
     return *pool;
 }
 
+/// @brief The pool the frame's parallel loops run on: one thread per performance core, so on a phone the
+///        slow, efficient cores do not hold every loop back (platform::get_performance_core_count).
+inline auto get_frame_pool() -> ttp::task_thread_pool&
+{
+    static const std::unique_ptr<ttp::task_thread_pool> pool = detail::create_frame_pool();
+    return *pool;
+}
+
 /// @brief The pool the parallel loops started on this thread run on: the background pool inside a
-///        background_scope, the default pool otherwise.
+///        background_scope, the frame pool otherwise.
 inline auto get_current_pool() -> ttp::task_thread_pool&
 {
-    return detail::current_pool != nullptr ? *detail::current_pool : *execution::internal::get_default_pool();
+    return detail::current_pool != nullptr ? *detail::current_pool : get_frame_pool();
 }
 
 /// @brief While alive, sends every parallel loop the calling thread starts to the background pool.

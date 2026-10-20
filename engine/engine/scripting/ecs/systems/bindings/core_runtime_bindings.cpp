@@ -61,6 +61,40 @@ auto internal_m2n_screen_get_size() -> math::vec2
     return {float(size.width), float(size.height)};
 }
 
+/// A rectangle as it crosses to C#: the layout of the C# Rect struct.
+struct script_rect
+{
+    float x{};
+    float y{};
+    float width{};
+    float height{};
+};
+
+auto internal_m2n_screen_get_safe_area() -> script_rect
+{
+    auto& ctx = engine::context();
+    const auto& size = ctx.get_cached<rendering_system>().get_game_view_size();
+    script_rect area{0.0f, 0.0f, float(size.width), float(size.height)};
+    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
+    if(window == nullptr)
+    {
+        return area;
+    }
+    // In the player the game view is the window. The editor's Game panel is a part of its window,
+    // and nothing covers it.
+    const auto window_size = window->get_window().get_size();
+    if(window_size.w != size.width || window_size.h != size.height)
+    {
+        return area;
+    }
+    const auto insets = window->get_window().get_safe_area_insets();
+    area.x = float(insets.left);
+    area.y = float(insets.top);
+    area.width = float(int(size.width) - insets.left - insets.right);
+    area.height = float(int(size.height) - insets.top - insets.bottom);
+    return area;
+}
+
 /// The logical DPI Windows reports at 100 % display scaling; the content scale multiplies it.
 constexpr float BASE_SCREEN_DPI = 96.0f;
 
@@ -160,6 +194,7 @@ void register_core_runtime_script_bindings()
         auto reg = dotnet::internal_call_registry("Unravel.Core.Screen");
         reg.add_internal_call("internal_m2n_screen_get_size", dotnet_internal_call(internal_m2n_screen_get_size));
         reg.add_internal_call("internal_m2n_screen_get_dpi", dotnet_internal_call(internal_m2n_screen_get_dpi));
+        reg.add_internal_call("internal_m2n_screen_get_safe_area", dotnet_internal_call(internal_m2n_screen_get_safe_area));
 
     }
     {

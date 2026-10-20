@@ -20,7 +20,8 @@
  *     variants, stale binaries, older runtime versions;
  *   - platform folders under the deploy folder;
  *   - Android: default and invalid application ids, adb device lists, logcat lines, the player template's
- *     stamp checks, Gradle's command line;
+ *     stamp checks, Gradle's command line, the start command with the game's options;
+ *   - run arguments: split on whitespace, quoted for a device shell;
  *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
  *     its process at once;
  *   - a protocol shipped packed, loose, packed again, as a patch over a kept release and full again,
@@ -43,6 +44,7 @@
 #include <deploy/keys.h>
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
+#include <deploy/run_arguments.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
@@ -610,6 +612,29 @@ void test_gradle_arguments()
           "the debug package's place");
 }
 
+void test_run_arguments()
+{
+    std::printf("test_run_arguments\n");
+    check(deployment::split_run_arguments("").empty() && deployment::split_run_arguments(" \t ").empty(),
+          "no options in blank text");
+    const auto split = deployment::split_run_arguments("  --gfx-stats\t--window=0,0,640,480 \n-n ");
+    check(split == std::vector<std::string>{"--gfx-stats", "--window=0,0,640,480", "-n"},
+          "options split on any whitespace");
+    check(deployment::quote_for_shell("--gfx-stats -n") == "'--gfx-stats -n'", "a shell word in single quotes");
+    check(deployment::quote_for_shell("it's $HOME") == "'it'\\''s $HOME'", "a single quote is escaped outside the quotes");
+    deployment::android_toolchain tools;
+    tools.adb = "/sdk/platform-tools/adb";
+    const auto plain = deployment::make_start_arguments(tools, "serial", "com.company.game", {});
+    check(!plain.empty() && plain.back() == "com.company.game/com.unravel.player.UnravelActivity" &&
+              !contains_argument(plain, "--es"),
+          "a start without options sets no extra");
+    const auto with_options =
+        deployment::make_start_arguments(tools, "serial", "com.company.game", {"--gfx-stats", "--novsync"});
+    check(with_options.size() == plain.size() + 3 && with_options[plain.size()] == "--es" &&
+              with_options[plain.size() + 1] == "arguments" && with_options.back() == "'--gfx-stats --novsync'",
+          "the options go in one quoted extra of the start intent");
+}
+
 //-----------------------------------------------------------------------------
 // subprocess
 //-----------------------------------------------------------------------------
@@ -1006,6 +1031,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_logcat_lines();
         test_android_template(temp / "android");
         test_gradle_arguments();
+        test_run_arguments();
         test_subprocess(temp / "subprocess");
         test_pack_inputs(temp / "inputs");
         test_stale_binaries(temp / "binaries");

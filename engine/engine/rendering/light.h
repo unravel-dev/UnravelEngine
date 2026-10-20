@@ -296,9 +296,10 @@ struct light
          */
         struct pcf_impl_params
         {
-            /// Offset along the x-axis for PCF sampling.
+            /// PCF softness along x; the larger of x_offset and y_offset picks the tent filter size
+            /// (deferred pipeline get_pcf_tent_slot).
             float x_offset{1.0f};
-            /// Offset along the y-axis for PCF sampling.
+            /// PCF softness along y; see x_offset.
             float y_offset{1.0f};
         };
 

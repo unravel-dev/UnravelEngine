@@ -72,6 +72,7 @@ auto inspector_platform_renderer_settings::inspect(rtti::context& ctx,
     result |= inspect_platform_renderer_combo("Windows", data.windows, renderer_platform::windows, info.read_only);
     result |= inspect_platform_renderer_combo("Linux", data.linux, renderer_platform::linux, info.read_only);
     result |= inspect_platform_renderer_combo("macOS", data.macos, renderer_platform::macos, info.read_only);
+    result |= inspect_platform_renderer_combo("Android", data.android, renderer_platform::android, info.read_only);
     return result;
 }
 

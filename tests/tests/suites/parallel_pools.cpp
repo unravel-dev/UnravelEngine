@@ -5,13 +5,14 @@
  *   cmake --build <build-dir> --target tests
  *   <build-dir>/bin/unravel-tests --suite "parallel pools"
  *
- * The frame's loops run on poolSTL's default pool, which serves one queue in order. Work that holds
- * every thread it gets for minutes, such as an asset compile's distance-field bake, runs inside a
- * background_scope on a pool of its own, or a frame waits for a free thread until the bake ends.
+ * The frame's loops run on the frame pool, one thread per performance core, which serves one queue
+ * in order. Work that holds every thread it gets for minutes, such as an asset compile's
+ * distance-field bake, runs inside a background_scope on a pool of its own, or a frame waits for a
+ * free thread until the bake ends.
  *
  * These pin the contract:
  *   - a loop inside a background_scope runs on the background pool's threads and on none of the
- *     default pool's;
+ *     frame pool's;
  *   - a loop outside it still runs while every background thread is held;
  *   - a scope covers only its own thread, ends with its block, and nests;
  *   - the background threads run below normal priority (checked on Windows).
@@ -89,28 +90,30 @@ auto collect_pool_thread_ids() -> std::set<std::thread::id>
 void test_background_scope_runs_on_its_own_threads()
 {
     std::printf("test_background_scope_runs_on_its_own_threads\n");
-    const std::set<std::thread::id> default_ids = collect_pool_thread_ids();
+    const std::set<std::thread::id> frame_ids = collect_pool_thread_ids();
     std::set<std::thread::id> background_ids;
     {
         const poolstl::background_scope background;
         background_ids = collect_pool_thread_ids();
     }
-    std::printf("  default pool %zu threads, background pool %zu threads\n", default_ids.size(), background_ids.size());
-    check(default_ids.size() == poolstl::get_current_pool().get_num_threads(), "a default loop runs on every default thread");
+    std::printf("  frame pool %zu threads, background pool %zu threads\n", frame_ids.size(), background_ids.size());
+    check(frame_ids.size() == poolstl::get_current_pool().get_num_threads(), "a frame loop runs on every frame thread");
+    check(poolstl::get_frame_pool().get_num_threads() == platform::get_performance_core_count(),
+          "the frame pool has one thread per performance core");
     check(background_ids.size() == poolstl::get_background_pool().get_num_threads(),
           "a loop in the scope runs on every background thread");
     const bool is_shared = std::any_of(background_ids.begin(),
                                        background_ids.end(),
                                        [&](const std::thread::id& id)
                                        {
-                                           return default_ids.count(id) > 0;
+                                           return frame_ids.count(id) > 0;
                                        });
-    check(!is_shared, "the scope's loop runs on none of the default pool's threads");
+    check(!is_shared, "the scope's loop runs on none of the frame pool's threads");
 }
 
-void test_default_loop_runs_while_background_threads_are_held()
+void test_frame_loop_runs_while_background_threads_are_held()
 {
-    std::printf("test_default_loop_runs_while_background_threads_are_held\n");
+    std::printf("test_frame_loop_runs_while_background_threads_are_held\n");
     const unsigned int background_threads = poolstl::get_background_pool().get_num_threads();
     std::atomic<bool> is_released{false};
     std::atomic<bool> has_given_up{false};
@@ -164,10 +167,10 @@ void test_default_loop_runs_while_background_threads_are_held()
     const bool finished_while_held = !has_given_up.load();
     is_released = true;
     holder.join();
-    std::printf("  %u background threads held, the default loop took %.2f ms\n", held_count.load(), loop_ms);
+    std::printf("  %u background threads held, the frame loop took %.2f ms\n", held_count.load(), loop_ms);
     check(are_all_held, "every background thread holds an item");
     check(ran_count.load() == DEFAULT_LOOP_ITEMS && finished_while_held,
-          "a default loop finishes while every background thread is held");
+          "a frame loop finishes while every background thread is held");
 #if UNRAVEL_PLATFORM_WINDOWS
     check(below_normal_count.load() == background_threads, "every background thread runs below normal priority");
 #endif
@@ -180,7 +183,7 @@ void test_background_scope_covers_its_own_thread_and_block()
     {
         return &poolstl::get_current_pool() == &poolstl::get_background_pool();
     };
-    check(!is_on_background(), "outside a scope, loops run on the default pool");
+    check(!is_on_background(), "outside a scope, loops run on the frame pool");
     {
         const poolstl::background_scope outer;
         check(is_on_background(), "inside a scope, loops run on the background pool");
@@ -198,7 +201,7 @@ void test_background_scope_covers_its_own_thread_and_block()
         }
         check(is_on_background(), "leaving a nested scope keeps the outer one");
     }
-    check(!is_on_background(), "leaving the scope restores the default pool");
+    check(!is_on_background(), "leaving the scope restores the frame pool");
 }
 
 auto run_parallel_pools_suite(rtti::context& ctx) -> int
@@ -207,7 +210,7 @@ auto run_parallel_pools_suite(rtti::context& ctx) -> int
     g_checks = 0;
     g_failures = 0;
     test_background_scope_runs_on_its_own_threads();
-    test_default_loop_runs_while_background_threads_are_held();
+    test_frame_loop_runs_while_background_threads_are_held();
     test_background_scope_covers_its_own_thread_and_block();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

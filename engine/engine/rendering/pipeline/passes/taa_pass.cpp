@@ -83,6 +83,8 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
 
     gfx::render_pass pass("TAA/Resolve Pass");
     pass.bind(temp_fbo.get());
+    // Every pixel is drawn below: a clear instead of a load spares a tile-based GPU reading the old contents.
+    pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
     // The output lives on the unjittered pixel grid: fs_taa.sc reconstructs positions through the unjittered
     // projection and resamples the current frame around the unjittered centre with the jitter below.
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());

@@ -68,6 +68,8 @@ struct android_package_plan
     fs::path output;
     /// The device Deploy and Run installs on.
     std::string device;
+    /// The command line options Deploy and Run starts the game with.
+    std::vector<std::string> run_arguments;
     /// Uninstall a copy signed with another key before installing (its saved data goes with it).
     bool replace_installed{};
     /// Uninstall the game before installing: the copy on the device is known to be signed with another key.

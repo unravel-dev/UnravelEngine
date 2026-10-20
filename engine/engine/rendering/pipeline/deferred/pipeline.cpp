@@ -25,6 +25,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
+#include <hpp/optional.hpp>
 
 #include <graphics/index_buffer.h>
 #include <graphics/graphics.h>
@@ -44,6 +45,38 @@ namespace ANONYMOUS
 {
 /// Border fade of the cloud shadow map in map space (fraction of the half extent).
 constexpr float cloud_shadow_border_fade = 0.08f;
+/// First sampler stage of the shadow maps' depth attachments in the light programs (s_shadowDepth0).
+constexpr uint8_t light_shadow_compare_stage = 12;
+
+/// PCF filter radius in shadow map texels at PCF offset 1, at least one texel.
+constexpr float pcf_radius_texels_per_offset = 2.0f;
+constexpr float pcf_min_radius_texels = 1.0f;
+/// Point lights pack four tetrahedron faces into one map and filter each at this fraction of the radius.
+constexpr float pcf_point_face_radius_scale = 0.25f;
+/// A tent of N texels stands in for a filter disk of radius (N - 1) / 2: radii below these pick the 3x3 and
+/// the 5x5 tent, larger ones the 7x7.
+constexpr float pcf_tent3_max_radius_texels = 1.5f;
+constexpr float pcf_tent5_max_radius_texels = 2.5f;
+/// Slots of deferred::color_lighting_pcf_tent_.
+constexpr size_t pcf_tent3_slot = 0;
+constexpr size_t pcf_tent7_slot = 1;
+
+/// The color_lighting_pcf_tent_ slot of a PCF light, or no slot for the 5x5 tent.
+auto get_pcf_tent_slot(const light& l) -> hpp::optional<size_t>
+{
+    const float offset = std::max(l.shadow_params.pcf.x_offset, l.shadow_params.pcf.y_offset);
+    const float face_scale = l.type == light_type::point ? pcf_point_face_radius_scale : 1.0f;
+    const float radius_texels = std::max(pcf_radius_texels_per_offset * offset * face_scale, pcf_min_radius_texels);
+    if(radius_texels < pcf_tent3_max_radius_texels)
+    {
+        return pcf_tent3_slot;
+    }
+    if(radius_texels >= pcf_tent5_max_radius_texels)
+    {
+        return pcf_tent7_slot;
+    }
+    return hpp::nullopt;
+}
 
 /// The cloud_shadow.sh uniforms of @p shadow (u_cloudShadow, u_cloudShadow2) and whether the lights apply it.
 struct cloud_shadow_uniforms
@@ -443,7 +476,18 @@ auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
 
 auto deferred::get_light_program(const light& l) const -> const color_lighting&
 {
-    return color_lighting_[uint8_t(l.type)][uint8_t(l.shadow_params.depth)][uint8_t(l.shadow_params.type)];
+    const auto& program = color_lighting_[uint8_t(l.type)][uint8_t(l.shadow_params.depth)][uint8_t(l.shadow_params.type)];
+    if(l.shadow_params.type != sm_impl::pcf)
+    {
+        return program;
+    }
+    const auto tent_slot = ANONYMOUS::get_pcf_tent_slot(l);
+    if(!tent_slot)
+    {
+        return program;
+    }
+    const auto& tent_program = color_lighting_pcf_tent_[uint8_t(l.type)][uint8_t(l.shadow_params.depth)][*tent_slot];
+    return tent_program.program ? tent_program : program;
 }
 
 auto deferred::get_light_program_no_shadows(const light& l) const -> const color_lighting&
@@ -935,16 +979,16 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     apply_pipeline_taa_jitter_to_camera(camera, viewport_size, params);
 
-    // Velocity buffer production: UNCONDITIONAL for camera runs, like depth - a standing
-    // frame resource every temporal consumer (and future feature: motion blur, upscalers)
-    // relies on without negotiation. The velocity_pass step bit stays the opt-out lever:
-    // probe captures build pflags from 0 and never set it, and a custom caller can clear
-    // it. Consumers receive the texture EXPLICITLY through their run params (this pipeline
-    // is the only place that fetches "VELOCITY" from the render view); a valid texture IS
-    // their enable - null falls back to their legacy matrix reprojection. Also excludes
-    // movers from static-mesh batching below so their G-buffer raster matches the velocity
-    // pass for the EQUAL depth test.
-    velocity_run_active_ = is_camera_run && (stages & pipeline_steps::velocity_pass) != 0u;
+    // Velocity buffer production: camera runs that have a reader (is_velocity_wanted). It is two
+    // full-resolution passes, so a run without temporal effects skips it. The velocity_pass step
+    // bit stays the opt-out lever: probe captures build pflags from 0 and never set it, and a
+    // custom caller can clear it. Consumers receive the texture EXPLICITLY through their run
+    // params (this pipeline is the only place that fetches "VELOCITY" from the render view); a
+    // valid texture IS their enable - null falls back to their matrix reprojection. Also excludes
+    // movers from static-mesh batching below so their G-buffer raster matches the velocity pass
+    // for the EQUAL depth test.
+    velocity_run_active_ =
+        is_camera_run && (stages & pipeline_steps::velocity_pass) != 0u && is_velocity_wanted(params);
     if(velocity_run_active_)
     {
         model_component::request_velocity_recording(gfx::get_render_frame());
@@ -958,14 +1002,17 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_screen_ao_pass(camera, rview, dt, params);
 
-    // The GI reflections write every pixel of RBUFFER when they run, so only other views start it cleared.
+    // SSR composites into RBUFFER from the traced clear. The GI reflections write every pixel of it
+    // when they run, and without a traced layer the indirect pass reads the clear value from a
+    // constant texture (get_traced_reflection_layer), so only SSR needs the clear.
     const bool gi_owns_reflections = is_camera_run && gi_reflections_own_view(params);
     gi_reflections_written_ = false;
-    if(build_reflection_probes && !gi_owns_reflections)
+    traced_reflections_cleared_ = false;
+    if(build_reflection_probes && is_ssr_wanted(params))
     {
         clear_traced_reflections(rview);
     }
-    run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, dt);
+    run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, gi_owns_reflections, dt);
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
@@ -1576,6 +1623,13 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
     // collector at the end of the run, which also invalidates the transform pointers.
 }
 
+auto deferred::is_velocity_wanted(const run_params& params) const -> bool
+{
+    const bool has_temporal_effect = params.fill_taa_params || params.fill_gtao_params || params.fill_ssr_params ||
+                                     params.fill_ssil_params || params.fill_gi_params;
+    return has_temporal_effect || debug_pass_ == debug_pass_velocity || temporal_probe_pass_.is_busy();
+}
+
 void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
                                  const camera& camera,
                                  gfx::render_view& rview)
@@ -1616,6 +1670,8 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         const auto& camera_fbo = rview.fbo_get("VELOCITY_FBO_CAMERA");
         gfx::render_pass pass("Velocity/Camera Pass");
         pass.bind(camera_fbo.get());
+        // Every pixel is drawn below: a clear instead of a load spares a tile-based GPU reading the old contents.
+        pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
         pass.set_view_proj(view, proj);
 
         if(velocity_camera_program_.program->begin())
@@ -2405,12 +2461,12 @@ void deferred::submit_light(const light& light,
         gfx::set_texture(lprogram.s_tex[i], i, context.gbuffer->get_texture(i));
     }
     // Skip s_tex5 (RBUFFER) and s_tex6 (BRDF LUT) - not used by per-light direct shaders.
-    // Shadow maps start at slot 7.
+    // Shadow maps start at slot 7, their depth attachments at slot 12 (after the cloud shadow).
     i = 7;
 
     if(has_shadows)
     {
-        shadows->submit_uniforms(i);
+        shadows->submit_uniforms(i, ANONYMOUS::light_shadow_compare_stage);
     }
 
     if(light.type == light_type::directional)
@@ -2500,8 +2556,6 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     const auto& camera_pos = camera.get_position();
 
     const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& rbuffer = rview.fbo_find("RBUFFER");
-    const auto& pbuffer = rview.fbo_find("PBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
 
     gfx::render_pass pass("Indirect Lighting/Pass");
@@ -2520,7 +2574,9 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     {
         gfx::set_texture(iprogram.s_tex[i], i, gbuffer->get_texture(i));
     }
-    gfx::set_texture(iprogram.s_tex[i], i, apply_reflection && rbuffer ? rbuffer->get_texture(0) : default_textures::get().black_texture());
+    gfx::set_texture(iprogram.s_tex[i],
+                     i,
+                     apply_reflection ? get_traced_reflection_layer(rview) : default_textures::get().black_texture());
     i++;
     gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
     i++;
@@ -2557,7 +2613,7 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
     gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
-    const auto probe_layer = get_probe_layer_inputs(rview, apply_reflection && pbuffer ? pbuffer->get_texture(0) : nullptr);
+    const auto probe_layer = get_probe_layer_inputs(rview, apply_reflection ? get_probe_reflection_layer(rview) : nullptr);
     gfx::set_texture(iprogram.s_probe_layer,
                      10,
                      probe_layer.texture ? probe_layer.texture : default_textures::get().black_texture());
@@ -2590,32 +2646,45 @@ void deferred::clear_traced_reflections(gfx::render_view& rview)
     gfx::render_pass traced_clear_pass("Reflections/Traced Clear");
     traced_clear_pass.bind(rbuffer.get());
     traced_clear_pass.clear(BGFX_CLEAR_COLOR, ANONYMOUS::reflection_traced_clear_rgba, 0.0f, 0);
+    traced_reflections_cleared_ = true;
 }
 
-void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt)
+auto deferred::get_traced_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr
 {
+    const auto& rbuffer = rview.fbo_find("RBUFFER");
+    if(rbuffer && (traced_reflections_cleared_ || gi_reflections_written_))
+    {
+        return rbuffer->get_texture(0);
+    }
+    // Opaque black is the traced clear: no traced radiance, the whole pixel left to the probe layer.
+    return default_textures::get().black_texture();
+}
+
+auto deferred::get_probe_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr
+{
+    const auto& pbuffer = rview.fbo_find("PBUFFER");
+    if(pbuffer && (probe_layer_written_ || gi_reflections_written_))
+    {
+        return pbuffer->get_texture(0);
+    }
+    // Transparent black is the probe layer's clear: no probe covers the pixel.
+    return default_textures::get().transparent_texture();
+}
+
+void deferred::run_reflection_probe_pass(scene& scn,
+                                         const camera& camera,
+                                         gfx::render_view& rview,
+                                         bool apply_probes,
+                                         bool is_layer_read_by_gi,
+                                         delta_t dt)
+{
+    probe_layer_written_ = false;
     if(!apply_probes)
     {
         return;
     }
 
     APP_SCOPE_PERF("Rendering/Reflection Probe Pass");
-
-    const auto& view = camera.get_view();
-    const auto& proj = camera.get_projection();
-    const auto& camera_pos = camera.get_position();
-
-    const auto& viewport_size = camera.get_viewport_size();
-    const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& pbuffer = rview.fbo_get("PBUFFER");
-
-    const auto buffer_size = pbuffer->get_size();
-
-    gfx::render_pass pass("Reflections/Buffer Pass");
-    pass.bind(pbuffer.get());
-    pass.set_view_proj(view, proj);
-    pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
-
 
     std::vector<entt::entity> sorted_probes;
 
@@ -2650,6 +2719,28 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
                   // If the reflection methods are the same, compare based on the maximum range
                   return lhs_probe.get_max_range() > rhs_probe.get_max_range(); // Smaller ranges first
               });
+
+    // Without probes the layer stays empty; the indirect pass reads the same empty layer from a
+    // constant texture, so the full-screen clear is skipped unless the GI reflections read it.
+    if(sorted_probes.empty() && !is_layer_read_by_gi)
+    {
+        return;
+    }
+
+    const auto& view = camera.get_view();
+    const auto& proj = camera.get_projection();
+    const auto& camera_pos = camera.get_position();
+
+    const auto& gbuffer = rview.fbo_get("GBUFFER");
+    const auto& pbuffer = rview.fbo_get("PBUFFER");
+
+    const auto buffer_size = pbuffer->get_size();
+
+    gfx::render_pass pass("Reflections/Buffer Pass");
+    pass.bind(pbuffer.get());
+    pass.set_view_proj(view, proj);
+    pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
+    probe_layer_written_ = true;
 
     // Render or process the sorted probes, unoccluded: the GI reflection trace reads this layer
     // as the open sky, and the indirect pass occludes it (ComposeIndirectSpecular).
@@ -2881,7 +2972,7 @@ void deferred::run_ssr_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams)
 {
-    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params || gi_reflections_own_view(rparams))
+    if(!is_ssr_wanted(rparams))
     {
         ssr_pass_.release_resources(rview);
         return;
@@ -3311,6 +3402,11 @@ auto deferred::gi_short_range_ao_owns_view(const run_params& rparams) -> bool
     return resolve_gi_settings(rparams, gi) && gi.ambient_occlusion.enabled;
 }
 
+auto deferred::is_ssr_wanted(const run_params& rparams) -> bool
+{
+    return reflection_screen_stack_enabled(rparams) && rparams.fill_ssr_params && !gi_reflections_own_view(rparams);
+}
+
 auto deferred::gi_reflections_own_view(const run_params& rparams) -> bool
 {
     if(!reflection_screen_stack_enabled(rparams) || !wants_hdr_buffers(rparams) || !gi_reflection_pass_.has_programs())
@@ -3566,8 +3662,6 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& rbuffer = rview.fbo_find("RBUFFER");
-    const auto& pbuffer = rview.fbo_find("PBUFFER");
     const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
 
     gfx::render_pass pass("Debug/Visualization Pass");
@@ -3593,7 +3687,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     {
         gfx::set_texture(debug_visualization_program_.s_tex[i], i, gbuffer->get_texture(i));
     }
-    gfx::set_texture(debug_visualization_program_.s_tex[i], i, rbuffer);
+    gfx::set_texture(debug_visualization_program_.s_tex[i], i, get_traced_reflection_layer(rview));
     ++i;
     gfx::set_texture(debug_visualization_program_.s_tex[i], i, irradiance_tex);
     ++i;
@@ -3619,7 +3713,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
                                          get_gi_resolve_scale(rview)};
     gfx::set_uniform(debug_visualization_program_.u_visualize_indirect, visualize_indirect);
     // The reflection views compose the two reflection layers the way the indirect pass does.
-    const auto probe_layer = get_probe_layer_inputs(rview, pbuffer ? pbuffer->get_texture(0) : nullptr);
+    const auto probe_layer = get_probe_layer_inputs(rview, get_probe_reflection_layer(rview));
     gfx::set_texture(debug_visualization_program_.s_tex[9],
                      9,
                      probe_layer.texture ? probe_layer.texture : default_textures::get().black_texture());
@@ -3822,6 +3916,16 @@ auto deferred::init(rtti::context& ctx) -> bool
             }
         }
     }
+    for(auto& byLightType : color_lighting_pcf_tent_)
+    {
+        for(auto& byDepthType : byLightType)
+        {
+            for(auto& byTent : byDepthType)
+            {
+                byTent.cache_uniforms();
+            }
+        }
+    }
 
     // clang-format off
     color_lighting_no_shadow_[uint8_t(light_type::spot)].program = load_program("vs_clip_quad", "fs_deferred_spot_light");
@@ -3862,6 +3966,15 @@ auto deferred::init(rtti::context& ctx) -> bool
     color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcss_linear");
     color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_vsm_linear");
     color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_esm_linear");
+
+    // Linear spot and point maps keep the point-tap PCF and have no tent sizes; point lights never reach the 7x7.
+    color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcf_tent3");
+    color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcf_tent7");
+    color_lighting_pcf_tent_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_point_light_pcf_tent3");
+    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_tent3");
+    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_tent7");
+    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_linear_tent3");
+    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent7_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_linear_tent7");
     // clang-format on
 
     ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");

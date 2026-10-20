@@ -18,6 +18,8 @@
 #include <engine/settings/settings.h>
 
 #include <engine/profiler/profiler.h>
+
+#include <base/platform/thread.hpp>
 #define BT_USE_SSE_IN_API
 #include <BulletCollision/CollisionDispatch/btCollisionDispatcherMt.h>
 #include <BulletCollision/NarrowPhaseCollision/btRaycastCallback.h>
@@ -1496,7 +1498,7 @@ auto create_dynamics_world() -> bullet::world
 
 #ifdef BULLET_MT
     auto dispatcher = std::make_shared<btCollisionDispatcherMt>(collision_config.get());
-    const unsigned int hardware_threads = std::thread::hardware_concurrency();
+    const uint32_t hardware_threads = platform::get_performance_core_count();
     const int solver_threads = static_cast<int>(hardware_threads > 1 ? hardware_threads - 1 : 1);
     auto solver_pool = std::make_shared<btConstraintSolverPoolMt>(solver_threads);
     auto solver = std::make_shared<btSequentialImpulseConstraintSolverMt>();

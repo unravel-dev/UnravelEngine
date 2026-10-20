@@ -67,6 +67,10 @@ auto preferred_renderers_for_platform(renderer_platform platform) -> hpp::span<c
         preferred_renderer::metal,
         preferred_renderer::vulkan,
     };
+    static constexpr preferred_renderer android_backends[] = {
+        preferred_renderer::auto_detect,
+        preferred_renderer::vulkan,
+    };
     switch(platform)
     {
         case renderer_platform::windows:
@@ -75,6 +79,8 @@ auto preferred_renderers_for_platform(renderer_platform platform) -> hpp::span<c
             return linux_backends;
         case renderer_platform::macos:
             return macos_backends;
+        case renderer_platform::android:
+            return android_backends;
         default:
             return windows_backends;
     }

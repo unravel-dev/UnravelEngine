@@ -240,6 +240,152 @@ float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, v
     return PCFLod(_sampler, 0.0, vec2(2.0, 2.0), _shadowCoord, _bias, _planeGrad, _pcfParams, _texelSize, diskRotation, _cascadeScale, _minRadiusUV);
 }
 
+// PCF compares on the maps' depth attachments wherever they hold the stored depth: 1/z maps and
+// orthographic cascades. Linear spot and point maps store a depth the attachment does not hold and
+// keep the point-tap filter (PCF above).
+#if SM_PCF && (SM_CSM || !SM_LINEAR)
+#define SM_PCF_COMPARE 1
+#endif
+
+#if SM_PCF_COMPARE
+// ---- PCF -------------------------------------------------------------------------------------
+// Tent filters over the maps' depth attachments read through LEQUAL comparison samplers: each
+// fetch compares the receiver with the 2x2 texels around it and blends the four results
+// bilinearly; the fetches are placed and weighted from the receiver's position inside its texel
+// so that their weighted sum is exactly the tent: 3x3 texels from 4 fetches, 5x5 from 9, 7x7
+// from 16. Smooth without noise. A light program compiles one size (PCF_TENT_SIZE, 5 unless the
+// program asks for 3 or 7); the pipeline picks the program from the light's PCF offset, so no
+// pixel pays for the registers of a larger tent.
+//
+// The colour maps store 0.5 z_ndc + 0.5 (z_ndc on [0, 1], the engine's projection), the depth
+// attachments the window depth: z_ndc where the backend's clip depth spans [0, 1] (scale 2),
+// 0.5 z_ndc + 0.5 where it spans [-1, 1] (OpenGL, scale 1).
+#define u_shadowHardwareDepthScale u_params2.w
+
+// A fetch compares every texel of its 2x2 footprint with one reference: the receiver plane at the
+// fetch, lowered to the lowest the plane gets at those texel centres (exact for planar receivers).
+// Along each axis that is the texel behind the fetch on the downhill side, from 0 to 1 texel away
+// depending on where the fetch sits in its footprint.
+float comparePlaneSlack(vec2 _sampleUV, vec2 _planeGrad)
+{
+    vec2 footprint = fract(_sampleUV / u_shadowMapTexelSize - 0.5);
+    vec2 texelStep = _planeGrad * u_shadowMapTexelSize;
+    vec2 slack = max(texelStep * footprint, texelStep * (footprint - 1.0));
+    return slack.x + slack.y;
+}
+
+// One comparison fetch at _sampleUV: the receiver plane at the fetch against the stored depths.
+float compareShadowTap(sampler2DShadow _sampler, vec2 _sampleUV, vec2 _receiverUV, float _receiverDepth, vec2 _planeGrad)
+{
+#if SM_CSM
+    _sampleUV = saturate(_sampleUV);
+#else
+    bool outside = any(greaterThan(_sampleUV, vec2_splat(1.0)))
+                || any(lessThan   (_sampleUV, vec2_splat(0.0)))
+                 ;
+
+    if (outside)
+    {
+        return 1.0;
+    }
+#endif
+
+    float receiver = _receiverDepth + dot(_sampleUV - _receiverUV, _planeGrad) - comparePlaneSlack(_sampleUV, _planeGrad);
+    float hardwareDepth = receiver * u_shadowHardwareDepthScale + (1.0 - u_shadowHardwareDepthScale);
+    return shadow2D(_sampler, vec3(_sampleUV, hardwareDepth));
+}
+
+// The tents: _baseUV is the centre of the texel below and left of the texel corner nearest the
+// receiver, _st the receiver's position from that texel's centre, in texels.
+float pcfTent3(sampler2DShadow _sampler, vec2 _baseUV, vec2 _st, vec2 _receiverUV, float _receiverDepth, vec2 _planeGrad)
+{
+    float texel = u_shadowMapTexelSize;
+    vec2 w0 = 3.0 - 2.0 * _st;
+    vec2 w1 = 1.0 + 2.0 * _st;
+    vec2 o0 = (2.0 - _st) / w0 - 1.0;
+    vec2 o1 = _st / w1 + 1.0;
+    float sum = w0.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w0.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad);
+    return sum * (1.0 / 16.0);
+}
+
+float pcfTent5(sampler2DShadow _sampler, vec2 _baseUV, vec2 _st, vec2 _receiverUV, float _receiverDepth, vec2 _planeGrad)
+{
+    float texel = u_shadowMapTexelSize;
+    vec2 w0 = 4.0 - 3.0 * _st;
+    vec2 w1 = vec2_splat(7.0);
+    vec2 w2 = 1.0 + 3.0 * _st;
+    vec2 o0 = (3.0 - 2.0 * _st) / w0 - 2.0;
+    vec2 o1 = (3.0 + _st) / w1;
+    vec2 o2 = _st / w2 + 2.0;
+    float sum = w0.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w0.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w0.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad);
+    return sum * (1.0 / 144.0);
+}
+
+// The per-axis weights of the 7x7 tent are all negative (they sum to -52); their products are not.
+float pcfTent7(sampler2DShadow _sampler, vec2 _baseUV, vec2 _st, vec2 _receiverUV, float _receiverDepth, vec2 _planeGrad)
+{
+    float texel = u_shadowMapTexelSize;
+    vec2 w0 = 5.0 * _st - 6.0;
+    vec2 w1 = 11.0 * _st - 28.0;
+    vec2 w2 = -(11.0 * _st + 17.0);
+    vec2 w3 = -(5.0 * _st + 1.0);
+    vec2 o0 = (4.0 * _st - 5.0) / w0 - 3.0;
+    vec2 o1 = (4.0 * _st - 16.0) / w1 - 1.0;
+    vec2 o2 = -(7.0 * _st + 5.0) / w2 + 1.0;
+    vec2 o3 = -_st / w3 + 3.0;
+    float sum = w0.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w3.x * w0.y * compareShadowTap(_sampler, _baseUV + vec2(o3.x, o0.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w0.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w3.x * w1.y * compareShadowTap(_sampler, _baseUV + vec2(o3.x, o1.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w0.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w3.x * w2.y * compareShadowTap(_sampler, _baseUV + vec2(o3.x, o2.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w0.x * w3.y * compareShadowTap(_sampler, _baseUV + vec2(o0.x, o3.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w1.x * w3.y * compareShadowTap(_sampler, _baseUV + vec2(o1.x, o3.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w2.x * w3.y * compareShadowTap(_sampler, _baseUV + vec2(o2.x, o3.y) * texel, _receiverUV, _receiverDepth, _planeGrad)
+              + w3.x * w3.y * compareShadowTap(_sampler, _baseUV + vec2(o3.x, o3.y) * texel, _receiverUV, _receiverDepth, _planeGrad);
+    return sum * (1.0 / 2704.0);
+}
+
+#ifndef PCF_TENT_SIZE
+#define PCF_TENT_SIZE 5
+#endif
+
+// The program's tent around the receiver.
+float PCFCompare(sampler2DShadow _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad)
+{
+    vec2 receiverUV = _shadowCoord.xy / _shadowCoord.w;
+    float receiverDepth = _shadowCoord.z / _shadowCoord.w - _bias;
+    vec2 texelPos = receiverUV / u_shadowMapTexelSize;
+    vec2 baseTexel = floor(texelPos + 0.5);
+    vec2 st = texelPos + 0.5 - baseTexel;
+    vec2 baseUV = (baseTexel - 0.5) * u_shadowMapTexelSize;
+#if PCF_TENT_SIZE == 3
+    return pcfTent3(_sampler, baseUV, st, receiverUV, receiverDepth, _planeGrad);
+#elif PCF_TENT_SIZE == 7
+    return pcfTent7(_sampler, baseUV, st, receiverUV, receiverDepth, _planeGrad);
+#else
+    return pcfTent5(_sampler, baseUV, st, receiverUV, receiverDepth, _planeGrad);
+#endif
+}
+#endif
+
 // ---- Subsurface transmittance ----------------------------------------------------------------
 // The light that reaches a subsurface receiver through whatever the map stored in front of it: exp(-distance from
 // that occluder to the receiver x density), as if everything between were the receiver's own material. A leaf lit

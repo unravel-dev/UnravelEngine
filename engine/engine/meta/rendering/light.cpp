@@ -360,7 +360,7 @@ REFLECT(light)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 3.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Offset along the x-axis for PCF sampling."},
+            entt::attribute{"tooltip", "Softness of PCF shadows. The larger of X Offset and Y Offset picks the filter: below 0.75 it covers 3 x 3 shadow map texels, below 1.25 5 x 5 and from 1.25 7 x 7. Point lights use a quarter of that softness."},
         })
         .data<&light::shadowmap_params::pcf_impl_params::y_offset>("y_offset"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -369,7 +369,7 @@ REFLECT(light)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 3.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Offset along the y-axis for PCF sampling."},
+            entt::attribute{"tooltip", "Softness of PCF shadows. The larger of X Offset and Y Offset picks the filter: below 0.75 it covers 3 x 3 shadow map texels, below 1.25 5 x 5 and from 1.25 7 x 7. Point lights use a quarter of that softness."},
         });
 
     // Reflection for pcss_impl_params

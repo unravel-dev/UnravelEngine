@@ -129,11 +129,27 @@ public:
                                     bool apply_reflection,
                                     delta_t dt) -> gfx::frame_buffer::ptr;
 
-    void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt);
+    /**
+     * @brief Draws the captured reflection probes into PBUFFER, the untraced reflection layer.
+     *
+     * Without a captured probe the layer is left unwritten (probe_layer_written_ stays false), unless
+     * @p is_layer_read_by_gi: the GI reflections read it as the open sky, so it is cleared for them.
+     */
+    void run_reflection_probe_pass(scene& scn,
+                                   const camera& camera,
+                                   gfx::render_view& rview,
+                                   bool apply_probes,
+                                   bool is_layer_read_by_gi,
+                                   delta_t dt);
 
     /// Clears RBUFFER to no traced radiance (the whole pixel left to the probe layer), for a view whose traced
     /// reflections do not write every pixel this frame.
     void clear_traced_reflections(gfx::render_view& rview);
+
+    /// RBUFFER and PBUFFER as this run's indirect pass reads them: the buffer when this run wrote it, otherwise
+    /// the constant texture holding the value it would have been cleared to.
+    auto get_traced_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr;
+    auto get_probe_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr;
 
     auto run_atmospherics_pass(gfx::frame_buffer::ptr input,
                                scene& scn,
@@ -277,6 +293,8 @@ public:
     /// float buffers and GI with its reflections enabled. SSR and the reflection probes then step aside (no
     /// other specular composites under the GI's).
     auto gi_reflections_own_view(const run_params& rparams) -> bool;
+    /// Whether SSR traces this view: a camera run with the probe stack and SSR on, unless the GI reflections own it.
+    auto is_ssr_wanted(const run_params& rparams) -> bool;
     /// True when the GI's short-range AO is enabled in this view: it replaces the screen-space AO at any intensity
     /// (the screen-space AO never stacks on the GI's).
     auto gi_short_range_ao_owns_view(const run_params& rparams) -> bool;
@@ -665,6 +683,8 @@ private:
 
     auto run_irradiance_pass(scene& scn, gfx::render_view& rview) -> irradiance_pass_result;
 
+    /// The light's shadowed program; PCF lights get the tent size their PCF offset asks for
+    /// (get_pcf_tent_slot).
     auto get_light_program(const light& l) const -> const color_lighting&;
     auto get_light_program_no_shadows(const light& l) const -> const color_lighting&;
 
@@ -703,6 +723,9 @@ private:
     void submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
 
     color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
+    /// PCF programs with the 3x3 and the 7x7 tent (common_shadow.sh PCF_TENT_SIZE); the PCF programs of
+    /// color_lighting_ have the 5x5 one. Slots without a program fall back to color_lighting_.
+    color_lighting color_lighting_pcf_tent_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][2];
     color_lighting color_lighting_no_shadow_[uint8_t(light_type::count)];
 
     asset_handle<gfx::texture> ibl_brdf_lut_;
@@ -808,6 +831,9 @@ private:
      * camera (probe captures, thumbnails) in turn.
      */
     auto update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run) -> pre_exposure_state;
+    /// Whether this run has a reader of the velocity buffer: TAA, GTAO, SSR, SSIL or GI, the velocity
+    /// debug view, or a temporal measurement in progress.
+    auto is_velocity_wanted(const run_params& params) const -> bool;
     /// Velocity buffer production is active for the CURRENT run (camera run + velocity_pass
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
@@ -818,6 +844,10 @@ private:
     layer_mask render_mask_{layer_reserved::everything_layer};
     /// The GI reflections wrote RBUFFER and PBUFFER in this run (run_gi_pass), so RBUFFER needs no clear.
     bool gi_reflections_written_{false};
+    /// RBUFFER was cleared in this run, for SSR to composite into or as the GI reflections' fallback.
+    bool traced_reflections_cleared_{false};
+    /// PBUFFER was cleared and drawn in this run (run_reflection_probe_pass).
+    bool probe_layer_written_{false};
     /// Render frame of the last velocity pass that drew ANY mover (individual or batched),
     /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for SSR's
     /// mover gate, held one temporal window by the consumer. Riding the owning pass's loop keeps

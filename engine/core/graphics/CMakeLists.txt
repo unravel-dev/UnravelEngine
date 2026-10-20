@@ -6,10 +6,10 @@ if(NOT MESHOPTIMIZER_LIBRARIES)
 	file(
 		GLOB #
 		MESHOPTIMIZER_SOURCES #
-		${BGFX_DIR}/3rdparty/meshoptimizer/src/*.cpp #
-		${BGFX_DIR}/3rdparty/meshoptimizer/src/*.h #
+		${UNRAVEL_BGFX_DIR}/3rdparty/meshoptimizer/src/*.cpp #
+		${UNRAVEL_BGFX_DIR}/3rdparty/meshoptimizer/src/*.h #
 	)
-	set(MESHOPTIMIZER_INCLUDE_DIR ${BGFX_DIR}/3rdparty)
+	set(MESHOPTIMIZER_INCLUDE_DIR ${UNRAVEL_BGFX_DIR}/3rdparty)
 endif()
 
 
@@ -18,7 +18,7 @@ add_library (${target_name} ${libsrc} ${MESHOPTIMIZER_SOURCES})
 target_include_directories(${target_name}
     PUBLIC
 		${CMAKE_CURRENT_SOURCE_DIR}/..
-        ${BGFX_DIR}/3rdparty
+        ${UNRAVEL_BGFX_DIR}/3rdparty
         ${MESHOPTIMIZER_INCLUDE_DIR}
 )
 

@@ -80,9 +80,10 @@ auto get_ui_element_text(const Rml::Element& element, const ui_text_options& opt
 
 auto is_ui_element_styled_visible(Rml::Element& element) -> bool
 {
+    // A value resolved from var() lives in storage the next GetProperty call reuses: read each one at once.
     const auto* display = element.GetProperty(Rml::PropertyId::Display);
-    const auto* visibility = element.GetProperty(Rml::PropertyId::Visibility);
     const bool is_displayed = !display || display->Get<int>() != static_cast<int>(Rml::Style::Display::None);
+    const auto* visibility = element.GetProperty(Rml::PropertyId::Visibility);
     const bool is_visible = !visibility || visibility->Get<int>() == static_cast<int>(Rml::Style::Visibility::Visible);
     return is_displayed && is_visible;
 }

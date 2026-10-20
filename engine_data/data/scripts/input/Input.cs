@@ -20,6 +20,33 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Gets the number of fingers on the touch screen this frame, the ones that left it this frame
+        /// included. A touch also moves and presses the mouse, so mouse input keeps working on a touch
+        /// screen.
+        /// </summary>
+        public static int touchCount
+        {
+            get
+            {
+                return internal_m2n_input_get_touch_count();
+            }
+        }
+
+        /// <summary>
+        /// Gets a finger on the touch screen, in the order the fingers touched it.
+        /// </summary>
+        /// <param name="index">From 0 to <see cref="touchCount"/> - 1.</param>
+        /// <returns>The finger at the index.</returns>
+        public static Touch GetTouch(int index)
+        {
+            if (index < 0 || index >= touchCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index), index, "There is no touch at this index.");
+            }
+            return internal_m2n_input_get_touch(index);
+        }
+
+        /// <summary>
         /// Gets the analog value of an input axis.
         /// </summary>
         /// <param name="action">The name of the action or axis to query.</param>
@@ -174,5 +201,11 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Vector2 internal_m2n_input_get_mouse_position();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_input_get_touch_count();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Touch internal_m2n_input_get_touch(int index);
     }
 }

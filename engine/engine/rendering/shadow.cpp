@@ -461,6 +461,10 @@ void shadowmap_generator::deinit_uniforms()
         {
             bgfx::destroy(shadow_map_[i]);
         }
+        if(bgfx::isValid(shadow_depth_[i]))
+        {
+            bgfx::destroy(shadow_depth_[i]);
+        }
     }
 }
 
@@ -477,6 +481,10 @@ void shadowmap_generator::init(rtti::context& ctx)
     shadow_map_[1] = bgfx::createUniform("s_shadowMap1", bgfx::UniformType::Sampler);
     shadow_map_[2] = bgfx::createUniform("s_shadowMap2", bgfx::UniformType::Sampler);
     shadow_map_[3] = bgfx::createUniform("s_shadowMap3", bgfx::UniformType::Sampler);
+    shadow_depth_[0] = bgfx::createUniform("s_shadowDepth0", bgfx::UniformType::Sampler);
+    shadow_depth_[1] = bgfx::createUniform("s_shadowDepth1", bgfx::UniformType::Sampler);
+    shadow_depth_[2] = bgfx::createUniform("s_shadowDepth2", bgfx::UniformType::Sampler);
+    shadow_depth_[3] = bgfx::createUniform("s_shadowDepth3", bgfx::UniformType::Sampler);
 
     for(int i = 0; i < ShadowMapRenderTargets::Count; ++i)
     {
@@ -1135,7 +1143,7 @@ auto shadowmap_generator::get_depth_render_program(PackDepth::Enum depth) const 
     return programs_.m_drawDepth[depth];
 }
 
-void shadowmap_generator::submit_uniforms(uint8_t stage) const
+void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) const
 {
     if(!bgfx::isValid(tex_color_))
     {
@@ -1157,6 +1165,24 @@ void shadowmap_generator::submit_uniforms(uint8_t stage) const
         }
 
         bgfx::setTexture(stage + ii, shadow_map_[ii], bgfx::getTexture(rt_shadow_map_[ii]), sampler_flags);
+    }
+    if(filtered_map || compare_stage == no_compare_stage)
+    {
+        return;
+    }
+    // Bilinear comparison: each fetch filters the results of the 2x2 texels around it.
+    constexpr uint32_t compare_flags = BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_UVW_CLAMP;
+    constexpr uint8_t depth_attachment = 1;
+    for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
+    {
+        if(!bgfx::isValid(rt_shadow_map_[ii]))
+        {
+            continue;
+        }
+        bgfx::setTexture(compare_stage + ii,
+                         shadow_depth_[ii],
+                         bgfx::getTexture(rt_shadow_map_[ii], depth_attachment),
+                         compare_flags);
     }
 }
 
@@ -1416,6 +1442,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
 
     ///
     bool homogeneousDepth = gfx::is_homogeneous_depth();
+    // The backend's own clip depth range, not the engine's projection convention: it decides the
+    // window depth the depth attachments hold.
+    uniforms_.m_hardwareDepthScale = bgfx::getCaps()->homogeneousDepth ? 1.0f : 2.0f;
     bool originBottomLeft = gfx::is_origin_bottom_left();
 
     // Compute transform matrices.

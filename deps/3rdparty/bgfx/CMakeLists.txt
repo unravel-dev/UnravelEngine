@@ -69,6 +69,12 @@ endif()
 
 add_subdirectory(bgfx)
 
+# bgfx.cmake builds bgfx from the folder its own BGFX_DIR names: the commit it pins, fetched into the build
+# tree (FetchContent), unless BGFX_DIR is set to a checkout. That variable stays in bgfx.cmake's scope; the
+# engine reads bgfx's 3rdparty headers (stb, meshoptimizer) and its shader headers from UNRAVEL_BGFX_DIR.
+get_directory_property(unravel_bgfx_dir DIRECTORY bgfx DEFINITION BGFX_DIR)
+set(UNRAVEL_BGFX_DIR "${unravel_bgfx_dir}" CACHE INTERNAL "The bgfx sources bgfx.cmake builds.")
+
 set_target_properties(bgfx PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     WINDOWS_EXPORT_ALL_SYMBOLS ON

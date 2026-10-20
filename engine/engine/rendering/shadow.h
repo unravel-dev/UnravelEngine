@@ -416,7 +416,9 @@ struct Uniforms
             float m_depthValuePow;
             float m_showSmCoverage;
             float m_shadowMapTexelSize;
-            float m_unused23;
+            /// Stored depth to the depth attachment's window depth (x scale + 1 - scale): 2 where
+            /// the backend's clip depth spans [0, 1], 1 where it spans [-1, 1] (OpenGL).
+            float m_hardwareDepthScale;
         };
 
         float m_params2[4];
@@ -735,6 +737,9 @@ using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
 class shadowmap_generator
 {
 public:
+    /// submit_uniforms: leave the depth attachments unbound.
+    static constexpr uint8_t no_compare_stage = UINT8_MAX;
+
     shadowmap_generator();
     ~shadowmap_generator();
 
@@ -774,7 +779,10 @@ public:
     auto get_depth_type() const -> PackDepth::Enum;
     auto get_rt_texture(uint8_t split) const -> bgfx::TextureHandle;
     auto get_depth_render_program(PackDepth::Enum depth) const -> gpu_program::ptr;
-    void submit_uniforms(uint8_t stage) const;
+    /// Binds the stored-depth maps from @p stage on and, unless @p compare_stage is
+    /// no_compare_stage, the maps' depth attachments with LEQUAL comparison samplers from
+    /// @p compare_stage on (point-sampled maps only: hard, PCF and PCSS).
+    void submit_uniforms(uint8_t stage, uint8_t compare_stage = no_compare_stage) const;
 
 
     /// Edge of every split's map in texels.
@@ -858,6 +866,7 @@ private:
 
     bgfx::UniformHandle tex_color_{bgfx::kInvalidHandle};
     bgfx::UniformHandle shadow_map_[ShadowMapRenderTargets::Count];
+    bgfx::UniformHandle shadow_depth_[ShadowMapRenderTargets::Count];
     bgfx::FrameBufferHandle rt_shadow_map_[ShadowMapRenderTargets::Count];
     bgfx::FrameBufferHandle rt_blur_{bgfx::kInvalidHandle};
 

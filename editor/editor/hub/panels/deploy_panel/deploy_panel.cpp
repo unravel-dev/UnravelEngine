@@ -408,6 +408,10 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
                                      .c_str());
     }
     inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
+    if(params.deploy_and_run)
+    {
+        inspect_deploy_properties(ctx, {"deploy_run_arguments"_hs});
+    }
     widgets::draw_gap(widgets::SECTION_GAP);
     widgets::draw_section_title("Packaging");
     inspect_deploy_properties(ctx, {"deploy_packed_assets"_hs, "deploy_cooked_assets"_hs, "deploy_debug_symbols"_hs});

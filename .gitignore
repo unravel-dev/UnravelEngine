@@ -35,6 +35,7 @@
 
 [Bb]uild_*/
 [Bb]uild/
+.fetchcontent-cache/
 [Bb]in/
 .vs/
 .vscode/

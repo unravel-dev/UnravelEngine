@@ -129,6 +129,15 @@ REFLECT(deploy_settings)
                             "Start the game once the deploy is done.\n"
                             "Android: install it on the chosen device and start it there."},
         })
+        .data<&deploy_settings::deploy_run_arguments>("deploy_run_arguments"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_run_arguments"},
+            entt::attribute{"pretty_name", "Run Arguments"},
+            entt::attribute{"tooltip",
+                            "Command line options the game starts with after the deploy, separated by spaces.\n"
+                            "--gfx-stats shows the graphics statistics over the game.\n"
+                            "--novsync turns off vsync."},
+        })
         .data<&deploy_settings::android_device>("android_device"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "android_device"},
@@ -197,6 +206,7 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_location", fs::to_utf8_string(obj.deploy_location)));
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
+    try_save(ar, ser20::make_nvp("deploy_run_arguments", obj.deploy_run_arguments));
     try_save(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
     try_save(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
     try_save(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));
@@ -226,6 +236,7 @@ LOAD(deploy_settings)
 
     try_load(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_load(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
+    try_load(ar, ser20::make_nvp("deploy_run_arguments", obj.deploy_run_arguments));
     try_load(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
     try_load(ar, ser20::make_nvp("deploy_debug_symbols", obj.deploy_debug_symbols));
     try_load(ar, ser20::make_nvp("deploy_packed_assets", obj.deploy_packed_assets));

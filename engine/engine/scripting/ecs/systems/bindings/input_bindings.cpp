@@ -95,6 +95,40 @@ auto internal_m2n_input_get_mouse_position() -> math::vec2
     return {coord.x, coord.y};
 }
 
+/// A finger as it crosses to C#: the layout of the C# Touch struct (TouchPhase crosses as an int).
+struct script_touch
+{
+    int32_t finger_id{};
+    int32_t phase{};
+    math::vec2 position{};
+    math::vec2 delta_position{};
+    float pressure{};
+};
+
+auto internal_m2n_input_get_touch_count() -> int32_t
+{
+    auto& input = engine::context().get_cached<input_system>();
+    return static_cast<int32_t>(input.manager.get_touches().get_count());
+}
+
+auto internal_m2n_input_get_touch(int32_t index) -> script_touch
+{
+    auto& input = engine::context().get_cached<input_system>();
+    const auto& touches = input.manager.get_touches();
+    if(index < 0 || static_cast<size_t>(index) >= touches.get_count())
+    {
+        return {};
+    }
+    const input::touch_point& point = touches.get(static_cast<size_t>(index));
+    script_touch touch;
+    touch.finger_id = point.id;
+    touch.phase = static_cast<int32_t>(point.phase);
+    touch.position = {point.position.x, point.position.y};
+    touch.delta_position = {point.delta.x, point.delta.y};
+    touch.pressure = point.pressure;
+    return touch;
+}
+
 /// CursorLockMode crosses as an int: the C# enum's underlying type.
 auto internal_m2n_cursor_get_lock_state() -> int32_t
 {
@@ -146,6 +180,8 @@ void register_input_script_bindings()
                             dotnet_internal_call(internal_m2n_input_is_mouse_button_down));
     reg.add_internal_call("internal_m2n_input_get_mouse_position",
                             dotnet_internal_call(internal_m2n_input_get_mouse_position));
+    reg.add_internal_call("internal_m2n_input_get_touch_count", dotnet_internal_call(internal_m2n_input_get_touch_count));
+    reg.add_internal_call("internal_m2n_input_get_touch", dotnet_internal_call(internal_m2n_input_get_touch));
 
     auto cursor = dotnet::internal_call_registry("Unravel.Core.Cursor");
     cursor.add_internal_call("internal_m2n_cursor_get_lock_state", dotnet_internal_call(internal_m2n_cursor_get_lock_state));

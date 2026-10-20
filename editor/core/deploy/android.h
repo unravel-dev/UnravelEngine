@@ -177,8 +177,11 @@ auto make_gradle_local_properties(const fs::path& sdk) -> std::string;
 /// The package Gradle writes for a debug or release build of the project in `project_dir`.
 auto get_built_package(const fs::path& project_dir, bool is_release) -> fs::path;
 
-/// The command line that starts the game's activity on `device`.
-auto make_start_arguments(const android_toolchain& tools, const std::string& device, const std::string& application_id)
-    -> std::vector<std::string>;
+/// The command line that starts the game's activity on `device`. The game's `run_arguments` go in an
+/// extra of the start intent, which the player's activity hands to the game as its command line.
+auto make_start_arguments(const android_toolchain& tools,
+                          const std::string& device,
+                          const std::string& application_id,
+                          const std::vector<std::string>& run_arguments) -> std::vector<std::string>;
 
 } // namespace unravel::deployment

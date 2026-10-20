@@ -1,4 +1,5 @@
 #include "android.h"
+#include "run_arguments.h"
 
 #include <algorithm>
 #include <cctype>
@@ -18,6 +19,8 @@ constexpr const char* DEFAULT_PRODUCT_PART = "game";
 constexpr const char* LEADING_LETTERS = "app";
 constexpr const char* GRADLE_WRAPPER_MAIN = "org.gradle.wrapper.GradleWrapperMain";
 constexpr const char* PLAYER_ACTIVITY = "com.unravel.player.UnravelActivity";
+/// The start intent's extra that UnravelActivity reads the game's command line options from.
+constexpr const char* ARGUMENTS_EXTRA = "arguments";
 
 auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>
 {
@@ -441,10 +444,25 @@ auto get_built_package(const fs::path& project_dir, bool is_release) -> fs::path
     return outputs / ("app-" + suffix + ".apk");
 }
 
-auto make_start_arguments(const android_toolchain& tools, const std::string& device, const std::string& application_id)
-    -> std::vector<std::string>
+auto make_start_arguments(const android_toolchain& tools,
+                          const std::string& device,
+                          const std::string& application_id,
+                          const std::vector<std::string>& run_arguments) -> std::vector<std::string>
 {
-    return {tools.adb.string(), "-s", device, "shell", "am", "start", "-W", "-n", application_id + "/" + PLAYER_ACTIVITY};
+    std::vector<std::string> arguments{
+        tools.adb.string(), "-s", device, "shell", "am", "start", "-W", "-n", application_id + "/" + PLAYER_ACTIVITY};
+    if(run_arguments.empty())
+    {
+        return arguments;
+    }
+    std::string command_line;
+    for(const auto& argument : run_arguments)
+    {
+        command_line += command_line.empty() ? argument : " " + argument;
+    }
+    // adb joins its arguments into one command for the device's shell, which would split the options.
+    arguments.insert(arguments.end(), {"--es", ARGUMENTS_EXTRA, quote_for_shell(command_line)});
+    return arguments;
 }
 
 } // namespace unravel::deployment

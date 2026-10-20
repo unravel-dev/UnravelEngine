@@ -57,6 +57,34 @@ namespace
         }
     }
 
+    auto is_touch_event(const os::event& event) -> bool
+    {
+        switch(event.type)
+        {
+        case os::events::finger_down:
+        case os::events::finger_motion:
+        case os::events::finger_up:
+        case os::events::finger_canceled:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    /// The platform also makes mouse events from a finger; the documents take the finger itself.
+    auto is_mouse_from_touch(const os::event& event) -> bool
+    {
+        switch(event.type)
+        {
+        case os::events::mouse_button:
+            return event.button.is_from_touch;
+        case os::events::mouse_motion:
+            return event.motion.is_from_touch;
+        default:
+            return false;
+        }
+    }
+
     auto context_wants_keyboard_input(Rml::Context* context) -> bool
     {
         if(!context)
@@ -105,6 +133,14 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
             event = {};
             return;
         }
+    }
+    else if(input_allowed && is_touch_event(event))
+    {
+        dispatch_touch_event(ctx, scene, event);
+    }
+    else if(input_allowed && is_mouse_from_touch(event))
+    {
+        consume_touch_mouse_press(ctx, scene, event);
     }
     else if(input_allowed)
     {
@@ -317,8 +353,27 @@ void ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn)
         return;
     }
 
-    const int mouse_x = static_cast<int>(input.manager.get_mouse().get_position().x);
-    const int mouse_y = static_cast<int>(input.manager.get_mouse().get_position().y);
+    visit_pointer_documents(scn,
+                            input.manager.get_mouse().get_position(),
+                            [&](Rml::Context* context, bool is_over, Rml::Vector2f position)
+                            {
+                                if(is_over)
+                                {
+                                    process_mouse_move(scn,
+                                                       context,
+                                                       static_cast<int>(position.x),
+                                                       static_cast<int>(position.y));
+                                }
+                                else
+                                {
+                                    context->ProcessMouseLeave();
+                                }
+                            });
+}
+
+void ui_system::visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit)
+{
+    const Rml::Vector2f screen_position(static_cast<float>(position.x), static_cast<float>(position.y));
 
     const camera* scene_camera = nullptr;
     entt::handle camera_entity;
@@ -334,7 +389,7 @@ void ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn)
 
     if(debug_context_)
     {
-        process_mouse_move(scn, debug_context_, mouse_x, mouse_y);
+        visit(debug_context_, true, screen_position);
     }
 
     scn.registry->view<ui_document_component, active_component>().each(
@@ -347,13 +402,13 @@ void ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn)
 
             if(ui_comp.render_mode == ui_render_mode::screen_space_overlay)
             {
-                process_mouse_move(scn, ui_comp.context, mouse_x, mouse_y);
+                visit(ui_comp.context, true, screen_position);
                 return;
             }
 
             if(!scene_camera)
             {
-                ui_comp.context->ProcessMouseLeave();
+                visit(ui_comp.context, false, {});
                 return;
             }
 
@@ -361,16 +416,108 @@ void ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn)
             auto& transform = handle.get<transform_component>();
             const auto quad_transform = ui_comp.get_world_space_quad(transform.get_transform_global());
             math::vec2 pixel;
-            if(scene_camera->project_to_quad(math::vec2(static_cast<float>(mouse_x), static_cast<float>(mouse_y)),
-                                             quad_transform, ui_comp.size.width, ui_comp.size.height, pixel))
-            {
-                process_mouse_move(scn, ui_comp.context, static_cast<int>(pixel.x), static_cast<int>(pixel.y));
-            }
-            else
-            {
-                ui_comp.context->ProcessMouseLeave();
-            }
+            const bool is_over = scene_camera->project_to_quad(math::vec2(screen_position.x, screen_position.y),
+                                                               quad_transform,
+                                                               ui_comp.size.width,
+                                                               ui_comp.size.height,
+                                                               pixel);
+            visit(ui_comp.context, is_over, Rml::Vector2f(pixel.x, pixel.y));
         });
+}
+
+void ui_system::dispatch_touch_event(rtti::context& ctx, scene& scn, os::event& event)
+{
+    auto& input = ctx.get_cached<input_system>();
+    const input::coord position = input.manager.map_finger_position(event.finger);
+    const auto identifier = static_cast<Rml::TouchId>(event.finger.finger_id);
+    // Touches carry no key modifiers.
+    constexpr int key_modifiers = 0;
+    Rml::Context* target_context = nullptr;
+
+    visit_pointer_documents(scn,
+                            position,
+                            [&](Rml::Context* context, bool is_over, Rml::Vector2f document_position)
+                            {
+                                const Rml::TouchList touches{Rml::Touch{identifier, document_position}};
+                                switch(event.type)
+                                {
+                                    case os::events::finger_down:
+                                        if(is_over)
+                                        {
+                                            context->ProcessTouchStart(touches, key_modifiers);
+                                            if(is_not_root_element(scn, context->GetHoverElement()))
+                                            {
+                                                target_context = context;
+                                            }
+                                        }
+                                        break;
+                                    case os::events::finger_motion:
+                                        if(is_over)
+                                        {
+                                            context->ProcessTouchMove(touches, key_modifiers);
+                                        }
+                                        break;
+                                    case os::events::finger_up:
+                                        // A finger that leaves a world-space document lets go without a click.
+                                        if(is_over)
+                                        {
+                                            context->ProcessTouchEnd(touches, key_modifiers);
+                                        }
+                                        else
+                                        {
+                                            context->ProcessTouchCancel(touches);
+                                        }
+                                        break;
+                                    case os::events::finger_canceled:
+                                        context->ProcessTouchCancel(touches);
+                                        break;
+                                    default:
+                                        break;
+                                }
+                            });
+
+    if(event.type != os::events::finger_down)
+    {
+        return;
+    }
+    // As a mouse press: a finger off the UI takes the focus from every document, a finger on it from
+    // the other documents, and the game does not see it.
+    if(target_context == nullptr)
+    {
+        blur_ui_context(debug_context_);
+        scn.registry->view<ui_document_component>().each(
+            [&](entt::entity, ui_document_component& ui_comp)
+            {
+                blur_ui_context(ui_comp.context);
+            });
+        return;
+    }
+    blur_all_document_contexts(scn, target_context, *this);
+    event = {};
+}
+
+void ui_system::consume_touch_mouse_press(rtti::context& ctx, scene& scn, os::event& event)
+{
+    if(event.type != os::events::mouse_button || event.button.state_id != os::state::pressed)
+    {
+        return;
+    }
+    auto& input = ctx.get_cached<input_system>();
+    const input::coord position = input.manager.map_window_position({event.button.x, event.button.y});
+    bool is_on_element = false;
+    visit_pointer_documents(scn,
+                            position,
+                            [&](Rml::Context* context, bool is_over, Rml::Vector2f document_position)
+                            {
+                                if(is_over && is_not_root_element(scn, context->GetElementAtPoint(document_position)))
+                                {
+                                    is_on_element = true;
+                                }
+                            });
+    if(is_on_element)
+    {
+        event = {};
+    }
 }
 
 } // namespace unravel

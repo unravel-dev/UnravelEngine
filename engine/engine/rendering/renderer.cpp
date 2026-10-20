@@ -3,6 +3,7 @@
 #include "eviction_settings.h"
 #include "../events.h"
 #include "spdlog/common.h"
+#include "gpu_pass_log.h"
 #include "gpu_program.h"
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
@@ -19,9 +20,16 @@
 
 #include <logging/logging.h>
 
+#include <ospp/event.h>
+#include <ospp/message_box.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace unravel
@@ -119,11 +127,14 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
 
     auto& ev = ctx.get_cached<events>();
     ev.on_os_event.connect(sentinel_, this, &renderer::on_os_event);
+    ev.on_app_enter_background.connect(sentinel_, this, &renderer::on_app_enter_background);
     ev.on_frame_begin.connect(sentinel_, this, &renderer::frame_begin);
     ev.on_frame_end.connect(sentinel_, this, &renderer::frame_end);
 
     parser.set_optional<std::string>("r", "renderer", "auto", "Select preferred renderer.");
     parser.set_optional<bool>("n", "novsync", false, "Disable vsync.");
+    parser.set_optional<bool>("", "gfx-stats", false, "Show the graphics backend's statistics over the frame.");
+    parser.set_optional<bool>("", "gfx-profile", false, "Log the GPU time of every render pass every few seconds.");
     parser.set_optional<std::string>("W",
                                      "window",
                                      "",
@@ -212,6 +223,64 @@ namespace
 {
 constexpr const char* WINDOW_GEOMETRY_PREFIX = "--window=";
 constexpr uint32_t MIN_WINDOW_DIMENSION = 64;
+/// How long the wait for a surface sleeps when the event pump returns without one.
+constexpr auto SURFACE_WAIT_INTERVAL = std::chrono::milliseconds(10);
+/// Starts of the graphics backend before giving up, each after the surface went away during the
+/// previous one.
+constexpr uint32_t MAX_BACKEND_START_ATTEMPTS = 3;
+#if UNRAVEL_PLATFORM_ANDROID
+/// Shown when Vulkan, the only backend built for Android, does not start.
+constexpr const char* NO_VULKAN_MESSAGE = "The game needs Vulkan graphics, which this device could not start.";
+#endif
+/// The largest scale bgfx draws its debug text at.
+constexpr float MAX_DEBUG_TEXT_SCALE = 4.0f;
+
+/// Turns on the graphics backend's statistics overlay and its per-pass GPU timers when the command
+/// line asks for them; returns whether the timers are on. The overlay text grows with the display
+/// scale, so it stays readable on a phone's dense screen.
+auto apply_debug_options(const cmd_line::parser& parser, const os::window& window) -> bool
+{
+    bool show_stats = false;
+    parser.try_get("gfx-stats", show_stats);
+    bool log_passes = false;
+    parser.try_get("gfx-profile", log_passes);
+    if(!show_stats && !log_passes)
+    {
+        return false;
+    }
+    const uint32_t flags = (show_stats ? BGFX_DEBUG_STATS : 0u) | (log_passes ? BGFX_DEBUG_PROFILER : 0u);
+    const float text_scale = std::clamp(std::floor(window.get_display_scale()), 1.0f, MAX_DEBUG_TEXT_SCALE);
+    bgfx::setDebug(flags, BGFX_INVALID_HANDLE, static_cast<uint8_t>(text_scale));
+    if(show_stats)
+    {
+        APPLOG_INFO("Showing the graphics statistics at text scale {}.", text_scale);
+    }
+    if(log_passes)
+    {
+        APPLOG_INFO("Logging the GPU time of every render pass.");
+    }
+    return log_passes;
+}
+
+/// The native window to start the graphics backend on. Android can destroy the window's surface
+/// between the window's creation and here (a start on a locked phone); the event pump then blocks
+/// until the application returns with a new surface.
+auto wait_for_native_window(const os::window& window) -> void*
+{
+    void* native_window = window.get_native_handle();
+#if UNRAVEL_PLATFORM_ANDROID
+    while(native_window == nullptr && !engine::is_interrupted())
+    {
+        os::pump_events();
+        native_window = window.get_native_handle();
+        if(native_window == nullptr)
+        {
+            std::this_thread::sleep_for(SURFACE_WAIT_INTERVAL);
+        }
+    }
+#endif
+    return native_window;
+}
 
 void strip_window_geometry_arguments(std::vector<std::string>& arguments)
 {
@@ -299,21 +368,57 @@ auto renderer::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
+auto renderer::start_backend(bgfx::Init& init_data) -> bool
+{
+    const auto& window = render_window_->get_window();
+    for(uint32_t attempt = 1;; ++attempt)
+    {
+        init_data.swapChain.nwh = wait_for_native_window(window);
+        if(init_data.swapChain.nwh == nullptr)
+        {
+            APPLOG_ERROR("The main window has no surface to render to.");
+            return false;
+        }
+        render_window_->prepare_surface();
+        const auto size = render_window_->get_surface()->get_size();
+        init_data.swapChain.width = size.width;
+        init_data.swapChain.height = size.height;
+        const uint32_t backgrounds = background_count_;
+        if(gfx::init(init_data))
+        {
+            return true;
+        }
+        // Android can destroy the surface while the backend starts on it. The pump then takes the
+        // pending background event and blocks until the application returns with a new surface.
+        os::pump_events();
+        if(background_count_ == backgrounds || attempt == MAX_BACKEND_START_ATTEMPTS)
+        {
+            return false;
+        }
+        APPLOG_INFO("The surface went away while the graphics backend started. Starting it again.");
+    }
+}
+
+void renderer::on_app_enter_background(rtti::context& /*ctx*/)
+{
+    ++background_count_;
+}
+
 auto renderer::init_backend(const cmd_line::parser& parser) -> bool
 {
     // bgfx is initialized on the main window: its backbuffer is the window's surface.
     const auto& window = render_window_->get_window();
-    const auto size = render_window_->get_surface()->get_size();
 
     bgfx::Init init_data;
     init_data.type = get_renderer_type(parser);
     init_data.reset = get_reset_flags(parser);
-    init_data.swapChain.width = size.width;
-    init_data.swapChain.height = size.height;
     init_data.swapChain.flags = render_window::get_swap_chain_flags();
     init_data.swapChain.ndt = window.get_native_display();
-    init_data.swapChain.nwh = window.get_native_handle();
 #if UNRAVEL_PLATFORM_ANDROID
+    // Vulkan is the only backend built for Android. Without the fallback a failed start fails,
+    // where bgfx would otherwise run on its no-op renderer.
+    init_data.type = bgfx::RendererType::Vulkan;
+    init_data.fallback = false;
     // Android's Vulkan surfaces present RGBA8, not bgfx's default BGRA8: a BGRA8 swap chain is
     // created, but every frame it shows is black. Later resizes keep the main swap chain's format.
     init_data.swapChain.formatColor = bgfx::TextureFormat::RGBA8;
@@ -325,13 +430,25 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     }
     reset_flags_ = init_data.reset;
 
-    if(!gfx::init(init_data))
+    if(!start_backend(init_data))
     {
         APPLOG_ERROR("Could not initialize rendering backend!");
+#if UNRAVEL_PLATFORM_ANDROID
+        // The application closes next; a phone shows no log, so say why.
+        if(!engine::is_interrupted())
+        {
+            os::message_box::show(os::message_box::kind::error, window.get_title(), NO_VULKAN_MESSAGE);
+        }
+#endif
         return false;
     }
-    backbuffer_size_ = size;
+    backbuffer_size_ = {init_data.swapChain.width, init_data.swapChain.height};
+    backbuffer_window_ = init_data.swapChain.nwh;
     APPLOG_TRACE("Using {0} rendering backend.", bgfx::getRendererName(bgfx::getRendererType()));
+    if(apply_debug_options(parser, window))
+    {
+        gpu_pass_log_ = std::make_unique<gpu_pass_log>();
+    }
 
     // Driver-compiled pipeline binaries persist here across runs. Without them, D3D12
     // recompiles every pipeline at first use each launch - the GI compute chain alone was a
@@ -525,17 +642,25 @@ void renderer::sync_main_surface()
     }
     render_window_->prepare_surface();
     const auto size = render_window_->get_surface()->get_size();
-    // A minimized window reports no area; the backbuffer keeps its size until it comes back.
-    if(size.width == 0 || size.height == 0 || size == backbuffer_size_)
+    auto* native_window = render_window_->get_window().get_native_handle();
+    // A minimized window reports no area, and a window without a surface no native window; the
+    // backbuffer stays as it is until they come back.
+    if(size.width == 0 || size.height == 0 || native_window == nullptr)
+    {
+        return;
+    }
+    if(size == backbuffer_size_ && native_window == backbuffer_window_)
     {
         return;
     }
     bgfx::SwapChain desc;
+    desc.nwh = native_window;
     desc.width = size.width;
     desc.height = size.height;
     desc.flags = render_window::get_swap_chain_flags();
     bgfx::reset(reset_flags_, &desc);
     backbuffer_size_ = size;
+    backbuffer_window_ = native_window;
 }
 
 void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
@@ -576,6 +701,10 @@ void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
     pass.bind();
 
     gfx::frame();
+    if(gpu_pass_log_)
+    {
+        gpu_pass_log_->collect();
+    }
 
     if(!request_screenshot_.empty())
     {
