@@ -60,6 +60,11 @@ add_definitions(-DBGFX_CONFIG_MAX_BONES=128)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_VERTEX_BUFFER_SIZE=6<<24)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_INDEX_BUFFER_SIZE=2<<24)
 add_definitions(-DBGFX_CONFIG_DEBUG_UNIFORM=0)
+# The Vulkan backend reuses a command list every BGFX_CONFIG_MAX_FRAME_LATENCY frames, and before it renders
+# into a swap chain image again it waits on the fence of the command list that last rendered into it. With
+# more images than frames in flight, that command list already belongs to the frame just submitted, so the
+# CPU waits for the GPU every frame. The Mali driver on Android creates 4 images.
+add_definitions(-DBGFX_CONFIG_MAX_FRAME_LATENCY=4)
 
 # Android renders through Vulkan only. Defining one renderer leaves the others out of the build
 # (src/config.h), the OpenGL ES backend and its EGL dependency included.
