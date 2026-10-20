@@ -113,14 +113,14 @@ auto make_atlas(uint32_t size, bgfx::TextureFormat::Enum format) -> gfx::texture
                                           BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
 }
 
-auto make_capture_texture(uint32_t size, bgfx::TextureFormat::Enum format) -> gfx::texture::ptr
+auto make_capture_texture(uint32_t size, bgfx::TextureFormat::Enum format, uint64_t extra_flags = 0) -> gfx::texture::ptr
 {
     return std::make_shared<gfx::texture>(uint16_t(size),
                                           uint16_t(size),
                                           false,
                                           1,
                                           format,
-                                          BGFX_TEXTURE_RT | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+                                          BGFX_TEXTURE_RT | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP | extra_flags);
 }
 
 /// Appends the words of page record @p page's 8 x 8 tiles, of a page of @p size texels, to @p words.
@@ -394,8 +394,8 @@ void gi_surface_cache::create_targets()
     radiosity_frames_ = make_atlas(s.atlas_size / tile_size, bgfx::TextureFormat::R32F);
     resample_direct_ = make_atlas(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F);
     resample_indirect_ = make_atlas(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F);
-    // The G-buffer program's four targets, in its formats, plus depth.
-    std::vector<gfx::texture::ptr> targets = {make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA8),
+    // The G-buffer program's four targets, in its formats (the base colour's sRGB, EncodeGBuffer), plus depth.
+    std::vector<gfx::texture::ptr> targets = {make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_SRGB),
                                               make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F),
                                               make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F),
                                               make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA8),

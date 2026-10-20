@@ -277,9 +277,10 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
 {
     const auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
     const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
+    // sRGB: the base colour is stored encoded and every reader gets it decoded by the texture unit (EncodeGBuffer).
     const auto& tex0 = rview.tex_acquire(
         "GBUFFER_0",
-        {.size = viewport_size, .format = get_default_format(), .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT});
+        {.size = viewport_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_SRGB});
     const auto& tex1 = rview.tex_acquire("GBUFFER_1", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
     const auto& tex2 = rview.tex_acquire("GBUFFER_2", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
     const auto& tex3 = rview.tex_acquire(

@@ -1,7 +1,8 @@
 /*
  * Surface cache: card capture -> physical atlases, one 8x8 group per captured tile.
  *
- * The capture atlas holds the G-buffer encoding of each captured page (rt0 = sRGB base colour + AO, rt1 =
+ * The capture atlas holds the G-buffer encoding of each captured page (rt0 = base colour + AO, read linear from its
+ * sRGB target, rt1 =
  * octahedral world normal + metalness + roughness, rt2 = emissive, rt3 = subsurface colour + opacity, depth = the
  * card's linear depth: 0 at its front plane, 1 at its back, cleared to 1). The surface cache stores per texel:
  *  - albedo: sqrt of the diffuse colour, BaseColor (1 - Metallic) + 0.45 x lerp(0.04, BaseColor, Metallic)
@@ -76,7 +77,7 @@ void main()
 	vec4 rt0 = texelFetch(s_gi_capture_rt0, capture_texel, 0);
 	vec4 rt1 = texelFetch(s_gi_capture_rt1, capture_texel, 0);
 	vec3 emissive = texelFetch(s_gi_capture_rt2, capture_texel, 0).xyz;
-	vec3 base_color = srgb_to_linear(rt0.xyz);
+	vec3 base_color = rt0.xyz;
 	float metalness = rt1.z;
 	vec3 specular_color = mix(vec3_splat(GI_DIELECTRIC_F0), base_color, metalness);
 	vec3 subsurface_color = texelFetch(s_gi_capture_rt3, capture_texel, 0).xyz;

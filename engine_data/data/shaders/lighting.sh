@@ -214,12 +214,13 @@ float F0RGBToMetallic(vec3 F0)
 }
 
 // base_color enters LINEAR (materials sample sRGB-flagged textures, hardware
-// decodes) and is stored sRGB-ENCODED in the UNORM8 target: 8-bit linear would
-// band visibly in the darks. Every decoder below undoes this; raw passthroughs
-// (ASSAO's AO merge) are unaffected because they do not interpret rgb.
+// decodes) and is stored sRGB-encoded: the target is an sRGB RGBA8 format, which
+// encodes on write and decodes on every read in the texture unit (8-bit linear
+// would band visibly in the darks, and a decode in the shader costs every
+// lighting pass three pow per pixel). AO in alpha stays linear.
 void EncodeGBuffer(in GBufferData data, inout vec4 result[4])
 {
-    result[0] = vec4(linear_to_srgb(saturate(data.base_color)), data.ambient_occlusion);
+    result[0] = vec4(saturate(data.base_color), data.ambient_occlusion);
     result[1] = vec4(encodeNormalOctahedron(data.world_normal), data.metalness, data.roughness);
     result[2] = vec4(data.emissive_color, 0.0f);
     result[3] = vec4(data.subsurface_color, data.subsurface_opacity);
@@ -231,9 +232,9 @@ GBufferDataColorAndAO DecodeGBufferColorAndAO(
     sampler2D colorTex)
 {
     GBufferDataColorAndAO data;
-    vec4 data0 = texture2D(colorTex, texcoord);   // base_color (sRGB-encoded), ao
+    vec4 data0 = texture2D(colorTex, texcoord);   // base_color (linear from the sRGB target), ao
 
-    data.base_color = srgb_to_linear(data0.xyz);
+    data.base_color = data0.xyz;
     data.ambient_occlusion = data0.w;
 
     return data;
@@ -399,7 +400,7 @@ GBufferData DecodeGBufferTexel(
     vec4 d3 = texelFetch(tex3, texel, 0);
     float deviceDepth = texelFetch(tex4, texel, 0).x;
 
-    data.base_color = srgb_to_linear(d0.xyz);
+    data.base_color = d0.xyz;
     data.ambient_occlusion = d0.w;
     data.world_normal = decodeNormalOctahedron(d1.xy);
     data.metalness = d1.z;
