@@ -1,0 +1,60 @@
+Vulkan: a frame's descriptor pools are reset when its command list begins again
+
+RendererContextVK::submit reset the descriptor pools of the frame-in-flight it began on. A submit
+that kicks part-way (OcclusionQueryVK::flush copies the query results and kicks with a wait) moves
+the rest of the frame to the next frame-in-flight, whose pools that submit never reset. With an even
+BGFX_CONFIG_MAX_FRAME_LATENCY and a flush every frame, half of the frames' pools are never reset:
+they fill up, vkAllocateDescriptorSets fails with VK_ERROR_OUT_OF_POOL_MEMORY, and the next
+vkUpdateDescriptorSets writes into a null set (a crash on Mali within seconds). The pools are now
+reset in CommandQueueVK::alloc, after the frame's fence, together with its command pool.
+
+diff --git a/src/renderer_vk.cpp b/src/renderer_vk.cpp
+index 766da228b..2dfbded6c 100644
+--- a/src/renderer_vk.cpp
++++ b/src/renderer_vk.cpp
+@@ -5102,6 +5102,21 @@ VK_IMPORT_DEVICE
+ 			return pipeline;
+ 		}
+ 
++		// A frame-in-flight's descriptor sets are only used by its command list. Once that command list has
++		// finished and begins again, its pools can be reused. Resetting them here, and not when a submit
++		// begins, keeps the pools in step with the command list when a submit kicks part-way (an occlusion
++		// query flush, a readback): the rest of that submit records into the next frame's command list.
++		void resetDescriptorPools(uint32_t _frame)
++		{
++			for (uint32_t ii = 0; ii < m_numDescriptorPools[_frame]; ++ii)
++			{
++				vkResetDescriptorPool(m_device, m_descriptorPool[_frame][ii], 0);
++			}
++
++			m_descriptorPoolIdx = 0;
++			m_descriptorSetMap.clear();
++		}
++
+ 		VkDescriptorPool createDescriptorPool()
+ 		{
+ 			const VkDescriptorPoolSize dps[] =
+@@ -10653,6 +10668,8 @@ VK_DESTROY
+ 				return result;
+ 			}
+ 
++			s_renderVK->resetDescriptorPools(m_currentFrameInFlight);
++
+ 			VkCommandBufferBeginInfo cbi;
+ 			cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+ 			cbi.pNext = NULL;
+@@ -11446,14 +11463,6 @@ VK_DESTROY
+ 		const uint64_t f6 = BGFX_STATE_BLEND_FACTOR<<12;
+ 		const uint64_t f7 = BGFX_STATE_BLEND_INV_FACTOR<<12;
+ 
+-		const uint32_t descriptorFrame = m_cmd.m_currentFrameInFlight;
+-		for (uint32_t ii = 0; ii < m_numDescriptorPools[descriptorFrame]; ++ii)
+-		{
+-			vkResetDescriptorPool(m_device, m_descriptorPool[descriptorFrame][ii], 0);
+-		}
+-		m_descriptorPoolIdx = 0;
+-		m_descriptorSetMap.clear();
+-
+ 		ChunkedScratchBufferVK& uniformScratchBuffer = m_uniformScratchBuffer;
+ 		uniformScratchBuffer.begin();
+ 

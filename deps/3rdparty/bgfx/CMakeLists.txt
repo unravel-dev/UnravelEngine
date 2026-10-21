@@ -72,6 +72,21 @@ if(ANDROID)
     add_definitions(-DBGFX_CONFIG_RENDERER_VULKAN=1)
 endif()
 
+# Fixes to bgfx itself (patches/, applied in file name order by apply_patches.cmake). bgfx.cmake fetches bgfx
+# with FetchContent, and the first FetchContent_Declare of a name wins: this one, with bgfx.cmake's options and
+# a patch step, replaces bgfx.cmake's own. A bgfx from BGFX_DIR or an in-tree checkout is built as it is.
+include(FetchContent)
+include(${CMAKE_CURRENT_SOURCE_DIR}/bgfx/cmake/dependencies.cmake)
+FetchContent_Declare(
+    bgfx_source
+    GIT_REPOSITORY https://github.com/bkaradzic/bgfx.git
+    GIT_TAG ${BGFX_GIT_TAG}
+    GIT_SHALLOW FALSE
+    SOURCE_SUBDIR bgfx-cmake-no-subproject
+    PATCH_COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=<SOURCE_DIR> -DPATCH_DIR=${CMAKE_CURRENT_SOURCE_DIR}/patches
+                  -P ${CMAKE_CURRENT_SOURCE_DIR}/apply_patches.cmake
+)
+
 add_subdirectory(bgfx)
 
 # bgfx.cmake builds bgfx from the folder its own BGFX_DIR names: the commit it pins, fetched into the build

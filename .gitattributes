@@ -1,6 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
+# Patches apply to checkouts with LF line endings: they keep LF on every platform
+*.patch text eol=lf
+
 # Custom for Visual Studio
 *.cs     diff=csharp
 

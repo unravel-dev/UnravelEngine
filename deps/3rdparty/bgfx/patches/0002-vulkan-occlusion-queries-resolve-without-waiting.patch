@@ -1,0 +1,189 @@
+Vulkan: occlusion query results are resolved without waiting for the GPU
+
+OcclusionQueryVK::flush, at the start of every submit that followed one with occlusion queries,
+copied their results and kicked with a wait: the CPU waited for the whole previous frame to finish
+on the GPU before recording the next one, and the rest of the submit went to the next
+frame-in-flight. The copies are now recorded in the frame's own command list, into a readback
+region per frame-in-flight, and resolved at a later flush once that command list has finished
+(vkGetFenceStatus), as the other renderers resolve theirs. The queries are reset after the copies in
+the same command list. Results arrive a few frames later, and no frame waits for them.
+
+diff --git a/src/renderer_vk.cpp b/src/renderer_vk.cpp
+index 2dfbded..2e04df5 100644
+--- a/src/renderer_vk.cpp
++++ b/src/renderer_vk.cpp
+@@ -7294,7 +7294,9 @@ VK_DESTROY
+ 
+ 		vkCmdResetQueryPool(commandBuffer, m_queryPool, 0, count);
+ 
+-		const uint32_t size = count * sizeof(uint32_t);
++		// One readback region per frame-in-flight: a region is copied into again only after the
++		// command list that last copied into it has finished, and its results are resolved.
++		const uint32_t size = BGFX_CONFIG_MAX_FRAME_LATENCY * count * sizeof(uint32_t);
+ 		result = s_renderVK->createReadbackBuffer(size, &m_readback, &m_readbackMemory);
+ 
+ 		if (VK_SUCCESS != result)
+@@ -7311,6 +7313,7 @@ VK_DESTROY
+ 		}
+ 
+ 		m_control.reset();
++		m_numCopied = 0;
+ 
+ 		return result;
+ 	}
+@@ -7351,17 +7354,31 @@ VK_DESTROY
+ 	{
+ 		BGFX_PROFILER_SCOPE("OcclusionQueryVK::flush", kColorFrame);
+ 
+-		if (0 < m_control.getNumUsed() )
++		resolve(_render);
++
++		const uint32_t numUsed = m_control.getNumUsed();
++
++		if (m_numCopied < numUsed)
+ 		{
+-			VkCommandBuffer commandBuffer = s_renderVK->m_commandBuffer;
++			const VkCommandBuffer commandBuffer = s_renderVK->m_commandBuffer;
+ 
+-			const uint32_t size = m_control.m_size;
++			const uint32_t size  = m_control.m_size;
++			const uint32_t count = BX_COUNTOF(m_handle);
++			const uint32_t frameInFlight = s_renderVK->m_cmd.m_currentFrameInFlight;
++			const uint64_t submission    = s_renderVK->m_cmd.m_submitted;
+ 
++			// The results are copied in this frame's command list, without waiting for it: resolve()
++			// reads them once the command list has finished.
+ 			// need to copy each result individually because VK_QUERY_RESULT_WAIT_BIT causes
+ 			// vkWaitForFences to hang indefinitely if we copy all results (including unavailable ones)
+-			for (uint32_t ii = 0, num = m_control.getNumUsed(); ii < num; ++ii)
++			for (uint32_t ii = m_numCopied; ii < numUsed; ++ii)
+ 			{
+-				const OcclusionQueryHandle& handle = m_handle[(m_control.m_read + ii) % size];
++				const uint32_t idx = (m_control.m_read + ii) % size;
++				const OcclusionQueryHandle& handle = m_handle[idx];
++
++				m_submission[idx]    = submission;
++				m_frameInFlight[idx] = uint8_t(frameInFlight);
++
+ 				if (isValid(handle) )
+ 				{
+ 					vkCmdCopyQueryPoolResults(
+@@ -7370,7 +7387,7 @@ VK_DESTROY
+ 						, handle.idx
+ 						, 1
+ 						, m_readback
+-						, handle.idx * sizeof(uint32_t)
++						, (frameInFlight * count + handle.idx) * sizeof(uint32_t)
+ 						, sizeof(uint32_t)
+ 						, VK_QUERY_RESULT_WAIT_BIT
+ 						);
+@@ -7378,28 +7395,35 @@ VK_DESTROY
+ 			}
+ 
+ 			setMemoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT);
+-			s_renderVK->kick(true);
+-
+-			commandBuffer = s_renderVK->m_commandBuffer;
+ 
+-			// resetting in the new command buffer prevents a false positive validation layer error
+-			const uint32_t count = BX_COUNTOF(m_handle);
++			// Query commands on the same query execute in submission order: the reset follows the copies.
+ 			vkCmdResetQueryPool(commandBuffer, m_queryPool, 0, count);
+ 
+-			resolve(_render);
++			m_numCopied = numUsed;
+ 		}
+ 	}
+ 
+ 	void OcclusionQueryVK::resolve(Frame* _render)
+ 	{
+-		while (0 != m_control.getNumUsed() )
++		const uint32_t count = BX_COUNTOF(m_handle);
++
++		while (0 != m_numCopied)
+ 		{
+-			OcclusionQueryHandle handle = m_handle[m_control.m_read];
++			const uint32_t idx = m_control.m_read;
++
++			if (!s_renderVK->m_cmd.isFinished(m_submission[idx], m_frameInFlight[idx]) )
++			{
++				break;
++			}
++
++			OcclusionQueryHandle handle = m_handle[idx];
+ 			if (isValid(handle) )
+ 			{
+-				_render->m_occlusion[handle.idx] = m_queryResult[handle.idx];
++				_render->m_occlusion[handle.idx] = m_queryResult[m_frameInFlight[idx] * count + handle.idx];
+ 			}
++
+ 			m_control.consume(1);
++			--m_numCopied;
+ 		}
+ 	}
+ 
+@@ -10814,6 +10838,22 @@ VK_DESTROY
+ 		}
+ 	}
+ 
++	bool CommandQueueVK::isFinished(uint64_t _submission, uint32_t _frameInFlight) const
++	{
++		if (m_submitted <= _submission)
++		{
++			return false;
++		}
++
++		// The frame-in-flight has been submitted again since: alloc waited for its fence first.
++		if (m_submitted > _submission + s_renderVK->m_maxFrameLatency)
++		{
++			return true;
++		}
++
++		return VK_SUCCESS == vkGetFenceStatus(s_renderVK->m_device, m_commandList[_frameInFlight].m_fence);
++	}
++
+ 	void CommandQueueVK::release(uint64_t _handle, VkObjectType _type)
+ 	{
+ 		Resource resource;
+diff --git a/src/renderer_vk.h b/src/renderer_vk.h
+index 7665380..a6dddff 100644
+--- a/src/renderer_vk.h
++++ b/src/renderer_vk.h
+@@ -175,6 +175,7 @@
+ 			VK_IMPORT_DEVICE_FUNC(false, vkQueueWaitIdle);                            \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkDeviceWaitIdle);                           \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkWaitForFences);                            \
++			VK_IMPORT_DEVICE_FUNC(false, vkGetFenceStatus);                           \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkBeginCommandBuffer);                       \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkEndCommandBuffer);                         \
+ 			VK_IMPORT_DEVICE_FUNC(false, vkCmdPipelineBarrier);                       \
+@@ -667,6 +668,7 @@ VK_DESTROY_FUNC(DescriptorSet);
+ 	{
+ 		OcclusionQueryVK()
+ 			: m_control(BX_COUNTOF(m_handle) )
++			, m_numCopied(0)
+ 		{
+ 		}
+ 
+@@ -685,6 +687,13 @@ VK_DESTROY_FUNC(DescriptorSet);
+ 		VkQueryPool m_queryPool;
+ 		const uint32_t* m_queryResult;
+ 		bx::RingBufferControl m_control;
++
++		// Per ring entry: the submission whose command list copies the result, and the
++		// frame-in-flight that recorded it (its readback region).
++		uint64_t m_submission[BGFX_CONFIG_MAX_OCCLUSION_QUERIES];
++		uint8_t  m_frameInFlight[BGFX_CONFIG_MAX_OCCLUSION_QUERIES];
++		// The used entries, from the read head, whose results are copied.
++		uint32_t m_numCopied;
+ 	};
+ 
+ 	struct ReadbackVK
+@@ -946,6 +955,7 @@ VK_DESTROY_FUNC(DescriptorSet);
+ 		void addSwapChain(SwapChainVK& _swapChain);
+ 		void kick(bool _wait = false);
+ 		void finish(bool _finishAll = false);
++		bool isFinished(uint64_t _submission, uint32_t _frameInFlight) const;
+ 
+ 		void release(uint64_t _handle, VkObjectType _type);
+ 		void recycleMemory(DeviceMemoryAllocationVK _mem);
