@@ -48,6 +48,10 @@ namespace ANONYMOUS
 constexpr float cloud_shadow_border_fade = 0.08f;
 /// First sampler stage of the shadow maps' depth attachments in the light programs (s_shadowDepth0).
 constexpr uint8_t light_shadow_compare_stage = 12;
+/// The stages fs_pbr_lighting.sh declares the GPU pre-exposure at (PRE_EXPOSURE_STAGE): the direct light
+/// programs leave s_tex5 / s_tex6 unbound, the indirect ones keep 13 free.
+constexpr uint8_t light_pre_exposure_stage = 6;
+constexpr uint8_t indirect_pre_exposure_stage = 13;
 
 /// PCF filter radius in shadow map texels at PCF offset 1, at least one texel.
 constexpr float pcf_radius_texels_per_offset = 2.0f;
@@ -521,17 +525,20 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
     // storage). Initial data must go through update_texture_2d (glTexSubImage2D), not
     // the texture ctor _mem path. BGFX_TEXTURE_RT keeps the GL texture sampleable after
     // compute image writes (same pattern as Hi-Z and other compute targets).
-    // Layout: 9x1, one texel per SH coefficient, rgb = channels R,G,B (a unused).
+    // Layout: one texel per SH coefficient, rgb = channels R,G,B (a unused), then the GPU's share of the
+    // pre-exposure (pre_exposure_state::gpu_texel), 1 until the first run writes it.
+    constexpr std::uint16_t width = pre_exposure_state::gpu_texel + 1;
     return rview.tex_acquire("IRRADIANCE_SH",
-                             {.size = {9, 1},
+                             {.size = {width, 1},
                               .format = bgfx::TextureFormat::RGBA32F,
                               .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_MIN_POINT |
                                        BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP},
                              [](const gfx::texture::ptr& tex)
                              {
-                                 float initial_coeffs[9 * 4] = {};
-                                 const bgfx::Memory* initial_pixels = bgfx::copy(initial_coeffs, sizeof(initial_coeffs));
-                                 bgfx::updateTexture2D(tex->native_handle(), 0, 0, 0, 0, 9, 1, initial_pixels);
+                                 float initial_texels[width * 4] = {};
+                                 std::fill_n(initial_texels + pre_exposure_state::gpu_texel * 4, 4, 1.0f);
+                                 const bgfx::Memory* initial_pixels = bgfx::copy(initial_texels, sizeof(initial_texels));
+                                 bgfx::updateTexture2D(tex->native_handle(), 0, 0, 0, 0, width, 1, initial_pixels);
                              });
 }
 
@@ -1309,7 +1316,7 @@ void deferred::run_gi_visualize_scene_color(const camera& camera,
     world.surface_cache = &gi_surface_cache_pass_;
     world.gi_scene = &engine::context().get_cached<surface_cache_system>();
     world.radiance_cache = gi_gather_pass_.get_radiance_cache();
-    world.pre_exposure = pre_exposure.value;
+    world.pre_exposure = pre_exposure;
     world.settings = gi_visualize_settings_;
     gi_visualize_pass_.draw_world(world);
 }
@@ -2458,7 +2465,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
     context.cam = &camera;
     context.gbuffer = gbuffer;
     context.buffer_size = buffer_size;
-    context.pre_exposure = get_pre_exposure(rview).value;
+    context.pre_exposure = get_pre_exposure(rview);
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
@@ -2584,7 +2591,7 @@ void deferred::submit_light(const light& light,
     float light_color_intensity[4] = {linear_color.x,
                                       linear_color.y,
                                       linear_color.z,
-                                      light.intensity * context.pre_exposure};
+                                      light.intensity * context.pre_exposure.value};
 
     gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
 
@@ -2618,6 +2625,7 @@ void deferred::submit_light(const light& light,
     bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);
     bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
+    context.pre_exposure.bind(ANONYMOUS::light_pre_exposure_stage);
     bgfx::submit(context.view, lprogram.program->native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);
 
@@ -2770,6 +2778,7 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     }
     gfx::set_texture(iprogram.s_specular_occlusion, 12, default_textures::get().specular_occlusion().texture.get());
     gfx::set_uniform(iprogram.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
+    get_pre_exposure(rview).bind(ANONYMOUS::indirect_pre_exposure_stage);
     
 
     auto topology = gfx::clip_quad(1.0f);
@@ -2968,6 +2977,7 @@ void deferred::run_reflection_probe_pass(scene& scn,
 
             gfx::set_uniform(ref_probe_program->u_data0, data0);
             gfx::set_uniform(ref_probe_program->u_data1, data1);
+            get_pre_exposure(rview).bind();
             gfx::set_uniform(ref_probe_program->u_capture, capture);
 
             for(size_t i = 0; i < gbuffer->get_attachment_count(); ++i)
@@ -3133,9 +3143,9 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
         return input;
     }
     const auto pre_exposure = get_pre_exposure(rview);
-    params_perez.pre_exposure = pre_exposure.value;
-    params_perez.history_pre_exposure_correction = pre_exposure.get_history_correction();
+    params_perez.pre_exposure = pre_exposure;
     params_skybox.sky_brightness *= pre_exposure.value;
+    params_skybox.pre_exposure = pre_exposure;
     const auto& viewport_size = camera.get_viewport_size();
 
     auto c = camera;
@@ -3449,21 +3459,23 @@ auto deferred::update_pre_exposure(gfx::render_view& rview, const run_params& pa
     state.previous = state.value;
 
     float value = 1.0f;
-    if(is_camera_run && params.fill_hdr_params)
+    const bool has_hdr_exposure = is_camera_run && params.fill_hdr_params;
+    const bool auto_exposure_active =
+        has_hdr_exposure && reflection_screen_stack_enabled(params) && params.fill_auto_exposure_params != nullptr;
+    if(has_hdr_exposure)
     {
-        // The manual exposure scale (the tonemapper's exposure) times the adapted exposure the
-        // occlusion-query channel delivered a few frames ago.
+        // The CPU's share: the manual exposure scale (the tonemapper's exposure).
         tonemapping_pass::run_params hdr;
         params.fill_hdr_params(hdr);
         value = hdr.config.exposure;
-        const bool auto_exposure_active =
-            reflection_screen_stack_enabled(params) && params.fill_auto_exposure_params != nullptr;
-        if(auto_exposure_active)
-        {
-            value *= auto_exposure_pass_.resolve_exposure_readback(rview);
-        }
     }
     state.value = std::clamp(value, pre_exposure_state::min_value, pre_exposure_state::max_value);
+    // The adaptive share stays on the GPU, in the view's environment SH: it follows the auto exposure for the
+    // camera's passes and is 1 for every other run.
+    const auto& environment_sh = create_or_get_irradiance_texture(rview);
+    auto_exposure_pass_.update_gpu_pre_exposure(rview, environment_sh, state.value, auto_exposure_active);
+    state.gpu_texture = environment_sh->native_handle();
+    state.gpu_sampler = pre_exposure_sampler_->native_handle();
     return state;
 }
 
@@ -3482,7 +3494,7 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
     params.input = input;
     params.delta_time = dt.count();
     params.camera_cut = is_camera_cut(camera);
-    params.pre_exposure = get_pre_exposure(rview).value;
+    params.pre_exposure = get_pre_exposure(rview);
     rparams.fill_auto_exposure_params(params);
     auto_exposure_pass_.run(rview, params);
 }
@@ -3499,7 +3511,7 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
     bloom_pass::run_params params;
     params.input = input;
     rparams.fill_bloom_params(params);
-    params.pre_exposure = get_pre_exposure(rview).value;
+    params.pre_exposure = get_pre_exposure(rview);
 
     if(rparams.fill_auto_exposure_params)
     {
@@ -3542,7 +3554,7 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     params.defer_output_noise = fxaa_follows || is_upscaled;
 
     rparams.fill_hdr_params(params);
-    params.pre_exposure = get_pre_exposure(rview).value;
+    params.pre_exposure = get_pre_exposure(rview);
 
     if(rparams.fill_auto_exposure_params)
     {
@@ -3787,7 +3799,7 @@ void deferred::run_gi_surface_cache(const camera& camera,
     inputs.view_cache = view_cache;
     // Last frame's environment SH: the irradiance pass runs later in the frame.
     inputs.environment_sh = rview.tex_find("IRRADIANCE_SH");
-    inputs.view_exposure = get_pre_exposure(rview).value;
+    inputs.view_exposure = get_pre_exposure(rview);
     gi_surface_cache_pass_.light(inputs);
 }
 
@@ -3886,6 +3898,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
 
     gfx::set_uniform(debug_visualization_program_.u_params, u_params);
     gfx::set_uniform(debug_visualization_program_.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
+    get_pre_exposure(rview).bind();
 
     size_t i = 0;
     for(; i < gbuffer->get_attachment_count(); ++i)
@@ -3957,7 +3970,7 @@ void deferred::run_gi_visualize_pass(const camera& camera,
     params.gi_scene = &engine::context().get_cached<surface_cache_system>();
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     resolve_gi_settings(rparams, params.gi);
-    params.exposure = get_pre_exposure(rview).value;
+    params.exposure = get_pre_exposure(rview);
     params.tonemapping = get_debug_tonemapping(rparams);
     gi_visualize_pass_.run(params, debug_view_labels_);
 }
@@ -4041,6 +4054,9 @@ deferred::~deferred()
 auto deferred::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
+
+    // Before any program, this pipeline's and its passes' alike (pipeline::init runs last).
+    pre_exposure_sampler_ = std::make_shared<gfx::uniform>("s_pre_exposure", bgfx::UniformType::Sampler);
 
     auto load_program = [&](const std::string& vs, const std::string& fs)
     {

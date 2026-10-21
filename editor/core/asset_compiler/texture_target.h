@@ -68,6 +68,17 @@ auto select_astc_ldr_format(std::uint32_t width,
                             std::uint32_t max_side,
                             texture_importer_meta::compression_quality quality) -> bgfx::TextureFormat::Enum;
 
+/// Whether every renderer that reads `format` samples it through an sRGB view, which a texture tagged sRGB
+/// needs: without one the texture loads untagged and its colors are sampled as linear, too light.
+auto has_srgb_view(bgfx::TextureFormat::Enum format) -> bool;
+
+/**
+ * @brief The format a texture tagged sRGB compiles to in place of `format`: `format` itself when it has an
+ * sRGB view (has_srgb_view); otherwise the family's color format for a compressed one (BC1 for BC4 and BC5,
+ * ETC2 for EAC) and RGBA8 for an uncompressed one (R8, RG8). The channels stay where the shaders read them.
+ */
+auto select_srgb_format(bgfx::TextureFormat::Enum format, texture_compression_family family) -> bgfx::TextureFormat::Enum;
+
 /**
  * @brief The parameters as a manifest records them, with the texture compiler's version, such as
  * "v2/astc/compression_3/size_6": a compiled texture whose manifest records other parameters is compiled

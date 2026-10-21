@@ -49,8 +49,20 @@
 #else
 #define GI_TRACE_SCREEN_STAGE 1
 #endif
+// The GPU pre-exposure: at stage 7 for the screen stage, from the environment SH's texel 9 for the distance-field
+// stages, whose visualizing variant has no stage left.
+#if defined(GI_TRACE_FAR_STAGES)
+#define PRE_EXPOSURE_ENVIRONMENT s_gi_env_sh
+#else
+#define PRE_EXPOSURE_STAGE 7
+#endif
 
 #include "bgfx_compute.sh"
+#ifdef GI_TRACE_FAR_STAGES
+/// The environment SH (texels 0-8), absolute radiance; texel 9 holds the GPU pre-exposure (declared before the
+/// headers that read the pre-exposure).
+SAMPLER2D(s_gi_env_sh, 3);
+#endif
 #include "../common.sh"
 // eval_radiance_sh.
 #include "../lighting.sh"
@@ -89,8 +101,6 @@ SAMPLER2D(s_gi_prev_color, 2);
 SAMPLER2D(s_gi_prev_depth, 6);
 #endif
 #ifdef GI_TRACE_FAR_STAGES
-/// The environment SH (9 texels), absolute radiance.
-SAMPLER2D(s_gi_env_sh, 3);
 /// The radiance cache: this frame's indirection and the bordered final atlas (radiance, hit distance in alpha).
 BUFFER_RO(b_gi_rc_indirection, uint, 7);
 SAMPLER2D(s_gi_rc_final, 8);

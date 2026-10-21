@@ -1679,6 +1679,10 @@ public:
             {
                 bgfx::setUniform(params.pre_exposure_uniform, &params.pre_exposure);
             }
+            if(bgfx::isValid(params.environment_texture))
+            {
+                bgfx::setTexture(params.environment_stage, params.environment_sampler, params.environment_texture);
+            }
             particle_gpu::draw_params draw;
             draw.view = params.view;
             draw.program = is_mask ? params.mask_program : params.program;

@@ -51,6 +51,10 @@ void gi_short_range_ao_pass::uniforms::cache_uniforms()
                   s_gi_short_range_ao_history,
                   "s_gi_short_range_ao_history",
                   bgfx::UniformType::Sampler);
+    cache_uniform(nullptr,
+                  s_gi_short_range_ao_accumulation,
+                  "s_gi_short_range_ao_accumulation",
+                  bgfx::UniformType::Sampler);
 }
 
 auto gi_short_range_ao_pass::init(rtti::context& ctx) -> bool
@@ -64,6 +68,7 @@ auto gi_short_range_ao_pass::init(rtti::context& ctx) -> bool
         return std::make_shared<gpu_program>(shader);
     };
     search_program_ = load("cs_gi_short_range_ao");
+    screen_program_ = load("cs_gi_short_range_ao_screen");
     if(!has_programs())
     {
         APPLOG_WARNING("[GI] Short-range AO programs failed to load; the views keep the screen-space AO.");
@@ -150,13 +155,41 @@ void gi_short_range_ao_pass::bind_accumulation(const frame_targets& targets,
 {
     const bool has_history = targets.has_history && has_gather_history;
     bind_image(5, targets.history_write, bgfx::Access::Write, packed_ao_format);
-    bind_image(7, targets.screen, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
     gfx::set_texture(uniforms_.s_gi_short_range_ao, 14, targets.search);
     gfx::set_texture(uniforms_.s_gi_short_range_ao_history,
                      15,
                      // Without a history the accumulation reads none; a uint texture stands in for the uint sampler.
                      has_history ? targets.history_read : targets.search);
     set_short_range_ao_uniform(params, has_history);
+}
+
+void gi_short_range_ao_pass::resolve_screen(const frame_targets& targets, const run_params& params) const
+{
+    if(params.gather == nullptr || !params.gather->g_buffer || params.gather->cam == nullptr || params.view == nullptr ||
+       !targets.history_write || !targets.screen)
+    {
+        return;
+    }
+    // begin() links the program once its shader has loaded (it may compile after init).
+    if(!screen_program_ || !screen_program_->begin())
+    {
+        return;
+    }
+    const auto& gather = *params.gather;
+    const auto size = gather.g_buffer->get_size();
+    gfx::render_pass pass("GI/Short Range AO Screen");
+    pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
+    gfx::set_texture(uniforms_.s_gi_depth, 0, gather.g_buffer->get_texture(4));
+    gfx::set_texture(uniforms_.s_gi_normal, 1, gather.g_buffer->get_texture(1));
+    gfx::set_texture(uniforms_.s_gi_short_range_ao_accumulation, 2, targets.history_write);
+    bind_image(3, targets.screen, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
+    gfx::set_uniform(uniforms_.u_gi_view, params.view);
+    bgfx::dispatch(pass.id,
+                   screen_program_->native_handle(),
+                   divide_round_up(size.width, group_edge),
+                   divide_round_up(size.height, group_edge),
+                   1);
+    screen_program_->end();
 }
 
 } // namespace unravel

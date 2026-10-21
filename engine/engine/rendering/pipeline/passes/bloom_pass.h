@@ -4,6 +4,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/local_exposure_binding.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 #include <graphics/render_view.h>
 #include <math/color.h>
 
@@ -82,7 +83,7 @@ public:
         settings config{};
         gfx::texture::ptr exposure_texture;
         /// The view's scene-color pre-exposure: the input carries it.
-        float pre_exposure = 1.0f;
+        pre_exposure_state pre_exposure{};
         /// Local exposure for the bloom source: the first downsample scales the scene by the factor
         /// the tonemapper gives it, so a highlight it compresses also blooms compressed. Inactive
         /// when local exposure is off.

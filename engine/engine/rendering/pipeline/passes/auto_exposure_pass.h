@@ -1,10 +1,10 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 #include <graphics/render_view.h>
 #include <math/math.h>
 #include <bgfx/bgfx.h>
-#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -32,9 +32,8 @@ enum class exposure_metering_mode : std::uint8_t
  * RGBA32F texture, AUTO_EXPOSURE: r = adapted exposure, g = target exposure, b = applied bias
  * in stops, a = average local exposure.
  *
- * The adapted exposure also reaches the CPU, a few frames late and without a GPU sync,
- * through occlusion queries (resolve_exposure_readback): the pipeline's pre-exposure is built
- * from this late value.
+ * The adapted exposure never reaches the CPU: update_gpu_pre_exposure turns the last frame's
+ * into the GPU's share of the pipeline's pre-exposure (pre_exposure.h).
  */
 class auto_exposure_pass
 {
@@ -145,63 +144,27 @@ public:
         /// The camera jumped this frame: the exposure snaps to its target.
         bool camera_cut = false;
         /// The view's pre-exposure this frame; the input carries it and metering removes it.
-        float pre_exposure = 1.0f;
+        pre_exposure_state pre_exposure{};
     };
 
     auto init(rtti::context& ctx) -> bool;
     auto shutdown() -> int32_t;
-    /// Runs histogram + temporal average to update AUTO_EXPOSURE and the instrument textures,
-    /// then submits this frame's exposure readback queries.
+    /// Runs histogram + temporal average to update AUTO_EXPOSURE and the instrument textures.
     void run(gfx::render_view& rview, const run_params& params);
 
     /**
-     * @brief The newest exposure value the occlusion-query channel has delivered:
-     * adapted exposure x average local exposure, a few frames old. Never blocks. Returns the
-     * previous value while a submission is still resolving, and 1 before the first one or
-     * when the occlusion query pool is exhausted.
-     */
-    auto resolve_exposure_readback(gfx::render_view& rview) -> float;
-
-    /**
-     * @brief The occlusion-query readback channel of ONE render view, stored in that view's
-     *        data under @ref view_key.
+     * @brief Writes this frame's GPU share of the pre-exposure for @p rview into texel
+     * pre_exposure_state::gpu_texel of the view's environment SH @p environment_sh (pre_exposure.sh,
+     * cs_pre_exposure.sc), before any pass of the frame writes or reads scene lighting.
      *
-     * PER VIEW on purpose. This state used to live on the pass, which one pipeline instance
-     * runs for every view it renders: a reflection probe face or a thumbnail rendered through
-     * a camera's pipeline took the no-exposure path, whose release destroyed the CAMERA's
-     * queries and reset its readback to 1, so the camera's next frame pre-exposed at the manual
-     * value while its own exposure texture still held the adapted one, and the queries then
-     * came back a few frames later - a dark / normal alternation whenever such captures
-     * interleaved with the camera, every flip rescaling the TAA and GI histories by the whole
-     * adaptation ratio (user-found 2026-09-18 on GI_TestSuite at play start). The queries die
-     * with the view.
+     * The share follows the adapted exposure the last frame left in AUTO_EXPOSURE while
+     * @p is_auto_exposure_active, and is 1 otherwise; @p manual_exposure is the CPU's share, which the
+     * whole pre-exposure is clamped with. Writes nothing until the program has loaded.
      */
-    /// Readback layout: tag bits, then code bits, then the tag bits again. Queries resolve in
-    /// submission order, so equal leading and trailing tags prove every query in between came
-    /// from the same submission.
-    static constexpr std::uint32_t readback_tag_bits = 2;
-    static constexpr std::uint32_t readback_code_bits = 10;
-    static constexpr std::uint32_t readback_query_count = readback_tag_bits * 2 + readback_code_bits;
-    /// log2 range of the encoded value; 10 bits over 40 stops step 0.04 stops.
-    static constexpr float readback_min_log2 = -28.0f;
-    static constexpr float readback_max_log2 = 12.0f;
-
-    struct readback_state
-    {
-        static constexpr const char* view_key = "AUTO_EXPOSURE_READBACK_STATE";
-        readback_state();
-        ~readback_state();
-        readback_state(const readback_state&) = delete;
-        auto operator=(const readback_state&) -> readback_state& = delete;
-        /// Destroys the queries and forgets the value (the view goes back to manual exposure).
-        void reset();
-        std::array<bgfx::OcclusionQueryHandle, readback_query_count> queries{};
-        bool created = false;
-        /// Submissions so far; the tag is its low bits.
-        std::uint32_t submissions = 0;
-        /// Last value decoded for this view.
-        float value = 1.0f;
-    };
+    void update_gpu_pre_exposure(gfx::render_view& rview,
+                                 const gfx::texture::ptr& environment_sh,
+                                 float manual_exposure,
+                                 bool is_auto_exposure_active);
 
     /// Returns the AUTO_EXPOSURE texture (1x1 RGBA32F, layout in the class comment).
     auto get_exposure_texture(gfx::render_view& rview) const -> gfx::texture::ptr;
@@ -287,8 +250,6 @@ private:
     /// The view's compensation curve LUT: 2^curve at compensation_curve_samples EV100 values,
     /// rebaked when the keys change. Null when the curve is empty.
     static auto update_compensation_curve(gfx::render_view& rview, const settings& config) -> gfx::texture::ptr;
-    void submit_exposure_readback(gfx::render_view& rview);
-    static auto ensure_readback_queries(readback_state& state) -> bool;
 
     struct histogram_program : uniforms_cache
     {
@@ -376,20 +337,18 @@ private:
         }
     } local_blur_program_;
 
-    struct readback_program : uniforms_cache
+    struct pre_exposure_program : uniforms_cache
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr s_exposure;
-        gfx::program::uniform_ptr u_readback_bit;
-        gfx::program::uniform_ptr u_readback_range;
+        gfx::program::uniform_ptr u_pre_exposure_params;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), u_readback_bit, "u_readback_bit", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_readback_range, "u_readback_range", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_pre_exposure_params, "u_pre_exposure_params", bgfx::UniformType::Vec4);
         }
-    } readback_program_;
+    } pre_exposure_program_;
 
     bgfx::DynamicIndexBufferHandle histogram_buffer_ = BGFX_INVALID_HANDLE;
     /// False until the first average dispatch has consumed (and zeroed) the histogram.

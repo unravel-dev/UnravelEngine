@@ -21,6 +21,7 @@
  */
 
 #include "bgfx_compute.sh"
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_hdr_input, 0);
 BUFFER_RW(s_histogram, uint, 1);
@@ -45,7 +46,8 @@ uniform vec4 u_metering_cell;
 #define u_metering_mode      int(u_metering_params.x)
 #define u_metering_area      u_metering_params.y
 #define u_aspect_ratio       u_metering_params.z
-#define u_log2_pre_exposure  u_metering_params.w
+// The CPU's share (u_metering_params.w) plus the GPU's.
+#define u_log2_pre_exposure  (u_metering_params.w + log2(u_pre_exposure_gpu_scale))
 
 #define u_cell_texels        u_metering_cell.xy
 #define u_texel_size         u_metering_cell.zw

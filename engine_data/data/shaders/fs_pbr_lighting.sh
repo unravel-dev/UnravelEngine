@@ -10,8 +10,6 @@ SAMPLER2D(s_tex1, 1);
 SAMPLER2D(s_tex2, 2);
 SAMPLER2D(s_tex3, 3);
 SAMPLER2D(s_tex4, 4);
-SAMPLER2D(s_tex5, 5);
-SAMPLER2D(s_tex6, 6);
 
 uniform vec4 u_light_position;
 uniform vec4 u_light_direction;
@@ -31,6 +29,9 @@ SAMPLER2D(s_cloudShadow, 11);
 #endif
 
 #if PBR_INDIRECT
+// RBUFFER (the traced reflections) and the BRDF LUT; the direct light programs bind neither.
+SAMPLER2D(s_tex5, 5);
+SAMPLER2D(s_tex6, 6);
 SAMPLER2D(s_irradiance, 7);
 SAMPLER2D(s_ssil, 8);
 // Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
@@ -54,8 +55,13 @@ SAMPLER2D(s_probe_layer, 10);
 // The GTSO specular occlusion table (specular_occlusion_lut). Stage 11 is the directional
 // light's cloud shadow sampler.
 SAMPLER3D(s_specular_occlusion, 12);
+// The GPU's share of the pre-exposure (deferred::run_indirect_lighting_pass binds it here).
+#define PRE_EXPOSURE_STAGE 13
 #include "pre_exposure.sh"
 #else
+// The GPU's share of the pre-exposure, at the stage s_tex6 holds in the indirect programs.
+#define PRE_EXPOSURE_STAGE 6
+#include "pre_exposure.sh"
 SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
 SAMPLER2D(s_shadowMap2, 9);
@@ -871,7 +877,8 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 world_position = clipToWorld(u_invViewProj, clip);
     float filtered_roughness = GeometricSpecularAA(data.world_normal, GetLightingRoughness(data.roughness));
     vec3 light_color = u_light_color_intensity.xyz;
-    float intensity = u_light_color_intensity.w;
+    // The CPU scaled the intensity by its share of the pre-exposure; the GPU's share joins it here.
+    float intensity = u_light_color_intensity.w * u_pre_exposure_gpu_scale;
     vec3 specular_color = data.specular_color;
     vec3 diffuse_color = data.diffuse_color;
 
@@ -984,6 +991,10 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 // Separate indirect lighting + emissive pass (rendered once as a fullscreen quad, not per-light)
 vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
 {
+    // The GPU's share of the pre-exposure, fetched once and multiplied in where each term needs it: this
+    // pass is register-bound, and on Mali GPUs a fetch per use, or the product held for the whole pass,
+    // costs it far more than the fetch.
+    vec4 pre_exposure_gpu = u_pre_exposure_gpu;
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
     GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
@@ -1028,7 +1039,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     vec3 dominant_dir = normalize(GetSpecularDominantDir(N, reflect(-V, N), indirect_filtered_roughness));
     SHIndirectTerms environment = eval_sh_cone_and_lobe(s_irradiance, diffuse_axis, visibility, dominant_dir, indirect_filtered_roughness);
-    vec3 ambient_sh = environment.irradiance * bounce_gain * (RECIP_PI * u_pre_exposure_value);
+    vec3 ambient_sh = environment.irradiance * bounce_gain * (RECIP_PI * pre_exposure_from_gpu(pre_exposure_gpu));
     bool gi_is_ssil = u_indirect_params.y > 0.5;
     vec4 gi_sample = gi_is_ssil || is_surface ? texture2D(s_ssil, texcoord0) : vec4_splat(0.0);
     float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (is_surface ? 1.0 : 0.0);
@@ -1043,11 +1054,11 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     IndirectSpecularOcclusion specular_occlusion =
         ComputeIndirectSpecularOcclusion(s_specular_occlusion, N, dominant_dir, indirect_filtered_roughness, data.specular_color,
                                          material_ao, visibility, occlusion_axis, u_screen_ao_multi_bounce);
-    vec3 environment_specular = environment.radiance * u_pre_exposure_value;
+    vec3 environment_specular = environment.radiance * pre_exposure_from_gpu(pre_exposure_gpu);
 #if PROBE_LAYER_INLINE
     // What the layer would hold for one probe over its clear: rgb premultiplied by the coverage.
     vec4 probe_texel = SampleSphereProbe(s_probe_cube, world_position, reflect(-V, N), data.roughness, u_probe_sphere,
-                                         u_probe_sample.x, u_probe_sample.y, u_probe_sample.z);
+                                         u_probe_sample.x, u_probe_sample.y * pre_exposure_gpu.x, u_probe_sample.z);
     probe_texel.w *= u_probe_sample.w;
     probe_texel.xyz *= probe_texel.w;
 #else
@@ -1060,7 +1071,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // albedo carries it for the light other surfaces bounce off this one.
     vec3 indirect_diffuse_color = data.diffuse_color + data.subsurface_color;
     vec3 indirect_lighting = StandardShadingIndirect(indirect_diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, V, N);
-    return vec4(indirect_lighting + data.emissive_color * u_pre_exposure_value, 1.0f);
+    return vec4(indirect_lighting + data.emissive_color * pre_exposure_from_gpu(pre_exposure_gpu), 1.0f);
 }
 #endif
 

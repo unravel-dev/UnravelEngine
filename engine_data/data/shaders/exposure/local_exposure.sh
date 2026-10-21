@@ -18,6 +18,8 @@
 
 SAMPLER2D(s_local_exposure_grid, 2);
 SAMPLER2D(s_local_exposure_blurred, 3);
+// The GPU's share of the pre-exposure (u_log2_pre_exposure below); the includers keep stage 15 free.
+#include "../pre_exposure.sh"
 
 /// x = highlight contrast scale, y = shadow contrast scale, z = detail strength,
 /// w = blurred-luminance blend.
@@ -35,7 +37,7 @@ uniform vec4 u_local_exposure4;
 #define u_local_shadow_contrast    u_local_exposure.y
 #define u_local_detail_strength    u_local_exposure.z
 #define u_local_blurred_blend      u_local_exposure.w
-#define u_log2_pre_exposure        u_local_exposure2.x
+#define u_log2_pre_exposure        (u_local_exposure2.x + log2(u_pre_exposure_gpu_scale))
 #define u_local_middle_grey_bias   u_local_exposure2.y
 #define u_local_exposure_enabled   (u_local_exposure2.z > 0.5)
 #define u_local_min_log_lum        u_local_exposure2.w

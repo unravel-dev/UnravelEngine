@@ -54,8 +54,13 @@ SAMPLER2D(s_gi_debug_values, 13);
 /// Per page-table entry (gi_scene::get_page_lighting_ages): x = frames since its direct lighting update, y = since
 /// its indirect lighting update.
 BUFFER_RO(b_gi_page_ages, vec4, 14);
-/// The environment's radiance SH (9 texels, absolute radiance).
+/// The environment's radiance SH (texels 0-8, absolute radiance); texel 9 holds the GPU pre-exposure, read there for
+/// want of a free stage.
 SAMPLER2D(s_gi_env_sh, 15);
+#define PRE_EXPOSURE_ENVIRONMENT s_gi_env_sh
+#include "../pre_exposure.sh"
+/// The view's pre-exposure the debug views scale radiance by: the CPU's share and the GPU's.
+#define u_gi_debug_exposure (u_gi_debug2.y * u_pre_exposure_gpu_scale)
 
 #define GI_SURFACE_CACHE_OBJECT_GRID
 #include "gi/gi_surface_cache.sh"
@@ -162,7 +167,7 @@ GiDebugHit GiTraceGlobalSdfView(vec2 uv, vec2 pixel)
 /// Exposed radiance through the lit image's tone mapping operator.
 vec4 GiDebugToneMap(vec3 radiance)
 {
-	return vec4(apply_tonemapping(radiance * u_gi_debug2.y, int(u_gi_debug2.w), 1.0), 1.0);
+	return vec4(apply_tonemapping(radiance * u_gi_debug_exposure, int(u_gi_debug2.w), 1.0), 1.0);
 }
 
 /// A pre-exposed value as @p mode shows it: albedo display encoded, normals as they are, the rest tone mapped.
@@ -185,7 +190,7 @@ vec4 GiDebugSky(vec2 uv, int mode)
 	vec3 origin;
 	vec3 direction;
 	GiDebugCameraRay(uv, origin, direction);
-	return GiDebugFinalize(eval_radiance_sh(s_gi_env_sh, direction) * u_gi_debug2.y, mode);
+	return GiDebugFinalize(eval_radiance_sh(s_gi_env_sh, direction) * u_gi_debug_exposure, mode);
 }
 
 /// How one card covers a hit, as GiSampleCard computes it before it reads the atlases (kept
@@ -302,7 +307,7 @@ vec3 GiCardDebugValue(int mode, int card_index, GiCardTap tap)
 	}
 	else if(mode == GI_DEBUG_EMISSIVE)
 	{
-		return GiFetchCardAtlas(s_gi_debug_values, tap.s, tap.weights) * u_gi_debug2.y;
+		return GiFetchCardAtlas(s_gi_debug_values, tap.s, tap.weights) * u_gi_debug_exposure;
 	}
 	else if(mode == GI_DEBUG_CARD_WEIGHTS)
 	{
@@ -392,17 +397,17 @@ vec4 GiSampleSceneHit(GiDebugHit hit, int mode)
 	else if(mode == GI_DEBUG_DIRECT)
 	{
 		cards = GiSampleGlobalSdfHit(hit.position, hit.normal, voxel_extent, s_gi_card_direct);
-		cards.xyz *= u_gi_debug2.y;
+		cards.xyz *= u_gi_debug_exposure;
 	}
 	else if(mode == GI_DEBUG_INDIRECT)
 	{
 		cards = GiSampleGlobalSdfHit(hit.position, hit.normal, voxel_extent, s_gi_card_indirect);
-		cards.xyz *= u_gi_debug2.y;
+		cards.xyz *= u_gi_debug_exposure;
 	}
 	else
 	{
 		cards = GiSampleGlobalSdfHit(hit.position, hit.normal, voxel_extent, s_gi_card_final);
-		cards.xyz *= u_gi_debug2.y;
+		cards.xyz *= u_gi_debug_exposure;
 	}
 	return cards;
 }

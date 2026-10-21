@@ -235,6 +235,7 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     float ssil_params3[4] = {params.settings.thickness, 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(trace_program_.u_ssil_params3, ssil_params3);
     gfx::set_uniform(trace_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
+    pre_exposure_.bind();
 
     // u_ssil_resolution: xy = full G-buffer size, zw = PER-AXIS (full / trace) scale.
     // Per-axis is required: at odd full-res W with even full-res H (e.g. 1233 x 900)
@@ -619,6 +620,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         gfx::set_uniform(temporal_program_.u_temporal_params2, temporal_params2);
         gfx::set_uniform(temporal_program_.u_temporal_resolution, temporal_resolution);
         gfx::set_uniform(temporal_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
+        pre_exposure_.bind();
 
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
         // prev misaligns a still camera's reprojection by the jitter delta every frame

@@ -131,6 +131,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, aa_data.z, aa_data.w, use_reactive ? 1.0f : 0.0f};
     gfx::set_uniform(program_.u_taa_params2, taa_params2);
     gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
+    params.pre_exposure.bind();
 
     const auto topology = gfx::clip_quad(1.0f);
     bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);

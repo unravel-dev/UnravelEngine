@@ -6,6 +6,7 @@
 #include <engine/rendering/pipeline/passes/gi_surface_cache_pass.h>
 #include <engine/rendering/pipeline/passes/shader_print.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -81,7 +82,7 @@ public:
         ///< The view's GI settings: the reflections' trace distance and roughness, the gather temporal's frames.
         gi_settings gi{};
         ///< The view's exposure (its pre-exposure), applied to the lighting before the tone map.
-        float exposure = 1.0f;
+        pre_exposure_state exposure{};
         ///< The lit image's tone mapping operator, which the views go through as well.
         tonemapping_method tonemapping = tonemapping_method::none;
     };
@@ -172,7 +173,7 @@ public:
         ///< The radiance cache this frame's gather updated (null when it did not run).
         const gi_radiance_cache* radiance_cache = nullptr;
         ///< The scene colour's pre-exposure: a primitive's colour is its radiance.
-        float pre_exposure = 1.0f;
+        pre_exposure_state pre_exposure{};
         world_settings settings{};
     };
 

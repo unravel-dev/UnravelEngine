@@ -69,7 +69,8 @@ void main()
     vec3 color = texture2D(s_input, v_texcoord0).rgb;
     vec3 scene_color = texture2D(s_scene, v_texcoord0).rgb;
 
-    float exposure = u_tonemappingExposure;
+    // u_tonemappingExposure divides out the CPU's share of the pre-exposure; the GPU's share goes here.
+    float exposure = u_tonemappingExposure / u_pre_exposure_gpu_scale;
     vec4 exposure_texel = texture2DLod(s_exposure, vec2(0.5, 0.5), 0.0);
     float adapted = exposure_texel.r;
     if ((adapted != adapted) || adapted <= 0.0 || adapted >= 1.0e10)

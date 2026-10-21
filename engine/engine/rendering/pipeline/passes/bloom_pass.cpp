@@ -133,14 +133,15 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         // The shader divides the threshold by the adapted exposure to compare it against the
         // input; the input is pre-exposed, so the threshold carries the pre-exposure too, and the
         // test is the exposed luminance against the threshold whatever the pre-exposure.
-        float params_data[4] = {config.threshold * params.pre_exposure, 0.0f, config.soft_knee, config.clamp};
+        float params_data[4] = {config.threshold * params.pre_exposure.value, 0.0f, config.soft_knee, config.clamp};
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());
         gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
+        params.pre_exposure.bind();
         const float bloom_exposure[4] = {std::log2(std::max(params.manual_exposure, 1e-12f)), 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_bloom_exposure, bloom_exposure);
-        downsample_program_.local_exposure.submit(params.local_exposure, params.pre_exposure);
+        downsample_program_.local_exposure.submit(params.local_exposure, params.pre_exposure.value);
 
         irect32_t rect(0, 0, mip0_size.width, mip0_size.height);
         bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
@@ -184,8 +185,9 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         gfx::set_texture(downsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(i)));
         gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
+        params.pre_exposure.bind();
         // Only the first downsample applies local exposure; the stand-ins keep the slots valid.
-        downsample_program_.local_exposure.submit({}, params.pre_exposure);
+        downsample_program_.local_exposure.submit({}, params.pre_exposure.value);
 
         irect32_t rect(0, 0, out_w, out_h);
         bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());

@@ -16,6 +16,7 @@ $input v_texcoord0
 #include "../tonemapping/tonemapping.sh"
 #include "gi/gi_common.sh"
 #include "gi/gi_visualize.sh"
+#include "../pre_exposure.sh"
 
 /// The G-buffer's colour and normal targets and its depth.
 SAMPLER2D(s_gbuffer0, 0);
@@ -57,7 +58,8 @@ vec3 GiDedicatedReflectionRays(vec2 uv)
 	GBufferData data = DecodeGBufferSimple(uv, s_gbuffer0, s_gbuffer1, s_gbuffer_depth);
 	if(data.depth01 >= 1.0)
 	{
-		vec3 sky = eval_radiance_sh(s_gi_env_sh, GiCameraDirection(uv)) * u_gi_visualize.w;
+		// u_gi_visualize.w is the CPU's share of the pre-exposure; the GPU's share joins it here.
+		vec3 sky = eval_radiance_sh(s_gi_env_sh, GiCameraDirection(uv)) * (u_gi_visualize.w * u_pre_exposure_gpu_scale);
 		return apply_tonemapping(sky, int(u_gi_visualize.z), 1.0);
 	}
 	vec3 light_direction = vec3(-0.707, 0.707, 0.0);

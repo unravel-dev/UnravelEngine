@@ -8,6 +8,7 @@
 #include <engine/rendering/pipeline/passes/gi_pass_common.h>
 #include <engine/rendering/pipeline/passes/gi_surface_cache_feedback.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -114,8 +115,8 @@ public:
         const gi_object_grid* object_grid = nullptr;
         ///< The environment's radiance SH: the sky radiosity rays see on a miss.
         gfx::texture::ptr environment_sh;
-        ///< The view's exposure, which scales the radiosity rays' maximum intensity into cached units.
-        float view_exposure = 1.0f;
+        ///< The view's pre-exposure, which scales the radiosity rays' maximum intensity into cached units.
+        pre_exposure_state view_exposure{};
     };
 
     /// The debug views of fs_gi_scene_debug.sc: the scene views, which show the cards at the global distance

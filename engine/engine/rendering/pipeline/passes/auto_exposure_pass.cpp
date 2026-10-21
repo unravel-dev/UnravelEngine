@@ -6,6 +6,7 @@
 #include <graphics/texture.h>
 #include <bx/math.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -27,7 +28,6 @@ struct metering_state
 constexpr const char* exposure_key = "AUTO_EXPOSURE";
 constexpr const char* history_key = "AUTO_EXPOSURE_HISTORY";
 constexpr const char* histogram_key = "AUTO_EXPOSURE_HISTOGRAM";
-constexpr const char* readback_target_key = "AUTO_EXPOSURE_READBACK";
 /// Per metering cell, its log2 scene luminance: the histogram writes it, the local exposure
 /// grid bins it (cs_local_exposure_grid.sc).
 constexpr const char* log_lum_key = "EXPOSURE_LOG_LUM";
@@ -103,13 +103,15 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
     auto cs_local_downsample =
         am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_downsample.sc");
     auto cs_local_blur = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_blur.sc");
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_readback = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/fs_exposure_readback.sc");
+    auto cs_pre_exposure = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_pre_exposure.sc");
 
-    if(!cs_histogram || !cs_average || !vs_clip_quad || !fs_readback)
+    if(!cs_histogram || !cs_average || !cs_pre_exposure)
     {
         return false;
     }
+
+    pre_exposure_program_.cache_uniforms();
+    pre_exposure_program_.program = std::make_shared<gpu_program>(cs_pre_exposure);
 
     histogram_program_.cache_uniforms();
     histogram_program_.program = std::make_shared<gpu_program>(cs_histogram);
@@ -127,9 +129,6 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
         local_blur_program_.cache_uniforms();
         local_blur_program_.program = std::make_shared<gpu_program>(cs_local_blur);
     }
-
-    readback_program_.cache_uniforms();
-    readback_program_.program = std::make_shared<gpu_program>(vs_clip_quad, fs_readback);
 
     // NOTE: the buffer's initial contents are undefined and CANNOT be seeded from the
     // CPU -- bgfx forbids update() on COMPUTE_WRITE buffers (the same constraint the GI
@@ -155,33 +154,6 @@ auto auto_exposure_pass::shutdown() -> int32_t
     }
 
     return 0;
-}
-
-auto_exposure_pass::readback_state::readback_state()
-{
-    for(auto& query : queries)
-    {
-        query = BGFX_INVALID_HANDLE;
-    }
-}
-
-auto_exposure_pass::readback_state::~readback_state()
-{
-    reset();
-}
-
-void auto_exposure_pass::readback_state::reset()
-{
-    for(auto& query : queries)
-    {
-        if(bgfx::isValid(query))
-        {
-            bgfx::destroy(query);
-        }
-        query = BGFX_INVALID_HANDLE;
-    }
-    created = false;
-    value = 1.0f;
 }
 
 void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
@@ -295,6 +267,7 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
     histogram_program_.program->begin();
 
     gfx::set_texture(histogram_program_.s_hdr_input, 0, params.input->get_texture(), metering_sampler_flags);
+    params.pre_exposure.bind();
 
     bgfx::setBuffer(1, histogram_buffer_, bgfx::Access::ReadWrite);
     bgfx::setImage(2, log_lum_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
@@ -304,7 +277,7 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
     gfx::set_uniform(histogram_program_.u_histogram_params, histogram_params);
 
     const float aspect_ratio = float(input_width) / float(input_height);
-    const float log2_pre_exposure = std::log2(std::max(params.pre_exposure, min_valid_pre_exposure));
+    const float log2_pre_exposure = std::log2(std::max(params.pre_exposure.value, min_valid_pre_exposure));
     const float metering_params[4] = {float(static_cast<int>(config.metering_mode)), config.metering_area, aspect_ratio, log2_pre_exposure};
     gfx::set_uniform(histogram_program_.u_metering_params, metering_params);
 
@@ -567,122 +540,6 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
     }
 }
 
-auto auto_exposure_pass::ensure_readback_queries(readback_state& state) -> bool
-{
-    if(state.created)
-    {
-        return true;
-    }
-    for(auto& query : state.queries)
-    {
-        query = bgfx::createOcclusionQuery();
-        if(!bgfx::isValid(query))
-        {
-            // The global pool is exhausted: give back what was taken and stay without a
-            // readback (pre-exposure then follows the manual exposure only).
-            state.reset();
-            return false;
-        }
-    }
-    state.created = true;
-    return true;
-}
-
-void auto_exposure_pass::submit_exposure_readback(gfx::render_view& rview)
-{
-    auto exposure_tex = rview.tex_get(exposure_key);
-    auto& state = rview.data().get_or_emplace<readback_state>(readback_state::view_key);
-    if(!exposure_tex || !readback_program_.program || !ensure_readback_queries(state))
-    {
-        return;
-    }
-
-    auto& target = rview.fbo_acquire(readback_target_key);
-    if(!target)
-    {
-        auto target_tex = std::make_shared<gfx::texture>(1, 1, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
-        target = std::make_shared<gfx::frame_buffer>();
-        target->populate({target_tex});
-    }
-
-    const std::uint32_t tag = state.submissions & ((1u << readback_tag_bits) - 1u);
-    ++state.submissions;
-
-    const float max_code = float((1u << readback_code_bits) - 1u);
-    const float range[4] = {readback_min_log2, max_code / (readback_max_log2 - readback_min_log2), max_code, 0.0f};
-
-    gfx::render_pass pass("Auto Exposure/Readback");
-    pass.bind(target.get());
-
-    if(!readback_program_.program->begin())
-    {
-        return;
-    }
-    for(std::uint32_t slot = 0; slot < readback_query_count; ++slot)
-    {
-        const bool is_code_bit = slot >= readback_tag_bits && slot < readback_tag_bits + readback_code_bits;
-        const std::uint32_t bit_index = is_code_bit ? slot - readback_tag_bits
-                                                    : (slot < readback_tag_bits ? slot : slot - readback_tag_bits - readback_code_bits);
-        const float tag_bit_value = float((tag >> bit_index) & 1u);
-        const float bit[4] = {is_code_bit ? 1.0f : 0.0f, float(bit_index), tag_bit_value, 0.0f};
-
-        gfx::set_uniform(readback_program_.u_readback_bit, bit);
-        gfx::set_uniform(readback_program_.u_readback_range, range);
-        gfx::set_texture(readback_program_.s_exposure, 0, exposure_tex);
-        const auto topology = gfx::clip_quad(1.0f);
-        bgfx::setState(topology | BGFX_STATE_WRITE_RGB);
-        bgfx::submit(pass.id, readback_program_.program->native_handle(), state.queries[slot]);
-    }
-    bgfx::setState(BGFX_STATE_DEFAULT);
-    readback_program_.program->end();
-}
-
-auto auto_exposure_pass::resolve_exposure_readback(gfx::render_view& rview) -> float
-{
-    // A view without its own channel (never ran the readback, or its queries could not be
-    // created) follows the manual exposure: never another view's value.
-    auto* state = rview.data().try_get<readback_state>(readback_state::view_key);
-    if(!state || !state->created)
-    {
-        return 1.0f;
-    }
-
-    std::array<bool, readback_query_count> bits{};
-    for(std::uint32_t slot = 0; slot < readback_query_count; ++slot)
-    {
-        const auto result = bgfx::getResult(state->queries[slot]);
-        if(result == bgfx::OcclusionQueryResult::NoResult)
-        {
-            return state->value;
-        }
-        bits[slot] = result == bgfx::OcclusionQueryResult::Visible;
-    }
-
-    std::uint32_t leading_tag = 0;
-    std::uint32_t trailing_tag = 0;
-    const std::uint32_t trailing_start = readback_tag_bits + readback_code_bits;
-    for(std::uint32_t bit = 0; bit < readback_tag_bits; ++bit)
-    {
-        leading_tag |= std::uint32_t(bits[bit]) << bit;
-        trailing_tag |= std::uint32_t(bits[trailing_start + bit]) << bit;
-    }
-    if(leading_tag != trailing_tag)
-    {
-        // A submission is still resolving: the queries in between may mix two frames.
-        return state->value;
-    }
-
-    std::uint32_t code = 0;
-    for(std::uint32_t bit = 0; bit < readback_code_bits; ++bit)
-    {
-        code |= std::uint32_t(bits[readback_tag_bits + bit]) << bit;
-    }
-    const float max_code = float((1u << readback_code_bits) - 1u);
-    const float stops_per_code = (readback_max_log2 - readback_min_log2) / max_code;
-    state->value = std::pow(2.0f, readback_min_log2 + float(code) * stops_per_code);
-    return state->value;
-}
-
 void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
 {
     APP_SCOPE_PERF("Rendering/Auto Exposure Pass");
@@ -691,10 +548,32 @@ void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
 
     run_histogram(rview, params);
     // Before the average: the average folds the local exposure's mean into AUTO_EXPOSURE.a,
-    // which the pre-exposure readback then carries.
+    // which the next frame's pre-exposure then carries.
     run_local_exposure(rview, params);
     run_average(rview, params);
-    submit_exposure_readback(rview);
+}
+
+void auto_exposure_pass::update_gpu_pre_exposure(gfx::render_view& rview,
+                                                 const gfx::texture::ptr& environment_sh,
+                                                 float manual_exposure,
+                                                 bool is_auto_exposure_active)
+{
+    // begin() links the program once its shader has loaded (it may compile after init).
+    if(!environment_sh || !pre_exposure_program_.program || !pre_exposure_program_.program->begin())
+    {
+        return;
+    }
+    // Without auto exposure the share returns to 1, and the history correction carries that step too.
+    const auto exposure_tex = is_auto_exposure_active ? rview.tex_find(exposure_key) : nullptr;
+    const auto& input = exposure_tex ? exposure_tex : default_textures::get().white_texture();
+    const float params[4] = {manual_exposure, pre_exposure_state::min_value, pre_exposure_state::max_value, 0.0f};
+
+    gfx::render_pass pass("Auto Exposure/Pre-Exposure");
+    gfx::set_uniform(pre_exposure_program_.u_pre_exposure_params, params);
+    gfx::set_texture(pre_exposure_program_.s_exposure, 0, input);
+    bgfx::setImage(1, environment_sh->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F);
+    bgfx::dispatch(pass.id, pre_exposure_program_.program->native_handle(), 1, 1, 1);
+    pre_exposure_program_.program->end();
 }
 
 void auto_exposure_pass::release_resources(gfx::render_view& rview)
@@ -708,13 +587,7 @@ void auto_exposure_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove(local_blur_temp_key);
     rview.tex_remove(local_blurred_key);
     rview.tex_remove(compensation_curve_key);
-    rview.fbo_remove(readback_target_key);
     rview.data().get_or_emplace<metering_state>(metering_state::view_key).force_snap = true;
-    // THIS view's channel only: the pass instance also serves other views' frames.
-    if(auto* state = rview.data().try_get<readback_state>(readback_state::view_key))
-    {
-        state->reset();
-    }
 }
 
 } // namespace unravel

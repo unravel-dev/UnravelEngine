@@ -2,6 +2,7 @@ $input v_texcoord0, v_weye_dir
 
 #include "../common.sh"
 #include "../lighting.sh"
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_tex0, 0);
 SAMPLER2D(s_tex1, 1);
@@ -19,7 +20,8 @@ uniform mat4 u_inv_world;
 
 #define u_probe_position_and_radius u_data0
 #define u_cube_mips u_data1.x
-#define u_intensity u_data1.y
+// The CPU scaled the intensity by its share of the pre-exposure; the GPU's share joins it here.
+#define u_intensity (u_data1.y * u_pre_exposure_gpu_scale)
 #define u_is_global_fallback u_data1.z
 #define u_source_validity u_data1.w
 #define u_probe_extents u_data2

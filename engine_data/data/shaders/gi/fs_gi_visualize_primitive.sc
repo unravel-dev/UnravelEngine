@@ -6,11 +6,12 @@ $input v_color0
  */
 
 #include "../common.sh"
+#include "../pre_exposure.sh"
 
-/// x = the view's pre-exposure.
+/// x = the view's pre-exposure (the CPU's share; the GPU's share joins it below).
 uniform vec4 u_gi_visualize_primitive;
 
 void main()
 {
-	gl_FragColor = vec4(v_color0.rgb * u_gi_visualize_primitive.x, v_color0.a);
+	gl_FragColor = vec4(v_color0.rgb * (u_gi_visualize_primitive.x * u_pre_exposure_gpu_scale), v_color0.a);
 }

@@ -70,5 +70,6 @@ void main()
 		                       dot(texelFetch(s_gi_radiosity_sh_b, probe, 0), transfer));
 		lighting = max(irradiance, vec3_splat(0.0)) / GI_PI;
 	}
-	gl_FragColor = vec4(lighting * u_gi_visualize_probe2.x, 1.0);
+	// u_gi_visualize_probe2.x is the CPU's share of the pre-exposure; the GPU's share joins it here.
+	gl_FragColor = vec4(lighting * (u_gi_visualize_probe2.x * u_pre_exposure_gpu_scale), 1.0);
 }

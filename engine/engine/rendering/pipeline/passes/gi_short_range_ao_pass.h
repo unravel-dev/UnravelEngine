@@ -65,6 +65,10 @@ public:
      */
     void bind_accumulation(const frame_targets& targets, const run_params& params, bool has_gather_history) const;
 
+    /// Unpacks the screen AO from this frame's accumulation (cs_gi_short_range_ao_screen.sc), after the integrate:
+    /// the integrate's stage 7 holds the GPU pre-exposure.
+    void resolve_screen(const frame_targets& targets, const run_params& params) const;
+
 private:
     /// The uniforms of the search and of the integrate's AO. bgfx uniforms are name-global, so one set serves both.
     struct uniforms : uniforms_cache
@@ -78,6 +82,7 @@ private:
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_gi_short_range_ao;
         gfx::program::uniform_ptr s_gi_short_range_ao_history;
+        gfx::program::uniform_ptr s_gi_short_range_ao_accumulation;
 
         void cache_uniforms();
     } uniforms_;
@@ -89,6 +94,7 @@ private:
     void set_short_range_ao_uniform(const run_params& params, bool has_history) const;
 
     gpu_program::ptr search_program_;
+    gpu_program::ptr screen_program_;
 };
 
 } // namespace unravel

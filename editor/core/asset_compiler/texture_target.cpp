@@ -14,7 +14,7 @@ namespace
 {
 /// Raised when a change to the texture compiler (texturec, the format choice) changes what a texture
 /// compiles to with the same parameters, so that every compiled texture is compiled again.
-constexpr int TEXTURE_COMPILER_VERSION = 2;
+constexpr int TEXTURE_COMPILER_VERSION = 3;
 /// The protocol of the project's own files.
 constexpr const char* PROJECT_PROTOCOL = "app";
 /// What a texture compiles with when neither it nor the target sets a value.
@@ -126,6 +126,61 @@ auto select_astc_ldr_format(std::uint32_t width,
     };
     const auto found = std::find_if(formats.begin(), formats.end(), keeps_size);
     return found != formats.end() ? *found : bgfx::TextureFormat::ASTC4x4;
+}
+
+auto has_srgb_view(bgfx::TextureFormat::Enum format) -> bool
+{
+    switch(format)
+    {
+        case bgfx::TextureFormat::RGBA8:
+        case bgfx::TextureFormat::BGRA8:
+        case bgfx::TextureFormat::BC1:
+        case bgfx::TextureFormat::BC2:
+        case bgfx::TextureFormat::BC3:
+        case bgfx::TextureFormat::BC7:
+        case bgfx::TextureFormat::ETC2:
+        case bgfx::TextureFormat::ETC2A:
+        case bgfx::TextureFormat::ETC2A1:
+        case bgfx::TextureFormat::ASTC4x4:
+        case bgfx::TextureFormat::ASTC5x4:
+        case bgfx::TextureFormat::ASTC5x5:
+        case bgfx::TextureFormat::ASTC6x5:
+        case bgfx::TextureFormat::ASTC6x6:
+        case bgfx::TextureFormat::ASTC8x5:
+        case bgfx::TextureFormat::ASTC8x6:
+        case bgfx::TextureFormat::ASTC8x8:
+        case bgfx::TextureFormat::ASTC10x5:
+        case bgfx::TextureFormat::ASTC10x6:
+        case bgfx::TextureFormat::ASTC10x8:
+        case bgfx::TextureFormat::ASTC10x10:
+        case bgfx::TextureFormat::ASTC12x10:
+        case bgfx::TextureFormat::ASTC12x12:
+            return true;
+        default:
+            return false;
+    }
+}
+
+auto select_srgb_format(bgfx::TextureFormat::Enum format, texture_compression_family family) -> bgfx::TextureFormat::Enum
+{
+    if(has_srgb_view(format))
+    {
+        return format;
+    }
+    if(!bimg::isCompressed(static_cast<bimg::TextureFormat::Enum>(format)))
+    {
+        return bgfx::TextureFormat::RGBA8;
+    }
+    switch(family)
+    {
+        case texture_compression_family::etc2:
+            return bgfx::TextureFormat::ETC2;
+        case texture_compression_family::astc:
+            return bgfx::TextureFormat::ASTC4x4;
+        case texture_compression_family::bc:
+        default:
+            return bgfx::TextureFormat::BC1;
+    }
 }
 
 auto to_string(const texture_compile_parameters& parameters) -> std::string

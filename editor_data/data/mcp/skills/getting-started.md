@@ -76,8 +76,8 @@ Building a scene is not shipping a game. The rest of the chain:
   says what was written where and which shared values a profile shadows.
   project_deploy (profile: which one) builds the profile into
   <location>/<profile> once running compiles finish. editor_open_deploy opens
-  the Deploy window for a user who should see it. A profile's textures are cooked for its platform (Android: ASTC or
-  ETC2) into cache/profiles/<profile>, each recompiled in place when a setting
+  the Deploy window for a user who should see it. A profile's textures are cooked for its platform (Android: ASTC,
+  ETC2, or BC, which ships the editor's own files) into cache/profiles/<profile>, each recompiled in place when a setting
   changes. An asset that failed to compile fails
   the deploy (failed_steps names it) before the folder is touched. Compiled
   assets ship in data/<engine|app>/content.pak (pack_assets false ships them

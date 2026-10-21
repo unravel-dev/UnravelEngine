@@ -987,7 +987,7 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
     // The probes' layout (gi_radiosity_common.sh): a tile's rays in groups of radiosity_group_threads for the trace,
     // as many whole probes per group as fit for the filter.
     const auto& layout = radiosity_layout_;
-    const math::vec4 radiosity(radiosity_max_ray_intensity / std::max(inputs.view_exposure, 1e-6f),
+    const math::vec4 radiosity(radiosity_max_ray_intensity / std::max(inputs.view_exposure.value, 1e-6f),
                                float(layout.probe_spacing),
                                float(layout.hemisphere_resolution),
                                float(radiosity_page_words_base_));
@@ -1017,6 +1017,7 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
         gfx::set_uniform(uniforms_.u_gi_surface_cache, get_surface_cache_params());
         gfx::set_uniform(uniforms_.u_gi_card_lighting, lighting);
         gfx::set_uniform(uniforms_.u_gi_radiosity, radiosity);
+        inputs.view_exposure.bind();
         bgfx::dispatch(pass.id, radiosity_trace_program_->native_handle(), count, trace_groups_per_tile, 1);
         radiosity_trace_program_->end();
     }

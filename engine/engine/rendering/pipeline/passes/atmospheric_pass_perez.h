@@ -22,6 +22,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/perez_luminance.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <graphics/index_buffer.h>
 #include <graphics/texture.h>
@@ -165,10 +166,9 @@ public:
         float cloud_time = 0.0f;
         /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
         float sky_brightness = 1.0f;
-        /// The view's scene-color pre-exposure: the sky and the clouds are written with it.
-        float pre_exposure = 1.0f;
-        /// Pre-exposure / last frame's: rescales the cloud history into this frame's scale.
-        float history_pre_exposure_correction = 1.0f;
+        /// The view's scene-color pre-exposure: the sky and the clouds are written with it, and its
+        /// history correction rescales the cloud history into this frame's scale.
+        pre_exposure_state pre_exposure{};
     };
 
     /// Cloud shadow map of one frame: sun transmittance of the cloud layer over a square of

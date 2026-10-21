@@ -25,7 +25,9 @@
  *     of nothing writing nothing, caches of profiles that no longer exist deleted;
  *   - ASTC blocks: the block each quality takes keeps a texture's size, capped and non-square sizes included;
  *   - texture parameters: a platform's own quality, defaults, fallbacks, one family for uncompressed textures;
- *   - texture variants, compiled with texturec: ASTC and ETC2 formats (blocks that keep a texture's size),
+ *   - sRGB textures: a texture tagged sRGB never compiles to a format without an sRGB view (one and two
+ *     channel formats), for any format family and uncompressed;
+ *   - texture variants, compiled with texturec: ASTC, ETC2 and BC formats (blocks that keep a texture's size),
  *     a variant reused while current, compiled again in place when a setting changes (never a second
  *     file), stray and unneeded files swept, a texture the profile compiles as the editor does shipping the
  *     editor's file once it is current and a variant until then, left-out textures kept.
@@ -44,6 +46,7 @@
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <filesystem/filesystem.h>
+#include <graphics/utils/bgfx_utils.h>
 #include <serialization/document_paths.h>
 #include <serialization/sparse_document.h>
 
@@ -51,6 +54,7 @@
 #include <bimg/decode.h>
 #include <bx/allocator.h>
 #include <bx/file.h>
+#include <bx/hash.h>
 
 #include <cstdio>
 #include <fstream>
@@ -74,6 +78,8 @@ constexpr const char* TEXTURE_FOLDER = "data/profile_tests";
 constexpr std::uint32_t LOW_QUALITY_SIDE = 64;
 /// A side ASTC 6x6 blocks divide.
 constexpr std::uint32_t WALL_SIDE = 96;
+/// The grayscale texture the sRGB tests compile.
+constexpr std::uint32_t SRGB_TEXTURE_SIDE = 64;
 /// A power of two, which ASTC 6x6 blocks do not divide.
 constexpr std::uint32_t FLOOR_SIDE = 64;
 
@@ -533,20 +539,93 @@ void write_texture(const fs::path& file, std::uint32_t side)
     }
 }
 
-/// The format and width of a compiled texture; Count when it cannot be read.
-auto read_texture_format(const fs::path& file, std::uint32_t& width) -> bimg::TextureFormat::Enum
+void append_big_endian(std::vector<std::uint8_t>& out, std::uint32_t value)
+{
+    for(int shift = 24; shift >= 0; shift -= 8)
+    {
+        out.push_back(static_cast<std::uint8_t>(value >> shift));
+    }
+}
+
+void append_png_chunk(std::vector<std::uint8_t>& out, const char* type, const std::vector<std::uint8_t>& data)
+{
+    append_big_endian(out, static_cast<std::uint32_t>(data.size()));
+    bx::HashCrc32 crc;
+    crc.begin();
+    crc.add(type, 4);
+    crc.add(data.data(), static_cast<std::int32_t>(data.size()));
+    out.insert(out.end(), type, type + 4);
+    out.insert(out.end(), data.begin(), data.end());
+    append_big_endian(out, crc.end());
+}
+
+/// A grayscale PNG `side` texels wide: one channel, as texturec reads it. Written by hand, one stored deflate
+/// block per row: bimg's PNG writer labels its single-channel images as RGBA.
+void write_gray_texture(const fs::path& file, std::uint32_t side)
+{
+    std::vector<std::uint8_t> header;
+    append_big_endian(header, side);
+    append_big_endian(header, side);
+    header.insert(header.end(), {8, 0, 0, 0, 0});
+    std::vector<std::uint8_t> image_data = {0x78, 0x01};
+    bx::HashAdler32 adler;
+    adler.begin();
+    const auto row_size = static_cast<std::uint16_t>(side + 1);
+    for(std::uint32_t y = 0; y < side; ++y)
+    {
+        std::vector<std::uint8_t> row = {0};
+        for(std::uint32_t x = 0; x < side; ++x)
+        {
+            row.push_back(static_cast<std::uint8_t>((x + y) * 2));
+        }
+        image_data.push_back(y + 1 == side ? 1 : 0);
+        image_data.insert(image_data.end(),
+                          {static_cast<std::uint8_t>(row_size), static_cast<std::uint8_t>(row_size >> 8),
+                           static_cast<std::uint8_t>(~row_size), static_cast<std::uint8_t>(~row_size >> 8)});
+        image_data.insert(image_data.end(), row.begin(), row.end());
+        adler.add(row.data(), static_cast<std::int32_t>(row.size()));
+    }
+    append_big_endian(image_data, adler.end());
+    std::vector<std::uint8_t> png = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+    append_png_chunk(png, "IHDR", header);
+    append_png_chunk(png, "IDAT", image_data);
+    append_png_chunk(png, "IEND", {});
+    fs::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+    stream.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+}
+
+/// Whether a compiled texture's container is tagged sRGB.
+auto is_texture_srgb(const fs::path& file) -> bool
 {
     const auto bytes = read_text(file);
+    if(bytes.empty())
+    {
+        return false;
+    }
     bx::DefaultAllocator allocator;
     auto* image = bimg::imageParse(&allocator, bytes.data(), static_cast<std::uint32_t>(bytes.size()));
     if(image == nullptr)
     {
+        return false;
+    }
+    const bool is_srgb = image->m_srgb;
+    bimg::imageFree(image);
+    return is_srgb;
+}
+
+/// The format and width of a compiled texture as the engine reads it; Count when it cannot be read.
+auto read_texture_format(const fs::path& file, std::uint32_t& width) -> bimg::TextureFormat::Enum
+{
+    const auto bytes = read_text(file);
+    bimg::ImageContainer image;
+    if(!imageParseInfo(bytes.data(), static_cast<std::uint32_t>(bytes.size()), image))
+    {
         return bimg::TextureFormat::Count;
     }
-    width = image->m_width;
-    const auto format = image->m_format;
-    bimg::imageFree(image);
-    return format;
+    width = image.m_width;
+    return image.m_format;
 }
 
 void test_astc_blocks()
@@ -612,6 +691,71 @@ void test_texture_parameters()
     android.defaults.default_max_size = desktop.defaults.default_max_size;
     check(ac::resolve_texture_parameters(importer, android) == ac::resolve_texture_parameters(importer, desktop),
           "an uncompressed texture compiles the same for every format family");
+}
+
+void test_srgb_textures(const fs::path& root)
+{
+    std::printf("test_srgb_textures\n");
+    check(!ac::has_srgb_view(bgfx::TextureFormat::BC4) && !ac::has_srgb_view(bgfx::TextureFormat::EACRG11) &&
+              !ac::has_srgb_view(bgfx::TextureFormat::R8) && ac::has_srgb_view(bgfx::TextureFormat::BC1) &&
+              ac::has_srgb_view(bgfx::TextureFormat::ETC2A) && ac::has_srgb_view(bgfx::TextureFormat::ASTC6x6),
+          "one and two channel formats have no sRGB view, color formats have one");
+    check(ac::select_srgb_format(bgfx::TextureFormat::BC5, ac::texture_compression_family::bc) == bgfx::TextureFormat::BC1 &&
+              ac::select_srgb_format(bgfx::TextureFormat::EACR11, ac::texture_compression_family::etc2) == bgfx::TextureFormat::ETC2 &&
+              ac::select_srgb_format(bgfx::TextureFormat::RG8, ac::texture_compression_family::bc) == bgfx::TextureFormat::RGBA8 &&
+              ac::select_srgb_format(bgfx::TextureFormat::BC3, ac::texture_compression_family::bc) == bgfx::TextureFormat::BC3,
+          "an sRGB texture takes its family's color format, RGBA8 uncompressed, and keeps a format with a view");
+    if(!is_present(fs::resolve_protocol(std::string("binary:/texturec") + fs::executable_extension())))
+    {
+        return;
+    }
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    const auto app_root = fs::resolve_protocol("app:/");
+    const auto source = app_root / TEXTURE_FOLDER / "gray.png";
+    const auto key = std::string("app:/") + TEXTURE_FOLDER + "/gray.png";
+    write_gray_texture(source, SRGB_TEXTURE_SIDE);
+    unravel::asset_meta meta;
+    meta.uid = hpp::uuid::from_string("40000000-0000-4000-8000-000000000003").value();
+    meta.type = ".png";
+    auto importer = std::make_shared<texture_importer_meta>();
+    importer->colorspace = texture_importer_meta::color_space::srgb;
+    meta.importer = importer;
+    unravel::save_to_file((app_root / TEXTURE_FOLDER / "gray.png.meta").string(), meta);
+    struct family_case
+    {
+        ac::texture_compression_family family;
+        target_platform platform;
+    };
+    for(const auto& item : {family_case{ac::texture_compression_family::bc, target_platform::desktop},
+                            family_case{ac::texture_compression_family::etc2, target_platform::android},
+                            family_case{ac::texture_compression_family::astc, target_platform::android}})
+    {
+        ac::texture_target target;
+        target.platform = item.platform;
+        target.family = item.family;
+        target.defaults.default_compression = texture_importer_meta::compression_quality::normal_quality;
+        const auto output = root / "gray.png.asset";
+        std::uint32_t width = 0;
+        const bool is_compiled = ac::compile_texture_for_target(key, output, target);
+        const auto format = static_cast<bgfx::TextureFormat::Enum>(read_texture_format(output, width));
+        const auto message = fmt::format("a grayscale texture tagged sRGB compiles for {} to a format with an sRGB view, "
+                                         "tagged sRGB (compiled: {}, {})",
+                                         ac::to_string(ac::texture_compile_parameters{item.family}),
+                                         is_compiled ? bimg::getName(static_cast<bimg::TextureFormat::Enum>(format)) : "no",
+                                         is_texture_srgb(output) ? "sRGB" : "linear");
+        check(is_compiled && ac::has_srgb_view(format) && is_texture_srgb(output), message.c_str());
+    }
+    importer->quality.compression = texture_importer_meta::compression_quality::none;
+    unravel::save_to_file((app_root / TEXTURE_FOLDER / "gray.png.meta").string(), meta);
+    ac::texture_target uncompressed;
+    const auto output = root / "gray_uncompressed.png.asset";
+    std::uint32_t width = 0;
+    check(ac::compile_texture_for_target(key, output, uncompressed) &&
+              read_texture_format(output, width) == bimg::TextureFormat::RGBA8 && is_texture_srgb(output),
+          "uncompressed, it is RGBA8 rather than R8");
+    fs::remove(source, ec);
+    fs::remove(app_root / TEXTURE_FOLDER / "gray.png.meta", ec);
 }
 
 /// A cook plan over the tests' app protocol for one profile.
@@ -692,6 +836,13 @@ void test_texture_variants(const fs::path& root)
     report = deployment::cook_texture_variants(fixture.make_plan());
     check(report.compiled == 2 && read_texture_format(wall, width) == bimg::TextureFormat::ETC2A && count_files(variants) == 4,
           "ETC2 compiles in place too: ETC2A for a texture with alpha");
+    fixture.params.android.texture_compression = unravel::android_texture_compression::bc;
+    report = deployment::cook_texture_variants(fixture.make_plan());
+    check(report.compiled == 2 && read_texture_format(wall, width) == bimg::TextureFormat::BC3 && count_files(variants) == 4,
+          "BC compiles the desktop's formats in place: BC3 for a texture with alpha");
+    fixture.params.android.texture_compression = unravel::android_texture_compression::etc2;
+    report = deployment::cook_texture_variants(fixture.make_plan());
+    check(report.compiled == 2 && read_texture_format(wall, width) == bimg::TextureFormat::ETC2A, "and back to ETC2, in place");
 
     write_text(variants / "profile_tests" / "stray.png.asset", "stray");
     write_text(variants / "elsewhere" / "old.png.asset.manifest", "stray");
@@ -760,6 +911,7 @@ auto run_settings_profiles_suite(rtti::context&) -> int
         test_unreadable_profile(temp / "unreadable");
         test_astc_blocks();
         test_texture_parameters();
+        test_srgb_textures(temp / "srgb");
         test_texture_variants(temp / "variants");
     }
     catch(const std::exception& ex)

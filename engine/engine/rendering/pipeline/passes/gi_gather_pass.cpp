@@ -43,6 +43,10 @@ constexpr const char* history_ping_pong_key = "GI_HISTORY_PING_PONG";
 constexpr uint32_t visualize_traces_jitter_index = 6;
 /// The trace programs' output stage: the trace radiance, or the visualize variant's rays.
 constexpr uint8_t trace_output_stage = 5;
+/// The stage the screen trace and the integrate declare the GPU pre-exposure at (PRE_EXPOSURE_STAGE). The ray
+/// generation takes pre_exposure.sh's default; the far-field stages read it from the environment SH (s_gi_env_sh).
+constexpr uint8_t trace_screen_pre_exposure_stage = 7;
+constexpr uint8_t integrate_pre_exposure_stage = 7;
 /// The stage of the rays the screen pass leaves to the far-field pass, in each (cs_gi_probe_trace.sc).
 constexpr uint8_t trace_rays_screen_stage = 3;
 constexpr uint8_t trace_rays_far_field_stage = 1;
@@ -436,6 +440,7 @@ void gi_gather_pass::run_generate_rays(const gi_run_params& params,
     gfx::set_uniform(uniforms_.u_gi_prev_probe, layout.prev_probe.data());
     bind_motion(params, 9);
     gfx::set_uniform(uniforms_.u_pre_exposure, params.pre_exposure.to_uniform().data());
+    params.pre_exposure.bind();
     adaptive_probes_.dispatch(pass.id, *programs_->generate_rays, gi_adaptive_probes::args_group_per_probe);
     programs_->generate_rays->end();
 }
@@ -527,6 +532,7 @@ void gi_gather_pass::run_trace(const gi_run_params& params,
         bind_trace_inputs(params, layout, targets, radiance_cache_ready);
         bind_image(trace_output_stage, targets.trace_radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         bgfx::setBuffer(trace_rays_screen_stage, trace_rays_, bgfx::Access::ReadWrite);
+        params.pre_exposure.bind(trace_screen_pre_exposure_stage);
         adaptive_probes_.dispatch(pass.id, *programs_->trace, gi_adaptive_probes::args_group_per_probe);
         programs_->trace->end();
     }
@@ -730,12 +736,19 @@ void gi_gather_pass::run_integrate(const gi_run_params& params,
                                (experiments_ & experiment_show_interpolation_fallback) != 0u ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_gi_temporal, temporal);
     gfx::set_uniform(uniforms_.u_pre_exposure, params.pre_exposure.to_uniform().data());
+    params.pre_exposure.bind(integrate_pre_exposure_stage);
     bgfx::dispatch(pass.id,
                    program->native_handle(),
                    divide_round_up(layout.view_size.width, group_edge),
                    divide_round_up(layout.view_size.height, group_edge),
                    1);
     program->end();
+    // The integrate leaves the screen AO's stage to the pre-exposure: the screen AO is unpacked from the
+    // accumulation in its own dispatch.
+    if(has_short_range_ao)
+    {
+        short_range_ao_.resolve_screen(short_range_ao, short_range_ao_params);
+    }
 }
 
 auto gi_gather_pass::make_short_range_ao_params(const gi_run_params& params, const frame_layout& layout) const

@@ -102,6 +102,7 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
 
     float sky_brightness_vec[4] = {params.sky_brightness, 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_sky_brightness, sky_brightness_vec);
+    params.pre_exposure.bind();
 
     // 4) The critical part: Use DEPTH_TEST_EQUAL, so we only fill the background
     uint64_t state =

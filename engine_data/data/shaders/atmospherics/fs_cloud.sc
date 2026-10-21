@@ -27,7 +27,8 @@ uniform mat4 u_prevViewProj;
 
 #include "../pre_exposure.sh"
 
-#define u_exposition u_parameters.z
+// The CPU scaled the exposition by its share of the pre-exposure; the GPU's share joins it here.
+#define u_exposition (u_parameters.z * u_pre_exposure_gpu_scale)
 
 // x = jitter frame index (wrapped on the CPU), y = history valid (0/1).
 #define u_frame_index           u_cloudFrame.x

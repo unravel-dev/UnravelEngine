@@ -591,7 +591,6 @@ auto compile_texture_to_file(const fs::path& input_path,
 
     const auto& quality = parameters;
     const auto input_info = get_input_texture_info(compile_input, quality.max_size);
-    auto format = select_compressed_format(input_info, compile_input.extension(), parameters);
 
     // Resolve the effective color space. Data-typed imports are always linear no
     // matter the tag: normal maps are vectors, and float sources (.hdr/.exr) have
@@ -610,6 +609,14 @@ auto compile_texture_to_file(const fs::path& input_path,
     const bool resolved_srgb = (importer.colorspace == texture_importer_meta::color_space::srgb ||
                                 auto_srgb_equirect) &&
                                !is_normal_map && !source_is_float;
+    // A texture sampled through an sRGB view needs a format that has one (select_srgb_format). The project's
+    // textures take the family's color format; the others keep their source's format, RGBA8 when it has none.
+    auto format = select_compressed_format(input_info, compile_input.extension(), parameters);
+    if(resolved_srgb)
+    {
+        format = select_srgb_format(format, parameters.family);
+    }
+    const bool needs_srgb_format = resolved_srgb && !try_compress && !has_srgb_view(input_info.format);
 
     const bool needs_format_conversion = input_info.format != format;
     const bool needs_downscale = !input_info.fits_max_size;
@@ -673,6 +680,11 @@ auto compile_texture_to_file(const fs::path& input_path,
                 args_array.emplace_back("-q");
                 args_array.emplace_back("highest");
             }
+        }
+        else if(needs_srgb_format)
+        {
+            args_array.emplace_back("-t");
+            args_array.emplace_back(gfx::to_string(bgfx::TextureFormat::RGBA8));
         }
 
         if(importer.generate_mipmaps)

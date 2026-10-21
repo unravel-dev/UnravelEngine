@@ -32,9 +32,12 @@
  * Writes the histories (rgb = E / pi and the rough specular, pre-exposed; a = GiEncodeHistoryAlpha for the
  * diffuse, the stored frame count for the rough specular; zero on the sky), which are also this frame's results: the
  * indirect lighting reads the diffuse and the reflections the rough specular, both times the GI intensity. With the
- * AO, its history (bent normal, visibility) and the composite's screen AO.
+ * AO, its history (bent normal, visibility), which cs_gi_short_range_ao_screen.sc unpacks into the composite's
+ * screen AO.
  */
 
+// The GPU pre-exposure takes stage 7: the screen AO is unpacked in its own dispatch.
+#define PRE_EXPOSURE_STAGE 7
 #include "bgfx_compute.sh"
 #include "../common.sh"
 #include "../pre_exposure.sh"
@@ -54,7 +57,6 @@ IMAGE2D_WO(s_gi_history_out, rgba16f, 6);
 #ifdef GI_INTEGRATE_SHORT_RANGE_AO
 /// The accumulated AO, packed (GiPackShortRangeAO).
 UIMAGE2D_WO(s_gi_short_range_ao_history_out, r32ui, 5);
-IMAGE2D_WO(s_gi_short_range_ao_screen_out, rgba8, 7);
 /// This frame's AO search (cs_gi_short_range_ao.sc) and last frame's accumulation.
 USAMPLER2D(s_gi_short_range_ao, 14);
 USAMPLER2D(s_gi_short_range_ao_history, 15);
@@ -469,6 +471,5 @@ void main()
 #ifdef GI_INTEGRATE_SHORT_RANGE_AO
 	vec4 ao = GiAccumulateShortRangeAO(pixel, position, normal, depth, taps, frames, group_origin);
 	imageStore(s_gi_short_range_ao_history_out, pixel, uvec4(GiPackShortRangeAO(ao), 0u, 0u, 0u));
-	imageStore(s_gi_short_range_ao_screen_out, pixel, GiShortRangeAOScreen(ao, normal));
 #endif
 }

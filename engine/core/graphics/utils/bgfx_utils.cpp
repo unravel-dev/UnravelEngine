@@ -287,6 +287,17 @@ static void imageReleaseCb(void* _ptr, void* _userData)
     bimg::imageFree(imageContainer);
 }
 
+// KTX2 has no ETC1 format of its own: bimg reads an ETC2 RGB container as ETC1, which Vulkan and
+// Direct3D have no format for (the texture would be decoded to BGRA8 when it is created) and which
+// has no sRGB view. Every ETC1 block is an ETC2 block that decodes the same, so it is read as ETC2.
+static void readEtc1AsEtc2(bimg::ImageContainer& imageContainer)
+{
+    if(imageContainer.m_format == bimg::TextureFormat::ETC1)
+    {
+        imageContainer.m_format = bimg::TextureFormat::ETC2;
+    }
+}
+
 // Containers written by the asset compiler (KTX2; also KTX and DX10-header DDS)
 // carry an sRGB transfer tag. Decoded source images (PNG/JPG/...) do not reliably
 // express intent, so their parse result is never trusted for this.
@@ -349,6 +360,7 @@ static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageC
         return BGFX_INVALID_HANDLE;
     }
 
+    readEtc1AsEtc2(*imageContainer);
     _flags = applyContainerSrgbFlag(imageContainer, _flags);
 
     const bgfx::Memory* mem = bgfx::makeRef(
@@ -702,7 +714,13 @@ bgfx::TextureHandle loadTexture(const bx::FilePath& _filePath,
 
 bimg::ImageContainer* imageLoad(const void* data, uint32_t size, bgfx::TextureFormat::Enum _dstFormat)
 {
-    return bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
+    bimg::ImageContainer* image =
+        bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
+    if(image != nullptr)
+    {
+        readEtc1AsEtc2(*image);
+    }
+    return image;
 }
 
 bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureFormat::Enum _dstFormat)
@@ -721,6 +739,10 @@ bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureForm
     bimg::ImageContainer* image =
         bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
     bx::free(entry::getAllocator(), data);
+    if(image != nullptr)
+    {
+        readEtc1AsEtc2(*image);
+    }
     return image;
 }
 
@@ -731,7 +753,9 @@ bool imageParseInfo(const void* _data, uint32_t _size, bimg::ImageContainer& _in
         return false;
     }
 
-    return bimg::imageParseInfo(entry::getAllocator(), _info, _data, _size, _err);
+    const bool parsed = bimg::imageParseInfo(entry::getAllocator(), _info, _data, _size, _err);
+    readEtc1AsEtc2(_info);
+    return parsed;
 }
 
 bool imageParseInfo(const bx::FilePath& _filePath, bimg::ImageContainer& _info, bx::Error* _err)
@@ -746,6 +770,7 @@ bool imageParseInfo(const bx::FilePath& _filePath, bimg::ImageContainer& _info, 
 
     const bool parsed = bimg::imageParseInfo(entry::getAllocator(), _info, data, size, _err);
     unload(data);
+    readEtc1AsEtc2(_info);
     return parsed;
 }
 

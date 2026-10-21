@@ -29,6 +29,9 @@ using gi_pass::has_view_size;
 constexpr uint32_t reflection_tile_pixels = 8;
 /// Trace texels per surface cache feedback tile side (cs_gi_reflection_feedback.sc GI_FEEDBACK_TILE).
 constexpr uint32_t feedback_tile_texels = 16;
+/// The stage cs_gi_reflection_temporal.sc declares the GPU pre-exposure at (PRE_EXPOSURE_STAGE). The screen trace
+/// takes pre_exposure.sh's default, the distance-field stage reads it from the environment SH (s_gi_env_sh).
+constexpr uint8_t temporal_pre_exposure_stage = 7;
 } // namespace
 
 void gi_reflection_pass::uniforms::cache_uniforms()
@@ -222,6 +225,7 @@ void gi_reflection_pass::run_screen(const run_params& params, const frame_target
                           gather.velocity,
                           gather.cam->get_prev_view_projection_unjittered().get_matrix(),
                           experiments_);
+    gather.pre_exposure.bind();
     bgfx::dispatch(pass.id,
                    screen_program_->native_handle(),
                    divide_round_up(trace_size_.width, group_edge),
@@ -354,6 +358,7 @@ void gi_reflection_pass::run_temporal(const run_params& params, const frame_targ
                           gather.velocity,
                           gather.cam->get_prev_view_projection_unjittered().get_matrix(),
                           experiments_);
+    gather.pre_exposure.bind(temporal_pre_exposure_stage);
     bgfx::dispatch(pass.id,
                    temporal_program_->native_handle(),
                    divide_round_up(view_size_.width, group_edge),

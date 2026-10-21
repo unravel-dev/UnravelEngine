@@ -2,6 +2,7 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <graphics/index_buffer.h>
 #include <graphics/render_view.h>
@@ -19,6 +20,8 @@ public:
         asset_handle<gfx::texture> cubemap;
         /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
         float sky_brightness = 1.0f;
+        /// The view's pre-exposure, whose CPU share sky_brightness carries already (fs_skybox.sc).
+        pre_exposure_state pre_exposure{};
     };
     bool init(rtti::context& ctx);
 

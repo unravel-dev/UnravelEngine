@@ -52,6 +52,11 @@ REFLECT(android_deploy_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "etc2"},
             entt::attribute{"pretty_name", "ETC2"},
+        })
+        .data<android_texture_compression::bc>("bc"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bc"},
+            entt::attribute{"pretty_name", "BC (Desktop)"},
         });
 
     entt::meta_factory<android_deploy_settings>{}
@@ -141,7 +146,10 @@ REFLECT(android_deploy_settings)
                             "The formats the game's textures are compressed to on the phone.\n\n"
                             "ASTC: the better image for its size. A phone without it decodes the\n"
                             "textures when they load, into four times the memory.\n"
-                            "ETC2: read by every OpenGL ES 3 and Vulkan phone, at a lower quality.\n\n"
+                            "ETC2: read by every OpenGL ES 3 and Vulkan phone, at a lower quality.\n"
+                            "BC (Desktop): the formats the editor compiles for this computer, shipped\n"
+                            "as they are. Only some phones read them; the others decode the textures\n"
+                            "when they load, into four to eight times the memory.\n\n"
                             "The deploy compresses the textures for this profile and keeps them\n"
                             "for its next deploys."},
         });

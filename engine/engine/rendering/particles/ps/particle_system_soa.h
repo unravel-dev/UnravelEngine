@@ -7,6 +7,7 @@
 #include "particle_gpu_schema.h"
 #include "particle_types.h"
 #include <bgfx/bgfx.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 #include <context/context.hpp>
 #include <math/bbox.h>
 #include <math/math.h>
@@ -311,6 +312,11 @@ struct render_view_params
     /// The u_pre_exposure value the particle programs read.
     math::vec4 pre_exposure{1.0f, 1.0f, 1.0f, 1.0f};
     bgfx::UniformHandle pre_exposure_uniform = BGFX_INVALID_HANDLE;
+    /// The view's environment SH, whose texel 9 is the GPU's share of the pre-exposure (pre_exposure_state::gpu_texture),
+    /// bound for every draw at @ref environment_stage, where the particle programs read the share.
+    bgfx::TextureHandle environment_texture = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle environment_sampler = BGFX_INVALID_HANDLE;
+    uint8_t environment_stage = 0;
     /// The view's second render target takes the particles' TAA reactive coverage (MAX blend; needs
     /// BGFX_CAPS_BLEND_INDEPENDENT). Without it the target, if any, takes the color target's blend.
     bool has_reactive_target = false;

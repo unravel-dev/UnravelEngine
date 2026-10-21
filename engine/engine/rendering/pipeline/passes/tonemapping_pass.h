@@ -3,6 +3,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/local_exposure_binding.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 #include <graphics/render_view.h>
 #include <math/color.h>
 
@@ -96,7 +97,7 @@ public:
         gfx::texture::ptr scene_without_bloom;
         /// The view's scene-color pre-exposure (it already includes settings::exposure): the
         /// input carries it and the exposure removes it.
-        float pre_exposure = 1.0f;
+        pre_exposure_state pre_exposure{};
 
         settings config{};
         /// When FXAA runs after this pass, grain and TPDF dither are deferred to

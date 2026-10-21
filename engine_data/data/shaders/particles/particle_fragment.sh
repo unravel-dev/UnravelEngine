@@ -1,6 +1,10 @@
 #ifndef PARTICLE_FRAGMENT_SH_HEADER_GUARD
 #define PARTICLE_FRAGMENT_SH_HEADER_GUARD
 
+// The lit programs' vertex shaders read the sky SH at stage 12 (particle_lighting.sh); every particle program
+// reads the GPU's share of the pre-exposure from its texel 9 there (pre_exposure.sh PRE_EXPOSURE_ENVIRONMENT).
+SAMPLER2D(s_particle_irradiance, 12);
+#define PRE_EXPOSURE_ENVIRONMENT s_particle_irradiance
 #include "../pre_exposure.sh"
 #include "../shaderlib.sh"
 
@@ -179,7 +183,8 @@ vec3 particle_pixel_light(vec3 ambient, vec4 sun, vec3 sun_local, vec2 quad_uv, 
 	}
 	float wrap = sun.w;
 	float diffuse = clamp((dot(normal, sun_local) + wrap) / (1.0 + wrap), 0.0, 1.0);
-	return ambient + sun.rgb * diffuse;
+	// The vertex shader's light carries the CPU's share of the pre-exposure only.
+	return (ambient + sun.rgb * diffuse) * u_pre_exposure_gpu_scale;
 }
 
 #endif // PARTICLE_FRAGMENT_SH_HEADER_GUARD

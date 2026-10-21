@@ -11,7 +11,8 @@ uniform vec4 	u_sunLuminance;
 
 #define u_sun_size u_parameters.x
 #define u_sun_bloom u_parameters.y
-#define u_exposition u_parameters.z
+// The CPU scaled the exposition by its share of the pre-exposure; the GPU's share joins it here.
+#define u_exposition (u_parameters.z * u_pre_exposure_gpu_scale)
 #define u_time u_parameters.w
 
 
@@ -279,7 +280,8 @@ void main()
     vec3 mie_color = mie_tint * mie * mie_strength;
 
     // Stars (rendered behind sun and clouds, only visible at night)
-    vec3 color = render_stars(v_skyColor, viewDir, lightDir);
+    // The vertex shader's sky colour carries the CPU's share of the pre-exposure only.
+    vec3 color = render_stars(v_skyColor * u_pre_exposure_gpu_scale, viewDir, lightDir);
 
     // Combine sun disc and Mie halo
     vec3 sun_color = u_sunLuminance.xyz * u_exposition * (sun2 + mie_color);

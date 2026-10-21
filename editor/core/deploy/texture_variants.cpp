@@ -111,6 +111,20 @@ auto describe_failures(const std::vector<std::string>& failed, const std::string
     }
     return fmt::format("{} texture(s) could not be compiled for profile {} (the log says why): {}", failed.size(), profile, listed);
 }
+/// The formats an Android profile's textures compile to.
+auto get_compression_family(android_texture_compression compression) -> asset_compiler::texture_compression_family
+{
+    switch(compression)
+    {
+        case android_texture_compression::etc2:
+            return asset_compiler::texture_compression_family::etc2;
+        case android_texture_compression::bc:
+            return asset_compiler::texture_compression_family::bc;
+        case android_texture_compression::astc:
+        default:
+            return asset_compiler::texture_compression_family::astc;
+    }
+}
 } // namespace
 
 auto get_profile_texture_target(const deploy_settings& params, const settings& runtime_settings) -> asset_compiler::texture_target
@@ -120,9 +134,7 @@ auto get_profile_texture_target(const deploy_settings& params, const settings& r
     target.defaults = runtime_settings.assets.texture;
     if(params.deploy_target == deploy_platform::android)
     {
-        target.family = params.android.texture_compression == android_texture_compression::etc2
-                            ? asset_compiler::texture_compression_family::etc2
-                            : asset_compiler::texture_compression_family::astc;
+        target.family = get_compression_family(params.android.texture_compression);
     }
     return target;
 }

@@ -429,6 +429,7 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
                            params.settings.fidelityfx.brightness};
     gfx::set_uniform(fidelityfx_pixel_program_.u_ssr_params, ssr_params);
     gfx::set_uniform(fidelityfx_pixel_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
+    pre_exposure_.bind();
 
             
     // Resolution scale MUST be per-axis. Computing a single scalar (e.g. full_w / half_w)
@@ -571,6 +572,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     };
     gfx::set_uniform(temporal_resolve_program_.u_motion_params, motion_params);
     gfx::set_uniform(temporal_resolve_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
+    pre_exposure_.bind();
 
     // Per-axis scale; see ssr trace pass for why scalar scale is wrong at odd full-res W.
     auto history_size = history_tex->get_size();

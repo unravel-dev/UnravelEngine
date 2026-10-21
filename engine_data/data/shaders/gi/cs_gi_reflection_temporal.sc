@@ -25,6 +25,8 @@
  * (-1 marks a pixel without reflections, which later reads treat as invalid history).
  */
 
+// The GPU pre-exposure takes a stage this pass leaves free.
+#define PRE_EXPOSURE_STAGE 7
 #include "bgfx_compute.sh"
 #include "../common.sh"
 #include "../pre_exposure.sh"

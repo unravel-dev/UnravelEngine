@@ -75,7 +75,7 @@ auto resolve_particle_scene_depth(gfx::render_view& rview, const gfx::texture::p
 /// vec4s each takes in u_particle_lights.
 constexpr size_t k_particle_max_lights = 4;
 constexpr size_t k_particle_light_vec4s = k_particle_max_lights * 3;
-/// SH coefficients of the sky's irradiance texture (IRRADIANCE_SH, 9x1).
+/// SH coefficients of the sky's irradiance texture (IRRADIANCE_SH's first texels).
 constexpr uint16_t k_irradiance_sh_coefficients = 9;
 /// Stages of the lit particles' sky irradiance and sun shadow cascades (particle_lighting.sh).
 constexpr uint8_t k_particle_irradiance_stage = 12;
@@ -1390,6 +1390,11 @@ auto pipeline::run_particle_pass(scene& scn,
                 const auto pre_exposure_values = pre_exposure.to_uniform();
                 params.pre_exposure = math::vec4(pre_exposure_values[0], pre_exposure_values[1], pre_exposure_values[2], pre_exposure_values[3]);
                 params.pre_exposure_uniform = particle_pre_exposure_uniform_->native_handle();
+                // Every particle program reads the GPU's share of the pre-exposure from the environment SH at the lit
+                // programs' sky stage (particle_fragment.sh), so each draw binds it there.
+                params.environment_texture = pre_exposure.gpu_texture;
+                params.environment_sampler = particle_irradiance_sampler_->native_handle();
+                params.environment_stage = k_particle_irradiance_stage;
                 // Lit batches read the scene's light, gathered once per view and bound before each of their draws.
                 particle_scene_lighting lighting;
                 if(has_lit_batches && particle_program_lit_->begin() && particle_program_lit_mask_->begin())

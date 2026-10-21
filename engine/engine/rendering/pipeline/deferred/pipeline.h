@@ -747,7 +747,7 @@ private:
         const camera* cam = nullptr;
         gfx::frame_buffer::ptr gbuffer;
         usize32_t buffer_size{};
-        float pre_exposure = 1.0f;
+        pre_exposure_state pre_exposure{};
     };
 
     /**
@@ -875,14 +875,17 @@ private:
     bool has_frozen_clipmap_camera_{false};
     /**
      * @brief This run's pre-exposure, the scene-color scale. Camera runs with HDR
-     * output use the manual exposure times the adapted exposure the GPU delivered a few frames
-     * ago (1 before the first); probe captures and LDR runs render unscaled. The state is kept
+     * output use the manual exposure (the CPU's share) times the adapted exposure the last frame
+     * left on the GPU (the GPU's share, written here, 1 before the first); probe captures and LDR
+     * runs render unscaled. The state is kept
      * PER RENDER VIEW (pre_exposure_state::view_key, the previous value for the history
      * corrections included) and read back through get_pre_exposure by every pass that writes
      * or reads scene lighting - never held on this object, which serves every view of its
      * camera (probe captures, thumbnails) in turn.
      */
     auto update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run) -> pre_exposure_state;
+    /// The s_pre_exposure sampler (pre_exposure.sh), created before every program (GL uniform order contract).
+    gfx::program::uniform_ptr pre_exposure_sampler_;
     /// Whether this run has a reader of the velocity buffer: TAA, GTAO, SSR, SSIL or GI, the velocity
     /// debug view, or a temporal measurement in progress.
     auto is_velocity_wanted(const run_params& params) const -> bool;

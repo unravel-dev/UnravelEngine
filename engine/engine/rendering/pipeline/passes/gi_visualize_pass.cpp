@@ -488,7 +488,7 @@ void gi_visualize_pass::draw_view(const run_params& params, view mode, const ire
                                                              : visualize_max_trace_distance;
     scene.tile = tile;
     scene.environment_sh = params.rview->tex_find("IRRADIANCE_SH");
-    scene.exposure = params.exposure;
+    scene.exposure = params.exposure.value;
     scene.tonemapping = params.tonemapping;
     params.surface_cache->run_debug(scene);
 }
@@ -626,7 +626,8 @@ void gi_visualize_pass::draw_card_generation_clusters(const world_params& params
         {
             primitive_program_.program->begin();
             gfx::set_uniform(primitive_program_.u_gi_visualize_primitive,
-                             math::vec4(params.pre_exposure, 0.0f, 0.0f, 0.0f));
+                             math::vec4(params.pre_exposure.value, 0.0f, 0.0f, 0.0f));
+            params.pre_exposure.bind();
             gfx::set_transform(source.local_to_world);
             bgfx::setVertexBuffer(0, buffers.rays, rays.first, rays.count);
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS | line_raster_state);
@@ -714,7 +715,8 @@ void gi_visualize_pass::draw_surfels(const world_params& params,
     program.program->begin();
     gfx::set_uniform(program.u_gi_visualize_surfel,
                      math::vec4(surfel_radius * params.settings.card_generation_surfel_scale, 0.0f, 0.0f, 0.0f));
-    gfx::set_uniform(program.u_gi_visualize_primitive, math::vec4(params.pre_exposure, 0.0f, 0.0f, 0.0f));
+    gfx::set_uniform(program.u_gi_visualize_primitive, math::vec4(params.pre_exposure.value, 0.0f, 0.0f, 0.0f));
+    params.pre_exposure.bind();
     gfx::set_transform(local_to_world);
     bgfx::setVertexBuffer(0, surfel_disc_);
     bgfx::setInstanceDataBuffer(buffers.surfels, range.first, count);
@@ -1095,7 +1097,8 @@ void gi_visualize_pass::bind_probe_program(const world_params& params, const mat
     gfx::set_texture(program.s_gi_rc_final, radiance_cache_final_stage, default_textures::get().black_texture());
     gfx::set_uniform(program.u_gi_surface_cache, surface_cache->get_surface_cache_params());
     gfx::set_uniform(program.u_gi_visualize_probe, probe);
-    gfx::set_uniform(program.u_gi_visualize_probe2, math::vec4(params.pre_exposure, 0.0f, 0.0f, 0.0f));
+    gfx::set_uniform(program.u_gi_visualize_probe2, math::vec4(params.pre_exposure.value, 0.0f, 0.0f, 0.0f));
+    params.pre_exposure.bind();
     // The radiosity probes' layout (gi_radiosity_common.sh u_gi_radiosity: y = spacing, z = rays per axis).
     const auto& layout = surface_cache->get_radiosity_layout();
     gfx::set_uniform(program.u_gi_radiosity,
@@ -1180,8 +1183,9 @@ void gi_visualize_pass::draw_primitives(const world_params& params,
         bgfx::allocTransientVertexBuffer(&buffer, count, layout);
         std::memcpy(buffer.data, vertices.data() + first, size_t(count) * sizeof(primitive_vertex));
         program.program->begin();
-        const math::vec4 scale(params.pre_exposure, 0.0f, 0.0f, 0.0f);
+        const math::vec4 scale(params.pre_exposure.value, 0.0f, 0.0f, 0.0f);
         gfx::set_uniform(program.u_gi_visualize_primitive, scale);
+        params.pre_exposure.bind();
         bgfx::setVertexBuffer(0, &buffer);
         // Depth tested against the scene, never written: the scene's depth is read again next frame.
         const uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_DEPTH_TEST_LESS |
@@ -1250,8 +1254,9 @@ void gi_visualize_pass::draw_screen_view(const run_params& params, view mode, co
     const math::vec4 visualize(is_frames_view ? screen_mode_screen_probe_frames : screen_mode_dedicated_reflection_rays,
                                gi_pass::get_max_roughness_to_trace(params.gi.reflections),
                                float(params.tonemapping),
-                               params.exposure);
+                               params.exposure.value);
     gfx::set_uniform(program.u_gi_visualize, visualize);
+    params.exposure.bind();
     const math::vec4 tile_params(is_tile ? float(tile.width()) : 0.0f,
                                  is_tile ? float(tile.height()) : 0.0f,
                                  gi_pass::get_temporal_max_frames(params.gi.diffuse.update_speed),

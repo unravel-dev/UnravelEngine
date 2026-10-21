@@ -28,7 +28,8 @@ uniform vec4 u_params;
 /// x = log2 of the manual exposure (the tonemapper's exposure scale).
 uniform vec4 u_bloom_exposure;
 
-#define u_threshold  u_params.x
+// The CPU's share of the pre-exposure is in u_params.x; the GPU's share joins it here.
+#define u_threshold  (u_params.x * u_pre_exposure_gpu_scale)
 #define u_soft_knee  u_params.z
 #define u_clamp      u_params.w
 #define u_mip_level  int(u_params.y)

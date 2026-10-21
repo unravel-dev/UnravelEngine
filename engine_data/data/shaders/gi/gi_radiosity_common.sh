@@ -22,9 +22,12 @@
 /// x = the ray clamp in cached units (max ray intensity / the view's pre-exposure; the trace), y = the probe spacing in
 /// card texels, z = the rays per axis of a probe's hemisphere, w = the float4 of b_gi_light_tiles the per-page
 /// update indices start at (gi_scene::get_page_radiosity_indices), negative when the probes stop at page edges.
+#include "../pre_exposure.sh"
+
 uniform vec4 u_gi_radiosity;
 
-#define u_gi_radiosity_max_ray_intensity u_gi_radiosity.x
+// The CPU divided the clamp by its share of the pre-exposure; the GPU's share divides it here.
+#define u_gi_radiosity_max_ray_intensity (u_gi_radiosity.x * u_pre_exposure_gpu.y)
 #define u_gi_radiosity_spacing              int(u_gi_radiosity.y)
 #define u_gi_radiosity_resolution           int(u_gi_radiosity.z)
 #define u_gi_radiosity_page_words           u_gi_radiosity.w

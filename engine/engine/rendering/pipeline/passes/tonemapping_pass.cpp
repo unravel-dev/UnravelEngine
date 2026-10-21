@@ -92,8 +92,8 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     const bool apply_output_noise = !params.defer_output_noise;
     // The final linear colour is the scene colour / pre-exposure x the global exposure. The shader
-    // multiplies this by the adapted exposure texture.
-    float tonemap[4] = {params.config.exposure / std::max(params.pre_exposure, 1e-12f),
+    // multiplies this by the adapted exposure texture (and divides out the GPU's share of the pre-exposure).
+    float tonemap[4] = {params.config.exposure / std::max(params.pre_exposure.value, 1e-12f),
                         static_cast<float>(params.config.method),
                         (apply_output_noise && params.config.dithering) ? 1.0f : 0.0f,
                         1.0f};
@@ -139,8 +139,9 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     gfx::set_texture(tonemapping_program_.s_scene,
                      4,
                      params.scene_without_bloom ? params.scene_without_bloom : input->get_texture());
-    tonemapping_program_.local_exposure.submit(params.local_exposure, params.pre_exposure);
-    
+    tonemapping_program_.local_exposure.submit(params.local_exposure, params.pre_exposure.value);
+    params.pre_exposure.bind();
+
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);

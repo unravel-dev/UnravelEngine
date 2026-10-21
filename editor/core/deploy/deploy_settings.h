@@ -37,6 +37,9 @@ enum class android_texture_compression : std::uint8_t
     astc,
     /// ETC2 and EAC, which every OpenGL ES 3 and Vulkan device reads.
     etc2,
+    /// BC, the desktop formats: the editor's own files ship. Some Android GPUs read them; on the others the
+    /// textures are decoded at load, into four to eight times the memory.
+    bc,
 };
 
 /// What an Android build is on the device: its identity, its icon, its signing and its texture

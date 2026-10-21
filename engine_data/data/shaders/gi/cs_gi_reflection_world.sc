@@ -14,7 +14,12 @@
  * texels, cs_gi_reflection_feedback.sc), 0 elsewhere.
  */
 
+// The GPU pre-exposure from the environment SH's texel 9: this pass has no stage left for it.
+#define PRE_EXPOSURE_ENVIRONMENT s_gi_env_sh
 #include "bgfx_compute.sh"
+/// The environment SH (texels 0-8), absolute radiance; texel 9 holds the GPU pre-exposure (declared before the
+/// headers that read the pre-exposure).
+SAMPLER2D(s_gi_env_sh, 7);
 #include "../common.sh"
 // eval_radiance_sh.
 #include "../lighting.sh"
@@ -36,8 +41,6 @@ SAMPLER2D(s_gi_depth, 3);
 SAMPLER2D(s_gi_prev_color, 5);
 /// Last frame's device depth.
 SAMPLER2D(s_gi_prev_depth, 6);
-/// The environment SH (9 texels), absolute radiance.
-SAMPLER2D(s_gi_env_sh, 7);
 /// This frame's reflection-probe layer (PBUFFER as the probe pass drew it): rgb = the probes' prefiltered
 /// reflection at the pixel, premultiplied and pre-exposed, a = their coverage; unoccluded.
 SAMPLER2D(s_gi_probe_layer, 8);
