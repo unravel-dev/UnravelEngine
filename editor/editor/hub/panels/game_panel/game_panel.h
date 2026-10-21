@@ -8,6 +8,7 @@
 #include <graphics/frame_buffer.h>
 #include "../viewport_stats_overlay.h"
 #include "../panel_toolbar.h"
+#include "../view_render_scale.h"
 #include "../visualization_menu.h"
 
 namespace unravel
@@ -87,6 +88,8 @@ private:
     visualization_menu::state visualization_menu_state_{};
 
     panel_toolbar::layout_state toolbar_layout_{};
+    /// The render scale the game's cameras render at in this view.
+    view_render_scale::state render_scale_{};
     /// Opacity of the toolbar, 0 while it stays out of the way of a running game.
     float toolbar_alpha_{1.0f};
     /// Content area of the panel at its last draw, the area the game view is sized against.

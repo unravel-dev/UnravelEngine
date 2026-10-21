@@ -52,12 +52,33 @@ Building a scene is not shipping a game. The rest of the chain:
 - settings_list_properties / settings_get / settings_set configure the project.
   standalone.startup_scene (the scene the built game loads) is required before
   the project can be deployed at all.
+- Settings profiles are the targets a project builds for: each has a platform
+  (desktop or android) and overrides only what differs from the project
+  settings. settings_profiles_list lists them (a project starts with Desktop);
+  settings_profiles_create / _rename / _delete manage them. settings_get and
+  settings_set with profile read and override a profile's values (overridden
+  lists what it changes), settings_revert stops overriding paths. Layers,
+  input, resolutions and the physics backend are shared by every profile.
+  editor_set_preview_profile runs the editor with a profile's settings; then
+  settings_set without profile reports as shadowed the paths that profile
+  overrides, whose values the editor shows instead.
 - input_list_actions / input_map_action define the action names scripts query.
-- deploy_get_state reports the deploy settings, what still blocks a build (one
-  sentence each) and the progress of a running deploy; deploy_set_settings
-  picks the destination folder (default .deploy in the project; relative paths are in the
-  project folder, outside the folders the editor manages), and project_deploy
-  builds it once running compiles finish. An asset that failed to compile fails
+- deploy_get_state reports the deploy profile and its settings, what still blocks
+  a build (one sentence each) and the progress of a running deploy;
+  deploy_set_settings sets the destination folder (default .deploy in the
+  project; relative paths are in the project folder, outside the folders the
+  editor manages) and the deploy settings: scope shared (default) writes what
+  every profile deploys with, scope profile writes overrides of profile
+  (default the deploy profile), and revert stops overriding settings named as
+  its arguments. location is always shared; patch_release and android_* always
+  belong to the profile. deploy_profile selects the profile deploys build, as
+  the Deploy window's picker does; profile alone never changes it. The result
+  says what was written where and which shared values a profile shadows.
+  project_deploy (profile: which one) builds the profile into
+  <location>/<profile> once running compiles finish. editor_open_deploy opens
+  the Deploy window for a user who should see it. A profile's textures are cooked for its platform (Android: ASTC or
+  ETC2) into cache/profiles/<profile>, each recompiled in place when a setting
+  changes. An asset that failed to compile fails
   the deploy (failed_steps names it) before the folder is touched. Compiled
   assets ship in data/<engine|app>/content.pak (pack_assets false ships them
   loose). Deploying again into the same folder updates it in place and only
@@ -65,15 +86,16 @@ Building a scene is not shipping a game. The rest of the chain:
   deploy_keep_release (named by app.version), then deploy_set_settings
   patch_release to that name - later deploys ship the release's packs
   unchanged plus content_p1.pak with every change since; deploy_remove_release
-  deletes a kept release. To ship only what the game uses: deploy_set_settings
+  deletes a kept release. Releases are kept per profile. To ship only what the game uses: deploy_set_settings
   only_used_assets true, scenes (the scenes scripts load besides the startup
   scene) and include (folders or assets scripts load by a path built at run
   time); keys that name nothing come back as warnings. deploy_get_content lists
   every project asset with whether it ships and why, named_folders points at
   folders scripts build asset paths in (with the scripts that do), and
   orphan_rules lists rules on paths that are gone. While a deploy runs, project and settings changes are refused.
-- Android: deploy_set_settings platform android and project_deploy build <project>.apk; with
-  run_after_deploy it is installed and started on android_device, and the game's log reaches the
+- Android: project_deploy with an Android profile (settings_profiles_create
+  platform android makes one) builds <project>.apk; with run_after_deploy it is
+  installed and started on android_device, and the game's log reaches the
   editor log as [Device] lines (logs_get_recent include_device_system adds the device system's own
   [Device System] lines). android_device_action acts without a new deploy: run_last_build,
   follow_log, clear_data, uninstall.

@@ -3,6 +3,7 @@
 #include <engine/settings/settings.h>
 #include <editor/settings/settings.h>
 #include <deploy/deploy_settings.h>
+#include <deploy/project_profiles.h>
 #include <editor/project/project_editor_settings.h>
 #include <editor/project/project_info.h>
 #include <filesystem/syncer.h>
@@ -109,7 +110,9 @@ public:
 
     void set_name(const std::string& name);
 
+    /// The project settings (settings/settings.cfg): the base every profile overrides.
     auto get_settings() -> settings&;
+    /// The deploy settings every profile shares (deploy/deploy.cfg), and this session's Android device.
     auto get_deploy_settings() -> deploy_settings&;
     auto get_editor_settings() -> editor_settings&;
     auto get_project_editor_settings() -> project_editor_settings&;
@@ -119,6 +122,52 @@ public:
 
     auto has_open_project() const -> bool;
 
+    /// The project's settings profiles. Change them through the functions below, which keep the editor's
+    /// choices and the settings it runs with in step.
+    auto get_profiles() const -> const deployment::project_profiles&;
+
+    /// The profile the Deploy window builds; always one of the project's.
+    auto get_deploy_profile() const -> const std::string&;
+    auto set_deploy_profile(const std::string& name) -> deployment::result;
+
+    /// The profile whose settings the editor runs with; empty for the project settings.
+    auto get_preview_profile() const -> const std::string&;
+    /// Runs the editor with a profile's settings, or the project settings for an empty name. Refused in play
+    /// mode: the running game keeps the settings it started with.
+    auto set_preview_profile(rtti::context& ctx, const std::string& name) -> deployment::result;
+
+    /// The project settings a profile runs with; the project settings for an unknown profile.
+    auto get_profile_settings(const std::string& profile) const -> settings;
+    /// The deploy settings a profile deploys with, with this session's Android device; empty for an unknown
+    /// profile.
+    auto get_profile_deploy_settings(const std::string& profile) const -> hpp::optional<deploy_settings>;
+    /// The deploy settings of the deploy profile, which the Deploy window and project_deploy deploy with.
+    auto get_deploy_request() const -> deploy_settings;
+
+    auto create_profile(rtti::context& ctx, const std::string& name, target_platform platform, const std::string& copy_from = {})
+        -> deployment::result;
+    /// Renames a profile; refused while a deploy runs or the game plays (check_profiles_changeable).
+    auto rename_profile(rtti::context& ctx, const std::string& name, const std::string& new_name) -> deployment::result;
+    /// Deletes a profile; refused while a deploy runs or the game plays (check_profiles_changeable).
+    auto remove_profile(rtti::context& ctx, const std::string& name) -> deployment::result;
+    /// Why profiles cannot be renamed or deleted now: a deploy reads them and their caches as it runs, and a
+    /// game in play mode keeps the settings it started with. Ok when they can.
+    auto check_profiles_changeable(rtti::context& ctx) const -> deployment::result;
+    auto set_profile_android(rtti::context& ctx, const std::string& name, const android_deploy_settings& android) -> deployment::result;
+    /// Overrides in a profile what `edited` (the profile's settings after an edit) changes.
+    auto override_profile_settings(rtti::context& ctx, const std::string& name, const settings& edited) -> deployment::result;
+    /// Overrides in a profile what an edit changed against `before`, the settings it started from: an override
+    /// changed meanwhile keeps its new value (deployment::project_profiles::override_settings).
+    auto override_profile_settings(rtti::context& ctx, const std::string& name, const settings& before, const settings& edited)
+        -> deployment::result;
+    auto override_profile_deploy(rtti::context& ctx, const std::string& name, const deploy_settings& edited) -> deployment::result;
+    auto override_profile_deploy(rtti::context& ctx,
+                                 const std::string& name,
+                                 const deploy_settings& before,
+                                 const deploy_settings& edited) -> deployment::result;
+    auto revert_profile_settings(rtti::context& ctx, const std::string& name, hpp::string_view path) -> deployment::result;
+    auto revert_profile_deploy(rtti::context& ctx, const std::string& name, hpp::string_view path) -> deployment::result;
+
     /// True once opening a project asked the editor to restart, because the project uses another
     /// renderer or physics backend than the running one; the project opens after the restart.
     auto is_restart_pending() const -> bool
@@ -127,6 +176,8 @@ public:
     }
 
     void load_project_settings();
+    /// Saves the project settings and gives the editor what follows from them: the settings it runs with and
+    /// the texture defaults it compiles with.
     void save_project_settings(rtti::context& ctx);
     void load_deploy_settings();
     void save_deploy_settings();
@@ -138,6 +189,16 @@ public:
     void save_project_info();
 
 private:
+    /// Puts the settings the editor runs with into the context: the preview profile's, or the project's.
+    void publish_settings(rtti::context& ctx);
+    /// Points the asset compiler at the project's texture defaults; recompiles the project's textures when
+    /// they changed while the project is open.
+    void apply_texture_defaults(const settings::asset_settings::texture_importer_settings& defaults, bool is_open);
+    /// Reads the profiles and makes the editor's choices name existing ones.
+    void load_profiles();
+    /// Keeps the deploy and preview profiles naming existing profiles after a change of the profiles.
+    void fix_profile_choices(rtti::context& ctx);
+
     void fixup_editor_settings_on_save();
     void fixup_editor_settings_on_load();
     void push_recent_project(const fs::path& project_path);
@@ -160,6 +221,7 @@ private:
     editor_settings editor_settings_;
     project_editor_settings project_editor_settings_;
     project_info project_info_;
+    deployment::project_profiles profiles_;
     /// When true, @ref prepare_restart adds -p recent even if no project is open yet.
     bool restart_opens_recent_{false};
 

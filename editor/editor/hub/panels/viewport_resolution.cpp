@@ -59,6 +59,15 @@ auto compute_viewport_pixels(const settings::resolution_settings::resolution& re
     return {static_cast<std::uint32_t>(viewport.x), static_cast<std::uint32_t>(viewport.y)};
 }
 
+auto get_render_resolution(const settings::resolution_settings::resolution& res) -> usize32_t
+{
+    if(res.width <= 0 || res.height <= 0)
+    {
+        return {};
+    }
+    return {static_cast<std::uint32_t>(res.width), static_cast<std::uint32_t>(res.height)};
+}
+
 void apply_to_camera(camera_component& camera_comp,
                      const settings::resolution_settings::resolution& res,
                      ImVec2 avail_size)

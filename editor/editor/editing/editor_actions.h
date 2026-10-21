@@ -194,6 +194,8 @@ struct editor_actions
     static auto open_project_settings(rtti::context& ctx,
                                       const std::string& category,
                                       std::string* error = nullptr) -> bool;
+    /// Opens the Deploy window, as the header's Deploy button does.
+    static auto open_deploy_window(rtti::context& ctx, std::string* error = nullptr) -> bool;
 
     // Console log history
     static auto get_recent_logs(rtti::context& ctx,

@@ -21,9 +21,34 @@
 #include <engine/rendering/ecs/systems/model_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/systems/skylight_system.h>
+#include <engine/settings/settings.h>
 
 namespace unravel
 {
+namespace
+{
+/**
+ * @brief How a camera run renders the view its host shows: with the project's graphics settings (the feature
+ * limits bound the effects the camera and its volumes ask for, the scene renders at the render scale) unless
+ * the view asks for the engine's defaults, and with the view's own choices over them.
+ */
+void apply_view_params(rtti::context& ctx, rendering::pipeline::run_params& params, const view_render_params& view)
+{
+    params.is_being_edited = view.is_being_edited;
+    params.render_resolution = view.render_resolution;
+    params.needs_output_depth = view.needs_output_depth;
+    if(view.settings_use == graphics_settings_use::project && ctx.has<settings>())
+    {
+        const auto& graphics = ctx.get<settings>().graphics;
+        rendering::pipeline::apply_feature_limits(params, graphics.limits);
+        params.render_scale = graphics.render_scale;
+    }
+    if(view.render_scale)
+    {
+        params.render_scale = *view.render_scale;
+    }
+}
+} // namespace
 
 auto rendering_system::init(rtti::context& ctx) -> bool
 {
@@ -106,8 +131,11 @@ auto rendering_system::release_pipeline_resources(scene& scn) -> bool
     return true;
 }
 
-auto rendering_system::render_scene(entt::handle camera_ent, camera_component& camera_comp, scene& scn, delta_t dt,
-                                    bool render_screen_space, bool is_being_edited) -> gfx::frame_buffer::ptr
+auto rendering_system::render_scene(entt::handle camera_ent,
+                                    camera_component& camera_comp,
+                                    scene& scn,
+                                    delta_t dt,
+                                    const view_render_params& view) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Render Scene Camera");
     auto& ctx = engine::context();
@@ -117,24 +145,24 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
     auto& rview = camera_comp.get_render_view();
 
     auto& ui = ctx.get_cached<ui_system>();
-    bool process_input = render_screen_space;
+    bool process_input = view.render_screen_space;
     ui.update_screen_space(ctx, camera_ent, scn, process_input);
     ui.update_world_space(ctx, camera_ent, scn, process_input);
 
     ui.render_world_space(ctx, camera_ent, scn, dt);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
-    params.is_being_edited = is_being_edited;
+    apply_view_params(ctx, params, view);
     auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
-    if(render_screen_space)
+    if(view.render_screen_space)
     {
         ui.render_screen_space(ctx, result, camera_ent, scn, dt);
     }
     return result;
 }
 
-auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer::ptr
+auto rendering_system::render_scene(scene& scn, delta_t dt, const view_render_params& view) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
@@ -144,7 +172,7 @@ auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer
         [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
-            output = render_scene(handle, camera_comp, scn, dt, true);
+            output = render_scene(handle, camera_comp, scn, dt, view);
             return;
         });
     return output;
@@ -155,7 +183,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
                                     camera_component& camera_comp,
                                     scene& scn,
                                     delta_t dt,
-                                    bool render_screen_space)
+                                    const view_render_params& view)
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
@@ -165,16 +193,17 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
     auto& rview = camera_comp.get_render_view();
     auto& ui = ctx.get_cached<ui_system>();
 
-    bool process_input = render_screen_space;
+    bool process_input = view.render_screen_space;
     ui.update_screen_space(ctx, camera_ent, scn, process_input);
     ui.update_world_space(ctx, camera_ent, scn, process_input);
 
     ui.render_world_space(ctx, camera_ent, scn, dt);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
+    apply_view_params(ctx, params, view);
     pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
-    if(render_screen_space)
+    if(view.render_screen_space)
     {
         ui.render_screen_space(ctx, output, camera_ent, scn, dt);
     }
@@ -188,7 +217,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene&
         [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
-            render_scene(output, handle, camera_comp, scn, dt, true);
+            render_scene(output, handle, camera_comp, scn, dt);
         });
 }
 
@@ -205,8 +234,14 @@ void rendering_system::render_debug(entt::handle camera_entity)
     const auto& rview = camera_comp.get_render_view();
     const auto& camera = camera_comp.get_camera();
     const auto& view = camera.get_view();
-    const auto& proj = camera.get_projection();
-    const auto& obuffer = rview.fbo_get("OBUFFER");
+    // Drawn over the finished image, after temporal AA: a jittered projection would shake every line.
+    const auto proj = camera.get_projection_unjittered();
+    // A scaled player view upscales straight into the window and has no OBUFFER.
+    const auto& obuffer = rview.fbo_find("OBUFFER");
+    if(!obuffer)
+    {
+        return;
+    }
 
     gfx::render_pass pass("Debug Draw Pass");
     pass.bind(obuffer.get());

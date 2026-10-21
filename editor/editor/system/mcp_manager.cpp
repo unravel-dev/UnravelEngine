@@ -236,6 +236,7 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     mcp::register_project_tools(registry_);
     mcp::register_settings_tools(registry_);
     mcp::register_deploy_tools(registry_);
+    mcp::register_profile_tools(registry_);
     mcp::register_input_tools(registry_);
     mcp::register_input_action_tools(registry_);
     mcp::register_ui_tools(registry_);

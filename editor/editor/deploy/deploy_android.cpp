@@ -58,7 +58,7 @@ constexpr const char* DEFAULT_ICON_KEY = "editor:/data/icons/unravel_logo.png";
 /// The image the game's icon is made from: the chosen texture's source image, or the engine's logo.
 auto get_icon_image(const deploy_settings& params) -> fs::path
 {
-    return fs::resolve_protocol(params.android_icon ? params.android_icon.id() : std::string(DEFAULT_ICON_KEY));
+    return fs::resolve_protocol(params.android.icon ? params.android.icon.id() : std::string(DEFAULT_ICON_KEY));
 }
 
 auto get_project_name(rtti::context& ctx) -> std::string
@@ -66,17 +66,28 @@ auto get_project_name(rtti::context& ctx) -> std::string
     return ctx.get_cached<project_manager>().get_name();
 }
 
-/// The open project's Android build folder: the Gradle project and the data it packages.
-auto get_build_dir() -> fs::path
+/// A profile's Android build folder: the Gradle project and the data it packages. Each profile has its own,
+/// so its packs update in place between its deploys.
+auto get_build_dir(const std::string& profile) -> fs::path
 {
-    const auto key = std::hash<std::string>{}(get_project_root().generic_string());
+    const auto key = std::hash<std::string>{}(get_project_root().generic_string() + "|" + profile);
     return fs::temp_directory_path() / GRADLE_STAGING_FOLDER / fmt::format("{:016x}", key);
 }
 
-/// The folder Gradle builds this project's packages in.
-auto get_gradle_project_dir() -> fs::path
+} // namespace
+
+void remove_android_build_dir(const std::string& profile)
 {
-    return get_build_dir() / "project";
+    fs::error_code ec;
+    fs::remove_all(get_build_dir(profile), ec);
+}
+
+namespace
+{
+/// The folder Gradle builds a profile's packages in.
+auto get_gradle_project_dir(const std::string& profile) -> fs::path
+{
+    return get_build_dir(profile) / "project";
 }
 
 /// The data/ an Android deploy wrote beside its package before the data moved to the build folder; only
@@ -700,18 +711,18 @@ auto get_android_toolchain() -> android_toolchain
     return found_tools;
 }
 
-auto get_android_content_dir() -> fs::path
+auto get_android_content_dir(const std::string& profile) -> fs::path
 {
-    return get_build_dir() / "content";
+    return get_build_dir(profile) / "content";
 }
 
 auto get_android_application_id(rtti::context& ctx, const deploy_settings& params) -> std::string
 {
-    if(!params.android_application_id.empty())
+    if(!params.android.application_id.empty())
     {
-        return params.android_application_id;
+        return params.android.application_id;
     }
-    const auto& app = ctx.get_cached<project_manager>().get_settings().app;
+    const auto app = ctx.get_cached<project_manager>().get_profile_settings(params.profile).app;
     return make_default_application_id(app.company, app.product.empty() ? get_project_name(ctx) : app.product);
 }
 
@@ -739,13 +750,13 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
         problems.push_back(fmt::format("The icon image {} is missing. Choose another one, or none for the engine's logo.",
                                        get_icon_image(params).generic_string()));
     }
-    if(params.android_release)
+    if(params.android.release)
     {
-        if(params.android_keystore.empty() || !fs::exists(params.android_keystore, ec))
+        if(params.android.keystore.empty() || !fs::exists(params.android.keystore, ec))
         {
             problems.push_back("A release build needs the keystore that signs it. Choose one, or turn off Release Build.");
         }
-        else if(params.android_key_alias.empty())
+        else if(params.android.key_alias.empty())
         {
             problems.push_back("A release build needs the key alias of its keystore.");
         }
@@ -803,7 +814,7 @@ auto has_android_package(rtti::context& ctx, const deploy_settings& params) -> b
 
 auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params) -> android_package_plan
 {
-    const auto& app = ctx.get_cached<project_manager>().get_settings().app;
+    const auto app = ctx.get_cached<project_manager>().get_profile_settings(params.profile).app;
     android_package_plan plan;
     plan.tools = get_android_toolchain();
     plan.device = params.android_device;
@@ -817,19 +828,19 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     }
     auto& package = plan.package;
     package.player = get_android_template().found;
-    package.project_dir = get_gradle_project_dir();
-    package.content_dir = get_android_content_dir();
+    package.project_dir = get_gradle_project_dir(params.profile);
+    package.content_dir = get_android_content_dir(params.profile);
     package.application_id = get_android_application_id(ctx, params);
     package.name = app.product.empty() ? get_project_name(ctx) : app.product;
     package.version_name = app.version.empty() ? DEFAULT_VERSION_NAME : app.version;
-    package.version_code = std::max<std::uint32_t>(1, params.android_version_code);
-    package.orientation = params.android_screen_orientation;
+    package.version_code = std::max<std::uint32_t>(1, params.android.version_code);
+    package.orientation = params.android.screen_orientation;
     package.icon_image = get_icon_image(params);
-    package.icon_background = params.android_icon_background;
-    package.icon_dir = get_build_dir() / "icon";
-    package.is_release = params.android_release;
-    package.keystore = params.android_keystore;
-    package.key_alias = params.android_key_alias;
+    package.icon_background = params.android.icon_background;
+    package.icon_dir = get_build_dir(params.profile) / "icon";
+    package.is_release = params.android.release;
+    package.keystore = params.android.keystore;
+    package.key_alias = params.android.key_alias;
     return plan;
 }
 

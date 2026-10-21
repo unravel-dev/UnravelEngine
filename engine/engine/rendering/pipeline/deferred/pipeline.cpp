@@ -23,6 +23,7 @@
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
+#include <engine/rendering/render_scale.h>
 #include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
 #include <hpp/optional.hpp>
@@ -252,18 +253,18 @@ void apply_pipeline_taa_jitter_to_camera(const camera& view_camera,
 }
 
 auto create_or_resize_d_buffer(gfx::render_view& rview,
-                               const usize32_t& viewport_size,
+                               const usize32_t& render_size,
                                const pipeline::run_params& params) -> const gfx::texture::ptr&
 {
     return rview.tex_acquire("DEPTH",
-                             {.size = viewport_size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_RT});
+                             {.size = render_size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_RT});
 }
 
-auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& viewport_size) -> const gfx::texture::ptr&
+auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& render_size) -> const gfx::texture::ptr&
 {
     // R32F for precision, a full mip chain, compute-written and point-sampled with clamped UVs.
     return rview.tex_acquire("HIZBUFFER",
-                             {.size = viewport_size,
+                             {.size = render_size,
                               .format = bgfx::TextureFormat::R32F,
                               .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_MIN_POINT |
                                        BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP |
@@ -272,20 +273,20 @@ auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& viewp
 }
 
 auto create_or_resize_g_buffer(gfx::render_view& rview,
-                               const usize32_t& viewport_size,
+                               const usize32_t& render_size,
                                const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
 {
-    const auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const auto& depth = create_or_resize_d_buffer(rview, render_size, params);
     const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
     // sRGB: the base colour is stored encoded and every reader gets it decoded by the texture unit (EncodeGBuffer).
     const auto& tex0 = rview.tex_acquire(
         "GBUFFER_0",
-        {.size = viewport_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_SRGB});
-    const auto& tex1 = rview.tex_acquire("GBUFFER_1", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
-    const auto& tex2 = rview.tex_acquire("GBUFFER_2", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
+        {.size = render_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_SRGB});
+    const auto& tex1 = rview.tex_acquire("GBUFFER_1", {.size = render_size, .format = format, .flags = BGFX_TEXTURE_RT});
+    const auto& tex2 = rview.tex_acquire("GBUFFER_2", {.size = render_size, .format = format, .flags = BGFX_TEXTURE_RT});
     const auto& tex3 = rview.tex_acquire(
         "GBUFFER_3",
-        {.size = viewport_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT});
+        {.size = render_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT});
 
     auto& fbo = rview.fbo_acquire("GBUFFER");
     if(gfx::needs_recreate(fbo, {tex0, tex1, tex2, tex3, depth}))
@@ -299,12 +300,12 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
 }
 
 auto create_or_resize_l_buffer(gfx::render_view& rview,
-                               const usize32_t& viewport_size,
+                               const usize32_t& render_size,
                                const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
 {
-    const auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const auto& depth = create_or_resize_d_buffer(rview, render_size, params);
     const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
-    const auto& tex = rview.tex_acquire("LBUFFER", {.size = viewport_size, .format = format, .flags = BGFX_TEXTURE_RT});
+    const auto& tex = rview.tex_acquire("LBUFFER", {.size = render_size, .format = format, .flags = BGFX_TEXTURE_RT});
 
     auto& fbo_depth = rview.fbo_acquire("LBUFFER_DEPTH");
     if(gfx::needs_recreate(fbo_depth, {tex, depth}))
@@ -325,15 +326,15 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
     return fbo;
 }
 
-/// A viewport-sized reflection target, rebuilt when its size, format or flags change.
+/// A reflection target at the render size, rebuilt when its size, format or flags change.
 auto create_or_resize_reflection_buffer(gfx::render_view& rview,
                                         const std::string& name,
-                                        const usize32_t& viewport_size,
+                                        const usize32_t& render_size,
                                         const pipeline::run_params& params,
                                         uint64_t texture_flags) -> const gfx::frame_buffer::ptr&
 {
     const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
-    const auto& tex = rview.tex_acquire(name, {.size = viewport_size, .format = format, .flags = texture_flags});
+    const auto& tex = rview.tex_acquire(name, {.size = render_size, .format = format, .flags = texture_flags});
 
     auto& fbo = rview.fbo_acquire(name);
     if(gfx::needs_recreate(fbo, {tex}))
@@ -352,31 +353,27 @@ auto create_or_resize_reflection_buffer(gfx::render_view& rview,
 /// two differently (ComposeIndirectSpecular in lighting.sh). The GI reflections write both
 /// from compute.
 void create_or_resize_reflection_buffers(gfx::render_view& rview,
-                                         const usize32_t& viewport_size,
+                                         const usize32_t& render_size,
                                          const pipeline::run_params& params)
 {
-    create_or_resize_reflection_buffer(rview, "RBUFFER", viewport_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
-    create_or_resize_reflection_buffer(rview, "PBUFFER", viewport_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
+    create_or_resize_reflection_buffer(rview, "RBUFFER", render_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
+    create_or_resize_reflection_buffer(rview, "PBUFFER", render_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
 }
-auto create_or_resize_o_buffer(gfx::render_view& rview,
-                               const usize32_t& viewport_size,
-                               const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
+/// The size a run renders its scene at: a camera run's render resolution (its viewport's size unless set) at its
+/// render scale (get_view_render_size); every other run renders at its viewport's size.
+auto get_run_render_size(const usize32_t& viewport_size, const pipeline::run_params& params) -> usize32_t
 {
-    auto& depth = create_or_resize_d_buffer(rview, viewport_size, params);
+    const bool is_camera_run = params.run_type == pipeline::pipeline_run_type::camera;
+    return is_camera_run ? get_view_render_size(viewport_size, params.render_resolution, params.render_scale) : viewport_size;
+}
 
+/// The output's color at the viewport's size; acquire_scene_output attaches the scene's depth to it.
+auto create_or_resize_o_buffer(gfx::render_view& rview, const usize32_t& viewport_size) -> const gfx::frame_buffer::ptr&
+{
     const auto& tex = rview.tex_acquire("OBUFFER",
                                         {.size = viewport_size,
                                          .format = get_default_format(),
                                          .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT});
-    {
-        auto& fbo = rview.fbo_acquire("OBUFFER_DEPTH");
-        if(gfx::needs_recreate(fbo, {tex, depth}))
-        {
-            fbo.reset();
-            fbo = std::make_shared<gfx::frame_buffer>();
-            fbo->populate({tex, depth});
-        }
-    }
 
     auto& fbo = rview.fbo_acquire("OBUFFER");
     if(gfx::needs_recreate(fbo, {tex}))
@@ -389,7 +386,93 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
     return fbo;
 }
 
-// Velocity (motion vector) target, full camera resolution. RGBA16F: RG = total uv-delta
+/// Where a camera run finishes its scene: the passes after the post-processing chain draw into it.
+struct scene_output
+{
+    /// The finished scene's color.
+    gfx::frame_buffer::ptr color;
+    /// The same color with the scene's depth attached.
+    gfx::frame_buffer::ptr color_depth;
+    /// A scaled run's output with a depth of its own at the output's size (OBUFFER_DEPTH), which the upscale
+    /// fills with the scene's depth; null unless the run asks for it (run_params::needs_output_depth).
+    gfx::frame_buffer::ptr output_depth;
+};
+
+/// The depth a scaled run gives its output, at the output's size, for the overlays drawn over it.
+auto acquire_output_depth(gfx::render_view& rview, const gfx::frame_buffer::ptr& output, const usize32_t& viewport_size)
+    -> const gfx::frame_buffer::ptr&
+{
+    const auto& depth = rview.tex_acquire("OUTPUT_DEPTH",
+                                          {.size = viewport_size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_RT});
+    auto& output_depth = rview.fbo_acquire("OBUFFER_DEPTH");
+    if(gfx::needs_recreate(output_depth, {output->get_texture(), depth}))
+    {
+        output_depth.reset();
+        output_depth = std::make_shared<gfx::frame_buffer>();
+        output_depth->populate({output->get_texture(), depth});
+    }
+    return output_depth;
+}
+
+/**
+ * @brief The scene output of a camera run rendering at `render_size` into `output`.
+ *
+ * At the output's size the run finishes in the output itself. A scaled run finishes in SCALED_OBUFFER, at the
+ * render size like the rest of its targets, which the pipeline resamples into the output last; its targets are
+ * released while the run is not scaled.
+ * @param needs_output_depth A scaled run also gives the output a depth at its size (run_params::needs_output_depth).
+ */
+auto acquire_scene_output(gfx::render_view& rview,
+                          const gfx::frame_buffer::ptr& output,
+                          const usize32_t& viewport_size,
+                          const usize32_t& render_size,
+                          bool needs_output_depth) -> scene_output
+{
+    const auto& depth = rview.tex_get("DEPTH");
+    if(render_size == viewport_size)
+    {
+        rview.fbo_remove("SCALED_OBUFFER_DEPTH");
+        rview.fbo_remove("SCALED_OBUFFER");
+        rview.tex_remove("SCALED_OBUFFER");
+        rview.tex_remove("OUTPUT_DEPTH");
+        auto& output_depth = rview.fbo_acquire("OBUFFER_DEPTH");
+        if(gfx::needs_recreate(output_depth, {output->get_texture(), depth}))
+        {
+            output_depth.reset();
+            output_depth = std::make_shared<gfx::frame_buffer>();
+            output_depth->populate({output->get_texture(), depth});
+        }
+        return {output, output_depth};
+    }
+    // Clamped: the upscale filters across the edge texels.
+    const auto& tex = rview.tex_acquire(
+        "SCALED_OBUFFER",
+        {.size = render_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
+    auto& color = rview.fbo_acquire("SCALED_OBUFFER");
+    if(gfx::needs_recreate(color, {tex}))
+    {
+        color.reset();
+        color = std::make_shared<gfx::frame_buffer>();
+        color->populate({tex});
+    }
+    auto& color_depth = rview.fbo_acquire("SCALED_OBUFFER_DEPTH");
+    if(gfx::needs_recreate(color_depth, {tex, depth}))
+    {
+        color_depth.reset();
+        color_depth = std::make_shared<gfx::frame_buffer>();
+        color_depth->populate({tex, depth});
+    }
+    if(needs_output_depth)
+    {
+        return {color, color_depth, acquire_output_depth(rview, output, viewport_size)};
+    }
+    // The scene's DEPTH is at the render size: the output has no depth.
+    rview.fbo_remove("OBUFFER_DEPTH");
+    rview.tex_remove("OUTPUT_DEPTH");
+    return {color, color_depth, {}};
+}
+
+// Velocity (motion vector) target, at the render size of the G-buffer it pairs with. RGBA16F: RG = total uv-delta
 // (uv_curr - uv_prev), BA = the OBJECT-ONLY component (total minus the camera-induced
 // part), both computed inside the velocity pass with one consistent matrix set.
 //
@@ -403,13 +486,13 @@ auto create_or_resize_o_buffer(gfx::render_view& rview,
 //    rounds (see tasks/velocity_buffer_plan.md).
 //  - "VELOCITY_FBO" carries the shared DEPTH attachment for the movers sub-pass, which
 //    depth-tests EQUAL and never samples depth - no conflict there.
-auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& viewport_size)
+auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& render_size)
     -> const gfx::frame_buffer::ptr&
 {
     const auto& depth = rview.tex_find("DEPTH");
 
     const auto& tex = rview.tex_acquire("VELOCITY",
-                                        {.size = viewport_size,
+                                        {.size = render_size,
                                          .format = bgfx::TextureFormat::RGBA16F,
                                          .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
 
@@ -578,7 +661,7 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     bgfx::setState(state);
 }
 
-void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
+void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt, const feature_limits& limits)
 {
     APP_SCOPE_PERF("Rendering/Reflection Generation Pass");
 
@@ -657,6 +740,9 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
                     params.run_type = pipeline_run_type::reflection_probe_capture;
                     params.vflags = vflags;
                     params.pflags = pflags;
+                    // The camera's limits: its shadow maps are shared with the captures, so both render
+                    // every light the same way.
+                    apply_feature_limits(params, limits);
                     strip_post_effects_for_reflection_probe_capture(params);
 
                     //if(!reflection_probe_comp.get_capture_sky())
@@ -741,7 +827,11 @@ void deferred::refresh_shadow_casters(scene& scn, const camera& camera, delta_t 
     }
 }
 
-void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask)
+void deferred::build_shadows(scene& scn,
+                             const camera& camera,
+                             delta_t dt,
+                             const feature_limits& limits,
+                             layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Shadow Generation Pass");
 
@@ -750,7 +840,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer
     scn.registry->view<transform_component, light_component>().each(
         [&](auto e, auto&& transform_comp, auto&& light_comp)
         {
-            const auto& light = light_comp.get_light();
+            const auto light = limit_light(light_comp.get_light(), limits);
 
             bool is_directional = light.type == light_type::directional;
             bool has_render_mask = render_mask.mask != layer_reserved::everything_layer;
@@ -894,8 +984,7 @@ auto deferred::run_pipeline(scene& scn,
                             const run_params& params,
                             layer_mask render_mask) -> gfx::frame_buffer::ptr
 {
-    const auto& viewport_size = camera.get_viewport_size();
-    const auto& obuffer = create_or_resize_o_buffer(rview, viewport_size, params);
+    const auto& obuffer = create_or_resize_o_buffer(rview, camera.get_viewport_size());
 
     run_pipeline_impl(obuffer, scn, camera, rview, dt, params, render_mask);
 
@@ -910,6 +999,14 @@ void deferred::run_pipeline(const gfx::frame_buffer::ptr& output,
                             const run_params& params,
                             layer_mask render_mask)
 {
+    // A scaled view upscales straight into the caller's target: going through OBUFFER would cost one more pass at
+    // the output's size, on the devices the scale is for.
+    const auto& viewport_size = camera.get_viewport_size();
+    if(get_run_render_size(viewport_size, params) != viewport_size)
+    {
+        run_pipeline_impl(output, scn, camera, rview, dt, params, render_mask);
+        return;
+    }
     auto obuffer = run_pipeline(scn, camera, rview, dt, params, render_mask);
 
     blit_to_output(rview, obuffer, output);
@@ -969,7 +1066,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(build_reflection_probes)
     {
-        build_reflections(scn, camera, dt);
+        build_reflections(scn, camera, dt, params.limits);
     }
 
     is_camera_run_ = is_camera_run;
@@ -978,7 +1075,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(build_shadowmaps)
     {
-        build_shadows(scn, camera, dt, render_mask);
+        build_shadows(scn, camera, dt, params.limits, render_mask);
     }
 
     // Before any pass writes or reads scene lighting (the nested probe captures above rendered
@@ -988,16 +1085,19 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // The GI scene: instance residency and this view's global distance field (gating rationale at the definition).
     run_gi_scene_passes(scn, camera, rview, params);
 
+    // The scene renders at the render size; the camera's viewport keeps the output's size, which the screen
+    // helpers, the UI and the picking work in.
     const auto& viewport_size = camera.get_viewport_size();
-    create_or_resize_d_buffer(rview, viewport_size, params);
-    create_or_resize_g_buffer(rview, viewport_size, params);
-    create_or_resize_l_buffer(rview, viewport_size, params);
-    create_or_resize_reflection_buffers(rview, viewport_size, params);
+    const usize32_t render_size = get_run_render_size(viewport_size, params);
+    create_or_resize_d_buffer(rview, render_size, params);
+    create_or_resize_g_buffer(rview, render_size, params);
+    create_or_resize_l_buffer(rview, render_size, params);
+    create_or_resize_reflection_buffers(rview, render_size, params);
 
-    apply_pipeline_taa_jitter_to_camera(camera, viewport_size, params);
+    apply_pipeline_taa_jitter_to_camera(camera, render_size, params);
 
     // Velocity buffer production: camera runs that have a reader (is_velocity_wanted). It is two
-    // full-resolution passes, so a run without temporal effects skips it. The velocity_pass step
+    // passes at the render size, so a run without temporal effects skips it. The velocity_pass step
     // bit stays the opt-out lever: probe captures build pflags from 0 and never set it, and a
     // custom caller can clear it. Consumers receive the texture EXPLICITLY through their run
     // params (this pipeline is the only place that fetches "VELOCITY" from the render view); a
@@ -1015,7 +1115,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
-    run_velocity_pass(visibility_set, camera, rview);
+    run_velocity_pass(visibility_set, camera, rview, render_size);
 
     run_screen_ao_pass(camera, rview, dt, params);
 
@@ -1031,7 +1131,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     }
     run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, gi_owns_reflections, dt);
 
-    const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
+    const bool hiz_active = run_hiz_pass(camera, rview, params, render_size, dt);
 
     // SSR samples last frame's PREV_SCENE_HDR snapshot (post-TAA, scene-referred linear).
     // It must NOT sample the final OBUFFER: that image is tonemapped, sRGB-encoded and has
@@ -1048,7 +1148,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     const irradiance_pass_result irradiance = run_irradiance_pass(scn, rview);
 
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
-    target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
+    target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, params.limits, dt);
 
     // GI: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
     // frame's light buffer is populated, and before the indirect pass, which composites the results.
@@ -1095,7 +1195,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         return;
     }
 
-    target = run_taa_pass(camera, rview, target, output, params, particle_reactive);
+    const auto scene = acquire_scene_output(rview, output, viewport_size, render_size, params.needs_output_depth);
+
+    target = run_taa_pass(camera, rview, target, scene.color, params, particle_reactive);
 
     // Scene-referred history for next frame's SSR trace and GI far-field. Taken after TAA
     // (temporally stable) and before bloom/tonemap/UI (still linear HDR, no display encode,
@@ -1111,20 +1213,31 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     const auto scene_before_bloom = target;
     target = run_bloom_pass(rview, target, params);
 
-    target = run_tonemapping_pass(rview, target, scene_before_bloom, output, params);
+    const bool is_upscaled = scene.color != output;
+    target = run_tonemapping_pass(rview, target, scene_before_bloom, scene.color, params, is_upscaled);
 
-    run_fxaa_pass(rview, target, output, params);
+    run_fxaa_pass(rview, target, scene.color, params, is_upscaled);
 
     if(is_camera_run)
     {
-        run_ui_pass(scn, camera, rview, output);
-        run_debug_passes(camera, rview, output, params);
+        run_ui_pass(scn, camera, rview, scene.color_depth);
+        run_debug_passes(camera, rview, scene.color, params);
         // Whatever shaders printed this frame (nothing to draw unless one did).
-        shader_print_.draw(output);
+        shader_print_.draw(scene.color);
         // The temporal-stability instrument measures the finished image (the lit frame or the active
         // debug view, before the editor draws its overlays) and must read LAST frame's depth, so it
         // runs before the depth snapshot below.
-        run_temporal_probe_pass(camera, rview, output);
+        run_temporal_probe_pass(camera, rview, scene.color);
+    }
+
+    if(is_upscaled)
+    {
+        upscale_pass::run_params upscale;
+        upscale.input = scene.color;
+        upscale.output = output;
+        upscale.output_depth = scene.output_depth;
+        upscale.input_depth = rview.tex_find("DEPTH");
+        run_upscale_pass(std::move(upscale), params);
     }
 
     // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
@@ -1139,7 +1252,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // GTAO is a fourth consumer: its temporal accumulation reprojects against this depth and
     // treats a missing one as "no history" (raw per-frame noise).
     const bool gtao_active = static_cast<bool>(rview.tex_find("GTAO"));
-    snapshot_prev_depth(rview, viewport_size, hiz_active || gi_active || taa_active || gtao_active);
+    snapshot_prev_depth(rview, render_size, hiz_active || gi_active || taa_active || gtao_active);
 
     // Clear batch collector for this frame
     batch_collector_.clear();
@@ -1649,7 +1762,8 @@ auto deferred::is_velocity_wanted(const run_params& params) const -> bool
 
 void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
                                  const camera& camera,
-                                 gfx::render_view& rview)
+                                 gfx::render_view& rview,
+                                 const usize32_t& render_size)
 {
     if(!velocity_run_active_)
     {
@@ -1667,8 +1781,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
 
     APP_SCOPE_PERF("Rendering/Velocity Pass");
 
-    const auto& viewport_size = camera.get_viewport_size();
-    const auto& fbo = create_or_resize_v_buffer(rview, viewport_size);
+    const auto& fbo = create_or_resize_v_buffer(rview, render_size);
     const auto& gbuffer = rview.fbo_get("GBUFFER");
 
     const auto& view = camera.get_view();
@@ -2321,6 +2434,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                                         const camera& camera,
                                         gfx::render_view& rview,
                                         bool apply_shadows,
+                                        const feature_limits& limits,
                                         delta_t dt) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Direct Lighting Pass");
@@ -2352,7 +2466,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             {
                 return;
             }
-            const auto& light = light_comp_ref.get_light();
+            const auto light = limit_light(light_comp_ref.get_light(), limits);
             auto world_transform = transform_comp_ref.get_transform_global();
             world_transform.reset_scale();
             const bool has_shadows = light.casts_shadows && apply_shadows;
@@ -3287,7 +3401,8 @@ auto deferred::run_taa_pass(const camera& camera,
 auto deferred::run_fxaa_pass(gfx::render_view& rview,
                              const gfx::frame_buffer::ptr& input,
                              const gfx::frame_buffer::ptr& output,
-                             const run_params& rparams) -> gfx::frame_buffer::ptr
+                             const run_params& rparams,
+                             bool is_upscaled) -> gfx::frame_buffer::ptr
 {
     if(!rparams.fill_fxaa_params || rparams.fill_taa_params)
     {
@@ -3303,7 +3418,7 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
 
     rparams.fill_fxaa_params(params);
 
-    if(rparams.fill_hdr_params)
+    if(rparams.fill_hdr_params && !is_upscaled)
     {
         tonemapping_pass::run_params hdr;
         rparams.fill_hdr_params(hdr);
@@ -3312,6 +3427,19 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
     }
 
     return fxaa_pass_.run(rview, params);
+}
+
+void deferred::run_upscale_pass(upscale_pass::run_params params, const run_params& rparams)
+{
+    APP_SCOPE_PERF("Rendering/Upscale Pass");
+    if(rparams.fill_hdr_params)
+    {
+        tonemapping_pass::run_params hdr;
+        rparams.fill_hdr_params(hdr);
+        params.grain_intensity = hdr.config.grain_intensity;
+        params.dithering = hdr.config.dithering;
+    }
+    upscale_pass_.run(params);
 }
 
 auto deferred::update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run)
@@ -3389,7 +3517,8 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& input,
                                     const gfx::frame_buffer::ptr& scene_before_bloom,
                                     const gfx::frame_buffer::ptr& output,
-                                    const run_params& rparams) -> gfx::frame_buffer::ptr
+                                    const run_params& rparams,
+                                    bool is_upscaled) -> gfx::frame_buffer::ptr
 {
     if(!rparams.fill_hdr_params)
     {
@@ -3410,7 +3539,7 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     {
         params.output = output;
     }
-    params.defer_output_noise = fxaa_follows;
+    params.defer_output_noise = fxaa_follows || is_upscaled;
 
     rparams.fill_hdr_params(params);
     params.pre_exposure = get_pre_exposure(rview).value;

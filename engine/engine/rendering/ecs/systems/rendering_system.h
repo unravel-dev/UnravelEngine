@@ -9,6 +9,7 @@
 #include <graphics/debugdraw.h>
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <hpp/optional.hpp>
 #include <hpp/span.hpp>
 
 #include <map>
@@ -17,6 +18,35 @@
 
 namespace unravel
 {
+
+/// Whether a view renders with the project's graphics settings.
+enum class graphics_settings_use : std::uint8_t
+{
+    /// The feature limits and the render scale.
+    project,
+    /// The engine's defaults: an asset preview (a thumbnail) does not depend on the profile the editor previews.
+    none,
+};
+
+/// How the host of a camera view renders it.
+struct view_render_params
+{
+    /// The view shows the game: it draws the screen-space UI into its output. Otherwise only the world-space UI.
+    bool render_screen_space = true;
+    /// The user is editing the scene in this view (pipeline::run_params::is_being_edited).
+    bool is_being_edited = false;
+    /// Whether the view renders with the project's graphics settings.
+    graphics_settings_use settings_use = graphics_settings_use::project;
+    /// The view's own render scale, over the project's graphics.render_scale; empty: the project's, or 1 with
+    /// the engine's defaults.
+    hpp::optional<float> render_scale;
+    /// The size the scene renders at before the render scale; empty: the view's size
+    /// (pipeline::run_params::render_resolution).
+    usize32_t render_resolution{};
+    /// A view whose scene renders at another size than its output also gives the output a depth at its size,
+    /// for overlays drawn over it with the scene's depth (pipeline::run_params::needs_output_depth).
+    bool needs_output_depth = false;
+};
 
 /**
  * @class rendering_system
@@ -59,12 +89,13 @@ public:
     auto release_pipeline_resources(scene& scn) -> bool;
 
     /**
-     * @brief Renders the scene and returns the frame buffer.
+     * @brief Renders every active camera of the scene and returns the last one's frame buffer.
      * @param scn The scene to render.
      * @param dt The delta time.
+     * @param view How the host shows the cameras.
      * @return A shared pointer to the frame buffer containing the rendered scene.
      */
-    auto render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer::ptr;
+    auto render_scene(scene& scn, delta_t dt, const view_render_params& view = {}) -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the scene to the specified output.
@@ -80,12 +111,11 @@ public:
      * @param comp Camera component
      * @param scn The scene to render.
      * @param dt The delta time.
-     * @param render_screen_space If true, render screen-space UI to output; if false, only world-space UI
-     * @param is_being_edited The user is editing the scene in this view (pipeline::run_params::is_being_edited).
+     * @param view How the host shows the camera.
      * @return A shared pointer to the frame buffer containing the rendered scene.
      */
-    auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt,
-                     bool render_screen_space = true, bool is_being_edited = false) -> gfx::frame_buffer::ptr;
+    auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt, const view_render_params& view = {})
+        -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the scene to the specified output.
@@ -94,10 +124,14 @@ public:
      * @param comp Camera component
      * @param scn The scene to render.
      * @param dt The delta time.
-     * @param render_screen_space If true, render screen-space UI to output; if false, only world-space UI
+     * @param view How the host shows the camera.
      */
-    void render_scene(const gfx::frame_buffer::ptr& output, entt::handle camera_ent, camera_component& comp, scene& scn,
-                     delta_t dt, bool render_screen_space = true);
+    void render_scene(const gfx::frame_buffer::ptr& output,
+                      entt::handle camera_ent,
+                      camera_component& comp,
+                      scene& scn,
+                      delta_t dt,
+                      const view_render_params& view = {});
 
     void add_debugdraw_call(const std::function<void(gfx::dd_raii& dd)>& callback);
 

@@ -21,6 +21,9 @@ struct settings_category
     /// Words the search finds the page by, besides its name.
     std::string keywords;
     std::function<void(rtti::context&)> draw;
+    /// How many of the page's settings carry a mark (a profile's overrides), shown beside its name; empty or 0
+    /// for none.
+    std::function<std::size_t()> count_marks;
 };
 
 /**

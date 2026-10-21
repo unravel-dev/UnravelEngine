@@ -32,17 +32,28 @@ auto is_script_key(const std::string& key) -> bool
     return ex::is_format<script>(fs::path(key).extension().generic_string());
 }
 
-auto get_compiled_paths(const std::string& key, const fs::path& protocol_root, const std::set<std::string>& shader_variants)
-    -> std::vector<fs::path>
+auto get_compiled_relative_path(const std::string& key) -> fs::path
 {
     const auto protocol = fs::extract_protocol(fs::path(key)).generic_string();
     const auto data_prefix = get_data_prefix(protocol);
-    if(protocol.empty() || key.compare(0, data_prefix.size(), data_prefix) != 0 || is_script_key(key))
+    if(protocol.empty() || key.compare(0, data_prefix.size(), data_prefix) != 0)
     {
         return {};
     }
-    auto compiled = protocol_root / ex::get_compiled_directory_no_slash() / key.substr(data_prefix.size());
-    compiled += COMPILED_SUFFIX;
+    fs::path relative = key.substr(data_prefix.size());
+    relative += COMPILED_SUFFIX;
+    return relative;
+}
+
+auto get_compiled_paths(const std::string& key, const fs::path& protocol_root, const std::set<std::string>& shader_variants)
+    -> std::vector<fs::path>
+{
+    const auto relative = get_compiled_relative_path(key);
+    if(relative.empty() || is_script_key(key))
+    {
+        return {};
+    }
+    const auto compiled = protocol_root / ex::get_compiled_directory_no_slash() / relative;
     if(!ex::is_format<gfx::shader>(fs::path(key).extension().generic_string()))
     {
         return {compiled};
@@ -120,8 +131,26 @@ auto is_shipped_compiled_file(const fs::path& file, bool with_debug_symbols) -> 
     return !ex::is_format<script>(ex::get_source_path_from_compiled(file).extension().generic_string());
 }
 
+auto get_shipped_variant(const cooked_folders& cooked, const fs::path& relative, const fs::path& compiled_file) -> fs::path
+{
+    for(const auto& folder : cooked)
+    {
+        if(folder.empty())
+        {
+            continue;
+        }
+        auto variant = folder / relative;
+        fs::error_code ec;
+        if(fs::exists(variant, ec))
+        {
+            return variant;
+        }
+    }
+    return compiled_file;
+}
+
 auto collect_pack_inputs(const fs::path& compiled,
-                         const fs::path& cooked,
+                         const cooked_folders& cooked,
                          const fs::path& index,
                          const compiled_file_filter& is_shipped) -> std::vector<fs::pack_input>
 {
@@ -136,9 +165,7 @@ auto collect_pack_inputs(const fs::path& compiled,
         {
             continue;
         }
-        const auto cooked_file = cooked / relative;
-        fs::error_code exists_ec;
-        inputs.push_back({compiled_folder + "/" + relative.generic_string(), fs::exists(cooked_file, exists_ec) ? cooked_file : file});
+        inputs.push_back({compiled_folder + "/" + relative.generic_string(), get_shipped_variant(cooked, relative, file)});
     }
     if(ec)
     {
@@ -180,15 +207,23 @@ void copy_file_or_throw(const fs::path& from, const fs::path& to)
     }
 }
 
-void copy_cooked_or_throw(const fs::path& cooked, const fs::path& destination, const compiled_file_filter& is_shipped)
+void copy_cooked_or_throw(const cooked_folders& cooked, const fs::path& destination, const compiled_file_filter& is_shipped)
 {
-    fs::error_code ec;
-    for(fs::recursive_directory_iterator it(cooked, ec), end; !ec && it != end; it.increment(ec))
+    // The last folder first, so an earlier folder's variant is the one copied last.
+    for(auto folder = cooked.rbegin(); folder != cooked.rend(); ++folder)
     {
-        const auto relative = it->path().lexically_relative(cooked);
-        if(it->is_regular_file(ec) && is_shipped(it->path(), relative))
+        if(folder->empty())
         {
-            copy_file_or_throw(it->path(), destination / relative);
+            continue;
+        }
+        fs::error_code ec;
+        for(fs::recursive_directory_iterator it(*folder, ec), end; !ec && it != end; it.increment(ec))
+        {
+            const auto relative = it->path().lexically_relative(*folder);
+            if(it->is_regular_file(ec) && is_shipped(it->path(), relative))
+            {
+                copy_file_or_throw(it->path(), destination / relative);
+            }
         }
     }
 }

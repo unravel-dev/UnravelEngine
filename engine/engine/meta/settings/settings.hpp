@@ -26,4 +26,13 @@ auto load_from_file_bin(const std::string& absolute_path, settings& obj) -> bool
  */
 auto load_boot_sections_from_file(const std::string& absolute_path, settings& obj) -> bool;
 
+/**
+ * @brief Loads only the asset import defaults of a settings document over `obj`.
+ *
+ * Like @ref load_boot_sections_from_file it never reaches an asset handle, so it can run before the
+ * project's asset database is loaded: the asset compiler needs the defaults for the first compiles.
+ * A document without the section leaves `obj` as it is.
+ */
+auto load_asset_sections_from_file(const std::string& absolute_path, settings::asset_settings& obj) -> bool;
+
 } // namespace unravel

@@ -180,6 +180,42 @@ REFLECT(texture_importer_meta)
             entt::attribute{"pretty_name", "Compression"},
         });
 
+    entt::meta_factory<texture_importer_meta::platform_quality_meta>{}
+        .type("platform_quality_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "platform_quality_meta"},
+            entt::attribute{"pretty_name", "Platform Quality"},
+        })
+        .data<&texture_importer_meta::platform_quality_meta::is_overridden>("is_overridden"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_overridden"},
+            entt::attribute{"pretty_name", "Override"},
+            entt::attribute{"tooltip", "Compile with the quality below on this platform instead of the Default tab's."},
+        })
+        .data<&texture_importer_meta::platform_quality_meta::quality>("quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "quality"},
+            entt::attribute{"pretty_name", "Quality"},
+            entt::attribute{"tooltip", "Project Default here means the default of the profile being deployed."},
+        });
+
+    entt::meta_factory<texture_importer_meta::platforms_meta>{}
+        .type("texture_platforms_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_platforms_meta"},
+            entt::attribute{"pretty_name", "Platforms"},
+        })
+        .data<&texture_importer_meta::platforms_meta::desktop>("desktop"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop"},
+            entt::attribute{"pretty_name", "Desktop"},
+        })
+        .data<&texture_importer_meta::platforms_meta::android>("android"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android"},
+            entt::attribute{"pretty_name", "Android"},
+        });
+
     // Register texture_importer_meta with entt
     entt::meta_factory<texture_importer_meta>{}
         .type("texture_importer_meta"_hs)
@@ -211,6 +247,12 @@ REFLECT(texture_importer_meta)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "quality"},
             entt::attribute{"pretty_name", "Quality"},
+        })
+        .data<&texture_importer_meta::platforms>("platforms"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "platforms"},
+            entt::attribute{"pretty_name", "Platforms"},
+            entt::attribute{"tooltip", "A platform's own quality, used instead of the quality above while it is overridden. Desktop is also what the editor compiles with."},
         });
 }
 
@@ -230,6 +272,38 @@ LOAD(texture_importer_meta::quality_meta)
 LOAD_INSTANTIATE(texture_importer_meta::quality_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(texture_importer_meta::quality_meta, ser20::iarchive_binary_t);
 
+SAVE(texture_importer_meta::platform_quality_meta)
+{
+    try_save(ar, ser20::make_nvp("is_overridden", obj.is_overridden));
+    try_save(ar, ser20::make_nvp("quality", obj.quality));
+}
+SAVE_INSTANTIATE(texture_importer_meta::platform_quality_meta, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(texture_importer_meta::platform_quality_meta, ser20::oarchive_binary_t);
+
+LOAD(texture_importer_meta::platform_quality_meta)
+{
+    try_load(ar, ser20::make_nvp("is_overridden", obj.is_overridden));
+    try_load(ar, ser20::make_nvp("quality", obj.quality));
+}
+LOAD_INSTANTIATE(texture_importer_meta::platform_quality_meta, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(texture_importer_meta::platform_quality_meta, ser20::iarchive_binary_t);
+
+SAVE(texture_importer_meta::platforms_meta)
+{
+    try_save(ar, ser20::make_nvp("desktop", obj.desktop));
+    try_save(ar, ser20::make_nvp("android", obj.android));
+}
+SAVE_INSTANTIATE(texture_importer_meta::platforms_meta, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(texture_importer_meta::platforms_meta, ser20::oarchive_binary_t);
+
+LOAD(texture_importer_meta::platforms_meta)
+{
+    try_load(ar, ser20::make_nvp("desktop", obj.desktop));
+    try_load(ar, ser20::make_nvp("android", obj.android));
+}
+LOAD_INSTANTIATE(texture_importer_meta::platforms_meta, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(texture_importer_meta::platforms_meta, ser20::iarchive_binary_t);
+
 SAVE(texture_importer_meta)
 {
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
@@ -238,6 +312,7 @@ SAVE(texture_importer_meta)
     try_save(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
     try_save(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
     try_save(ar, ser20::make_nvp("quality", obj.quality));
+    try_save(ar, ser20::make_nvp("platforms", obj.platforms));
 }
 SAVE_INSTANTIATE(texture_importer_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(texture_importer_meta, ser20::oarchive_binary_t);
@@ -250,6 +325,7 @@ LOAD(texture_importer_meta)
     try_load(ar, ser20::make_nvp("generate_mipmaps", obj.generate_mipmaps));
     try_load(ar, ser20::make_nvp("invert_normal_y", obj.invert_normal_y));
     try_load(ar, ser20::make_nvp("quality", obj.quality));
+    try_load(ar, ser20::make_nvp("platforms", obj.platforms));
 }
 LOAD_INSTANTIATE(texture_importer_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(texture_importer_meta, ser20::iarchive_binary_t);

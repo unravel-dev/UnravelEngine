@@ -128,6 +128,10 @@ auto save_manifest(const fs::path& manifest_path, const asset_manifest& manifest
         success &= try_save(archive, ser20::make_nvp("source_fingerprint", manifest.source_fingerprint));
         success &= try_save(archive, ser20::make_nvp("format_version", manifest.format_version));
         success &= try_save(archive, ser20::make_nvp("fingerprint_version", manifest.fingerprint_version));
+        if(!manifest.compile_parameters.empty())
+        {
+            success &= try_save(archive, ser20::make_nvp("compile_parameters", manifest.compile_parameters));
+        }
         return success;
     }
     catch(const std::exception& e)
@@ -151,6 +155,7 @@ auto load_manifest(const fs::path& manifest_path, asset_manifest& manifest) -> b
         try_load(archive, ser20::make_nvp("source_fingerprint", manifest.source_fingerprint));
         try_load(archive, ser20::make_nvp("format_version", manifest.format_version));
         try_load(archive, ser20::make_nvp("fingerprint_version", manifest.fingerprint_version));
+        try_load(archive, ser20::make_nvp("compile_parameters", manifest.compile_parameters));
         return true;
     }
     catch(const std::exception& e)

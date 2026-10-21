@@ -1751,6 +1751,20 @@ auto editor_actions::open_project_settings(rtti::context& ctx, const std::string
     return true;
 }
 
+auto editor_actions::open_deploy_window(rtti::context& ctx, std::string* error) -> bool
+{
+    if(!ctx.has<hub>() || !ctx.get_cached<project_manager>().has_open_project())
+    {
+        if(error)
+        {
+            *error = "No open project";
+        }
+        return false;
+    }
+    ctx.get_cached<hub>().get_panels().get_deploy_panel().show(true);
+    return true;
+}
+
 auto editor_actions::get_recent_logs(rtti::context& ctx,
                                      level::level_enum min_level,
                                      size_t max_count,

@@ -215,6 +215,14 @@ void settings_view::draw_category_row(std::size_t index)
                           ImFloor(rect.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f));
     draw_list->PushClipRect(rect.Min, rect.Max, true);
     draw_list->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), category.name.c_str());
+    const std::size_t marks = category.count_marks ? category.count_marks() : 0;
+    if(marks > 0)
+    {
+        const std::string count = std::to_string(marks);
+        const float count_width = ImGui::CalcTextSize(count.c_str()).x;
+        const ImVec2 count_pos(rect.Max.x - to_pixels(SETTINGS_ROW_PADDING_X) - count_width, text_pos.y);
+        draw_list->AddText(count_pos, get_accent_color(), count.c_str());
+    }
     draw_list->PopClipRect();
 }
 

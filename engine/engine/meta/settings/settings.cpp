@@ -386,6 +386,121 @@ LOAD_INLINE(settings::graphics_settings::particle_settings)
     try_load(ar, ser20::make_nvp("max_lighting", obj.max_lighting));
 }
 
+REFLECT_INLINE(anti_aliasing_limit)
+{
+    entt::meta_factory<anti_aliasing_limit>{}
+        .type("anti_aliasing_limit"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "anti_aliasing_limit"},
+            entt::attribute{"pretty_name", "Anti-Aliasing Limit"},
+        })
+        .data<anti_aliasing_limit::none>("none"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "none"},
+            entt::attribute{"pretty_name", "None"},
+        })
+        .data<anti_aliasing_limit::fxaa>("fxaa"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fxaa"},
+            entt::attribute{"pretty_name", "FXAA"},
+        })
+        .data<anti_aliasing_limit::temporal>("temporal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "temporal"},
+            entt::attribute{"pretty_name", "Temporal"},
+        });
+}
+
+REFLECT_INLINE(feature_limits)
+{
+    entt::meta_factory<feature_limits>{}
+        .type("feature_limits"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "feature_limits"},
+            entt::attribute{"pretty_name", "Allowed Features"},
+        })
+        .data<&feature_limits::global_illumination>("global_illumination"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "global_illumination"},
+            entt::attribute{"pretty_name", "Global Illumination"},
+            entt::attribute{"tooltip", "Allow global illumination. When off, scenes are lit by their probes and the sky only."},
+        })
+        .data<&feature_limits::screen_space_reflections>("screen_space_reflections"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "screen_space_reflections"},
+            entt::attribute{"pretty_name", "Screen Space Reflections"},
+            entt::attribute{"tooltip", "Allow screen space reflections."},
+        })
+        .data<&feature_limits::screen_space_indirect_lighting>("screen_space_indirect_lighting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "screen_space_indirect_lighting"},
+            entt::attribute{"pretty_name", "Screen Space Indirect Lighting"},
+            entt::attribute{"tooltip", "Allow screen space indirect lighting."},
+        })
+        .data<&feature_limits::ambient_occlusion>("ambient_occlusion"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ambient_occlusion"},
+            entt::attribute{"pretty_name", "Ambient Occlusion"},
+            entt::attribute{"tooltip", "Allow screen space ambient occlusion (GTAO and ASSAO)."},
+        })
+        .data<&feature_limits::bloom>("bloom"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bloom"},
+            entt::attribute{"pretty_name", "Bloom"},
+            entt::attribute{"tooltip", "Allow bloom."},
+        })
+        .data<&feature_limits::max_anti_aliasing>("max_anti_aliasing"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_anti_aliasing"},
+            entt::attribute{"pretty_name", "Max Anti-Aliasing"},
+            entt::attribute{"tooltip", "The most expensive anti-aliasing a view may use. With FXAA, views asking for temporal AA get FXAA."},
+        })
+        .data<&feature_limits::max_shadow_resolution>("max_shadow_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_shadow_resolution"},
+            entt::attribute{"pretty_name", "Max Shadow Resolution"},
+            entt::attribute{"tooltip", "The largest shadow map a light may use. Lights asking for larger ones render at this resolution."},
+        })
+        .data<&feature_limits::soft_shadows>("soft_shadows"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "soft_shadows"},
+            entt::attribute{"pretty_name", "Soft Shadows"},
+            entt::attribute{"tooltip", "Allow soft shadows (PCSS, VSM and ESM). When off, those lights filter their shadows with PCF."},
+        })
+        .data<&feature_limits::contact_shadows>("contact_shadows"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "contact_shadows"},
+            entt::attribute{"pretty_name", "Contact Shadows"},
+            entt::attribute{"tooltip", "Allow contact shadows."},
+        });
+}
+
+SAVE_INLINE(feature_limits)
+{
+    try_save(ar, ser20::make_nvp("global_illumination", obj.global_illumination));
+    try_save(ar, ser20::make_nvp("screen_space_reflections", obj.screen_space_reflections));
+    try_save(ar, ser20::make_nvp("screen_space_indirect_lighting", obj.screen_space_indirect_lighting));
+    try_save(ar, ser20::make_nvp("ambient_occlusion", obj.ambient_occlusion));
+    try_save(ar, ser20::make_nvp("bloom", obj.bloom));
+    try_save(ar, ser20::make_nvp("max_anti_aliasing", obj.max_anti_aliasing));
+    try_save(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
+    try_save(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
+    try_save(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
+}
+
+LOAD_INLINE(feature_limits)
+{
+    try_load(ar, ser20::make_nvp("global_illumination", obj.global_illumination));
+    try_load(ar, ser20::make_nvp("screen_space_reflections", obj.screen_space_reflections));
+    try_load(ar, ser20::make_nvp("screen_space_indirect_lighting", obj.screen_space_indirect_lighting));
+    try_load(ar, ser20::make_nvp("ambient_occlusion", obj.ambient_occlusion));
+    try_load(ar, ser20::make_nvp("bloom", obj.bloom));
+    try_load(ar, ser20::make_nvp("max_anti_aliasing", obj.max_anti_aliasing));
+    try_load(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
+    try_load(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
+    try_load(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
+}
+
 REFLECT_INLINE(settings::graphics_settings)
 {
     entt::meta_factory<settings::graphics_settings>{}
@@ -409,6 +524,28 @@ REFLECT_INLINE(settings::graphics_settings)
                             "Draw the meshes that share a mesh and a material with one instanced draw call. "
                             "Skinned meshes are always drawn one by one."},
         })
+        .data<&settings::graphics_settings::render_scale>("render_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "render_scale"},
+            entt::attribute{"pretty_name", "Render Scale"},
+            entt::attribute{"tooltip",
+                            "The fraction of a game view's size its scene renders at. The finished scene is "
+                            "upscaled to the view's size before the screen-space UI, and every scene pass "
+                            "shades fewer pixels. The editor's Game and Scene views can use it, a scale of "
+                            "their own or none, from their toolbars."},
+            entt::attribute{"min", MIN_RENDER_SCALE},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", RENDER_SCALE_STEP},
+        })
+        .data<&settings::graphics_settings::limits>("limits"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "limits"},
+            entt::attribute{"pretty_name", "Allowed Features"},
+            entt::attribute{"tooltip",
+                            "The rendering features scenes may use, and the most expensive versions of them. Where "
+                            "these do not allow what a camera and its volumes ask for, the effect is turned off or "
+                            "lowered. Scenes themselves are not changed."},
+        })
         .data<&settings::graphics_settings::eviction>("eviction"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "eviction"},
@@ -429,6 +566,8 @@ SAVE_INLINE(settings::graphics_settings)
     try_save(ar, ser20::make_nvp("static_mesh_batching", obj.static_mesh_batching));
     try_save(ar, ser20::make_nvp("eviction", obj.eviction));
     try_save(ar, ser20::make_nvp("particles", obj.particles));
+    try_save(ar, ser20::make_nvp("render_scale", obj.render_scale));
+    try_save(ar, ser20::make_nvp("limits", obj.limits));
 }
 
 LOAD_INLINE(settings::graphics_settings)
@@ -437,6 +576,8 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("static_mesh_batching", obj.static_mesh_batching));
     try_load(ar, ser20::make_nvp("eviction", obj.eviction));
     try_load(ar, ser20::make_nvp("particles", obj.particles));
+    try_load(ar, ser20::make_nvp("render_scale", obj.render_scale));
+    try_load(ar, ser20::make_nvp("limits", obj.limits));
 }
 
 REFLECT_INLINE(gi_project_settings::atlas_size)
@@ -957,6 +1098,60 @@ LOAD_INLINE(settings::resolution_settings)
     try_load(ar, ser20::make_nvp("current_resolution", obj.current_resolution));
 }
 
+REFLECT_INLINE(target_platform)
+{
+    entt::meta_factory<target_platform>{}
+        .type("target_platform"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "target_platform"},
+            entt::attribute{"pretty_name", "Platform"},
+        })
+        .data<target_platform::desktop>("desktop"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop"},
+            entt::attribute{"pretty_name", "Desktop"},
+        })
+        .data<target_platform::android>("android"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android"},
+            entt::attribute{"pretty_name", "Android"},
+        });
+}
+
+REFLECT_INLINE(settings::build_settings)
+{
+    entt::meta_factory<settings::build_settings>{}
+        .type("build_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "build_settings"},
+            entt::attribute{"pretty_name", "Build"},
+        })
+        .data<&settings::build_settings::profile>("profile"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "profile"},
+            entt::attribute{"pretty_name", "Profile"},
+            entt::attribute{"tooltip", "The settings profile the build was made from."},
+        })
+        .data<&settings::build_settings::platform>("platform"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "platform"},
+            entt::attribute{"pretty_name", "Platform"},
+            entt::attribute{"tooltip", "The platform the build runs on."},
+        });
+}
+
+SAVE_INLINE(settings::build_settings)
+{
+    try_save(ar, ser20::make_nvp("profile", obj.profile));
+    try_save(ar, ser20::make_nvp("platform", obj.platform));
+}
+
+LOAD_INLINE(settings::build_settings)
+{
+    try_load(ar, ser20::make_nvp("profile", obj.profile));
+    try_load(ar, ser20::make_nvp("platform", obj.platform));
+}
+
 REFLECT_INLINE(settings::resolution_settings::resolution)
 {
     entt::meta_factory<settings::resolution_settings::resolution>{}
@@ -1086,7 +1281,12 @@ SAVE(settings)
     try_save(ar, ser20::make_nvp("layer", obj.layer));
     try_save(ar, ser20::make_nvp("input", obj.input));
     try_save(ar, ser20::make_nvp("physics", obj.physics));
-    try_save(ar, ser20::make_nvp("resolutions", obj.resolution));
+    try_save(ar, ser20::make_nvp("resolution", obj.resolution));
+    // Only a deploy names a build; the project's own settings carry no build section.
+    if(!obj.build.profile.empty())
+    {
+        try_save(ar, ser20::make_nvp("build", obj.build));
+    }
 }
 SAVE_INSTANTIATE(settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(settings, ser20::oarchive_binary_t);
@@ -1106,7 +1306,12 @@ LOAD(settings)
     {
         try_load(ar, ser20::make_nvp("time", obj.physics));
     }
-    try_load(ar, ser20::make_nvp("resolutions", obj.resolution));
+    // Prefer "resolution", the property's name; fall back to legacy "resolutions".
+    if(!try_load(ar, ser20::make_nvp("resolution", obj.resolution)))
+    {
+        try_load(ar, ser20::make_nvp("resolutions", obj.resolution));
+    }
+    try_load(ar, ser20::make_nvp("build", obj.build));
 }
 LOAD_INSTANTIATE(settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(settings, ser20::iarchive_binary_t);
@@ -1188,6 +1393,38 @@ auto load_boot_sections_from_file(const std::string& absolute_path, settings& ob
     }
     obj.graphics = sections.graphics;
     obj.physics = sections.physics;
+    return true;
+}
+
+/**
+ * @brief Load-only view of the import defaults of a settings document; it never reaches an asset
+ * handle, for the same reason as settings_boot_sections.
+ */
+struct settings_asset_sections
+{
+    settings::asset_settings assets{};
+};
+
+LOAD_INLINE(settings_asset_sections)
+{
+    try_load(ar, ser20::make_nvp("assets", obj.assets));
+}
+
+auto load_asset_sections_from_file(const std::string& absolute_path, settings::asset_settings& obj) -> bool
+{
+    std::ifstream stream(absolute_path);
+    if(!stream.good())
+    {
+        return false;
+    }
+    settings_asset_sections sections{};
+    sections.assets = obj;
+    auto ar = ser20::create_iarchive_associative(stream);
+    if(!try_load(ar, ser20::make_nvp("settings", sections)))
+    {
+        return false;
+    }
+    obj = sections.assets;
     return true;
 }
 

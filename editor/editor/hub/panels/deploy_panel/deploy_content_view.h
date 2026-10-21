@@ -2,6 +2,8 @@
 
 #include <context/context.hpp>
 
+#include "deploy_settings_editor.h"
+
 #include <deploy/content.h>
 #include <deploy/content_tree.h>
 #include <engine/threading/threader.h>
@@ -29,11 +31,15 @@ namespace unravel
 class deploy_content_view
 {
 public:
-    void draw(rtti::context& ctx);
+    /// Draws the content of the deploy settings `editor` shows, and edits them through it.
+    void draw(rtti::context& ctx, deploy_settings_editor& editor);
     /// Detects again the next time the tab shows: the window was reopened, the project may have changed.
     void invalidate();
 
 private:
+    /// The startup scene of the deploy profile.
+    auto get_shipped_settings(rtti::context& ctx) const -> settings;
+    auto get_startup_scene(rtti::context& ctx) const -> std::string;
     void update_content(rtti::context& ctx);
     void start_detection(rtti::context& ctx, const std::string& signature);
     void poll_detection();
@@ -75,6 +81,8 @@ private:
     std::chrono::steady_clock::time_point detected_at_{};
     bool is_invalidated_{true};
 
+    /// The editor the frame's draw shows; set by draw.
+    deploy_settings_editor* editor_{};
     deployment::content_tree tree_;
     deployment::tree_view view_;
     std::unordered_set<std::string> open_folders_;

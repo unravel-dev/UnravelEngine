@@ -100,51 +100,79 @@ auto is_valid_release_name(const std::string& name) -> bool
            !is_device_name(name);
 }
 
-auto get_release_folder(const fs::path& project_root, const std::string& name) -> fs::path
+auto get_profile_releases_folder(const fs::path& project_root, const std::string& profile) -> fs::path
 {
-    return project_root / RELEASES_FOLDER / name;
+    return project_root / RELEASES_FOLDER / fs::from_utf8_string(profile);
 }
 
-auto get_release_pack(const fs::path& project_root, const std::string& name, const std::string& protocol) -> fs::path
+auto get_release_folder(const fs::path& releases, const std::string& name) -> fs::path
 {
-    return get_release_folder(project_root, name) / protocol / ex::get_pack_file_name();
+    return releases / name;
 }
 
-auto is_kept_release(const fs::path& project_root, const std::string& name) -> bool
+auto get_release_pack(const fs::path& releases, const std::string& name, const std::string& protocol) -> fs::path
+{
+    return get_release_folder(releases, name) / protocol / ex::get_pack_file_name();
+}
+
+auto is_kept_release(const fs::path& releases, const std::string& name) -> bool
 {
     fs::error_code ec;
     return is_valid_release_name(name) && std::all_of(PACKED_PROTOCOLS.begin(),
                                                       PACKED_PROTOCOLS.end(),
                                                       [&](const char* protocol)
                                                       {
-                                                          return fs::exists(get_release_pack(project_root, name, protocol), ec);
+                                                          return fs::exists(get_release_pack(releases, name, protocol), ec);
                                                       });
 }
 
-auto list_releases(const fs::path& project_root) -> std::vector<std::string>
+auto list_releases(const fs::path& releases) -> std::vector<std::string>
 {
-    std::vector<std::string> releases;
+    std::vector<std::string> names;
     fs::error_code ec;
-    for(const auto& entry : fs::directory_iterator(project_root / RELEASES_FOLDER, ec))
+    for(const auto& entry : fs::directory_iterator(releases, ec))
     {
         const auto name = entry.path().filename().string();
-        if(entry.is_directory(ec) && is_kept_release(project_root, name))
+        if(entry.is_directory(ec) && is_kept_release(releases, name))
         {
-            releases.push_back(name);
+            names.push_back(name);
         }
     }
-    std::sort(releases.begin(), releases.end());
-    return releases;
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
-auto keep_release(const fs::path& project_root, const fs::path& deploy_location, const std::string& name) -> result
+auto move_releases_into_profile(const fs::path& project_root, const std::string& profile) -> result
+{
+    const auto old_releases = project_root / RELEASES_FOLDER;
+    const auto names = list_releases(old_releases);
+    if(names.empty())
+    {
+        return {};
+    }
+    const auto destination = get_profile_releases_folder(project_root, profile);
+    fs::error_code ec;
+    fs::create_directories(destination, ec);
+    for(const auto& name : names)
+    {
+        fs::rename(get_release_folder(old_releases, name), get_release_folder(destination, name), ec);
+        if(ec)
+        {
+            return result::failure(fmt::format("Moving release {} into the releases of profile {} failed: {}", name, profile, ec.message()));
+        }
+    }
+    APPLOG_INFO("Moved {} kept release(s) into the releases of profile {}", names.size(), profile);
+    return {};
+}
+
+auto keep_release(const fs::path& releases, const fs::path& deploy_location, const std::string& name) -> result
 {
     if(!is_valid_release_name(name))
     {
         return result::failure(name.empty() ? "Set the product version, or give the release a name, to keep it."
                                             : fmt::format("'{}' cannot name a release folder.", name));
     }
-    const auto release = get_release_folder(project_root, name);
+    const auto release = get_release_folder(releases, name);
     fs::error_code ec;
     if(fs::exists(release, ec))
     {
@@ -158,7 +186,7 @@ auto keep_release(const fs::path& project_root, const fs::path& deploy_location,
     {
         bool is_copied = false;
         if(!fs::copy_file_if_changed(get_deployed_pack(deploy_location, protocol),
-                                     get_release_pack(project_root, name, protocol),
+                                     get_release_pack(releases, name, protocol),
                                      is_copied,
                                      ec))
         {
@@ -171,14 +199,14 @@ auto keep_release(const fs::path& project_root, const fs::path& deploy_location,
     return {};
 }
 
-auto remove_release(const fs::path& project_root, const std::string& name) -> result
+auto remove_release(const fs::path& releases, const std::string& name) -> result
 {
-    const auto releases = list_releases(project_root);
-    if(std::find(releases.begin(), releases.end(), name) == releases.end())
+    const auto names = list_releases(releases);
+    if(std::find(names.begin(), names.end(), name) == names.end())
     {
         return result::failure(fmt::format("No release named '{}' is kept.", name));
     }
-    const auto release = get_release_folder(project_root, name);
+    const auto release = get_release_folder(releases, name);
     fs::error_code ec;
     fs::remove_all(release, ec);
     if(ec)

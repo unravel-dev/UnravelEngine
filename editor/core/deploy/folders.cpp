@@ -1,5 +1,7 @@
 #include "folders.h"
 #include "files.h"
+#include "profile.h"
+#include "profile_cache.h"
 #include "releases.h"
 
 #include <engine/assets/impl/asset_extensions.h>
@@ -7,6 +9,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 
 namespace unravel::deployment
 {
@@ -81,6 +84,8 @@ auto get_managed_project_folder(const fs::path& path, const fs::path& project_ro
                                    PROJECT_DEPLOY_SETTINGS_FOLDER,
                                    PROJECT_EDITOR_FOLDER,
                                    RELEASES_FOLDER,
+                                   PROFILES_FOLDER,
+                                   CACHE_FOLDER,
                                    SCRIPT_BUILD_FOLDER};
     const auto top = fs::make_path_key(relative.begin()->generic_string());
     const auto found = std::find_if(std::begin(managed),
@@ -90,6 +95,46 @@ auto get_managed_project_folder(const fs::path& path, const fs::path& project_ro
                                         return fs::make_path_key(folder) == top;
                                     });
     return found == std::end(managed) ? std::string{} : *found;
+}
+
+auto is_same_folder_name(const std::string& lhs, const std::string& rhs) -> bool
+{
+    return fs::make_path_key(lhs) == fs::make_path_key(rhs);
+}
+
+auto read_whole_file(const fs::path& file, std::string& out) -> bool
+{
+    out.clear();
+    std::ifstream stream(file, std::ios::binary);
+    if(!stream.good())
+    {
+        return false;
+    }
+    out.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    return !stream.bad();
+}
+
+void rename_folder(const fs::path& from, const fs::path& to, fs::error_code& ec)
+{
+    ec.clear();
+    if(fs::make_path_key(from.generic_string()) != fs::make_path_key(to.generic_string()))
+    {
+        fs::rename(from, to, ec);
+        return;
+    }
+    auto through = to;
+    through += ".renaming";
+    fs::rename(from, through, ec);
+    if(ec)
+    {
+        return;
+    }
+    fs::rename(through, to, ec);
+    if(ec)
+    {
+        fs::error_code undo_ec;
+        fs::rename(through, from, undo_ec);
+    }
 }
 
 auto is_executable_in_use(const fs::path& executable) -> bool

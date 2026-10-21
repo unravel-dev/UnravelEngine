@@ -8,6 +8,7 @@
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
 #include "../panel_toolbar.h"
+#include "../view_render_scale.h"
 #include "../visualization_menu.h"
 
 namespace unravel
@@ -127,6 +128,9 @@ private:
     void begin_camera_orbit(const editing_manager& em);
     void draw_camera_fly_speed_hint(const ImVec2& size, const ImVec2& pos);
     void setup_camera_viewport(camera_component& camera_comp, const ImVec2& size, const ImVec2& pos);
+    /// The resolution the scene renders at: the preset's pixels; empty for the view's size, with an aspect-only
+    /// preset or while a capture forces the view's size.
+    auto get_render_resolution(rtti::context& ctx) const -> usize32_t;
     void draw_scene_viewport(rtti::context& ctx, const ImVec2& size, const ImVec2& pos);
 
     // Handle prefab mode changes
@@ -136,6 +140,8 @@ private:
     int visualize_passes_{-1};
     float visualize_scale_{1.0f};
     int current_resolution_index_{0};
+    /// The render scale the scene renders at in this view: full resolution until the user picks another.
+    view_render_scale::state render_scale_{view_render_scale::source::full};
     uint32_t forced_render_width_{0};
     uint32_t forced_render_height_{0};
     scene panel_scene_{"scene_panel"};

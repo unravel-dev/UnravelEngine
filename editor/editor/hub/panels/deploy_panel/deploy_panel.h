@@ -4,18 +4,27 @@
 #include <context/context.hpp>
 
 #include <deploy/deploy_settings.h>
+#include <deploy/result.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/deploy/deploy_preflight.h>
 
 #include "deploy_content_view.h"
+#include "deploy_settings_editor.h"
 
+#include <editor/hub/panels/inspector_panel/inspectors/property_override_view.h>
+
+#include <array>
+#include <initializer_list>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
 namespace unravel
 {
+namespace deployment
+{
+class project_profiles;
+} // namespace deployment
 
 class imgui_panels;
 
@@ -23,6 +32,9 @@ class imgui_panels;
  * @brief The Deploy Project window: tabs for what the game is and where it goes (Build), what it
  * ships (Content) and the releases it patches (Releases); under them, always in view, what still
  * keeps it from deploying, the steps of the deploy while it runs, and the buttons.
+ *
+ * It deploys one settings profile at a time, the deploy profile, chosen in the Build tab. The settings
+ * every profile shares are edited for all of them, or as overrides of the deploy profile.
  */
 class deploy_panel
 {
@@ -66,8 +78,19 @@ private:
     /// A tab's body: as tall as its content between a floor and a share of the screen, scrolling past it.
     void draw_tab_body(rtti::context& ctx, tab_drawer draw);
     void draw_build_tab(rtti::context& ctx);
-    /// The Build tab's left column: the product, the deploy folder and running the game, packaging.
+    /// The Build tab's left column: the product and the deploy folder, then the deploy settings.
     void draw_common_settings(rtti::context& ctx);
+    /// The product settings every profile builds from, marked where the deploy profile overrides them.
+    void draw_product_settings(rtti::context& ctx);
+    /// What project settings drawn here are marked with: the deploy profile's overrides of them.
+    auto make_product_marks(rtti::context& ctx) -> property_override_marks;
+    /// The switch between the deploy settings every profile shares and the deploy profile's overrides of them.
+    void draw_edit_target(rtti::context& ctx);
+    /// What deploy settings are marked with: the deploy profile's overrides, owned while they are edited.
+    auto make_deploy_marks(rtti::context& ctx) -> property_override_marks;
+    /// The deploy settings' properties `names`, in rows as the inspector draws them, marked where the deploy
+    /// profile overrides them; committed once an edit is finished.
+    void inspect_deploy_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names);
     /// No deploy folder is set: says so, with a button that sets the project's own (.deploy).
     void draw_missing_location_notice(rtti::context& ctx);
     void draw_content_tab(rtti::context& ctx);
@@ -75,12 +98,18 @@ private:
     /// Patch Against Release as a pick of the kept releases. @return True when the pick changed.
     auto draw_patch_release_picker(rtti::context& ctx) -> bool;
     void draw_kept_releases(rtti::context& ctx);
-    /// A tab per platform: the selected one is what the deploy builds for, and shows its settings.
-    void draw_platform_tabs(rtti::context& ctx);
-    /// The desktop settings: the player and its libraries.
+    /// The Build tab's right column: the deploy profile, with its platform's settings.
+    void draw_profile_section(rtti::context& ctx);
+    /// The deploy profile as a pick of the project's profiles, with New, Rename and Delete.
+    void draw_profile_picker(rtti::context& ctx);
+    void draw_new_profile_popup(rtti::context& ctx);
+    void draw_rename_profile_popup(rtti::context& ctx);
+    /// What a desktop profile builds: the player.
     void draw_desktop_section(rtti::context& ctx);
-    /// The Android settings: the device, the game's id and version, its orientation and signing.
+    /// The Android settings: the device, the game's id and version, its orientation, signing and textures.
     void draw_android_section(rtti::context& ctx);
+    /// The deploy profile's Android settings `names`, in rows; saved with the profile once an edit is finished.
+    void inspect_android_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names);
     /// The device Deploy and Run installs on, as a pick of the devices adb lists. @return True when the pick changed.
     auto draw_android_device_picker(rtti::context& ctx) -> bool;
     /// Run Last Build, Follow Log, Clear Data and Uninstall for the game on the chosen device.
@@ -92,6 +121,8 @@ private:
     void keep_release(rtti::context& ctx);
     void remove_release(rtti::context& ctx, const std::string& name);
     void refresh_releases();
+    /// Shows the outcome of a profile action under the profile picker.
+    void set_profile_message(const deployment::result& outcome, const std::string& success);
 
     imgui_panels* parent_{};
     bool show_request_{};
@@ -102,7 +133,9 @@ private:
     /// What keeps the project from deploying, checked again a moment after the settings change.
     deployment::problems_cache problems_;
     deploy_content_view content_view_;
-    /// The kept releases, read when the Releases tab comes into view, a release is kept or the picker opens.
+    deploy_settings_editor settings_editor_;
+    /// The kept releases of the deploy profile, read when the Releases tab comes into view, a release is
+    /// kept or the picker opens.
     std::vector<kept_release> releases_;
     /// The frame the Releases tab was last drawn in: a tab drawn again after a gap reads the releases anew.
     int releases_tab_frame_{-1};
@@ -111,9 +144,32 @@ private:
     bool is_release_message_error_{};
     /// Whether the Android devices were listed since the window opened.
     bool has_listed_android_devices_{};
-    /// The platform whose tab the Build tab showed last; empty before it was drawn.
-    std::optional<deploy_platform> shown_platform_;
     /// The Android install conflicts already shown: a new one opens the window.
     std::uint32_t seen_install_conflicts_{};
+    /// The longest profile name the popups take, with its terminating zero.
+    static constexpr std::size_t PROFILE_NAME_CAPACITY = 128;
+    /// A profile name typed in a popup, and why the profiles do not take it: an error shown under the field,
+    /// checked again when the name changes.
+    struct profile_name_field
+    {
+        std::array<char, PROFILE_NAME_CAPACITY> text{};
+        std::string checked;
+        std::string error;
+
+        /// Checks the name once it changes: whether `profiles` take it, for a rename of `renamed` when set.
+        void check(const deployment::project_profiles& profiles, const std::string& renamed = {});
+    };
+    /// The New Profile popup's fields.
+    profile_name_field new_profile_name_;
+    target_platform new_profile_platform_{target_platform::desktop};
+    /// The profile the new one copies; empty: the platform's starting values.
+    std::string new_profile_source_;
+    /// The Rename Profile popup's field.
+    profile_name_field rename_profile_name_;
+    /// What the last profile action did, shown under the profile picker.
+    std::string profile_message_;
+    bool is_profile_message_error_{};
+    /// Why the last revert of a product setting failed, shown under them.
+    std::string product_error_;
 };
 } // namespace unravel

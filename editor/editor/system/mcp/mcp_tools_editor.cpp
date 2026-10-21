@@ -722,6 +722,24 @@ void register_editor_tools(mcp_tool_registry& registry)
          .idempotent = true});
 
     registry.add(
+        {.name = "editor_open_deploy",
+         .description = "Open the Deploy window, as the header's Deploy button does, for a user who should see it. "
+                        "Deploying itself needs no window: deploy_get_state, deploy_set_settings and project_deploy.",
+         .input_schema_json = empty_object_schema(),
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             {
+                 std::string error;
+                 if(!editor_actions::open_deploy_window(ctx, &error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 return {.text = R"({"opened":true})", .is_error = false};
+             },
+         .mutates_scene = false,
+         .idempotent = true});
+
+    registry.add(
         {.name = "window_request_focus",
          .description =
              "Raise and focus the editor's OS window, for a user who should see it. Asset changes are picked up "

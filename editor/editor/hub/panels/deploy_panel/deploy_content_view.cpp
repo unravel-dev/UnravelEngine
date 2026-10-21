@@ -2,6 +2,7 @@
 #include "deploy_panel_widgets.h"
 
 #include <deploy/keys.h>
+#include <deploy/profile.h>
 #include <editor/assets/asset_icons.h>
 #include <editor/deploy/deploy_preflight.h>
 #include <editor/editing/editor_actions.h>
@@ -57,11 +58,11 @@ constexpr ImU32 ADDED_COLOR = IM_COL32(110, 200, 130, 255);
  * @brief The project's scenes that are not in the build yet - neither the startup scene nor listed - and
  * whose path passes `search` (null: every one), by path.
  */
-auto find_scenes_outside_build(rtti::context& ctx, const ImGuiTextFilter* search) -> std::vector<asset_handle<scene_prefab>>
+auto find_scenes_outside_build(rtti::context& ctx,
+                               const deploy_settings& params,
+                               const std::string& startup_scene,
+                               const ImGuiTextFilter* search) -> std::vector<asset_handle<scene_prefab>>
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    const auto& params = pm.get_deploy_settings();
-    const auto startup_scene = pm.get_settings().standalone.startup_scene.id();
     const std::string project_root = std::string(deployment::CONTENT_PROTOCOL) + ":/";
     auto scenes = ctx.get_cached<asset_manager>().get_assets_with_predicate<scene_prefab>(
         [&](const asset_handle<scene_prefab>& scene)
@@ -115,11 +116,12 @@ auto with_alpha(ImU32 color, float alpha) -> ImU32
 }
 
 /// What the content is detected from: when it changes, the content is stale.
-auto make_source_signature(rtti::context& ctx) -> std::string
+/// What the walk depends on besides the assets: the project, the shipped settings (their startup scene and
+/// handles) and the scenes the deploy names.
+auto make_source_signature(const deploy_settings& params, const std::string& settings_document) -> std::string
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    std::string signature = deployment::get_project_root().generic_string() + "|" + pm.get_settings().standalone.startup_scene.id();
-    for(const auto& scene : pm.get_deploy_settings().deploy_scenes)
+    std::string signature = deployment::get_project_root().generic_string() + "|" + settings_document;
+    for(const auto& scene : params.deploy_scenes)
     {
         signature += "|" + scene;
     }
@@ -217,13 +219,24 @@ void deploy_content_view::invalidate()
     is_invalidated_ = true;
 }
 
-void deploy_content_view::draw(rtti::context& ctx)
+auto deploy_content_view::get_shipped_settings(rtti::context& ctx) const -> settings
 {
+    return ctx.get_cached<project_manager>().get_profile_settings(editor_->get_profile());
+}
+
+auto deploy_content_view::get_startup_scene(rtti::context& ctx) const -> std::string
+{
+    return get_shipped_settings(ctx).standalone.startup_scene.id();
+}
+
+void deploy_content_view::draw(rtti::context& ctx, deploy_settings_editor& editor)
+{
+    editor_ = &editor;
     update_content(ctx);
     view_.search = search_.InputBuf;
     if(content_ != nullptr)
     {
-        tree_.update(ctx.get_cached<project_manager>().get_deploy_settings(), view_);
+        tree_.update(editor_->get(), view_);
     }
     draw_scenes(ctx);
     widgets::draw_gap(widgets::SECTION_GAP);
@@ -242,7 +255,8 @@ void deploy_content_view::update_content(rtti::context& ctx)
         content_.reset();
         tree_ = {};
     }
-    const auto signature = make_source_signature(ctx);
+    const auto signature =
+        make_source_signature(editor_->get(), serialization::save_to_document(get_shipped_settings(ctx), SETTINGS_DOCUMENT_ROOT));
     const bool is_stale = is_invalidated_ || signature != content_signature_;
     if(is_stale && !detect_job_.valid())
     {
@@ -253,10 +267,10 @@ void deploy_content_view::update_content(rtti::context& ctx)
 void deploy_content_view::start_detection(rtti::context& ctx, const std::string& signature)
 {
     is_invalidated_ = false;
-    auto& pm = ctx.get_cached<project_manager>();
-    auto source = deployment::make_project_content_source(ctx.get_cached<asset_manager>());
-    const auto params = pm.get_deploy_settings();
-    const auto startup_scene = pm.get_settings().standalone.startup_scene.id();
+    const auto shipped_settings = get_shipped_settings(ctx);
+    auto source = deployment::make_project_content_source(ctx.get_cached<asset_manager>(), shipped_settings);
+    const auto params = editor_->get();
+    const auto startup_scene = shipped_settings.standalone.startup_scene.id();
     detect_signature_ = signature;
     detect_job_ = ctx.get_cached<threader>()
                       .pool
@@ -291,8 +305,7 @@ void deploy_content_view::poll_detection()
 
 void deploy_content_view::draw_scenes(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& params = pm.get_deploy_settings();
+    auto& params = editor_->get();
     ImGui::AlignTextToFramePadding();
     ImGui::PushFont(ImGui::Font::Bold);
     ImGui::TextUnformatted("Scenes in Build");
@@ -315,7 +328,7 @@ void deploy_content_view::draw_scenes(rtti::context& ctx)
     ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch, SCENE_PATH_COLUMN_SHARE);
     ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, ImMax(startup_width, ImGui::GetFrameHeight()));
     std::string removed;
-    const auto startup_scene = pm.get_settings().standalone.startup_scene.id();
+    const auto startup_scene = get_startup_scene(ctx);
     draw_scene_row(startup_scene, true, removed);
     for(const auto& scene : params.deploy_scenes)
     {
@@ -329,7 +342,7 @@ void deploy_content_view::draw_scenes(rtti::context& ctx)
     {
         params.deploy_scenes.erase(std::remove(params.deploy_scenes.begin(), params.deploy_scenes.end(), removed),
                                    params.deploy_scenes.end());
-        pm.save_deploy_settings();
+        editor_->commit(ctx);
     }
 }
 
@@ -380,7 +393,7 @@ void deploy_content_view::draw_scene_row(const std::string& key, bool is_startup
 /// the project is in the build.
 void deploy_content_view::draw_scene_buttons(rtti::context& ctx)
 {
-    const auto outside = find_scenes_outside_build(ctx, nullptr);
+    const auto outside = find_scenes_outside_build(ctx, editor_->get(), get_startup_scene(ctx), nullptr);
     const char* add_all_label = ICON_MDI_PLAYLIST_PLUS " Add All Scenes";
     const char* add_label = ICON_MDI_PLUS " Add Scene";
     const float width = widgets::calc_button_width(add_all_label) + ImGui::GetStyle().ItemSpacing.x + widgets::calc_button_width(add_label);
@@ -416,7 +429,7 @@ void deploy_content_view::draw_scene_picker(rtti::context& ctx)
     {
         return;
     }
-    const auto scenes = find_scenes_outside_build(ctx, &scene_search_);
+    const auto scenes = find_scenes_outside_build(ctx, editor_->get(), get_startup_scene(ctx), &scene_search_);
     auto& tm = ctx.get_cached<thumbnail_manager>();
     const auto get_tile = [&](std::size_t index) -> asset_picker::tile_content
     {
@@ -446,10 +459,9 @@ void deploy_content_view::draw_scene_picker(rtti::context& ctx)
 
 void deploy_content_view::add_scenes(rtti::context& ctx, const std::vector<std::string>& keys)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& scenes = pm.get_deploy_settings().deploy_scenes;
+    auto& scenes = editor_->get().deploy_scenes;
     scenes.insert(scenes.end(), keys.begin(), keys.end());
-    pm.save_deploy_settings();
+    editor_->commit(ctx);
 }
 
 void deploy_content_view::draw_assets_header(rtti::context& ctx)
@@ -466,8 +478,7 @@ void deploy_content_view::draw_assets_header(rtti::context& ctx)
 
 void deploy_content_view::draw_mode(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& params = pm.get_deploy_settings();
+    auto& params = editor_->get();
     bool is_changed = false;
     if(ImGui::RadioButton("Everything", !params.deploy_only_used_assets))
     {
@@ -488,7 +499,7 @@ void deploy_content_view::draw_mode(rtti::context& ctx)
                             "scripts name by path. Check what scripts load by a path built at run time.");
     if(is_changed)
     {
-        pm.save_deploy_settings();
+        editor_->commit(ctx);
     }
 }
 
@@ -526,7 +537,9 @@ void deploy_content_view::draw_toolbar(rtti::context& ctx)
     ImGui::BeginDisabled(detect_job_.valid());
     if(ImGui::Button(detect_label, ImVec2(widgets::calc_button_width(detect_label), 0.0f)))
     {
-        start_detection(ctx, make_source_signature(ctx));
+        start_detection(ctx,
+                        make_source_signature(editor_->get(),
+                                              serialization::save_to_document(get_shipped_settings(ctx), SETTINGS_DOCUMENT_ROOT)));
     }
     ImGui::EndDisabled();
     ImGui::PopStyleVar();
@@ -540,8 +553,7 @@ void deploy_content_view::draw_toolbar(rtti::context& ctx)
 /// Drops the choices made by hand in one go: what was added, what was left out, or both.
 void deploy_content_view::draw_reset_menu(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& params = pm.get_deploy_settings();
+    auto& params = editor_->get();
     const std::size_t added_count = params.deploy_included.size();
     const std::size_t left_out_count = params.deploy_excluded.size();
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, widgets::to_pixels(widgets::BUTTON_ROUNDING));
@@ -589,7 +601,7 @@ void deploy_content_view::draw_reset_menu(rtti::context& ctx)
     }
     if(is_changed)
     {
-        pm.save_deploy_settings();
+        editor_->commit(ctx);
     }
     ImGui::EndPopup();
 }
@@ -641,7 +653,7 @@ void deploy_content_view::draw_notes(rtti::context& ctx)
                                 ImGui::GetColorU32(ImGuiCol_Text));
     }
     draw_orphan_rule_note(ctx);
-    if(ctx.get_cached<project_manager>().get_deploy_settings().deploy_only_used_assets)
+    if(editor_->get().deploy_only_used_assets)
     {
         draw_named_folder_notes(ctx);
     }
@@ -649,7 +661,7 @@ void deploy_content_view::draw_notes(rtti::context& ctx)
 
 void deploy_content_view::draw_named_folder_notes(rtti::context& ctx)
 {
-    const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto& params = editor_->get();
     std::size_t noted = 0;
     for(const auto& folder : content_->named_folders)
     {
@@ -695,8 +707,7 @@ void deploy_content_view::draw_named_folder_notes(rtti::context& ctx)
 
 void deploy_content_view::draw_orphan_rule_note(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& params = pm.get_deploy_settings();
+    auto& params = editor_->get();
     const auto orphans = deployment::find_orphan_rules(params, *content_);
     if(orphans.empty())
     {
@@ -728,7 +739,7 @@ void deploy_content_view::draw_orphan_rule_note(rtti::context& ctx)
         {
             deployment::reset_rules(params, orphan);
         }
-        pm.save_deploy_settings();
+        editor_->commit(ctx);
     }
     ImGui::SetItemTooltipEx("%s", "Remove the rules on paths that are no longer in the project.");
 }
@@ -831,7 +842,7 @@ void deploy_content_view::draw_row(rtti::context& ctx, std::size_t index, float 
                               nullptr);
     ImGui::PopStyleColor();
     ImGui::TableNextColumn();
-    draw_status_cell(node, ctx.get_cached<project_manager>().get_deploy_settings());
+    draw_status_cell(node, editor_->get());
     ImGui::TableNextColumn();
     draw_size_text(node.is_folder() ? node.shipped_size : node.total_size, !is_shipped);
     ImGui::PopID();
@@ -993,16 +1004,14 @@ auto deploy_content_view::get_use_chain(const deployment::content_entry& entry) 
 
 void deploy_content_view::set_shipped(rtti::context& ctx, const std::string& key, bool is_shipped)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    deployment::set_shipped(pm.get_deploy_settings(), *content_, key, is_shipped);
-    pm.save_deploy_settings();
+    deployment::set_shipped(editor_->get(), *content_, key, is_shipped);
+    editor_->commit(ctx);
 }
 
 void deploy_content_view::reset_rules(rtti::context& ctx, const std::string& key)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    deployment::reset_rules(pm.get_deploy_settings(), key);
-    pm.save_deploy_settings();
+    deployment::reset_rules(editor_->get(), key);
+    editor_->commit(ctx);
 }
 
 } // namespace unravel

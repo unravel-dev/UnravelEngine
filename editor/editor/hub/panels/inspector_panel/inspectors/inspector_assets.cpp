@@ -41,6 +41,7 @@
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
+#include <editor/hub/panels/profile_labels.h>
 #include <editor/imgui/integration/imgui_style.h>
 
 #include <filesystem/filesystem.h>
@@ -347,7 +348,8 @@ auto make_mutable_asset_proxy(entt::meta_any& var, const meta_any_proxy& var_pro
 }
 
 /// The import settings as the binary archive writes them.
-auto save_import_settings_bytes(const animation_importer_meta& settings) -> std::string
+template<typename Settings>
+auto save_import_settings_bytes(const Settings& settings) -> std::string
 {
     std::stringstream stream;
     {
@@ -358,9 +360,106 @@ auto save_import_settings_bytes(const animation_importer_meta& settings) -> std:
 }
 
 /// Whether two import settings hold the same values; compared as saved, so every saved field counts.
-auto is_same_import_settings(const animation_importer_meta& lhs, const animation_importer_meta& rhs) -> bool
+template<typename Settings>
+auto is_same_import_settings(const Settings& lhs, const Settings& rhs) -> bool
 {
     return save_import_settings_bytes(lhs) == save_import_settings_bytes(rhs);
+}
+
+/// The texture's properties `names`, in rows as the inspector draws them.
+auto inspect_texture_import_properties(rtti::context& ctx,
+                                       texture_importer_meta& importer,
+                                       std::initializer_list<entt::id_type> names) -> inspect_result
+{
+    entt::meta_any object = entt::forward_as_meta(importer);
+    const auto type = entt::resolve<texture_importer_meta>();
+    inspect_result result;
+    for(const auto name : names)
+    {
+        if(const auto prop = type.data(name))
+        {
+            result |= inspect_property(ctx, object, make_proxy(object), prop);
+        }
+    }
+    return result;
+}
+
+/**
+ * @brief A platform's quality tab: whether the platform overrides the Default tab's quality, then its own
+ * quality while it does, or the Default tab's, read-only, while it does not. The tab's label is bold while
+ * the platform overrides it, as an overridden setting is.
+ */
+auto inspect_platform_quality_tab(rtti::context& ctx,
+                                  target_platform platform,
+                                  texture_importer_meta::platform_quality_meta& own,
+                                  const texture_importer_meta::quality_meta& fallback) -> inspect_result
+{
+    inspect_result result;
+    const auto label = fmt::format("{} {}", profile_labels::get_platform_icon(platform), profile_labels::get_platform_name(platform));
+    if(own.is_overridden)
+    {
+        ImGui::PushFont(ImGui::Font::ExtraBold);
+        // The tab bar sizes its tabs in its own font: the bold label keeps a width measured in bold.
+        ImGui::SetNextItemWidth(ImGui::TabItemCalcSize(label.c_str(), false).x);
+    }
+    const bool is_open = ImGui::BeginTabItem(label.c_str());
+    if(own.is_overridden)
+    {
+        ImGui::PopFont();
+    }
+    if(!is_open)
+    {
+        return result;
+    }
+    const bool was_overridden = own.is_overridden;
+    entt::meta_any object = entt::forward_as_meta(own);
+    const auto prop = entt::resolve<texture_importer_meta::platform_quality_meta>().data("is_overridden"_hs);
+    result |= inspect_property(ctx, object, make_proxy(object), prop);
+    // An override starts from the quality the platform had, as the Default tab's.
+    if(own.is_overridden && !was_overridden && own.quality == texture_importer_meta::quality_meta{})
+    {
+        own.quality = fallback;
+    }
+    if(own.is_overridden)
+    {
+        result |= inspect(ctx, own.quality);
+    }
+    else
+    {
+        auto inherited = fallback;
+        ImGui::BeginDisabled();
+        inspect(ctx, inherited);
+        ImGui::EndDisabled();
+    }
+    ImGui::EndTabItem();
+    return result;
+}
+
+/// The texture's import settings: what it is, then its quality, by default and per platform, in tabs.
+auto inspect_texture_import_settings(rtti::context& ctx, texture_importer_meta& importer) -> inspect_result
+{
+    inspect_result result =
+        inspect_texture_import_properties(ctx, importer, {"type"_hs, "colorspace"_hs, "generate_mipmaps"_hs, "invert_normal_y"_hs});
+    ImGui::SeparatorText("Quality");
+    if(!ImGui::BeginTabBar("##texture_quality"))
+    {
+        return result;
+    }
+    if(ImGui::BeginTabItem("Default"))
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::TextWrapped("%s",
+                           "Every platform compiles with this quality unless its tab overrides it. Project Default is the "
+                           "texture default of the profile deployed. The editor compiles with the Desktop tab and the "
+                           "project settings' defaults.");
+        ImGui::PopStyleColor();
+        result |= inspect(ctx, importer.quality);
+        ImGui::EndTabItem();
+    }
+    result |= inspect_platform_quality_tab(ctx, target_platform::desktop, importer.platforms.desktop, importer.quality);
+    result |= inspect_platform_quality_tab(ctx, target_platform::android, importer.platforms.android, importer.quality);
+    ImGui::EndTabBar();
+    return result;
 }
 
 } // namespace
@@ -469,9 +568,12 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
                     importer_ = std::make_shared<texture_importer_meta>(*importer);
                 }
 
-                result |= ::unravel::inspect(ctx, *importer_);
+                result |= inspect_texture_import_settings(ctx, *importer_);
             }
 
+            ImGui::Spacing();
+            const bool has_unapplied_edits = importer && importer_ && !is_same_import_settings(*importer_, *importer);
+            ImGui::BeginDisabled(!has_unapplied_edits);
             if(ImGui::Button("Revert"))
             {
                 importer_ = {};
@@ -479,13 +581,10 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
             ImGui::SameLine();
             if(ImGui::Button("Apply"))
             {
-                if(importer_)
-                {
-                    *importer = *importer_;
-                }
-
+                *importer = *importer_;
                 editor_actions::save_import_settings(data.id(), meta.meta);
             }
+            ImGui::EndDisabled();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

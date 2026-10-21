@@ -22,6 +22,9 @@
 #include <engine/play_mode.h>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/renderer.h>
+#include <engine/settings/boot_config.h>
+#include <editor/hub/panels/profile_labels.h>
+#include <editor/hub/panels/project_settings_panel/project_settings_panel.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/threading/threader.h>
 #include <array>
@@ -300,7 +303,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
         {
             if(ImGui::MenuItem("Deploy Project"))
             {
-                parent_->get_deploy_panel().show(true);
+                editor_actions::open_deploy_window(ctx);
             }
 
             ImGui::EndMenu();
@@ -753,15 +756,16 @@ void header_panel::draw_play_state_line(rtti::context& ctx)
     ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(window_min.x, window_max.y - line_height), window_max, color);
 }
 
-/// Deploy and Run, beside the play controls: deploys with the project's deploy settings and starts the
-/// built game. While a deploy runs it shows its progress, and a click opens the Deploy window on it.
+/// Deploy and Run, beside the play controls: deploys the Deploy window's profile and starts the built game.
+/// While a deploy runs it shows its progress, and a click opens the Deploy window on it.
 void header_panel::draw_deploy_and_run_button(rtti::context& ctx)
 {
     auto& deploy = parent_->get_deploy_panel();
+    auto& pm = ctx.get_cached<project_manager>();
     const bool is_deploying = deploy.is_deploying();
     const std::string tooltip =
         is_deploying ? fmt::format("Deploying {}% - click to see the steps", static_cast<int>(deploy.get_progress() * 100.0f))
-                     : std::string("Deploy and Run");
+                     : fmt::format("Deploy and Run {}", pm.get_deploy_profile());
     panel_toolbar::begin_segment();
     const bool is_clicked = panel_toolbar::button("##deploy_and_run",
                                                   is_deploying ? ICON_MDI_PROGRESS_CLOCK : ICON_MDI_PACKAGE_VARIANT_CLOSED,
@@ -778,8 +782,7 @@ void header_panel::draw_deploy_and_run_button(rtti::context& ctx)
         deploy.show(true);
         return;
     }
-    auto& pm = ctx.get_cached<project_manager>();
-    auto deploy_settings = pm.get_deploy_settings();
+    auto deploy_settings = pm.get_deploy_request();
     deploy_settings.deploy_and_run = true;
     deploy_settings.deploy_dependencies = true;
     deploy.deploy_and_run(ctx, deploy_settings);
@@ -808,6 +811,69 @@ void header_panel::draw_play_options(rtti::context& ctx)
         ImGui::SetItemTooltipEx("%s",
                                 "Show the splash screen when play starts.\n"
                                 "It also has to be enabled in the project settings.");
+        panel_toolbar::end_dropdown();
+    }
+    ImGui::EndDisabled();
+}
+
+/// The settings profile the editor previews, beside the play options: its quality and budgets show in the
+/// Scene and Game views as its builds have them. Settings applied at start keep the editor's.
+void header_panel::draw_preview_profile(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    if(!pm.has_open_project())
+    {
+        return;
+    }
+    const bool is_playing = ctx.get_cached<play_mode>().is_active();
+    const auto& preview = pm.get_preview_profile();
+    const auto* profile = pm.get_profiles().find(preview);
+    // Named as a preview: the profile Deploy and Run builds is chosen in the Deploy window.
+    const std::string text = profile != nullptr ? fmt::format(ICON_MDI_EYE_OUTLINE " Preview: {}", profile->name)
+                                                : std::string(ICON_MDI_EYE_OUTLINE " Project Settings");
+    const char* tooltip = is_playing ? "The game keeps the settings it started with. Stop play mode to change them."
+                                     : "The settings the editor previews: the project settings, or a profile's, as its "
+                                       "builds have them.";
+    ImGui::BeginDisabled(is_playing);
+    if(panel_toolbar::begin_dropdown("##preview_profile", text.c_str(), tooltip, profile != nullptr ? HEADER_CHANGED_VALUE_COLOR : 0))
+    {
+        ImGui::SeparatorText("Run the Editor With");
+        if(ImGui::MenuItem(ICON_MDI_COG " Project Settings", nullptr, profile == nullptr))
+        {
+            pm.set_preview_profile(ctx, {});
+        }
+        for(const auto& listed : pm.get_profiles().get_all())
+        {
+            if(ImGui::MenuItem(profile_labels::get_label(listed).c_str(), nullptr, listed.name == preview))
+            {
+                pm.set_preview_profile(ctx, listed.name);
+            }
+        }
+        if(profile != nullptr)
+        {
+            // The renderer starts with the editor, so a profile's own one shows only in its builds.
+            const auto settings_of = pm.get_profile_settings(profile->name);
+            const auto renderer = profile->platform == target_platform::android
+                                      ? preferred_renderer::vulkan
+                                      : settings_of.graphics.renderer.get_for_current_platform();
+            const auto wanted = preferred_renderer_to_gfx_type(renderer);
+            if(wanted != bgfx::RendererType::Count && wanted != bgfx::getRendererType())
+            {
+                ImGui::Separator();
+                ImGui::TextDisabled("%s builds render with %s, and the editor runs %s.",
+                                    profile->name.c_str(),
+                                    bgfx::getRendererName(wanted),
+                                    bgfx::getRendererName(bgfx::getRendererType()));
+            }
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Deploy and Run builds %s.", pm.get_deploy_profile().c_str());
+        const std::string edit_label = profile != nullptr ? fmt::format(ICON_MDI_PENCIL " Edit {}'s Settings...", profile->name)
+                                                          : std::string(ICON_MDI_PENCIL " Edit Project Settings...");
+        if(ImGui::MenuItem(edit_label.c_str()))
+        {
+            parent_->get_project_settings_panel().show_profile(preview);
+        }
         panel_toolbar::end_dropdown();
     }
     ImGui::EndDisabled();
@@ -892,6 +958,7 @@ void header_panel::draw_play_toolbar(rtti::context& ctx)
     if(panel_toolbar::begin_strip("##header_toolbar", panel_toolbar::strip_style::flat))
     {
         draw_play_options(ctx);
+        draw_preview_profile(ctx);
         panel_toolbar::align_center();
         draw_transport_controls(ctx);
         draw_deploy_and_run_button(ctx);

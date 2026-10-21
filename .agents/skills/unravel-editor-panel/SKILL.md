@@ -146,7 +146,8 @@ returns no `MenuBar`).
   with counts), `draw_log_list` (single-line rows through `draw_log_line`, which the status bar
   reuses for the last log), `draw_details`
 - `header_panel.cpp` -> `draw_play_toolbar`: flat strip - play options dropdown (script mode +
-  splash, locked while playing) | play / pause / step (one segment, disabled by compile errors),
+  splash, locked while playing), preview profile dropdown (`draw_preview_profile`: the settings
+  the editor runs with, the project's or a settings profile's; locked while playing) | play / pause / step (one segment, disabled by compile errors),
   then Deploy and Run (its own segment; shows progress while deploying and a click opens the
   Deploy window; the Deploy menu opens it too) | time scale dropdown, frame pacing dropdown (VSync + max FPS).
   The dropdown faces show the current value (`width_text` keeps them steady while a slider in

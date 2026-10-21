@@ -8,6 +8,7 @@
 #include <asset_compiler/asset_dependencies.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <asset_compiler/asset_manifest.h>
+#include <asset_compiler/texture_target.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/assets/asset_dependency_graph.h>
 #include <engine/audio/audio_clip.h>
@@ -117,6 +118,21 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
     {
         APPLOG_WARNING("Compiled format changed for {}, recompilation needed", compiled_output_path.string());
         return true;
+    }
+
+    // A texture's parameters come from the project's defaults too, and a manifest from before they were recorded
+    // names none: the defaults it was compiled with are unknown, so it compiles again.
+    if constexpr(std::is_same_v<T, gfx::texture>)
+    {
+        const auto parameters = asset_compiler::to_string(
+            asset_compiler::get_texture_parameters(source_file_path,
+                                                   asset_compiler::get_editor_texture_target_for(source_file_path)));
+        if(manifest.compile_parameters != parameters)
+        {
+            // Every texture once after an engine update changes the parameters: no warning each.
+            APPLOG_INFO("Compile parameters changed for {}, recompilation needed", compiled_output_path.string());
+            return true;
+        }
     }
 
     std::vector<fs::path> deps;

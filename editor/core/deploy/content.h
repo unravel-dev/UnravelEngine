@@ -3,6 +3,7 @@
 #include "deploy_settings.h"
 
 #include <engine/assets/asset_storage.h>
+#include <engine/settings/settings.h>
 #include <filesystem/filesystem.h>
 
 #include <cstdint>
@@ -108,10 +109,14 @@ struct content_source
     asset_database::database_t database;
     /// The folder of the app protocol (the project).
     fs::path project_root;
+    /// The settings the deploy ships, as a document: the handles in them (splash logos and the like) are
+    /// reached. Empty: the project's settings file.
+    std::string settings_document;
 };
 
-/// The open project's source; main thread.
-auto make_project_content_source(asset_manager& am) -> content_source;
+/// The open project's source, with `shipped_settings`, the settings its deploy ships (a profile's); main
+/// thread.
+auto make_project_content_source(asset_manager& am, const settings& shipped_settings) -> content_source;
 
 /**
  * @brief Walks from the deploy's scenes - `startup_scene` and params.deploy_scenes - through what they

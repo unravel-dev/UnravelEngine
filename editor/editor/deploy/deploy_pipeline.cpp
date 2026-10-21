@@ -10,13 +10,18 @@
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
 #include <deploy/run_arguments.h>
+#include <deploy/texture_variants.h>
 #include <editor/editing/prefab_bake.h>
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/meta/settings/settings.hpp>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <process/process.h>
+
+// must be below all
+#include <engine/assets/impl/asset_writer.h>
 
 #include <algorithm>
 #include <atomic>
@@ -33,6 +38,7 @@ namespace
 // Step names, as the Deploy window and the deploy tool list them.
 constexpr const char* STEP_CHECK_ASSETS = "Checking Assets";
 constexpr const char* STEP_COOK = "Cooking Prefabs";
+constexpr const char* STEP_COOK_TEXTURES = "Cooking Textures";
 constexpr const char* STEP_DEPENDENCIES = "Dependencies";
 constexpr const char* STEP_SETTINGS = "Project Settings";
 constexpr const char* STEP_PROJECT_DATA = "Project Data";
@@ -43,6 +49,7 @@ constexpr std::size_t LISTED_UNCOMPILED_MAX = 10;
 constexpr const char* COOK_STAGING_PREFIX = "unravel-deploy-cook-";
 constexpr const char* DEPENDENCY_SCANNER = "editor:/tools/dependencies/Dependencies.exe";
 constexpr const char* SETTINGS_FOLDER = "settings";
+constexpr const char* SETTINGS_FILE = "settings.cfg";
 
 std::atomic<int> running_deploys{0};
 
@@ -50,17 +57,20 @@ std::atomic<int> running_deploys{0};
 struct deploy_plan
 {
     deploy_settings params;
-    /// The platform's folder in the deploy folder.
+    /// The profile's folder in the deploy folder.
     fs::path output;
     fs::path executable;
     fs::path player;
     fs::path dependency_scanner;
-    fs::path settings_source;
-    fs::path settings_destination;
+    /// The project settings the profile runs with: what the game loads.
+    settings runtime_settings;
+    /// The build's data/app/settings folder.
+    fs::path settings_folder;
     protocol_job app;
     protocol_job engine;
     runtime_plan runtime;
     fs::path cook_staging;
+    texture_cook_plan textures;
     /// Android deploys only: the package built from the deployed data.
     android_package_plan android;
 };
@@ -156,15 +166,16 @@ auto make_cook_staging() -> fs::path
 }
 
 /// The path keys of the project assets the content selection leaves out; empty when everything ships.
-auto find_left_out_assets(asset_manager& am, const deploy_settings& params, const std::string& startup_scene)
+auto find_left_out_assets(asset_manager& am, const deploy_settings& params, const settings& shipped_settings)
     -> std::unordered_set<std::string>
 {
     if(!is_filtered(params))
     {
         return {};
     }
-    const auto source = make_project_content_source(am);
-    const auto found = needs_walk(params) ? detect_content(source, params, startup_scene) : list_content(source);
+    const auto source = make_project_content_source(am, shipped_settings);
+    const auto found = needs_walk(params) ? detect_content(source, params, shipped_settings.standalone.startup_scene.id())
+                                          : list_content(source);
     auto left_out = get_left_out_keys(params, found);
     APPLOG_INFO("Deploy: shipping {} of {} project assets; {} left out (see the Deploy window's Content tab).",
                 found.entries.size() - left_out.size(),
@@ -194,13 +205,13 @@ auto cook_prefabs(rtti::context& ctx, const deploy_settings& params, const fs::p
 auto make_protocol_job(asset_manager& am,
                        const deploy_settings& params,
                        const std::string& protocol,
-                       const fs::path& staging,
+                       cooked_folders cooked,
                        std::unordered_set<std::string> left_out) -> protocol_job
 {
     protocol_job job;
     job.protocol = protocol;
     job.compiled_root = fs::resolve_protocol(ex::get_compiled_directory(protocol));
-    job.cooked_root = staging / protocol;
+    job.cooked = std::move(cooked);
     job.protocol_root = params.deploy_location / DATA_FOLDER / protocol;
     job.database = am.get_database_snapshot(protocol + ":/");
     job.left_out = std::move(left_out);
@@ -210,7 +221,8 @@ auto make_protocol_job(asset_manager& am,
     // An Android package carries every pack whole: patches are for desktop deploys.
     if(!params.deploy_patch_release.empty() && params.deploy_target != deploy_platform::android)
     {
-        job.patch_release_pack = get_release_pack(get_project_root(), params.deploy_patch_release, protocol);
+        job.patch_release_pack =
+            get_release_pack(get_profile_releases_folder(get_project_root(), params.profile), params.deploy_patch_release, protocol);
     }
     return job;
 }
@@ -222,17 +234,24 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     deploy_plan plan;
     plan.params = params;
     plan.output = get_output_location(params);
-    // The data steps write data/ into the platform's folder; for Android into the build folder, where
-    // Gradle packages it, so the platform's folder holds the package only.
+    plan.runtime_settings = ctx.get_cached<project_manager>().get_profile_settings(params.profile);
+    // The data steps write data/ into the profile's folder; for Android into the build folder, where Gradle
+    // packages it, so the profile's folder holds the package only.
     auto data_params = params;
-    data_params.deploy_location = params.deploy_target == deploy_platform::android ? get_android_content_dir() : plan.output;
+    data_params.deploy_location = is_android(plan) ? get_android_content_dir(params.profile) : plan.output;
     plan.executable = get_deployed_executable(ctx, params);
     plan.player = fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
     plan.dependency_scanner = fs::resolve_protocol(DEPENDENCY_SCANNER);
-    plan.settings_source = fs::resolve_protocol(std::string(CONTENT_PROTOCOL) + ":/" + SETTINGS_FOLDER);
-    plan.settings_destination = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
-    plan.app = make_protocol_job(am, data_params, CONTENT_PROTOCOL, staging, std::move(left_out));
-    plan.engine = make_protocol_job(am, data_params, ENGINE_PROTOCOL, staging, {});
+    plan.settings_folder = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
+    plan.textures = make_texture_cook_plan(get_project_root(),
+                                           params,
+                                           plan.runtime_settings,
+                                           am.get_database_snapshot("app:/"),
+                                           left_out,
+                                           asset_compiler::get_editor_texture_target());
+    // The cooked prefabs and the texture variants: no file is in both, so their order does not matter.
+    plan.app = make_protocol_job(am, data_params, CONTENT_PROTOCOL, {staging / CONTENT_PROTOCOL, plan.textures.variants}, std::move(left_out));
+    plan.engine = make_protocol_job(am, data_params, ENGINE_PROTOCOL, {staging / ENGINE_PROTOCOL}, {});
     plan.runtime = make_runtime_plan(ctx, data_params);
     plan.cook_staging = staging;
     if(is_android(plan))
@@ -261,6 +280,27 @@ void deploy_dependencies(const deploy_plan& plan)
     remove_stale_binaries(plan.output, shipped);
 }
 
+/// The settings the game loads: the project settings with the profile's overrides and its build section.
+/// Nothing else ships in the folder, so neither profiles nor files left from an earlier build reach the game.
+void deploy_settings_file(const deploy_plan& plan)
+{
+    fs::error_code ec;
+    fs::create_directories(plan.settings_folder, ec);
+    const auto file = plan.settings_folder / SETTINGS_FILE;
+    if(!asset_writer::atomic_save_to_file(file.string(), plan.runtime_settings))
+    {
+        throw std::runtime_error(fmt::format("Writing {} failed", file.generic_string()));
+    }
+    for(const auto& entry : fs::directory_iterator(plan.settings_folder, ec))
+    {
+        if(entry.path().filename() != SETTINGS_FILE)
+        {
+            fs::remove_all(entry.path(), ec);
+        }
+    }
+}
+
+/// The steps that need nothing but the plan; Project Data waits for Cooking Textures instead.
 auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<deploy_step>
 {
     std::vector<deploy_step> steps;
@@ -269,11 +309,42 @@ auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<d
     {
         steps.push_back({STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }});
     }
-    steps.push_back({STEP_SETTINGS, [plan]() { mirror_or_throw(plan->settings_source, plan->settings_destination); }});
-    steps.push_back({STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }});
+    steps.push_back({STEP_SETTINGS, [plan]() { deploy_settings_file(*plan); }});
     steps.push_back({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }});
     steps.push_back({plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime); }});
     return steps;
+}
+
+auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<void>
+{
+    return th.pool
+        ->schedule("Deploying " + step.name,
+                   [step]()
+                   {
+                       APPLOG_INFO("Deploying {}...", step.name);
+                       step.run();
+                       APPLOG_INFO("Deploying {} - Done", step.name);
+                   })
+        .share();
+}
+
+/// Project Data packs the profile's texture variants, so it starts once Cooking Textures succeeded.
+auto schedule_project_data(const std::shared_ptr<const deploy_plan>& plan, const tpp::shared_future<void>& textures)
+    -> tpp::shared_future<void>
+{
+    return textures
+        .then(
+            [plan](auto cooked)
+            {
+                if(!get_step_error(cooked).empty())
+                {
+                    throw std::runtime_error(fmt::format("Skipped: {} failed.", STEP_COOK_TEXTURES));
+                }
+                APPLOG_INFO("Deploying {}...", STEP_PROJECT_DATA);
+                deploy_protocol_data(plan->app);
+                APPLOG_INFO("Deploying {} - Done", STEP_PROJECT_DATA);
+            })
+        .share();
 }
 
 auto has_failed_step(const std::vector<tpp::shared_future<void>>& steps) -> bool
@@ -350,8 +421,8 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
 {
     auto& th = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
-    const auto startup_scene = ctx.get_cached<project_manager>().get_settings().standalone.startup_scene.id();
-    auto left_out = find_left_out_assets(am, params, startup_scene);
+    const auto shipped_settings = ctx.get_cached<project_manager>().get_profile_settings(params.profile);
+    auto left_out = find_left_out_assets(am, params, shipped_settings);
     // Before anything touches the destination, so a refused deploy leaves the previous build there.
     std::vector<std::string> uncompiled;
     const auto shader_variants = get_shader_variants(params);
@@ -373,31 +444,27 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
     fs::create_directories(get_output_location(params), ec);
     if(params.deploy_target == deploy_platform::android)
     {
-        fs::create_directories(get_android_content_dir(), ec);
+        fs::create_directories(get_android_content_dir(params.profile), ec);
     }
     const auto plan = std::make_shared<const deploy_plan>(make_plan(ctx, params, staging, std::move(left_out)));
     ++running_deploys;
     deploy_jobs jobs;
     std::vector<tpp::shared_future<void>> futures;
-    for(auto& step : make_steps(plan))
+    const auto add_job = [&](const std::string& name, const tpp::shared_future<void>& job)
     {
-        auto job = th.pool
-                       ->schedule("Deploying " + step.name,
-                                  [step]()
-                                  {
-                                      APPLOG_INFO("Deploying {}...", step.name);
-                                      step.run();
-                                      APPLOG_INFO("Deploying {} - Done", step.name);
-                                  })
-                       .share();
-        jobs.push_back({step.name, job});
+        jobs.push_back({name, job});
         futures.push_back(job);
+    };
+    const auto textures = schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_textures(plan->textures); }});
+    add_job(STEP_COOK_TEXTURES, textures);
+    for(const auto& step : make_steps(plan))
+    {
+        add_job(step.name, schedule_step(th, step));
     }
+    add_job(STEP_PROJECT_DATA, schedule_project_data(plan, textures));
     if(is_android(*plan))
     {
-        auto package = schedule_android_package(plan, futures);
-        jobs.push_back({STEP_ANDROID_PACKAGE, package});
-        futures.push_back(package);
+        add_job(STEP_ANDROID_PACKAGE, schedule_android_package(plan, futures));
         for(auto& device_job : get_device_jobs(plan->android))
         {
             futures.push_back(device_job.job);

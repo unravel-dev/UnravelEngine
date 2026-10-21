@@ -1,4 +1,5 @@
 #include "mcp_asset_lookup.h"
+#include "mcp_profile_utils.h"
 #include "mcp_project_paths.h"
 #include "mcp_tools_common.h"
 
@@ -104,7 +105,7 @@ auto take_snapshot(rtti::context& ctx) -> deploy_snapshot
     snapshot.ready = collect_step_status(ctx, snapshot.steps);
     if(ctx.has<project_manager>())
     {
-        snapshot.location = fs::to_utf8_string(get_output_location(ctx.get_cached<project_manager>().get_deploy_settings()));
+        snapshot.location = fs::to_utf8_string(get_output_location(ctx.get_cached<project_manager>().get_deploy_request()));
     }
     return snapshot;
 }
@@ -124,8 +125,8 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
                        steps_to_json(snapshot.steps));
 }
 
-constexpr const char* PLATFORM_NAMES[] = {"desktop", "android"};
 constexpr const char* ORIENTATION_NAMES[] = {"landscape", "portrait", "automatic"};
+constexpr const char* TEXTURE_COMPRESSION_NAMES[] = {"astc", "etc2"};
 
 /// Sets `out` from the name at `key` when the arguments have one; false (with `error`) for an unknown name.
 template<typename Enum, std::size_t Count>
@@ -149,19 +150,20 @@ auto read_enum_name(const simdjson::dom::object& args, const char* key, const ch
     return false;
 }
 
-auto android_settings_to_json(const deploy_settings& params) -> std::string
+auto android_settings_to_json(const android_deploy_settings& android, const std::string& device) -> std::string
 {
     return fmt::format(
-        R"({{"application_id":{},"version_code":{},"orientation":{},"icon":{},"icon_background":{},"release":{},"keystore":{},"key_alias":{},"device":{}}})",
-        params.android_application_id.empty() ? "null" : make_json_string(params.android_application_id),
-        params.android_version_code,
-        make_json_string(ORIENTATION_NAMES[static_cast<int>(params.android_screen_orientation)]),
-        asset_handle_key_json(params.android_icon),
-        color_to_json(params.android_icon_background),
-        bool_to_json(params.android_release),
-        params.android_keystore.empty() ? "null" : make_json_string(fs::to_utf8_string(params.android_keystore)),
-        params.android_key_alias.empty() ? "null" : make_json_string(params.android_key_alias),
-        params.android_device.empty() ? "null" : make_json_string(params.android_device));
+        R"({{"application_id":{},"version_code":{},"orientation":{},"texture_compression":{},"icon":{},"icon_background":{},"release":{},"keystore":{},"key_alias":{},"device":{}}})",
+        android.application_id.empty() ? "null" : make_json_string(android.application_id),
+        android.version_code,
+        make_json_string(ORIENTATION_NAMES[static_cast<int>(android.screen_orientation)]),
+        make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<int>(android.texture_compression)]),
+        asset_handle_key_json(android.icon),
+        color_to_json(android.icon_background),
+        bool_to_json(android.release),
+        android.keystore.empty() ? "null" : make_json_string(fs::to_utf8_string(android.keystore)),
+        android.key_alias.empty() ? "null" : make_json_string(android.key_alias),
+        device.empty() ? "null" : make_json_string(device));
 }
 
 /// The Android side of deploy_get_state: the editor's player, this machine's tools, the devices from the
@@ -197,7 +199,7 @@ auto android_state_to_json(rtti::context& ctx, const deploy_settings& params) ->
 }
 
 /// Reads android_icon, a texture's key or uid; null or an empty string choose the engine's logo.
-auto read_android_icon(rtti::context& ctx, const simdjson::dom::object& args, deploy_settings& params, std::string& error) -> bool
+auto read_android_icon(rtti::context& ctx, const simdjson::dom::object& args, android_deploy_settings& android, std::string& error) -> bool
 {
     simdjson::dom::element value;
     if(args["android_icon"].get(value) != simdjson::SUCCESS)
@@ -211,7 +213,7 @@ auto read_android_icon(rtti::context& ctx, const simdjson::dom::object& args, de
     }
     if(key.empty())
     {
-        params.android_icon = {};
+        android.icon = {};
         return true;
     }
     auto icon = find_existing_asset<gfx::texture>(ctx, to_asset_key(key), error);
@@ -219,45 +221,148 @@ auto read_android_icon(rtti::context& ctx, const simdjson::dom::object& args, de
     {
         return false;
     }
-    params.android_icon = icon;
+    android.icon = icon;
     return true;
 }
 
-/// Reads the platform and Android settings deploy_set_settings takes.
-auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args, deploy_settings& params, std::string& error)
+/// The Android settings deploy_set_settings takes, read over the profile's; `is_given` says whether the
+/// arguments had any.
+auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args, android_deploy_settings& android, bool& is_given, std::string& error)
     -> bool
 {
-    if(!read_enum_name(args, "platform", PLATFORM_NAMES, params.deploy_target, error) ||
-       !read_enum_name(args, "android_orientation", ORIENTATION_NAMES, params.android_screen_orientation, error) ||
-       !read_android_icon(ctx, args, params, error))
+    static constexpr const char* ANDROID_KEYS[] = {"android_application_id",
+                                                   "android_version_code",
+                                                   "android_orientation",
+                                                   "android_texture_compression",
+                                                   "android_icon",
+                                                   "android_icon_background",
+                                                   "android_release",
+                                                   "android_keystore",
+                                                   "android_key_alias"};
+    is_given = std::any_of(std::begin(ANDROID_KEYS),
+                           std::end(ANDROID_KEYS),
+                           [&args](const char* key)
+                           {
+                               simdjson::dom::element value;
+                               return args[key].get(value) == simdjson::SUCCESS;
+                           });
+    if(!read_enum_name(args, "android_orientation", ORIENTATION_NAMES, android.screen_orientation, error) ||
+       !read_enum_name(args, "android_texture_compression", TEXTURE_COMPRESSION_NAMES, android.texture_compression, error) ||
+       !read_android_icon(ctx, args, android, error))
     {
         return false;
     }
     simdjson::dom::element background;
-    if(args["android_icon_background"].get(background) == simdjson::SUCCESS &&
-       !parse_color(background, params.android_icon_background, error))
+    if(args["android_icon_background"].get(background) == simdjson::SUCCESS && !parse_color(background, android.icon_background, error))
     {
         return false;
     }
-    read_string(args, "android_application_id", params.android_application_id);
-    const auto version_code = read_int64_or(args, "android_version_code", params.android_version_code);
-    params.android_version_code = static_cast<std::uint32_t>(std::max<int64_t>(1, version_code));
-    read_bool(args, "android_release", params.android_release);
+    read_string(args, "android_application_id", android.application_id);
+    const auto version_code = read_int64_or(args, "android_version_code", android.version_code);
+    android.version_code = static_cast<std::uint32_t>(std::max<int64_t>(1, version_code));
+    read_bool(args, "android_release", android.release);
     std::string keystore;
     if(read_string(args, "android_keystore", keystore))
     {
-        params.android_keystore = fs::from_utf8_string(keystore);
+        android.keystore = fs::from_utf8_string(keystore);
     }
-    read_string(args, "android_key_alias", params.android_key_alias);
-    read_string(args, "android_device", params.android_device);
+    read_string(args, "android_key_alias", android.key_alias);
     return true;
+}
+
+/// The profile the arguments name at `key`, checked, or the deploy profile when they name none.
+auto read_target_profile(const project_manager& pm,
+                         const simdjson::dom::object& args,
+                         const char* key,
+                         std::string& profile,
+                         std::string& error) -> bool
+{
+    profile = pm.get_deploy_profile();
+    return read_profile_argument(pm, args, key, profile, error);
+}
+
+/// The deploy settings a deploy_set_settings call names, besides location and patch_release, as the tool names
+/// them: they go where its scope says.
+auto get_scoped_settings_given(const simdjson::dom::object& args) -> std::vector<std::string>
+{
+    std::vector<std::string> given;
+    for(const auto& name : get_deploy_argument_names())
+    {
+        simdjson::dom::element value;
+        if(name != "location" && name != "patch_release" && args[name].get(value) == simdjson::SUCCESS)
+        {
+            given.push_back(name);
+        }
+    }
+    return given;
+}
+
+/// A deploy override to drop: the setting's name as the tool takes it, and its stored path.
+struct deploy_revert
+{
+    std::string name;
+    std::string path;
+};
+
+/// Reads the revert argument: deploy settings, named as the tool's arguments, a profile stops overriding.
+auto read_revert_argument(const simdjson::dom::object& args, std::vector<deploy_revert>& reverts, std::string& error) -> bool
+{
+    std::vector<std::string> names;
+    if(!read_string_array(args, "revert", names, error))
+    {
+        return false;
+    }
+    for(const auto& name : names)
+    {
+        const auto path = find_deploy_setting_path(name);
+        if(path.empty())
+        {
+            error = fmt::format("{} is no deploy setting. deploy_get_state's settings name them.", name);
+            return false;
+        }
+        if(!deployment::is_overridable_deploy_path(path))
+        {
+            error = fmt::format("{} is shared by every profile, so no profile overrides it.", name);
+            return false;
+        }
+        reverts.push_back({name, path});
+    }
+    return true;
+}
+
+/// The profiles as the deploy tools list them: each with its platform.
+auto profile_names_to_json(const project_manager& pm) -> std::string
+{
+    std::string json = "[";
+    for(const auto& profile : pm.get_profiles().get_all())
+    {
+        json += fmt::format(R"({}{{"name":{},"platform":{}}})",
+                            json.size() > 1 ? "," : "",
+                            make_json_string(profile.name),
+                            make_json_string(get_platform_name(profile.platform)));
+    }
+    return json + "]";
+}
+
+/// The platform argument is the profile's now: name what to do instead.
+auto refuse_platform_argument(const simdjson::dom::object& args, std::string& error) -> bool
+{
+    simdjson::dom::element value;
+    if(args["platform"].get(value) != simdjson::SUCCESS)
+    {
+        return true;
+    }
+    error = "platform is no deploy setting: it belongs to the profile. Pass profile (settings_profiles_list lists them, "
+            "and settings_profiles_create makes an Android one).";
+    return false;
 }
 
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"run_arguments":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{}}})",
-        make_json_string(PLATFORM_NAMES[static_cast<int>(params.deploy_target)]),
+        R"({{"profile":{},"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"run_arguments":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{}}})",
+        make_json_string(params.profile),
+        make_json_string(get_platform_name(params.deploy_target)),
         params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(params.deploy_location)),
         params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(get_output_location(params))),
         bool_to_json(params.deploy_dependencies),
@@ -271,7 +376,14 @@ auto deploy_settings_to_json(const deploy_settings& params) -> std::string
         strings_to_json_array(params.deploy_scenes),
         strings_to_json_array(params.deploy_included),
         strings_to_json_array(params.deploy_excluded),
-        android_settings_to_json(params));
+        params.deploy_target == deploy_platform::android ? android_settings_to_json(params.android, params.android_device)
+                                                         : std::string("null"));
+}
+
+/// The deploy settings a profile overrides, as deploy_set_settings names them.
+auto deploy_overrides_to_json(const settings_profile& profile) -> std::string
+{
+    return strings_to_json_array(to_deploy_argument_names(profile.deploy.get_paths()));
 }
 
 /// Replaces `out` with the string array at `key` when the arguments have one.
@@ -356,7 +468,9 @@ auto apply_location(fs::path& destination, const std::string& location, bool cre
 /// the project come back as warnings.
 auto normalize_deploy_keys(rtti::context& ctx, deploy_settings& params) -> std::vector<std::string>
 {
-    const auto found = deployment::list_content(deployment::make_project_content_source(ctx.get_cached<asset_manager>()));
+    auto& pm = ctx.get_cached<project_manager>();
+    const auto shipped_settings = pm.get_profile_settings(pm.get_deploy_profile());
+    const auto found = deployment::list_content(deployment::make_project_content_source(ctx.get_cached<asset_manager>(), shipped_settings));
     std::vector<std::string> warnings;
     for(const auto& key : deployment::normalize_keys(params, found))
     {
@@ -392,35 +506,45 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "deploy_get_state",
          .description =
-             "Everything about deploying in one read: the settings (destination folder, runtime dependencies, run "
-             "after deploy, cooked assets, debug symbols, packing, the release patched against); the kept releases "
-             "a deploy can patch; what keeps the project from deploying, one sentence each (usually a missing "
-             "deploy folder - deploy_set_settings - no startup scene - settings_set standalone.startup_scene - or "
-             "assets still compiling); and the progress of the current or last deploy. With platform android it "
-             "also reports android: whether the editor has its Android player, the Android SDK and Java found, the "
-             "application id used, the devices adb listed (each call lists them again in the background, so call "
-             "again for a fresh list) and whether a game started by Deploy and Run still runs; the game's log goes "
-             "to the editor log ([Device] lines, logs_get_recent).",
-         .input_schema_json = empty_object_schema(),
+             "Everything about deploying a profile in one read; profile (default the deploy profile, the one deploys "
+             "build) picks which, and deploy_profile names the selected one. profiles lists every profile with its "
+             "platform. settings are the deploy settings the profile deploys with (destination folder, runtime "
+             "dependencies, run after deploy, cooked assets, debug symbols, packing, the release patched against), "
+             "named as deploy_set_settings takes them; overridden lists the ones the profile overrides of the shared "
+             "settings. Also the profile's kept releases a deploy can patch, what keeps it from deploying, one "
+             "sentence each (usually a missing deploy folder - deploy_set_settings - no startup scene - settings_set "
+             "standalone.startup_scene - or assets still compiling), and the progress of the current or last deploy. "
+             "For an Android profile it also reports android: whether the editor has its Android player, the Android "
+             "SDK and Java found, the application id used, the devices adb listed (each call lists them again in the "
+             "background, so call again for a fresh list) and whether a game started by Deploy and Run still runs. "
+             "The game's log goes to the editor log ([Device] lines, logs_get_recent).",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile to report on; default the deploy profile"}}})json",
          .handler =
-             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
              auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr)
+             std::string profile;
+             if(pm == nullptr || !read_target_profile(*pm, args, "profile", profile, error))
              {
                  return {.text = error, .is_error = true};
              }
-             const auto& params = pm->get_deploy_settings();
+             const auto params = *pm->get_profile_deploy_settings(profile);
              const auto problems = deployment::get_problems(ctx, params);
              const bool is_android = params.deploy_target == deploy_platform::android;
-             return {.text = fmt::format(R"({{"settings":{},"releases":{},"can_deploy":{},"problems":{},"deploy":{},"android":{}}})",
-                                         deploy_settings_to_json(params),
-                                         strings_to_json_array(deployment::list_project_releases()),
-                                         bool_to_json(problems.empty()),
-                                         strings_to_json_array(problems),
-                                         deploy_progress_json(take_snapshot(ctx)),
-                                         is_android ? android_state_to_json(ctx, params) : std::string("null")),
+             return {.text = fmt::format(
+                         R"({{"deploy_profile":{},"profile":{},"profiles":{},"settings":{},"overridden":{},"releases":{},"can_deploy":{},"problems":{},"deploy":{},"android":{}}})",
+                         make_json_string(pm->get_deploy_profile()),
+                         make_json_string(profile),
+                         profile_names_to_json(*pm),
+                         deploy_settings_to_json(params),
+                         deploy_overrides_to_json(*pm->get_profiles().find(profile)),
+                         strings_to_json_array(deployment::list_project_releases(profile)),
+                         bool_to_json(problems.empty()),
+                         strings_to_json_array(problems),
+                         deploy_progress_json(take_snapshot(ctx)),
+                         is_android ? android_state_to_json(ctx, params) : std::string("null")),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -429,72 +553,208 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "deploy_set_settings",
          .description =
-             "Set the project's deploy settings and save them, then report what still keeps the "
-             "project from deploying. location is an absolute folder, or one relative to the project folder "
-             "(default .deploy, stored relative when it is in the project, outside the folders the editor "
-             "manages: data, compiled, settings, deploy, editor, releases, temp); it is created when missing "
-             "and must be empty or an earlier deploy, which a deploy updates in place. "
+             "Set deploy settings and save them, then report what still keeps the profile from deploying. "
+             "Every argument is checked before anything is written: a refused call changes nothing. "
+             "profile names the profile the call writes (default the deploy profile) and leaves the selection alone; "
+             "deploy_profile selects the profile deploys build. "
+             "scope says where the settings other than location, patch_release and android_* go: \"shared\" (default) "
+             "writes them for every profile that does not override them, \"profile\" stores them as overrides of the "
+             "profile only. location is always shared; patch_release and the android_* settings always belong to the "
+             "profile. written lists where each value went; shadowed lists shared values the profile overrides, so it "
+             "keeps deploying with its own (revert them, or pass scope profile). revert lists settings, named as this "
+             "tool's arguments, the profile stops overriding. "
+             "location is an absolute folder, or one relative to the project folder (default .deploy, stored relative "
+             "when it is in the project, outside the folders the editor manages: data, compiled, settings, deploy, "
+             "editor, releases, profiles, cache, temp); it is created when missing and must be empty or an earlier "
+             "deploy, which a deploy updates in place. Each profile builds into a folder named after it in location; "
+             "an Android profile's holds <project>.apk only (the data stays in the editor's build folder). "
              "include_debug_symbols ships the scripts' .pdb/.xml so managed exceptions name file and line. "
-             "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off "
-             "ships them loose. patch_release names a kept release (deploy_keep_release): its packs ship "
-             "unchanged and content_p1.pak holds every change since; an empty string makes full builds again. "
-             "only_used_assets ships only the project assets the startup scene, the scenes list and the scripts' "
-             "path literals reach (deploy_get_content shows the result); include / exclude are folder or asset "
-             "keys that always / never ship, the most specific rule winning (exclude on a tie). scenes, include and "
-             "exclude replace the whole list; keys are stored as the project spells them, and keys that name "
-             "nothing come back as warnings. Each platform builds into a folder of its own under location: "
-             "<location>/desktop, or <location>/android for platform android, which holds <project>.apk only (the "
-             "data stays in the editor's build folder); deploy_get_state reports what an Android deploy still "
-             "needs. android_device is an "
-             "adb serial from deploy_get_state's device list, used by run_after_deploy and not saved. Omitted "
-             "fields keep their value.",
+             "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off ships them "
+             "loose. patch_release names a kept release (deploy_keep_release): its packs ship unchanged and "
+             "content_p1.pak holds every change since; an empty string makes full builds again. only_used_assets ships "
+             "only the project assets the startup scene, the scenes list and the scripts' path literals reach "
+             "(deploy_get_content shows the result); include / exclude are folder or asset keys that always / never "
+             "ship, the most specific rule winning (exclude on a tie). scenes, include and exclude replace the whole "
+             "list; keys are stored as the project spells them, and keys that name nothing come back as warnings. "
+             "android_device is an adb serial from deploy_get_state's device list, used by run_after_deploy and not "
+             "saved. android_texture_compression picks the formats the profile's textures are cooked to (astc "
+             "default, or etc2). Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"platform":{"type":"string","enum":["desktop","android"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, android_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location, patch_release and android_* go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
+             // Every argument is checked before anything changes: a refused call leaves the settings as they were.
              std::string error;
              auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr || !require_not_deploying(ctx, error))
+             if(pm == nullptr || !require_not_deploying(ctx, error) || !refuse_platform_argument(args, error))
              {
                  return {.text = error, .is_error = true};
              }
-             auto params = pm->get_deploy_settings();
-             std::string location;
-             if(read_string(args, "location", location) && !location.empty())
+             std::string deploy_profile;
+             if(!read_target_profile(*pm, args, "deploy_profile", deploy_profile, error))
              {
-                 bool create_location = true;
-                 read_bool(args, "create_location", create_location);
-                 if(!apply_location(params.deploy_location, location, create_location, error))
-                 {
-                     return {.text = error, .is_error = true};
-                 }
+                 return {.text = error, .is_error = true};
              }
+             // A call that selects a profile writes that one unless it names another.
+             std::string profile = deploy_profile;
+             if(!read_profile_argument(*pm, args, "profile", profile, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             std::string scope = "shared";
+             read_string(args, "scope", scope);
+             if(scope != "shared" && scope != "profile")
+             {
+                 return {.text = fmt::format("scope must be shared or profile, not '{}'.", scope), .is_error = true};
+             }
+             const bool is_profile_scope = scope == "profile";
+             std::vector<deploy_revert> reverts;
+             if(!read_revert_argument(args, reverts, error))
+             {
+                 return {.text = error, .is_error = true};
+             }
+             const auto* found = pm->get_profiles().find(profile);
+             const auto scoped = get_scoped_settings_given(args);
+             std::string patch_release;
+             const bool has_patch_release = read_string(args, "patch_release", patch_release);
+             const bool writes_overrides = (is_profile_scope && !scoped.empty()) || has_patch_release || !reverts.empty();
+             if(writes_overrides && found->deploy.is_unreadable())
+             {
+                 return {.text = fmt::format("Profile {}'s deploy.cfg could not be read. Mend or delete the file, then open "
+                                             "the project again to change what it overrides.",
+                                             profile),
+                         .is_error = true};
+             }
+             auto shared = pm->get_deploy_settings();
+             auto params = is_profile_scope ? *pm->get_profile_deploy_settings(profile) : shared;
              read_bool(args, "deploy_dependencies", params.deploy_dependencies);
              read_bool(args, "run_after_deploy", params.deploy_and_run);
              read_string(args, "run_arguments", params.deploy_run_arguments);
              read_bool(args, "cook_assets", params.deploy_cooked_assets);
              read_bool(args, "include_debug_symbols", params.deploy_debug_symbols);
              read_bool(args, "pack_assets", params.deploy_packed_assets);
-             read_string(args, "patch_release", params.deploy_patch_release);
              read_bool(args, "only_used_assets", params.deploy_only_used_assets);
-             if(!read_android_settings(ctx, args, params, error) ||
+             auto android = found->android;
+             bool has_android_settings = false;
+             std::string device;
+             const bool has_device = read_string(args, "android_device", device);
+             if(!read_android_settings(ctx, args, android, has_android_settings, error) ||
                 !read_key_list(args, "scenes", params.deploy_scenes, error) ||
                 !read_key_list(args, "include", params.deploy_included, error) ||
                 !read_key_list(args, "exclude", params.deploy_excluded, error))
              {
                  return {.text = error, .is_error = true};
              }
+             if(has_android_settings && found->platform != deploy_platform::android)
+             {
+                 return {.text = fmt::format("Profile {} is no Android profile: android_* settings belong to an Android "
+                                             "profile (pass profile).",
+                                             profile),
+                         .is_error = true};
+             }
+             std::string location;
+             if(read_string(args, "location", location) && !location.empty())
+             {
+                 bool create_location = true;
+                 read_bool(args, "create_location", create_location);
+                 if(!apply_location(shared.deploy_location, location, create_location, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+             }
+             params.deploy_location = shared.deploy_location;
              const auto warnings = normalize_deploy_keys(ctx, params);
 
-             pm->get_deploy_settings() = params;
-             pm->save_deploy_settings();
+             // The shared location and device, the scope's settings, the profile's own, then the selection.
+             std::vector<std::string> written_shared;
+             std::vector<std::string> written_profile;
+             pm->get_deploy_settings().deploy_location = shared.deploy_location;
+             if(!location.empty())
+             {
+                 written_shared.emplace_back("location");
+             }
+             if(has_device)
+             {
+                 pm->get_deploy_settings().android_device = device;
+             }
+             if(is_profile_scope)
+             {
+                 pm->save_deploy_settings();
+                 if(auto overridden = pm->override_profile_deploy(ctx, profile, params); !overridden.is_ok())
+                 {
+                     return {.text = overridden.error, .is_error = true};
+                 }
+                 written_profile.insert(written_profile.end(), scoped.begin(), scoped.end());
+             }
+             else
+             {
+                 params.deploy_patch_release = pm->get_deploy_settings().deploy_patch_release;
+                 params.android_device = pm->get_deploy_settings().android_device;
+                 params.profile.clear();
+                 params.android = {};
+                 pm->get_deploy_settings() = params;
+                 pm->save_deploy_settings();
+                 written_shared.insert(written_shared.end(), scoped.begin(), scoped.end());
+             }
+             if(has_patch_release)
+             {
+                 auto resolved = *pm->get_profile_deploy_settings(profile);
+                 resolved.deploy_patch_release = patch_release;
+                 if(auto overridden = pm->override_profile_deploy(ctx, profile, resolved); !overridden.is_ok())
+                 {
+                     return {.text = overridden.error, .is_error = true};
+                 }
+                 written_profile.emplace_back("patch_release");
+             }
+             std::vector<std::string> reverted;
+             for(const auto& revert : reverts)
+             {
+                 if(auto result = pm->revert_profile_deploy(ctx, profile, revert.path); !result.is_ok())
+                 {
+                     return {.text = result.error, .is_error = true};
+                 }
+                 reverted.push_back(revert.name);
+             }
+             if(has_android_settings)
+             {
+                 if(auto changed = pm->set_profile_android(ctx, profile, android); !changed.is_ok())
+                 {
+                     return {.text = changed.error, .is_error = true};
+                 }
+                 written_profile.emplace_back("android");
+             }
+             if(deploy_profile != pm->get_deploy_profile())
+             {
+                 if(auto selected = pm->set_deploy_profile(deploy_profile); !selected.is_ok())
+                 {
+                     return {.text = selected.error, .is_error = true};
+                 }
+             }
 
-             const auto problems = deployment::get_problems(ctx, params);
-             return {.text = fmt::format(R"({{"ok":true,"settings":{},"warnings":{},"problems":{}}})",
-                                         deploy_settings_to_json(params),
-                                         strings_to_json_array(warnings),
-                                         strings_to_json_array(problems)),
+             const auto* written_to = pm->get_profiles().find(profile);
+             std::vector<std::string> shadowed;
+             std::copy_if(written_shared.begin(),
+                          written_shared.end(),
+                          std::back_inserter(shadowed),
+                          [written_to](const std::string& name)
+                          {
+                              return written_to->deploy.is_overridden(find_deploy_setting_path(name));
+                          });
+             const auto request = *pm->get_profile_deploy_settings(profile);
+             const auto problems = deployment::get_problems(ctx, request);
+             return {.text = fmt::format(
+                         R"({{"ok":true,"deploy_profile":{},"profile":{},"written":{{"shared":{},"profile":{}}},"shadowed":{},"reverted":{},"settings":{},"overridden":{},"warnings":{},"problems":{}}})",
+                         make_json_string(pm->get_deploy_profile()),
+                         make_json_string(profile),
+                         strings_to_json_array(written_shared),
+                         strings_to_json_array(written_profile),
+                         strings_to_json_array(shadowed),
+                         strings_to_json_array(reverted),
+                         deploy_settings_to_json(request),
+                         deploy_overrides_to_json(*written_to),
+                         strings_to_json_array(warnings),
+                         strings_to_json_array(problems)),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -504,35 +764,39 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "deploy_keep_release",
          .description =
-             "Keep the packed build in the deploy folder as a release (in the project's releases/<name>), so later "
-             "deploys with patch_release set to its name ship only a patch for it (content_p1.pak) beside its "
-             "unchanged packs. name defaults to the product version (settings app.version). Needs a full packed "
-             "deploy in the folder; refuses a name already kept.",
+             "Keep a desktop profile's packed build in its deploy folder as a release (in the project's "
+             "releases/<profile>/<name>), so later deploys of the profile with patch_release set to its name ship "
+             "only a patch for it (content_p1.pak) beside its unchanged packs. profile defaults to the deploy profile. "
+             "name defaults to the product version (settings app.version). Needs a full packed deploy of the profile "
+             "in its folder; refuses a name already kept.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"name":{"type":"string","description":"Release name; default the product version"}}})json",
+             R"json({"type":"object","properties":{"name":{"type":"string","description":"Release name; default the product version"},"profile":{"type":"string","description":"Default the deploy profile"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
              auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr || !require_not_deploying(ctx, error))
+             std::string profile;
+             if(pm == nullptr || !require_not_deploying(ctx, error) || !read_target_profile(*pm, args, "profile", profile, error))
              {
                  return {.text = error, .is_error = true};
              }
+             const auto request = *pm->get_profile_deploy_settings(profile);
              std::string name;
              if(!read_string(args, "name", name) || name.empty())
              {
-                 name = deployment::get_default_release_name(ctx);
+                 name = deployment::get_default_release_name(ctx, request.profile);
              }
-             const auto result = deployment::keep_project_release(pm->get_deploy_settings(), name);
+             const auto result = deployment::keep_project_release(request, name);
              if(!result.is_ok())
              {
                  return {.text = result.error, .is_error = true};
              }
-             return {.text = fmt::format(R"({{"ok":true,"release":{},"folder":{},"releases":{}}})",
+             return {.text = fmt::format(R"({{"ok":true,"profile":{},"release":{},"folder":{},"releases":{}}})",
+                                         make_json_string(request.profile),
                                          make_json_string(name),
-                                         make_json_string(fs::to_utf8_string(deployment::get_project_release_folder(name))),
-                                         strings_to_json_array(deployment::list_project_releases())),
+                                         make_json_string(fs::to_utf8_string(deployment::get_project_release_folder(request.profile, name))),
+                                         strings_to_json_array(deployment::list_project_releases(request.profile))),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -541,7 +805,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "deploy_get_content",
          .description =
-             "What a deploy ships of the project's assets, as the Deploy window's Content tab shows it: finds what "
+             "What a deploy of a profile (default the deploy profile) ships of the project's assets, as the Deploy "
+             "window's Content tab shows it: finds what "
              "the startup scene, the scenes list (deploy_set_settings scenes) and the scripts' path literals use, "
              "directly or through other assets, then applies the include / exclude rules and only_used_assets. "
              "Returns counts and sizes, deploy scenes no longer in the project, named_folders: folders scripts build "
@@ -550,7 +815,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "keys that name nothing in the project (deploy_set_settings drops them when given the lists without "
              "them). Engine assets always ship and are not listed. The walk runs off the main thread.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"folder":{"type":"string","description":"Only assets in this folder (or this one asset), e.g. app:/data/levels"},"show":{"type":"string","enum":["all","shipped","left_out","changed"],"description":"Default all; changed = assets under an include or exclude rule"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Default 200"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"Default the deploy profile"},"folder":{"type":"string","description":"Only assets in this folder (or this one asset), e.g. app:/data/levels"},"show":{"type":"string","enum":["all","shipped","left_out","changed"],"description":"Default all; changed = assets under an include or exclude rule"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Default 200"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -572,16 +837,19 @@ void register_deploy_tools(mcp_tool_registry& registry)
              const auto limit = static_cast<size_t>(std::min(read_clamped_int64(args, "limit", default_limit, 1), max_limit));
              std::string error;
              auto request = ctx.get_cached<mcp_manager>().invoke_on_main(
-                 [&ctx, &error]() -> hpp::optional<content_request>
+                 [&ctx, &error, &args]() -> hpp::optional<content_request>
                  {
                      auto* pm = get_open_project(ctx, error);
-                     if(pm == nullptr)
+                     std::string profile;
+                     if(pm == nullptr || !read_target_profile(*pm, args, "profile", profile, error))
                      {
                          return hpp::nullopt;
                      }
-                     return content_request{deployment::make_project_content_source(ctx.get_cached<asset_manager>()),
-                                            pm->get_deploy_settings(),
-                                            pm->get_settings().standalone.startup_scene.id()};
+                     const auto request = *pm->get_profile_deploy_settings(profile);
+                     const auto shipped_settings = pm->get_profile_settings(request.profile);
+                     return content_request{deployment::make_project_content_source(ctx.get_cached<asset_manager>(), shipped_settings),
+                                            request,
+                                            shipped_settings.standalone.startup_scene.id()};
                  });
              if(!request || !*request)
              {
@@ -638,29 +906,31 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "deploy_remove_release",
          .description =
-             "Delete a kept release's packs (deploy_get_state lists the releases). Patches can no longer be made "
-             "for it; when patch_release names it, patch_release is cleared and deploys make full builds again.",
+             "Delete a kept release's packs of a profile (default the deploy profile; deploy_get_state lists its "
+             "releases). Patches can no longer be made for it; when the profile's patch_release names it, "
+             "patch_release is cleared and its deploys make full builds again.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"name":{"type":"string","description":"The release to delete"}},"required":["name"]})json",
+             R"json({"type":"object","properties":{"name":{"type":"string","description":"The release to delete"},"profile":{"type":"string","description":"Default the deploy profile"}},"required":["name"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              std::string error;
              auto* pm = get_open_project(ctx, error);
-             if(pm == nullptr || !require_not_deploying(ctx, error))
+             std::string profile;
+             if(pm == nullptr || !require_not_deploying(ctx, error) || !read_target_profile(*pm, args, "profile", profile, error))
              {
                  return {.text = error, .is_error = true};
              }
              std::string name;
              read_string(args, "name", name);
-             const auto result = deployment::remove_project_release(ctx, name);
+             const auto result = deployment::remove_project_release(ctx, profile, name);
              if(!result.is_ok())
              {
                  return {.text = result.error, .is_error = true};
              }
              return {.text = fmt::format(R"({{"ok":true,"removed":{},"releases":{}}})",
                                          make_json_string(name),
-                                         strings_to_json_array(deployment::list_project_releases())),
+                                         strings_to_json_array(deployment::list_project_releases(profile))),
                      .is_error = false};
          },
          .mutates_scene = false,
@@ -675,11 +945,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "deploy_get_state first. Waits for running asset and script "
              "compiles first, then for the deploy, up to timeout_ms in all (default 180000); on timeout the deploy "
              "keeps running and deploy_get_state reports it. Assets without a compiled file fail the deploy before "
-             "the folder is touched, named in failed_steps. Refuses play mode. With platform android the last step "
-             "builds <project>.apk with Gradle from the editor's Android player; run_after_deploy then installs and "
-             "starts it on android_device, and the game's log goes to the editor log ([Device] lines).",
+             "the folder is touched, named in failed_steps. Refuses play mode. It deploys the deploy profile, or the "
+             "profile given, which becomes the deploy profile. For an Android profile the last step builds "
+             "<project>.apk with Gradle from the editor's Android player; run_after_deploy then installs and starts "
+             "it on android_device, and the game's log goes to the editor log ([Device] lines). Textures the profile "
+             "compiles differently from the editor (its formats, its defaults) are cooked first (Cooking Textures) "
+             "and kept in the project's cache/profiles/<profile> for its next deploys.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"location":{"type":"string","description":"Deploy folder, absolute or relative to the project folder; the platform builds into <location>/desktop or <location>/android. Also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean"},"platform":{"type":"string","enum":["desktop","android"],"description":"Also saved into the deploy settings. android builds an .apk; with run_after_deploy it is installed and started on android_device"},"android_device":{"type":"string","description":"adb serial from deploy_get_state's android.devices"},"android_replace_installed":{"type":"boolean","description":"When the game on the device was signed with another key (debug vs release), uninstall it first, which removes its saved data; default false reports android.install_conflict instead"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
+             R"json({"type":"object","properties":{"location":{"type":"string","description":"Deploy folder, absolute or relative to the project folder; the profile builds into <location>/<profile>. Also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean","description":"For this deploy only"},"profile":{"type":"string","description":"The profile to deploy; it becomes the deploy profile. An Android profile builds an .apk; with run_after_deploy it is installed and started on android_device"},"android_device":{"type":"string","description":"adb serial from deploy_get_state's android.devices"},"android_replace_installed":{"type":"boolean","description":"When the game on the device was signed with another key (debug vs release), uninstall it first, which removes its saved data; default false reports android.install_conflict instead"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -687,20 +960,38 @@ void register_deploy_tools(mcp_tool_registry& registry)
 
              std::string location;
              read_string(args, "location", location);
-             deploy_platform platform{};
              std::string argument_error;
-             std::string platform_name;
-             const bool has_platform = read_string(args, "platform", platform_name);
-             if(!read_enum_name(args, "platform", PLATFORM_NAMES, platform, argument_error))
+             if(!refuse_platform_argument(args, argument_error))
              {
                  return {.text = argument_error, .is_error = true};
+             }
+             std::string profile;
+             read_string(args, "profile", profile);
+             if(!profile.empty())
+             {
+                 const auto checked = mcp.invoke_on_main(
+                     [&ctx, &args]() -> std::string
+                     {
+                         std::string error;
+                         std::string named;
+                         auto* pm = get_open_project(ctx, error);
+                         if(pm != nullptr)
+                         {
+                             read_profile_argument(*pm, args, "profile", named, error);
+                         }
+                         return error;
+                     });
+                 if(checked && !checked->empty())
+                 {
+                     return {.text = *checked, .is_error = true};
+                 }
              }
              std::string android_device;
              const bool has_device = read_string(args, "android_device", android_device);
              bool replace_installed = false;
              read_bool(args, "android_replace_installed", replace_installed);
              // The device check below reads the last listing; this call may be the first of the session.
-             if(has_device || (has_platform && platform == deploy_platform::android))
+             if(has_device || !deployment::has_listed_android_devices())
              {
                  deployment::update_android_devices();
              }
@@ -727,7 +1018,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
 
              auto start = mcp.invoke_on_main(
-                 [&ctx, location, run_after_deploy, has_run_flag, platform, has_platform, android_device, has_device, replace_installed]() -> tool_result
+                 [&ctx, location, run_after_deploy, has_run_flag, profile, android_device, has_device, replace_installed]() -> tool_result
                  {
                      std::string error;
                      if(!require_not_play_mode(ctx, error))
@@ -745,26 +1036,29 @@ void register_deploy_tools(mcp_tool_registry& registry)
                          return {.text = "A deploy is already running; poll deploy_get_state", .is_error = true};
                      }
 
-                     auto params = pm->get_deploy_settings();
-                     if(has_platform)
+                     if(!profile.empty())
                      {
-                         params.deploy_target = platform;
+                         if(auto selected = pm->set_deploy_profile(profile); !selected.is_ok())
+                         {
+                             return {.text = selected.error, .is_error = true};
+                         }
                      }
-                     if(!location.empty() && !apply_location(params.deploy_location, location, true, error))
+                     auto& shared = pm->get_deploy_settings();
+                     if(!location.empty() && !apply_location(shared.deploy_location, location, true, error))
                      {
                          return {.text = error, .is_error = true};
                      }
+                     if(has_device)
+                     {
+                         shared.android_device = android_device;
+                     }
+                     pm->save_deploy_settings();
+                     auto params = pm->get_deploy_request();
+                     // For this deploy only: run it or not, and whether it may uninstall the game from the device.
                      if(has_run_flag)
                      {
                          params.deploy_and_run = run_after_deploy;
                      }
-                     if(has_device)
-                     {
-                         params.android_device = android_device;
-                     }
-                     pm->get_deploy_settings() = params;
-                     pm->save_deploy_settings();
-                     // For this deploy only: it may uninstall the game from the device.
                      params.android_replace_installed = replace_installed;
 
                      const auto problems = deployment::get_problems(ctx, params);
@@ -861,22 +1155,28 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "android_device_action",
          .description =
-             "Act on the game on an Android device without a new deploy, as the Deploy window's On Device row "
-             "does. run_last_build installs <location>/android/<project>.apk (from an earlier project_deploy with "
-             "platform android) and starts it; its steps show in deploy_get_state and the game's log goes to the "
+             "Act on the game of the deploy profile (an Android profile) on a device without a new deploy, as the "
+             "Deploy window's On Device row does. run_last_build installs <location>/<profile>/<project>.apk (from "
+             "an earlier project_deploy of the profile) and starts it; its steps show in deploy_get_state and the game's log goes to the "
              "editor log as [Device] lines. follow_log follows the log of the game already running. clear_data "
              "removes the game's saved data (pm clear), which stops it. uninstall removes the game with its saved "
              "data. clear_data and uninstall finish in the background; logs_get_recent shows the outcome. "
              "android_device is an adb serial from deploy_get_state's android.devices; default the deploy "
              "settings' device, or the only ready one.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"action":{"type":"string","enum":["run_last_build","follow_log","clear_data","uninstall"]},"android_device":{"type":"string","description":"adb serial; default the deploy settings' device, or the only ready one"}},"required":["action"]})json",
+             R"json({"type":"object","properties":{"action":{"type":"string","enum":["run_last_build","follow_log","clear_data","uninstall"]},"profile":{"type":"string","description":"An Android profile; default the deploy profile"},"android_device":{"type":"string","description":"adb serial; default the deploy settings' device, or the only ready one"}},"required":["action"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
+             constexpr const char* actions[] = {"run_last_build", "follow_log", "clear_data", "uninstall"};
              std::string action;
              read_string(args, "action", action);
+             if(std::find(std::begin(actions), std::end(actions), action) == std::end(actions))
+             {
+                 return {.text = fmt::format("action must be run_last_build, follow_log, clear_data or uninstall, not '{}'.", action),
+                         .is_error = true};
+             }
              std::string android_device;
              const bool has_device = read_string(args, "android_device", android_device);
              // The device check reads the last listing; this call may be the first of the session.
@@ -885,7 +1185,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  deployment::update_android_devices();
              }
              auto done = mcp.invoke_on_main(
-                 [&ctx, action, android_device, has_device]() -> tool_result
+                 [&ctx, &args, action, android_device, has_device]() -> tool_result
                  {
                      std::string error;
                      auto* pm = get_open_project(ctx, error);
@@ -894,8 +1194,17 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      {
                          return {.text = pm == nullptr ? error : "Deploy window unavailable", .is_error = true};
                      }
-                     auto params = pm->get_deploy_settings();
-                     params.deploy_target = deploy_platform::android;
+                     std::string profile;
+                     if(!read_target_profile(*pm, args, "profile", profile, error))
+                     {
+                         return {.text = error, .is_error = true};
+                     }
+                     auto params = *pm->get_profile_deploy_settings(profile);
+                     if(params.deploy_target != deploy_platform::android)
+                     {
+                         return {.text = fmt::format("Profile {} is no Android profile. Pass profile, an Android one.", profile),
+                                 .is_error = true};
+                     }
                      if(has_device)
                      {
                          params.android_device = android_device;
@@ -926,9 +1235,12 @@ void register_deploy_tools(mcp_tool_registry& registry)
                                                        });
                      if(!is_ready)
                      {
-                         return {.text = fmt::format("'{}' is no connected, ready device; deploy_get_state lists them",
-                                                     params.android_device),
-                                 .is_error = true};
+                         const auto text = params.android_device.empty()
+                                               ? fmt::format("{} devices are ready. Pass android_device (deploy_get_state lists them).",
+                                                             ready_count == 0 ? std::string("No") : std::to_string(ready_count))
+                                               : fmt::format("'{}' is no connected, ready device. deploy_get_state lists them.",
+                                                             params.android_device);
+                         return {.text = text, .is_error = true};
                      }
                      if(panel->is_deploying() || deployment::is_android_device_busy())
                      {
@@ -938,7 +1250,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      {
                          if(!deployment::has_android_package(ctx, params))
                          {
-                             return {.text = fmt::format("No package at {}; run project_deploy with platform android first",
+                             return {.text = fmt::format("No package at {}; run project_deploy of the profile first",
                                                          fs::to_utf8_string(deployment::get_android_package_path(ctx, params))),
                                      .is_error = true};
                          }

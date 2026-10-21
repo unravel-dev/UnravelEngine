@@ -47,6 +47,14 @@ auto compute_viewport_pixels(const settings::resolution_settings::resolution& re
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// The pixels a preset renders a view's scene at: its own for a preset with pixels; empty
+/// otherwise, for the view's size.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_render_resolution(const settings::resolution_settings::resolution& res) -> usize32_t;
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// Apply the resolution preset to the camera component using
 /// compute_viewport_pixels. Only viewport size is modified; viewport position
 /// is left untouched.

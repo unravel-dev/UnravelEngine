@@ -1,6 +1,7 @@
 #include "content.h"
 #include "files.h"
 #include "keys.h"
+#include "profile.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -35,7 +36,7 @@ auto get_project_relative(const std::string& key) -> std::string
 
 /// Reads a text file whole; false for a binary, missing or oversized file. The first bytes are read
 /// first, so a binary source costs one small read.
-auto read_text_file(const fs::path& file, std::string& text) -> bool
+auto read_scannable_text_file(const fs::path& file, std::string& text) -> bool
 {
     std::ifstream stream(file, std::ios::binary);
     if(!stream)
@@ -104,11 +105,16 @@ public:
         }
     }
 
-    /// The handles the project settings hold (splash logos and the like).
+    /// The handles the shipped settings hold (splash logos and the like).
     void reach_settings()
     {
+        if(!source_.settings_document.empty())
+        {
+            reach_uids(source_.settings_document, PROJECT_SETTINGS_NAME);
+            return;
+        }
         std::string text;
-        if(read_text_file(get_file(PROJECT_SETTINGS_KEY), text))
+        if(read_scannable_text_file(get_file(PROJECT_SETTINGS_KEY), text))
         {
             reach_uids(text, PROJECT_SETTINGS_NAME);
         }
@@ -121,7 +127,7 @@ public:
         for(const auto& script_key : script_keys_)
         {
             std::string text;
-            if(!read_text_file(get_file(script_key), text))
+            if(!read_scannable_text_file(get_file(script_key), text))
             {
                 continue;
             }
@@ -272,7 +278,7 @@ private:
     {
         const std::string key = content_.entries[index].key;
         std::string text;
-        if(read_text_file(get_file(key), text))
+        if(read_scannable_text_file(get_file(key), text))
         {
             reach_uids(text, key);
             for(const auto& path : asset_references::find_quoted_protocol_paths(text, CONTENT_PROTOCOL))
@@ -454,10 +460,12 @@ void content::build_index()
     }
 }
 
-auto make_project_content_source(asset_manager& am) -> content_source
+auto make_project_content_source(asset_manager& am, const settings& shipped_settings) -> content_source
 {
     const std::string root = std::string(CONTENT_PROTOCOL) + ":/";
-    return {am.get_database_snapshot(root), fs::resolve_protocol(root)};
+    return {am.get_database_snapshot(root),
+            fs::resolve_protocol(root),
+            serialization::save_to_document(shipped_settings, SETTINGS_DOCUMENT_ROOT)};
 }
 
 auto detect_content(const content_source& source, const deploy_settings& params, const std::string& startup_scene)

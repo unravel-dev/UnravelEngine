@@ -30,7 +30,7 @@ void deploy_loose(const protocol_job& job, const fs::path& destination, const co
                     {
                         return is_shipped(file, file.lexically_relative(job.compiled_root));
                     });
-    copy_cooked_or_throw(job.cooked_root, destination, is_shipped);
+    copy_cooked_or_throw(job.cooked, destination, is_shipped);
 }
 
 /// The packed build: only what the runtime loads by path stays loose; the pack reads the rest straight
@@ -43,7 +43,7 @@ void deploy_packed(const protocol_job& job, const fs::path& destination, const f
                     {
                         return is_loose_only_file(file) && is_shipped_compiled_file(file, job.with_debug_symbols);
                     });
-    const auto inputs = collect_pack_inputs(job.compiled_root, job.cooked_root, index, is_shipped);
+    const auto inputs = collect_pack_inputs(job.compiled_root, job.cooked, index, is_shipped);
     if(job.patch_release_pack.empty())
     {
         write_full_pack(job.protocol_root, inputs);

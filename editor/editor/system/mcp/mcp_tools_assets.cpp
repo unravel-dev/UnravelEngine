@@ -1240,10 +1240,11 @@ void register_asset_tools(mcp_tool_registry& registry)
         {.name = "assets_get_import_settings",
          .description =
              "Read assets' import settings by key - what the .meta beside each asset stores (textures: type, "
-             "colorspace, generate_mipmaps, quality.max_size, quality.compression; meshes, animations and audio "
-             "have their own). 'project_default' values follow the project's settings (settings_get group "
-             "assets). A loaded texture also reports its compiled format, size and mips; 'schemas' describes each "
-             "importer type once.",
+             "colorspace, generate_mipmaps, quality.max_size, quality.compression, and platforms.desktop / "
+             "platforms.android with is_overridden and the quality that platform compiles with instead; meshes, "
+             "animations and audio have their own). 'project_default' values follow the project's settings "
+             "(settings_get group assets), or the deployed profile's override of them. A loaded texture also "
+             "reports its compiled format, size and mips; 'schemas' describes each importer type once.",
          .input_schema_json =
              R"json({"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}}},"required":["keys"]})json",
          .handler =

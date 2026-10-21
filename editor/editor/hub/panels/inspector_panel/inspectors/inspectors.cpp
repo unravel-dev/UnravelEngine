@@ -1378,6 +1378,11 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     // Push property name to path context for flattable properties too
     auto& override_ctx = ctx.get_cached<prefab_override_context>();
     override_ctx.push_segment(prop_name, pretty_name);
+    auto& profile_overrides = ctx.get_cached<property_override_view>();
+    profile_overrides.push_segment(prop_name);
+    // A setting every profile shares is edited in the project settings, not in a profile.
+    is_readonly |= profile_overrides.is_current_shared();
+    info.read_only = is_readonly;
 
     ImGui::PushReadonly(is_readonly);
 
@@ -1471,6 +1476,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
         prop_inspector->after_inspect(prop, object);
     }
 
+    profile_overrides.pop_segment();
     override_ctx.pop_segment();
 
     return result;

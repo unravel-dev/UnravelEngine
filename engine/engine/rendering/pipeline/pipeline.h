@@ -5,6 +5,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/feature_limits.h>
 #include <engine/rendering/particles/ps/particle_types.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
@@ -33,6 +34,7 @@
 #include "passes/ssil_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
+#include "passes/upscale_pass.h"
 #include "passes/taa_pass.h"
 #include "pre_exposure.h"
 #include "volume_resolver.h"
@@ -189,12 +191,34 @@ public:
         /// Global illumination. Unset means off, exactly like the hooks above -- the feature runs only
         /// where a gi_component asks for it.
         std::function<void(gi_settings&)> fill_gi_params;
+
+        /// Camera runs: the fraction of the render resolution the scene renders at, from MIN_RENDER_SCALE to 1.
+        /// The finished scene is resampled into the output, at the camera's viewport size.
+        float render_scale = 1.0f;
+        /// Camera runs: the size the scene renders at before the render scale; empty: the camera's viewport
+        /// size. A view can render a resolution of its own this way while its viewport keeps the size it is
+        /// shown at, which the screen helpers and the picking work in.
+        usize32_t render_resolution{};
+        /// Camera runs whose scene renders at another size than the output: also give the output a depth at
+        /// its size (the OBUFFER_DEPTH frame buffer), for what draws over the finished image with the scene's
+        /// depth, such as the editor's gizmos and grid. A run at the output's size always has it.
+        bool needs_output_depth = false;
+
+        /// The features the run may use. apply_feature_limits applies them to the hooks above; the shadow
+        /// and lighting passes render every light as limit_light limits it.
+        feature_limits limits;
     };
 
     pipeline() = default;
     virtual ~pipeline() = default;
 
     virtual auto init(rtti::context& ctx) -> bool;
+
+    /**
+     * @brief Limits `params` to `limits`: the hooks of effects they do not allow are cleared, a view asking
+     * for temporal AA under an FXAA limit gets FXAA, and `params.limits` is set for the passes that read it.
+     */
+    static void apply_feature_limits(run_params& params, const feature_limits& limits);
 
     /**
      * @brief Gathers visible models from the scene based on the given query.
@@ -301,6 +325,11 @@ public:
         return temporal_probe_pass_;
     }
 
+    /**
+     * @brief Draws the world-space UI documents and texts over the finished scene.
+     * @param output The finished scene's color with its depth attached: the elements are drawn into the
+     *        color and depth tested against the scene.
+     */
     virtual void run_ui_pass(scene& scn,
                          const camera& camera,
                          gfx::render_view& rview,
@@ -356,6 +385,7 @@ public:
 protected:
     prefilter_pass prefilter_pass_{};
     blit_pass blit_pass_{};
+    upscale_pass upscale_pass_{};
     atmospheric_pass_perez atmospheric_pass_perez_{};
     atmospheric_pass_skybox atmospheric_pass_skybox_{};
     assao_pass assao_pass_{};

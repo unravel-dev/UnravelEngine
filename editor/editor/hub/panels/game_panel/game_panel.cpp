@@ -170,7 +170,7 @@ void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         return;
     }
 
-    path.render_scene(scene, dt);
+    path.render_scene(scene, dt, {.render_scale = view_render_scale::get_render_scale(render_scale_)});
 
     end_forced_frame();
 }
@@ -267,10 +267,10 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
 
     ImVec2 min = ImGui::GetItemRectMin();
     ImVec2 max = ImGui::GetItemRectMax();
-    const auto gi_visualize = visualization_menu::make_gi_visualize(visualization_menu_state_,
-                                                                    min,
-                                                                    max,
-                                                                    camera_comp.get_camera().get_viewport_size());
+    // The scene renders at the render size, which the GI visualization's pixels are in.
+    const auto& scene_depth = camera_comp.get_render_view().tex_find("DEPTH");
+    const auto render_size = scene_depth ? scene_depth->get_size() : camera_comp.get_camera().get_viewport_size();
+    const auto gi_visualize = visualization_menu::make_gi_visualize(visualization_menu_state_, min, max, render_size);
 
     input::zone work_zone{};
     work_zone.x = min.x;
@@ -374,6 +374,7 @@ void game_panel::draw_toolbar(rtti::context& ctx, const ImRect& area)
     if(panel_toolbar::begin_bar(GAME_TOOLBAR_ID, placement))
     {
         draw_resolution_dropdown(ctx);
+        view_render_scale::draw_toolbar_dropdown(ctx, render_scale_, toolbar_layout_.is_compact);
         panel_toolbar::separator();
         visualization_menu::draw_toolbar_dropdown(visualize_passes_, visualization_menu_state_);
         draw_ui_debugger_toggle(ctx);

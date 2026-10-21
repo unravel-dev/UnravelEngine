@@ -1,5 +1,6 @@
 #include "asset_compiler.h"
 #include "asset_dependencies.h"
+#include "texture_target.h"
 #include <engine/assets/impl/asset_writer.h>
 #include "asset_manifest.h"
 #include "generated_asset.h"
@@ -359,15 +360,10 @@ bool copy_compiled_file(const fs::path& from, const fs::path& to)
     return !err;
 }
 
-auto select_compressed_format(bgfx::TextureFormat::Enum input_format,
-                              const fs::path& extension,
-                              texture_importer_meta::compression_quality quality) -> bgfx::TextureFormat::Enum
+auto select_bc_format(bgfx::TextureFormat::Enum input_format,
+                      const fs::path& extension,
+                      texture_importer_meta::compression_quality quality) -> bgfx::TextureFormat::Enum
 {
-    if(quality == texture_importer_meta::compression_quality::none)
-    {
-        return input_format;
-    }
-
     if(input_format == bgfx::TextureFormat::BC1)
     {
         return bgfx::TextureFormat::BC3;
@@ -456,6 +452,70 @@ auto select_compressed_format(bgfx::TextureFormat::Enum input_format,
     return input_format;
 }
 
+/// The source's channels and range as the format choice reads them: a float file is HDR whatever its format.
+auto get_source_format_details(bgfx::TextureFormat::Enum input_format, const fs::path& extension) -> gfx::format_details
+{
+    auto info = gfx::get_format_info(input_format);
+    if(extension == ".hdr" || extension == ".exr")
+    {
+        info.is_hdr = true;
+    }
+    return info;
+}
+
+/// ASTC for every LDR texture (select_astc_ldr_format). ASTC's HDR profile is on few devices, so HDR
+/// textures take a small float format.
+auto select_astc_format(const input_texture_info& input,
+                        const fs::path& extension,
+                        const texture_compile_parameters& parameters) -> bgfx::TextureFormat::Enum
+{
+    if(get_source_format_details(input.format, extension).is_hdr)
+    {
+        return bgfx::TextureFormat::RG11B10F;
+    }
+    return select_astc_ldr_format(input.width, input.height, texture_size_to_pixel_limit(parameters.max_size), parameters.compression);
+}
+
+/// ETC2 for color and EAC for one and two channels. ETC has no HDR format, so HDR textures take a small
+/// float format.
+auto select_etc2_format(bgfx::TextureFormat::Enum input_format, const fs::path& extension) -> bgfx::TextureFormat::Enum
+{
+    const auto info = get_source_format_details(input_format, extension);
+    if(info.is_hdr)
+    {
+        return bgfx::TextureFormat::RG11B10F;
+    }
+    if(info.num_channels == 1)
+    {
+        return bgfx::TextureFormat::EACR11;
+    }
+    if(info.num_channels == 2)
+    {
+        return bgfx::TextureFormat::EACRG11;
+    }
+    return info.has_alpha_channel ? bgfx::TextureFormat::ETC2A : bgfx::TextureFormat::ETC2;
+}
+
+auto select_compressed_format(const input_texture_info& input,
+                              const fs::path& extension,
+                              const texture_compile_parameters& parameters) -> bgfx::TextureFormat::Enum
+{
+    if(parameters.compression == texture_importer_meta::compression_quality::none)
+    {
+        return input.format;
+    }
+    switch(parameters.family)
+    {
+        case texture_compression_family::astc:
+            return select_astc_format(input, extension, parameters);
+        case texture_compression_family::etc2:
+            return select_etc2_format(input.format, extension);
+        case texture_compression_family::bc:
+        default:
+            return select_bc_format(input.format, extension, parameters.compression);
+    }
+}
+
 auto bake_normal_map_input_if_needed(const fs::path& input_path,
                                      const texture_importer_meta& importer,
                                      fs::path& temp_baked_path) -> fs::path
@@ -490,7 +550,9 @@ auto bake_normal_map_input_if_needed(const fs::path& input_path,
 
     fs::error_code err;
     // Always feed texturec a lossless RGBA8 PNG (avoids broken BC re-encode and zero-alpha PNG previews).
-    temp_baked_path = fs::temp_directory_path(err) / (input_path.stem().string() + "_normal_y.png");
+    // Unique per compile: textures that share a name, or one texture compiled for two targets, can bake at once.
+    temp_baked_path =
+        fs::temp_directory_path(err) / fmt::format("{}_normal_y_{}.png", input_path.stem().string(), hpp::to_string(generate_uuid()));
     if(err || temp_baked_path.empty())
     {
         bimg::imageFree(image);
@@ -512,10 +574,11 @@ auto bake_normal_map_input_if_needed(const fs::path& input_path,
     return temp_baked_path;
 }
 
-auto compile_texture_to_file(const fs::path& input_path, 
-                            const fs::path& output_path,
-                            const texture_importer_meta& importer,
-                            const std::string& protocol) -> bool
+auto compile_texture_to_file(const fs::path& input_path,
+                             const fs::path& output_path,
+                             const texture_importer_meta& importer,
+                             const std::string& protocol,
+                             const texture_compile_parameters& parameters) -> bool
 {
     fs::path temp_baked_path;
     const fs::path compile_input = bake_normal_map_input_if_needed(input_path, importer, temp_baked_path);
@@ -525,42 +588,10 @@ auto compile_texture_to_file(const fs::path& input_path,
     std::string str_output = output_path.string();
     
     bool try_compress = protocol == "app";
-    
-    auto quality = importer.quality;
-    if(quality.compression == texture_importer_meta::compression_quality::project_default)
-    {
-        auto& ctx = engine::context();
-        if(ctx.has<settings>())
-        {
-            auto& ss = ctx.get<settings>();
-            quality.compression = ss.assets.texture.default_compression;
-        }
-    }
 
-    if(quality.max_size == texture_importer_meta::texture_size::project_default)
-    {
-        auto& ctx = engine::context();
-        if(ctx.has<settings>())
-        {
-            auto& ss = ctx.get<settings>();
-            quality.max_size = ss.assets.texture.default_max_size;
-        }
-    }
-
-    // If still default, set to normal quality
-    if(quality.compression == texture_importer_meta::compression_quality::project_default)
-    {
-        quality.compression = texture_importer_meta::compression_quality::normal_quality;
-    }
-
-    // If still default, set to 2048
-    if(quality.max_size == texture_importer_meta::texture_size::project_default)
-    {
-        quality.max_size = texture_importer_meta::texture_size::size_2048;
-    }
-
+    const auto& quality = parameters;
     const auto input_info = get_input_texture_info(compile_input, quality.max_size);
-    auto format = select_compressed_format(input_info.format, compile_input.extension(), quality.compression);
+    auto format = select_compressed_format(input_info, compile_input.extension(), parameters);
 
     // Resolve the effective color space. Data-typed imports are always linear no
     // matter the tag: normal maps are vectors, and float sources (.hdr/.exr) have
@@ -661,7 +692,12 @@ auto compile_texture_to_file(const fs::path& input_path,
 
             case texture_importer_meta::texture_type::normal_map:
             {
-                args_array.emplace_back("--normalmap");
+                // texturec's normal map mode stores an ASTC normal as XXXY (Y in alpha), and the shaders read
+                // the normal's XYZ, so ASTC normal maps are encoded as color.
+                if(parameters.family != texture_compression_family::astc)
+                {
+                    args_array.emplace_back("--normalmap");
+                }
                 break;
             }
 
@@ -862,15 +898,31 @@ auto compile_shader_to_file(const fs::path& input_path,
     return true;
 }
 
+/// The manifest of the source at `input_path` as it is now, with its dependencies' fingerprints.
 template<typename T>
-auto write_manifest_file(const fs::path& input_path, const fs::path& output_path) -> bool
+auto make_manifest(const fs::path& input_path, const std::string& compile_parameters = {}) -> asset_manifest
 {
-    APP_SCOPE_PERF("Write Manifest File");
     std::vector<fs::path> deps;
     resolve_dependencies<T>(input_path, deps);
-
     asset_manifest manifest(input_path);
     manifest.compute_source_fingerprint(input_path, deps);
+    manifest.compile_parameters = compile_parameters;
+    return manifest;
+}
+
+/// Writes `manifest` beside the compiled file at `output_path`, atomically.
+auto write_manifest(const fs::path& output_path, const asset_manifest& manifest) -> bool;
+
+template<typename T>
+auto write_manifest_file(const fs::path& input_path, const fs::path& output_path, const std::string& compile_parameters = {})
+    -> bool
+{
+    APP_SCOPE_PERF("Write Manifest File");
+    return write_manifest(output_path, make_manifest<T>(input_path, compile_parameters));
+}
+
+auto write_manifest(const fs::path& output_path, const asset_manifest& manifest) -> bool
+{
     auto manifest_path = get_manifest_path(output_path);
 
     bool ok = false;
@@ -999,6 +1051,70 @@ void build_submesh_gi_cards(mesh::load_data& data,
                 elapsed.count());
 }
 
+/// The importer settings of the texture whose source is at `source_path`, read without writing: a texture
+/// without settings gets the ones a new texture gets.
+auto read_texture_importer_settings(const fs::path& source_path) -> texture_importer_meta
+{
+    asset_meta meta;
+    if(load_from_file(source_path.string() + ".meta", meta) && meta.importer)
+    {
+        if(auto importer = std::dynamic_pointer_cast<texture_importer_meta>(meta.importer))
+        {
+            return *importer;
+        }
+    }
+    return *create_default_texture_importer_meta(source_path);
+}
+
+/**
+ * @brief Compiles the texture at `key` with `importer`'s settings for `target` into `output`, and its manifest.
+ * @param manifest The source's manifest (make_manifest), taken before `importer` was read: a source or settings
+ * edit made meanwhile leaves the manifest older than they are, so the next check compiles the texture again.
+ */
+auto compile_texture_with_importer(const fs::path& key,
+                                   const fs::path& output,
+                                   const texture_importer_meta& importer,
+                                   const texture_target& target,
+                                   asset_manifest manifest) -> bool
+{
+    const auto protocol = fs::extract_protocol(fs::convert_to_protocol(key)).generic_string();
+    const auto absolute_path = resolve_input_file(key);
+    const auto parameters = resolve_texture_parameters(importer, target);
+    manifest.compile_parameters = to_string(parameters);
+    // Without its manifest an interrupted compile leaves a file no check takes as current.
+    fs::error_code manifest_err;
+    fs::remove(get_manifest_path(output), manifest_err);
+    bool is_compiled = false;
+    fs::error_code err;
+    asset_writer::atomic_write_file(
+        output,
+        [&](const fs::path& temp_output) -> void
+        {
+            is_compiled = compile_texture_to_file(absolute_path, temp_output, importer, protocol, parameters);
+            if(!is_compiled)
+            {
+                // Without its temp file the write keeps the earlier compiled file instead of a partial one.
+                fs::error_code remove_err;
+                fs::remove(temp_output, remove_err);
+            }
+        },
+        err);
+    if(err || !is_compiled)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1}{2}",
+                     absolute_path.string(),
+                     output.filename().string(),
+                     err ? fmt::format(" with error: {}", err.message()) : std::string{});
+        return false;
+    }
+    if(!write_manifest(output, manifest))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled texture: {0}", output.string());
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 template<>
@@ -1068,6 +1184,8 @@ template<>
 auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     APP_SCOPE_PERF("Compile Texture");
+    // Before the importer settings are read (compile_texture_with_importer).
+    auto manifest = make_manifest<gfx::texture>(resolve_input_file(key));
     auto base_importer = read_importer<gfx::texture>(am, key);
 
     if(!base_importer)
@@ -1075,37 +1193,56 @@ auto compile<gfx::texture>(asset_manager& am, const fs::path& key, const fs::pat
         return true;
     }
     auto importer = std::static_pointer_cast<texture_importer_meta>(base_importer);
+    return compile_texture_with_importer(key, output, *importer, get_editor_texture_target_for(key), std::move(manifest));
+}
 
-    auto protocol = fs::extract_protocol(fs::convert_to_protocol(key)).generic_string();
-    auto absolute_path = resolve_input_file(key);
-    std::string str_input = absolute_path.string();
-
+auto compile_texture_for_target(const fs::path& key, const fs::path& output, const texture_target& target) -> bool
+{
+    APP_SCOPE_PERF("Compile Texture For Target");
+    // Before the importer settings are read (compile_texture_with_importer).
+    auto manifest = make_manifest<gfx::texture>(resolve_input_file(key));
+    const auto importer = read_texture_importer(key);
     fs::error_code err;
-    
-    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) -> void
-    {
-        compile_texture_to_file(
-            absolute_path, 
-            temp_output, 
-            *importer, 
-            protocol
-        );
-    }, err);
-    
-    if(err)
-    {
-        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
-            str_input, output.filename().string(), err.message());
-        return false;
-    }
+    fs::create_directories(output.parent_path(), err);
+    return compile_texture_with_importer(key, output, importer, target, std::move(manifest));
+}
 
-    if(!write_manifest_file<gfx::texture>(absolute_path, output))
+auto get_texture_parameters(const fs::path& key, const texture_target& target) -> texture_compile_parameters
+{
+    return resolve_texture_parameters(read_texture_importer(key), target);
+}
+
+auto read_texture_importer(const fs::path& key) -> texture_importer_meta
+{
+    return read_texture_importer_settings(resolve_input_file(key));
+}
+
+auto is_texture_compiled_for_target(const fs::path& key, const fs::path& output, const texture_target& target) -> bool
+{
+    return is_texture_compiled_with(key, output, get_texture_parameters(key, target));
+}
+
+auto is_texture_compiled_with(const fs::path& key, const fs::path& output, const texture_compile_parameters& parameters) -> bool
+{
+    fs::error_code err;
+    const auto manifest_path = get_manifest_path(output);
+    if(!fs::exists(output, err) || !fs::exists(manifest_path, err))
     {
-        APPLOG_ERROR("Failed to write manifest for compiled texture: {0}", output.string());
         return false;
     }
-    
-    return true;
+    asset_manifest manifest;
+    if(!load_manifest(manifest_path, manifest))
+    {
+        return false;
+    }
+    const auto source = resolve_input_file(key);
+    if(is_compiled_format_changed(source, manifest) || manifest.compile_parameters != to_string(parameters))
+    {
+        return false;
+    }
+    std::vector<fs::path> deps;
+    resolve_dependencies<gfx::texture>(source, deps);
+    return !is_source_file_changed(source, manifest, deps);
 }
 
 template<>

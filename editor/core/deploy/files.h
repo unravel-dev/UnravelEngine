@@ -24,6 +24,10 @@ constexpr const char* DATA_FOLDER = "data";
 /// Whether `key` is a script source: scripts ship as their library, not as assets.
 auto is_script_key(const std::string& key) -> bool;
 
+/// Where the compiled file of the asset at `key` lies in its protocol's compiled folder ("app:/data/a/b.png"
+/// -> "a/b.png.asset"); empty for keys outside the protocol's data folder.
+auto get_compiled_relative_path(const std::string& key) -> fs::path;
+
 /**
  * @brief The compiled files a deployed game reads for the asset at `key`, in the protocol whose folder
  * is `protocol_root`: one per renderer for a shader; none for scripts and for keys outside the protocol's
@@ -55,13 +59,21 @@ auto is_shipped_compiled_file(const fs::path& file, bool with_debug_symbols) -> 
 /// compiled folder (which names the asset it was compiled from).
 using compiled_file_filter = std::function<bool(const fs::path& file, const fs::path& relative)>;
 
+/// Folders of cooked variants laid over a protocol's compiled cache, each holding files at the paths their
+/// compiled files have. A variant in an earlier folder wins over one in a later folder.
+using cooked_folders = std::vector<fs::path>;
+
+/// The file that ships for the compiled file at `relative`: the variant in the first cooked folder that has
+/// one, otherwise `compiled_file`.
+auto get_shipped_variant(const cooked_folders& cooked, const fs::path& relative, const fs::path& compiled_file) -> fs::path;
+
 /**
  * @brief The files a protocol's pack holds, read straight from the compiled cache: the compiled files
- * `is_shipped` keeps, with the cooked variants in `cooked` in their place, and the asset index. In name
- * order, so the same build packs to the same bytes.
+ * `is_shipped` keeps, with their cooked variants in their place, and the asset index. In name order, so
+ * the same build packs to the same bytes.
  */
 auto collect_pack_inputs(const fs::path& compiled,
-                         const fs::path& cooked,
+                         const cooked_folders& cooked,
                          const fs::path& index,
                          const compiled_file_filter& is_shipped) -> std::vector<fs::pack_input>;
 
@@ -69,8 +81,9 @@ auto collect_pack_inputs(const fs::path& compiled,
 void mirror_or_throw(const fs::path& from, const fs::path& to, const fs::mirror_filter& include = {});
 /// fs::copy_file_if_changed that throws on failure.
 void copy_file_or_throw(const fs::path& from, const fs::path& to);
-/// Overlays the cooked variants the filter keeps onto loose compiled files in `destination`.
-void copy_cooked_or_throw(const fs::path& cooked, const fs::path& destination, const compiled_file_filter& is_shipped);
+/// Overlays the cooked variants the filter keeps onto loose compiled files in `destination`; an earlier
+/// folder's variant wins.
+void copy_cooked_or_throw(const cooked_folders& cooked, const fs::path& destination, const compiled_file_filter& is_shipped);
 
 /// Writes the entries `include` keeps (by location) as an asset index.
 void write_asset_index(const asset_database::database_t& database,

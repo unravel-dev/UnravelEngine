@@ -2,11 +2,14 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 
+#include <editor/hub/panels/deploy_panel/deploy_panel_widgets.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h>
+#include <editor/hub/panels/profile_labels.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/system/project_manager.h>
 #include <engine/engine.h>
+#include <engine/meta/settings/settings.hpp>
 #include <engine/input/input.h>
 #include <engine/settings/boot_config.h>
 
@@ -32,6 +35,8 @@ constexpr float INPUT_MAPPING_GAP = 0.35f;
 constexpr float INPUT_DRAG_SPEED = 0.05f;
 constexpr float INPUT_MUTED_ALPHA = 0.55f;
 constexpr const char* INPUT_NEW_ACTION_NAME = "New Action";
+constexpr const char* REVERT_TO_PROJECT_LABEL = "Revert to Project Settings";
+constexpr const char* PROJECT_SETTINGS_LABEL = "Project Settings";
 
 auto to_pixels(float font_units) -> float
 {
@@ -48,10 +53,13 @@ auto from_os_key(os::key::code code) -> input::key_code
     return static_cast<input::key_code>(code);
 }
 
+/// A muted line, wrapped at the window's edge.
 void draw_muted_text(const char* text)
 {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_Text, INPUT_MUTED_ALPHA));
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
 }
 
@@ -633,10 +641,100 @@ auto draw_action_list(std::map<input::action_id_t, std::vector<Entry>>& entries,
     return result;
 }
 
-void draw_input_settings(rtti::context& ctx)
+/// Says that a category is shared by every profile, while a profile is edited; the category is then drawn
+/// read only.
+auto draw_shared_category_note(const settings_edit_target& target, const char* what) -> bool
+{
+    if(target.profile.empty())
+    {
+        return false;
+    }
+    draw_muted_text(fmt::format("Every profile shares {}. Edit them with {} selected above.", what, PROJECT_SETTINGS_LABEL).c_str());
+    ImGui::Spacing();
+    return true;
+}
+
+/// The tooltip line of a setting every profile shares, read-only while a profile is edited.
+constexpr const char* SHARED_SETTING_NOTE = "Every profile shares this setting. Change it with Project Settings selected above.";
+
+/**
+ * @brief What the settings drawn are marked with: the edited profile's overrides, or, while the project
+ * settings are edited, the overrides of the profile the editor previews, which hide those edits in the editor.
+ * Empty (no get_mark) when nothing is marked.
+ */
+auto make_profile_marks(rtti::context& ctx, settings_edit_target& target) -> property_override_marks
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    property_override_marks marks;
+    const bool is_profile_edited = !target.profile.empty();
+    const std::string profile = is_profile_edited ? target.profile : pm.get_preview_profile();
+    if(pm.get_profiles().find(profile) == nullptr)
+    {
+        return marks;
+    }
+    marks.get_mark = [&pm, profile](const std::string& path)
+    {
+        const auto* found = pm.get_profiles().find(profile);
+        return found != nullptr ? get_override_mark(found->settings, path) : override_mark::none;
+    };
+    marks.revert = [&ctx, &pm, &target, profile](const std::string& path)
+    {
+        target.error = pm.revert_profile_settings(ctx, profile, path).error;
+    };
+    if(is_profile_edited)
+    {
+        marks.revert_label = REVERT_TO_PROJECT_LABEL;
+        marks.overridden_note = fmt::format("Profile {} overrides this setting.", profile);
+        marks.contains_note = fmt::format("Profile {} overrides settings in this group.", profile);
+        marks.is_shared = [](const std::string& path)
+        {
+            return !deployment::is_overridable_settings_path(path);
+        };
+        marks.shared_note = SHARED_SETTING_NOTE;
+        return marks;
+    }
+    marks.style = override_style::shadowing;
+    marks.revert_label = fmt::format("Revert {} to Project Settings", profile);
+    marks.overridden_note = fmt::format("The editor previews profile {}, which overrides this setting, so the editor "
+                                        "shows {}'s value.",
+                                        profile,
+                                        profile);
+    marks.contains_note = fmt::format("The editor previews profile {}, which overrides settings in this group.", profile);
+    return marks;
+}
+
+/// How many settings within `root` the edited profile overrides.
+auto count_profile_overrides(rtti::context& ctx, const settings_edit_target& target, const char* root) -> std::size_t
+{
+    const auto* profile = ctx.get_cached<project_manager>().get_profiles().find(target.profile);
+    if(profile == nullptr)
+    {
+        return 0;
+    }
+    const auto& paths = profile->settings.get_paths();
+    return static_cast<std::size_t>(std::count_if(paths.begin(),
+                                                  paths.end(),
+                                                  [root](const std::string& path)
+                                                  {
+                                                      return serialization::is_path_within(path, root);
+                                                  }));
+}
+
+void draw_error_line(const std::string& error)
+{
+    ImGui::Spacing();
+    deploy_widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
+                                   deploy_widgets::WARNING_COLOR,
+                                   error.c_str(),
+                                   ImGui::GetColorU32(ImGuiCol_Text));
+}
+
+void draw_input_settings(rtti::context& ctx, settings_edit_target& target)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& actions = pm.get_settings().input.actions;
+    const bool is_shared = draw_shared_category_note(target, "the input actions");
+    ImGui::PushReadonly(is_shared);
 
     inspect_result result{};
     if(ImGui::BeginTabBar("##input_devices"))
@@ -659,22 +757,70 @@ void draw_input_settings(rtti::context& ctx)
         ImGui::EndTabBar();
     }
 
-    if(result.edit_finished)
+    ImGui::PopReadonly();
+    if(result.edit_finished && !is_shared)
     {
         pm.save_project_settings(ctx);
     }
 }
 
-/// Inspects one group of the project settings and saves them once an edit is done.
-template<typename Settings>
-auto inspect_and_save(rtti::context& ctx, Settings& settings) -> bool
+/// The settings a category draws: the project settings, or the copy of the profile's, taken again on every
+/// frame no item is being edited.
+auto get_shown_settings(rtti::context& ctx, settings_edit_target& target) -> settings&
 {
-    if(!inspect(ctx, settings).edit_finished)
+    auto& pm = ctx.get_cached<project_manager>();
+    if(target.profile.empty())
+    {
+        return pm.get_settings();
+    }
+    if(!ImGui::IsAnyItemActive())
+    {
+        target.shown = pm.get_profile_settings(target.profile);
+        target.before = target.shown;
+    }
+    return target.shown;
+}
+
+/**
+ * @brief Inspects one group of the settings and saves it once an edit is done.
+ *
+ * With a profile edited, the group drawn is the profile's, the properties it overrides are marked, and an
+ * edit becomes an override of that profile.
+ * @param root The group's path in the settings document, such as "assets/texture".
+ * @param get The group in a settings object.
+ */
+template<typename Getter>
+auto inspect_and_save(rtti::context& ctx, settings_edit_target& target, const char* root, Getter get) -> bool
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& shown = get_shown_settings(ctx, target);
+    auto marks = make_profile_marks(ctx, target);
+    hpp::optional<property_override_scope> marked;
+    if(marks.get_mark)
+    {
+        marked.emplace(ctx, root, std::move(marks));
+    }
+    if(target.profile.empty())
+    {
+        if(!inspect(ctx, get(shown)).edit_finished)
+        {
+            return false;
+        }
+        pm.save_project_settings(ctx);
+        return true;
+    }
+    inspect_result result;
+    {
+        // The shown settings are a copy, taken again every frame: an undo step could not reach them.
+        const inspect_without_undo_scope no_undo;
+        result = inspect(ctx, get(shown));
+    }
+    if(!result.edit_finished)
     {
         return false;
     }
-    ctx.get_cached<project_manager>().save_project_settings(ctx);
-    return true;
+    target.error = pm.override_profile_settings(ctx, target.profile, target.before, shown).error;
+    return target.error.empty();
 }
 
 void ask_restart(const char* what_changed)
@@ -693,20 +839,31 @@ void ask_restart(const char* what_changed)
                         });
 }
 
-void draw_application_settings(rtti::context& ctx)
+void draw_application_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().app);
+    inspect_and_save(ctx, target, "app", [](settings& s) -> auto& { return s.app; });
 }
 
-void draw_resolution_settings(rtti::context& ctx)
+void draw_resolution_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().resolution);
+    if(draw_shared_category_note(target, "the Game view's resolutions"))
+    {
+        ImGui::PushReadonly(true);
+        inspect(ctx, ctx.get_cached<project_manager>().get_settings().resolution);
+        ImGui::PopReadonly();
+        return;
+    }
+    inspect_and_save(ctx, target, "resolution", [](settings& s) -> auto& { return s.resolution; });
 }
 
-void draw_asset_settings(rtti::context& ctx)
+void draw_asset_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().assets.texture);
-
+    inspect_and_save(ctx, target, "assets/texture", [](settings& s) -> auto& { return s.assets.texture; });
+    if(!target.profile.empty())
+    {
+        draw_muted_text("The profile's deploys compile its textures with these defaults, into its own cache.");
+        return;
+    }
     property_layout layout("Textures", "Imports every texture again, with the defaults above.");
     if(ImGui::Button(ICON_MDI_REFRESH " Recompile All", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)))
     {
@@ -714,109 +871,237 @@ void draw_asset_settings(rtti::context& ctx)
     }
 }
 
-void draw_graphics_settings(rtti::context& ctx)
+void draw_graphics_settings(rtti::context& ctx, settings_edit_target& target)
 {
     auto& settings = ctx.get_cached<project_manager>().get_settings();
     const preferred_renderer renderer_before = settings.graphics.renderer.get_for_current_platform();
-    if(inspect_and_save(ctx, settings.graphics) && settings.graphics.renderer.get_for_current_platform() != renderer_before)
+    // A profile's renderer is its builds'; the editor keeps the one it started with.
+    if(inspect_and_save(ctx, target, "graphics", [](unravel::settings& s) -> auto& { return s.graphics; }) && target.profile.empty() &&
+       settings.graphics.renderer.get_for_current_platform() != renderer_before)
     {
         ask_restart("renderer backend for this platform");
     }
 }
 
-void draw_global_illumination_settings(rtti::context& ctx)
+void draw_global_illumination_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().global_illumination);
+    inspect_and_save(ctx, target, "global_illumination", [](settings& s) -> auto& { return s.global_illumination; });
 }
 
-void draw_splash_settings(rtti::context& ctx)
+void draw_splash_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().splash);
+    inspect_and_save(ctx, target, "splash", [](settings& s) -> auto& { return s.splash; });
 }
 
-void draw_standalone_settings(rtti::context& ctx)
+void draw_standalone_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().standalone);
+    inspect_and_save(ctx, target, "standalone", [](settings& s) -> auto& { return s.standalone; });
 }
 
-void draw_layers_settings(rtti::context& ctx)
+void draw_layers_settings(rtti::context& ctx, settings_edit_target& target)
 {
-    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().layer);
+    if(draw_shared_category_note(target, "the layers"))
+    {
+        ImGui::PushReadonly(true);
+        inspect(ctx, ctx.get_cached<project_manager>().get_settings().layer);
+        ImGui::PopReadonly();
+        return;
+    }
+    inspect_and_save(ctx, target, "layer", [](settings& s) -> auto& { return s.layer; });
 }
 
-void draw_physics_settings(rtti::context& ctx)
+void draw_physics_settings(rtti::context& ctx, settings_edit_target& target)
 {
     auto& settings = ctx.get_cached<project_manager>().get_settings();
     const physics_backend_type backend_before = settings.physics.backend;
-    if(inspect_and_save(ctx, settings.physics) &&
+    if(!target.profile.empty())
+    {
+        draw_muted_text("Every profile shares the physics backend, which gameplay is tuned to. The simulation step can "
+                        "differ per profile.");
+        ImGui::Spacing();
+    }
+    if(inspect_and_save(ctx, target, "physics", [](unravel::settings& s) -> auto& { return s.physics; }) && target.profile.empty() &&
        resolve_physics_backend(settings.physics.backend) != resolve_physics_backend(backend_before))
     {
         ask_restart("physics backend");
     }
 }
 
-auto make_project_settings_categories() -> std::vector<settings_category>
+auto make_project_settings_categories(rtti::context& ctx, settings_edit_target& target) -> std::vector<settings_category>
 {
+    const auto draws = [&target](void (*draw)(rtti::context&, settings_edit_target&))
+    {
+        return [&target, draw](rtti::context& ctx)
+        {
+            draw(ctx, target);
+            if(!target.error.empty())
+            {
+                draw_error_line(target.error);
+            }
+        };
+    };
+    const auto counts = [&ctx, &target](const char* root)
+    {
+        return [&ctx, &target, root]()
+        {
+            return count_profile_overrides(ctx, target, root);
+        };
+    };
     return {
         {"Application",
          ICON_MDI_APPLICATION,
          "Who makes the game and what it is called.",
          "company product version name",
-         &draw_application_settings},
+         draws(&draw_application_settings),
+         counts("app")},
         {"Resolution",
          ICON_MDI_ASPECT_RATIO,
          "The resolutions and aspect ratios the Game view offers.",
          "aspect ratio width height screen game view",
-         &draw_resolution_settings},
+         draws(&draw_resolution_settings),
+         counts("resolution")},
         {"Assets",
          ICON_MDI_PACKAGE_VARIANT_CLOSED,
          "Defaults for importing assets.",
          "texture import compression max size recompile",
-         &draw_asset_settings},
+         draws(&draw_asset_settings),
+         counts("assets")},
         {"Graphics",
          ICON_MDI_CHIP,
-         "The renderer backend of each platform, static mesh batching, and how GPU memory is paged.",
-         "renderer backend directx vulkan opengl metal static mesh batching instancing draw calls gpu memory eviction "
-         "paging budget",
-         &draw_graphics_settings},
+         "The renderer backend of each platform, the render scale, the features scenes may use, particle budgets, "
+         "static mesh batching, and how GPU memory is paged.",
+         "renderer backend directx vulkan opengl metal render scale resolution allowed features limits global "
+         "illumination reflections ambient occlusion bloom anti-aliasing fxaa taa shadows soft contact particles "
+         "static mesh batching instancing draw calls gpu memory eviction paging budget mobile quality",
+         draws(&draw_graphics_settings),
+         counts("graphics")},
         {"Global Illumination",
          ICON_MDI_WHITE_BALANCE_SUNNY,
          "The surface cache: its atlas, the card capture budget and refresh, and the card resolution rule.",
          "gi surface cache atlas cards capture refresh budget texel density resolution",
-         &draw_global_illumination_settings},
+         draws(&draw_global_illumination_settings),
+         counts("global_illumination")},
         {"Splash Screen",
          ICON_MDI_IMAGE_OUTLINE,
          "What the game shows while it starts.",
          "logo fade made with startup intro",
-         &draw_splash_settings},
+         draws(&draw_splash_settings),
+         counts("splash")},
         {"Standalone",
          ICON_MDI_ROCKET,
          "How the built game starts.",
          "startup scene build player deploy",
-         &draw_standalone_settings},
+         draws(&draw_standalone_settings),
+         counts("standalone")},
         {"Layers",
          ICON_MDI_LAYERS_OUTLINE,
          "The layers entities can be on. The first ones are built in.",
          "layer mask culling names",
-         &draw_layers_settings},
+         draws(&draw_layers_settings),
+         {}},
         {"Input",
          ICON_MDI_GAMEPAD_VARIANT,
          "Named actions, and the keys, buttons and axes that trigger them.",
          "keyboard mouse gamepad action mapping key button axis controls",
-         &draw_input_settings},
+         draws(&draw_input_settings),
+         {}},
         {"Physics",
          ICON_MDI_ATOM,
          "The physics backend and the simulation step.",
          "backend timestep fixed step solver iterations box3d bullet",
-         &draw_physics_settings},
+         draws(&draw_physics_settings),
+         counts("physics")},
     };
+}
+
+/// The edit target's combo item for a profile: its label and how many settings it overrides.
+auto get_target_label(const settings_profile& profile) -> std::string
+{
+    const auto count = profile.settings.get_paths().size();
+    if(count == 0)
+    {
+        return profile_labels::get_label(profile);
+    }
+    return fmt::format("{}   ({} override{})", profile_labels::get_label(profile), count, count == 1 ? "" : "s");
+}
+
+/// Picks what the window edits; returns the profile edited, or null for the project settings.
+auto draw_edit_target_combo(rtti::context& ctx, settings_edit_target& target) -> const settings_profile*
+{
+    const auto& profiles = ctx.get_cached<project_manager>().get_profiles();
+    const auto* edited = profiles.find(target.profile);
+    property_layout layout("Settings Of",
+                           "The project settings, which every profile starts from, or a profile's. In a profile a "
+                           "change becomes an override of that profile, and the rest follows the project settings.");
+    const std::string project_label = std::string(ICON_MDI_COG " ") + PROJECT_SETTINGS_LABEL;
+    const std::string preview = edited != nullptr ? get_target_label(*edited) : project_label;
+    if(ImGui::BeginCombo("##settings_of", preview.c_str()))
+    {
+        if(ImGui::Selectable(project_label.c_str(), edited == nullptr))
+        {
+            target.profile.clear();
+            target.missing_profile.clear();
+            target.error.clear();
+        }
+        for(const auto& profile : profiles.get_all())
+        {
+            if(ImGui::Selectable(get_target_label(profile).c_str(), &profile == edited))
+            {
+                target.profile = profile.name;
+                target.missing_profile.clear();
+                target.error.clear();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    return profiles.find(target.profile);
+}
+
+/// Which settings the window edits: the project's, or a profile's; with a profile, how to preview it.
+void draw_edit_target(rtti::context& ctx, settings_edit_target& target)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    if(!target.profile.empty() && pm.get_profiles().find(target.profile) == nullptr)
+    {
+        // Deleted or renamed elsewhere: say so, rather than let the next edit land in the project settings unseen.
+        target.missing_profile = target.profile;
+        target.profile.clear();
+    }
+    const auto* edited = draw_edit_target_combo(ctx, target);
+    if(edited == nullptr)
+    {
+        if(!target.missing_profile.empty())
+        {
+            draw_error_line(fmt::format("Profile {} no longer exists, so the project settings are shown.", target.missing_profile));
+        }
+        else if(const auto& previewed = pm.get_preview_profile(); !previewed.empty())
+        {
+            draw_muted_text(fmt::format("The editor previews profile {}. The settings it overrides are drawn in its color, "
+                                        "and the editor shows its values for them.",
+                                        previewed)
+                                .c_str());
+        }
+        return;
+    }
+    // A profile is saved with each edit, outside the editor's undo history.
+    draw_muted_text(fmt::format("Changes here apply to profile {} only and are saved at once, without undo. Overridden "
+                                "settings are shown in bold. Right-click one to revert it to the project setting.",
+                                edited->name)
+                        .c_str());
+    const bool is_previewed = pm.get_preview_profile() == edited->name;
+    property_layout preview_layout("Preview", "Whether the editor runs with this profile's settings, as its builds do.");
+    if(is_previewed ? ImGui::Button(ICON_MDI_EYE_OFF_OUTLINE " Stop Preview") : ImGui::Button(ICON_MDI_EYE_OUTLINE " Preview in Editor"))
+    {
+        target.error = pm.set_preview_profile(ctx, is_previewed ? std::string{} : edited->name).error;
+    }
 }
 
 } // namespace
 
 project_settings_panel::project_settings_panel(imgui_panels* parent)
     : parent_(parent)
-    , view_(make_project_settings_categories())
+    , edit_target_(std::make_unique<settings_edit_target>())
+    , view_(make_project_settings_categories(engine::context(), *edit_target_))
 {
 }
 
@@ -824,6 +1109,14 @@ void project_settings_panel::show(bool s, const std::string& hint)
 {
     visible_ = s;
     view_.select(hint);
+}
+
+void project_settings_panel::show_profile(const std::string& profile)
+{
+    visible_ = true;
+    edit_target_->profile = profile;
+    edit_target_->missing_profile.clear();
+    edit_target_->error.clear();
 }
 
 void project_settings_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
@@ -835,6 +1128,8 @@ void project_settings_panel::on_frame_ui_render(rtti::context& ctx, const char* 
     ImGui::SetNextWindowSize(ImGui::GetMainViewport()->Size * 0.5f, ImGuiCond_FirstUseEver);
     if(ImGui::Begin(name, &visible_))
     {
+        draw_edit_target(ctx, *edit_target_);
+        ImGui::Separator();
         view_.draw(ctx);
     }
     ImGui::End();

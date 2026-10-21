@@ -18,9 +18,10 @@ namespace
 constexpr auto PROBLEMS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
 
 /// The deploy folder's problem, if any. In the project it stays out of the folders the editor manages;
-/// it never holds the project. It is created when missing, in a folder that exists. The platform builds
-/// into a folder of its own in it, created when missing, which must be empty or an earlier build of
-/// that platform, since a deploy replaces and removes files in it. An Android folder holds packages only.
+/// it never holds the project. It is created when missing, in a folder that exists. The profile builds
+/// into a folder of its own in it, created when missing, which must be empty or an earlier build of a
+/// profile of its platform, since a deploy replaces and removes files in it. An Android folder holds
+/// packages only.
 auto get_folder_problem(const fs::path& location, const fs::path& output, bool is_android) -> std::string
 {
     fs::error_code ec;
@@ -81,11 +82,12 @@ auto get_patch_problem(const deploy_settings& params) -> std::string
     {
         return "A patch against a release needs Pack Assets on.";
     }
-    if(!is_kept_release(get_project_root(), params.deploy_patch_release))
+    if(!is_kept_release(get_profile_releases_folder(get_project_root(), params.profile), params.deploy_patch_release))
     {
-        return fmt::format("Release '{}' is not kept. Keep one with Keep as Release, or set Patch Against Release to "
-                           "None.",
-                           params.deploy_patch_release);
+        return fmt::format("Release '{}' is not kept for profile {}. Keep one with Keep as Release, or set Patch Against "
+                           "Release to None.",
+                           params.deploy_patch_release,
+                           params.profile);
     }
     return {};
 }
@@ -123,7 +125,7 @@ auto is_inside_project(const fs::path& path) -> bool
 
 auto get_deployed_executable(rtti::context& ctx, const deploy_settings& params) -> fs::path
 {
-    return get_platform_location(params, deploy_platform::desktop) / (ctx.get_cached<project_manager>().get_name() + fs::executable_extension());
+    return get_output_location(params) / (ctx.get_cached<project_manager>().get_name() + fs::executable_extension());
 }
 
 auto get_pending_compile_reason(rtti::context& ctx) -> std::string
@@ -146,6 +148,12 @@ auto get_pending_compile_reason(rtti::context& ctx) -> std::string
 auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
 {
     std::vector<std::string> problems;
+    auto& pm = ctx.get_cached<project_manager>();
+    if(pm.get_profiles().find(params.profile) == nullptr)
+    {
+        problems.push_back("Choose the profile to deploy.");
+        return problems;
+    }
     const bool is_android = params.deploy_target == deploy_platform::android;
     const auto folder_problem = get_folder_problem(get_deploy_folder(params), get_output_location(params), is_android);
     add_problem(problems, folder_problem);
@@ -153,7 +161,7 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     {
         add_problem(problems, "The game in the deploy folder is running. Close it first.");
     }
-    if(!ctx.get_cached<project_manager>().get_settings().standalone.startup_scene.is_valid())
+    if(!pm.get_profile_settings(params.profile).standalone.startup_scene.is_valid())
     {
         add_problem(problems, "Choose the scene the game starts with.");
     }
@@ -186,7 +194,8 @@ auto can_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
 
 auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> const std::vector<std::string>&
 {
-    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                                       params.profile,
                                        params.deploy_location.generic_string(),
                                        params.deploy_patch_release,
                                        params.deploy_packed_assets,
@@ -194,11 +203,12 @@ auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> c
                                        static_cast<int>(params.deploy_target),
                                        params.deploy_and_run,
                                        params.android_device,
-                                       params.android_application_id,
-                                       params.android_release,
-                                       params.android_keystore.generic_string(),
-                                       params.android_key_alias,
-                                       params.android_icon.id());
+                                       params.android.application_id,
+                                       params.android.release,
+                                       params.android.keystore.generic_string(),
+                                       params.android.key_alias,
+                                       params.android.icon.id(),
+                                       ctx.get_cached<project_manager>().get_profiles().get_revision());
     const auto now = std::chrono::steady_clock::now();
     if(signature != signature_ || now - checked_at_ >= PROBLEMS_REFRESH_INTERVAL)
     {

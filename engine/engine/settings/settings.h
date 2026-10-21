@@ -9,9 +9,12 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/physics/physics_types.h>
 #include <engine/rendering/eviction_settings.h>
+#include <engine/rendering/feature_limits.h>
+#include <engine/rendering/render_scale.h>
 #include <engine/rendering/gi/gi_project_settings.h>
 #include <engine/rendering/particles/ps/particle_types.h>
 #include <engine/settings/boot_config.h>
+#include <engine/settings/target_platform.h>
 #include <graphics/texture.h>
 
 #include <string>
@@ -113,6 +116,13 @@ struct settings
             friend auto operator==(const particle_settings& lhs, const particle_settings& rhs) -> bool = default;
         } particles;
 
+        /// The fraction of a game view's size its scene renders at (MIN_RENDER_SCALE..1). The finished scene
+        /// is upscaled to the view's size before the screen-space UI. The editor's views can use it, a scale
+        /// of their own or none (view_render_params). The renderer applies it every frame.
+        float render_scale{1.0f};
+        /// The most expensive rendering features scenes may use. The renderer applies them every frame.
+        feature_limits limits;
+
         friend auto operator==(const graphics_settings& lhs, const graphics_settings& rhs) -> bool = default;
     } graphics;
 
@@ -202,6 +212,17 @@ struct settings
 
         friend auto operator==(const physics_settings& lhs, const physics_settings& rhs) -> bool = default;
     } physics;
+
+    /// What a deployed game was built as. The deploy writes it into the settings it ships; in the
+    /// editor it names the profile being previewed. Empty in the project's own settings.
+    struct build_settings
+    {
+        /// The settings profile the build was made from.
+        std::string profile;
+        target_platform platform{target_platform::desktop};
+
+        friend auto operator==(const build_settings& lhs, const build_settings& rhs) -> bool = default;
+    } build;
 
     friend auto operator==(const settings& lhs, const settings& rhs) -> bool = default;
 

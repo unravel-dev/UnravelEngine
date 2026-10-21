@@ -3,6 +3,7 @@
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/types/string.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
 
 #include <logging/logging.h>
@@ -36,6 +37,18 @@ LOAD_INLINE(project_editor_settings::scene_setup)
     try_load(ar, ser20::make_nvp("opened_scene", obj.opened_scene));
 }
 
+SAVE_INLINE(project_editor_settings::profile_setup)
+{
+    try_save(ar, ser20::make_nvp("deploy_profile", obj.deploy_profile));
+    try_save(ar, ser20::make_nvp("preview_profile", obj.preview_profile));
+}
+
+LOAD_INLINE(project_editor_settings::profile_setup)
+{
+    try_load(ar, ser20::make_nvp("deploy_profile", obj.deploy_profile));
+    try_load(ar, ser20::make_nvp("preview_profile", obj.preview_profile));
+}
+
 REFLECT(project_editor_settings)
 {
     entt::meta_factory<project_editor_settings>{}
@@ -55,6 +68,7 @@ REFLECT(project_editor_settings)
 SAVE(project_editor_settings)
 {
     try_save(ar, ser20::make_nvp("scene", obj.scene));
+    try_save(ar, ser20::make_nvp("profiles", obj.profiles));
 }
 SAVE_INSTANTIATE(project_editor_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(project_editor_settings, ser20::oarchive_binary_t);
@@ -62,6 +76,7 @@ SAVE_INSTANTIATE(project_editor_settings, ser20::oarchive_binary_t);
 LOAD(project_editor_settings)
 {
     try_load(ar, ser20::make_nvp("scene", obj.scene));
+    try_load(ar, ser20::make_nvp("profiles", obj.profiles));
 }
 LOAD_INSTANTIATE(project_editor_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(project_editor_settings, ser20::iarchive_binary_t);

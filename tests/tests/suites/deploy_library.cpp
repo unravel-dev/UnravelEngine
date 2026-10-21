@@ -17,8 +17,8 @@
  *   - the content tree: counts, folders first, rows of open folders only, search and filter rows,
  *     left out but used assets counted;
  *   - files: classification, compiled paths, a target's shader variants, pack inputs with cooked
- *     variants, stale binaries, older runtime versions;
- *   - platform folders under the deploy folder; deploy locations relative to the project, and the
+ *     variants from several folders (the first wins), stale binaries, older runtime versions;
+ *   - profile folders under the deploy folder; deploy locations relative to the project, and the
  *     project folders the editor manages;
  *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
  *     lines, which are the game's or the device system's and the engine lines' text, the player template's
@@ -28,7 +28,9 @@
  *     its process at once;
  *   - a protocol shipped packed, loose, packed again, as a patch over a kept release and full again,
  *     with left out assets;
- *   - releases: names, keep / list / remove, and their refusals;
+ *   - the content walk over a profile's shipped settings instead of the settings file;
+ *   - releases: names, keep / list / remove, and their refusals; a profile's releases folder, and the
+ *     releases of a project from before profiles moved into one;
  *   - dependency scanner output parsed; a failed scan throws every time;
  *   - folder checks: earlier deploys, Android package folders, inside / outside, an executable in use;
  *   - unravel::process::spawn_detached runs a program and reports one that does not start.
@@ -396,6 +398,18 @@ void test_walk(const deployment::content& found)
     check(wall != nullptr && wall->size == COMPILED_WALL_SIZE, "an asset's size is its compiled file's");
 }
 
+/// A profile's deploy walks the settings it ships, not the project's file.
+void test_walk_shipped_settings(walk_project project)
+{
+    std::printf("test_walk_shipped_settings\n");
+    using reason = deployment::content_reason;
+    project.source.settings_document = R"({"settings":{"splash":{"uid":"20000000-0000-4000-8000-00000000000b"}}})";
+    const auto found = deployment::detect_content(project.source, {}, project.startup_scene);
+    check(is_used_by(found, "app:/data/textures/unused.png", reason::referenced, "Project Settings") &&
+              is_unused(found, "app:/data/textures/logo.png"),
+          "the shipped settings' handles are followed instead of the settings file's");
+}
+
 void test_tree(const deployment::content& found)
 {
     std::printf("test_tree\n");
@@ -486,19 +500,22 @@ void test_shader_variants(const fs::path& root)
 // Android
 //-----------------------------------------------------------------------------
 
-void test_platform_locations()
+void test_profile_locations()
 {
-    std::printf("test_platform_locations\n");
+    std::printf("test_profile_locations\n");
     deploy_settings params;
     check(params.deploy_location == fs::path(unravel::DEFAULT_DEPLOY_LOCATION), "a project starts with .deploy");
+    params.profile = "Desktop";
     params.deploy_location.clear();
-    check(unravel::get_output_location(params).empty(), "without a deploy folder there is no platform folder");
+    check(unravel::get_output_location(params).empty(), "without a deploy folder there is no profile folder");
     params.deploy_location = fs::path("/builds/game");
-    check(unravel::get_output_location(params) == fs::path("/builds/game/desktop"), "desktop builds go to desktop/");
+    check(unravel::get_output_location(params) == fs::path("/builds/game/Desktop"), "a profile builds into its own folder");
+    params.profile = "Android Low";
     params.deploy_target = unravel::deploy_platform::android;
-    check(unravel::get_output_location(params) == fs::path("/builds/game/android"), "Android builds go to android/");
-    check(unravel::get_platform_location(params, unravel::deploy_platform::desktop) == fs::path("/builds/game/desktop"),
-          "releases read the desktop folder whatever the platform");
+    check(unravel::get_output_location(params) == fs::path("/builds/game/Android Low"), "whatever its platform");
+    params.profile.clear();
+    check(unravel::get_output_location(params).empty(), "without a profile a deploy has no folder, never the deploy folder itself");
+    check(unravel::get_profile_location(params, "Demo") == fs::path("/builds/game/Demo"), "any profile's folder is named after it");
 }
 
 void test_deploy_locations(const fs::path& root)
@@ -516,6 +533,8 @@ void test_deploy_locations(const fs::path& root)
     check(fs::make_relative_if_inside(root / "out", project) == root / "out", "a folder outside the project stays absolute");
     check(deployment::get_managed_project_folder(project / "data" / "out", project) == "data" &&
               deployment::get_managed_project_folder(project / "releases", project) == "releases" &&
+              deployment::get_managed_project_folder(project / "profiles" / "Android", project) == "profiles" &&
+              deployment::get_managed_project_folder(project / "cache" / "profiles", project) == "cache" &&
               deployment::get_managed_project_folder(project / "temp" / "bin", project) == "temp",
           "the folders the editor manages are named");
     check(deployment::get_managed_project_folder(project / ".deploy", project).empty() &&
@@ -857,13 +876,17 @@ void test_pack_inputs(const fs::path& root)
     std::printf("test_pack_inputs\n");
     const auto compiled = root / "compiled";
     const auto cooked = root / "cooked";
+    const auto variants = root / "variants";
     write_text(compiled / "a.png.asset", "a");
     write_text(compiled / "prefabs/b.pfb.asset", "plain");
     write_text(compiled / "scripts/game.dll", "dll");
     write_text(cooked / "prefabs/b.pfb.asset", "cooked");
+    write_text(variants / "prefabs/b.pfb.asset", "variant");
+    write_text(variants / "c.png.asset", "variant c");
+    write_text(compiled / "c.png.asset", "plain c");
     write_text(root / ex::get_asset_index_file_name(), "index");
     const auto inputs = deployment::collect_pack_inputs(compiled,
-                                                        cooked,
+                                                        {cooked, variants, root / "missing"},
                                                         root / ex::get_asset_index_file_name(),
                                                         [](const fs::path&, const fs::path& relative)
                                                         {
@@ -874,9 +897,12 @@ void test_pack_inputs(const fs::path& root)
     {
         names.push_back(input.name);
     }
-    check(names == std::vector<std::string>{ex::get_asset_index_file_name(), "compiled/prefabs/b.pfb.asset"},
+    check(names == std::vector<std::string>{ex::get_asset_index_file_name(), "compiled/c.png.asset", "compiled/prefabs/b.pfb.asset"},
           "the pack takes the shipped compiled files and the index, by name, but no library");
-    check(inputs.size() == 2 && read_text(inputs[1].source) == "cooked", "a cooked variant replaces its compiled file");
+    check(inputs.size() == 3 && read_text(inputs[2].source) == "cooked", "a cooked variant replaces its compiled file, the first folder winning");
+    check(inputs.size() == 3 && read_text(inputs[1].source) == "variant c", "a later folder's variant replaces a file the first has none for");
+    check(deployment::get_shipped_variant({}, "c.png.asset", compiled / "c.png.asset") == compiled / "c.png.asset",
+          "without cooked folders the compiled file ships");
 }
 
 void test_stale_binaries(const fs::path& root)
@@ -930,7 +956,7 @@ auto make_protocol_job(const fs::path& root) -> deployment::protocol_job
     deployment::protocol_job job;
     job.protocol = "app";
     job.compiled_root = root / "project/compiled";
-    job.cooked_root = root / "cooked/app";
+    job.cooked = {root / "cooked/app"};
     job.protocol_root = root / "deploy/data/app";
     add_asset(job.database, make_uid("30000000-0000-4000-8000-000000000001"), "app:/data/textures/wall.png");
     add_asset(job.database, make_uid("30000000-0000-4000-8000-000000000002"), "app:/data/textures/floor.png");
@@ -942,7 +968,7 @@ auto make_protocol_job(const fs::path& root) -> deployment::protocol_job
     write_text(job.compiled_root / "prefabs/a.pfb.asset", "plain prefab");
     write_text(job.compiled_root / "scripts/game.dll", "library");
     write_text(job.compiled_root / "scripts/game.pdb", "symbols");
-    write_text(job.cooked_root / "prefabs/a.pfb.asset", "cooked prefab");
+    write_text(job.cooked.front() / "prefabs/a.pfb.asset", "cooked prefab");
     return job;
 }
 
@@ -1043,7 +1069,8 @@ void test_release_names()
 void test_keep_and_remove_release(const fs::path& root)
 {
     std::printf("test_keep_and_remove_release\n");
-    const auto project = root / "project";
+    const auto project = deployment::get_profile_releases_folder(root / "project", "Desktop");
+    check(project == root / "project" / "releases" / "Desktop", "a profile's releases are in releases/<profile>");
     const auto build = root / "build";
     check(!deployment::keep_release(project, build, "1.0").is_ok(), "a folder without a packed build cannot be kept");
     for(const auto* protocol : deployment::PACKED_PROTOCOLS)
@@ -1061,6 +1088,20 @@ void test_keep_and_remove_release(const fs::path& root)
     check(!deployment::remove_release(project, "2.0").is_ok(), "removing a release that is not kept fails");
     check(deployment::remove_release(project, "1.0").is_ok() && deployment::list_releases(project).empty(),
           "a removed release is gone");
+
+    // A project from before profiles kept its releases in releases/<release>.
+    const auto old_project = root / "old";
+    for(const auto* protocol : deployment::PACKED_PROTOCOLS)
+    {
+        write_text(old_project / "releases" / "0.9" / protocol / ex::get_pack_file_name(), "old pack");
+    }
+    check(deployment::move_releases_into_profile(old_project, "Desktop").is_ok(), "the old releases move");
+    const auto moved = deployment::get_profile_releases_folder(old_project, "Desktop");
+    check(deployment::list_releases(moved) == std::vector<std::string>{"0.9"}, "into the profile's releases");
+    check(deployment::list_releases(old_project / "releases").empty(), "and no release is left outside a profile");
+    check(deployment::move_releases_into_profile(old_project, "Desktop").is_ok() &&
+              deployment::list_releases(moved) == std::vector<std::string>{"0.9"},
+          "moving again changes nothing: a profile's folder is no release");
 }
 
 //-----------------------------------------------------------------------------
@@ -1203,10 +1244,11 @@ auto run_deploy_library_suite(rtti::context&) -> int
         params.deploy_scenes = {"app:/data/levels/gone.spfb"};
         const auto walked = deployment::detect_content(project.source, params, project.startup_scene);
         test_walk(walked);
+        test_walk_shipped_settings(project);
         test_tree(walked);
         test_file_classification(temp / "files");
         test_shader_variants(temp / "variants");
-        test_platform_locations();
+        test_profile_locations();
         test_deploy_locations(temp / "locations");
         test_application_ids();
         test_android_devices();

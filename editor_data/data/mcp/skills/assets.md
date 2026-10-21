@@ -58,8 +58,10 @@ inside the project).
 
 - assets_get_import_settings {"keys":[...]} reads what the inspector's Import tab
   edits: textures (type, colorspace, generate_mipmaps, invert_normal_y,
-  quality.max_size, quality.compression), meshes (model, sdf, cards, animations,
-  materials), animations (root_motion), audio (force_to_mono). "schemas" gives the
+  quality.max_size, quality.compression, and platforms.desktop /
+  platforms.android: is_overridden with the quality that platform compiles
+  with instead), meshes (model, sdf, cards, animations, materials), animations
+  (root_motion), audio (force_to_mono). "schemas" gives the
   enum names and ranges; a loaded texture also reports "texture": its compiled
   format, size and mips - the proof a change took.
 - assets_set_import_settings {"items":[{"key":"UI/atlas.png",
@@ -67,9 +69,10 @@ inside the project).
   the asset has been imported again. Partial objects merge into the current
   settings; an item with any rejected entry writes nothing.
 - "project_default" follows the project's settings assets.texture
-  (default_compression, default_max_size; settings_get {"group":"assets"}).
-  Changing them recompiles nothing by itself: run assets_recompile_textures
-  (prefix, default app:/data; wait_ms to wait for each).
+  (default_compression, default_max_size; settings_get {"group":"assets"}), or
+  the deployed profile's override of them. Changing them recompiles the
+  project's textures in the editor; assets_recompile_textures (prefix, default
+  app:/data; wait_ms to wait for each) compiles them again on demand.
 - assets_reimport_batch imports keys again and waits until each has reloaded.
 - Only app:/ textures are compressed. Use compression "none" for UI atlases and
   pixel art that must stay exact, colorspace "srgb" for color maps, "linear" for

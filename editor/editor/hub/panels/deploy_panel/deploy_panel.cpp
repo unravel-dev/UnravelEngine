@@ -1,6 +1,8 @@
 #include "deploy_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
+#include "../profile_labels.h"
+#include "../visualization_widgets.h"
 #include "deploy_panel_widgets.h"
 
 #include <editor/deploy/deploy_android.h>
@@ -46,8 +48,27 @@ constexpr float DEPLOY_SCREEN_MARGIN = 1.0f;
 constexpr float DEPLOY_BODY_SHARE = 0.5f;
 constexpr float DEPLOY_BODY_MIN_HEIGHT = 22.0f;
 constexpr float DEPLOY_BODY_MAX_HEIGHT = 30.0f;
+// The width of the profile popups' fields.
+constexpr float PROFILE_POPUP_WIDTH = 22.0f;
+/// The icon buttons beside the profile picker: new, rename, delete.
+constexpr float PROFILE_PICKER_BUTTONS = 3.0f;
 // The empty Patch Against Release.
 constexpr const char* DEPLOY_FULL_BUILD_LABEL = "None - full build";
+// The edit scope switch: the deploy settings every profile shares, and the deploy profile's overrides.
+constexpr int EDIT_SCOPE_SEGMENTS = 2;
+constexpr int PROFILE_SCOPE_INDEX = 1;
+constexpr const char* SHARED_SCOPE_LABEL = "Shared by All Profiles";
+// The profile's segment when "<profile> Only" does not fit in it.
+constexpr const char* PROFILE_SCOPE_FALLBACK_LABEL = "This Profile Only";
+// Room a segment keeps beside its label for the override count and its edges, in font sizes.
+constexpr float EDIT_SCOPE_LABEL_MARGIN = 3.0f;
+// The revert item of a deploy setting the deploy profile overrides.
+constexpr const char* REVERT_TO_SHARED_LABEL = "Revert to Shared Value";
+// The Releases tab picks the release a profile patches, always in the profile: no override the switch shows.
+constexpr const char* PATCH_RELEASE_PATH = "deploy_patch_release";
+constexpr const char* NEW_PROFILE_POPUP = "##new_profile";
+constexpr const char* RENAME_PROFILE_POPUP = "##rename_profile";
+constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
 
 void draw_header()
 {
@@ -56,7 +77,7 @@ void draw_header()
     widgets::draw_icon_line(ICON_MDI_PACKAGE_VARIANT, widgets::get_accent_u32(), "Deploy Project", ImGui::GetColorU32(ImGuiCol_Text));
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
-    widgets::draw_muted_text("Builds the game into a folder, for this computer or an Android device.");
+    widgets::draw_muted_text("Builds the game into a folder, for this computer or an Android device, with the settings of a profile.");
 }
 
 /// The close button in the top right corner of the window.
@@ -94,19 +115,26 @@ auto draw_confirmation(const char* id, const std::string& question, const char* 
     return is_confirmed;
 }
 
-/// The delete button of a kept release, which asks first. True once the deletion is confirmed.
-auto draw_release_remove_button(const std::string& name, bool is_patched, bool is_enabled) -> bool
+/// A square icon button that takes its place in the layout.
+auto draw_inline_icon_button(const char* id, const char* icon, const char* tooltip, bool is_enabled, bool is_destructive = false) -> bool
 {
     const float side = ImGui::GetFrameHeight();
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImRect rect(min, min + ImVec2(side, side));
     ImGui::ItemSize(rect);
     ImGui::BeginDisabled(!is_enabled);
-    if(container_widgets::draw_icon_button({"##remove_release", ICON_MDI_DELETE_OUTLINE, "Delete this release", true}, rect))
+    const bool is_pressed = container_widgets::draw_icon_button({id, icon, tooltip, is_destructive}, rect);
+    ImGui::EndDisabled();
+    return is_pressed;
+}
+
+/// The delete button of a kept release, which asks first. True once the deletion is confirmed.
+auto draw_release_remove_button(const std::string& name, bool is_patched, bool is_enabled) -> bool
+{
+    if(draw_inline_icon_button("##remove_release", ICON_MDI_DELETE_OUTLINE, "Delete this release.", is_enabled, true))
     {
         ImGui::OpenPopup("##remove_release_confirm");
     }
-    ImGui::EndDisabled();
     return draw_confirmation("##remove_release_confirm",
                              fmt::format("Delete release {}?", name),
                              is_patched ? "Its packs are deleted, and deploys make full builds again."
@@ -158,25 +186,41 @@ auto get_folder_size(const fs::path& folder) -> std::uint64_t
     return size;
 }
 
-/// The deploy settings' properties `names`, in rows as the inspector draws them; saved once an edit
-/// is finished.
-void inspect_deploy_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names)
+/// The text of a name field, without the zeros after it.
+template<std::size_t Capacity>
+auto get_field_text(const std::array<char, Capacity>& field) -> std::string
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    entt::meta_any object = entt::forward_as_meta(pm.get_deploy_settings());
-    const auto type = entt::resolve<deploy_settings>();
-    inspect_result result;
-    for(const auto& name : names)
-    {
-        if(const auto prop = type.data(name))
-        {
-            result |= inspect_property(ctx, object, make_proxy(object), prop);
-        }
-    }
-    if(result.edit_finished)
-    {
-        pm.save_deploy_settings();
-    }
+    return std::string(field.data());
+}
+
+template<std::size_t Capacity>
+void set_field_text(std::array<char, Capacity>& field, const std::string& text)
+{
+    field.fill('\0');
+    std::copy_n(text.begin(), std::min(text.size(), field.size() - 1), field.begin());
+}
+
+/// A row of a profile popup: its label, then the field the caller draws next, at the popup's field width.
+void begin_popup_row(const char* label)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::SetNextItemWidth(widgets::to_pixels(PROFILE_POPUP_WIDTH));
+}
+
+/// The deploy profile's overrides the Build and Content tabs edit.
+auto count_switched_overrides(const settings_profile& profile) -> int
+{
+    const auto& paths = profile.deploy.get_paths();
+    return static_cast<int>(std::count_if(paths.begin(),
+                                          paths.end(),
+                                          [](const std::string& path)
+                                          {
+                                              return !serialization::is_path_within(path, PATCH_RELEASE_PATH);
+                                          }));
 }
 
 /// A deploy step's name with its state: done, failed or still running.
@@ -225,7 +269,32 @@ void draw_step_row(const deployment::deploy_jobs& steps)
         }
     }
 }
+
+/// A line under a section: what the last action did, or why it failed.
+void draw_message(const std::string& message, bool is_error)
+{
+    if(message.empty())
+    {
+        return;
+    }
+    widgets::draw_gap(widgets::LINE_GAP);
+    widgets::draw_icon_line(is_error ? ICON_MDI_ALERT_CIRCLE_OUTLINE : ICON_MDI_CHECK_CIRCLE_OUTLINE,
+                            is_error ? widgets::WARNING_COLOR : widgets::get_accent_u32(),
+                            message.c_str(),
+                            ImGui::GetColorU32(ImGuiCol_Text));
+}
 } // namespace
+
+void deploy_panel::profile_name_field::check(const deployment::project_profiles& profiles, const std::string& renamed)
+{
+    const auto name = get_field_text(text);
+    if(name == checked)
+    {
+        return;
+    }
+    checked = name;
+    error = name.empty() ? std::string{} : profiles.check_new_name(name, renamed).error;
+}
 
 deploy_panel::deploy_panel(imgui_panels* parent) : parent_(parent)
 {
@@ -262,6 +331,7 @@ void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
         ImGui::OpenPopup(name);
         show_request_ = false;
         release_message_.clear();
+        profile_message_.clear();
         content_view_.invalidate();
         problems_.invalidate();
     }
@@ -285,6 +355,7 @@ void deploy_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
         return;
     }
 
+    settings_editor_.sync(ctx);
     draw_ui(ctx);
 
     const bool is_escape_pressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::IsAnyItemActive();
@@ -421,8 +492,8 @@ void deploy_panel::draw_tab_body(rtti::context& ctx, tab_drawer draw)
     ImGui::EndChild();
 }
 
-/// Two columns: what every platform shares on the left - the product, where builds go, how files are
-/// stored - and the platform, with only its own settings, on the right.
+/// Two columns: what every profile shares on the left - the product, where builds go, how files are
+/// stored - and the profile, with its platform's own settings, on the right.
 void deploy_panel::draw_build_tab(rtti::context& ctx)
 {
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(widgets::to_pixels(DEPLOY_COLUMN_GUTTER), 0.0f));
@@ -433,49 +504,222 @@ void deploy_panel::draw_build_tab(rtti::context& ctx)
         ImGui::TableSetColumnIndex(0);
         draw_common_settings(ctx);
         ImGui::TableSetColumnIndex(1);
-        draw_platform_tabs(ctx);
+        draw_profile_section(ctx);
         ImGui::EndTable();
     }
     ImGui::PopStyleVar();
 }
 
-/// The settings every platform shares: the product, the deploy folder and running the game, packaging.
-void deploy_panel::draw_common_settings(rtti::context& ctx)
+auto deploy_panel::make_deploy_marks(rtti::context& ctx) -> property_override_marks
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    const std::string profile = settings_editor_.get_profile();
+    property_override_marks marks;
+    if(pm.get_profiles().find(profile) == nullptr)
+    {
+        return marks;
+    }
+    marks.get_mark = [&pm, profile](const std::string& path)
+    {
+        const auto* found = pm.get_profiles().find(profile);
+        return found != nullptr ? get_override_mark(found->deploy, path) : override_mark::none;
+    };
+    marks.revert = [this, &ctx](const std::string& path)
+    {
+        settings_editor_.revert(ctx, path);
+        problems_.invalidate();
+        content_view_.invalidate();
+    };
+    marks.contains_note = fmt::format("Profile {} overrides settings in this group.", profile);
+    if(settings_editor_.is_profile_mode())
+    {
+        marks.revert_label = REVERT_TO_SHARED_LABEL;
+        marks.overridden_note = fmt::format("Profile {} overrides this setting.", profile);
+        return marks;
+    }
+    // Edits of the shared settings do not reach the profile where it overrides them.
+    marks.style = override_style::shadowing;
+    marks.revert_label = fmt::format("Revert {} to Shared Value", profile);
+    marks.overridden_note = fmt::format("Profile {} overrides this setting, so its deploys use their own value.", profile);
+    return marks;
+}
+
+void deploy_panel::inspect_deploy_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names)
+{
+    auto& shown = settings_editor_.get();
+    entt::meta_any object = entt::forward_as_meta(shown);
+    const auto type = entt::resolve<deploy_settings>();
+    inspect_result result;
+    {
+        // The shown settings are a copy, taken again every frame: an undo step could not reach them.
+        const inspect_without_undo_scope no_undo;
+        auto marks = make_deploy_marks(ctx);
+        hpp::optional<property_override_scope> marked;
+        if(marks.get_mark)
+        {
+            marked.emplace(ctx, std::string{}, std::move(marks));
+        }
+        for(const auto& name : names)
+        {
+            if(const auto prop = type.data(name))
+            {
+                result |= inspect_property(ctx, object, make_proxy(object), prop);
+            }
+        }
+    }
+    if(result.edit_finished)
+    {
+        settings_editor_.commit(ctx);
+        problems_.invalidate();
+        content_view_.invalidate();
+    }
+}
+
+auto deploy_panel::make_product_marks(rtti::context& ctx) -> property_override_marks
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    const std::string profile = settings_editor_.get_profile();
+    property_override_marks marks;
+    if(pm.get_profiles().find(profile) == nullptr)
+    {
+        return marks;
+    }
+    marks.get_mark = [&pm, profile](const std::string& path)
+    {
+        const auto* found = pm.get_profiles().find(profile);
+        return found != nullptr ? get_override_mark(found->settings, path) : override_mark::none;
+    };
+    marks.revert = [this, &ctx, &pm, profile](const std::string& path)
+    {
+        product_error_ = pm.revert_profile_settings(ctx, profile, path).error;
+        problems_.invalidate();
+        content_view_.invalidate();
+    };
+    marks.style = override_style::shadowing;
+    marks.revert_label = fmt::format("Revert {} to Project Settings", profile);
+    marks.overridden_note = fmt::format("Profile {} overrides this setting, so its deploys use their own value.", profile);
+    marks.contains_note = fmt::format("Profile {} overrides settings in this group.", profile);
+    return marks;
+}
+
+void deploy_panel::draw_product_settings(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& settings = pm.get_settings();
-    const auto& params = pm.get_deploy_settings();
+    const auto inspect_marked = [this, &ctx](const char* root, auto& object)
+    {
+        auto marks = make_product_marks(ctx);
+        hpp::optional<property_override_scope> marked;
+        if(marks.get_mark)
+        {
+            marked.emplace(ctx, root, std::move(marks));
+        }
+        return inspect(ctx, object).edit_finished;
+    };
+    bool is_edited = inspect_marked("app", settings.app);
+    is_edited |= inspect_marked("standalone", settings.standalone);
+    if(is_edited)
+    {
+        pm.save_project_settings(ctx);
+        product_error_.clear();
+    }
+    const auto* profile = pm.get_profiles().find(settings_editor_.get_profile());
+    if(profile != nullptr && (profile->settings.is_related("app") || profile->settings.is_related("standalone")))
+    {
+        widgets::draw_muted_text(fmt::format("Profile {} deploys with its own values of the highlighted settings. "
+                                             "Right-click one to revert it.",
+                                             profile->name)
+                                     .c_str());
+    }
+    draw_message(product_error_, true);
+}
+
+/// The product and the deploy folder every profile shares, then the deploy settings: running the game and
+/// packaging, edited for every profile or as the deploy profile's overrides.
+void deploy_panel::draw_common_settings(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
     widgets::draw_section_title("Product");
-    if(inspect(ctx, settings.app).edit_finished)
-    {
-        pm.save_project_settings(ctx);
-    }
-    if(inspect(ctx, settings.standalone).edit_finished)
-    {
-        pm.save_project_settings(ctx);
-    }
+    draw_product_settings(ctx);
     widgets::draw_gap(widgets::SECTION_GAP);
     widgets::draw_section_title("Output");
-    inspect_deploy_properties(ctx, {"deploy_location"_hs});
-    if(params.deploy_location.empty())
+    {
+        // Every profile builds under the one location: always the shared setting.
+        auto& shared = pm.get_deploy_settings();
+        entt::meta_any object = entt::forward_as_meta(shared);
+        const auto prop = entt::resolve<deploy_settings>().data("deploy_location"_hs);
+        if(inspect_property(ctx, object, make_proxy(object), prop).edit_finished)
+        {
+            pm.save_deploy_settings();
+            problems_.invalidate();
+        }
+    }
+    const auto request = pm.get_deploy_request();
+    if(request.deploy_location.empty())
     {
         draw_missing_location_notice(ctx);
     }
     else
     {
-        widgets::draw_muted_text(fmt::format("{} builds go to {}.",
-                                             params.deploy_target == deploy_platform::android ? "Android" : "Desktop",
-                                             describe_folder(get_output_location(params)))
-                                     .c_str());
+        widgets::draw_muted_text(
+            fmt::format("{} builds go to {}.", request.profile, describe_folder(get_output_location(request))).c_str());
     }
+    widgets::draw_gap(widgets::SECTION_GAP);
+    widgets::draw_section_title("Deploy Settings");
+    draw_edit_target(ctx);
+    widgets::draw_gap(widgets::LINE_GAP);
     inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
-    if(params.deploy_and_run)
+    if(settings_editor_.get().deploy_and_run)
     {
         inspect_deploy_properties(ctx, {"deploy_run_arguments"_hs});
     }
-    widgets::draw_gap(widgets::SECTION_GAP);
-    widgets::draw_section_title("Packaging");
+    if(settings_editor_.get().deploy_target != deploy_platform::android)
+    {
+        inspect_deploy_properties(ctx, {"deploy_dependencies"_hs});
+    }
+    ImGui::SeparatorText("Packaging");
     inspect_deploy_properties(ctx, {"deploy_packed_assets"_hs, "deploy_cooked_assets"_hs, "deploy_debug_symbols"_hs});
+    draw_message(settings_editor_.get_error(), true);
+}
+
+/// One segment per scope, the profile's counting its overrides, and a line under them saying where changes go.
+void deploy_panel::draw_edit_target(rtti::context& ctx)
+{
+    const auto& profile = settings_editor_.get_profile();
+    const auto* found = ctx.get_cached<project_manager>().get_profiles().find(profile);
+    const int override_count = found != nullptr ? count_switched_overrides(*found) : 0;
+    const float width = ImGui::GetContentRegionAvail().x;
+    std::string profile_label = fmt::format("{} Only", profile);
+    const float label_room = width / float(EDIT_SCOPE_SEGMENTS) - widgets::to_pixels(EDIT_SCOPE_LABEL_MARGIN);
+    if(ImGui::CalcTextSize(profile_label.c_str()).x > label_room)
+    {
+        profile_label = PROFILE_SCOPE_FALLBACK_LABEL;
+    }
+    const char* labels[EDIT_SCOPE_SEGMENTS] = {SHARED_SCOPE_LABEL, profile_label.c_str()};
+    const int badges[EDIT_SCOPE_SEGMENTS] = {0, override_count};
+    int index = settings_editor_.is_profile_mode() ? PROFILE_SCOPE_INDEX : 0;
+    if(visualization_widgets::draw_segmented("##edit_scope", labels, badges, EDIT_SCOPE_SEGMENTS, width, index))
+    {
+        settings_editor_.set_profile_mode(ctx, index == PROFILE_SCOPE_INDEX);
+        content_view_.invalidate();
+    }
+    widgets::draw_gap(widgets::LINE_GAP);
+    std::string note;
+    if(settings_editor_.is_profile_mode())
+    {
+        note = fmt::format("Changes are saved in profile {} only, as overrides of the shared settings. Overridden settings "
+                           "are bold, and their context menu reverts them.",
+                           profile);
+    }
+    else
+    {
+        note = "Every profile deploys with these settings unless it overrides them.";
+        if(override_count > 0)
+        {
+            note += fmt::format(" Profile {} overrides {} of them.", profile, override_count);
+        }
+    }
+    widgets::draw_muted_text(note.c_str());
 }
 
 /// Where the deploy folder line goes once one is set: that none is, and a button that sets the project's own.
@@ -502,104 +746,330 @@ void deploy_panel::draw_missing_location_notice(rtti::context& ctx)
         pm.save_deploy_settings();
         problems_.invalidate();
     }
-    ImGui::SetItemTooltipEx("Deploy into %s in the project folder, which the deploy creates. Each platform builds "
+    ImGui::SetItemTooltipEx("Deploy into %s in the project folder, which the deploy creates. Each profile builds "
                             "into a folder of its own in it.",
                             DEFAULT_DEPLOY_LOCATION);
 }
 
-/// A tab per platform; the selected one is what the deploy builds for, and shows that platform's settings.
-void deploy_panel::draw_platform_tabs(rtti::context& ctx)
+/// The deploy profile and its platform's settings.
+void deploy_panel::draw_profile_section(rtti::context& ctx)
 {
-    struct platform_tab
+    widgets::draw_section_title("Profile");
+    draw_profile_picker(ctx);
+    draw_message(profile_message_, is_profile_message_error_);
+    widgets::draw_gap(widgets::LINE_GAP);
+    if(settings_editor_.get().deploy_target == deploy_platform::android)
     {
-        deploy_platform platform;
-        const char* label;
-        const char* tooltip;
-        tab_drawer draw;
-    };
-    static constexpr platform_tab tabs[] = {
-        {deploy_platform::desktop, ICON_MDI_MONITOR " Desktop", "Build the game for this computer.", &deploy_panel::draw_desktop_section},
-        {deploy_platform::android, ICON_MDI_ANDROID " Android", "Build an Android package from the editor's Android player.", &deploy_panel::draw_android_section},
-    };
+        draw_android_section(ctx);
+    }
+    else
+    {
+        draw_desktop_section(ctx);
+    }
+}
+
+void deploy_panel::draw_profile_picker(rtti::context& ctx)
+{
     auto& pm = ctx.get_cached<project_manager>();
-    auto& params = pm.get_deploy_settings();
-    widgets::draw_section_title("Platform");
-    // The setting can change elsewhere (MCP): its tab is selected until the tab bar shows it, and clicks on
-    // the tab still shown meanwhile change nothing.
-    const bool is_selecting = !shown_platform_ || *shown_platform_ != params.deploy_target;
-    if(!ImGui::BeginTabBar("##deploy_platforms"))
+    const auto& profiles = pm.get_profiles();
+    const auto& current = pm.get_deploy_profile();
+    const auto* selected = profiles.find(current);
+    const float side = ImGui::GetFrameHeight();
+    const float buttons_width = PROFILE_PICKER_BUTTONS * (side + ImGui::GetStyle().ItemSpacing.x);
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - buttons_width));
+    const std::string preview = selected != nullptr ? profile_labels::get_label(*selected) : current;
+    const bool is_open = ImGui::BeginCombo("##deploy_profile", preview.c_str());
+    ImGui::SetItemTooltipEx("%s",
+                            "The profile the deploy builds: a platform, and the settings it changes from the project's.\n"
+                            "Each profile builds into a folder named after it in the deploy folder.");
+    if(is_open)
+    {
+        for(const auto& profile : profiles.get_all())
+        {
+            if(ImGui::Selectable(profile_labels::get_label(profile).c_str(), profile.name == current) && profile.name != current)
+            {
+                set_profile_message(pm.set_deploy_profile(profile.name), {});
+                settings_editor_.sync(ctx);
+                problems_.invalidate();
+                content_view_.invalidate();
+                refresh_releases();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if(draw_inline_icon_button("##new_profile_button", ICON_MDI_PLUS, "Create a profile.", true))
+    {
+        new_profile_name_ = {};
+        new_profile_platform_ = selected != nullptr ? selected->platform : target_platform::desktop;
+        new_profile_source_.clear();
+        ImGui::OpenPopup(NEW_PROFILE_POPUP);
+    }
+    ImGui::SameLine();
+    if(draw_inline_icon_button("##rename_profile_button", ICON_MDI_PENCIL_OUTLINE, "Rename this profile.", selected != nullptr))
+    {
+        rename_profile_name_ = {};
+        set_field_text(rename_profile_name_.text, current);
+        ImGui::OpenPopup(RENAME_PROFILE_POPUP);
+    }
+    ImGui::SameLine();
+    const bool can_remove = selected != nullptr && profiles.get_all().size() > 1;
+    if(draw_inline_icon_button("##remove_profile_button",
+                               ICON_MDI_DELETE_OUTLINE,
+                               can_remove ? "Delete this profile." : "A project keeps at least one profile.",
+                               can_remove,
+                               true))
+    {
+        ImGui::OpenPopup(REMOVE_PROFILE_POPUP);
+    }
+    draw_new_profile_popup(ctx);
+    draw_rename_profile_popup(ctx);
+    if(draw_confirmation(REMOVE_PROFILE_POPUP,
+                         fmt::format("Delete profile {}?", current),
+                         "Its settings, its kept releases and its texture cache are deleted. Its builds in the deploy "
+                         "folder stay.",
+                         ICON_MDI_DELETE_OUTLINE " Delete"))
+    {
+        const std::string removed = current;
+        set_profile_message(pm.remove_profile(ctx, removed), fmt::format("Deleted profile {}.", removed));
+        settings_editor_.sync(ctx);
+        problems_.invalidate();
+        content_view_.invalidate();
+        refresh_releases();
+    }
+}
+
+void deploy_panel::draw_new_profile_popup(rtti::context& ctx)
+{
+    if(!ImGui::BeginPopup(NEW_PROFILE_POPUP))
     {
         return;
     }
-    for(const auto& tab : tabs)
+    auto& pm = ctx.get_cached<project_manager>();
+    ImGui::PushFont(ImGui::Font::Bold);
+    ImGui::TextUnformatted("New Profile");
+    ImGui::PopFont();
+    widgets::draw_gap(widgets::LINE_GAP);
+    bool is_entered = false;
+    if(ImGui::BeginTable("##new_profile_fields", 2, ImGuiTableFlags_SizingFixedFit))
     {
-        const ImGuiTabItemFlags flags = is_selecting && tab.platform == params.deploy_target ? ImGuiTabItemFlags_SetSelected : 0;
-        const bool is_open = ImGui::BeginTabItem(tab.label, nullptr, flags);
-        ImGui::SetItemTooltipEx("%s", tab.tooltip);
-        if(!is_open)
+        begin_popup_row("Name");
+        if(ImGui::IsWindowAppearing())
         {
-            continue;
+            ImGui::SetKeyboardFocusHere();
         }
-        if(tab.platform != params.deploy_target && !is_selecting)
+        is_entered = ImGui::InputTextWithHint("##new_profile_name",
+                                              "Such as Android or Demo",
+                                              new_profile_name_.text.data(),
+                                              new_profile_name_.text.size(),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        begin_popup_row("Platform");
+        for(const auto platform : {target_platform::desktop, target_platform::android})
         {
-            params.deploy_target = tab.platform;
-            pm.save_deploy_settings();
-            problems_.invalidate();
+            if(platform != target_platform::desktop)
+            {
+                ImGui::SameLine();
+            }
+            const auto label = fmt::format("{} {}", profile_labels::get_platform_icon(platform), profile_labels::get_platform_name(platform));
+            if(ImGui::RadioButton(label.c_str(), new_profile_platform_ == platform) && new_profile_platform_ != platform)
+            {
+                new_profile_platform_ = platform;
+                new_profile_source_.clear();
+            }
         }
-        if(tab.platform == params.deploy_target)
+        begin_popup_row("Start From");
+        const std::string defaults_label = fmt::format("{} starting values", profile_labels::get_platform_name(new_profile_platform_));
+        const std::string source_label = new_profile_source_.empty() ? defaults_label : "A copy of " + new_profile_source_;
+        if(ImGui::BeginCombo("##new_profile_source", source_label.c_str()))
         {
-            shown_platform_ = tab.platform;
+            if(ImGui::Selectable(defaults_label.c_str(), new_profile_source_.empty()))
+            {
+                new_profile_source_.clear();
+            }
+            for(const auto& profile : pm.get_profiles().get_all())
+            {
+                if(profile.platform == new_profile_platform_ &&
+                   ImGui::Selectable(("A copy of " + profile.name).c_str(), profile.name == new_profile_source_))
+                {
+                    new_profile_source_ = profile.name;
+                }
+            }
+            ImGui::EndCombo();
         }
-        widgets::draw_gap(widgets::LINE_GAP);
-        (this->*tab.draw)(ctx);
-        ImGui::EndTabItem();
+        ImGui::SetItemTooltipEx("%s", "Start from the values a new profile of the platform gets, or from a copy of a profile.");
+        ImGui::EndTable();
     }
-    ImGui::EndTabBar();
+    new_profile_name_.check(pm.get_profiles());
+    const auto name = get_field_text(new_profile_name_.text);
+    draw_message(new_profile_name_.error, true);
+    widgets::draw_gap(widgets::LINE_GAP);
+    const bool can_create = !name.empty() && new_profile_name_.error.empty();
+    ImGui::BeginDisabled(!can_create);
+    const bool is_created = ImGui::Button(ICON_MDI_PLUS " Create") || (is_entered && can_create);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if(ImGui::Button("Cancel"))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    if(is_created)
+    {
+        const auto created = pm.create_profile(ctx, name, new_profile_platform_, new_profile_source_);
+        if(created.is_ok())
+        {
+            set_profile_message(created, fmt::format("Created profile {}. Deploys build it now.", name));
+            pm.set_deploy_profile(name);
+            settings_editor_.sync(ctx);
+            problems_.invalidate();
+            content_view_.invalidate();
+            refresh_releases();
+            ImGui::CloseCurrentPopup();
+        }
+        else
+        {
+            new_profile_name_.error = created.error;
+        }
+    }
+    ImGui::EndPopup();
 }
 
-void deploy_panel::draw_desktop_section(rtti::context& ctx)
+void deploy_panel::draw_rename_profile_popup(rtti::context& ctx)
+{
+    if(!ImGui::BeginPopup(RENAME_PROFILE_POPUP))
+    {
+        return;
+    }
+    auto& pm = ctx.get_cached<project_manager>();
+    const std::string current = pm.get_deploy_profile();
+    ImGui::PushFont(ImGui::Font::Bold);
+    ImGui::TextUnformatted(fmt::format("Rename {}", current).c_str());
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
+    ImGui::TextUnformatted("Its kept releases and texture cache move with it. Its builds in the deploy folder keep the old name.");
+    ImGui::PopStyleColor();
+    widgets::draw_gap(widgets::LINE_GAP);
+    if(ImGui::IsWindowAppearing())
+    {
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::SetNextItemWidth(widgets::to_pixels(PROFILE_POPUP_WIDTH));
+    const bool is_entered = ImGui::InputText("##rename_profile_name",
+                                             rename_profile_name_.text.data(),
+                                             rename_profile_name_.text.size(),
+                                             ImGuiInputTextFlags_EnterReturnsTrue);
+    const auto name = get_field_text(rename_profile_name_.text);
+    if(name != current)
+    {
+        rename_profile_name_.check(pm.get_profiles(), current);
+    }
+    draw_message(name != current ? rename_profile_name_.error : std::string{}, true);
+    widgets::draw_gap(widgets::LINE_GAP);
+    const bool can_rename = !name.empty() && name != current && rename_profile_name_.error.empty();
+    ImGui::BeginDisabled(!can_rename);
+    const bool is_renamed = ImGui::Button(ICON_MDI_PENCIL_OUTLINE " Rename") || (is_entered && can_rename);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if(ImGui::Button("Cancel"))
+    {
+        ImGui::CloseCurrentPopup();
+    }
+    if(is_renamed)
+    {
+        const auto renamed = pm.rename_profile(ctx, current, name);
+        if(renamed.is_ok())
+        {
+            set_profile_message(renamed, fmt::format("Renamed profile {} to {}.", current, name));
+            settings_editor_.sync(ctx);
+            problems_.invalidate();
+            refresh_releases();
+            ImGui::CloseCurrentPopup();
+        }
+        else
+        {
+            rename_profile_name_.error = renamed.error;
+        }
+    }
+    ImGui::EndPopup();
+}
+
+void deploy_panel::set_profile_message(const deployment::result& outcome, const std::string& success)
+{
+    is_profile_message_error_ = !outcome.is_ok();
+    profile_message_ = is_profile_message_error_ ? outcome.error : success;
+}
+
+void deploy_panel::draw_desktop_section(rtti::context& /*ctx*/)
 {
     widgets::draw_muted_text("The player for this computer, with the game's data beside it. Run After Deploy starts it.");
-    widgets::draw_gap(widgets::LINE_GAP);
-    inspect_deploy_properties(ctx, {"deploy_dependencies"_hs});
+}
+
+void deploy_panel::inspect_android_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names)
+{
+    auto& android = settings_editor_.get().android;
+    entt::meta_any object = entt::forward_as_meta(android);
+    const auto type = entt::resolve<android_deploy_settings>();
+    inspect_result result;
+    {
+        const inspect_without_undo_scope no_undo;
+        for(const auto& name : names)
+        {
+            if(const auto prop = type.data(name))
+            {
+                result |= inspect_property(ctx, object, make_proxy(object), prop);
+            }
+        }
+    }
+    if(result.edit_finished)
+    {
+        auto& pm = ctx.get_cached<project_manager>();
+        set_profile_message(pm.set_profile_android(ctx, settings_editor_.get_profile(), android), {});
+        problems_.invalidate();
+    }
 }
 
 void deploy_panel::draw_android_section(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& params = pm.get_deploy_settings();
-    widgets::draw_muted_text("An Android package (.apk). Run After Deploy installs it on the device and starts it there.");
-    widgets::draw_gap(widgets::LINE_GAP);
+    const auto& android = settings_editor_.get().android;
+    widgets::draw_muted_text(fmt::format("An Android package (.apk). Run After Deploy installs it on the chosen device and "
+                                         "starts it there. The package and signing settings are saved in profile {}.",
+                                         settings_editor_.get_profile())
+                                 .c_str());
     if(!has_listed_android_devices_)
     {
         has_listed_android_devices_ = true;
         deployment::refresh_android_devices(ctx);
     }
+    ImGui::SeparatorText("Device");
     if(draw_android_device_picker(ctx))
     {
         problems_.invalidate();
     }
     draw_android_device_actions(ctx);
-    inspect_deploy_properties(ctx, {"android_application_id"_hs});
-    if(params.android_application_id.empty())
+    ImGui::SeparatorText("Package");
+    inspect_android_properties(ctx, {"application_id"_hs});
+    if(android.application_id.empty())
     {
-        widgets::draw_muted_text(
-            fmt::format("Uses {} from the product settings.", deployment::get_android_application_id(ctx, params)).c_str());
+        widgets::draw_muted_text(fmt::format("Uses {}, made from the product settings.",
+                                             deployment::get_android_application_id(ctx, settings_editor_.get()))
+                                     .c_str());
     }
-    inspect_deploy_properties(ctx, {"android_version_code"_hs, "android_screen_orientation"_hs, "android_icon"_hs});
-    if(!params.android_icon)
+    inspect_android_properties(ctx, {"version_code"_hs, "screen_orientation"_hs, "texture_compression"_hs, "icon"_hs});
+    if(!android.icon)
     {
         widgets::draw_muted_text("Without an image, the icon is the engine's logo.");
     }
-    inspect_deploy_properties(ctx, {"android_icon_background"_hs, "android_release"_hs});
-    if(params.android_release)
+    inspect_android_properties(ctx, {"icon_background"_hs});
+    ImGui::SeparatorText("Signing");
+    inspect_android_properties(ctx, {"release"_hs});
+    if(android.release)
     {
-        inspect_deploy_properties(ctx, {"android_keystore"_hs, "android_key_alias"_hs});
+        inspect_android_properties(ctx, {"keystore"_hs, "key_alias"_hs});
     }
 }
 
 auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
 {
+    // The device is this session's choice, kept with the shared settings and never saved.
     auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
     const auto devices = deployment::get_android_devices();
     // The only device ready is the one to use; the choice is not saved, since devices belong to a computer.
@@ -678,12 +1148,16 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
     }
     ImGui::EndDisabled();
     ImGui::SetItemTooltipEx("%s", "List the connected devices again.");
+    if(is_changed)
+    {
+        settings_editor_.sync(ctx);
+    }
     return is_changed;
 }
 
 void deploy_panel::draw_android_device_actions(rtti::context& ctx)
 {
-    auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto params = ctx.get_cached<project_manager>().get_deploy_request();
     const auto devices = deployment::get_android_devices();
     const bool is_device_ready = std::any_of(devices.begin(),
                                              devices.end(),
@@ -709,9 +1183,9 @@ void deploy_panel::draw_android_device_actions(rtti::context& ctx)
     };
     property_layout layout("On Device", "The game on the chosen device, without a new deploy.");
     const std::string run_tooltip =
-        has_package ? describe("Install the package in the deploy folder on the device and start it, without a new "
-                               "build. Its log follows in the Console.")
-                    : std::string("No package yet. Deploy for Android first.");
+        has_package ? describe("Install the package in the profile's deploy folder on the device and start it, without a "
+                               "new build. Its log follows in the Console.")
+                    : std::string("No package yet. Deploy this profile first.");
     if(draw_device_action(ICON_MDI_PLAY_CIRCLE_OUTLINE " Run Last Build", run_tooltip, can_act && has_package, true))
     {
         run_last_android_build(ctx, params);
@@ -750,7 +1224,9 @@ void deploy_panel::draw_android_device_actions(rtti::context& ctx)
 /// The scenes the game is built from and the assets that ship with it.
 void deploy_panel::draw_content_tab(rtti::context& ctx)
 {
-    content_view_.draw(ctx);
+    draw_edit_target(ctx);
+    widgets::draw_gap(widgets::LINE_GAP);
+    content_view_.draw(ctx, settings_editor_);
 }
 
 /// The release a deploy patches and the releases kept to patch.
@@ -763,32 +1239,32 @@ void deploy_panel::draw_releases_tab(rtti::context& ctx)
     }
     releases_tab_frame_ = ImGui::GetFrameCount();
     auto& pm = ctx.get_cached<project_manager>();
-    const auto& release = pm.get_deploy_settings().deploy_patch_release;
-    widgets::draw_section_title("Patching");
-    if(draw_patch_release_picker(ctx))
+    const auto request = pm.get_deploy_request();
+    widgets::draw_section_title(fmt::format("Patching {}", request.profile).c_str());
+    if(request.deploy_target == deploy_platform::android)
     {
-        pm.save_deploy_settings();
+        widgets::draw_muted_text("Patches and releases are for desktop profiles. An Android package always carries every "
+                                 "pack whole.");
+        return;
     }
+    draw_patch_release_picker(ctx);
     widgets::draw_gap(widgets::LINE_GAP);
+    const auto& release = request.deploy_patch_release;
     widgets::draw_muted_text(release.empty()
                                  ? "Every pack is written whole."
                                  : fmt::format("The packs of {} ship unchanged, and content_p1.pak holds every change since.", release)
                                        .c_str());
-    if(pm.get_deploy_settings().deploy_target == deploy_platform::android)
-    {
-        widgets::draw_muted_text("Patches and releases are for desktop deploys. An Android package always carries every "
-                                 "pack whole.");
-    }
     widgets::draw_gap(widgets::SECTION_GAP);
     draw_kept_releases(ctx);
 }
 
 auto deploy_panel::draw_patch_release_picker(rtti::context& ctx) -> bool
 {
-    auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
-    entt::meta_any object = entt::forward_as_meta(params);
+    auto& pm = ctx.get_cached<project_manager>();
+    auto request = pm.get_deploy_request();
+    entt::meta_any object = entt::forward_as_meta(request);
     property_layout layout(entt::resolve<deploy_settings>().data("deploy_patch_release"_hs), object);
-    auto& value = params.deploy_patch_release;
+    auto& value = request.deploy_patch_release;
     const bool is_missing = !value.empty() && std::none_of(releases_.begin(),
                                                            releases_.end(),
                                                            [&](const kept_release& release)
@@ -821,7 +1297,15 @@ auto deploy_panel::draw_patch_release_picker(rtti::context& ctx) -> bool
     }
     if(is_missing)
     {
-        ImGui::SetItemTooltipEx("No release named '%s' is kept.", value.c_str());
+        ImGui::SetItemTooltipEx("No release named '%s' is kept for this profile.", value.c_str());
+    }
+    if(is_changed)
+    {
+        // A release is one profile's build, so the release patched is always the profile's own setting.
+        const auto changed = pm.override_profile_deploy(ctx, request.profile, request);
+        is_release_message_error_ = !changed.is_ok();
+        release_message_ = changed.error;
+        problems_.invalidate();
     }
     return is_changed;
 }
@@ -830,14 +1314,13 @@ auto deploy_panel::draw_patch_release_picker(rtti::context& ctx) -> bool
 /// button per release.
 void deploy_panel::draw_kept_releases(rtti::context& ctx)
 {
-    const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto request = ctx.get_cached<project_manager>().get_deploy_request();
     fs::error_code ec;
-    // Releases are desktop builds: their packs ship beside the player, and patches update them.
-    const bool has_folder = fs::is_directory(get_platform_location(params, deploy_platform::desktop), ec);
+    const bool has_folder = fs::is_directory(get_output_location(request), ec);
     if(widgets::draw_section_title_button("Kept Releases",
                                           ICON_MDI_TAG_PLUS_OUTLINE " Keep as Release",
-                                          "Keep the build in the deploy folder as a release named by the product version,\n"
-                                          "so later deploys can ship patches for it.",
+                                          "Keep the profile's build in the deploy folder as a release named by the product\n"
+                                          "version, so later deploys of the profile can ship patches for it.",
                                           has_folder && !is_deploying()))
     {
         keep_release(ctx);
@@ -854,7 +1337,7 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
         std::string removed_release;
         for(const auto& release : releases_)
         {
-            const bool is_patched = release.name == params.deploy_patch_release;
+            const bool is_patched = release.name == request.deploy_patch_release;
             ImGui::PushID(release.name.c_str());
             const float text_offset = ImGui::GetStyle().FramePadding.y;
             ImGui::TableNextRow();
@@ -883,22 +1366,15 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
             remove_release(ctx, removed_release);
         }
     }
-    if(!release_message_.empty())
-    {
-        widgets::draw_gap(widgets::LINE_GAP);
-        widgets::draw_icon_line(is_release_message_error_ ? ICON_MDI_ALERT_CIRCLE_OUTLINE : ICON_MDI_TAG_OUTLINE,
-                                is_release_message_error_ ? widgets::WARNING_COLOR : widgets::get_accent_u32(),
-                                release_message_.c_str(),
-                                ImGui::GetColorU32(ImGuiCol_Text));
-    }
+    draw_message(release_message_, is_release_message_error_);
 }
 
 /// Keeps the build in the deploy folder as a release named by the product version.
 void deploy_panel::keep_release(rtti::context& ctx)
 {
-    const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
-    const auto name = deployment::get_default_release_name(ctx);
-    const auto result = deployment::keep_project_release(params, name);
+    const auto request = ctx.get_cached<project_manager>().get_deploy_request();
+    const auto name = deployment::get_default_release_name(ctx, request.profile);
+    const auto result = deployment::keep_project_release(request, name);
     is_release_message_error_ = !result.is_ok();
     release_message_ = is_release_message_error_
                            ? result.error
@@ -908,7 +1384,8 @@ void deploy_panel::keep_release(rtti::context& ctx)
 
 void deploy_panel::remove_release(rtti::context& ctx, const std::string& name)
 {
-    const auto result = deployment::remove_project_release(ctx, name);
+    const auto& profile = ctx.get_cached<project_manager>().get_deploy_profile();
+    const auto result = deployment::remove_project_release(ctx, profile, name);
     is_release_message_error_ = !result.is_ok();
     release_message_ = is_release_message_error_ ? result.error : fmt::format("Deleted release {}.", name);
     refresh_releases();
@@ -917,9 +1394,10 @@ void deploy_panel::remove_release(rtti::context& ctx, const std::string& name)
 void deploy_panel::refresh_releases()
 {
     releases_.clear();
-    for(auto& name : deployment::list_project_releases())
+    const auto& profile = settings_editor_.get_profile();
+    for(auto& name : deployment::list_project_releases(profile))
     {
-        const auto size = get_folder_size(deployment::get_project_release_folder(name));
+        const auto size = get_folder_size(deployment::get_project_release_folder(profile, name));
         releases_.push_back({std::move(name), size});
     }
 }
@@ -960,7 +1438,7 @@ void deploy_panel::draw_install_conflict()
 
 void deploy_panel::draw_status(rtti::context& ctx)
 {
-    const auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto params = ctx.get_cached<project_manager>().get_deploy_request();
     const bool is_in_progress = is_deploying();
     draw_install_conflict();
     if(!is_in_progress)
@@ -979,13 +1457,13 @@ void deploy_panel::draw_status(rtti::context& ctx)
         }
     }
 
-    // The steps shown are of the last deploy, which may have gone to another platform's folder.
+    // The steps shown are of the last deploy, which may have gone to another profile's folder.
     const std::string location = describe_folder(deploy_jobs_.empty() ? get_output_location(params) : deployed_location_);
     if(deploy_jobs_.empty())
     {
         widgets::draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
                                 widgets::get_accent_u32(),
-                                fmt::format("Ready to deploy to {}", location).c_str(),
+                                fmt::format("Ready to deploy {} to {}.", params.profile, location).c_str(),
                                 widgets::get_muted_color());
         return;
     }
@@ -1016,7 +1494,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
 /// Close at the left end; Open Folder and Deploy at the right end.
 void deploy_panel::draw_actions(rtti::context& ctx)
 {
-    auto& params = ctx.get_cached<project_manager>().get_deploy_settings();
+    const auto params = ctx.get_cached<project_manager>().get_deploy_request();
     const bool can_deploy = !is_deploying() && problems_.get(ctx, params).empty();
     fs::error_code ec;
     const bool has_folder = fs::is_directory(get_output_location(params), ec);
@@ -1043,7 +1521,7 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     {
         ImGui::OpenInShell(get_output_location(params).string().c_str());
     }
-    ImGui::SetItemTooltipEx("%s", "Show the deploy folder in the file browser.");
+    ImGui::SetItemTooltipEx("%s", "Show the profile's folder in the file browser.");
     ImGui::SameLine();
     if(is_game_running)
     {

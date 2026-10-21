@@ -422,6 +422,10 @@ auto to_string(bgfx::TextureFormat::Enum fmt) -> std::string
         case bgfx::TextureFormat::ETC2:      return "ETC2";
         case bgfx::TextureFormat::ETC2A:     return "ETC2A";
         case bgfx::TextureFormat::ETC2A1:    return "ETC2A1";
+        case bgfx::TextureFormat::EACR11:    return "EACR11";
+        case bgfx::TextureFormat::EACR11S:   return "EACR11S";
+        case bgfx::TextureFormat::EACRG11:   return "EACRG11";
+        case bgfx::TextureFormat::EACRG11S:  return "EACRG11S";
         case bgfx::TextureFormat::PTC12:     return "PTC12";
         case bgfx::TextureFormat::PTC14:     return "PTC14";
         case bgfx::TextureFormat::PTC12A:    return "PTC12A";

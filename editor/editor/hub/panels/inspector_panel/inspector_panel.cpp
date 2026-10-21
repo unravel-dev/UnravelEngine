@@ -87,6 +87,7 @@ void inspector_panel::init(rtti::context& ctx)
     ctx.add<inspector_registry>();
     ctx.add<inspector_context>();
     ctx.add<prefab_override_context>();
+    ctx.add<property_override_view>();
 }
 
 void inspector_panel::deinit(rtti::context& ctx)
@@ -95,6 +96,7 @@ void inspector_panel::deinit(rtti::context& ctx)
     ctx.remove<inspector_registry>();
     ctx.remove<inspector_context>();
     ctx.remove<prefab_override_context>();
+    ctx.remove<property_override_view>();
 }
 
 auto inspector_panel::get_window_flags() const -> ImGuiWindowFlags

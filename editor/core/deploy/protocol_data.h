@@ -1,5 +1,7 @@
 #pragma once
 
+#include "files.h"
+
 #include <engine/assets/asset_storage.h>
 #include <filesystem/filesystem.h>
 
@@ -18,8 +20,9 @@ struct protocol_job
     std::string protocol;
     /// The protocol's compiled cache.
     fs::path compiled_root;
-    /// The cooked variants that replace compiled files (absent when nothing was cooked).
-    fs::path cooked_root;
+    /// Folders of cooked variants that replace compiled files, the first winning: the prefabs the deploy
+    /// cooked, the profile's texture variants. A folder that does not exist holds none.
+    cooked_folders cooked;
     /// The build's data/<protocol> folder.
     fs::path protocol_root;
     /// The protocol's asset index.

@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <engine/assets/asset_handle.h>
+#include <engine/settings/target_platform.h>
 
 #include <filesystem/filesystem.h>
 #include <graphics/texture.h>
@@ -14,14 +15,8 @@
 namespace unravel
 {
 
-/// The platform a deploy builds the game for.
-enum class deploy_platform : std::uint8_t
-{
-    /// This computer's platform: the player executable beside the data.
-    desktop,
-    /// An Android package (.apk) built from the editor's Android player.
-    android,
-};
+/// The platform a deploy builds the game for: the platform of the profile it deploys.
+using deploy_platform = target_platform;
 
 /// How an Android game turns with the phone.
 enum class android_orientation : std::uint8_t
@@ -34,17 +29,61 @@ enum class android_orientation : std::uint8_t
     automatic,
 };
 
+/// The block-compressed formats an Android build's textures are cooked to.
+enum class android_texture_compression : std::uint8_t
+{
+    /// ASTC, the better image per byte. A device without it decodes the textures at load, into four
+    /// times the memory.
+    astc,
+    /// ETC2 and EAC, which every OpenGL ES 3 and Vulkan device reads.
+    etc2,
+};
+
+/// What an Android build is on the device: its identity, its icon, its signing and its texture
+/// formats. An Android profile holds one (profiles/<name>/profile.cfg).
+struct android_deploy_settings
+{
+    /// The game's id on Android devices and in stores. Empty: com.<company>.<product> from the
+    /// project settings. Changing it later installs a separate app.
+    std::string application_id;
+    /// Android's version number of the game, which must grow with every release a store gets.
+    std::uint32_t version_code{1};
+    android_orientation screen_orientation{android_orientation::landscape};
+    /// The image the game's launcher icon is made from, square at best. None: the engine's logo.
+    asset_handle<gfx::texture> icon;
+    /// The opaque color behind the icon's image, seen around it and through its transparent parts.
+    math::color icon_background{math::color::white()};
+    /// A release package signed with keystore; otherwise a debug package, signed with the Android
+    /// SDK's debug keystore.
+    bool release{};
+    fs::path keystore;
+    std::string key_alias;
+    android_texture_compression texture_compression{android_texture_compression::astc};
+};
+
 /// The open project's folder, which a relative deploy location lies in.
 constexpr const char* PROJECT_ROOT_KEY = "app:/";
 /// The deploy location a project starts with: a folder of its own in the project.
 constexpr const char* DEFAULT_DEPLOY_LOCATION = ".deploy";
 
-/// How the project is deployed; saved with the project (app:/deploy/deploy.cfg).
+/**
+ * @brief How the project deploys one profile.
+ *
+ * deploy/deploy.cfg holds the settings every profile shares, and a profile's deploy.cfg overrides any of
+ * them but the location. The profile's own fields come from the profile (resolve_deploy_settings) and are
+ * saved with it; the device fields are not saved at all.
+ */
 struct deploy_settings
 {
+    /// The profile the deploy builds. From the profile.
+    std::string profile;
+    /// The profile's platform. From the profile.
     deploy_platform deploy_target{deploy_platform::desktop};
-    /// The folder builds go to, each platform into a folder of its own in it (get_output_location). A
-    /// relative location lies in the project's folder.
+    /// The Android profile's identity, signing and texture formats. From the profile.
+    android_deploy_settings android;
+
+    /// The folder builds go to, each profile into a folder of its own in it (get_output_location). A
+    /// relative location lies in the project's folder. Shared: no profile overrides it.
     fs::path deploy_location{DEFAULT_DEPLOY_LOCATION};
     bool deploy_dependencies{true};
     bool deploy_and_run{};
@@ -78,8 +117,8 @@ struct deploy_settings
     /// inspect; the game reads either.
     bool deploy_packed_assets{true};
 
-    /// The kept release to patch (a folder under the project's releases/). Set: the release's packs ship
-    /// unchanged and content_p1.pak holds every change since it, so players who have the release
+    /// The kept release of the profile to patch (releases/<profile>/<release>). Set: the release's packs
+    /// ship unchanged and content_p1.pak holds every change since it, so players who have the release
     /// download only the patch. Empty: full packs.
     std::string deploy_patch_release;
 
@@ -96,33 +135,12 @@ struct deploy_settings
     /// Folders and assets that never ship, by key, even when the scenes use them.
     std::vector<std::string> deploy_excluded;
 
-    /// The game's id on Android devices and in stores. Empty: com.<company>.<product> from the project
-    /// settings. Changing it later installs a separate app.
-    std::string android_application_id;
-    /// Android's version number of the game, which must grow with every release a store gets.
-    std::uint32_t android_version_code{1};
-    android_orientation android_screen_orientation{android_orientation::landscape};
-    /// The image the game's launcher icon is made from, square at best. None: the engine's logo.
-    asset_handle<gfx::texture> android_icon;
-    /// The opaque color behind the icon's image, seen around it and through its transparent parts.
-    math::color android_icon_background{math::color::white()};
-    /// A release package signed with android_keystore; otherwise a debug package, signed with the
-    /// Android SDK's debug keystore.
-    bool android_release{};
-    fs::path android_keystore;
-    std::string android_key_alias;
     /// The device Deploy and Run installs on (an adb serial). Not saved: devices belong to a computer.
     std::string android_device;
     /// Uninstall the game from the device when its installed copy was signed with another key, which
     /// removes its saved data. Not saved: asked for each time.
     bool android_replace_installed{};
 };
-
-/// The folder of a platform's builds under the deploy location: "desktop" or "android".
-inline auto get_platform_folder_name(deploy_platform platform) -> const char*
-{
-    return platform == deploy_platform::android ? "android" : "desktop";
-}
 
 /// The folder the deploy location names, a relative one in the open project's folder. Empty while no
 /// deploy location is set.
@@ -131,17 +149,18 @@ inline auto get_deploy_folder(const deploy_settings& params) -> fs::path
     return fs::resolve_relative_to(params.deploy_location, fs::resolve_protocol(PROJECT_ROOT_KEY));
 }
 
-/// The folder `platform` builds into: <deploy folder>/<platform folder>. Empty while no deploy location is set.
-inline auto get_platform_location(const deploy_settings& params, deploy_platform platform) -> fs::path
+/// The folder a profile builds into under the deploy location: <deploy folder>/<profile>. Empty while no
+/// deploy location or no profile is set, so a deploy never writes into the deploy folder itself.
+inline auto get_profile_location(const deploy_settings& params, const std::string& profile) -> fs::path
 {
     const auto folder = get_deploy_folder(params);
-    return folder.empty() ? fs::path{} : folder / get_platform_folder_name(platform);
+    return folder.empty() || profile.empty() ? fs::path{} : folder / fs::from_utf8_string(profile);
 }
 
-/// The folder a deploy with these settings builds into: the chosen platform's under the deploy location.
+/// The folder a deploy with these settings builds into: its profile's under the deploy location.
 inline auto get_output_location(const deploy_settings& params) -> fs::path
 {
-    return get_platform_location(params, params.deploy_target);
+    return get_profile_location(params, params.profile);
 }
 
 } // namespace unravel

@@ -33,6 +33,10 @@ struct asset_manifest
     /// Fingerprint algorithm version. Legacy manifests use 0 (SHA1).
     uint64_t fingerprint_version = 0;
 
+    /// The parameters the compile resolved beside the source and its settings, such as a texture's
+    /// format family and size for its target; empty for assets that have none.
+    std::string compile_parameters;
+
     asset_manifest() = default;
 
     asset_manifest(const fs::path& key)

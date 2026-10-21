@@ -3,6 +3,7 @@
 #include "asset_handle.h"
 #include <engine/animation/animation.h>
 #include "asset_flags.h"
+#include <engine/settings/target_platform.h>
 
 #include <context/context.hpp>
 #include <hpp/event.hpp>
@@ -82,9 +83,35 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
         texture_size max_size{texture_size::project_default};
         compression_quality compression{compression_quality::project_default};
 
+        friend auto operator==(const quality_meta& lhs, const quality_meta& rhs) -> bool = default;
     } quality;
 
+    /// A platform's own quality, used on that platform instead of `quality` while overridden.
+    struct platform_quality_meta
+    {
+        bool is_overridden{false};
+        quality_meta quality;
 
+        friend auto operator==(const platform_quality_meta& lhs, const platform_quality_meta& rhs) -> bool = default;
+    };
+
+    /// Per-platform quality, keyed by platform (not by profile, so renaming a profile leaves every
+    /// texture's settings alone).
+    struct platforms_meta
+    {
+        platform_quality_meta desktop;
+        platform_quality_meta android;
+
+        friend auto operator==(const platforms_meta& lhs, const platforms_meta& rhs) -> bool = default;
+    } platforms;
+
+    /// The quality a texture compiles with on `platform`: the platform's own while it is overridden,
+    /// otherwise the texture's.
+    auto get_quality(target_platform platform) const -> const quality_meta&
+    {
+        const auto& own = platform == target_platform::android ? platforms.android : platforms.desktop;
+        return own.is_overridden ? own.quality : quality;
+    }
 };
 
 struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_meta>

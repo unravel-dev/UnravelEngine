@@ -37,6 +37,8 @@ private:
     // The play toolbar, a panel_toolbar strip: the play options on the left, the play controls and
     // Deploy and Run in the middle, the simulation and frame pacing on the right.
     void draw_play_options(rtti::context& ctx);
+    /// The settings the editor runs with: the project settings, or a profile's.
+    void draw_preview_profile(rtti::context& ctx);
     void draw_transport_controls(rtti::context& ctx);
     void draw_deploy_and_run_button(rtti::context& ctx);
     void draw_time_scale(rtti::context& ctx);

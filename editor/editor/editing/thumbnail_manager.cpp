@@ -118,7 +118,11 @@ auto render_thumbnail_preview_scene(rendering_system& rpath,
     for(int i = 0; i < frames; ++i)
     {
         rpath.on_frame_before_render(scn, dt);
-        auto new_fbo = rpath.render_scene(camera_entity, *camera_comp, scn, dt, false);
+        auto new_fbo = rpath.render_scene(camera_entity,
+                                          *camera_comp,
+                                          scn,
+                                          dt,
+                                          {.render_screen_space = false, .settings_use = graphics_settings_use::none});
         if(new_fbo)
         {
             captured = std::move(new_fbo);

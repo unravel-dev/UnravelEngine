@@ -24,9 +24,13 @@ auto get_android_template() -> const android_template_lookup&;
 /// This machine's Android tools; searched once, and again after refresh_android_devices.
 auto get_android_toolchain() -> android_toolchain;
 
-/// The folder an Android deploy writes the game's data/ into: the open project's build folder, beside
-/// the Gradle project. It stays between deploys, so the packs update in place.
-auto get_android_content_dir() -> fs::path;
+/// The folder an Android deploy of `profile` writes the game's data/ into: the profile's build folder,
+/// beside the Gradle project. It stays between deploys, so the packs update in place.
+auto get_android_content_dir(const std::string& profile) -> fs::path;
+
+/// Deletes the build folder of the profile named `profile` (its Gradle project and the data it packs), once the
+/// profile is renamed or deleted: a later deploy builds it anew. A folder in use is left for a later attempt.
+void remove_android_build_dir(const std::string& profile);
 
 /// The application id a deploy with these settings uses: the set one, or com.<company>.<product>.
 auto get_android_application_id(rtti::context& ctx, const deploy_settings& params) -> std::string;
@@ -84,7 +88,7 @@ auto get_device_jobs(const android_package_plan& plan) -> deploy_jobs;
 /// Fails the plan's device steps that did not finish, with `reason`.
 void fail_device_steps(const android_package_plan& plan, const std::string& reason);
 
-/// The package an Android deploy with these settings writes: <project>.apk in the platform's folder.
+/// The package an Android deploy with these settings writes: <project>.apk in the profile's folder.
 auto get_android_package_path(rtti::context& ctx, const deploy_settings& params) -> fs::path;
 /// Whether an earlier Android deploy left its package in the deploy folder.
 auto has_android_package(rtti::context& ctx, const deploy_settings& params) -> bool;

@@ -106,6 +106,7 @@ void register_asset_property_tools(mcp_tool_registry& registry);
 void register_project_tools(mcp_tool_registry& registry);
 void register_settings_tools(mcp_tool_registry& registry);
 void register_deploy_tools(mcp_tool_registry& registry);
+void register_profile_tools(mcp_tool_registry& registry);
 void register_input_tools(mcp_tool_registry& registry);
 void register_input_action_tools(mcp_tool_registry& registry);
 void register_ui_tools(mcp_tool_registry& registry);

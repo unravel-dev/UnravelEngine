@@ -182,6 +182,7 @@ void property_layout::push_layout(bool auto_proceed_to_next_column)
     {
         {
             ImGui::ContextMenuStyleScope style_scope;
+            const property_override_plain_scope plain(engine::context().get_cached<property_override_view>());
 
             auto& ctx = engine::context();
             auto& override_ctx = ctx.get_cached<prefab_override_context>();
@@ -193,15 +194,22 @@ void property_layout::push_layout(bool auto_proceed_to_next_column)
                     override_ctx.reset_override();
                 }
             }
+            const auto& profile_overrides = ctx.get_cached<property_override_view>();
+            if(const auto& label = profile_overrides.get_revert_label(); !label.empty() && ImGui::MenuItem(label.c_str()))
+            {
+                profile_overrides.revert_current();
+            }
         }
         ImGui::EndPopup();
     }
 
-    if(!tooltip_.empty())
+    // A settings profile's overrides add a line, so a property without a description gets a tooltip too.
+    const auto& override_note = engine::context().get_cached<property_override_view>().get_tooltip_note();
+    if(!tooltip_.empty() || !override_note.empty())
     {
-        
         auto tooltip_callback = [&]()
         {
+            const property_override_plain_scope plain(engine::context().get_cached<property_override_view>());
             ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::PushFont(ImGui::Font::Bold);
             ImGui::PushWindowFontScale(1.2f);
@@ -211,13 +219,24 @@ void property_layout::push_layout(bool auto_proceed_to_next_column)
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::Text("%s", tooltip_.c_str());
+            if(!tooltip_.empty())
+            {
+                ImGui::Text("%s", tooltip_.c_str());
+            }
+            if(!override_note.empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextUnformatted(override_note.c_str());
+            }
             ImGui::PopStyleColor();
         };
         ImGui::ItemTooltipEx(tooltip_callback);
 
-        ImGui::SameLine();
-        ImGui::HelpMarker("(?)", true, tooltip_callback);
+        if(!tooltip_.empty())
+        {
+            ImGui::SameLine();
+            ImGui::HelpMarker("(?)", true, tooltip_callback);
+        }
     }
 
     if(auto_proceed_to_next_column)
@@ -271,6 +290,7 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags, bool default_op
     {
         {
             ImGui::ContextMenuStyleScope style_scope;
+            const property_override_plain_scope plain(engine::context().get_cached<property_override_view>());
 
             auto& ctx = engine::context();
             auto& override_ctx = ctx.get_cached<prefab_override_context>();
@@ -282,15 +302,22 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags, bool default_op
                     override_ctx.reset_override();
                 }
             }
+            const auto& profile_overrides = ctx.get_cached<property_override_view>();
+            if(const auto& label = profile_overrides.get_revert_label(); !label.empty() && ImGui::MenuItem(label.c_str()))
+            {
+                profile_overrides.revert_current();
+            }
         }
         ImGui::EndPopup();
     }
 
-    if(!tooltip_.empty())
+    // A settings profile's overrides add a line, so a property without a description gets a tooltip too.
+    const auto& override_note = engine::context().get_cached<property_override_view>().get_tooltip_note();
+    if(!tooltip_.empty() || !override_note.empty())
     {
-        
         auto tooltip_callback = [&]()
         {
+            const property_override_plain_scope plain(engine::context().get_cached<property_override_view>());
             ImGui::PushStyleColor(ImGuiCol_Separator, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::PushFont(ImGui::Font::Bold);
             ImGui::PushWindowFontScale(1.2f);
@@ -300,13 +327,24 @@ auto property_layout::push_tree_layout(ImGuiTreeNodeFlags flags, bool default_op
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::Text("%s", tooltip_.c_str());
+            if(!tooltip_.empty())
+            {
+                ImGui::Text("%s", tooltip_.c_str());
+            }
+            if(!override_note.empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextUnformatted(override_note.c_str());
+            }
             ImGui::PopStyleColor();
         };
         ImGui::ItemTooltipEx(tooltip_callback);
 
-        ImGui::SameLine();
-        ImGui::HelpMarker("(?)", true, tooltip_callback);
+        if(!tooltip_.empty())
+        {
+            ImGui::SameLine();
+            ImGui::HelpMarker("(?)", true, tooltip_callback);
+        }
     }
     
     prepare_for_item();

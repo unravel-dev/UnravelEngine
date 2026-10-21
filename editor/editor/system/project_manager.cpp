@@ -1,13 +1,15 @@
 #include "project_manager.h"
 #include "version/version.h"
 #include <editor/assets/asset_watcher.h>
+#include <editor/deploy/deploy_android.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/events.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/imgui/integration/imgui_notify.h>
-#include <editor/meta/deploy/deploy.hpp>
+#include <asset_compiler/texture_target.h>
+#include <deploy/meta/deploy_settings.hpp>
 #include <editor/meta/project/project_editor_settings.hpp>
 #include <editor/meta/project/project_info.hpp>
 #include <editor/meta/settings/settings.hpp>
@@ -25,6 +27,7 @@
 #include <engine/threading/threader.h>
 #include <engine/loading_screen.h>
 #include <engine/engine.h>
+#include <engine/play_mode.h>
 #include <engine/settings/boot_config.h>
 
 // must be below all
@@ -99,6 +102,7 @@ void project_manager::close_project(rtti::context& ctx)
         deploy_settings_ = {};
         project_editor_settings_ = {};
         project_info_ = {};
+        profiles_.clear();
     }
 
     ctx.remove<settings>();
@@ -170,6 +174,14 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     auto& ls = ctx.get_cached<loading_screen>();
     ls.begin_session("Opening project");
+    // The first compiles need the project's texture defaults. The full settings load needs the assets, so the
+    // defaults are read on their own first.
+    {
+        settings::asset_settings assets{};
+        load_asset_sections_from_file(fs::resolve_protocol(app_settings_cfg).string(), assets);
+        apply_texture_defaults(assets.texture, false);
+    }
+
     ls.begin_module("Project Assets");
     auto& aw = ctx.get_cached<asset_watcher>();
     aw.watch_assets(ctx, "app:/", true, [&ls](size_t completed, size_t total, const std::string& step, const std::string& item) -> void
@@ -233,14 +245,14 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     ls.begin_module("Project Settings");
     load_project_settings();
-    save_project_settings(ctx);
-
-    ls.begin_module("Deploy Settings");
     load_deploy_settings();
-    save_deploy_settings();
-
-    ls.begin_module("Project Editor Settings");
     load_project_editor_settings();
+
+    ls.begin_module("Profiles");
+    load_profiles();
+    save_deploy_settings();
+    save_project_editor_settings();
+    save_project_settings(ctx);
 
     ls.begin_module("Scene");
 
@@ -278,8 +290,75 @@ void project_manager::load_project_settings()
 void project_manager::save_project_settings(rtti::context& ctx)
 {
     asset_writer::atomic_save_to_file(fs::resolve_protocol(app_settings_cfg).string(), project_settings_);
+    apply_texture_defaults(project_settings_.assets.texture, true);
+    publish_settings(ctx);
+}
 
+void project_manager::publish_settings(rtti::context& ctx)
+{
+    const auto& preview = project_editor_settings_.profiles.preview_profile;
+    if(!preview.empty())
+    {
+        if(auto resolved = profiles_.resolve_settings(preview, project_settings_))
+        {
+            ctx.add<settings>(*resolved);
+            return;
+        }
+    }
     ctx.add<settings>(project_settings_);
+}
+
+void project_manager::apply_texture_defaults(const settings::asset_settings::texture_importer_settings& defaults, bool is_open)
+{
+    auto target = asset_compiler::get_editor_texture_target();
+    const bool is_changed = target.defaults != defaults;
+    target.platform = target_platform::desktop;
+    target.family = asset_compiler::texture_compression_family::bc;
+    target.defaults = defaults;
+    asset_compiler::set_editor_texture_target(target);
+    if(is_open && is_changed)
+    {
+        // The project's textures left on Project Default compile with the new defaults.
+        editor_actions::recompile_textures("app:/data");
+    }
+}
+
+void project_manager::load_profiles()
+{
+    auto& choices = project_editor_settings_.profiles;
+    std::string migrated_profile;
+    const auto warnings = profiles_.load(fs::resolve_protocol("app:/"), project_settings_, deploy_settings_, migrated_profile);
+    for(const auto& warning : warnings)
+    {
+        APPLOG_WARNING("{}", warning);
+    }
+    if(!migrated_profile.empty())
+    {
+        choices.deploy_profile = migrated_profile;
+    }
+    if(profiles_.find(choices.deploy_profile) == nullptr)
+    {
+        choices.deploy_profile = profiles_.get_all().front().name;
+    }
+    if(!choices.preview_profile.empty() && profiles_.find(choices.preview_profile) == nullptr)
+    {
+        choices.preview_profile.clear();
+    }
+}
+
+void project_manager::fix_profile_choices(rtti::context& ctx)
+{
+    auto& choices = project_editor_settings_.profiles;
+    if(profiles_.find(choices.deploy_profile) == nullptr && !profiles_.get_all().empty())
+    {
+        choices.deploy_profile = profiles_.get_all().front().name;
+    }
+    if(!choices.preview_profile.empty() && profiles_.find(choices.preview_profile) == nullptr)
+    {
+        choices.preview_profile.clear();
+    }
+    save_project_editor_settings();
+    publish_settings(ctx);
 }
 
 void project_manager::load_deploy_settings()
@@ -294,6 +373,13 @@ void project_manager::load_deploy_settings()
 
 void project_manager::save_deploy_settings()
 {
+    // Saving would drop the settings from before profiles the file still holds without a backup.
+    if(profiles_.has_unkept_legacy_settings())
+    {
+        APPLOG_WARNING("The deploy settings are not saved: deploy/deploy.cfg holds settings from before profiles that "
+                       "could not be backed up. Copy the file aside, then open the project again.");
+        return;
+    }
     asset_writer::atomic_save_to_file(fs::resolve_protocol(app_deploy_cfg).string(), deploy_settings_);
 }
 
@@ -702,6 +788,197 @@ auto project_manager::get_editor_settings() -> editor_settings&
 auto project_manager::has_open_project() const -> bool
 {
     return !get_name().empty();
+}
+
+auto project_manager::get_profiles() const -> const deployment::project_profiles&
+{
+    return profiles_;
+}
+
+auto project_manager::get_deploy_profile() const -> const std::string&
+{
+    return project_editor_settings_.profiles.deploy_profile;
+}
+
+auto project_manager::set_deploy_profile(const std::string& name) -> deployment::result
+{
+    if(profiles_.find(name) == nullptr)
+    {
+        return deployment::result::failure(fmt::format("No profile named {}.", name));
+    }
+    project_editor_settings_.profiles.deploy_profile = name;
+    save_project_editor_settings();
+    return {};
+}
+
+auto project_manager::get_preview_profile() const -> const std::string&
+{
+    return project_editor_settings_.profiles.preview_profile;
+}
+
+auto project_manager::set_preview_profile(rtti::context& ctx, const std::string& name) -> deployment::result
+{
+    if(name == get_preview_profile())
+    {
+        return {};
+    }
+    if(ctx.get_cached<play_mode>().is_active())
+    {
+        return deployment::result::failure("Stop play mode first. The game keeps the settings it started with.");
+    }
+    if(!name.empty() && profiles_.find(name) == nullptr)
+    {
+        return deployment::result::failure(fmt::format("No profile named {}.", name));
+    }
+    project_editor_settings_.profiles.preview_profile = name;
+    save_project_editor_settings();
+    publish_settings(ctx);
+    APPLOG_INFO("The editor runs with the settings of {}.", name.empty() ? std::string("the project") : "profile " + name);
+    return {};
+}
+
+auto project_manager::get_profile_settings(const std::string& profile) const -> settings
+{
+    auto resolved = profiles_.resolve_settings(profile, project_settings_);
+    return resolved ? *resolved : project_settings_;
+}
+
+auto project_manager::get_profile_deploy_settings(const std::string& profile) const -> hpp::optional<deploy_settings>
+{
+    auto resolved = profiles_.resolve_deploy(profile, deploy_settings_);
+    if(resolved)
+    {
+        resolved->android_device = deploy_settings_.android_device;
+    }
+    return resolved;
+}
+
+auto project_manager::get_deploy_request() const -> deploy_settings
+{
+    if(auto resolved = get_profile_deploy_settings(get_deploy_profile()))
+    {
+        return *resolved;
+    }
+    return deploy_settings_;
+}
+
+auto project_manager::create_profile(rtti::context& ctx, const std::string& name, target_platform platform, const std::string& copy_from)
+    -> deployment::result
+{
+    auto created = profiles_.create(name, platform, project_settings_, copy_from);
+    fix_profile_choices(ctx);
+    return created;
+}
+
+auto project_manager::rename_profile(rtti::context& ctx, const std::string& name, const std::string& new_name) -> deployment::result
+{
+    if(auto changeable = check_profiles_changeable(ctx); !changeable.is_ok())
+    {
+        return changeable;
+    }
+    auto renamed = profiles_.rename(name, new_name);
+    if(!renamed.is_ok() || name == new_name)
+    {
+        return renamed;
+    }
+    deployment::remove_android_build_dir(name);
+    auto& choices = project_editor_settings_.profiles;
+    if(choices.deploy_profile == name)
+    {
+        choices.deploy_profile = new_name;
+    }
+    if(choices.preview_profile == name)
+    {
+        choices.preview_profile = new_name;
+    }
+    fix_profile_choices(ctx);
+    return renamed;
+}
+
+auto project_manager::remove_profile(rtti::context& ctx, const std::string& name) -> deployment::result
+{
+    if(auto changeable = check_profiles_changeable(ctx); !changeable.is_ok())
+    {
+        return changeable;
+    }
+    auto removed = profiles_.remove(name);
+    if(!removed.is_ok())
+    {
+        return removed;
+    }
+    deployment::remove_android_build_dir(name);
+    fix_profile_choices(ctx);
+    return removed;
+}
+
+auto project_manager::check_profiles_changeable(rtti::context& ctx) const -> deployment::result
+{
+    if(deployment::is_deploy_running())
+    {
+        return deployment::result::failure("A deploy is running. Rename or delete profiles once it finishes.");
+    }
+    if(ctx.get_cached<play_mode>().is_active())
+    {
+        return deployment::result::failure("Stop play mode first. The game keeps the settings it started with.");
+    }
+    return {};
+}
+
+auto project_manager::set_profile_android(rtti::context& ctx, const std::string& name, const android_deploy_settings& android)
+    -> deployment::result
+{
+    auto changed = profiles_.set_android(name, android);
+    publish_settings(ctx);
+    return changed;
+}
+
+auto project_manager::override_profile_settings(rtti::context& ctx, const std::string& name, const settings& edited) -> deployment::result
+{
+    auto changed = profiles_.override_settings(name, project_settings_, edited);
+    publish_settings(ctx);
+    return changed;
+}
+
+auto project_manager::override_profile_settings(rtti::context& ctx,
+                                                const std::string& name,
+                                                const settings& before,
+                                                const settings& edited) -> deployment::result
+{
+    auto changed = profiles_.override_settings(name, project_settings_, before, edited);
+    publish_settings(ctx);
+    return changed;
+}
+
+auto project_manager::override_profile_deploy(rtti::context& ctx, const std::string& name, const deploy_settings& edited)
+    -> deployment::result
+{
+    auto changed = profiles_.override_deploy(name, deploy_settings_, edited);
+    publish_settings(ctx);
+    return changed;
+}
+
+auto project_manager::override_profile_deploy(rtti::context& ctx,
+                                              const std::string& name,
+                                              const deploy_settings& before,
+                                              const deploy_settings& edited) -> deployment::result
+{
+    auto changed = profiles_.override_deploy(name, deploy_settings_, before, edited);
+    publish_settings(ctx);
+    return changed;
+}
+
+auto project_manager::revert_profile_settings(rtti::context& ctx, const std::string& name, hpp::string_view path) -> deployment::result
+{
+    auto reverted = profiles_.revert_settings(name, project_settings_, path);
+    publish_settings(ctx);
+    return reverted;
+}
+
+auto project_manager::revert_profile_deploy(rtti::context& ctx, const std::string& name, hpp::string_view path) -> deployment::result
+{
+    auto reverted = profiles_.revert_deploy(name, deploy_settings_, path);
+    publish_settings(ctx);
+    return reverted;
 }
 
 project_manager::project_manager(rtti::context& ctx, cmd_line::parser& parser)

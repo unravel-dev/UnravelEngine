@@ -2,6 +2,7 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "../viewport_resolution.h"
+#include "../view_render_scale.h"
 #include "../panel_toolbar.h"
 #include "../visualization_menu.h"
 #include "imgui_widgets/utils.h"
@@ -1472,11 +1473,27 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
 
     if(target_scene)
     {
+        view_render_params view{};
+        view.render_screen_space = false;
         // A gizmo or a widget being dragged edits the scene: the GI follows the edit sooner while it lasts.
-        const bool is_being_edited = ImGuizmo::IsUsing() || ImGui::IsAnyItemActive();
-        path.render_scene(handle, camera_comp, *target_scene, dt, false, is_being_edited);
+        view.is_being_edited = ImGuizmo::IsUsing() || ImGui::IsAnyItemActive();
+        view.render_scale = view_render_scale::get_render_scale(render_scale_);
+        view.render_resolution = get_render_resolution(ctx);
+        // The gizmos, the grid and the selection outline draw over the image with the scene's depth.
+        view.needs_output_depth = true;
+        path.render_scene(handle, camera_comp, *target_scene, dt, view);
         gizmos_.on_frame_render(ctx, *target_scene, handle, dd_2d_);
     }
+}
+
+auto scene_panel::get_render_resolution(rtti::context& ctx) const -> usize32_t
+{
+    if(forced_render_width_ > 0 && forced_render_height_ > 0)
+    {
+        return {};
+    }
+    const auto* preset = viewport_resolution::get_resolution(ctx, current_resolution_index_);
+    return preset != nullptr ? viewport_resolution::get_render_resolution(*preset) : usize32_t{};
 }
 
 void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
@@ -1619,6 +1636,7 @@ void scene_panel::draw_view_bar(rtti::context& ctx, editing_manager& em, const I
     if(panel_toolbar::begin_bar(SCENE_TOOLBAR_VIEW_BAR_ID, placement))
     {
         viewport_resolution::draw_toolbar_dropdown(ctx, current_resolution_index_, toolbar_layout_.is_compact);
+        view_render_scale::draw_toolbar_dropdown(ctx, render_scale_, toolbar_layout_.is_compact);
         panel_toolbar::separator();
         draw_grid_controls(em);
         draw_gizmos_controls(em);
@@ -2301,11 +2319,10 @@ void scene_panel::draw_ui(rtti::context& ctx)
         return;
     }
 
-    // Determine the fitted viewport rectangle for the editor camera based on
-    // the resolution preset. We always fit the aspect within the available
-    // area so that picking and gizmos map 1:1 between screen pixels and the
-    // camera viewport. If no resolution is configured, the panel falls back
-    // to the full available area.
+    // The camera's viewport is the image's rectangle on screen, the preset's aspect fitted in the
+    // available area, so that picking and the gizmos map 1:1 between screen pixels and the camera
+    // viewport. A preset with pixels renders the scene at them (get_render_resolution) and the
+    // pipeline resamples it to the viewport. Without a preset the view takes the whole area.
     ImVec2 view_size = avail;
     const bool is_render_size_forced = forced_render_width_ > 0u && forced_render_height_ > 0u;
     if(is_render_size_forced)

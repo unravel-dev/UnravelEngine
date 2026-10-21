@@ -96,7 +96,8 @@ public:
     /// EQUAL against the shared G-buffer depth. Removes the buffer when inactive.
     void run_velocity_pass(const visibility_set_models_t& visibility_set,
                            const camera& camera,
-                           gfx::render_view& rview);
+                           gfx::render_view& rview,
+                           const usize32_t& render_size);
 
     /// Renders the VELOCITY buffer visualization (debug view @c debug_pass_velocity):
     /// hue = direction, brightness = magnitude, magenta = NaN.
@@ -113,8 +114,13 @@ public:
                         delta_t dt,
                         const run_params& rparams);
 
-    auto run_direct_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
-        -> gfx::frame_buffer::ptr;
+    /// Lights the G-buffer with every enabled light as `limits` limit it (limit_light).
+    auto run_direct_lighting_pass(scene& scn,
+                                  const camera& camera,
+                                  gfx::render_view& rview,
+                                  bool apply_shadows,
+                                  const feature_limits& limits,
+                                  delta_t dt) -> gfx::frame_buffer::ptr;
 
     /// The sky's irradiance SH (run_irradiance_pass): its texture and the flat ambient colour.
     struct irradiance_pass_result
@@ -179,9 +185,12 @@ public:
                       const run_params& rparams,
                       const gfx::texture::ptr& particle_reactive) -> gfx::frame_buffer::ptr;
 
-    auto run_fxaa_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output,
-                       const run_params& rparams)
-        -> gfx::frame_buffer::ptr;
+    /// @param is_upscaled The output is upscaled afterwards, which adds the film grain and dither instead.
+    auto run_fxaa_pass(gfx::render_view& rview,
+                       const gfx::frame_buffer::ptr& input,
+                       const gfx::frame_buffer::ptr& output,
+                       const run_params& rparams,
+                       bool is_upscaled) -> gfx::frame_buffer::ptr;
 
     void run_auto_exposure_pass(gfx::render_view& rview,
                                 const camera& camera,
@@ -195,11 +204,16 @@ public:
 
     /// @p scene_before_bloom is the scene @p input was composited from by the bloom (the input
     /// itself without bloom): local exposure measures and scales it, bloom rides on top.
+    /// @param is_upscaled The output is upscaled afterwards, which adds the film grain and dither instead.
     auto run_tonemapping_pass(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& input,
                               const gfx::frame_buffer::ptr& scene_before_bloom,
                               const gfx::frame_buffer::ptr& output,
-                              const run_params& rparams) -> gfx::frame_buffer::ptr;
+                              const run_params& rparams,
+                              bool is_upscaled) -> gfx::frame_buffer::ptr;
+    /// Resamples the finished scene at the render size into the output `params` name, with the output noise the
+    /// tone curve left.
+    void run_upscale_pass(upscale_pass::run_params params, const run_params& rparams);
     /// The lit image's tone mapping operator, which the debug views that read like the frame go through (none
     /// without HDR).
     static auto get_debug_tonemapping(const run_params& rparams) -> tonemapping_method;
@@ -318,9 +332,16 @@ public:
     auto make_gi_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
         -> gi_run_params;
 
-    void build_reflections(scene& scn, const camera& camera, delta_t dt);
+    /// Captures the reflection probes the camera sees that are due; the captures render every light as `limits`
+    /// limit it.
+    void build_reflections(scene& scn, const camera& camera, delta_t dt, const feature_limits& limits);
 
-    void build_shadows(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
+    /// Renders the shadow maps the camera needs, every light as `limits` limit it (limit_light).
+    void build_shadows(scene& scn,
+                       const camera& camera,
+                       delta_t dt,
+                       const feature_limits& limits,
+                       layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
     /// Lists this run's mesh particle emitters (camera runs only: a probe capture would keep one moment of
     /// their motion): the ones the G-buffer draws and the ones casting shadows. Keeps the ones in view simulating

@@ -2,6 +2,7 @@
 
 #include "entt/core/fwd.hpp"
 #include "inspector.h"
+#include "property_override_view.h"
 #include "property_path_generator.h"
 #include <context/context.hpp>
 #include <engine/meta/ecs/entity.hpp>

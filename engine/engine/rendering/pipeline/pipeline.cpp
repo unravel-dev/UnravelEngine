@@ -710,6 +710,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
 
     prefilter_pass_.init(ctx);
     blit_pass_.init(ctx);
+    upscale_pass_.init(ctx);
     atmospheric_pass_perez_.init(ctx);
     atmospheric_pass_skybox_.init(ctx);
     auto_exposure_pass_.init(ctx);
@@ -1143,6 +1144,42 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     return params;
 }
 
+void pipeline::apply_feature_limits(run_params& params, const feature_limits& limits)
+{
+    params.limits = limits;
+    if(!limits.global_illumination)
+    {
+        params.fill_gi_params = {};
+    }
+    if(!limits.screen_space_reflections)
+    {
+        params.fill_ssr_params = {};
+    }
+    if(!limits.screen_space_indirect_lighting)
+    {
+        params.fill_ssil_params = {};
+    }
+    if(!limits.ambient_occlusion)
+    {
+        params.fill_gtao_params = {};
+        params.fill_assao_params = {};
+    }
+    if(!limits.bloom)
+    {
+        params.fill_bloom_params = {};
+    }
+    if(limits.max_anti_aliasing != anti_aliasing_limit::temporal && params.fill_taa_params)
+    {
+        params.fill_taa_params = {};
+        params.apply_taa_params = {};
+        params.fill_fxaa_params = [](fxaa_pass::run_params&) {};
+    }
+    if(limits.max_anti_aliasing == anti_aliasing_limit::none)
+    {
+        params.fill_fxaa_params = {};
+    }
+}
+
 void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
 {
     APP_SCOPE_PERF("Rendering/3D Text Pass");
@@ -1152,10 +1189,9 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     // nothing removes the subpixel jitter afterwards: a jittered projection would shift
     // every document and text by up to half a pixel each frame.
     const auto proj = camera.get_projection_unjittered();
-    auto& fbo = rview.fbo_get("OBUFFER_DEPTH");
 
     gfx::render_pass pass("World UI/Elements Pass");
-    pass.bind(fbo.get());
+    pass.bind(output.get());
     pass.set_view_proj(view, proj);
 
 

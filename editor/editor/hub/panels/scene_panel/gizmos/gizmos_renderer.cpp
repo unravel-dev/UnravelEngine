@@ -91,7 +91,8 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
 
     if(em.show_grid)
     {
-        draw_grid(camera, rview.fbo_get("OBUFFER"), rview.tex_get("DEPTH"), em.grid_data);
+        // The scene's depth at the output's size: DEPTH itself, or its copy when the scene renders at another size.
+        draw_grid(camera, rview.fbo_get("OBUFFER"), obuffer->get_texture(1), em.grid_data);
     }
 
     {
