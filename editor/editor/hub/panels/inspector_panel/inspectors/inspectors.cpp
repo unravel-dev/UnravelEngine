@@ -138,9 +138,14 @@ auto add_property_action(rtti::context& ctx,
 {
     if(inspect_without_undo_scope::is_active())
     {
-        // Written at once, as the action would; the owner of the value records the step.
-        var_proxy.impl->setter(var_proxy, new_var, 0);
-        result.change_recorded = true;
+        // Written at once, as the action would; the owner of the value records the step. Once a nested
+        // property has written itself, the enclosing value here is the copy taken before that write and is
+        // left alone, as the action path leaves it.
+        if(!result.change_recorded)
+        {
+            var_proxy.impl->setter(var_proxy, new_var, 0);
+            result.change_recorded = true;
+        }
         return true;
     }
     std::function<void()> on_success = nullptr;
