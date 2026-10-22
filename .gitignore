@@ -50,7 +50,7 @@
 .cline/
 .continue/
 
-# API docs output (tasks/generate-api-docs.ps1 / .sh)
+# API docs output (docs/generate-api-docs.ps1 / .sh)
 docs/script-api/
 docs/engine-api/
 docs/makrdown/
