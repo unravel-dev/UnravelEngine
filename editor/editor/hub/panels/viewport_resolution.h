@@ -4,6 +4,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/settings/settings.h>
+#include <hpp/optional.hpp>
 
 namespace unravel
 {
@@ -73,17 +74,41 @@ void apply_to_camera(camera_component& camera_comp,
 auto get_resolution(rtti::context& ctx, int index)
     -> const settings::resolution_settings::resolution*;
 
+/// Whether the preset is a phone or a tablet, which turns with the view's orientation.
+auto is_handheld(const settings::resolution_settings::resolution& res) -> bool;
+
+/// Whether a view shows the preset inside a frame of its device: a phone or a tablet with a shape.
+auto has_device_frame(const settings::resolution_settings::resolution& res) -> bool;
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// The preset as a view uses it: a phone or a tablet turned to the orientation, its pixels and its aspect with it.
+/// Any other preset stays as it is.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_oriented(const settings::resolution_settings::resolution& res,
+                  settings::resolution_settings::screen_orientation orientation)
+    -> settings::resolution_settings::resolution;
+
+/// get_resolution() turned to the orientation, or nothing without settings or presets.
+auto get_oriented_resolution(rtti::context& ctx, int index, settings::resolution_settings::screen_orientation orientation)
+    -> hpp::optional<settings::resolution_settings::resolution>;
+
 //-----------------------------------------------------------------------------
 /// <summary>
 /// Draw the resolution selection dropdown of a floating viewport toolbar; call between
-/// panel_toolbar::begin_bar() and end_bar(). The selection is read and written through the
-/// supplied index parameter. Returns true if the user changed the selection - the caller is
-/// responsible for persisting the new index if desired (e.g. project settings vs. a transient
-/// panel-local value). Adds an "Edit ..." entry that opens the project settings panel scoped to
-/// the Resolution section.
+/// panel_toolbar::begin_bar() and end_bar(). The popover lists the free presets, then the presets of
+/// each device in a section of its own, and turns phones and tablets between portrait and landscape.
+/// The selection is read and written through the supplied index and orientation. Returns true if the
+/// user changed either - the caller is responsible for persisting them if desired (e.g. project
+/// settings vs. a transient panel-local value). Adds an "Edit ..." entry that opens the project
+/// settings panel scoped to the Resolution section.
 /// </summary>
 /// <param name="is_compact">Show the icon alone, without the name of the preset</param>
 //-----------------------------------------------------------------------------
-auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compact) -> bool;
+auto draw_toolbar_dropdown(rtti::context& ctx,
+                           int& current_index,
+                           settings::resolution_settings::screen_orientation& orientation,
+                           bool is_compact) -> bool;
 
 } // namespace unravel::viewport_resolution

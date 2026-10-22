@@ -1,18 +1,48 @@
 #include "viewport_resolution.h"
 #include "panel_toolbar.h"
+#include "visualization_widgets.h"
 #include "../hub.h"
 
+#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <editor/imgui/screen_card.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 
 #include <imgui/imgui.h>
+#include <imgui_widgets/tooltips.h>
+#include <logging/logging.h>
 
 #include <algorithm>
+#include <array>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace unravel::viewport_resolution
 {
 
 namespace
 {
+using screen_card::to_pixels;
+using resolution = settings::resolution_settings::resolution;
+using device_type = settings::resolution_settings::device_type;
+using screen_orientation = settings::resolution_settings::screen_orientation;
+
+/// The popover's width, in units of the font size.
+constexpr float POPOVER_WIDTH = 18.0f;
+constexpr std::array<const char*, 2> ORIENTATION_LABELS{ICON_MDI_CROP_PORTRAIT " Portrait",
+                                                        ICON_MDI_CROP_LANDSCAPE " Landscape"};
+
+/// A section of the popover: the presets of one device that have a shape.
+struct device_section
+{
+    device_type device;
+    const char* header;
+};
+
+constexpr std::array<device_section, 3> DEVICE_SECTIONS{{{device_type::desktop, ICON_MDI_MONITOR " Desktop"},
+                                                         {device_type::phone, ICON_MDI_CELLPHONE " Phone"},
+                                                         {device_type::tablet, ICON_MDI_TABLET " Tablet"}}};
+
 auto clamp_index(int index, int count) -> int
 {
     if(count <= 0)
@@ -20,6 +50,137 @@ auto clamp_index(int index, int count) -> int
         return 0;
     }
     return std::clamp(index, 0, count - 1);
+}
+
+auto is_free(const resolution& res) -> bool
+{
+    return res.aspect <= 0.0f;
+}
+
+auto has_pixels(const resolution& res) -> bool
+{
+    return res.width > 0 && res.height > 0;
+}
+
+/// The icon of the toolbar button: the device of a preset with pixels, the aspect ratio otherwise.
+auto get_icon(const resolution& res) -> const char*
+{
+    switch(res.device)
+    {
+        case device_type::phone:
+            return ICON_MDI_CELLPHONE;
+        case device_type::tablet:
+            return ICON_MDI_TABLET;
+        case device_type::desktop:
+        default:
+            return has_pixels(res) ? ICON_MDI_MONITOR : ICON_MDI_ASPECT_RATIO;
+    }
+}
+
+auto make_size_text(const resolution& res) -> std::string
+{
+    return has_pixels(res) ? fmt::format("{} x {}", res.width, res.height) : std::string{};
+}
+
+auto make_tooltip(const resolution& shown) -> std::string
+{
+    if(is_free(shown))
+    {
+        return "Renders at the size of the view.";
+    }
+    const std::string frame =
+        has_device_frame(shown) ? fmt::format(", inside a {} frame", shown.device == device_type::tablet ? "tablet" : "phone")
+                                : std::string{};
+    if(has_pixels(shown))
+    {
+        return fmt::format("Renders at {} x {} pixels{}.", shown.width, shown.height, frame);
+    }
+    return fmt::format("Renders at the size of the view in the shape of the preset{}.", frame);
+}
+
+/// One preset of the popover, its size as the orientation turns it. Returns true when it was picked.
+auto draw_preset(const std::vector<resolution>& presets, int index, screen_orientation orientation, int& current_index)
+    -> bool
+{
+    const resolution shown = get_oriented(presets[index], orientation);
+    const std::string size_text = make_size_text(shown);
+    ImGui::PushID(index);
+    const bool is_pressed = visualization_widgets::draw_list_row("##preset",
+                                                                 nullptr,
+                                                                 shown.name.c_str(),
+                                                                 index == current_index,
+                                                                 false,
+                                                                 size_text.empty() ? nullptr : size_text.c_str());
+    ImGui::SetItemTooltipEx("%s", make_tooltip(shown).c_str());
+    ImGui::PopID();
+    if(!is_pressed || index == current_index)
+    {
+        return false;
+    }
+    current_index = index;
+    return true;
+}
+
+/// The presets of one device under its heading; nothing for a device without presets.
+auto draw_section(const std::vector<resolution>& presets,
+                  const device_section& section,
+                  screen_orientation orientation,
+                  int& current_index) -> bool
+{
+    const auto is_listed = [&](const resolution& preset)
+    {
+        return !is_free(preset) && preset.device == section.device;
+    };
+    if(std::none_of(presets.begin(), presets.end(), is_listed))
+    {
+        return false;
+    }
+    visualization_widgets::draw_section_header(section.header);
+    bool is_changed = false;
+    for(int i = 0; i < static_cast<int>(presets.size()); ++i)
+    {
+        if(is_listed(presets[i]))
+        {
+            is_changed |= draw_preset(presets, i, orientation, current_index);
+        }
+    }
+    return is_changed;
+}
+
+/// The free presets first, then a section per device. Returns true when the pick changed.
+auto draw_presets(const std::vector<resolution>& presets, screen_orientation orientation, int& current_index) -> bool
+{
+    bool is_changed = false;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+    for(int i = 0; i < static_cast<int>(presets.size()); ++i)
+    {
+        if(is_free(presets[i]))
+        {
+            is_changed |= draw_preset(presets, i, orientation, current_index);
+        }
+    }
+    for(const device_section& section : DEVICE_SECTIONS)
+    {
+        is_changed |= draw_section(presets, section, orientation, current_index);
+    }
+    ImGui::PopStyleVar();
+    return is_changed;
+}
+
+/// Portrait or landscape, for a phone or a tablet; desktop presets keep their shape, so it is off for them.
+auto draw_orientation(screen_orientation& orientation, bool is_enabled) -> bool
+{
+    int index = static_cast<int>(orientation);
+    ImGui::BeginDisabled(!is_enabled);
+    const bool is_changed = visualization_widgets::draw_segmented("##orientation",
+                                                                  ORIENTATION_LABELS.data(),
+                                                                  nullptr,
+                                                                  static_cast<int>(ORIENTATION_LABELS.size()),
+                                                                  ImGui::GetContentRegionAvail().x,
+                                                                  index);
+    ImGui::EndDisabled();
+    orientation = static_cast<screen_orientation>(index);
+    return is_changed;
 }
 } // namespace
 
@@ -91,7 +252,46 @@ auto get_resolution(rtti::context& ctx, int index) -> const settings::resolution
     return &resolutions[clamp_index(index, static_cast<int>(resolutions.size()))];
 }
 
-auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compact) -> bool
+auto is_handheld(const settings::resolution_settings::resolution& res) -> bool
+{
+    return res.device != device_type::desktop;
+}
+
+auto has_device_frame(const settings::resolution_settings::resolution& res) -> bool
+{
+    return is_handheld(res) && !is_free(res);
+}
+
+auto get_oriented(const settings::resolution_settings::resolution& res,
+                  settings::resolution_settings::screen_orientation orientation)
+    -> settings::resolution_settings::resolution
+{
+    const bool is_landscape = orientation == screen_orientation::landscape;
+    if(!is_handheld(res) || is_free(res) || (res.aspect > 1.0f) == is_landscape)
+    {
+        return res;
+    }
+    resolution turned = res;
+    std::swap(turned.width, turned.height);
+    turned.aspect = 1.0f / res.aspect;
+    return turned;
+}
+
+auto get_oriented_resolution(rtti::context& ctx, int index, settings::resolution_settings::screen_orientation orientation)
+    -> hpp::optional<settings::resolution_settings::resolution>
+{
+    const auto* res = get_resolution(ctx, index);
+    if(res == nullptr)
+    {
+        return hpp::nullopt;
+    }
+    return get_oriented(*res, orientation);
+}
+
+auto draw_toolbar_dropdown(rtti::context& ctx,
+                           int& current_index,
+                           settings::resolution_settings::screen_orientation& orientation,
+                           bool is_compact) -> bool
 {
     if(!ctx.has<unravel::settings>())
     {
@@ -106,22 +306,17 @@ auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compa
 
     current_index = clamp_index(current_index, static_cast<int>(resolutions.size()));
 
-    const std::string text =
-        panel_toolbar::make_text(ICON_MDI_ASPECT_RATIO, resolutions[current_index].name.c_str(), is_compact);
+    const auto& current = resolutions[current_index];
+    const std::string text = panel_toolbar::make_text(get_icon(current), current.name.c_str(), is_compact);
+    ImGui::SetNextWindowSize(ImVec2(to_pixels(POPOVER_WIDTH), 0.0f));
     if(!panel_toolbar::begin_dropdown("##resolution", text.c_str(), "Resolution Presets"))
     {
         return false;
     }
 
-    bool changed = false;
-    ImGui::SeparatorText("Resolution");
-    for(int i = 0; i < static_cast<int>(resolutions.size()); ++i)
-    {
-        if(ImGui::RadioButton(resolutions[i].name.c_str(), &current_index, i))
-        {
-            changed = true;
-        }
-    }
+    bool changed = draw_presets(resolutions, orientation, current_index);
+    ImGui::Separator();
+    changed |= draw_orientation(orientation, is_handheld(resolutions[current_index]));
 
     if(ImGui::MenuItem("Edit ...", "", false))
     {

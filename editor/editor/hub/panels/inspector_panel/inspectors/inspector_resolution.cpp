@@ -21,6 +21,7 @@ using resolution = settings::resolution_settings::resolution;
 // Sizes are in units of the font size.
 constexpr float RESOLUTION_ROW_GAP = 0.35f;
 constexpr float RESOLUTION_NAME_WEIGHT = 1.4f;
+constexpr float RESOLUTION_DEVICE_WEIGHT = 0.9f;
 constexpr float RESOLUTION_TYPE_WEIGHT = 1.0f;
 constexpr float RESOLUTION_SIZE_WEIGHT = 1.4f;
 constexpr float RESOLUTION_MUTED_ALPHA = 0.55f;
@@ -50,6 +51,11 @@ constexpr std::array<const char*, static_cast<std::size_t>(resolution_type::coun
     "Free",
     "Aspect Ratio",
     "Fixed Size"};
+
+using device_type = settings::resolution_settings::device_type;
+
+/// In the order of settings::resolution_settings::device_type.
+constexpr std::array<const char*, 3> RESOLUTION_DEVICE_NAMES{"Desktop", "Phone", "Tablet"};
 
 auto get_type(const resolution& preset) -> resolution_type
 {
@@ -149,6 +155,29 @@ auto draw_type_combo(resolution& preset) -> inspect_result
     return result;
 }
 
+/// The device a preset stands for. A phone or a tablet turns with the view's orientation and shows in a frame.
+auto draw_device_combo(resolution& preset) -> inspect_result
+{
+    inspect_result result{};
+    const auto current = static_cast<std::size_t>(preset.device);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if(ImGui::BeginCombo("##device", RESOLUTION_DEVICE_NAMES[std::min(current, RESOLUTION_DEVICE_NAMES.size() - 1)]))
+    {
+        for(std::size_t i = 0; i < RESOLUTION_DEVICE_NAMES.size(); ++i)
+        {
+            if(ImGui::Selectable(RESOLUTION_DEVICE_NAMES[i], i == current) && i != current)
+            {
+                preset.device = static_cast<device_type>(i);
+                result.changed = true;
+                result.edit_finished = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::DrawItemActivityOutline();
+    return result;
+}
+
 /// The size of a fixed preset as width x height, the ratio of an aspect preset, nothing for a
 /// free one.
 auto draw_size_fields(resolution& preset) -> inspect_result
@@ -199,7 +228,7 @@ auto draw_size_fields(resolution& preset) -> inspect_result
     return result;
 }
 
-/// One preset on one row: name, type, size, and a remove button.
+/// One preset on one row: name, device, type, size, and a remove button.
 auto draw_preset_row(resolution& preset, bool is_built_in, bool is_editable, bool& is_remove_pressed) -> inspect_result
 {
     inspect_result result{};
@@ -208,6 +237,9 @@ auto draw_preset_row(resolution& preset, bool is_built_in, bool is_editable, boo
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-FLT_MIN);
     add_edit(result, ImGui::InputTextWidget<128>("##name", preset.name));
+
+    ImGui::TableNextColumn();
+    result |= draw_device_combo(preset);
 
     ImGui::TableNextColumn();
     result |= draw_type_combo(preset);
@@ -269,9 +301,10 @@ auto inspector_resolution_settings::inspect(rtti::context& ctx,
     int index_to_remove = -1;
     const ImGuiTableFlags table_flags =
         ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp;
-    if(ImGui::BeginTable("##resolution_presets", 4, table_flags))
+    if(ImGui::BeginTable("##resolution_presets", 5, table_flags))
     {
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_NAME_WEIGHT);
+        ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_DEVICE_WEIGHT);
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_TYPE_WEIGHT);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_SIZE_WEIGHT);
         ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());

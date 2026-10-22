@@ -9,7 +9,11 @@
 #include "../viewport_stats_overlay.h"
 #include "../panel_toolbar.h"
 #include "../view_render_scale.h"
+#include "../viewport_device_frame.h"
 #include "../visualization_menu.h"
+
+#include <engine/settings/settings.h>
+#include <hpp/optional.hpp>
 
 namespace unravel
 {
@@ -131,7 +135,11 @@ private:
     /// The resolution the scene renders at: the preset's pixels; empty for the view's size, with an aspect-only
     /// preset or while a capture forces the view's size.
     auto get_render_resolution(rtti::context& ctx) const -> usize32_t;
-    void draw_scene_viewport(rtti::context& ctx, const ImVec2& size, const ImVec2& pos);
+    /// Draws the image at pos, size big, or on the screen of the device frame when the preset has one.
+    void draw_scene_viewport(rtti::context& ctx,
+                             const ImVec2& size,
+                             const ImVec2& pos,
+                             const hpp::optional<viewport_device_frame::layout>& device_frame);
 
     // Handle prefab mode changes
     void handle_prefab_mode_changes(rtti::context& ctx);
@@ -140,6 +148,9 @@ private:
     int visualize_passes_{-1};
     float visualize_scale_{1.0f};
     int current_resolution_index_{0};
+    /// How this view holds a phone or a tablet preset. The view's own, as its preset is.
+    settings::resolution_settings::screen_orientation resolution_orientation_{
+        settings::resolution_settings::screen_orientation::portrait};
     /// The render scale the scene renders at in this view: full resolution until the user picks another.
     view_render_scale::state render_scale_{view_render_scale::source::full};
     uint32_t forced_render_width_{0};

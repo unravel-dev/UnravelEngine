@@ -1,7 +1,7 @@
 #pragma once
 
-/// The controls of the debug view popover (visualization_menu): switches, list rows, section headings, option labels
-/// and the tab bar, drawn in the look of the editor's settings windows. Sizes follow the UI scale.
+/// The controls of the viewport popovers (debug views, resolutions): switches, list rows, section headings, option
+/// labels and the tab bar, drawn in the look of the editor's settings windows. Sizes follow the UI scale.
 namespace unravel::visualization_widgets
 {
 
@@ -29,8 +29,14 @@ auto draw_switch_row(const char* label, const char* tooltip, bool& value) -> boo
 /// </summary>
 /// <param name="icon">ICON_MDI_* literal, or nullptr for a row without one</param>
 /// <param name="has_marker">Draws an accent dot at the right end: what the list picks lies under this row</param>
+/// <param name="value">Muted text at the right end, such as a size; nullptr for none</param>
 //-----------------------------------------------------------------------------
-auto draw_list_row(const char* id, const char* icon, const char* label, bool is_selected, bool has_marker) -> bool;
+auto draw_list_row(const char* id,
+                   const char* icon,
+                   const char* label,
+                   bool is_selected,
+                   bool has_marker,
+                   const char* value = nullptr) -> bool;
 
 /// A short muted heading over a group of rows.
 void draw_section_header(const char* label);

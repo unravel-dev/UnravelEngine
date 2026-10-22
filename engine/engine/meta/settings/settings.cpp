@@ -1,5 +1,6 @@
 #include "settings.hpp"
 
+#include <algorithm>
 #include <fstream>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -1076,6 +1077,7 @@ SAVE_INLINE(settings::resolution_settings::resolution)
     try_save(ar, ser20::make_nvp("width", obj.width));
     try_save(ar, ser20::make_nvp("height", obj.height));
     try_save(ar, ser20::make_nvp("aspect", obj.aspect));
+    try_save(ar, ser20::make_nvp("device", obj.device));
 }
 
 LOAD_INLINE(settings::resolution_settings::resolution)
@@ -1084,18 +1086,89 @@ LOAD_INLINE(settings::resolution_settings::resolution)
     try_load(ar, ser20::make_nvp("width", obj.width));
     try_load(ar, ser20::make_nvp("height", obj.height));
     try_load(ar, ser20::make_nvp("aspect", obj.aspect));
+    try_load(ar, ser20::make_nvp("device", obj.device));
 }
+
+namespace
+{
+using resolution_preset = settings::resolution_settings::resolution;
+
+/// The presets every project was created with before presets had a device.
+auto get_presets_before_devices() -> std::vector<resolution_preset>
+{
+    return {{"Free Aspect", 0, 0, 0.0f},
+            {"16:9 Aspect", 0, 0, 16.0f / 9.0f},
+            {"16:10 Aspect", 0, 0, 16.0f / 10.0f},
+            {"Full HD (1920x1080)", 1920, 1080, 16.0f / 9.0f},
+            {"WXGA (1366x768)", 1366, 768, 16.0f / 9.0f},
+            {"QHD (2560x1440)", 2560, 1440, 16.0f / 9.0f},
+            {"4K UHD (3840x2160)", 3840, 2160, 16.0f / 9.0f}};
+}
+
+auto has_preset_named(const std::vector<resolution_preset>& presets, const std::string& name) -> bool
+{
+    return std::any_of(presets.begin(),
+                       presets.end(),
+                       [&](const resolution_preset& preset)
+                       {
+                           return preset.name == name;
+                       });
+}
+
+/// Presets with pixels match by their size, the others by their aspect.
+auto has_same_shape(const resolution_preset& lhs, const resolution_preset& rhs) -> bool
+{
+    if(lhs.width != rhs.width || lhs.height != rhs.height)
+    {
+        return false;
+    }
+    return lhs.width > 0 || lhs.aspect == rhs.aspect;
+}
+
+/// Brings presets saved before presets had a device up to date. A project that kept the old defaults gets today's,
+/// with its pick kept by shape; a list of the project's own keeps its presets and gains the default phones and tablets.
+void add_device_presets(settings::resolution_settings& obj)
+{
+    const settings::resolution_settings defaults{};
+    if(obj.resolutions == get_presets_before_devices())
+    {
+        const auto same_shape = std::find_if(defaults.resolutions.begin(),
+                                             defaults.resolutions.end(),
+                                             [&](const resolution_preset& preset)
+                                             {
+                                                 return has_same_shape(preset, obj.current_resolution);
+                                             });
+        obj.resolutions = defaults.resolutions;
+        obj.current_resolution = same_shape != defaults.resolutions.end() ? *same_shape : defaults.current_resolution;
+        return;
+    }
+    for(const auto& preset : defaults.resolutions)
+    {
+        if(preset.device != settings::resolution_settings::device_type::desktop &&
+           !has_preset_named(obj.resolutions, preset.name))
+        {
+            obj.resolutions.push_back(preset);
+        }
+    }
+}
+} // namespace
 
 SAVE_INLINE(settings::resolution_settings)
 {
     try_save(ar, ser20::make_nvp("resolutions", obj.resolutions));
     try_save(ar, ser20::make_nvp("current_resolution", obj.current_resolution));
+    try_save(ar, ser20::make_nvp("orientation", obj.orientation));
 }
 
 LOAD_INLINE(settings::resolution_settings)
 {
     try_load(ar, ser20::make_nvp("resolutions", obj.resolutions));
     try_load(ar, ser20::make_nvp("current_resolution", obj.current_resolution));
+    // The orientation came with the devices: settings without it were saved before phones and tablets were presets.
+    if(!try_load(ar, ser20::make_nvp("orientation", obj.orientation)))
+    {
+        add_device_presets(obj);
+    }
 }
 
 REFLECT_INLINE(target_platform)
@@ -1186,6 +1259,57 @@ REFLECT_INLINE(settings::resolution_settings::resolution)
             entt::attribute{"pretty_name", "Aspect Ratio"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"tooltip", "Aspect ratio (0 for free aspect)"},
+        })
+        .data<&settings::resolution_settings::resolution::device>("device"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "device"},
+            entt::attribute{"pretty_name", "Device"},
+            entt::attribute{"tooltip", "The device the preset stands for. The views show a phone or a tablet in its frame."},
+        });
+}
+
+REFLECT_INLINE(settings::resolution_settings::device_type)
+{
+    entt::meta_factory<settings::resolution_settings::device_type>{}
+        .type("resolution_device_type"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution_device_type"},
+            entt::attribute{"pretty_name", "Device"},
+        })
+        .data<settings::resolution_settings::device_type::desktop>("desktop"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop"},
+            entt::attribute{"pretty_name", "Desktop"},
+        })
+        .data<settings::resolution_settings::device_type::phone>("phone"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "phone"},
+            entt::attribute{"pretty_name", "Phone"},
+        })
+        .data<settings::resolution_settings::device_type::tablet>("tablet"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tablet"},
+            entt::attribute{"pretty_name", "Tablet"},
+        });
+}
+
+REFLECT_INLINE(settings::resolution_settings::screen_orientation)
+{
+    entt::meta_factory<settings::resolution_settings::screen_orientation>{}
+        .type("resolution_screen_orientation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "resolution_screen_orientation"},
+            entt::attribute{"pretty_name", "Orientation"},
+        })
+        .data<settings::resolution_settings::screen_orientation::portrait>("portrait"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "portrait"},
+            entt::attribute{"pretty_name", "Portrait"},
+        })
+        .data<settings::resolution_settings::screen_orientation::landscape>("landscape"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "landscape"},
+            entt::attribute{"pretty_name", "Landscape"},
         });
 }
 
@@ -1208,6 +1332,12 @@ REFLECT_INLINE(settings::resolution_settings)
             entt::attribute{"name", "current_resolution"},
             entt::attribute{"pretty_name", "Current Resolution"},
             entt::attribute{"tooltip", "The current resolution to use"},
+        })
+        .data<&settings::resolution_settings::orientation>("orientation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "orientation"},
+            entt::attribute{"pretty_name", "Orientation"},
+            entt::attribute{"tooltip", "How the Game view holds a phone or a tablet preset."},
         });
 }
 

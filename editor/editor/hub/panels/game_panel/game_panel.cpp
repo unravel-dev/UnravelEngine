@@ -1,6 +1,7 @@
 #include "game_panel.h"
 #include "../panel.h"
 #include "../panels_defs.h"
+#include "../viewport_device_frame.h"
 #include "../viewport_resolution.h"
 #include "../panel_toolbar.h"
 #include "../visualization_menu.h"
@@ -29,16 +30,37 @@ constexpr int GAME_TOOLBAR_FIRST_ROW_BARS = 1;
 // edge, and the fade takes this long.
 constexpr float GAME_TOOLBAR_REVEAL_ROWS = 2.0f;
 constexpr float GAME_TOOLBAR_FADE_SECONDS = 0.12f;
+/// The outline that marks a playing game around a device, as thick as the focus frame around a plain image.
+constexpr float PLAY_FRAME_THICKNESS = 2.0f;
 
-/// The resolution preset the game view shows, or null without settings or presets.
-auto get_current_resolution(rtti::context& ctx) -> const settings::resolution_settings::resolution*
+/// The resolution preset the game view shows, turned to its orientation; nothing without settings or presets.
+auto get_current_resolution(rtti::context& ctx) -> hpp::optional<settings::resolution_settings::resolution>
 {
     if(!ctx.has<unravel::settings>())
     {
-        return nullptr;
+        return hpp::nullopt;
     }
-    const auto& s = ctx.get<unravel::settings>();
-    return viewport_resolution::get_resolution(ctx, s.resolution.get_current_resolution_index());
+    const auto& s = ctx.get<unravel::settings>().resolution;
+    return viewport_resolution::get_oriented_resolution(ctx, s.get_current_resolution_index(), s.orientation);
+}
+
+/// The phone or the tablet the view shows an image of this size in, sized to the area at the cursor; nothing for
+/// another preset. The toolbar's row and the margin under it stay free on every side, so that the device stays in
+/// the middle and clear of the bar.
+auto make_device_frame(rtti::context& ctx, const ImVec2& image_size, const ImVec2& area_size)
+    -> hpp::optional<viewport_device_frame::layout>
+{
+    const auto resolution = get_current_resolution(ctx);
+    if(!resolution || !viewport_resolution::has_device_frame(*resolution) || image_size.x <= 0.0f ||
+       image_size.y <= 0.0f)
+    {
+        return hpp::nullopt;
+    }
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    return viewport_device_frame::compute_layout(resolution->device,
+                                                 image_size.x / image_size.y,
+                                                 ImRect(origin, origin + area_size),
+                                                 panel_toolbar::get_rows_extent(1) + panel_toolbar::get_bar_margin());
 }
 
 /// Whether the camera rendered an output image the panel can show.
@@ -105,7 +127,7 @@ void game_panel::apply_view_size(rtti::context& ctx, scene& scn) const
         ctx.get_cached<rendering_system>().apply_game_view_size(scn, {forced_render_width_, forced_render_height_});
         return;
     }
-    const auto* resolution = get_current_resolution(ctx);
+    const auto resolution = get_current_resolution(ctx);
     if(!resolution)
     {
         return;
@@ -263,7 +285,17 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
     auto tex = obuffer->get_texture(0);
     auto tex_size = obuffer->get_size();
     ImVec2 tex_size_v(tex_size.width, tex_size.height);
-    ImGui::ImageWithAspect(ImGui::ToId(tex), tex_size_v, area_size, ImVec2(0.5f, 0.5f));
+    const auto device_frame = make_device_frame(ctx, tex_size_v, area_size);
+    if(device_frame)
+    {
+        viewport_device_frame::draw(*device_frame, ImGui::ToId(tex));
+        // A preset with an aspect and no pixels renders at the size the screen of the device shows it at.
+        view_area_size_ = device_frame->screen.GetSize();
+    }
+    else
+    {
+        ImGui::ImageWithAspect(ImGui::ToId(tex), tex_size_v, area_size, ImVec2(0.5f, 0.5f));
+    }
 
     ImVec2 min = ImGui::GetItemRectMin();
     ImVec2 max = ImGui::GetItemRectMax();
@@ -284,8 +316,15 @@ void game_panel::draw_camera_image(rtti::context& ctx, entt::handle camera, cons
 
     if(ctx.get_cached<play_mode>().is_active())
     {
-        ImVec2 padding(2.0f, 2.0f);
-        ImGui::RenderFocusFrame(min - padding, max + padding);
+        if(device_frame)
+        {
+            viewport_device_frame::draw_outline(*device_frame, ImGui::GetColorU32(ImGuiCol_NavCursor), PLAY_FRAME_THICKNESS);
+        }
+        else
+        {
+            ImVec2 padding(2.0f, 2.0f);
+            ImGui::RenderFocusFrame(min - padding, max + padding);
+        }
     }
 
     const auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
@@ -392,11 +431,13 @@ void game_panel::draw_resolution_dropdown(rtti::context& ctx)
     }
     // The game view shows the resolution the project ships with, so the pick goes to its settings.
     auto& pm = ctx.get_cached<project_manager>();
-    auto& project_settings = pm.get_settings();
-    int index = project_settings.resolution.get_current_resolution_index();
-    if(viewport_resolution::draw_toolbar_dropdown(ctx, index, toolbar_layout_.is_compact))
+    auto& resolution = pm.get_settings().resolution;
+    int index = resolution.get_current_resolution_index();
+    auto orientation = resolution.orientation;
+    if(viewport_resolution::draw_toolbar_dropdown(ctx, index, orientation, toolbar_layout_.is_compact))
     {
-        project_settings.resolution.set_current_resolution_index(index);
+        resolution.set_current_resolution_index(index);
+        resolution.orientation = orientation;
         pm.save_project_settings(ctx);
     }
 }

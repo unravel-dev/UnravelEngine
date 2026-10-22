@@ -134,6 +134,22 @@ struct settings
     {
         friend auto operator==(const resolution_settings& lhs, const resolution_settings& rhs) -> bool = default;
 
+        /// What a preset stands for. The pickers of the views group the presets by it, and the views show a phone
+        /// or a tablet inside a frame of that device.
+        enum class device_type : uint8_t
+        {
+            desktop,
+            phone,
+            tablet
+        };
+
+        /// How a phone or a tablet is held. Desktop presets keep the shape they have.
+        enum class screen_orientation : uint8_t
+        {
+            portrait,
+            landscape
+        };
+
         auto get_current_resolution_index() const -> int
         {
             for(size_t i = 0; i < resolutions.size(); ++i)
@@ -159,21 +175,32 @@ struct settings
             int width;
             int height;
             float aspect; // 0 means free aspect
+            /// Phones and tablets are listed held upright; the view's orientation turns them.
+            device_type device{device_type::desktop};
 
             friend auto operator==(const resolution& lhs, const resolution& rhs) -> bool = default;
         };
-    
+
+        // A few common shapes per device rather than every model: the shapes are what a layout has to survive.
         std::vector<resolution> resolutions = {
             {"Free Aspect", 0, 0, 0.0f},
             {"16:9 Aspect", 0, 0, 16.0f / 9.0f},
             {"16:10 Aspect", 0, 0, 16.0f / 10.0f},
-            {"Full HD (1920x1080)", 1920, 1080, 16.0f / 9.0f},
-            {"WXGA (1366x768)", 1366, 768, 16.0f / 9.0f},
-            {"QHD (2560x1440)", 2560, 1440, 16.0f / 9.0f},
-            {"4K UHD (3840x2160)", 3840, 2160, 16.0f / 9.0f}
+            {"WXGA", 1366, 768, 1366.0f / 768.0f},
+            {"Full HD", 1920, 1080, 1920.0f / 1080.0f},
+            {"QHD", 2560, 1440, 2560.0f / 1440.0f},
+            {"4K UHD", 3840, 2160, 3840.0f / 2160.0f},
+            {"Phone 16:9", 1080, 1920, 1080.0f / 1920.0f, device_type::phone},
+            {"Phone 19.5:9", 1080, 2340, 1080.0f / 2340.0f, device_type::phone},
+            {"Phone 20:9", 1080, 2400, 1080.0f / 2400.0f, device_type::phone},
+            {"Phone 20:9 HD+", 720, 1600, 720.0f / 1600.0f, device_type::phone},
+            {"Tablet 4:3", 1536, 2048, 1536.0f / 2048.0f, device_type::tablet},
+            {"Tablet 16:10", 1200, 1920, 1200.0f / 1920.0f, device_type::tablet}
         };
 
         resolution current_resolution = resolutions[0];
+        /// How the Game view holds a phone or a tablet preset.
+        screen_orientation orientation{screen_orientation::portrait};
     } resolution;
    
 

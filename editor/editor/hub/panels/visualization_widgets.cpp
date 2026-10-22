@@ -23,6 +23,7 @@ constexpr float ROW_PADDING_X = 0.6f;
 constexpr float ROW_ICON_GAP = 0.55f;
 constexpr float MARKER_RADIUS = 0.2f;
 constexpr float MARKER_GAP = 0.4f;
+constexpr float VALUE_GAP = 1.0f;
 constexpr float SWITCH_WIDTH = 2.0f;
 constexpr float SWITCH_HEIGHT = 1.1f;
 constexpr float SWITCH_KNOB_INSET = 0.17f;
@@ -114,7 +115,7 @@ void draw_segment_label(const ImRect& rect, const char* label, int badge, bool i
     const float padding_y = to_pixels(BADGE_PADDING_Y);
     const ImVec2 badge_min(x + text_size.x + badge_gap, y - padding_y);
     const ImVec2 badge_max(badge_min.x + badge_width, y + text_size.y + padding_y);
-    draw_list->AddRectFilled(badge_min, badge_max, BADGE_COLOR, (badge_max.y - badge_min.y) * 0.5f);
+    draw_list->AddRectFilled(badge_min, badge_max, ImGui::GetColorU32(BADGE_COLOR), (badge_max.y - badge_min.y) * 0.5f);
     draw_list->AddText(ImVec2(badge_min.x + to_pixels(BADGE_PADDING_X), y), text_color, badge_text.data());
 }
 
@@ -164,7 +165,12 @@ auto draw_switch_row(const char* label, const char* tooltip, bool& value) -> boo
     return is_pressed;
 }
 
-auto draw_list_row(const char* id, const char* icon, const char* label, bool is_selected, bool has_marker) -> bool
+auto draw_list_row(const char* id,
+                   const char* icon,
+                   const char* label,
+                   bool is_selected,
+                   bool has_marker,
+                   const char* value) -> bool
 {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const ImVec2 size(ImGui::GetContentRegionAvail().x, to_pixels(LIST_ROW_HEIGHT));
@@ -198,6 +204,12 @@ auto draw_list_row(const char* id, const char* icon, const char* label, bool is_
         text_max_x -= radius * 2.0f + to_pixels(MARKER_GAP);
     }
     const ImVec2 text_pos(text_x, ImFloor(rect.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f));
+    if(value != nullptr)
+    {
+        const float value_x = ImFloor(text_max_x - ImGui::CalcTextSize(value).x);
+        draw_list->AddText(ImVec2(value_x, text_pos.y), imgui_style::get_muted_text_color_u32(), value);
+        text_max_x = value_x - to_pixels(VALUE_GAP);
+    }
     draw_list->PushClipRect(rect.Min, ImVec2(text_max_x, rect.Max.y), true);
     draw_list->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), label);
     draw_list->PopClipRect();
@@ -243,8 +255,9 @@ auto draw_segmented(const char* id, const char* const* labels, const int* badges
     const ImVec2 size(width, to_pixels(SEGMENT_HEIGHT));
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     const float rounding = to_pixels(SEGMENT_ROUNDING);
-    draw_list->AddRectFilled(min, min + size, SEGMENT_BG_COLOR, rounding);
-    draw_list->AddRect(min, min + size, SEGMENT_BORDER_COLOR, rounding);
+    // The fills go through the style's alpha, so that the control dims inside ImGui::BeginDisabled().
+    draw_list->AddRectFilled(min, min + size, ImGui::GetColorU32(SEGMENT_BG_COLOR), rounding);
+    draw_list->AddRect(min, min + size, ImGui::GetColorU32(SEGMENT_BORDER_COLOR), rounding);
     const float inset = to_pixels(SEGMENT_INSET);
     const float segment_width = (size.x - inset * 2.0f) / float(count);
     const float segment_rounding = ImMax(rounding - inset, 0.0f);
@@ -265,11 +278,14 @@ auto draw_segmented(const char* id, const char* const* labels, const int* badges
         const bool is_selected = index == i;
         if(is_selected)
         {
-            draw_list->AddRectFilled(segment_min, segment_max, get_accent_color(SEGMENT_SELECTED_ALPHA), segment_rounding);
+            draw_list->AddRectFilled(segment_min,
+                                     segment_max,
+                                     ImGui::GetColorU32(get_accent_color(SEGMENT_SELECTED_ALPHA)),
+                                     segment_rounding);
         }
         else if(is_hovered)
         {
-            draw_list->AddRectFilled(segment_min, segment_max, SEGMENT_HOVERED_COLOR, segment_rounding);
+            draw_list->AddRectFilled(segment_min, segment_max, ImGui::GetColorU32(SEGMENT_HOVERED_COLOR), segment_rounding);
         }
         draw_segment_label(ImRect(segment_min, segment_max), labels[i], badges != nullptr ? badges[i] : 0, is_selected);
     }

@@ -263,6 +263,8 @@ constexpr float SCENE_TOOLBAR_CAMERA_POPUP_HEIGHT = 560.0f;
 constexpr float SCENE_TOOLBAR_POPUP_MIN_HEIGHT = 120.0f;
 /// The tools and the view bar share the first row.
 constexpr int SCENE_TOOLBAR_FIRST_ROW_BARS = 2;
+/// The outline that marks prefab editing around the view's image or device.
+constexpr float PREFAB_FRAME_THICKNESS = 4.0f;
 
 struct transform_tool
 {
@@ -1492,8 +1494,9 @@ auto scene_panel::get_render_resolution(rtti::context& ctx) const -> usize32_t
     {
         return {};
     }
-    const auto* preset = viewport_resolution::get_resolution(ctx, current_resolution_index_);
-    return preset != nullptr ? viewport_resolution::get_render_resolution(*preset) : usize32_t{};
+    const auto preset =
+        viewport_resolution::get_oriented_resolution(ctx, current_resolution_index_, resolution_orientation_);
+    return preset ? viewport_resolution::get_render_resolution(*preset) : usize32_t{};
 }
 
 void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
@@ -1635,7 +1638,10 @@ void scene_panel::draw_view_bar(rtti::context& ctx, editing_manager& em, const I
     placement.row = toolbar_layout_.is_stacked ? 1 : 0;
     if(panel_toolbar::begin_bar(SCENE_TOOLBAR_VIEW_BAR_ID, placement))
     {
-        viewport_resolution::draw_toolbar_dropdown(ctx, current_resolution_index_, toolbar_layout_.is_compact);
+        viewport_resolution::draw_toolbar_dropdown(ctx,
+                                                   current_resolution_index_,
+                                                   resolution_orientation_,
+                                                   toolbar_layout_.is_compact);
         view_render_scale::draw_toolbar_dropdown(ctx, render_scale_, toolbar_layout_.is_compact);
         panel_toolbar::separator();
         draw_grid_controls(em);
@@ -2173,7 +2179,10 @@ void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImV
     }
 }
 
-void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, const ImVec2& pos)
+void scene_panel::draw_scene_viewport(rtti::context& ctx,
+                                      const ImVec2& size,
+                                      const ImVec2& pos,
+                                      const hpp::optional<viewport_device_frame::layout>& device_frame)
 {
     auto& em = ctx.get_cached<editing_manager>();
 
@@ -2188,7 +2197,12 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     const auto& obuffer = rview.fbo_find("OBUFFER");
 
     ImGui::SetCursorScreenPos(pos);
-    if(obuffer && obuffer->get_attachment_count() > 0)
+    const bool has_output = obuffer && obuffer->get_attachment_count() > 0;
+    if(device_frame)
+    {
+        viewport_device_frame::draw(*device_frame, has_output ? ImGui::ToId(obuffer->get_texture(0)) : ImTextureID{});
+    }
+    else if(has_output)
     {
         const auto& tex = obuffer->get_texture(0);
         ImGui::Image(ImGui::ToId(tex), size);
@@ -2202,11 +2216,18 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
 
     if(em.is_prefab_mode())
     {
-        ImVec2 padding(2.0f, 2.0f);
         auto color = ImGui::GetColorU32(ImGuiCol_ButtonActive);
-        auto min = ImGui::GetItemRectMin() - padding;
-        auto max = ImGui::GetItemRectMax() + padding;
-        ImGui::RenderFocusFrame(min, max, color, 4.0f);
+        if(device_frame)
+        {
+            viewport_device_frame::draw_outline(*device_frame, color, PREFAB_FRAME_THICKNESS);
+        }
+        else
+        {
+            ImVec2 padding(2.0f, 2.0f);
+            auto min = ImGui::GetItemRectMin() - padding;
+            auto max = ImGui::GetItemRectMax() + padding;
+            ImGui::RenderFocusFrame(min, max, color, PREFAB_FRAME_THICKNESS);
+        }
     }
 
     handle_viewport_interaction(ctx, camera, em);
@@ -2319,37 +2340,51 @@ void scene_panel::draw_ui(rtti::context& ctx)
         return;
     }
 
+    const auto avail_origin = ImGui::GetCursorScreenPos();
+    // The toolbar floats over the whole panel area, not over the (possibly letterboxed) image.
+    const ImRect toolbar_area(avail_origin, avail_origin + avail);
+    update_toolbar_layout(ctx, toolbar_area);
+
     // The camera's viewport is the image's rectangle on screen, the preset's aspect fitted in the
     // available area, so that picking and the gizmos map 1:1 between screen pixels and the camera
     // viewport. A preset with pixels renders the scene at them (get_render_resolution) and the
-    // pipeline resamples it to the viewport. Without a preset the view takes the whole area.
+    // pipeline resamples it to the viewport. Without a preset the view takes the whole area. A phone
+    // or a tablet shows the image on the screen of its device, clear of the toolbar rows and the
+    // margin under them.
     ImVec2 view_size = avail;
+    hpp::optional<viewport_device_frame::layout> device_frame;
     const bool is_render_size_forced = forced_render_width_ > 0u && forced_render_height_ > 0u;
     if(is_render_size_forced)
     {
         const float scale = std::min(avail.x / float(forced_render_width_), avail.y / float(forced_render_height_));
         view_size = ImVec2(float(forced_render_width_) * scale, float(forced_render_height_) * scale);
     }
-    else if(const auto* current_res = viewport_resolution::get_resolution(ctx, current_resolution_index_))
+    else if(const auto current_res = viewport_resolution::get_oriented_resolution(ctx,
+                                                                                  current_resolution_index_,
+                                                                                  resolution_orientation_))
     {
         view_size = viewport_resolution::compute_fitted_size(*current_res, avail);
+        if(viewport_resolution::has_device_frame(*current_res))
+        {
+            device_frame = viewport_device_frame::compute_layout(current_res->device,
+                                                                 current_res->aspect,
+                                                                 toolbar_area,
+                                                                 toolbar_extent_ + panel_toolbar::get_bar_margin());
+            view_size = device_frame->screen.GetSize();
+        }
     }
 
-    const auto avail_origin = ImGui::GetCursorScreenPos();
-    const ImVec2 view_pos(avail_origin.x + (avail.x - view_size.x) * 0.5f,
-                          avail_origin.y + (avail.y - view_size.y) * 0.5f);
+    const ImVec2 view_pos = device_frame ? device_frame->screen.Min
+                                         : ImVec2(avail_origin.x + (avail.x - view_size.x) * 0.5f,
+                                                  avail_origin.y + (avail.y - view_size.y) * 0.5f);
 
     auto& camera_comp = camera_entity.get<camera_component>();
-
-    // The toolbar floats over the whole panel area, not over the (possibly letterboxed) image.
-    const ImRect toolbar_area(avail_origin, avail_origin + avail);
-    update_toolbar_layout(ctx, toolbar_area);
 
     const ImVec2 render_size = is_render_size_forced
                                    ? ImVec2(float(forced_render_width_), float(forced_render_height_))
                                    : view_size;
     setup_camera_viewport(camera_comp, render_size, view_pos);
-    draw_scene_viewport(ctx, view_size, view_pos);
+    draw_scene_viewport(ctx, view_size, view_pos, device_frame);
     process_drag_drop_target(ctx, camera_comp);
     // After the image: the shadows of the bars go into this window's draw list, on top of it.
     draw_toolbar(ctx, toolbar_area);
