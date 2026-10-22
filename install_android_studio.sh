@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs what the UnravelEngine Android deploy needs on Ubuntu / Debian without Android Studio:
-# JDK 17, the SDK command-line tools, platform-tools (adb) and the pinned NDK. Gradle downloads the
-# compile SDK platform and the build tools on the first deploy, under the names the SDK repository uses.
+# JDK 17, the SDK command-line tools, platform-tools (adb) and the pinned NDK. The android CLI accepts
+# the SDK license itself (licenses/android-sdk-license), which lets Gradle download the compile SDK
+# platform and the build tools on the first deploy. --no-metrics turns off the CLI's usage data.
 # Run it as your own user (bash install_android_studio.sh): the SDK belongs in your home folder, and
 # the script asks for sudo itself for apt.
 set -euo pipefail
@@ -20,8 +21,8 @@ JDK_DIR="/usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture)"
 sudo apt-get update
 sudo apt-get install -y openjdk-17-jdk-headless curl unzip android-sdk-platform-tools-common
 
-SDKMANAGER="$SDK_DIR/cmdline-tools/latest/bin/sdkmanager"
-if [ ! -x "$SDKMANAGER" ]; then
+ANDROID_CLI="$SDK_DIR/cmdline-tools/latest/bin/android"
+if [ ! -x "$ANDROID_CLI" ]; then
     download_dir="$(mktemp -d)"
     zip="$download_dir/cmdline-tools.zip"
     curl -fL -o "$zip" "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_BUILD}_latest.zip"
@@ -32,9 +33,7 @@ if [ ! -x "$SDKMANAGER" ]; then
     rm -rf "$download_dir"
 fi
 
-export JAVA_HOME="$JDK_DIR"
-(yes || true) | "$SDKMANAGER" --licenses > /dev/null
-"$SDKMANAGER" "platform-tools" "ndk;${NDK_VERSION}"
+"$ANDROID_CLI" --no-metrics --sdk="$SDK_DIR" sdk install platform-tools "ndk/${NDK_VERSION}"
 
 if ! grep -q "ANDROID_HOME=" "$HOME/.profile"; then
     cat >> "$HOME/.profile" <<EOF
