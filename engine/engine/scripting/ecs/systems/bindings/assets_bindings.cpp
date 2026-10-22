@@ -12,6 +12,8 @@
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/font.h>
 #include <engine/rendering/mesh.h>
+#include <engine/ui/style_sheet.h>
+#include <engine/ui/ui_tree.h>
 #include <graphics/texture.h>
 
 namespace unravel
@@ -62,7 +64,9 @@ auto get_dotnet_asset(size_t type_hash) -> const dotnet_asset*
         {dotnet::type::get_hash("Unravel.Core.AnimationController"),
          std::make_shared<dotnet_asset_impl<animation_controller>>()},
         {dotnet::type::get_hash("Unravel.Core.AudioClip"),       std::make_shared<dotnet_asset_impl<audio_clip>>()},
-        {dotnet::type::get_hash("Unravel.Core.Font"),            std::make_shared<dotnet_asset_impl<font>>()}
+        {dotnet::type::get_hash("Unravel.Core.Font"),            std::make_shared<dotnet_asset_impl<font>>()},
+        {dotnet::type::get_hash("Unravel.Core.VisualTree"),      std::make_shared<dotnet_asset_impl<ui_tree>>()},
+        {dotnet::type::get_hash("Unravel.Core.StyleSheet"),      std::make_shared<dotnet_asset_impl<style_sheet>>()}
     };
     // clang-format on
 

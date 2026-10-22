@@ -691,6 +691,7 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         copy_compiled_lib(app_script_lib_temp, app_script_lib);
     }
 
+    app_cache_.scriptable_component_types.clear();
     if(!is_deploy_mode)
     {
         auto& am = ctx.get_cached<asset_manager>();
@@ -698,6 +699,7 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         // assets include the empty asset
         if(assets.size() <= 1)
         {
+            append_engine_scriptable_component_types();
             return result;
         }
     }
@@ -712,20 +714,10 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         {
             auto assembly = app_domain_->get_assembly(app_script_lib.string());
             // print_assembly_info(assembly);
-    
-            app_cache_.scriptable_component_types.clear();
+
             if(!has_compilation_errors_)
             {
-                app_cache_.scriptable_component_types = assembly.get_types_derived_from(get_scriptable_component_base_type());
-                // An abstract base (a framework's controller) cannot be added to an entity.
-                auto& types = app_cache_.scriptable_component_types;
-                types.erase(std::remove_if(types.begin(),
-                                           types.end(),
-                                           [](const auto& type)
-                                           {
-                                               return type.is_abstract();
-                                           }),
-                            types.end());
+                app_cache_.scriptable_component_types = get_addable_script_component_types(assembly);
 
                 // Same-named types in the engine and app assemblies are two
                 // distinct .NET types - name-based lookups resolve app-first,
@@ -749,10 +741,56 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
             result = false;
         }
     }
-    
 
+    append_engine_scriptable_component_types();
     return result;
 }
+
+auto script_system::get_addable_script_component_types(const dotnet::assembly& assembly) const -> std::vector<dotnet::type>
+{
+    auto types = assembly.get_types_derived_from(get_scriptable_component_base_type());
+    // An abstract base (a framework's controller) cannot be added to an entity.
+    types.erase(std::remove_if(types.begin(),
+                               types.end(),
+                               [](const auto& type)
+                               {
+                                   return type.is_abstract();
+                               }),
+                types.end());
+    return types;
+}
+
+void script_system::append_engine_scriptable_component_types()
+{
+    if(!domain_)
+    {
+        return;
+    }
+    auto& types = app_cache_.scriptable_component_types;
+    try
+    {
+        for(const auto& type : get_addable_script_component_types(get_engine_assembly()))
+        {
+            // An app type of the same name shadows the engine's (get_type_by_fullname resolves app-first).
+            const auto fullname = type.get_fullname();
+            const bool is_shadowed = std::any_of(types.begin(),
+                                                 types.end(),
+                                                 [&](const auto& listed)
+                                                 {
+                                                     return listed.get_fullname() == fullname;
+                                                 });
+            if(!is_shadowed)
+            {
+                types.push_back(type);
+            }
+        }
+    }
+    catch(const dotnet::exception& e)
+    {
+        log_exception(e);
+    }
+}
+
 void script_system::unload_app_domain()
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload App Domain");

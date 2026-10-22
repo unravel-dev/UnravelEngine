@@ -63,9 +63,12 @@ void input_system::on_play_end(rtti::context& ctx)
     // read as held in the next session.
     manager.set_virtual_mouse_position({});
     manager.release_all();
-    // How a script held the cursor belongs to its play session.
+    // How a script held the cursor belongs to its play session, as do the zones of its on-screen
+    // controls and whether its taps click.
     manager.get_cursor().set_lock_mode(input::cursor_lock_mode::none);
     manager.get_cursor().set_visible(true);
+    manager.get_pointer_zones().clear();
+    manager.set_mouse_simulated_with_touches(true);
 }
 
 auto input_system::deinit(rtti::context& ctx) -> bool

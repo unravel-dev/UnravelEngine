@@ -112,6 +112,27 @@ auto os_touches::get(size_t index) const -> const touch_point&
     return touches_.at(index).point;
 }
 
+auto os_touches::is_touching(uint64_t device_id, uint64_t finger_id) const -> bool
+{
+    return std::any_of(touches_.begin(),
+                       touches_.end(),
+                       [&](const tracked_touch& touch)
+                       {
+                           return touch.device_id == device_id && touch.finger_id == finger_id &&
+                                  !is_over(touch.point.phase) && !touch.is_end_pending;
+                       });
+}
+
+auto os_touches::has_touching() const -> bool
+{
+    return std::any_of(touches_.begin(),
+                       touches_.end(),
+                       [](const tracked_touch& touch)
+                       {
+                           return !is_over(touch.point.phase) && !touch.is_end_pending;
+                       });
+}
+
 auto os_touches::find(uint64_t device_id, uint64_t finger_id) -> tracked_touch*
 {
     auto it = std::find_if(touches_.begin(),

@@ -68,6 +68,8 @@ struct script_system
     auto load_app_domain(rtti::context& ctx, bool recompile) -> bool;
     void unload_app_domain();
 
+    /// The script components an entity can take: the app's, then the engine's (the samples) that no
+    /// app type of the same name shadows.
     auto get_all_scriptable_components() const -> const std::vector<dotnet::type>&;
     auto get_scriptable_component_base_type() const -> dotnet::type;
     auto get_engine_assembly() const -> dotnet::assembly;
@@ -319,6 +321,11 @@ private:
     void on_resume(rtti::context& ctx);
 
     auto bind_internal_calls(rtti::context& ctx) -> bool;
+
+    /// The assembly's script component types an entity can take: the ones that are not abstract.
+    auto get_addable_script_component_types(const dotnet::assembly& assembly) const -> std::vector<dotnet::type>;
+    /// Lists the engine's script components after the app's, leaving out the ones an app type shadows.
+    void append_engine_scriptable_component_types();
 
     void check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback);
 

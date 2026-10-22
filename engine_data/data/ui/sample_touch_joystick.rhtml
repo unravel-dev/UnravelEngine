@@ -1,0 +1,30 @@
+<html>
+<head>
+    <title>Touch Joystick</title>
+    <link type="text/rcss" href="engine:/data/ui/rml.rcss"/>
+    <style>
+        /* The controls take their fingers through pointer zones: no element here takes pointer input. */
+        body { width: 100%; height: 100%; pointer-events: none; font-family: Inter; font-weight: bold; color: rgba(255, 255, 255, 230); }
+        /* SampleTouchJoystick places every disc (left, top, width, height, border-radius) in pixels. */
+        .disc { position: absolute; display: block; box-sizing: border-box; }
+        #stick-base { background-color: rgba(20, 24, 40, 90); border: 3px rgba(255, 255, 255, 110); }
+        #stick-base.active { background-color: rgba(20, 24, 40, 140); border-color: rgba(255, 255, 255, 170); }
+        #stick-knob { background-color: rgba(255, 255, 255, 120); border: 2px rgba(255, 255, 255, 190); }
+        #stick-knob.active { background-color: rgba(255, 255, 255, 190); }
+        .button { background-color: rgba(20, 24, 40, 110); border: 3px rgba(255, 255, 255, 130); text-align: center; }
+        .button.pressed { background-color: rgba(255, 255, 255, 150); border-color: rgba(255, 255, 255, 230); color: rgba(20, 24, 40, 255); }
+        #button-south { border-color: rgba(120, 220, 120, 170); }
+        #button-east { border-color: rgba(240, 110, 110, 170); }
+        #button-west { border-color: rgba(110, 170, 250, 170); }
+        #button-north { border-color: rgba(250, 210, 90, 170); }
+    </style>
+</head>
+<body>
+    <div id="stick-base" class="disc"></div>
+    <div id="stick-knob" class="disc"></div>
+    <div id="button-south" class="disc button"></div>
+    <div id="button-east" class="disc button"></div>
+    <div id="button-west" class="disc button"></div>
+    <div id="button-north" class="disc button"></div>
+</body>
+</html>

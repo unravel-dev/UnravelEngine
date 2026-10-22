@@ -29,6 +29,8 @@ public:
     void set_position(coord pos);
     /// Moves the position without reporting motion: the cursor was put there, not moved.
     void rebase_position(coord pos);
+    /// Reports no motion this frame; the position stays where it is.
+    void clear_motion();
     void set_scroll(float scroll);
     void update();    
 };

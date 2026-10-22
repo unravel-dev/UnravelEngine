@@ -1,6 +1,7 @@
 #include "os_input_manager.hpp"
 #include "../bimap.hpp"
 #include "os_key_map.hpp"
+#include <base/platform/config.hpp>
 #include <cassert>
 #include <logging/logging.h>
 
@@ -38,6 +39,10 @@ void os_input_manager::init()
     auto mouse = std::make_shared<os_mouse>();
     devices_.emplace_back(mouse);
     mouse_ = mouse.get();
+
+    auto gamepad = std::make_shared<virtual_gamepad>();
+    devices_.emplace_back(gamepad);
+    virtual_gamepad_ = gamepad.get();
 }
 
 auto os_input_manager::get_all_devices() const -> const std::vector<std::shared_ptr<input_device>>&
@@ -80,18 +85,28 @@ void os_input_manager::before_events_update()
 
     touches_.update();
 
+    pointer_zones_.update();
+    is_mouse_motion_taken_ = pointer_zones_.is_mouse_held();
+
+    virtual_gamepad_->update();
+
     if(virtual_mouse_position_)
     {
         mouse_->set_position(remap_to_work_zone(*virtual_mouse_position_));
+        pointer_zones_.move_mouse(mouse_->get_position());
         return;
     }
 
     auto pos = os::mouse::get_position();
     mouse_->set_position(remap_to_work_zone({pos.x, pos.y}));
-    // This frame's motion is read; the next one is measured from where the cursor is put.
-    if(const auto held = cursor_.apply({pos.x, pos.y}, get_work_zone()))
+    pointer_zones_.move_mouse(mouse_->get_position());
+    // This frame's motion is read; the next one is measured from where the cursor is now. A platform
+    // without a cursor to move (a touch screen) leaves it where it was, and the distance to the held
+    // position must not read as motion every frame.
+    if(cursor_.apply({pos.x, pos.y}, get_work_zone()))
     {
-        mouse_->rebase_position(remap_to_work_zone(*held));
+        const auto placed = os::mouse::get_position();
+        mouse_->rebase_position(remap_to_work_zone({placed.x, placed.y}));
     }
 }
 
@@ -107,6 +122,13 @@ auto os_input_manager::get_cursor() const -> const os_cursor&
 
 void os_input_manager::after_events_update()
 {
+    // Decided after the frame's events: the pointer may have jumped to a landing finger before its
+    // events were read.
+    if(is_pointer_from_touch_ || is_mouse_motion_taken_)
+    {
+        mouse_->clear_motion();
+    }
+
     //  Update gamepads
     for(auto& kvp : gamepads_)
     {
@@ -165,6 +187,11 @@ void os_input_manager::on_os_event(const os::event& e)
 
         case os::events::mouse_button:
         {
+            is_pointer_from_touch_ = e.button.is_from_touch;
+            if(!is_mouse_button_for_game(e))
+            {
+                break;
+            }
             auto& state_map = mouse_->get_button_state_map();
 
             button_state state{};
@@ -226,6 +253,7 @@ void os_input_manager::on_os_event(const os::event& e)
 
         case os::events::mouse_motion:
         {
+            is_pointer_from_touch_ = e.motion.is_from_touch;
             break;
         }
 
@@ -253,6 +281,7 @@ void os_input_manager::on_os_event(const os::event& e)
 
         case os::events::mouse_wheel:
         {
+            is_pointer_from_touch_ = false;
             if(is_inside_work_zone(mouse_->get_position()))
             {
                 mouse_->set_scroll(e.wheel.y);
@@ -341,11 +370,80 @@ void os_input_manager::release_all()
     keyboard_->get_key_state_map().clear();
     mouse_->get_button_state_map().clear();
     touches_.cancel_all();
+    pointer_zones_.cancel_all();
+    is_touch_press_taken_ = false;
+    virtual_gamepad_->release_all();
 }
 
 auto os_input_manager::get_touches() const -> const os_touches&
 {
     return touches_;
+}
+
+auto os_input_manager::get_virtual_gamepad() -> virtual_gamepad&
+{
+    return *virtual_gamepad_;
+}
+
+auto os_input_manager::get_pointer_zones() -> pointer_zones&
+{
+    return pointer_zones_;
+}
+
+auto os_input_manager::get_pointer_zones() const -> const pointer_zones&
+{
+    return pointer_zones_;
+}
+
+void os_input_manager::set_mouse_simulated_with_touches(bool simulated)
+{
+    is_mouse_simulated_with_touches_ = simulated;
+}
+
+auto os_input_manager::is_mouse_simulated_with_touches() const -> bool
+{
+    return is_mouse_simulated_with_touches_;
+}
+
+auto os_input_manager::is_touch_supported() const -> bool
+{
+#if UNRAVEL_PLATFORM_ANDROID || UNRAVEL_PLATFORM_IOS
+    return true;
+#else
+    return has_seen_touch_;
+#endif
+}
+
+auto os_input_manager::is_mouse_button_for_game(const os::event& e) -> bool
+{
+    const bool is_left = e.button.button == os::mouse::button::left;
+    const bool is_press = e.button.state_id == os::state::pressed;
+    if(e.button.is_from_touch)
+    {
+        // The platform makes this press where a finger lands, before the finger's own event: a zone free
+        // there takes that finger next, so the press is the zone's too.
+        if(is_press)
+        {
+            const coord position = map_window_position({e.button.x, e.button.y});
+            is_touch_press_taken_ = is_left && is_input_allowed_ && pointer_zones_.is_free_zone_at(position);
+            return !is_touch_press_taken_ && is_mouse_simulated_with_touches_;
+        }
+        const bool was_press_taken = is_touch_press_taken_;
+        is_touch_press_taken_ = false;
+        const bool is_held = mouse_->get_button_state(static_cast<uint32_t>(mouse_button::left_button)) != button_state::up;
+        return !was_press_taken && (is_mouse_simulated_with_touches_ || is_held);
+    }
+    if(!is_left)
+    {
+        return true;
+    }
+    if(is_press)
+    {
+        const bool is_taken = is_input_allowed_ && pointer_zones_.take_mouse(mouse_->get_position());
+        is_mouse_motion_taken_ |= is_taken;
+        return !is_taken;
+    }
+    return !pointer_zones_.end_mouse(mouse_->get_position());
 }
 
 auto os_input_manager::map_window_position(coord window_position) -> coord
@@ -368,6 +466,11 @@ void os_input_manager::on_finger_event(const os::event& e)
     switch(e.type)
     {
         case os::events::finger_down:
+            has_seen_touch_ = true;
+            if(is_input_allowed_ && pointer_zones_.take_finger(finger.touch_id, finger.finger_id, position, finger.pressure))
+            {
+                break;
+            }
             // As a mouse press, a finger that lands outside the work zone is not the game's.
             if(is_inside_work_zone(position))
             {
@@ -375,13 +478,22 @@ void os_input_manager::on_finger_event(const os::event& e)
             }
             break;
         case os::events::finger_motion:
-            touches_.move(finger.touch_id, finger.finger_id, position, finger.pressure);
+            if(!pointer_zones_.move_finger(finger.touch_id, finger.finger_id, position, finger.pressure))
+            {
+                touches_.move(finger.touch_id, finger.finger_id, position, finger.pressure);
+            }
             break;
         case os::events::finger_up:
-            touches_.end(finger.touch_id, finger.finger_id, position, false);
+            if(!pointer_zones_.end_finger(finger.touch_id, finger.finger_id, position, false))
+            {
+                touches_.end(finger.touch_id, finger.finger_id, position, false);
+            }
             break;
         case os::events::finger_canceled:
-            touches_.end(finger.touch_id, finger.finger_id, position, true);
+            if(!pointer_zones_.end_finger(finger.touch_id, finger.finger_id, position, true))
+            {
+                touches_.end(finger.touch_id, finger.finger_id, position, true);
+            }
             break;
         default:
             break;

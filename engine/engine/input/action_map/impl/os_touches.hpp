@@ -34,6 +34,10 @@ public:
     auto get_count() const -> size_t;
     /// The fingers in the order they touched the screen.
     auto get(size_t index) const -> const touch_point&;
+    /// Whether the finger is listed and has not left the screen.
+    auto is_touching(uint64_t device_id, uint64_t finger_id) const -> bool;
+    /// Whether any listed finger has not left the screen.
+    auto has_touching() const -> bool;
 
 private:
     struct tracked_touch

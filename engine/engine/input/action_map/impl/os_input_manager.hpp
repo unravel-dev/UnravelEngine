@@ -2,11 +2,13 @@
 
 #include "../action_map.hpp"
 #include "../input_manager.hpp"
+#include "../virtual_gamepad.hpp"
 #include "os_cursor.hpp"
 #include "os_gamepad.hpp"
 #include "os_keyboard.hpp"
 #include "os_mouse.hpp"
 #include "os_touches.hpp"
+#include "pointer_zones.hpp"
 
 #include <ospp/event.h>
 #include <hpp/optional.hpp>
@@ -42,6 +44,21 @@ class os_input_manager : public input_manager
     /// The fingers on the touch screen. The platform also makes mouse events from them, so the mouse
     /// keeps working for touch.
     os_touches touches_;
+    /// Driven by scripts (on-screen controls); listed with the devices, so the action map reads it.
+    virtual_gamepad* virtual_gamepad_{};
+    /// The areas of on-screen controls: a pointer pressed inside one is the control's, not the game's.
+    pointer_zones pointer_zones_;
+    /// The last mouse event came from a finger. The platform puts the pointer where each finger lands,
+    /// so its motion then is no mouse motion: a finger's motion is its touch's.
+    bool is_pointer_from_touch_{};
+    /// The platform's mouse press made from a finger landed in a zone; its release is dropped too.
+    bool is_touch_press_taken_{};
+    /// A zone held the mouse during this frame: its motion was the zone's drag.
+    bool is_mouse_motion_taken_{};
+    /// Fingers press the mouse's left button (set_mouse_simulated_with_touches).
+    bool is_mouse_simulated_with_touches_{true};
+    /// A finger has touched the screen since the application started.
+    bool has_seen_touch_{};
 
     /// Stands in for the OS cursor while set. The pointer position is polled rather than
     /// event driven, so synthesized motion has to replace the poll, not add an event.
@@ -86,14 +103,29 @@ public:
     void set_virtual_mouse_position(const hpp::optional<coord>& position);
     auto get_virtual_mouse_position() const -> const hpp::optional<coord>&;
 
-    /// Lets go of every key and mouse button: nothing reads as held until it is pressed again.
+    /// Lets go of every key, mouse button, finger and zone pointer, and of the virtual gamepad: nothing
+    /// reads as held until it is pressed again.
     void release_all();
 
     /// The OS cursor: how scripts hold it, whether the host suspends it, what it shows.
     auto get_cursor() -> os_cursor&;
     auto get_cursor() const -> const os_cursor&;
-    /// The fingers on the touch screen this frame, in work zone pixels.
+    /// The fingers on the touch screen this frame, in work zone pixels. Fingers a zone holds are not listed.
     auto get_touches() const -> const os_touches&;
+
+    /// The gamepad on-screen controls drive.
+    auto get_virtual_gamepad() -> virtual_gamepad&;
+    /// The areas of on-screen controls, in work zone pixels.
+    auto get_pointer_zones() -> pointer_zones&;
+    auto get_pointer_zones() const -> const pointer_zones&;
+
+    /// Whether fingers press the mouse's left button. On by default, so a game made for the mouse takes
+    /// taps as clicks; a game with on-screen controls turns it off, so that a tap off the controls is no
+    /// click. Either way a finger's motion never reads as mouse motion.
+    void set_mouse_simulated_with_touches(bool simulated);
+    auto is_mouse_simulated_with_touches() const -> bool;
+    /// Whether the game runs on a touch screen: on a phone or a tablet, or a finger has touched the screen.
+    auto is_touch_supported() const -> bool;
 
     /// Counts calls to before_events_update, which is the boundary where a pressed state
     /// becomes down and a released state becomes up - so it is the unit a synthesized tap or
@@ -108,6 +140,9 @@ public:
 
 private:
     void on_finger_event(const os::event& e);
+    /// Whether a mouse button event is the game's: a zone takes a left press inside it (and that press's
+    /// release), and fingers press the mouse only while it is simulated with touches.
+    auto is_mouse_button_for_game(const os::event& e) -> bool;
 };
 
 } // namespace input

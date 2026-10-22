@@ -111,6 +111,17 @@ auto internal_m2n_input_get_touch_count() -> int32_t
     return static_cast<int32_t>(input.manager.get_touches().get_count());
 }
 
+auto to_script_touch(const input::touch_point& point) -> script_touch
+{
+    script_touch touch;
+    touch.finger_id = point.id;
+    touch.phase = static_cast<int32_t>(point.phase);
+    touch.position = {point.position.x, point.position.y};
+    touch.delta_position = {point.delta.x, point.delta.y};
+    touch.pressure = point.pressure;
+    return touch;
+}
+
 auto internal_m2n_input_get_touch(int32_t index) -> script_touch
 {
     auto& input = engine::context().get_cached<input_system>();
@@ -119,13 +130,88 @@ auto internal_m2n_input_get_touch(int32_t index) -> script_touch
     {
         return {};
     }
-    const input::touch_point& point = touches.get(static_cast<size_t>(index));
-    script_touch touch;
-    touch.finger_id = point.id;
-    touch.phase = static_cast<int32_t>(point.phase);
-    touch.position = {point.position.x, point.position.y};
-    touch.delta_position = {point.delta.x, point.delta.y};
-    touch.pressure = point.pressure;
+    return to_script_touch(touches.get(static_cast<size_t>(index)));
+}
+
+auto internal_m2n_input_is_touch_supported() -> bool
+{
+    auto& input = engine::context().get_cached<input_system>();
+    return input.manager.is_touch_supported();
+}
+
+auto internal_m2n_input_get_simulate_mouse_with_touches() -> bool
+{
+    auto& input = engine::context().get_cached<input_system>();
+    return input.manager.is_mouse_simulated_with_touches();
+}
+
+void internal_m2n_input_set_simulate_mouse_with_touches(bool simulated)
+{
+    auto& input = engine::context().get_cached<input_system>();
+    input.manager.set_mouse_simulated_with_touches(simulated);
+}
+
+/// GamepadAxis and GamepadButton cross as ints, the C# enums' underlying type; the gamepad ignores
+/// values out of range.
+void internal_m2n_virtual_gamepad_set_axis(int32_t axis, float value)
+{
+    auto& input = engine::context().get_cached<input_system>();
+    input.manager.get_virtual_gamepad().set_axis(static_cast<input::gamepad_axis>(axis), value);
+}
+
+void internal_m2n_virtual_gamepad_set_button(int32_t button, bool is_down)
+{
+    auto& input = engine::context().get_cached<input_system>();
+    input.manager.get_virtual_gamepad().set_button(static_cast<input::gamepad_button>(button), is_down);
+}
+
+void internal_m2n_virtual_gamepad_release_all()
+{
+    auto& input = engine::context().get_cached<input_system>();
+    input.manager.get_virtual_gamepad().release_all();
+}
+
+auto internal_m2n_pointer_zone_create() -> uint32_t
+{
+    auto& input = engine::context().get_cached<input_system>();
+    return input.manager.get_pointer_zones().create();
+}
+
+void internal_m2n_pointer_zone_destroy(uint32_t id)
+{
+    auto& input = engine::context().get_cached<input_system>();
+    input.manager.get_pointer_zones().destroy(id);
+}
+
+void internal_m2n_pointer_zone_set_area(uint32_t id, float x, float y, float width, float height)
+{
+    auto& input = engine::context().get_cached<input_system>();
+    const input::zone area{static_cast<int>(x), static_cast<int>(y), static_cast<int>(width), static_cast<int>(height)};
+    input.manager.get_pointer_zones().set_area(id, area);
+}
+
+auto internal_m2n_pointer_zone_has_pointer(uint32_t id) -> bool
+{
+    auto& input = engine::context().get_cached<input_system>();
+    return input.manager.get_pointer_zones().get_pointer(id) != nullptr;
+}
+
+/// The mouse crosses with finger id -1, as it is no finger.
+auto internal_m2n_pointer_zone_get_pointer(uint32_t id) -> script_touch
+{
+    constexpr int32_t MOUSE_FINGER_ID = -1;
+    auto& input = engine::context().get_cached<input_system>();
+    const auto& zones = input.manager.get_pointer_zones();
+    const input::touch_point* point = zones.get_pointer(id);
+    if(point == nullptr)
+    {
+        return {};
+    }
+    script_touch touch = to_script_touch(*point);
+    if(zones.is_mouse_pointer(id))
+    {
+        touch.finger_id = MOUSE_FINGER_ID;
+    }
     return touch;
 }
 
@@ -182,6 +268,25 @@ void register_input_script_bindings()
                             dotnet_internal_call(internal_m2n_input_get_mouse_position));
     reg.add_internal_call("internal_m2n_input_get_touch_count", dotnet_internal_call(internal_m2n_input_get_touch_count));
     reg.add_internal_call("internal_m2n_input_get_touch", dotnet_internal_call(internal_m2n_input_get_touch));
+    reg.add_internal_call("internal_m2n_input_is_touch_supported", dotnet_internal_call(internal_m2n_input_is_touch_supported));
+    reg.add_internal_call("internal_m2n_input_get_simulate_mouse_with_touches",
+                          dotnet_internal_call(internal_m2n_input_get_simulate_mouse_with_touches));
+    reg.add_internal_call("internal_m2n_input_set_simulate_mouse_with_touches",
+                          dotnet_internal_call(internal_m2n_input_set_simulate_mouse_with_touches));
+
+    auto gamepad = dotnet::internal_call_registry("Unravel.Core.VirtualGamepad");
+    gamepad.add_internal_call("internal_m2n_virtual_gamepad_set_axis", dotnet_internal_call(internal_m2n_virtual_gamepad_set_axis));
+    gamepad.add_internal_call("internal_m2n_virtual_gamepad_set_button",
+                              dotnet_internal_call(internal_m2n_virtual_gamepad_set_button));
+    gamepad.add_internal_call("internal_m2n_virtual_gamepad_release_all",
+                              dotnet_internal_call(internal_m2n_virtual_gamepad_release_all));
+
+    auto zone = dotnet::internal_call_registry("Unravel.Core.PointerZone");
+    zone.add_internal_call("internal_m2n_pointer_zone_create", dotnet_internal_call(internal_m2n_pointer_zone_create));
+    zone.add_internal_call("internal_m2n_pointer_zone_destroy", dotnet_internal_call(internal_m2n_pointer_zone_destroy));
+    zone.add_internal_call("internal_m2n_pointer_zone_set_area", dotnet_internal_call(internal_m2n_pointer_zone_set_area));
+    zone.add_internal_call("internal_m2n_pointer_zone_has_pointer", dotnet_internal_call(internal_m2n_pointer_zone_has_pointer));
+    zone.add_internal_call("internal_m2n_pointer_zone_get_pointer", dotnet_internal_call(internal_m2n_pointer_zone_get_pointer));
 
     auto cursor = dotnet::internal_call_registry("Unravel.Core.Cursor");
     cursor.add_internal_call("internal_m2n_cursor_get_lock_state", dotnet_internal_call(internal_m2n_cursor_get_lock_state));

@@ -33,7 +33,39 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Gets a finger on the touch screen, in the order the fingers touched it.
+        /// Whether the game runs on a touch screen: on a phone or a tablet, or a finger has touched the
+        /// screen since the application started.
+        /// </summary>
+        public static bool touchSupported
+        {
+            get
+            {
+                return internal_m2n_input_is_touch_supported();
+            }
+        }
+
+        /// <summary>
+        /// Whether a finger presses the mouse's left button where it touches (the first finger, as the
+        /// platform makes mouse events from it). On by default, so a game made for the mouse takes taps
+        /// as clicks; turn it off in a game with on-screen controls, so a tap beside them is no click.
+        /// Either way a finger's motion never reads as mouse motion ("Mouse X", "Mouse Y"): read
+        /// <see cref="Touch.DeltaPosition"/>. Play ending turns it back on.
+        /// </summary>
+        public static bool simulateMouseWithTouches
+        {
+            get
+            {
+                return internal_m2n_input_get_simulate_mouse_with_touches();
+            }
+            set
+            {
+                internal_m2n_input_set_simulate_mouse_with_touches(value);
+            }
+        }
+
+        /// <summary>
+        /// Gets a finger on the touch screen, in the order the fingers touched it. Fingers held by a
+        /// <see cref="PointerZone"/> or pressed on a UI element are not listed.
         /// </summary>
         /// <param name="index">From 0 to <see cref="touchCount"/> - 1.</param>
         /// <returns>The finger at the index.</returns>
@@ -207,5 +239,14 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern Touch internal_m2n_input_get_touch(int index);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_input_is_touch_supported();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_input_get_simulate_mouse_with_touches();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_input_set_simulate_mouse_with_touches(bool simulate);
     }
 }
