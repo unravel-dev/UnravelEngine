@@ -28,7 +28,7 @@
         android:name="android.hardware.type.pc"
         android:required="false" />
 
-    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- The permissions come from the profile: the deploy writes them into a manifest Gradle merges here. -->
 
     <application
         android:label="${appName}"

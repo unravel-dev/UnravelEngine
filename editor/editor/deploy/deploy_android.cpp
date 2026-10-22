@@ -716,14 +716,16 @@ auto get_android_content_dir(const std::string& profile) -> fs::path
     return get_build_dir(profile) / "content";
 }
 
+auto get_generated_android_application_id(rtti::context& ctx, const std::string& profile) -> std::string
+{
+    const auto app = ctx.get_cached<project_manager>().get_profile_settings(profile).app;
+    return make_default_application_id(app.company, app.product.empty() ? get_project_name(ctx) : app.product);
+}
+
 auto get_android_application_id(rtti::context& ctx, const deploy_settings& params) -> std::string
 {
-    if(!params.android.application_id.empty())
-    {
-        return params.android.application_id;
-    }
-    const auto app = ctx.get_cached<project_manager>().get_profile_settings(params.profile).app;
-    return make_default_application_id(app.company, app.product.empty() ? get_project_name(ctx) : app.product);
+    return params.android.application_id.empty() ? get_generated_android_application_id(ctx, params.profile)
+                                                 : params.android.application_id;
 }
 
 auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
@@ -743,6 +745,14 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
     if(!id_problem.empty())
     {
         problems.push_back(id_problem);
+    }
+    for(const auto& name : params.android.permissions.other)
+    {
+        const auto permission_problem = check_android_permission_name(name);
+        if(!permission_problem.empty())
+        {
+            problems.push_back(permission_problem);
+        }
     }
     fs::error_code ec;
     if(!fs::exists(get_icon_image(params), ec))
@@ -838,6 +848,8 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     package.icon_image = get_icon_image(params);
     package.icon_background = params.android.icon_background;
     package.icon_dir = get_build_dir(params.profile) / "icon";
+    package.permissions = get_android_permission_names(params.android.permissions);
+    package.permissions_manifest = get_build_dir(params.profile) / "permissions" / "AndroidManifest.xml";
     package.is_release = params.android.release;
     package.keystore = params.android.keystore;
     package.key_alias = params.android.key_alias;
@@ -854,6 +866,9 @@ void build_android_package(const android_package_plan& plan)
     {
         throw std::runtime_error(icon.error);
     }
+    fs::error_code ec;
+    fs::create_directories(package.permissions_manifest.parent_path(), ec);
+    write_text_or_throw(package.permissions_manifest, make_android_permissions_manifest(package.permissions));
     APPLOG_INFO("Deploy: building the Android package with Gradle in {}.", package.project_dir.generic_string());
     const auto result = subprocess::call(make_gradle_arguments(plan.tools, package),
                                          {},
@@ -875,7 +890,6 @@ void build_android_package(const android_package_plan& plan)
                                              get_last_lines(result.out_output, GRADLE_ERROR_LINES)));
     }
     const auto built = get_built_package(package.project_dir, package.is_release);
-    fs::error_code ec;
     fs::copy_file(built, plan.output, fs::copy_options::overwrite_existing, ec);
     if(ec)
     {

@@ -59,6 +59,79 @@ REFLECT(android_deploy_settings)
             entt::attribute{"pretty_name", "BC (Desktop)"},
         });
 
+    entt::meta_factory<android_permissions>{}
+        .type("android_permissions"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android_permissions"},
+            entt::attribute{"pretty_name", "Permissions"},
+        })
+        .data<&android_permissions::internet>("internet"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "internet"},
+            entt::attribute{"pretty_name", "Internet"},
+            entt::attribute{"tooltip",
+                            "INTERNET: networking, such as HttpClient and sockets.\n"
+                            "Granted when the game installs, without a prompt."},
+        })
+        .data<&android_permissions::network_state>("network_state"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "network_state"},
+            entt::attribute{"pretty_name", "Network State"},
+            entt::attribute{"tooltip",
+                            "ACCESS_NETWORK_STATE: whether the phone is online, and over which network.\n"
+                            "Granted when the game installs, without a prompt."},
+        })
+        .data<&android_permissions::vibrate>("vibrate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vibrate"},
+            entt::attribute{"pretty_name", "Vibrate"},
+            entt::attribute{"tooltip",
+                            "VIBRATE: the phone's vibration, also for gamepad rumble.\n"
+                            "Granted when the game installs, without a prompt."},
+        })
+        .data<&android_permissions::microphone>("microphone"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "microphone"},
+            entt::attribute{"pretty_name", "Microphone"},
+            entt::attribute{"tooltip",
+                            "RECORD_AUDIO: the microphone.\n"
+                            "The player is asked when the game first uses it."},
+        })
+        .data<&android_permissions::camera>("camera"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "camera"},
+            entt::attribute{"pretty_name", "Camera"},
+            entt::attribute{"tooltip",
+                            "CAMERA: the phone's cameras.\n"
+                            "The player is asked when the game first uses them."},
+        })
+        .data<&android_permissions::location>("location"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "location"},
+            entt::attribute{"pretty_name", "Location"},
+            entt::attribute{"tooltip",
+                            "ACCESS_COARSE_LOCATION and ACCESS_FINE_LOCATION: where the phone is.\n"
+                            "The player is asked when the game first uses it, and may allow only\n"
+                            "the approximate location."},
+        })
+        .data<&android_permissions::notifications>("notifications"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "notifications"},
+            entt::attribute{"pretty_name", "Notifications"},
+            entt::attribute{"tooltip",
+                            "POST_NOTIFICATIONS: notifications from the game.\n"
+                            "From Android 13 the player is asked when the game first sends one."},
+        })
+        .data<&android_permissions::other>("other"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "other"},
+            entt::attribute{"pretty_name", "Other Permissions"},
+            entt::attribute{"tooltip",
+                            "Further permissions by name, such as android.permission.WAKE_LOCK or a\n"
+                            "vendor's. A name without a '.' gets android.permission. in front,\n"
+                            "so WAKE_LOCK works too."},
+        });
+
     entt::meta_factory<android_deploy_settings>{}
         .type("android_deploy_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -72,8 +145,19 @@ REFLECT(android_deploy_settings)
             entt::attribute{"pretty_name", "Application Id"},
             entt::attribute{"tooltip",
                             "The game's id on Android devices and in stores, such as com.company.game.\n"
-                            "Empty: com.<company>.<product> from the project settings.\n\n"
-                            "Changing it later installs a separate app."},
+                            "Empty: com.<company>.<product>, made from the product settings and\n"
+                            "following them. Typing an id overrides it.\n\n"
+                            "Changing it after a release installs a separate app: devices and stores\n"
+                            "know the game by it, so it never carries the version."},
+        })
+        .data<&android_deploy_settings::permissions>("permissions"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "permissions"},
+            entt::attribute{"pretty_name", "Permissions"},
+            entt::attribute{"tooltip",
+                            "What the game asks for in its manifest. Internet, Network State and\n"
+                            "Vibrate are granted at install; the others are asked of the player\n"
+                            "when the game first uses them."},
         })
         .data<&android_deploy_settings::version_code>("version_code"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -155,9 +239,38 @@ REFLECT(android_deploy_settings)
         });
 }
 
+SAVE(android_permissions)
+{
+    try_save(ar, ser20::make_nvp("internet", obj.internet));
+    try_save(ar, ser20::make_nvp("network_state", obj.network_state));
+    try_save(ar, ser20::make_nvp("vibrate", obj.vibrate));
+    try_save(ar, ser20::make_nvp("microphone", obj.microphone));
+    try_save(ar, ser20::make_nvp("camera", obj.camera));
+    try_save(ar, ser20::make_nvp("location", obj.location));
+    try_save(ar, ser20::make_nvp("notifications", obj.notifications));
+    try_save(ar, ser20::make_nvp("other", obj.other));
+}
+SAVE_INSTANTIATE(android_permissions, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(android_permissions, ser20::oarchive_binary_t);
+
+LOAD(android_permissions)
+{
+    try_load(ar, ser20::make_nvp("internet", obj.internet));
+    try_load(ar, ser20::make_nvp("network_state", obj.network_state));
+    try_load(ar, ser20::make_nvp("vibrate", obj.vibrate));
+    try_load(ar, ser20::make_nvp("microphone", obj.microphone));
+    try_load(ar, ser20::make_nvp("camera", obj.camera));
+    try_load(ar, ser20::make_nvp("location", obj.location));
+    try_load(ar, ser20::make_nvp("notifications", obj.notifications));
+    try_load(ar, ser20::make_nvp("other", obj.other));
+}
+LOAD_INSTANTIATE(android_permissions, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(android_permissions, ser20::iarchive_binary_t);
+
 SAVE(android_deploy_settings)
 {
     try_save(ar, ser20::make_nvp("application_id", obj.application_id));
+    try_save(ar, ser20::make_nvp("permissions", obj.permissions));
     try_save(ar, ser20::make_nvp("version_code", obj.version_code));
     try_save(ar, ser20::make_nvp("screen_orientation", obj.screen_orientation));
     try_save(ar, ser20::make_nvp("icon", obj.icon));
@@ -173,6 +286,7 @@ SAVE_INSTANTIATE(android_deploy_settings, ser20::oarchive_binary_t);
 LOAD(android_deploy_settings)
 {
     try_load(ar, ser20::make_nvp("application_id", obj.application_id));
+    try_load(ar, ser20::make_nvp("permissions", obj.permissions));
     try_load(ar, ser20::make_nvp("version_code", obj.version_code));
     try_load(ar, ser20::make_nvp("screen_orientation", obj.screen_orientation));
     try_load(ar, ser20::make_nvp("icon", obj.icon));

@@ -110,6 +110,16 @@ private:
     void draw_android_section(rtti::context& ctx);
     /// The deploy profile's Android settings `names`, in rows; saved with the profile once an edit is finished.
     void inspect_android_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names);
+    /// The properties `props` of `object`, a part of the deploy profile's Android settings, in rows; the
+    /// profile is saved once an edit is finished.
+    void inspect_android_data(rtti::context& ctx, entt::meta_any& object, const std::vector<entt::meta_data>& props);
+    /// Saves the deploy profile's Android settings as edited.
+    void save_android_settings(rtti::context& ctx);
+    /// Application Id: the id made from Company and Product shows in the empty field and follows them; a typed
+    /// id overrides it, with a button back to the generated one.
+    void draw_application_id(rtti::context& ctx);
+    /// The permissions the game asks for: the named ones, then Other Permissions.
+    void draw_android_permissions(rtti::context& ctx);
     /// The device Deploy and Run installs on, as a pick of the devices adb lists. @return True when the pick changed.
     auto draw_android_device_picker(rtti::context& ctx) -> bool;
     /// Run Last Build, Follow Log, Clear Data and Uninstall for the game on the chosen device.

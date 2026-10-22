@@ -22,6 +22,8 @@ constexpr const char* GRADLE_WRAPPER_MAIN = "org.gradle.wrapper.GradleWrapperMai
 constexpr const char* PLAYER_ACTIVITY = "com.unravel.player.UnravelActivity";
 /// The start intent's extra that UnravelActivity reads the game's command line options from.
 constexpr const char* ARGUMENTS_EXTRA = "arguments";
+/// What a permission named without a package gets in front.
+constexpr const char* ANDROID_PERMISSION_PREFIX = "android.permission.";
 /// The engine's tag: spdlog's Android sink.
 constexpr const char* ENGINE_LOG_TAG = "spdlog";
 /// The tags of the game's own libraries: the engine, SDL's Java side and its HID support, OpenAL Soft and
@@ -289,6 +291,77 @@ auto get_screen_orientation(android_orientation orientation) -> std::string
     }
 }
 
+auto get_android_permission_entries() -> const std::vector<android_permission_entry>&
+{
+    static const std::vector<android_permission_entry> entries = {
+        {"internet", &android_permissions::internet, {"android.permission.INTERNET", ""}},
+        {"network_state", &android_permissions::network_state, {"android.permission.ACCESS_NETWORK_STATE", ""}},
+        {"vibrate", &android_permissions::vibrate, {"android.permission.VIBRATE", ""}},
+        {"microphone", &android_permissions::microphone, {"android.permission.RECORD_AUDIO", ""}},
+        {"camera", &android_permissions::camera, {"android.permission.CAMERA", ""}},
+        // Android 12 and later grant the fine location only beside the coarse one.
+        {"location", &android_permissions::location, {"android.permission.ACCESS_COARSE_LOCATION", "android.permission.ACCESS_FINE_LOCATION"}},
+        {"notifications", &android_permissions::notifications, {"android.permission.POST_NOTIFICATIONS", ""}},
+    };
+    return entries;
+}
+
+auto get_android_permission_name(const std::string& name) -> std::string
+{
+    return name.find('.') == std::string::npos ? ANDROID_PERMISSION_PREFIX + name : name;
+}
+
+auto check_android_permission_name(const std::string& name) -> std::string
+{
+    std::stringstream parts(get_android_permission_name(name));
+    std::string part;
+    bool is_valid = !name.empty() && name.back() != '.';
+    while(is_valid && std::getline(parts, part, '.'))
+    {
+        is_valid = !part.empty() && (is_letter(part.front()) || part.front() == '_') &&
+                   std::all_of(part.begin(), part.end(), is_id_character);
+    }
+    return is_valid ? std::string{}
+                    : "The permission '" + name + "' is no valid name. Names are parts separated by '.', each starting " +
+                          "with a letter and holding only letters, digits and '_', such as android.permission.WAKE_LOCK.";
+}
+
+auto get_android_permission_names(const android_permissions& permissions) -> std::vector<std::string>
+{
+    std::vector<std::string> names;
+    const auto add = [&names](const std::string& name)
+    {
+        if(!name.empty() && std::find(names.begin(), names.end(), name) == names.end())
+        {
+            names.push_back(name);
+        }
+    };
+    for(const auto& entry : get_android_permission_entries())
+    {
+        if(permissions.*entry.member)
+        {
+            add(entry.manifest_names[0]);
+            add(entry.manifest_names[1]);
+        }
+    }
+    for(const auto& name : permissions.other)
+    {
+        add(get_android_permission_name(name));
+    }
+    return names;
+}
+
+auto make_android_permissions_manifest(const std::vector<std::string>& names) -> std::string
+{
+    std::string text = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+                       "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n";
+    for(const auto& name : names)
+    {
+        text += "    <uses-permission android:name=\"" + name + "\" />\n";
+    }
+    return text + "</manifest>\n";
+}
+
 auto android_device::is_wireless() const -> bool
 {
     return serial.find(WIRELESS_SERVICE_MARKER) != std::string::npos || serial.find(ADDRESS_PORT_SEPARATOR) != std::string::npos;
@@ -543,6 +616,7 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
         "-Punravel.versionName=" + params.version_name,
         "-Punravel.orientation=" + get_screen_orientation(params.orientation),
         "-Punravel.icon=" + params.icon_dir.generic_string(),
+        "-Punravel.permissions=" + params.permissions_manifest.generic_string(),
     };
     if(params.is_release && !params.keystore.empty())
     {

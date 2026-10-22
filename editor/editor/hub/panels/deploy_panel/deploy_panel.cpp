@@ -50,6 +50,8 @@ constexpr float DEPLOY_BODY_MIN_HEIGHT = 22.0f;
 constexpr float DEPLOY_BODY_MAX_HEIGHT = 30.0f;
 // The width of the profile popups' fields.
 constexpr float PROFILE_POPUP_WIDTH = 22.0f;
+// Characters an application id field takes, the terminator included; Android allows far fewer.
+constexpr std::size_t ANDROID_APPLICATION_ID_CAPACITY = 256;
 /// The icon buttons beside the profile picker: new, rename, delete.
 constexpr float PROFILE_PICKER_BUTTONS = 3.0f;
 // The empty Patch Against Release.
@@ -1005,26 +1007,101 @@ void deploy_panel::draw_desktop_section(rtti::context& /*ctx*/)
 
 void deploy_panel::inspect_android_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names)
 {
-    auto& android = settings_editor_.get().android;
-    entt::meta_any object = entt::forward_as_meta(android);
+    entt::meta_any object = entt::forward_as_meta(settings_editor_.get().android);
     const auto type = entt::resolve<android_deploy_settings>();
+    std::vector<entt::meta_data> props;
+    for(const auto& name : names)
+    {
+        if(const auto prop = type.data(name))
+        {
+            props.push_back(prop);
+        }
+    }
+    inspect_android_data(ctx, object, props);
+}
+
+void deploy_panel::inspect_android_data(rtti::context& ctx, entt::meta_any& object, const std::vector<entt::meta_data>& props)
+{
     inspect_result result;
     {
         const inspect_without_undo_scope no_undo;
-        for(const auto& name : names)
+        for(const auto& prop : props)
         {
-            if(const auto prop = type.data(name))
-            {
-                result |= inspect_property(ctx, object, make_proxy(object), prop);
-            }
+            result |= inspect_property(ctx, object, make_proxy(object), prop);
         }
     }
     if(result.edit_finished)
     {
-        auto& pm = ctx.get_cached<project_manager>();
-        set_profile_message(pm.set_profile_android(ctx, settings_editor_.get_profile(), android), {});
-        problems_.invalidate();
+        save_android_settings(ctx);
     }
+}
+
+void deploy_panel::save_android_settings(rtti::context& ctx)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    set_profile_message(pm.set_profile_android(ctx, settings_editor_.get_profile(), settings_editor_.get().android), {});
+    problems_.invalidate();
+}
+
+void deploy_panel::draw_application_id(rtti::context& ctx)
+{
+    auto& android = settings_editor_.get().android;
+    const auto generated = deployment::get_generated_android_application_id(ctx, settings_editor_.get_profile());
+    entt::meta_any object = entt::forward_as_meta(android);
+    property_layout layout(entt::resolve<android_deploy_settings>().data("application_id"_hs), object);
+    const bool is_overridden = !android.application_id.empty();
+    const float side = ImGui::GetFrameHeight();
+    const float reset_width = is_overridden ? side + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - reset_width));
+    auto buffer = ImGui::CreateInputTextBuffer<ANDROID_APPLICATION_ID_CAPACITY>(android.application_id);
+    if(ImGui::InputTextWithHint("##application_id", generated.c_str(), buffer.data(), buffer.size()))
+    {
+        android.application_id = buffer.data();
+    }
+    bool is_finished = ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::DrawItemActivityOutline();
+    if(is_overridden)
+    {
+        ImGui::SameLine();
+        const ImVec2 min = ImGui::GetCursorScreenPos();
+        const ImRect rect(min, min + ImVec2(side, side));
+        ImGui::ItemSize(rect);
+        const auto tooltip = fmt::format("Use the id made from Company and Product: {}.", generated);
+        if(container_widgets::draw_icon_button({"##generated_application_id", ICON_MDI_RESTORE, tooltip.c_str()}, rect))
+        {
+            android.application_id.clear();
+            is_finished = true;
+        }
+    }
+    if(!is_finished)
+    {
+        return;
+    }
+    // An id typed as the generated one is no override: it keeps following the product settings.
+    if(android.application_id == generated)
+    {
+        android.application_id.clear();
+    }
+    save_android_settings(ctx);
+}
+
+void deploy_panel::draw_android_permissions(rtti::context& ctx)
+{
+    entt::meta_any object = entt::forward_as_meta(settings_editor_.get().android.permissions);
+    const auto type = entt::resolve<android_permissions>();
+    std::vector<entt::meta_data> props;
+    for(const auto& entry : deployment::get_android_permission_entries())
+    {
+        if(const auto prop = type.data(entt::hashed_string{entry.key}))
+        {
+            props.push_back(prop);
+        }
+    }
+    if(const auto prop = type.data("other"_hs))
+    {
+        props.push_back(prop);
+    }
+    inspect_android_data(ctx, object, props);
 }
 
 void deploy_panel::draw_android_section(rtti::context& ctx)
@@ -1046,13 +1123,7 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
     }
     draw_android_device_actions(ctx);
     ImGui::SeparatorText("Package");
-    inspect_android_properties(ctx, {"application_id"_hs});
-    if(android.application_id.empty())
-    {
-        widgets::draw_muted_text(fmt::format("Uses {}, made from the product settings.",
-                                             deployment::get_android_application_id(ctx, settings_editor_.get()))
-                                     .c_str());
-    }
+    draw_application_id(ctx);
     inspect_android_properties(ctx, {"version_code"_hs, "screen_orientation"_hs, "texture_compression"_hs, "icon"_hs});
     if(!android.icon)
     {
@@ -1065,6 +1136,8 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
     {
         inspect_android_properties(ctx, {"keystore"_hs, "key_alias"_hs});
     }
+    ImGui::SeparatorText("Permissions");
+    draw_android_permissions(ctx);
 }
 
 auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool

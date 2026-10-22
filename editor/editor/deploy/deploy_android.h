@@ -32,7 +32,10 @@ auto get_android_content_dir(const std::string& profile) -> fs::path;
 /// profile is renamed or deleted: a later deploy builds it anew. A folder in use is left for a later attempt.
 void remove_android_build_dir(const std::string& profile);
 
-/// The application id a deploy with these settings uses: the set one, or com.<company>.<product>.
+/// The application id made from the profile's product settings: com.<company>.<product>.
+auto get_generated_android_application_id(rtti::context& ctx, const std::string& profile) -> std::string;
+
+/// The application id a deploy with these settings uses: the set one, or the generated one.
 auto get_android_application_id(rtti::context& ctx, const deploy_settings& params) -> std::string;
 
 /// What keeps these settings from an Android deploy, one sentence each; empty when nothing does.

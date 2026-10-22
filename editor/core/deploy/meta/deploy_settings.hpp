@@ -5,6 +5,9 @@
 
 namespace unravel
 {
+SAVE_EXTERN(android_permissions);
+LOAD_EXTERN(android_permissions);
+
 SAVE_EXTERN(android_deploy_settings);
 LOAD_EXTERN(android_deploy_settings);
 REFLECT_EXTERN(android_deploy_settings);

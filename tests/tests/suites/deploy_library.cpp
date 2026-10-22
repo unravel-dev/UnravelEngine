@@ -727,6 +727,7 @@ void test_gradle_arguments()
     params.version_code = 7;
     params.orientation = unravel::android_orientation::portrait;
     params.icon_dir = "/tmp/icon";
+    params.permissions_manifest = "/tmp/permissions/AndroidManifest.xml";
     auto arguments = deployment::make_gradle_arguments(tools, params);
     check(!arguments.empty() && arguments.front() == tools.java.string(), "Java runs Gradle's wrapper");
     check(contains_argument(arguments, "assembleDebug") && !contains_argument(arguments, "assembleRelease"), "a debug build");
@@ -734,7 +735,8 @@ void test_gradle_arguments()
               contains_argument(arguments, "-Punravel.versionCode=7") &&
               contains_argument(arguments, "-Punravel.orientation=sensorPortrait") &&
               contains_argument(arguments, "-Punravel.player=/editor/players/android-arm64/lib/arm64-v8a") &&
-              contains_argument(arguments, "-Punravel.content=/deploy") && contains_argument(arguments, "-Punravel.icon=/tmp/icon"),
+              contains_argument(arguments, "-Punravel.content=/deploy") && contains_argument(arguments, "-Punravel.icon=/tmp/icon") &&
+              contains_argument(arguments, "-Punravel.permissions=/tmp/permissions/AndroidManifest.xml"),
           "the game's identity, its icon and the template's folders are passed");
     params.is_release = true;
     params.keystore = "/keys/game.jks";
@@ -783,6 +785,39 @@ auto read_png_alpha(const fs::path& file, std::uint32_t x, std::uint32_t y, std:
     const int alpha = x < image->m_width && y < image->m_height ? texels[(std::size_t(y) * image->m_width + x) * 4 + 3] : -1;
     bimg::imageFree(image);
     return alpha;
+}
+
+void test_android_permissions()
+{
+    std::printf("test_android_permissions\n");
+    unravel::android_permissions permissions;
+    check(deployment::get_android_permission_names(permissions) ==
+              std::vector<std::string>{"android.permission.INTERNET", "android.permission.VIBRATE"},
+          "a profile asks for the internet and vibration at first");
+    permissions.internet = false;
+    permissions.vibrate = false;
+    permissions.location = true;
+    permissions.other = {"WAKE_LOCK", "com.vendor.permission.SENSOR", "android.permission.ACCESS_FINE_LOCATION"};
+    check(deployment::get_android_permission_names(permissions) ==
+              std::vector<std::string>{"android.permission.ACCESS_COARSE_LOCATION",
+                                       "android.permission.ACCESS_FINE_LOCATION",
+                                       "android.permission.WAKE_LOCK",
+                                       "com.vendor.permission.SENSOR"},
+          "location asks for both locations, a short name gets android.permission. in front, and each name comes once");
+    check(deployment::check_android_permission_name("WAKE_LOCK").empty() &&
+              deployment::check_android_permission_name("com.vendor.permission.SENSOR").empty(),
+          "short and full names are valid");
+    check(!deployment::check_android_permission_name("").empty() && !deployment::check_android_permission_name("WAKE LOCK").empty() &&
+              !deployment::check_android_permission_name("android..CAMERA").empty() &&
+              !deployment::check_android_permission_name("android.permission.").empty() &&
+              !deployment::check_android_permission_name("com.2vendor.X").empty(),
+          "empty names, spaces, empty parts and parts starting with a digit are refused");
+    const auto manifest = deployment::make_android_permissions_manifest({"android.permission.INTERNET"});
+    check(manifest.find("<uses-permission android:name=\"android.permission.INTERNET\" />") != std::string::npos &&
+              manifest.find("<manifest") != std::string::npos,
+          "the permissions manifest holds a uses-permission element per name");
+    check(deployment::make_android_permissions_manifest({}).find("uses-permission") == std::string::npos,
+          "no permissions make an empty manifest");
 }
 
 void test_android_icon(const fs::path& root)
@@ -1258,6 +1293,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_merged_devices();
         test_android_template(temp / "android");
         test_gradle_arguments();
+        test_android_permissions();
         test_android_icon(temp / "icon");
         test_run_arguments();
         test_subprocess(temp / "subprocess");

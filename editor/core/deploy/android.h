@@ -4,6 +4,7 @@
 
 #include <filesystem/filesystem.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -79,6 +80,34 @@ auto check_application_id(const std::string& id) -> std::string;
 
 /// The manifest's android:screenOrientation value for `orientation`.
 auto get_screen_orientation(android_orientation orientation) -> std::string;
+
+/// A permission the Android settings name, and the manifest permissions it stands for.
+struct android_permission_entry
+{
+    /// Its name in the settings and over MCP: the android_permissions member it is.
+    const char* key;
+    bool android_permissions::*member;
+    /// The manifest names it adds; the second is empty when it adds one.
+    std::array<const char*, 2> manifest_names;
+};
+
+/// The named permissions of android_permissions, in the order the settings list them.
+auto get_android_permission_entries() -> const std::vector<android_permission_entry>&;
+
+/// The manifest name of a permission the settings name freely: as written when it holds a '.', with
+/// "android.permission." in front otherwise.
+auto get_android_permission_name(const std::string& name) -> std::string;
+
+/// Why `name` is no valid permission name, as a sentence; empty when it is one. Valid: parts separated
+/// by '.', each starting with a letter or '_' and holding only letters, digits and '_'.
+auto check_android_permission_name(const std::string& name) -> std::string;
+
+/// The manifest names `permissions` asks for: the named ones, then the others, each once.
+auto get_android_permission_names(const android_permissions& permissions) -> std::vector<std::string>;
+
+/// A manifest that holds only the uses-permission elements of `names`, which Gradle merges over the
+/// player's manifest.
+auto make_android_permissions_manifest(const std::vector<std::string>& names) -> std::string;
 
 /// A device adb lists.
 struct android_device
@@ -206,6 +235,10 @@ struct android_package_params
     math::color icon_background{math::color::white()};
     /// The folder the icon's Android resources are written to (write_android_icon), which Gradle packages.
     fs::path icon_dir;
+    /// The manifest names of the permissions the game asks for.
+    std::vector<std::string> permissions;
+    /// The file the permissions manifest (make_android_permissions_manifest) is written to, which Gradle merges.
+    fs::path permissions_manifest;
     /// A release build, signed with `keystore`; otherwise a debug build, signed with the SDK's debug keystore.
     bool is_release{};
     fs::path keystore;

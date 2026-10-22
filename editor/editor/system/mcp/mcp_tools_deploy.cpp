@@ -150,11 +150,22 @@ auto read_enum_name(const simdjson::dom::object& args, const char* key, const ch
     return false;
 }
 
+auto android_permissions_to_json(const android_permissions& permissions) -> std::string
+{
+    std::string json = "{";
+    for(const auto& entry : deployment::get_android_permission_entries())
+    {
+        json += fmt::format(R"("{}":{},)", entry.key, bool_to_json(permissions.*entry.member));
+    }
+    return json + R"("other":)" + strings_to_json_array(permissions.other) + "}";
+}
+
 auto android_settings_to_json(const android_deploy_settings& android, const std::string& device) -> std::string
 {
     return fmt::format(
-        R"({{"application_id":{},"version_code":{},"orientation":{},"texture_compression":{},"icon":{},"icon_background":{},"release":{},"keystore":{},"key_alias":{},"device":{}}})",
+        R"({{"application_id":{},"permissions":{},"version_code":{},"orientation":{},"texture_compression":{},"icon":{},"icon_background":{},"release":{},"keystore":{},"key_alias":{},"device":{}}})",
         android.application_id.empty() ? "null" : make_json_string(android.application_id),
+        android_permissions_to_json(android.permissions),
         android.version_code,
         make_json_string(ORIENTATION_NAMES[static_cast<int>(android.screen_orientation)]),
         make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<int>(android.texture_compression)]),
@@ -225,12 +236,47 @@ auto read_android_icon(rtti::context& ctx, const simdjson::dom::object& args, an
     return true;
 }
 
+/// android_permissions: the named permissions as booleans and `other` as names. A partial object changes
+/// only what it names.
+auto read_android_permissions(const simdjson::dom::object& args, android_permissions& permissions, std::string& error) -> bool
+{
+    simdjson::dom::element value;
+    if(args["android_permissions"].get(value) != simdjson::SUCCESS)
+    {
+        return true;
+    }
+    simdjson::dom::object object;
+    if(value.get(object) != simdjson::SUCCESS)
+    {
+        error = "android_permissions must be an object";
+        return false;
+    }
+    for(const auto& entry : deployment::get_android_permission_entries())
+    {
+        read_bool(object, entry.key, permissions.*entry.member);
+    }
+    simdjson::dom::element other;
+    if(object["other"].get(other) != simdjson::SUCCESS)
+    {
+        return true;
+    }
+    // The list given replaces the profile's.
+    std::vector<std::string> names;
+    if(!parse_string_array(other, names, error, "other"))
+    {
+        return false;
+    }
+    permissions.other = std::move(names);
+    return true;
+}
+
 /// The Android settings deploy_set_settings takes, read over the profile's; `is_given` says whether the
 /// arguments had any.
 auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args, android_deploy_settings& android, bool& is_given, std::string& error)
     -> bool
 {
     static constexpr const char* ANDROID_KEYS[] = {"android_application_id",
+                                                   "android_permissions",
                                                    "android_version_code",
                                                    "android_orientation",
                                                    "android_texture_compression",
@@ -248,7 +294,7 @@ auto read_android_settings(rtti::context& ctx, const simdjson::dom::object& args
                            });
     if(!read_enum_name(args, "android_orientation", ORIENTATION_NAMES, android.screen_orientation, error) ||
        !read_enum_name(args, "android_texture_compression", TEXTURE_COMPRESSION_NAMES, android.texture_compression, error) ||
-       !read_android_icon(ctx, args, android, error))
+       !read_android_icon(ctx, args, android, error) || !read_android_permissions(args, android.permissions, error))
     {
         return false;
     }
@@ -308,7 +354,7 @@ struct deploy_revert
 auto read_revert_argument(const simdjson::dom::object& args, std::vector<deploy_revert>& reverts, std::string& error) -> bool
 {
     std::vector<std::string> names;
-    if(!read_string_array(args, "revert", names, error))
+    if(!read_string_array(args, "revert", names, error, false))
     {
         return false;
     }
@@ -581,7 +627,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "default, etc2, or bc: the desktop formats, which ship the editor's own files and which only some "
              "Android GPUs read). Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, android_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location, patch_release and android_* go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, android_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location, patch_release and android_* go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {

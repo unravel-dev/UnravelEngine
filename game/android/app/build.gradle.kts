@@ -39,6 +39,10 @@ val gameOrientation = requireProperty("unravel.orientation")
 // unravel.icon: the launcher icon's resources, an adaptive icon the deploy makes from the game's icon image.
 val iconResourceDir: File = pathProperty("unravel.icon")
 
+// unravel.permissions: a manifest holding only the game's uses-permission elements, which the deploy writes
+// from the profile. Each build type's manifest is merged over the main one, so the permissions join it.
+val permissionsManifest: File = pathProperty("unravel.permissions")
+
 // unravel.keystore and unravel.keyAlias sign release builds; the passwords come from the
 // UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD environment variables, never from files. Debug
 // builds use the Android SDK's debug keystore (~/.android/debug.keystore), created when missing.
@@ -190,6 +194,12 @@ android {
         getByName("main") {
             java.directories.add(sdlJavaDir.path)
             res.directories.add(iconResourceDir.path)
+        }
+        getByName("debug") {
+            manifest.srcFile(permissionsManifest)
+        }
+        getByName("release") {
+            manifest.srcFile(permissionsManifest)
         }
     }
 

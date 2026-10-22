@@ -42,13 +42,37 @@ enum class android_texture_compression : std::uint8_t
     bc,
 };
 
+/// The permissions an Android build asks for in its manifest. The named ones are what a game commonly
+/// uses (get_android_permission_entries maps them to manifest names); `other` holds any further one.
+struct android_permissions
+{
+    /// INTERNET: networking, such as HttpClient and sockets. Granted at install, without a prompt.
+    bool internet{true};
+    /// ACCESS_NETWORK_STATE: whether and how the phone is online.
+    bool network_state{};
+    /// VIBRATE: the phone's vibration.
+    bool vibrate{true};
+    /// RECORD_AUDIO: the microphone. The player grants it at run time.
+    bool microphone{};
+    /// CAMERA: the cameras. The player grants it at run time.
+    bool camera{};
+    /// ACCESS_COARSE_LOCATION and ACCESS_FINE_LOCATION. The player grants them at run time.
+    bool location{};
+    /// POST_NOTIFICATIONS: notifications, which the player grants at run time from Android 13.
+    bool notifications{};
+    /// Further permissions by name: "android.permission.WAKE_LOCK", a vendor's, or a short name
+    /// ("WAKE_LOCK") that gets "android.permission." in front.
+    std::vector<std::string> other;
+};
+
 /// What an Android build is on the device: its identity, its icon, its signing and its texture
 /// formats. An Android profile holds one (profiles/<name>/profile.cfg).
 struct android_deploy_settings
 {
     /// The game's id on Android devices and in stores. Empty: com.<company>.<product> from the
-    /// project settings. Changing it later installs a separate app.
+    /// project settings, which follows them. Changing it later installs a separate app.
     std::string application_id;
+    android_permissions permissions;
     /// Android's version number of the game, which must grow with every release a store gets.
     std::uint32_t version_code{1};
     android_orientation screen_orientation{android_orientation::landscape};
