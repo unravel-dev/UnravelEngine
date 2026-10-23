@@ -8,11 +8,26 @@ they fill up, vkAllocateDescriptorSets fails with VK_ERROR_OUT_OF_POOL_MEMORY, a
 vkUpdateDescriptorSets writes into a null set (a crash on Mali within seconds). The pools are now
 reset in CommandQueueVK::alloc, after the frame's fence, together with its command pool.
 
+init allocates its first command buffer before it creates the descriptor pools, so the constructor
+starts every frame's pool count at zero. A new RendererContextVK is not cleared: with heap memory
+that was used before (the first start after an install, which extracts the packaged files first),
+that first alloc reset garbage pool handles and crashed in vkResetDescriptorPool.
+
 diff --git a/src/renderer_vk.cpp b/src/renderer_vk.cpp
-index 766da228b..2dfbded6c 100644
+index 766da228b..90da389c7 100644
 --- a/src/renderer_vk.cpp
 +++ b/src/renderer_vk.cpp
-@@ -5102,6 +5102,21 @@ VK_IMPORT_DEVICE
+@@ -1366,6 +1366,9 @@ VK_IMPORT_DEVICE
+ 			, m_variableRateShadingSupported(false)
+ 			, m_lowLatencySupported(false)
+ 		{
++			// CommandQueueVK::alloc resets the descriptor pools of its frame, and init allocates the first
++			// command buffer before it creates the pools: until then there are none to reset.
++			bx::memSet(m_numDescriptorPools, 0, sizeof(m_numDescriptorPools) );
+ 		}
+ 
+ 		~RendererContextVK()
+@@ -5102,6 +5105,21 @@ VK_IMPORT_DEVICE
  			return pipeline;
  		}
  
@@ -34,7 +49,7 @@ index 766da228b..2dfbded6c 100644
  		VkDescriptorPool createDescriptorPool()
  		{
  			const VkDescriptorPoolSize dps[] =
-@@ -10653,6 +10668,8 @@ VK_DESTROY
+@@ -10653,6 +10671,8 @@ VK_DESTROY
  				return result;
  			}
  
@@ -43,7 +58,7 @@ index 766da228b..2dfbded6c 100644
  			VkCommandBufferBeginInfo cbi;
  			cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
  			cbi.pNext = NULL;
-@@ -11446,14 +11463,6 @@ VK_DESTROY
+@@ -11446,14 +11466,6 @@ VK_DESTROY
  		const uint64_t f6 = BGFX_STATE_BLEND_FACTOR<<12;
  		const uint64_t f7 = BGFX_STATE_BLEND_INV_FACTOR<<12;
  
