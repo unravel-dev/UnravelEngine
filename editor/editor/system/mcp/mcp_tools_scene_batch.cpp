@@ -233,7 +233,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                      const auto& current = entity.get<model_component>().get_model();
                      existing = entries.insert(entries.end(), entry{uhandle, current, current});
                  }
-                 const auto slot_count = std::max<size_t>(1, existing->new_model.get_materials().size());
+                 const auto slot_count = std::max<size_t>(1, existing->new_model.get_shared_materials().size());
                  const int64_t index = read_int64_or(obj, "index", 0);
                  if(index < 0 || static_cast<size_t>(index) >= slot_count)
                  {
@@ -243,7 +243,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                                                  slot_count - 1),
                              .is_error = true};
                  }
-                 existing->new_model.set_material(mat_handle, static_cast<uint32_t>(index));
+                 existing->new_model.set_shared_material(mat_handle, static_cast<uint32_t>(index));
              }
 
              auto& em = ctx.get_cached<editing_manager>();

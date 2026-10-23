@@ -331,7 +331,7 @@ void place_created(entt::handle entity, const create_item& item)
     {
         auto& model_comp = entity.get<model_component>();
         auto model = model_comp.get_model();
-        model.set_material(item.material, item.material_index);
+        model.set_shared_material(item.material, item.material_index);
         model_comp.set_model(model);
         prefab_override_context::mark_material_as_changed(entity);
     }

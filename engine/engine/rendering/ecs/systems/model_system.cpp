@@ -133,6 +133,10 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       // Cleanup stale per-view LOD data (views not accessed for 2 seconds at 60fps)
                       model_comp.cleanup_stale_lod_data(frame, 120);
 
+                      // The overrides set since the last frame reach the materials this model draws with. Here,
+                      // in the model's own task, so the passes below only read them.
+                      model_comp.update_material_instances();
+
                       if(model_comp.is_newly_created())
                       {
                           model_comp.set_last_render_frame(frame);

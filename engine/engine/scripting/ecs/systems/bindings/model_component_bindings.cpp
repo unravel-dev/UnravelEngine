@@ -110,7 +110,7 @@ auto internal_m2n_model_get_shared_material(entt::entity id, uint32_t index) -> 
 {
     if(auto comp = safe_get_component<model_component>(id))
     {
-        return comp->get_model().get_material(index).uid();
+        return comp->get_model().get_shared_material(index).uid();
     }
 
     return {};
@@ -120,19 +120,7 @@ auto internal_m2n_model_get_shared_material_count(entt::entity id) -> int
 {
     if(auto comp = safe_get_component<model_component>(id))
     {
-        return comp->get_model().get_materials().size();
-    }
-
-    return {};
-}
-
-auto internal_m2n_model_get_material_instance(entt::entity id, uint32_t index)
-    -> dotnetpp_backend::managed_interface::material_properties
-{
-    if(auto comp = safe_get_component<model_component>(id))
-    {
-        auto instance = comp->get_model().get_material_instance(index);
-        return get_material_properties(instance);
+        return comp->get_model().get_shared_materials().size();
     }
 
     return {};
@@ -150,321 +138,108 @@ void internal_m2n_model_set_shared_material(entt::entity id, const hpp::uuid& ui
     }
 }
 
-void internal_m2n_model_set_material_instance(entt::entity id,
-                                              const dotnetpp_backend::managed_interface::material_properties& props,
-                                              uint32_t index)
+/// The value slot @p slot of the model draws with for @p property: its material instance's override, else the shared
+/// material's.
+auto get_instance_value(entt::entity id, uint32_t slot, int32_t property) -> entt::meta_any
+{
+    auto comp = safe_get_component<model_component>(id);
+    return comp ? comp->get_material_instance(slot).get_value(get_material_property_id(property)) : entt::meta_any{};
+}
+
+/// Overrides @p property of the slot's shared material for this model only.
+void set_instance_value(entt::entity id, uint32_t slot, int32_t property, const entt::meta_any& value)
 {
     if(auto comp = safe_get_component<model_component>(id))
     {
-        if(props.valid)
-        {
-            set_material_properties(comp->get_or_emplace_material_instance(index), props);
-        }
-        else
-        {
-            comp->set_material_instance(nullptr, index);
-        }
+        comp->set_material_instance_value(slot, get_material_property_id(property), value);
     }
 }
 
-auto internal_m2n_model_get_material_instance_count(entt::entity id) -> int
+void internal_m2n_material_instance_set_color(entt::entity id, uint32_t slot, int32_t property, const managed_color& value)
+{
+    set_instance_value(id, slot, property, make_color_value(value));
+}
+
+auto internal_m2n_material_instance_get_color(entt::entity id, uint32_t slot, int32_t property) -> managed_color
+{
+    return read_color_value(get_instance_value(id, slot, property));
+}
+
+void internal_m2n_material_instance_set_float(entt::entity id, uint32_t slot, int32_t property, float value)
+{
+    set_instance_value(id, slot, property, value);
+}
+
+auto internal_m2n_material_instance_get_float(entt::entity id, uint32_t slot, int32_t property) -> float
+{
+    return read_float_value(get_instance_value(id, slot, property));
+}
+
+void internal_m2n_material_instance_set_vector(entt::entity id,
+                                               uint32_t slot,
+                                               int32_t property,
+                                               const managed_vector2& value)
+{
+    set_instance_value(id, slot, property, make_vector_value(value));
+}
+
+auto internal_m2n_material_instance_get_vector(entt::entity id, uint32_t slot, int32_t property) -> managed_vector2
+{
+    return read_vector_value(get_instance_value(id, slot, property));
+}
+
+void internal_m2n_material_instance_set_texture(entt::entity id, uint32_t slot, int32_t property, const hpp::uuid& uid)
+{
+    set_instance_value(id, slot, property, make_texture_value(uid));
+}
+
+auto internal_m2n_material_instance_get_texture(entt::entity id, uint32_t slot, int32_t property) -> hpp::uuid
+{
+    return read_texture_value(get_instance_value(id, slot, property));
+}
+
+void internal_m2n_material_instance_set_mode(entt::entity id, uint32_t slot, int32_t property, int32_t value)
+{
+    set_instance_value(id, slot, property, make_mode_value(property, value));
+}
+
+auto internal_m2n_material_instance_get_mode(entt::entity id, uint32_t slot, int32_t property) -> int32_t
+{
+    return read_mode_value(get_instance_value(id, slot, property));
+}
+
+auto internal_m2n_material_instance_is_overridden(entt::entity id, uint32_t slot, int32_t property) -> bool
+{
+    auto comp = safe_get_component<model_component>(id);
+    return comp && comp->get_material_instance(slot).is_overridden(get_material_property_id(property));
+}
+
+void internal_m2n_material_instance_revert(entt::entity id, uint32_t slot, int32_t property)
 {
     if(auto comp = safe_get_component<model_component>(id))
     {
-        return comp->get_model().get_material_instances().size();
+        comp->revert_material_instance_value(slot, get_material_property_id(property));
     }
-
-    return {};
 }
 
-/// Material fields a script reads or writes one at a time. Matches the managed MaterialProperty
-/// enum; the managed side checks that a field is used with the setter of its type.
-enum class material_property : int32_t
+void internal_m2n_material_instance_revert_all(entt::entity id, uint32_t slot)
 {
-    base_color,
-    emissive_color,
-    subsurface_color,
-    emissive_intensity,
-    roughness,
-    metalness,
-    bumpiness,
-    alpha_cutoff,
-    tiling,
-    color_map,
-    normal_map,
-    roughness_map,
-    metalness_map,
-    emissive_map,
-    ao_map,
-    alpha_mode,
-    cull_mode,
-};
+    if(auto comp = safe_get_component<model_component>(id))
+    {
+        comp->revert_material_instance(slot);
+    }
+}
 
-using managed_color = dotnetpp_backend::managed_interface::color;
-using managed_vector2 = dotnetpp_backend::managed_interface::vector2;
-using texture_handle = asset_handle<gfx::texture>;
-
-/// The material a slot renders with (its instance, else the shared asset), when it is PBR.
-auto find_slot_material(entt::entity id, uint32_t slot) -> std::shared_ptr<pbr_material>
+auto internal_m2n_material_instance_has_overrides(entt::entity id, uint32_t slot) -> bool
 {
     auto comp = safe_get_component<model_component>(id);
-    if(!comp)
-    {
-        return {};
-    }
-    auto material = comp->get_model().get_material_instance(slot);
-    if(!material || !material->is<pbr_material>())
-    {
-        return {};
-    }
-    return std::static_pointer_cast<pbr_material>(material);
+    return comp && comp->get_material_instance(slot).has_overrides();
 }
 
-/// The slot's own material instance, copied from the shared material on first use, when it is PBR.
-auto edit_slot_material(entt::entity id, uint32_t slot) -> std::shared_ptr<pbr_material>
+auto internal_m2n_material_instance_shares_draw(entt::entity id, uint32_t slot) -> bool
 {
     auto comp = safe_get_component<model_component>(id);
-    if(!comp)
-    {
-        return {};
-    }
-    auto material = comp->get_or_emplace_material_instance(slot);
-    if(!material || !material->is<pbr_material>())
-    {
-        return {};
-    }
-    return std::static_pointer_cast<pbr_material>(material);
-}
-
-auto get_texture_slot(pbr_material& material, material_property property) -> const texture_handle*
-{
-    switch(property)
-    {
-        case material_property::color_map:
-            return &material.get_color_map();
-        case material_property::normal_map:
-            return &material.get_normal_map();
-        case material_property::roughness_map:
-            return &material.get_roughness_map();
-        case material_property::metalness_map:
-            return &material.get_metalness_map();
-        case material_property::emissive_map:
-            return &material.get_emissive_map();
-        case material_property::ao_map:
-            return &material.get_ao_map();
-        default:
-            return nullptr;
-    }
-}
-
-void internal_m2n_model_set_material_float(entt::entity id, int32_t property, float value, uint32_t slot)
-{
-    auto material = edit_slot_material(id, slot);
-    if(!material)
-    {
-        return;
-    }
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::emissive_intensity:
-            material->set_emissive_intensity(value);
-            break;
-        case material_property::roughness:
-            material->set_roughness(value);
-            break;
-        case material_property::metalness:
-            material->set_metalness(value);
-            break;
-        case material_property::bumpiness:
-            material->set_bumpiness(value);
-            break;
-        case material_property::alpha_cutoff:
-            material->set_alpha_cutoff(value);
-            break;
-        default:
-            break;
-    }
-}
-
-auto internal_m2n_model_get_material_float(entt::entity id, int32_t property, uint32_t slot) -> float
-{
-    auto material = find_slot_material(id, slot);
-    if(!material)
-    {
-        return 0.0f;
-    }
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::emissive_intensity:
-            return material->get_emissive_intensity();
-        case material_property::roughness:
-            return material->get_roughness();
-        case material_property::metalness:
-            return material->get_metalness();
-        case material_property::bumpiness:
-            return material->get_bumpiness();
-        case material_property::alpha_cutoff:
-            return material->get_alpha_cutoff();
-        default:
-            return 0.0f;
-    }
-}
-
-void internal_m2n_model_set_material_color(entt::entity id, int32_t property, const managed_color& value, uint32_t slot)
-{
-    using converter = dotnet::managed_interface::converter;
-    auto material = edit_slot_material(id, slot);
-    if(!material)
-    {
-        return;
-    }
-    const auto color = converter::convert<managed_color, math::color>(value);
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::base_color:
-            material->set_base_color(color);
-            break;
-        case material_property::emissive_color:
-            material->set_emissive_color(color);
-            break;
-        case material_property::subsurface_color:
-            material->set_subsurface_color(color);
-            break;
-        default:
-            break;
-    }
-}
-
-auto internal_m2n_model_get_material_color(entt::entity id, int32_t property, uint32_t slot) -> managed_color
-{
-    using converter = dotnet::managed_interface::converter;
-    auto material = find_slot_material(id, slot);
-    if(!material)
-    {
-        return {};
-    }
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::base_color:
-            return converter::convert<math::color, managed_color>(material->get_base_color());
-        case material_property::emissive_color:
-            return converter::convert<math::color, managed_color>(material->get_emissive_color());
-        case material_property::subsurface_color:
-            return converter::convert<math::color, managed_color>(material->get_subsurface_color());
-        default:
-            return {};
-    }
-}
-
-void internal_m2n_model_set_material_vector(entt::entity id,
-                                            int32_t property,
-                                            const managed_vector2& value,
-                                            uint32_t slot)
-{
-    using converter = dotnet::managed_interface::converter;
-    auto material = edit_slot_material(id, slot);
-    if(material && static_cast<material_property>(property) == material_property::tiling)
-    {
-        material->set_tiling(converter::convert<managed_vector2, math::vec2>(value));
-    }
-}
-
-auto internal_m2n_model_get_material_vector(entt::entity id, int32_t property, uint32_t slot) -> managed_vector2
-{
-    using converter = dotnet::managed_interface::converter;
-    auto material = find_slot_material(id, slot);
-    if(material && static_cast<material_property>(property) == material_property::tiling)
-    {
-        return converter::convert<math::vec2, managed_vector2>(material->get_tiling());
-    }
-    return {};
-}
-
-void internal_m2n_model_set_material_texture(entt::entity id, int32_t property, const hpp::uuid& uid, uint32_t slot)
-{
-    auto material = edit_slot_material(id, slot);
-    if(!material)
-    {
-        return;
-    }
-    texture_handle texture;
-    if(!uid.is_nil())
-    {
-        auto& am = engine::context().get_cached<asset_manager>();
-        texture = am.get_asset<gfx::texture>(uid);
-    }
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::color_map:
-            material->set_color_map(texture);
-            break;
-        case material_property::normal_map:
-            material->set_normal_map(texture);
-            break;
-        case material_property::roughness_map:
-            material->set_roughness_map(texture);
-            break;
-        case material_property::metalness_map:
-            material->set_metalness_map(texture);
-            break;
-        case material_property::emissive_map:
-            material->set_emissive_map(texture);
-            break;
-        case material_property::ao_map:
-            material->set_ao_map(texture);
-            break;
-        default:
-            break;
-    }
-}
-
-auto internal_m2n_model_get_material_texture(entt::entity id, int32_t property, uint32_t slot) -> hpp::uuid
-{
-    auto material = find_slot_material(id, slot);
-    if(!material)
-    {
-        return {};
-    }
-    const auto* texture = get_texture_slot(*material, static_cast<material_property>(property));
-    return texture ? texture->uid() : hpp::uuid{};
-}
-
-void internal_m2n_model_set_material_mode(entt::entity id, int32_t property, int32_t value, uint32_t slot)
-{
-    auto material = edit_slot_material(id, slot);
-    if(!material)
-    {
-        return;
-    }
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::alpha_mode:
-            material->set_alpha_mode(static_cast<alpha_mode>(value));
-            break;
-        case material_property::cull_mode:
-            material->set_cull_type(static_cast<cull_type>(value));
-            break;
-        default:
-            break;
-    }
-}
-
-auto internal_m2n_model_get_material_mode(entt::entity id, int32_t property, uint32_t slot) -> int32_t
-{
-    auto material = find_slot_material(id, slot);
-    if(!material)
-    {
-        return 0;
-    }
-    switch(static_cast<material_property>(property))
-    {
-        case material_property::alpha_mode:
-            return static_cast<int32_t>(material->get_alpha_mode());
-        case material_property::cull_mode:
-            return static_cast<int32_t>(material->get_cull_type());
-        default:
-            return 0;
-    }
+    return comp && comp->get_material_instance(slot).shares_draw();
 }
 
 //------------------------------
@@ -496,32 +271,38 @@ void register_model_component_script_bindings()
                             dotnet_internal_call(internal_m2n_model_get_shared_material_count));
     reg.add_internal_call("internal_m2n_model_set_shared_material",
                             dotnet_internal_call(internal_m2n_model_set_shared_material));
-    reg.add_internal_call("internal_m2n_model_set_material_instance",
-                            dotnet_internal_call(internal_m2n_model_set_material_instance));
-    reg.add_internal_call("internal_m2n_model_get_material_instance",
-                            dotnet_internal_call(internal_m2n_model_get_material_instance));
-    reg.add_internal_call("internal_m2n_model_get_material_instance_count",
-                            dotnet_internal_call(internal_m2n_model_get_material_instance_count));
-    reg.add_internal_call("internal_m2n_model_set_material_float",
-                          dotnet_internal_call(internal_m2n_model_set_material_float));
-    reg.add_internal_call("internal_m2n_model_get_material_float",
-                          dotnet_internal_call(internal_m2n_model_get_material_float));
-    reg.add_internal_call("internal_m2n_model_set_material_color",
-                          dotnet_internal_call(internal_m2n_model_set_material_color));
-    reg.add_internal_call("internal_m2n_model_get_material_color",
-                          dotnet_internal_call(internal_m2n_model_get_material_color));
-    reg.add_internal_call("internal_m2n_model_set_material_vector",
-                          dotnet_internal_call(internal_m2n_model_set_material_vector));
-    reg.add_internal_call("internal_m2n_model_get_material_vector",
-                          dotnet_internal_call(internal_m2n_model_get_material_vector));
-    reg.add_internal_call("internal_m2n_model_set_material_texture",
-                          dotnet_internal_call(internal_m2n_model_set_material_texture));
-    reg.add_internal_call("internal_m2n_model_get_material_texture",
-                          dotnet_internal_call(internal_m2n_model_get_material_texture));
-    reg.add_internal_call("internal_m2n_model_set_material_mode",
-                          dotnet_internal_call(internal_m2n_model_set_material_mode));
-    reg.add_internal_call("internal_m2n_model_get_material_mode",
-                          dotnet_internal_call(internal_m2n_model_get_material_mode));
+
+    auto instance_reg = dotnet::internal_call_registry("Unravel.Core.MaterialInstance");
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_color",
+                                   dotnet_internal_call(internal_m2n_material_instance_set_color));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_color",
+                                   dotnet_internal_call(internal_m2n_material_instance_get_color));
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_float",
+                                   dotnet_internal_call(internal_m2n_material_instance_set_float));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_float",
+                                   dotnet_internal_call(internal_m2n_material_instance_get_float));
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_vector",
+                                   dotnet_internal_call(internal_m2n_material_instance_set_vector));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_vector",
+                                   dotnet_internal_call(internal_m2n_material_instance_get_vector));
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_texture",
+                                   dotnet_internal_call(internal_m2n_material_instance_set_texture));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_texture",
+                                   dotnet_internal_call(internal_m2n_material_instance_get_texture));
+    instance_reg.add_internal_call("internal_m2n_material_instance_set_mode",
+                                   dotnet_internal_call(internal_m2n_material_instance_set_mode));
+    instance_reg.add_internal_call("internal_m2n_material_instance_get_mode",
+                                   dotnet_internal_call(internal_m2n_material_instance_get_mode));
+    instance_reg.add_internal_call("internal_m2n_material_instance_is_overridden",
+                                   dotnet_internal_call(internal_m2n_material_instance_is_overridden));
+    instance_reg.add_internal_call("internal_m2n_material_instance_revert",
+                                   dotnet_internal_call(internal_m2n_material_instance_revert));
+    instance_reg.add_internal_call("internal_m2n_material_instance_revert_all",
+                                   dotnet_internal_call(internal_m2n_material_instance_revert_all));
+    instance_reg.add_internal_call("internal_m2n_material_instance_has_overrides",
+                                   dotnet_internal_call(internal_m2n_material_instance_has_overrides));
+    instance_reg.add_internal_call("internal_m2n_material_instance_shares_draw",
+                                   dotnet_internal_call(internal_m2n_material_instance_shares_draw));
 }
 
 } // namespace unravel

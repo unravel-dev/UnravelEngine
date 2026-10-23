@@ -1,6 +1,7 @@
 #include "inspector_assets.h"
 #include "inspector_asset_picker.h"
 #include "inspector_asset_preview.h"
+#include "property_override_view.h"
 #include <editor/editing/authoring_root.h>
 #include "inspectors.h"
 
@@ -211,38 +212,6 @@ auto pick_asset(ImGuiTextFilter& filter,
     asset_picker::draw_footer(footer);
     asset_picker::end_window();
     return result;
-}
-
-template<typename T>
-auto make_asset_instance_proxy(entt::meta_any& var, const meta_any_proxy& var_proxy) -> meta_any_proxy
-{
-    meta_any_proxy data_var_proxy;
-    data_var_proxy.impl->parent = var_proxy.impl;
-    data_var_proxy.impl->type_name = entt::get_pretty_name(var.type());
-    data_var_proxy.impl->name = var_proxy.impl->name;
-    data_var_proxy.impl->getter = [parent_proxy = var_proxy](entt::meta_any& result)
-    {
-        entt::meta_any var;
-        if(parent_proxy.impl->getter(var) && var)
-        {
-            auto data = var.cast<std::shared_ptr<T>>();
-            result = entt::forward_as_meta(*data);
-            return true;
-        }
-        return false;
-    };
-    data_var_proxy.impl->setter =
-        [parent_proxy = var_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
-    {
-        entt::meta_any var;
-        if(proxy.impl->getter(var) && var)
-        {
-            var.assign(value);
-            return parent_proxy.impl->setter(parent_proxy, var, execution_count);
-        }
-        return false;
-    };
-    return data_var_proxy;
 }
 
 template<typename T>
@@ -734,45 +703,200 @@ void inspector_asset_handle_material::inspect_import_origin(rtti::context& ctx, 
     ImGui::PopStyleVar(2);
 }
 
-auto inspector_shared_material::inspect(rtti::context& ctx,
-                                        entt::meta_any& var,
-                                        const meta_any_proxy& var_proxy,
-                                        const var_info& info,
-                                        const entt::meta_custom& custom) -> inspect_result
+namespace
 {
-    auto& data = var.cast<std::shared_ptr<material>&>();
+/// @p mat as its most derived reflected type, so its base type's properties and its own are found.
+auto make_material_view(material& mat) -> entt::meta_any
+{
+    entt::meta_any object = entt::forward_as_meta(mat);
+    entt::as_derived(object);
+    return object;
+}
 
-    inspect_result result{};
+/// An editable copy of what a slot draws with: the shared material with the instance's overrides.
+auto make_instance_values(const material_instance& instance, const material& shared) -> material::sptr
+{
+    auto values = shared.clone();
+    for(const auto& entry : instance.get_overrides())
     {
-        if(data)
-        {
-            if(ImGui::Button(ICON_MDI_DELETE))
-            {
-                data.reset();
-                result.changed = true;
-                result.edit_finished = true;
-            }
-            ImGui::SameLine();
-            if(ImGui::TreeNodeEx("Material Instance", ImGuiTreeNodeFlags_AllowOverlap))
-            {
-                auto data_var_proxy = make_asset_instance_proxy<material>(var, var_proxy);
-                auto data_var = entt::forward_as_meta(*data);
-                result |= ::unravel::inspect_var(ctx, data_var, data_var_proxy);
+        set_material_value(*values, entry.property, entry.value);
+    }
+    return values;
+}
 
-                ImGui::TreePop();
-            }
-        }
-        else
+auto get_property_id(const std::string& name) -> entt::id_type
+{
+    return entt::hashed_string{name.c_str()}.value();
+}
+
+/// The first override that gives the slot a draw of its own (one that is not per instance), empty when none does.
+auto find_own_draw_override(const material_instance& instance, const entt::meta_type& type) -> std::string
+{
+    for(const auto& entry : instance.get_overrides())
+    {
+        const auto data = type.data(entry.property);
+        if(data && !entt::get_attribute_as<bool>(data, "per_instance"))
         {
-            if(ImGui::Button("Create Instance"))
-            {
-                data = std::make_shared<pbr_material>();
-                result.changed = true;
-                result.edit_finished = true;
-            }
+            return entt::get_attribute_as<std::string>(data, "pretty_name");
+        }
+    }
+    return {};
+}
+
+void draw_instance_status(const material_instance& instance, const entt::meta_type& type, const std::string& shared)
+{
+    if(!instance.has_overrides())
+    {
+        ImGui::TextDisabled("No overrides: the model draws exactly like %s.", shared.c_str());
+        return;
+    }
+    const auto own_draw = find_own_draw_override(instance, type);
+    if(own_draw.empty())
+    {
+        ImGui::TextWrapped("Draws together with the other models that use %s.", shared.c_str());
+        ImGui::SetItemTooltipEx("Every override is per instance (a color or a number), so the model shares the "
+                                "shared material's draw.");
+        return;
+    }
+    ImGui::TextWrapped("Draws on its own: %s is overridden.", own_draw.c_str());
+    ImGui::SetItemTooltipEx("Textures, tiling and modes are per material: overriding one gives the model a draw of "
+                            "its own. Colors and numbers do not.");
+}
+
+/// Marks the values the instance overrides, and reverts the one whose context menu asks for it.
+auto make_instance_marks(const material_instance& instance, hpp::optional<entt::id_type>& reverted)
+    -> property_override_marks
+{
+    property_override_marks marks;
+    marks.get_mark = [&instance](const std::string& path)
+    {
+        return instance.is_overridden(get_property_id(path)) ? override_mark::overridden : override_mark::none;
+    };
+    marks.revert = [&reverted](const std::string& path)
+    {
+        reverted = get_property_id(path);
+    };
+    marks.revert_label = "Revert to Shared Material";
+    marks.overridden_note = "This model overrides the shared material's value.";
+    return marks;
+}
+
+/// A color as the theme sets it: the value under the first push of it this frame.
+auto get_theme_color(ImGuiCol color) -> ImVec4
+{
+    for(const auto& pushed : ImGui::GetCurrentContext()->ColorStack)
+    {
+        if(pushed.Col == color)
+        {
+            return pushed.BackupValue;
+        }
+    }
+    return ImGui::GetStyleColorVec4(color);
+}
+
+/**
+ * @brief While alive, text is drawn in the base font and the theme's colors when the slot is drawn as a prefab
+ * instance's override: the slot is one prefab override, so its values show the material instance's own overrides.
+ */
+class unmarked_slot_scope
+{
+public:
+    explicit unmarked_slot_scope(rtti::context& ctx)
+    {
+        const auto& prefab_marks = ctx.get_cached<prefab_override_context>();
+        is_pushed_ = prefab_marks.is_active && prefab_marks.is_path_overridden();
+        if(!is_pushed_)
+        {
+            return;
+        }
+        ImGui::PushFont(ImGui::Font::Regular);
+        ImGui::PushStyleColor(ImGuiCol_Text, get_theme_color(ImGuiCol_Text));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, get_theme_color(ImGuiCol_CheckMark));
+    }
+
+    ~unmarked_slot_scope()
+    {
+        if(is_pushed_)
+        {
+            ImGui::PopStyleColor(2);
+            ImGui::PopFont();
         }
     }
 
+    unmarked_slot_scope(const unmarked_slot_scope&) = delete;
+    auto operator=(const unmarked_slot_scope&) -> unmarked_slot_scope& = delete;
+
+private:
+    bool is_pushed_{};
+};
+} // namespace
+
+auto inspector_material_instance::inspect(rtti::context& ctx,
+                                          entt::meta_any& var,
+                                          const meta_any_proxy& var_proxy,
+                                          const var_info& info,
+                                          const entt::meta_custom& custom) -> inspect_result
+{
+    auto& data = var.cast<material_instance&>();
+    inspect_result result{};
+    const auto& shared_handle = data.get_shared_material();
+    const auto shared = shared_handle.get();
+    if(!shared || asset_handle<material>::is_empty(shared))
+    {
+        ImGui::TextDisabled("The slot has no shared material.");
+        return result;
+    }
+    // Open at first when there is something to see.
+    const ImGuiTreeNodeFlags flags =
+        ImGuiTreeNodeFlags_AllowOverlap | (data.has_overrides() ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+    if(!ImGui::TreeNodeEx("Material Instance", flags))
+    {
+        return result;
+    }
+    const unmarked_slot_scope unmarked(ctx);
+    auto values = make_instance_values(data, *shared);
+    auto view = make_material_view(*values);
+    draw_instance_status(data, view.type(), shared_handle.name());
+    // The values are edited on a copy, as the shared material with the overrides; what changed becomes overrides of
+    // the instance, and the instance is what the model's undo step records.
+    hpp::optional<entt::id_type> reverted;
+    inspect_result view_result;
+    {
+        property_override_scope marked(ctx, {}, make_instance_marks(data, reverted));
+        inspect_without_undo_scope no_undo;
+        view_result = ::unravel::inspect_var(ctx, view, make_proxy(view));
+    }
+    if(reverted)
+    {
+        data.revert(*reverted);
+        result.changed = true;
+        result.edit_finished = true;
+    }
+    else if(view_result.changed)
+    {
+        for_each_material_property(view.type(),
+                                   [&](entt::id_type property, const entt::meta_data& prop)
+                                   {
+                                       auto edited = prop.get(view);
+                                       if(!(data.get_value(property) == edited))
+                                       {
+                                           data.set_override(property, edited);
+                                       }
+                                   });
+        result.changed = true;
+    }
+    result.edit_finished |= view_result.edit_finished;
+    if(data.has_overrides())
+    {
+        if(ImGui::Button("Revert All"))
+        {
+            data.revert_all();
+            result.changed = true;
+            result.edit_finished = true;
+        }
+        ImGui::SetItemTooltipEx("Drop every override: the model draws exactly like its shared material.");
+    }
+    ImGui::TreePop();
     return result;
 }
 

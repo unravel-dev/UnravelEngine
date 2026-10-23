@@ -5,6 +5,7 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/scene.h>
+#include <engine/rendering/material_instance.h>
 #include <audiopp/source.h>
 
 namespace gfx
@@ -57,11 +58,16 @@ private:
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_material, asset_handle<material>)
 
-struct inspector_shared_material : public crtp_meta_type<inspector_shared_material, inspector>
+/**
+ * @brief A model slot's material instance: every value the slot draws with, the overrides that differ from the shared
+ * material (each with a revert), and whether the slot still draws together with the shared material's other models.
+ * Editing a value overrides it.
+ */
+struct inspector_material_instance : public crtp_meta_type<inspector_material_instance, inspector>
 {
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
-REFLECT_INSPECTOR_INLINE(inspector_shared_material, std::shared_ptr<material>)
+REFLECT_INSPECTOR_INLINE(inspector_material_instance, material_instance)
 
 
 struct inspector_asset_handle_mesh : public crtp_meta_type<inspector_asset_handle_mesh, inspector_asset_handle>

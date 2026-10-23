@@ -41,8 +41,15 @@ constexpr float radiosity_max_ray_intensity = 40.0f;
 constexpr uint32_t radiosity_group_threads = 64;
 /// bgfx's per-dimension dispatch limit: larger tile lists go out in several dispatches.
 constexpr uint32_t max_groups_per_dispatch = 65535;
-/// Mixes a material's address into its card capture key (gi_scene::source::material_key) before its revision.
+/// Mixes a material's address into its card capture key (gi_scene::source::material_key) before its revisions.
 constexpr uint64_t material_key_multiplier = 0x9E3779B97F4A7C15ull;
+/// Mix the material's two revisions into the key apart, so a step of each cannot cancel out.
+constexpr uint64_t state_revision_multiplier = 0xC2B2AE3D27D4EB4Full;
+constexpr uint64_t instance_values_revision_multiplier = 0x165667B19E3779F9ull;
+/// The fewest updates between two captures a source's per-instance material values cause (about half a second).
+constexpr uint32_t instance_values_recapture_updates = 30;
+/// How often the gates of sources no longer drawn are dropped, and how long they are kept.
+constexpr uint32_t instance_values_gate_sweep_updates = 64;
 /// Copy tiles per dispatch row (gi_surface_cache_lighting.sh GI_CARD_COPY_DISPATCH_WIDTH).
 constexpr uint32_t copy_dispatch_width = 256;
 
@@ -586,6 +593,39 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
     return changes;
 }
 
+auto gi_surface_cache::gate_instance_values(uint64_t identity, uint64_t revision) -> uint64_t
+{
+    auto [found, is_new] = instance_values_gates_.try_emplace(identity);
+    auto& gate = found->second;
+    gate.seen_update = update_count_;
+    // A source seen for the first time captures its values as they are.
+    if(is_new || (gate.revision != revision && update_count_ - gate.taken_update >= instance_values_recapture_updates))
+    {
+        gate.revision = revision;
+        gate.taken_update = update_count_;
+    }
+    return gate.revision;
+}
+
+void gi_surface_cache::drop_unseen_instance_values_gates()
+{
+    if(update_count_ % instance_values_gate_sweep_updates != 0u)
+    {
+        return;
+    }
+    for(auto it = instance_values_gates_.begin(); it != instance_values_gates_.end();)
+    {
+        if(update_count_ - it->second.seen_update > instance_values_gate_sweep_updates)
+        {
+            it = instance_values_gates_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
 void gi_surface_cache::update(const surface_cache_system& gi_scene,
                               uint64_t frame,
                               const gi_settings::scene_settings& view_settings,
@@ -612,7 +652,12 @@ void gi_surface_cache::update(const surface_cache_system& gi_scene,
     {
         const uint64_t material_identity = uint64_t(reinterpret_cast<uintptr_t>(src.material.get()));
         const uint64_t material_key =
-            src.material ? (material_identity * material_key_multiplier) ^ src.material->get_revision() : 0u;
+            src.material
+                ? (material_identity * material_key_multiplier) ^
+                      (src.material->get_state_revision() * state_revision_multiplier) ^
+                      (gate_instance_values(src.identity, src.material->get_instance_values_revision()) *
+                       instance_values_revision_multiplier)
+                : 0u;
         sources_.push_back({src.identity,
                             src.instance_index,
                             src.cards,
@@ -620,6 +665,7 @@ void gi_surface_cache::update(const surface_cache_system& gi_scene,
                             instances[src.instance_index].is_emissive_light_source,
                             material_key});
     }
+    drop_unseen_instance_values_gates();
     scene_.set_hold_resident_resolutions((experiment_flags_ & experiment_hold_card_resolution) != 0u);
     // The reflections' feedback of a few frames ago asks for this frame's hi-res pages.
     uses_hi_res_pages_ = project_settings.hi_res_reflection_pages &&

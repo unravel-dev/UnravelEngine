@@ -631,13 +631,9 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto ao_tex = ao.get();
     const auto emissive_tex = emissive.get();
 
-    // Picker colors are authored sRGB-encoded; lighting math runs in linear, so
-    // decode at upload (textures get the same treatment via BGFX_TEXTURE_SRGB).
-    const auto base_color = mat.get_base_color().to_linear();
-    const auto subsurface_color = mat.get_subsurface_color().to_linear();
-    const auto emissive_color = mat.get_emissive_color().to_linear();
-    const float emissive_intensity = mat.get_emissive_intensity();
-    const auto& surface_data = mat.get_surface_data();
+    // The values an instanced draw reads per instance (pbr_material::write_instance_constants), here as uniforms.
+    std::array<math::vec4, material::MAX_INSTANCE_CONSTANTS> constants{};
+    mat.write_instance_constants(constants.data());
     const auto& tiling = mat.get_tiling();
     const auto& dither_threshold = mat.get_dither_threshold();
     const auto surface_data2 = mat.get_surface_data2();
@@ -649,16 +645,10 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     gfx::set_texture(program.s_tex_ao, 4, ao_tex, ANONYMOUS::get_material_sampler_flags(ao_tex));
     gfx::set_texture(program.s_tex_emissive, 5, emissive_tex, ANONYMOUS::get_material_sampler_flags(emissive_tex));
 
-    math::color premultiplied_emissive{
-        emissive_color.value.r * emissive_intensity,
-        emissive_color.value.g * emissive_intensity,
-        emissive_color.value.b * emissive_intensity,
-        emissive_color.value.a};
-
-    gfx::set_uniform(program.u_base_color, base_color);
-    gfx::set_uniform(program.u_subsurface_color, subsurface_color);
-    gfx::set_uniform(program.u_emissive_color, premultiplied_emissive);
-    gfx::set_uniform(program.u_surface_data, surface_data);
+    gfx::set_uniform(program.u_base_color, constants[0]);
+    gfx::set_uniform(program.u_subsurface_color, constants[1]);
+    gfx::set_uniform(program.u_emissive_color, constants[2]);
+    gfx::set_uniform(program.u_surface_data, constants[3]);
     gfx::set_uniform(program.u_tiling, tiling);
     gfx::set_uniform(program.u_dither_threshold, dither_threshold);
     gfx::set_uniform(program.u_surface_data2, surface_data2);
@@ -1619,6 +1609,21 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
 namespace
 {
+/// The instance data of @p instance in a batch drawn with @p batch_material: a layout that carries per-instance
+/// material values takes them from the instance's material, else the batch's.
+template<typename InstanceData>
+auto make_instance_data(const batch_instance& instance, const material& batch_material) -> InstanceData
+{
+    if constexpr(std::is_constructible_v<InstanceData, const batch_instance&, const material&>)
+    {
+        return InstanceData(instance, batch_material);
+    }
+    else
+    {
+        return InstanceData(instance);
+    }
+}
+
 /**
  * Shared core of the instanced batch submits (G-buffer geometry and velocity movers).
  * Iterates the prepared batches, selects instances via @p should_include, packs the
@@ -1688,7 +1693,7 @@ void submit_prepared_batches_instanced(const BatchList& prepared_batches,
             }
             if(should_include(instance))
             {
-                buffer_data[packed++] = InstanceData(instance);
+                buffer_data[packed++] = make_instance_data<InstanceData>(instance, *material_ptr);
             }
         }
 
@@ -1724,32 +1729,44 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
     const auto camera_pos = camera.get_position();
     const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
 
-    geom_program_instanced_.program->begin();
-    gfx::set_uniform(geom_program_instanced_.u_camera_wpos, camera_pos);
-    gfx::set_uniform(geom_program_instanced_.u_camera_clip_planes, clip_planes);
-
-    submit_prepared_batches_instanced<instance_vertex_data>(
-        prepared_batches,
-        [](const batch_instance&) { return true; },
-        [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
+    // A batch whose instances carry per-instance material values (material instances sharing the draw) uses the
+    // layout and program that read them; the others keep the matrix-only layout.
+    plain_batches_.clear();
+    material_value_batches_.clear();
+    for(const auto* batch : prepared_batches)
+    {
+        (batch->has_material_overrides ? material_value_batches_ : plain_batches_).push_back(batch);
+    }
+    const auto draw_batches = [&](geom_program& program, const std::vector<const batch_group*>& batches, auto layout)
+    {
+        using instance_data = decltype(layout);
+        if(batches.empty())
         {
-            stats_.drawn_static_submeshes += instance_count;
-
-            // Submit material properties
-            bool material_submitted = mat.submit(geom_program_instanced_.program.get());
-            if(!material_submitted && mat.is<pbr_material>())
+            return;
+        }
+        program.program->begin();
+        gfx::set_uniform(program.u_camera_wpos, camera_pos);
+        gfx::set_uniform(program.u_camera_clip_planes, clip_planes);
+        submit_prepared_batches_instanced<instance_data>(
+            batches,
+            [](const batch_instance&) { return true; },
+            [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
             {
-                submit_pbr_material(geom_program_instanced_, static_cast<const pbr_material&>(mat));
-            }
-
-            // Set LOD parameters (using global LOD settings for now)
-            const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
-            gfx::set_uniform(geom_program_instanced_.u_lod_params, lod_params);
-
-            bgfx::submit(pass.id, geom_program_instanced_.program->native_handle(), 0, BGFX_DISCARD_ALL);
-        });
-
-    geom_program_instanced_.program->end();
+                stats_.drawn_static_submeshes += instance_count;
+                bool material_submitted = mat.submit(program.program.get());
+                if(!material_submitted && mat.is<pbr_material>())
+                {
+                    submit_pbr_material(program, static_cast<const pbr_material&>(mat));
+                }
+                // Set LOD parameters (using global LOD settings for now)
+                const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
+                gfx::set_uniform(program.u_lod_params, lod_params);
+                bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+            });
+        program.program->end();
+    };
+    draw_batches(geom_program_instanced_, plain_batches_, instance_vertex_data{});
+    draw_batches(geom_program_instanced_material_, material_value_batches_, instance_material_vertex_data{});
 
     // Update statistics
     const auto& batch_stats = batch_collector_.get_stats();
@@ -4074,6 +4091,10 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     geom_program_instanced_.cache_uniforms();
     geom_program_instanced_.program = load_program("deferred_geom/vs_deferred_geom_instanced", "deferred_geom/fs_deferred_geom");
+
+    geom_program_instanced_material_.cache_uniforms();
+    geom_program_instanced_material_.program = load_program("deferred_geom/vs_deferred_geom_instanced_material",
+                                                            "deferred_geom/fs_deferred_geom_instance_material");
 
     card_capture_program_.cache_uniforms();
     card_capture_program_.program =

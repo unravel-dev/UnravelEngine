@@ -105,11 +105,16 @@ inside the project).
   they load. Assign a material with scene_create_batch material or
   scene_set_model_materials_batch; a physics material with the Physics
   component's material property.
-- Per-entity tweaks use scene_set_model_material_instances_batch: it gives ONE
-  entity's slot its own copy of the material (starting from the slot's
-  asset) and does NOT write .mat files; calls build on each other, undo puts
-  the previous values back; scene_clear_model_material_instances_batch
-  returns to the shared asset.
+- Per-entity tweaks use scene_set_model_material_instances_batch: the values
+  become overrides in ONE entity's material instance (that slot only); every
+  value it does not override keeps following the shared material, and no .mat
+  file is written. Calls build on each other, undo puts the previous values
+  back; scene_clear_model_material_instances_batch reverts every override.
+- Colors and numbers are per instance: entities that override only those still
+  draw in one instanced draw with the shared material's other users
+  (shares_draw in the result). Overriding a texture, tiling or a mode gives the
+  entity a draw of its own - give many entities the same look with a shared
+  material instead.
 - Useful emissive_intensity ranges: strips acting as area lights 25-35; small
   glowing props 5-10 (larger overwhelms bloom).
 

@@ -14,6 +14,7 @@
 #include <engine/scripting/script.h>
 
 #include "script_value_encoding.h"
+#include "bindings/material_script_helpers.h"
 
 
 #include <dotnetpp/dotnetpp.h>
@@ -974,6 +975,9 @@ void script_system::on_play_end(rtti::context& ctx)
     auto& registry = *scn.registry;
 
     seq::scope::stop_all("script");
+
+    // A shared material a script changed is the project's asset: it gets its values back with the scene.
+    restore_shared_material_edits();
 
     // try
     // {

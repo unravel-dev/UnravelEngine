@@ -474,8 +474,8 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
         }
     }
 
-    // After those syncs, which run queued too.
-    queue_action("Prune Stale Prefab Statements",
+    // After those syncs, which run queued too. It edits other prefab files, not the scene.
+    queue_action<untracked_editor_state_action_t>("Prune Stale Prefab Statements",
                  [this, &ctx, pfb]()
                  {
                      prune_stale_statements_in_dependents(ctx, pfb);
@@ -589,7 +589,9 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
         return;
     }
 
-    queue_action("Sync Prefab Entity",
+    // Not a scene edit: it replays the prefab file over its instance, which loading the scene does as well, so a
+    // scene that was just opened or a prefab saved elsewhere leaves no unsaved work in the scene.
+    queue_action<untracked_editor_state_action_t>("Sync Prefab Entity",
         [&ctx, entity, pfb]() mutable
     {
         auto& play = ctx.get_cached<play_mode>();

@@ -495,6 +495,22 @@ private:
     uint32_t update_count_ = 0;
     /// Resident cards reallocated since the last stats line.
     uint32_t reallocated_since_log_ = 0;
+
+    /// The per-instance values revision a source's capture key shows (see gate_instance_values).
+    struct instance_values_gate
+    {
+        uint64_t revision = 0;
+        ///< The update the key last took a new revision in.
+        uint32_t taken_update = 0;
+        ///< The last update the source was drawn in; sources gone for a while are dropped.
+        uint32_t seen_update = 0;
+    };
+    std::unordered_map<uint64_t, instance_values_gate> instance_values_gates_;
+
+    /// The per-instance values revision of a source's material for its capture key: a script may change these values
+    /// every frame (a hit flash), so the key takes a new one at most every few updates, and always the last one.
+    auto gate_instance_values(uint64_t identity, uint64_t revision) -> uint64_t;
+    void drop_unseen_instance_values_gates();
 };
 
 } // namespace unravel

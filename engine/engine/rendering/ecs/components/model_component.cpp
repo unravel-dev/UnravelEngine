@@ -1062,25 +1062,39 @@ void model_component::set_model(const model& model)
 
 void model_component::set_shared_material(const asset_handle<material>& material, uint32_t index)
 {
-    model_.set_material(material, index);
+    model_.set_shared_material(material, index);
 
     touch();
 }
 
-void model_component::set_material_instance(const material::sptr& instance, uint32_t index)
+auto model_component::get_material_instance(uint32_t index) const -> const material_instance&
 {
-    model_.set_material_instance(instance, index);
+    return model_.get_material_instance(index);
+}
 
+auto model_component::set_material_instance_value(uint32_t index, entt::id_type property, const entt::meta_any& value)
+    -> bool
+{
+    const bool applied = model_.get_material_instance(index).set_override(property, value);
+    touch();
+    return applied;
+}
+
+void model_component::revert_material_instance_value(uint32_t index, entt::id_type property)
+{
+    model_.get_material_instance(index).revert(property);
     touch();
 }
 
-auto model_component::get_or_emplace_material_instance(uint32_t index) -> material::sptr
+void model_component::revert_material_instance(uint32_t index)
 {
-    auto instance = model_.get_or_emplace_material_instance(index);
-
+    model_.get_material_instance(index).revert_all();
     touch();
+}
 
-    return instance;
+void model_component::update_material_instances()
+{
+    model_.update_material_instances();
 }
 
 auto model_component::get_bone_transforms() const -> const pose_mat4&

@@ -14,7 +14,7 @@ description: >-
 |------|------|---------|
 | **Material asset** (`.mat`) | Shared look used by many meshes; Content Browser / inspector material | Disk via `atomic_save_to_file` |
 | **Model material slot** | Assign which asset a `model_component` uses | Scene/prefab only |
-| **Material instance** | One entity's override (prototype/tweak) | Scene/prefab only - **never** writes `.mat` |
+| **Material instance** | One entity's overrides of a slot's shared material; values not overridden follow it | Scene/prefab only - **never** writes `.mat` |
 
 Create parity: content browser `get_asset_from_instance<material>(key, pbr_material)` + save.  
 Save parity: inspector `inspector_asset_handle_material` on `edit_finished`.
@@ -28,8 +28,8 @@ Save parity: inspector `inspector_asset_handle_material` on `edit_finished`.
 | `materials_set` | Mutate asset; `save` default `true`; optional `wait_ms` |
 | `materials_list_properties` | Supported property schema |
 | `scene_set_model_materials_batch` | Shared slot assignments (one undo) |
-| `scene_set_model_material_instances_batch` | Runtime instance props; no `.mat` |
-| `scene_clear_model_material_instances_batch` | Drop instances -> use assets again |
+| `scene_set_model_material_instances_batch` | Override instance values (reports `shares_draw`); no `.mat` |
+| `scene_clear_model_material_instances_batch` | Revert every override -> draws like the shared material |
 | `assets_find_batch` | Find materials (and all other asset types) by `type`/`prefix`/`name_contains` |
 | `window_request_focus` | Focus/raise editor OS window so asset watcher can import new `.mat` files |
 
@@ -58,7 +58,7 @@ Single-property edits: one-key `properties` object. Bulk: multiple keys in one c
 |---------|------|
 | PBR type / setters | `engine/engine/rendering/material.h` |
 | Meta names | `engine/engine/meta/rendering/standard_material.cpp` |
-| Model slots / instances | `engine/engine/rendering/model.h` |
+| Model slots / instances | `engine/engine/rendering/model.h`, `engine/engine/rendering/material_instance.h` |
 | MCP helpers | `editor/editor/system/mcp/mcp_material_utils.*` |
 | MCP tools | `editor/editor/system/mcp/mcp_tools_materials.cpp` |
 | Inspector save | `editor/editor/hub/panels/inspector_panel/inspectors/inspector_assets.cpp` |
@@ -70,3 +70,11 @@ Single-property edits: one-key `properties` object. Bulk: multiple keys in one c
 2. Only this entity should look different -> `scene_set_model_material_instances_batch`.
 3. Point entities at existing `.mat` -> `scene_set_model_materials_batch`.
 4. Play mode blocks scene mutators (`require_edit_scene`).
+
+## Per-instance values and batching
+
+Properties registered with the `per_instance` attribute (`standard_material.cpp`: base, subsurface and
+emissive colors, emissive intensity, roughness, metalness, bumpiness) can differ per entity and still share
+one instanced draw (`material_instance::shares_draw`, `instance_material_vertex_data`). Overriding any other
+property (textures, tiling, alpha / cull mode) gives the entity a draw of its own. GI recaptures caused by
+per-instance values are limited (`gi_surface_cache::gate_instance_values`).

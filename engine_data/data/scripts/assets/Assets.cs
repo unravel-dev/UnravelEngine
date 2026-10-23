@@ -1,6 +1,5 @@
 using System;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Unravel.Core
 {
@@ -48,9 +47,6 @@ public class Assets
 
     [MethodImpl(MethodImplOptions.InternalCall)]
     private static extern Guid internal_m2n_get_asset_by_key(string key, Type obj);
-
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    internal static extern MaterialProperties internal_m2n_get_material_properties(Guid uid);
 }
 
 /// <summary>
@@ -61,41 +57,45 @@ public class Texture : Asset<Texture>
 }
 
 /// <summary>
-/// A material field read or written on its own through a renderer, for example
-/// <see cref="ModelComponent.SetFloat"/>. Each field belongs to one setter family.
+/// A property of a material, as <see cref="MaterialInstance.IsOverridden"/> and <see cref="MaterialInstance.Revert"/>
+/// name it.
 /// </summary>
 public enum MaterialProperty
 {
-    /// <summary>Base (albedo) color. SetColor / GetColor.</summary>
+    /// <summary>Base (albedo) color; its alpha fades the surface.</summary>
     BaseColor,
-    /// <summary>Emissive color. SetColor / GetColor.</summary>
+    /// <summary>Emissive color.</summary>
     EmissiveColor,
-    /// <summary>Subsurface color; alpha is the subsurface opacity. SetColor / GetColor.</summary>
+    /// <summary>Subsurface color; alpha is the subsurface opacity.</summary>
     SubsurfaceColor,
-    /// <summary>Multiplier of the emissive color. SetFloat / GetFloat.</summary>
+    /// <summary>Multiplier of the emissive color.</summary>
     EmissiveIntensity,
-    /// <summary>Surface roughness. SetFloat / GetFloat.</summary>
+    /// <summary>Surface roughness.</summary>
     Roughness,
-    /// <summary>Surface metalness. SetFloat / GetFloat.</summary>
+    /// <summary>Surface metalness.</summary>
     Metalness,
-    /// <summary>Normal-map bump intensity. SetFloat / GetFloat.</summary>
+    /// <summary>Normal-map bump intensity.</summary>
     Bumpiness,
-    /// <summary>Alpha below which a masked surface is cut out. SetFloat / GetFloat.</summary>
+    /// <summary>Alpha below which a masked surface is cut out.</summary>
     AlphaCutoff,
-    /// <summary>UV tiling scale. SetVector / GetVector.</summary>
+    /// <summary>UV tiling scale.</summary>
     Tiling,
-    /// <summary>Base color texture. SetTexture / GetTexture.</summary>
+    /// <summary>Base color texture.</summary>
     ColorMap,
-    /// <summary>Normal map. SetTexture / GetTexture.</summary>
+    /// <summary>Normal map.</summary>
     NormalMap,
-    /// <summary>Roughness texture. SetTexture / GetTexture.</summary>
+    /// <summary>Roughness texture.</summary>
     RoughnessMap,
-    /// <summary>Metalness texture. SetTexture / GetTexture.</summary>
+    /// <summary>Metalness texture.</summary>
     MetalnessMap,
-    /// <summary>Emissive texture. SetTexture / GetTexture.</summary>
+    /// <summary>Emissive texture.</summary>
     EmissiveMap,
-    /// <summary>Ambient occlusion texture. SetTexture / GetTexture.</summary>
+    /// <summary>Ambient occlusion texture.</summary>
     AoMap,
+    /// <summary>How the material treats alpha.</summary>
+    AlphaMode,
+    /// <summary>Which faces the material hides.</summary>
+    CullMode,
 }
 
 /// <summary>
@@ -105,7 +105,7 @@ public enum MaterialAlphaMode
 {
     /// <summary>No alpha clip; casts solid shadows.</summary>
     Opaque,
-    /// <summary>Hard cutoff at <see cref="MaterialProperty.AlphaCutoff"/>; casts cutout shadows.</summary>
+    /// <summary>Hard cutoff at the alpha cutoff; casts cutout shadows.</summary>
     Mask,
     /// <summary>Transparent; does not cast shadows.</summary>
     Blend,
@@ -125,159 +125,175 @@ public enum MaterialCullMode
 }
 
 /// <summary>
-/// Blittable material property block exchanged with native code.
-/// </summary>
-[StructLayout(LayoutKind.Sequential)]
-public struct MaterialProperties
-{
-    // A bool field makes the struct non-blittable, so every internal call passing
-    // it by value needs a marshalling stub generated at run time. A byte keeps
-    // the one-byte layout of the native bool.
-    private byte validFlag;
-
-    /// <summary>
-    /// Whether this property block contains valid data.
-    /// </summary>
-    public bool valid
-    {
-        get => validFlag != 0;
-        set => validFlag = value ? (byte)1 : (byte)0;
-    }
-
-    /// <summary>
-    /// Base (albedo) color.
-    /// </summary>
-    public Color baseColor;
-
-    /// <summary>
-    /// Emissive color.
-    /// </summary>
-    public Color emissiveColor;
-
-    /// <summary>
-    /// UV tiling scale.
-    /// </summary>
-    public Vector2 tiling;
-
-    /// <summary>
-    /// Surface roughness.
-    /// </summary>
-    public float roughness;
-
-    /// <summary>
-    /// Surface metalness.
-    /// </summary>
-    public float metalness;
-
-    /// <summary>
-    /// Normal-map bump intensity.
-    /// </summary>
-    public float bumpiness;
-
-    /// <summary>
-    /// Multiplier of the emissive color.
-    /// </summary>
-    public float emissiveIntensity;
-}
-
-/// <summary>
-/// Material with editable shading properties.
+/// A shared material: a material asset that renderers use.
 /// </summary>
 /// <remarks>
-/// A material with a non-empty <see cref="Asset{T}.uid"/> refers to a shared material asset.
-/// A material with an empty uid is a standalone property block that can only be applied as a
-/// per-renderer override, for example through <see cref="ModelComponent.SetMaterial"/>.
+/// Setting a property changes every renderer that uses the material, except the values a renderer's
+/// <see cref="MaterialInstance"/> overrides. To change one renderer only, use its material instance
+/// (<see cref="ModelComponent.GetMaterialInstance"/>). In the editor, what a script changes on a shared material
+/// lasts until play stops.
 /// </remarks>
 public class Material : Asset<Material>
 {
-    /// <summary>
-    /// Creates an empty material handle.
-    /// </summary>
-    public Material()
+    /// <summary>Base (albedo) color; its alpha fades the surface.</summary>
+    public Color baseColor
     {
+        get => internal_m2n_material_get_color(uid, (int)MaterialProperty.BaseColor);
+        set => internal_m2n_material_set_color(uid, (int)MaterialProperty.BaseColor, value);
     }
 
-    /// <summary>
-    /// Creates a copy of <paramref name="rhs"/> that is not bound to any asset.
-    /// </summary>
-    /// <remarks>
-    /// The uid is deliberately not copied, so the result is a standalone property block. This
-    /// is the idiomatic way to derive an editable material from a shared asset.
-    /// </remarks>
-    /// <param name="rhs">The material to copy properties from.</param>
-    public Material(Material rhs)
+    /// <summary>Emissive color.</summary>
+    public Color emissiveColor
     {
-        SetProperties(rhs.GetProperties());
+        get => internal_m2n_material_get_color(uid, (int)MaterialProperty.EmissiveColor);
+        set => internal_m2n_material_set_color(uid, (int)MaterialProperty.EmissiveColor, value);
     }
 
-    internal override void OnResolved()
+    /// <summary>Subsurface color; alpha is the subsurface opacity.</summary>
+    public Color subsurfaceColor
     {
-        SetProperties(Assets.internal_m2n_get_material_properties(uid));
+        get => internal_m2n_material_get_color(uid, (int)MaterialProperty.SubsurfaceColor);
+        set => internal_m2n_material_set_color(uid, (int)MaterialProperty.SubsurfaceColor, value);
     }
 
-    internal void SetProperties(MaterialProperties props)
+    /// <summary>Multiplier of the emissive color: emitted light = emissiveColor x emissiveIntensity.</summary>
+    public float emissiveIntensity
     {
-        if(!props.valid)
-        {
-            return;
-        }
-        this.color = props.baseColor;
-        this.emissiveColor = props.emissiveColor;
-        this.tiling = props.tiling;
-        this.roughness = props.roughness;
-        this.metalness = props.metalness;
-        this.bumpiness = props.bumpiness;
-        this.emissiveIntensity = props.emissiveIntensity;
+        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.EmissiveIntensity);
+        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.EmissiveIntensity, value);
     }
 
-    internal MaterialProperties GetProperties()
+    /// <summary>Surface roughness.</summary>
+    public float roughness
     {
-        MaterialProperties props = default;
-        props.baseColor = this.color;
-        props.emissiveColor = this.emissiveColor;
-        props.tiling = this.tiling;
-        props.roughness = this.roughness;
-        props.metalness = this.metalness;
-        props.bumpiness = this.bumpiness;
-        props.emissiveIntensity = this.emissiveIntensity;
-        props.valid = true;
-        return props;
+        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.Roughness);
+        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.Roughness, value);
     }
 
-    /// <summary>
-    /// Base (albedo) color.
-    /// </summary>
-    public Color color = Color.white;
+    /// <summary>Surface metalness.</summary>
+    public float metalness
+    {
+        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.Metalness);
+        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.Metalness, value);
+    }
 
-    /// <summary>
-    /// Emissive color.
-    /// </summary>
-    public Color emissiveColor = Color.black;
+    /// <summary>Normal-map bump intensity.</summary>
+    public float bumpiness
+    {
+        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.Bumpiness);
+        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.Bumpiness, value);
+    }
 
-    /// <summary>
-    /// UV tiling scale.
-    /// </summary>
-    public Vector2 tiling = Vector2.one;
+    /// <summary>Alpha below which a masked surface is cut out.</summary>
+    public float alphaCutoff
+    {
+        get => internal_m2n_material_get_float(uid, (int)MaterialProperty.AlphaCutoff);
+        set => internal_m2n_material_set_float(uid, (int)MaterialProperty.AlphaCutoff, value);
+    }
 
-    /// <summary>
-    /// Surface roughness. Defaults to the engine's material default.
-    /// </summary>
-    public float roughness = 0.3f;
+    /// <summary>UV tiling scale.</summary>
+    public Vector2 tiling
+    {
+        get => internal_m2n_material_get_vector(uid, (int)MaterialProperty.Tiling);
+        set => internal_m2n_material_set_vector(uid, (int)MaterialProperty.Tiling, value);
+    }
 
-    /// <summary>
-    /// Surface metalness.
-    /// </summary>
-    public float metalness = 0.0f;
+    /// <summary>Base color texture, or null for the engine's default map.</summary>
+    public Texture colorMap
+    {
+        get => GetTexture(MaterialProperty.ColorMap);
+        set => SetTexture(MaterialProperty.ColorMap, value);
+    }
 
-    /// <summary>
-    /// Normal-map bump intensity.
-    /// </summary>
-    public float bumpiness = 1.0f;
+    /// <summary>Normal map, or null for the engine's default map.</summary>
+    public Texture normalMap
+    {
+        get => GetTexture(MaterialProperty.NormalMap);
+        set => SetTexture(MaterialProperty.NormalMap, value);
+    }
 
-    /// <summary>
-    /// Multiplier of the emissive color: emitted light = emissiveColor x emissiveIntensity.
-    /// </summary>
-    public float emissiveIntensity = 1.0f;
+    /// <summary>Roughness texture, or null for the engine's default map.</summary>
+    public Texture roughnessMap
+    {
+        get => GetTexture(MaterialProperty.RoughnessMap);
+        set => SetTexture(MaterialProperty.RoughnessMap, value);
+    }
+
+    /// <summary>Metalness texture, or null for the engine's default map.</summary>
+    public Texture metalnessMap
+    {
+        get => GetTexture(MaterialProperty.MetalnessMap);
+        set => SetTexture(MaterialProperty.MetalnessMap, value);
+    }
+
+    /// <summary>Emissive texture, or null for the engine's default map.</summary>
+    public Texture emissiveMap
+    {
+        get => GetTexture(MaterialProperty.EmissiveMap);
+        set => SetTexture(MaterialProperty.EmissiveMap, value);
+    }
+
+    /// <summary>Ambient occlusion texture, or null for the engine's default map.</summary>
+    public Texture aoMap
+    {
+        get => GetTexture(MaterialProperty.AoMap);
+        set => SetTexture(MaterialProperty.AoMap, value);
+    }
+
+    /// <summary>How the material treats alpha.</summary>
+    public MaterialAlphaMode alphaMode
+    {
+        get => (MaterialAlphaMode)internal_m2n_material_get_mode(uid, (int)MaterialProperty.AlphaMode);
+        set => internal_m2n_material_set_mode(uid, (int)MaterialProperty.AlphaMode, (int)value);
+    }
+
+    /// <summary>Which faces the material hides; None draws both sides.</summary>
+    public MaterialCullMode cullMode
+    {
+        get => (MaterialCullMode)internal_m2n_material_get_mode(uid, (int)MaterialProperty.CullMode);
+        set => internal_m2n_material_set_mode(uid, (int)MaterialProperty.CullMode, (int)value);
+    }
+
+    private Texture GetTexture(MaterialProperty property)
+    {
+        var texture = internal_m2n_material_get_texture(uid, (int)property);
+        return texture == Guid.Empty ? null : new Texture { uid = texture };
+    }
+
+    private void SetTexture(MaterialProperty property, Texture texture)
+    {
+        internal_m2n_material_set_texture(uid, (int)property, texture?.uid ?? Guid.Empty);
+    }
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern void internal_m2n_material_set_color(Guid uid, int property, Color value);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern Color internal_m2n_material_get_color(Guid uid, int property);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern void internal_m2n_material_set_float(Guid uid, int property, float value);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern float internal_m2n_material_get_float(Guid uid, int property);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern void internal_m2n_material_set_vector(Guid uid, int property, Vector2 value);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern Vector2 internal_m2n_material_get_vector(Guid uid, int property);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern void internal_m2n_material_set_texture(Guid uid, int property, Guid texture);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern Guid internal_m2n_material_get_texture(Guid uid, int property);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern void internal_m2n_material_set_mode(Guid uid, int property, int value);
+
+    [MethodImpl(MethodImplOptions.InternalCall)]
+    private static extern int internal_m2n_material_get_mode(Guid uid, int property);
 }
 
 /// <summary>

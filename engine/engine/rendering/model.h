@@ -7,6 +7,7 @@
 
 #include "gpu_program.h"
 #include "material.h"
+#include "material_instance.h"
 #include "mesh.h"
 #include "render_proxy.h"
 #include "batch_collector.h"
@@ -367,12 +368,12 @@ public:
     void set_lod(asset_handle<mesh> mesh, uint32_t lod);
 
     /**
-     * @brief Sets the material for the specified index.
-     * @param material The material to set.
-     * @param index The index to set the material at.
+     * @brief Sets the shared material of a slot. The slot's material instance keeps its overrides, which now
+     * apply on top of this material.
+     * @param material The shared material asset.
+     * @param index The slot.
      */
-    void set_material(asset_handle<material> material, uint32_t index);
-    void set_material_instance(material::sptr material, uint32_t index);
+    void set_shared_material(asset_handle<material> material, uint32_t index);
 
     /**
      * @brief Gets all the LOD meshes.
@@ -395,18 +396,24 @@ public:
     void set_lods(const std::vector<asset_handle<mesh>>& lods);
 
     /**
-     * @brief Gets all the materials.
-     * @return A constant reference to the vector of materials.
+     * @brief Gets the shared material of every slot.
      */
-    auto get_materials() const -> const std::vector<asset_handle<material>>&;
-    auto get_material_instances() const -> const std::vector<material::sptr>&;
+    auto get_shared_materials() const -> const std::vector<asset_handle<material>>&;
 
     /**
-     * @brief Sets the materials.
-     * @param materials The vector of materials to set.
+     * @brief Gets the material instance of every slot (at least one per shared material).
      */
-    void set_materials(const std::vector<asset_handle<material>>& materials);
-    void set_material_instances(const std::vector<material::sptr>& materials);
+    auto get_material_instances() const -> const std::vector<material_instance>&;
+
+    /**
+     * @brief Sets the shared material of every slot; the material instances keep their overrides.
+     */
+    void set_shared_materials(const std::vector<asset_handle<material>>& materials);
+
+    /**
+     * @brief Sets the material instance of every slot.
+     */
+    void set_material_instances(const std::vector<material_instance>& instances);
 
     /**
      * @brief Fills the slots that have no material of their own - empty, or still holding the
@@ -425,13 +432,33 @@ public:
     auto is_default_materials_pending() const -> bool;
 
     /**
-     * @brief Gets the material for the specified index.
-     * @param index The index.
-     * @return The asset handle for the material of the specified index.
+     * @brief Gets the shared material of a slot.
+     * @return An empty handle when the slot does not exist.
      */
-    auto get_material(uint32_t index) const -> asset_handle<material>;
-    auto get_material_instance(uint32_t index) const -> material::sptr;
-    auto get_or_emplace_material_instance(uint32_t index) -> material::sptr;
+    auto get_shared_material(uint32_t index) const -> asset_handle<material>;
+
+    /**
+     * @brief Gets the material instance of a slot: this model's overrides of the slot's shared material.
+     * @return An instance without overrides when the slot does not exist.
+     */
+    auto get_material_instance(uint32_t index) const -> const material_instance&;
+
+    /**
+     * @brief Gets the material instance of a slot for editing; creates the slot's instance when needed.
+     */
+    auto get_material_instance(uint32_t index) -> material_instance&;
+
+    /**
+     * @brief The material a slot draws with: its material instance resolved over the shared material, or the
+     * shared material when the instance has no overrides (or was not resolved yet, see update_material_instances).
+     */
+    auto get_render_material(uint32_t index) const -> material::sptr;
+
+    /**
+     * @brief Brings the resolved materials of the material instances up to date. Not thread safe for one model:
+     * the model system calls it once a frame from that model's task.
+     */
+    void update_material_instances();
 
     /**
      * @brief Gets whether LOD override is enabled.
@@ -815,6 +842,20 @@ private:
      */
     void resize_materials(const asset_handle<mesh>& mesh);
 
+    /// Gives every shared material a material instance and points each instance at its slot's shared material.
+    void sync_material_instances();
+
+    /// What a slot's batches key on, and the material its batch instances take their per-instance values from.
+    struct slot_batch_material
+    {
+        material::sptr key_material;
+        const material* material_override{};
+    };
+
+    /// A material instance that overrides only per-instance values draws in its shared material's batch, carrying
+    /// its resolved material; any other slot keys on the material it draws with.
+    auto get_slot_batch_material(uint32_t index) const -> slot_batch_material;
+
     /**
      * @brief Shared core of the per-submesh LOD selection working on a world-space sphere.
      * Applies all viability guards (single-mesh internal LODs, screen size table, override)
@@ -826,13 +867,14 @@ private:
                                        const math::bsphere& world_sphere,
                                        const camera& cam) const -> uint32_t;
 
-    /// Collection of all materials for this model.
+    /// The shared material of every slot.
     std::vector<asset_handle<material>> materials_;
 
     /// LOD 0's default materials still have to be applied (see set_default_materials_pending).
     bool default_materials_pending_{false};
 
-    std::vector<material::sptr> material_instances_;
+    /// The material instance of every slot; never shorter than materials_ (see sync_material_instances).
+    std::vector<material_instance> material_instances_;
 
     /// Collection of all LODs for this model.
     std::vector<asset_handle<mesh>> mesh_lods_;

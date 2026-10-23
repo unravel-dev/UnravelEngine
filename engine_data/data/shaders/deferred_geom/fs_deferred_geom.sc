@@ -1,4 +1,8 @@
+#ifdef DEFERRED_GEOM_INSTANCE_MATERIAL
+$input v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_params, v_material0, v_material1, v_material2, v_material3
+#else
 $input v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_params
+#endif
 
 #include "../common.sh"
 #include "../lighting.sh"
@@ -15,10 +19,18 @@ uniform vec4 u_camera_wpos;
 uniform vec4 u_camera_clip_planes; //.x = near, .y = far, .z = material texture mip bias
 
 // per instance
+#ifdef DEFERRED_GEOM_INSTANCE_MATERIAL
+// Each instance's own values (fs_deferred_geom_instance_material.sc, pbr_material::write_instance_constants).
+#define u_base_color v_material0
+#define u_subsurface_color v_material1
+#define u_emissive_color v_material2
+#define u_surface_data v_material3
+#else
 uniform vec4 u_base_color;
 uniform vec4 u_subsurface_color;
 uniform vec4 u_emissive_color;
 uniform vec4 u_surface_data;
+#endif
 uniform vec4 u_surface_data2;
 
 uniform vec4 u_tiling;

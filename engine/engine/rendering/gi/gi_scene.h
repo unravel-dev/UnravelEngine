@@ -99,8 +99,9 @@ public:
         ///< An emissive light source (surface_cache_system::instance::is_emissive_light_source): its cards stay
         ///< resident down to one texel and down to a fifth of the minimum face area.
         bool is_emissive_light_source = false;
-        ///< The material as captured (its identity and material::get_revision): a change queues the placement's pages
-        ///< for capture ahead of the refresh.
+        ///< The material as captured (its identity, material::get_state_revision and, at most every few updates,
+        ///< material::get_instance_values_revision): a change queues the placement's pages for capture ahead of the
+        ///< refresh.
         uint64_t material_key = 0;
     };
 

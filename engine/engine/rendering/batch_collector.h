@@ -46,6 +46,8 @@ struct batch_group_t
     batch_instance_collection instances;
     float camera_distance = 0.0f;
     bool is_split_batch = false;
+    /// Some instance carries a material_override, so the batch draws with the per-instance material layout.
+    bool has_material_overrides = false;
     /// Mixed hash of @ref key, cached by the owning collector: probing compares it before the
     /// key itself, and growing the index never hashes a key again.
     size_t key_hash = 0;

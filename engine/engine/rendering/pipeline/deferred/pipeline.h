@@ -461,7 +461,13 @@ private:
     geom_program geom_program_;
     geom_program geom_program_skinned_;
     geom_program geom_program_instanced_;
+    /// The instanced program of batches whose instances carry per-instance material values
+    /// (vs_deferred_geom_instanced_material.sc, instance_material_vertex_data).
+    geom_program geom_program_instanced_material_;
     card_capture_program card_capture_program_;
+    /// This frame's prepared batches split by layout (submit_batched_geometry); kept for their capacity.
+    std::vector<const batch_group*> plain_batches_;
+    std::vector<const batch_group*> material_value_batches_;
 
     struct velocity_geom_program : uniforms_cache
     {

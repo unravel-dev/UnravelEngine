@@ -549,6 +549,16 @@ void prefab_override_context::mark_material_as_changed(entt::handle entity)
     mark_property_as_changed(entity, entt::resolve<model_component>(), "model/materials");
 }
 
+void prefab_override_context::mark_material_instance_as_changed(entt::handle entity, uint32_t slot)
+{
+    // The path the inspector records for the slot, so an edit made either way states the same override.
+    const auto element = "[" + std::to_string(slot) + "]";
+    mark_property_as_changed(entity,
+                             entt::resolve<model_component>(),
+                             "model/material_instances" + element,
+                             "Model/Material Instances" + element);
+}
+
 void prefab_override_context::mark_property_as_changed(entt::handle entity,
                                                        const entt::meta_type& component_type,
                                                        const std::string& property_path,

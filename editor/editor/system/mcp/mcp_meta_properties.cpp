@@ -15,6 +15,7 @@
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/font.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_instance.h>
 #include <engine/rendering/mesh.h>
 #include <engine/settings/settings.h>
 #include <engine/ui/ui_tree.h>
@@ -379,6 +380,53 @@ auto make_bbox_codec() -> value_codec
                 }
                 out = entt::meta_any{bounds};
                 return true;
+            }};
+}
+
+auto find_codec(const entt::meta_type& type) -> const value_codec*;
+auto enum_to_json(const entt::meta_any& value) -> hpp::optional<std::string>;
+
+/// A model slot's material instance, read only: its shared material, the values it overrides and whether it still
+/// draws together with the shared material's other models. scene_set_model_material_instances_batch writes overrides.
+auto make_material_instance_codec() -> value_codec
+{
+    return {.schema_type = "object",
+            .format_hint = "read only: {shared_material, overrides: {property: value}, shares_draw}; "
+                           "scene_set_model_material_instances_batch sets overrides",
+            .to_json = [](rtti::context& ctx, const entt::meta_any& value) -> hpp::optional<std::string>
+            {
+                const auto& instance = value.cast<const material_instance&>();
+                const auto type = instance.get_material_type();
+                std::string overrides;
+                for(const auto& entry : instance.collect_overrides())
+                {
+                    const auto data = type ? type.data(entry.property) : entt::meta_data{};
+                    if(!data)
+                    {
+                        continue;
+                    }
+                    const auto* codec = find_codec(entry.value.type());
+                    auto encoded = codec != nullptr ? codec->to_json(ctx, entry.value) : enum_to_json(entry.value);
+                    if(!encoded)
+                    {
+                        continue;
+                    }
+                    overrides += fmt::format("{}{}:{}",
+                                             overrides.empty() ? "" : ",",
+                                             make_json_string(entt::get_attribute_as<std::string>(data, "name")),
+                                             *encoded);
+                }
+                const auto& shared = instance.get_shared_material();
+                return fmt::format(R"({{"shared_material":{},"overrides":{{{}}},"shares_draw":{}}})",
+                                   shared ? make_json_string(shared.id()) : std::string("null"),
+                                   overrides,
+                                   bool_to_json(instance.shares_draw()));
+            },
+            .from_json = [](rtti::context&, const simdjson::dom::element&, entt::meta_any&, std::string& error) -> bool
+            {
+                error = "material instances are read only here: scene_set_model_material_instances_batch overrides "
+                        "their values";
+                return false;
             }};
 }
 
@@ -1008,6 +1056,7 @@ auto codecs() -> const std::unordered_map<entt::id_type, value_codec>&
         add(entt::type_id<math::curve<math::color>>(), make_curve_codec<math::color>());
         add(entt::type_id<math::curve<math::vec3>>(), make_curve_codec<math::vec3>());
         add(entt::type_id<math::bbox>(), make_bbox_codec());
+        add(entt::type_id<material_instance>(), make_material_instance_codec());
         add(entt::type_id<math::vec4>(), make_vector_codec<4, float>());
         add(entt::type_id<math::bvec3>(), make_vector_codec<3, bool>());
         add(entt::type_id<entt::handle>(), make_entity_codec());

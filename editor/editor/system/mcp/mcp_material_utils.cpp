@@ -71,6 +71,36 @@ auto apply_material_properties(rtti::context& ctx, material& mat, const simdjson
     return result;
 }
 
+auto apply_material_instance_properties(rtti::context& ctx,
+                                        material_instance& instance,
+                                        const simdjson::dom::object& properties) -> component_apply_result
+{
+    component_apply_result result;
+    const auto shared = instance.get_shared_material().get();
+    if(!shared || asset_handle<material>::is_empty(shared))
+    {
+        result.ok = false;
+        result.errors.emplace_back("The slot has no shared material to override.");
+        return result;
+    }
+    auto candidate = shared->clone();
+    auto candidate_object = material_object(*candidate);
+    apply_meta_properties(ctx, candidate_object, properties, result);
+    if(!result.ok)
+    {
+        return result;
+    }
+    for(const auto& name : result.applied)
+    {
+        const auto property = entt::hashed_string{name.c_str()}.value();
+        if(const auto data = candidate_object.type().data(property))
+        {
+            instance.set_override(property, data.get(candidate_object));
+        }
+    }
+    return result;
+}
+
 auto save_material_asset(rtti::context& ctx, const asset_handle<material>& handle, std::string& error) -> bool
 {
     if(!handle)

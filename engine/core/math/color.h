@@ -119,6 +119,13 @@ struct color
         return value;
     }
 
+    /// Compares the float channels. Without it, color == color goes through the uint32 conversion, which clamps
+    /// to [0, 1] and quantizes to 8 bits, so HDR values and small differences compared equal.
+    friend auto operator==(const color& lhs, const color& rhs) -> bool
+    {
+        return lhs.value == rhs.value;
+    }
+
     inline void set_hsv(float h, float s, float v, float a = 1.0f)
     {
         hsv_to_rgb(h, s, v, value.x, value.y, value.z);

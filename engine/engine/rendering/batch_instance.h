@@ -6,6 +6,7 @@
 
 namespace unravel
 {
+class material;
 
 /**
  * @brief Instance data for a single object in a batch.
@@ -23,6 +24,11 @@ struct batch_instance
     /// pose storage - same frame-lifetime contract as world_transform_ptr. Consumed by the
     /// velocity pass's instanced submit; the G-buffer instanced path ignores it.
     const math::mat4* prev_world_transform_ptr = nullptr;
+
+    /// The resolved material of a material instance that shares its shared material's draw (the batch key's
+    /// material): its per-instance values go into this instance's data. Null to draw with the batch's material.
+    /// Frame lifetime, like world_transform_ptr.
+    const material* material_override = nullptr;
 
     /// LOD blending parameters (x = transition factor: +[0,1] = fade out, -[0,1] = fade in; y,z reserved)
     math::vec3 lod_params = math::vec3(0.0f, 0.0f, 0.0f);
@@ -145,6 +151,30 @@ struct velocity_instance_vertex_data
         // G-buffer batched draw.
         world_matrix[3][3] = instance.lod_params.x;
     }
+};
+
+/**
+ * @brief GPU instance data of a batch whose instances carry per-instance material values: the world matrix packed as
+ * instance_vertex_data packs it (i_data0..3, LOD in [3][3]) followed by the material's instance constants (i_data4..7,
+ * material::write_instance_constants) - the instance's own material, else the batch's. 128-byte stride, packed only
+ * for batches that have such instances.
+ */
+struct instance_material_vertex_data
+{
+    static constexpr size_t CONSTANT_COUNT = 4;
+
+    static auto packed_size() -> size_t
+    {
+        return 128;
+    }
+
+    /// Identical to instance_vertex_data, so the raster position matches the velocity pass's.
+    math::mat4 world_matrix;
+    /// The per-instance material values (i_data4..7).
+    math::vec4 constants[CONSTANT_COUNT]{};
+
+    instance_material_vertex_data() = default;
+    instance_material_vertex_data(const batch_instance& instance, const material& batch_material);
 };
 
 /**

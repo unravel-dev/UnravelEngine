@@ -247,6 +247,13 @@ struct prefab_override_context
     static void mark_material_as_changed(entt::handle entity);
 
     /**
+     * @brief Marks one slot's material instance as changed in prefab override system
+     * @param entity Entity whose material instance was modified
+     * @param slot Material slot of the instance
+     */
+    static void mark_material_instance_as_changed(entt::handle entity, uint32_t slot);
+
+    /**
      * @brief Marks a specific property as changed using component type
      * @param entity Entity that was modified
      * @param component_type Meta type of the component

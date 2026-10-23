@@ -4,6 +4,7 @@
 
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/material.h>
+#include <engine/rendering/material_instance.h>
 
 #include <context/context.hpp>
 #include <ser20/external/simdjson/simdjson.h>
@@ -34,6 +35,16 @@ auto material_to_json(rtti::context& ctx, material& mat) -> std::string;
  */
 auto apply_material_properties(rtti::context& ctx, material& mat, const simdjson::dom::object& properties)
     -> component_apply_result;
+
+/**
+ * @brief Overrides @p properties of the instance's shared material, all or nothing.
+ *
+ * The values are checked on a copy of the shared material; the properties that applied become overrides of the
+ * instance, and every other value keeps following the shared material.
+ */
+auto apply_material_instance_properties(rtti::context& ctx,
+                                        material_instance& instance,
+                                        const simdjson::dom::object& properties) -> component_apply_result;
 
 /// Saves a material asset to its file, as the inspector's save does, and refreshes its thumbnail.
 auto save_material_asset(rtti::context& ctx, const asset_handle<material>& handle, std::string& error) -> bool;

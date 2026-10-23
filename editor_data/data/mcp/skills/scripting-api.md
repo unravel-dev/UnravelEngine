@@ -101,11 +101,15 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   seconds, stopAtEnd)` ramp on unscaled time.
 - Lights: `LightComponent.enabled = false` is off (no light, shadows or GI); intensity 0
   still renders shadow maps.
-- Materials per renderer slot: `model.SetFloat(MaterialProperty.EmissiveIntensity, 3f, slot)`,
-  `SetColor(MaterialProperty.EmissiveColor, c, slot)`, `SetVector(MaterialProperty.Tiling, v)`,
-  `SetTexture(MaterialProperty.ColorMap, tex)`, `SetCullMode`, `SetAlphaMode`, the `Get*`
-  pairs and `ResetMaterial(slot)`. The first write gives that renderer its own copy of the
-  shared material; other renderers keep the asset.
+- Materials: two terms. A **shared material** (`Material`, the .mat asset,
+  `model.GetSharedMaterial(slot)` / `SetSharedMaterial`) changes every renderer that uses it
+  (`material.baseColor = c`; in the editor a script's change lasts until play stops). A
+  **material instance** (`model.GetMaterialInstance(slot)`) changes one renderer:
+  `instance.emissiveIntensity = 3f`, `instance.baseColor = c`, `instance.colorMap = tex`; values it
+  does not override follow the shared material; `instance.Revert(MaterialProperty.X)`,
+  `instance.RevertAll()`, `instance.IsOverridden(...)`. Colors and numbers are per instance (the
+  renderer keeps sharing the material's instanced draw, `instance.sharesDraw`); textures, tiling
+  and modes give it a draw of its own.
 - Particles: `emitter.Emit(count)` or `Emit(count, new EmitParams { position = p, velocity = v,
   color = c, size = s, lifetime = t })` bursts regardless of rate or play state.
   Gradients are `Gradient` (color keys), `MinMaxCurve` (random between two), `Curve` and

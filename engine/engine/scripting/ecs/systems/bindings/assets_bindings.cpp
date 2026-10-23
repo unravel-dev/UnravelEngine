@@ -11,10 +11,13 @@
 #include <engine/ecs/prefab.h>
 #include <engine/physics/physics_material.h>
 #include <engine/rendering/font.h>
+#include <engine/rendering/material_instance.h>
 #include <engine/rendering/mesh.h>
 #include <engine/ui/style_sheet.h>
 #include <engine/ui/ui_tree.h>
 #include <graphics/texture.h>
+
+#include <unordered_map>
 
 namespace unravel
 {
@@ -99,22 +102,95 @@ auto internal_m2n_get_asset_by_key(const std::string& key, const dotnet::type& t
     return {};
 }
 
-auto internal_m2n_get_material_properties(const hpp::uuid& uid) -> dotnetpp_backend::managed_interface::material_properties
+/// A shared material scripts edited, with its values from before the first edit.
+struct shared_material_edit
 {
-    using converter = dotnet::managed_interface::converter;
+    std::weak_ptr<material> live;
+    material::sptr original;
+};
 
-    auto& ctx = engine::context();
-    auto& am = ctx.get_cached<asset_manager>();
+auto get_shared_material_edits() -> std::unordered_map<const material*, shared_material_edit>&
+{
+    static std::unordered_map<const material*, shared_material_edit> edits;
+    return edits;
+}
 
-    dotnetpp_backend::managed_interface::material_properties props;
+auto find_shared_material(const hpp::uuid& uid) -> material::sptr
+{
+    auto& am = engine::context().get_cached<asset_manager>();
     auto asset = am.get_asset<material>(uid);
     if(!asset)
     {
-        return props;
+        return {};
     }
-    auto material = asset.get();
+    auto shared = asset.get();
+    return shared && !asset_handle<material>::is_empty(shared) ? shared : nullptr;
+}
 
-    return get_material_properties(material);
+auto get_shared_value(const hpp::uuid& uid, int32_t property) -> entt::meta_any
+{
+    const auto shared = find_shared_material(uid);
+    return shared ? get_material_value(*shared, get_material_property_id(property)) : entt::meta_any{};
+}
+
+/// Changes the shared material for every renderer that uses it; restored when play stops.
+void set_shared_value(const hpp::uuid& uid, int32_t property, const entt::meta_any& value)
+{
+    if(const auto shared = find_shared_material(uid))
+    {
+        remember_shared_material_edit(shared);
+        set_material_value(*shared, get_material_property_id(property), value);
+    }
+}
+
+void internal_m2n_material_set_color(const hpp::uuid& uid, int32_t property, const managed_color& value)
+{
+    set_shared_value(uid, property, make_color_value(value));
+}
+
+auto internal_m2n_material_get_color(const hpp::uuid& uid, int32_t property) -> managed_color
+{
+    return read_color_value(get_shared_value(uid, property));
+}
+
+void internal_m2n_material_set_float(const hpp::uuid& uid, int32_t property, float value)
+{
+    set_shared_value(uid, property, value);
+}
+
+auto internal_m2n_material_get_float(const hpp::uuid& uid, int32_t property) -> float
+{
+    return read_float_value(get_shared_value(uid, property));
+}
+
+void internal_m2n_material_set_vector(const hpp::uuid& uid, int32_t property, const managed_vector2& value)
+{
+    set_shared_value(uid, property, make_vector_value(value));
+}
+
+auto internal_m2n_material_get_vector(const hpp::uuid& uid, int32_t property) -> managed_vector2
+{
+    return read_vector_value(get_shared_value(uid, property));
+}
+
+void internal_m2n_material_set_texture(const hpp::uuid& uid, int32_t property, const hpp::uuid& texture)
+{
+    set_shared_value(uid, property, make_texture_value(texture));
+}
+
+auto internal_m2n_material_get_texture(const hpp::uuid& uid, int32_t property) -> hpp::uuid
+{
+    return read_texture_value(get_shared_value(uid, property));
+}
+
+void internal_m2n_material_set_mode(const hpp::uuid& uid, int32_t property, int32_t value)
+{
+    set_shared_value(uid, property, make_mode_value(property, value));
+}
+
+auto internal_m2n_material_get_mode(const hpp::uuid& uid, int32_t property) -> int32_t
+{
+    return read_mode_value(get_shared_value(uid, property));
 }
 
 auto internal_m2n_audio_clip_get_length(const hpp::uuid& uid) -> float
@@ -174,6 +250,39 @@ auto internal_m2n_animation_clip_get_name(const hpp::uuid& uid) -> std::string
 
 } // namespace
 
+auto make_texture_value(const hpp::uuid& uid) -> entt::meta_any
+{
+    texture_handle texture;
+    if(!uid.is_nil())
+    {
+        texture = engine::context().get_cached<asset_manager>().get_asset<gfx::texture>(uid);
+    }
+    return texture;
+}
+
+void remember_shared_material_edit(const material::sptr& shared)
+{
+    auto& edits = get_shared_material_edits();
+    if(edits.find(shared.get()) == edits.end())
+    {
+        edits.emplace(shared.get(), shared_material_edit{shared, shared->clone()});
+    }
+}
+
+void restore_shared_material_edits()
+{
+    auto& edits = get_shared_material_edits();
+    for(const auto& [key, edit] : edits)
+    {
+        // In place: renderers and material instances keep referencing the same material.
+        if(const auto live = edit.live.lock())
+        {
+            copy_material_values(*edit.original, *live);
+        }
+    }
+    edits.clear();
+}
+
 void register_assets_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
@@ -181,9 +290,21 @@ void register_assets_script_bindings()
         auto reg = dotnet::internal_call_registry("Unravel.Core.Assets");
         reg.add_internal_call("internal_m2n_get_asset_by_uuid", dotnet_internal_call(internal_m2n_get_asset_by_uuid));
         reg.add_internal_call("internal_m2n_get_asset_by_key", dotnet_internal_call(internal_m2n_get_asset_by_key));
-        reg.add_internal_call("internal_m2n_get_material_properties",
-                              dotnet_internal_call(internal_m2n_get_material_properties));
-
+    }
+    {
+        auto reg = dotnet::internal_call_registry("Unravel.Core.Material");
+        reg.add_internal_call("internal_m2n_material_set_color", dotnet_internal_call(internal_m2n_material_set_color));
+        reg.add_internal_call("internal_m2n_material_get_color", dotnet_internal_call(internal_m2n_material_get_color));
+        reg.add_internal_call("internal_m2n_material_set_float", dotnet_internal_call(internal_m2n_material_set_float));
+        reg.add_internal_call("internal_m2n_material_get_float", dotnet_internal_call(internal_m2n_material_get_float));
+        reg.add_internal_call("internal_m2n_material_set_vector", dotnet_internal_call(internal_m2n_material_set_vector));
+        reg.add_internal_call("internal_m2n_material_get_vector", dotnet_internal_call(internal_m2n_material_get_vector));
+        reg.add_internal_call("internal_m2n_material_set_texture",
+                              dotnet_internal_call(internal_m2n_material_set_texture));
+        reg.add_internal_call("internal_m2n_material_get_texture",
+                              dotnet_internal_call(internal_m2n_material_get_texture));
+        reg.add_internal_call("internal_m2n_material_set_mode", dotnet_internal_call(internal_m2n_material_set_mode));
+        reg.add_internal_call("internal_m2n_material_get_mode", dotnet_internal_call(internal_m2n_material_get_mode));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.AudioClip");

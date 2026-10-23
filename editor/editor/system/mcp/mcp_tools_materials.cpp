@@ -14,22 +14,22 @@ namespace unravel::mcp
 namespace
 {
 
-/// The do and undo of replacing an entity's model with another: each puts one of the two in place and
-/// records the material change as the inspector does. The entity is held by its uuid, so the step still
-/// finds it after it was deleted and restored.
-auto make_model_swap(entt::handle entity, const model& before, const model& after)
+/// The do and undo of replacing an entity's model with one whose material instance in `slot` changed: each
+/// puts one of the two in place and records the instance change as the inspector does. The entity is held by
+/// its uuid, so the step still finds it after it was deleted and restored.
+auto make_model_swap(entt::handle entity, const model& before, const model& after, uint32_t slot)
     -> std::pair<std::function<void()>, std::function<void()>>
 {
     const auto handle = entt::make_uhandle(entity);
-    const auto put = [handle](const model& value) -> std::function<void()>
+    const auto put = [handle, slot](const model& value) -> std::function<void()>
     {
-        return [handle, value]()
+        return [handle, slot, value]()
         {
             const auto target = handle.resolve();
             if(auto* model_comp = target ? target.try_get<model_component>() : nullptr)
             {
                 model_comp->set_model(value);
-                prefab_override_context::mark_material_as_changed(target);
+                prefab_override_context::mark_material_instance_as_changed(target, slot);
             }
         };
     };
@@ -43,10 +43,13 @@ void register_material_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_set_model_material_instances_batch",
          .description =
-             "Give model slots their own material: each item's properties (assets_list_properties type material) "
-             "edit a per-entity instance of the slot's material, starting from the slot's material asset "
-             "the first time; the .mat file and other renderers are untouched. Each item: entity_id, "
-             "properties, optional index (slot, default 0). All or nothing per item; one undo step.",
+             "Override properties of a model slot's shared material for that entity only (its material instance): "
+             "each item's properties (assets_list_properties type material) become overrides, every other value "
+             "keeps following the shared material, and the .mat file and other renderers are untouched. "
+             "shares_draw in the result is true while every override is a per-instance property (colors and "
+             "numbers), so the entity still draws together with the shared material's other renderers. Each "
+             "item: entity_id, properties, optional index (slot, default 0). All or nothing per item; one undo "
+             "step.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0},"properties":{"type":"object"}},"required":["entity_id","properties"]}}},"required":["items"]})json",
          .handler =
@@ -134,7 +137,7 @@ void register_material_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  const auto old_model = entity.get<model_component>().get_model();
-                 const auto slot_count = std::max<size_t>(1, old_model.get_materials().size());
+                 const auto slot_count = std::max<size_t>(1, old_model.get_shared_materials().size());
                  if(item.index >= slot_count)
                  {
                      results += fmt::format(R"({{"ok":false,"entity_id":{},"error":{}}})",
@@ -144,11 +147,11 @@ void register_material_tools(mcp_tool_registry& registry)
                                                                          slot_count - 1)));
                      continue;
                  }
-                 // The instance is edited as a copy: the model it replaces keeps the instance it shares, so undo
-                 // puts the old values back, and a rejected edit changes nothing.
+                 // The instance is edited on a copy of the model: the swap below is one undo step, and a rejected
+                 // edit changes nothing.
                  auto new_model = old_model;
-                 auto instance = new_model.get_or_emplace_material_instance(item.index)->clone();
-                 auto applied = apply_material_properties(ctx, *instance, properties);
+                 auto& instance = new_model.get_material_instance(item.index);
+                 auto applied = apply_material_instance_properties(ctx, instance, properties);
                  if(!applied.ok)
                  {
                      results += fmt::format(R"({{"ok":false,"entity_id":{},"result":{}}})",
@@ -156,13 +159,14 @@ void register_material_tools(mcp_tool_registry& registry)
                                             apply_result_to_json(applied));
                      continue;
                  }
-                 new_model.set_material_instance(instance, item.index);
-                 const auto swap = make_model_swap(entity, old_model, new_model);
+                 const bool shares_draw = instance.shares_draw();
+                 const auto swap = make_model_swap(entity, old_model, new_model, item.index);
                  em.do_action("MCP Set Model Material Instance", swap.first, swap.second);
                  ++ok_count;
-                 results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"result":{}}})",
+                 results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"shares_draw":{},"result":{}}})",
                                         make_json_string(entity_id_string(entity)),
                                         item.index,
+                                        shares_draw ? "true" : "false",
                                         apply_result_to_json(applied));
              }
              results += "]";
@@ -174,7 +178,8 @@ void register_material_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_clear_model_material_instances_batch",
          .description =
-             "Clear runtime material instances on model slots (batch) so shared assets are used again.",
+             "Revert every override of model slots' material instances (batch), so the slots draw exactly like "
+             "their shared materials again.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"index":{"type":"integer","minimum":0}},"required":["entity_id"]}}},"required":["items"]})json",
          .handler =
@@ -231,8 +236,8 @@ void register_material_tools(mcp_tool_registry& registry)
                  }
                  const auto old_model = entity.get<model_component>().get_model();
                  auto new_model = old_model;
-                 new_model.set_material_instance(nullptr, index);
-                 const auto swap = make_model_swap(entity, old_model, new_model);
+                 new_model.get_material_instance(index).revert_all();
+                 const auto swap = make_model_swap(entity, old_model, new_model, index);
                  em.do_action("MCP Clear Model Material Instance", swap.first, swap.second);
                  ++ok_count;
                  results += fmt::format(R"({{"ok":true,"entity_id":{},"index":{},"cleared":true}})",

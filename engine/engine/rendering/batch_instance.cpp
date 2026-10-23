@@ -1,4 +1,5 @@
 #include "batch_instance.h"
+#include "material.h"
 
 #include <sstream>
 #include <iomanip>
@@ -55,6 +56,19 @@ instance_vertex_data::instance_vertex_data(const batch_instance& instance)
 {
     // Pack LOD parameter into matrix[3][3] position (normally 1.0 for homogeneous coordinates)
     world_matrix[3][3] = instance.lod_params.x;
+}
+
+static_assert(instance_material_vertex_data::CONSTANT_COUNT == material::MAX_INSTANCE_CONSTANTS,
+              "the instance layout holds every instance constant a material writes");
+static_assert(sizeof(instance_material_vertex_data) == 128, "i_data0..7");
+
+instance_material_vertex_data::instance_material_vertex_data(const batch_instance& instance,
+                                                             const material& batch_material)
+    : world_matrix(instance.world_transform_ptr ? *instance.world_transform_ptr : math::mat4(1.0f))
+{
+    world_matrix[3][3] = instance.lod_params.x;
+    const auto& source = instance.material_override != nullptr ? *instance.material_override : batch_material;
+    source.write_instance_constants(constants);
 }
 
 void instance_vertex_data::set_lod_param(float lod_param)

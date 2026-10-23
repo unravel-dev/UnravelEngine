@@ -16,6 +16,7 @@ template<typename Key>
 void batch_group_t<Key>::add_instance(const batch_instance& instance)
 {
     instances.add_instance(instance);
+    has_material_overrides = has_material_overrides || instance.material_override != nullptr;
 }
 
 template<typename Key>
@@ -26,6 +27,7 @@ void batch_group_t<Key>::reset()
     instances.clear();
     camera_distance = 0.0f;
     is_split_batch = false;
+    has_material_overrides = false;
 }
 
 template<typename Key>

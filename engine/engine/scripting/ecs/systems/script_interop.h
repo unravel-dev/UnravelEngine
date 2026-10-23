@@ -84,19 +84,6 @@ struct ray
 	vector3 direction{};
 };
 
-struct material_properties
-{
-	bool valid{};
-
-	color base_color{1.0f, 1.0f, 1.0f, 1.0f};
-	color emissive_color{};
-	vector2 tiling{1.0f, 1.0f};
-	float roughness{0.5};
-	float metalness{};
-	float bumpiness{1.0f};
-	float emissive_intensity{1.0f};
-};
-
 struct manifold_point
 {
 	vector3 point{};

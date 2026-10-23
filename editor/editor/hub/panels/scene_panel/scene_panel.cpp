@@ -161,7 +161,7 @@ void handle_material_drop(rtti::context& ctx, const camera_component& camera_com
                 // Get current materials to store as old state
                 auto& model_comp = entity.get<model_component>();
                 const auto& current_model = model_comp.get_model();
-                auto old_materials = current_model.get_materials();
+                auto old_materials = current_model.get_shared_materials();
 
                 em.push_undo_stack_enabled(true);
 
@@ -1222,9 +1222,9 @@ void restore_original_materials(entt::handle entity, const std::vector<asset_han
     class model model_copy = model_comp.get_model();
 
     // Restore original materials
-    for(size_t i = 0; i < original_materials.size() && i < model_copy.get_materials().size(); ++i)
+    for(size_t i = 0; i < original_materials.size() && i < model_copy.get_shared_materials().size(); ++i)
     {
-        model_copy.set_material(original_materials[i], i);
+        model_copy.set_shared_material(original_materials[i], i);
     }
 
     // Update the model
@@ -1275,7 +1275,7 @@ void apply_material_preview(rtti::context& ctx,
         if(!is_previewing || entity != last_preview_entity)
         {
             original_materials.clear();
-            for(const auto& mat : model.get_materials())
+            for(const auto& mat : model.get_shared_materials())
             {
                 original_materials.push_back(mat);
             }
@@ -1283,9 +1283,9 @@ void apply_material_preview(rtti::context& ctx,
 
         // Apply preview material
         class model model_copy = model;
-        for(size_t i = 0; i < model_copy.get_materials().size(); ++i)
+        for(size_t i = 0; i < model_copy.get_shared_materials().size(); ++i)
         {
-            model_copy.set_material(material_asset, i);
+            model_copy.set_shared_material(material_asset, i);
         }
         model_comp.set_model(model_copy);
 

@@ -336,7 +336,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
             // On-process: a prefab update re-syncs its instances (destroys and recreates entities), which a wait of
             // the main thread in a render pass or a scene load would otherwise run in the middle of that work.
             tpp::invoke_on_process(tpp::main_thread::get_id(),
-                        [&tm, &em, &am, changed, removed, removed_dependents]()
+                        [&tm, &em, &am, changed, removed, removed_dependents, is_initial_list]()
                         {
                             // A change in any of these types can visually
                             // affect a prefab thumbnail (texture in a
@@ -367,10 +367,15 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
                             {
                                 asset_deps::cascade_thumbnail_regen(am, tm, uid, affects_prefabs);
 
+                                // The initial list is the prefabs as they are on disk, which the open scenes were
+                                // just loaded from: re-syncing their instances would only mark the scenes edited.
                                 if constexpr(std::is_same<T, prefab>::value)
                                 {
-                                    auto asset = am.get_asset<T>(uid);
-                                    em.on_prefab_updated(asset);
+                                    if(!is_initial_list)
+                                    {
+                                        auto asset = am.get_asset<T>(uid);
+                                        em.on_prefab_updated(asset);
+                                    }
                                 }
                             }
                         });

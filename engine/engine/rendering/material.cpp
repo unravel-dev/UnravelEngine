@@ -83,10 +83,26 @@ auto material::get_render_states(bool apply_cull, bool depth_write, bool depth_t
 }
 
 
+auto material::write_instance_constants(math::vec4* out) const -> uint32_t
+{
+    return 0;
+}
+
 auto pbr_material::clone() const -> material::sptr
 {
     auto mat = std::make_shared<pbr_material>(*this);
     return mat;
+}
+
+auto pbr_material::write_instance_constants(math::vec4* out) const -> uint32_t
+{
+    // Picker colors are authored sRGB-encoded; lighting math runs in linear, so decode them here.
+    const auto emissive = emissive_color_.to_linear().value;
+    out[0] = base_color_.to_linear().value;
+    out[1] = subsurface_color_.to_linear().value;
+    out[2] = math::vec4(math::vec3(emissive) * emissive_intensity_, emissive.w);
+    out[3] = surface_data_;
+    return 4;
 }
 
 void pbr_material::set_alpha_mode(alpha_mode mode)

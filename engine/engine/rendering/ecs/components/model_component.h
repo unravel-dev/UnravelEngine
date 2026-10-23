@@ -127,20 +127,34 @@ public:
     void set_shared_material(const asset_handle<material>& material, uint32_t index);
 
     /**
-     * @brief Assigns the runtime material instance override for a slot.
-     * @param instance The material instance to assign, or null to fall back to the shared asset.
-     * @param index The material slot index.
+     * @brief Gets the material instance of a slot: this model's overrides of the slot's shared material.
      */
-    void set_material_instance(const material::sptr& instance, uint32_t index);
+    auto get_material_instance(uint32_t index) const -> const material_instance&;
 
     /**
-     * @brief Returns the material instance for a slot, cloning the shared asset on first edit.
-     *
-     * The returned material is owned by this component; mutating it takes effect immediately.
+     * @brief Overrides one property of a slot's shared material for this model only.
      * @param index The material slot index.
-     * @return The owned material instance for the slot.
+     * @param property The reflected property id of the material type (for example "base_color"_hs).
+     * @param value The value; it must convert to the property's type.
+     * @return False when the slot's shared material has no such property or the value does not convert to it.
      */
-    auto get_or_emplace_material_instance(uint32_t index) -> material::sptr;
+    auto set_material_instance_value(uint32_t index, entt::id_type property, const entt::meta_any& value) -> bool;
+
+    /**
+     * @brief Drops one override of a slot's material instance: the property follows the shared material again.
+     */
+    void revert_material_instance_value(uint32_t index, entt::id_type property);
+
+    /**
+     * @brief Drops every override of a slot's material instance: the slot draws like its shared material.
+     */
+    void revert_material_instance(uint32_t index);
+
+    /**
+     * @brief Brings the resolved materials of the material instances up to date (see
+     * model::update_material_instances); the model system calls it once a frame.
+     */
+    void update_material_instances();
 
     /**
      * @brief Gets the bone transforms.

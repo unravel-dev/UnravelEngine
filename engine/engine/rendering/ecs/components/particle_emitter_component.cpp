@@ -1636,7 +1636,7 @@ void for_each_mesh_submesh(const model& mesh_model, Visitor&& visit)
     }
     for(uint32_t group = 0; group < mesh_ptr->get_data_groups_count(); ++group)
     {
-        const auto material_ptr = mesh_model.get_material_instance(group);
+        const auto material_ptr = mesh_model.get_render_material(group);
         if(!material_ptr)
         {
             continue;
@@ -1845,7 +1845,7 @@ void particle_emitter_component::refresh_render_mesh()
     {
         for(uint32_t group = 0; group < source->get_data_groups_count(); ++group)
         {
-            built.set_material(render_material_, group);
+            built.set_shared_material(render_material_, group);
         }
     }
     else

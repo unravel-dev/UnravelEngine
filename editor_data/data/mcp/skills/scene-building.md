@@ -108,9 +108,10 @@ nothing to measure reports its position as a point).
 - scene_set_models_batch swaps the mesh an entity shows (asset), keeping its
   transform and other components; the new model gets the mesh's own materials,
   as at creation. A skinned mesh is reported - add Animation to play its clips.
-- scene_set_model_materials_batch assigns material assets to slots;
-  scene_set_model_material_instances_batch gives a slot a per-entity copy to
-  tweak (the .mat file stays as it is).
+- scene_set_model_materials_batch assigns shared materials (assets) to slots;
+  scene_set_model_material_instances_batch overrides values of a slot's shared
+  material for one entity (its material instance; the .mat file stays as it is,
+  and values not overridden follow it).
 - scene_set_layers_batch puts entities on layers (names from the project's
   layer.layers setting); physics queries and rendering filter on them, and
   detail summary reports them.

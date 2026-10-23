@@ -433,7 +433,7 @@ auto surface_cache_system::resolve_submesh_material(const model& mdl, const mesh
     {
         return {};
     }
-    return mdl.get_material_instance(sub->data_group_id);
+    return mdl.get_render_material(sub->data_group_id);
 }
 
 namespace

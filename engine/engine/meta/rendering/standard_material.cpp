@@ -28,17 +28,20 @@ REFLECT(pbr_material)
         .data<&pbr_material::set_base_color, &pbr_material::get_base_color>("base_color"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "base_color"},
-            entt::attribute{"pretty_name", "Base Color"} 
+            entt::attribute{"pretty_name", "Base Color"},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_subsurface_color, &pbr_material::get_subsurface_color>("subsurface_color"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "subsurface_color"},
-            entt::attribute{"pretty_name", "Subsurface Color"} 
+            entt::attribute{"pretty_name", "Subsurface Color"},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_emissive_color, &pbr_material::get_emissive_color>("emissive_color"_hs)
         .custom<entt::attributes>(entt::attributes{ 
             entt::attribute{"name", "emissive_color"},
-            entt::attribute{"pretty_name", "Emissive Color"} 
+            entt::attribute{"pretty_name", "Emissive Color"},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_emissive_intensity, &pbr_material::get_emissive_intensity>("emissive_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -46,6 +49,7 @@ REFLECT(pbr_material)
             entt::attribute{"pretty_name", "Emissive Intensity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 100.0f},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_roughness, &pbr_material::get_roughness>("roughness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -53,6 +57,7 @@ REFLECT(pbr_material)
             entt::attribute{"pretty_name", "Roughness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_metalness, &pbr_material::get_metalness>("metalness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -60,6 +65,7 @@ REFLECT(pbr_material)
             entt::attribute{"pretty_name", "Metalness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_bumpiness, &pbr_material::get_bumpiness>("bumpiness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -67,6 +73,7 @@ REFLECT(pbr_material)
             entt::attribute{"pretty_name", "Bumpiness"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 10.0f},
+            entt::attribute{"per_instance", true},
         })
         .data<&pbr_material::set_alpha_mode, &pbr_material::get_alpha_mode>("alpha_mode"_hs)
         .custom<entt::attributes>(entt::attributes{

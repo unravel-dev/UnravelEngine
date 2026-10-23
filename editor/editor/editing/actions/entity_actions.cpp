@@ -864,9 +864,9 @@ void entity_set_materials_action_t::do_action()
     {
         auto& model_comp = ent.get<model_component>();
         auto model_copy = model_comp.get_model();
-        for(size_t i = 0; i < new_materials.size() && i < model_copy.get_materials().size(); ++i)
+        for(size_t i = 0; i < new_materials.size() && i < model_copy.get_shared_materials().size(); ++i)
         {
-            model_copy.set_material(new_materials[i], i);
+            model_copy.set_shared_material(new_materials[i], i);
         }
         model_comp.set_model(model_copy);
         prefab_override_context::mark_material_as_changed(ent);
@@ -879,9 +879,9 @@ void entity_set_materials_action_t::undo_action()
     {
         auto& model_comp = ent.get<model_component>();
         auto model_copy = model_comp.get_model();
-        for(size_t i = 0; i < old_materials.size() && i < model_copy.get_materials().size(); ++i)
+        for(size_t i = 0; i < old_materials.size() && i < model_copy.get_shared_materials().size(); ++i)
         {
-            model_copy.set_material(old_materials[i], i);
+            model_copy.set_shared_material(old_materials[i], i);
         }
         model_comp.set_model(model_copy);
         prefab_override_context::mark_material_as_changed(ent);

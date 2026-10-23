@@ -200,14 +200,14 @@ void model::set_lod(asset_handle<mesh> mesh, uint32_t lod)
     resize_materials(mesh);
 }
 
-void model::set_material(asset_handle<material> material, uint32_t index)
+void model::set_shared_material(asset_handle<material> material, uint32_t index)
 {
     if(index >= materials_.size())
     {
         materials_.resize(index + 1);
     }
-
     materials_[index] = std::move(material);
+    sync_material_instances();
 }
 
 auto model::apply_default_materials(asset_manager& am, bool wait) -> bool
@@ -227,14 +227,14 @@ auto model::apply_default_materials(asset_manager& am, bool wait) -> bool
     {
         const auto index = static_cast<uint32_t>(i);
         // set_lod fills every new slot with the default material, so that one counts as no choice.
-        const auto current = get_material(index);
+        const auto current = get_shared_material(index);
         if(current && current != default_material())
         {
             continue;
         }
         if(auto mat_asset = am.get_asset<material>(material_uids[i]))
         {
-            set_material(mat_asset, index);
+            set_shared_material(mat_asset, index);
         }
     }
     default_materials_pending_ = false;
@@ -251,15 +251,6 @@ auto model::is_default_materials_pending() const -> bool
     return default_materials_pending_;
 }
 
-void model::set_material_instance(material::sptr material, uint32_t index)
-{
-    if(index >= material_instances_.size())
-    {
-        material_instances_.resize(index + 1, nullptr);
-    }
-
-    material_instances_[index] = std::move(material);
-}
 
 auto model::get_lods() const -> const std::vector<asset_handle<mesh>>&
 {
@@ -303,83 +294,102 @@ void model::set_lods(const std::vector<asset_handle<mesh>>& lods)
     }
 }
 
-auto model::get_materials() const -> const std::vector<asset_handle<material>>&
+auto model::get_shared_materials() const -> const std::vector<asset_handle<material>>&
 {
     return materials_;
 }
 
-auto model::get_material_instances() const -> const std::vector<material::sptr>&
+auto model::get_material_instances() const -> const std::vector<material_instance>&
 {
     return material_instances_;
 }
 
-
-void model::set_materials(const std::vector<asset_handle<material>>& materials)
+void model::set_shared_materials(const std::vector<asset_handle<material>>& materials)
 {
     materials_ = materials;
+    sync_material_instances();
 }
 
-void model::set_material_instances(const std::vector<material::sptr>& materials)
+void model::set_material_instances(const std::vector<material_instance>& instances)
 {
-    material_instances_ = materials;
+    material_instances_ = instances;
+    sync_material_instances();
 }
 
-auto model::get_material(uint32_t index) const -> asset_handle<material>
+auto model::get_shared_material(uint32_t index) const -> asset_handle<material>
 {
     if(materials_.size() <= index)
     {
         return {};
     }
-
     return materials_[index];
 }
 
-auto model::get_material_instance(uint32_t index) const -> material::sptr
+auto model::get_material_instance(uint32_t index) const -> const material_instance&
 {
-    if(index < material_instances_.size())
-    {
-        auto instance =  material_instances_[index];
-        if(instance)
-        {
-            return instance;
-        }
-    }
-
-    auto instance = get_material(index);
-    if(instance.is_valid())
-    {
-        return instance.get();
-    }
-
-    return nullptr;
+    static const material_instance none;
+    return index < material_instances_.size() ? material_instances_[index] : none;
 }
 
-auto model::get_or_emplace_material_instance(uint32_t index) -> material::sptr
+auto model::get_material_instance(uint32_t index) -> material_instance&
 {
     if(index >= material_instances_.size())
     {
-        material_instances_.resize(index + 1, nullptr);
+        material_instances_.resize(index + 1);
     }
+    return material_instances_[index];
+}
 
-    auto& instance = material_instances_[index];
-
-    if(!instance)
+auto model::get_render_material(uint32_t index) const -> material::sptr
+{
+    if(index < material_instances_.size())
     {
-        auto asset_instance = get_material_instance(index);
-
-        // if we already have an asset for that slot, promote it to instance
-        if(asset_instance)
+        const auto& instance = material_instances_[index];
+        if(instance.has_overrides() && instance.get_resolved())
         {
-            instance = asset_instance->clone();
-        }
-        else
-        {
-            // create a new one
-            instance = std::make_shared<pbr_material>();
+            return instance.get_resolved();
         }
     }
+    const auto shared = get_shared_material(index);
+    return shared.is_valid() ? shared.get() : nullptr;
+}
 
-    return instance;
+auto model::get_slot_batch_material(uint32_t index) const -> slot_batch_material
+{
+    if(index < material_instances_.size())
+    {
+        const auto& instance = material_instances_[index];
+        const auto& resolved = instance.get_resolved();
+        if(resolved && instance.has_overrides() && instance.get_resolved_shares_draw())
+        {
+            const auto shared = get_shared_material(index);
+            if(auto shared_material = shared.is_valid() ? shared.get() : nullptr)
+            {
+                return {std::move(shared_material), resolved.get()};
+            }
+        }
+    }
+    return {get_render_material(index), nullptr};
+}
+
+void model::update_material_instances()
+{
+    for(auto& instance : material_instances_)
+    {
+        instance.update_resolved();
+    }
+}
+
+void model::sync_material_instances()
+{
+    if(material_instances_.size() < materials_.size())
+    {
+        material_instances_.resize(materials_.size());
+    }
+    for(size_t i = 0; i < materials_.size(); ++i)
+    {
+        material_instances_[i].set_shared_material(materials_[i]);
+    }
 }
 
 
@@ -820,7 +830,7 @@ void model::submit(const math::mat4& world_transform,
                                submit_callbacks::params& params,
                                const submit_callbacks& callbacks)
         {
-            auto group_mat = get_material_instance(group_id);
+            auto group_mat = get_render_material(group_id);
             if(!group_mat)
             {
                 return;
@@ -953,7 +963,7 @@ void model::submit(const math::mat4& world_transform,
                                        submit_callbacks::params& params,
                                        const submit_callbacks& callbacks)
         {
-            auto group_mat = get_material_instance(group_id);
+            auto group_mat = get_render_material(group_id);
             if(!group_mat)
             {
                 return;
@@ -1304,6 +1314,7 @@ void model::resize_materials(const asset_handle<mesh>& mesh)
     {
         materials_.resize(submeshes, default_material());
     }
+    sync_material_instances();
 }
 
 auto model::default_material() -> asset_handle<material>&
@@ -1349,8 +1360,9 @@ void model::submit_for_batching(batch_collector& collector,
 
     for (uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
-        // Get material for this data group
-        auto group_material = get_material_instance(data_group_id);
+        // A material instance that overrides only per-instance values keys on its shared material and
+        // carries its own values per instance.
+        const auto [group_material, material_override] = get_slot_batch_material(data_group_id);
         if(!group_material)
         {
             continue; // Skip data groups without a valid material
@@ -1413,6 +1425,7 @@ void model::submit_for_batching(batch_collector& collector,
                     // Create batch instance with the specific transform
                     batch_instance instance(transform_ptr);
                     instance.lod_params.x = lod_param;
+                    instance.material_override = material_override;
                     if(extras.prev_submesh_transforms != nullptr)
                     {
                         const auto* prev_ptr =
@@ -1444,6 +1457,7 @@ void model::submit_for_batching(batch_collector& collector,
                 // Create batch instance with world transform
                 batch_instance instance(&world_transform);
                 instance.lod_params.x = lod_param;
+                instance.material_override = material_override;
                 if(extras.prev_world_transform != nullptr)
                 {
                     instance.prev_world_transform_ptr = extras.prev_world_transform;
@@ -1555,7 +1569,7 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
     const auto data_group_count = mesh->get_data_groups_count();
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
-        auto group_material = get_material_instance(data_group_id);
+        auto group_material = get_render_material(data_group_id);
         if(!group_material)
         {
             continue;

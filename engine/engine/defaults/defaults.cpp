@@ -1421,7 +1421,7 @@ auto defaults::create_default_3d_scene_for_asset_preview(rtti::context& ctx,
     auto object = create_embedded_mesh_entity(ctx, scn, "Sphere");
     auto& model_comp = object.get<model_component>();
     auto model = model_comp.get_model();
-    model.set_material(asset, 0);
+    model.set_shared_material(asset, 0);
     model_comp.set_model(model);
     model_comp.set_casts_shadow(false);
 

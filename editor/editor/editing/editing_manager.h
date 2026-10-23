@@ -724,7 +724,7 @@ struct editing_manager
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
     bool waiting_for_compilation_before_play_{};
-    bool has_unsaved_changes_;
+    bool has_unsaved_changes_{};
     bool prefab_has_unsaved_changes_{};
     
 

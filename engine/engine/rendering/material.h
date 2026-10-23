@@ -56,7 +56,21 @@ public:
     /// card captures) compares it to notice a change.
     auto get_revision() const -> uint64_t
     {
-        return revision_;
+        return state_revision_ + instance_values_revision_;
+    }
+
+    /// Counts the edits of values that are not per instance (textures, modes, tiling): they change how the
+    /// material draws, so a cache of its look follows them at once.
+    auto get_state_revision() const -> uint64_t
+    {
+        return state_revision_;
+    }
+
+    /// Counts the edits of per-instance values (colors and numbers a material instance can override without a
+    /// separate draw). A script may change them every frame, so a costly cache may follow them less often.
+    auto get_instance_values_revision() const -> uint64_t
+    {
+        return instance_values_revision_;
     }
 
 
@@ -106,18 +120,36 @@ public:
      */
     virtual auto clone() const -> material::sptr;
 
+    /// The most constants a material's instanced draw reads per instance (instance_material_vertex_data).
+    static constexpr uint32_t MAX_INSTANCE_CONSTANTS = 4;
+
+    /**
+     * @brief Writes the material's per-instance values (see material_instance::shares_draw) as the constants its
+     * instanced shader reads per instance, so renderers whose values differ still share one instanced draw.
+     * @param out At least MAX_INSTANCE_CONSTANTS constants.
+     * @return How many constants were written; 0 for a material without per-instance values.
+     */
+    virtual auto write_instance_constants(math::vec4* out) const -> uint32_t;
+
 protected:
-    /// Every setter calls this (get_revision).
+    /// Every setter of a value that is not per instance calls this (get_state_revision).
     void mark_changed()
     {
-        ++revision_;
+        ++state_revision_;
+    }
+
+    /// Every setter of a per-instance value calls this (get_instance_values_revision).
+    void mark_instance_value_changed()
+    {
+        ++instance_values_revision_;
     }
 
     ///< The culling type for this material.
     cull_type cull_type_ = cull_type::counter_clockwise;
 
 private:
-    uint64_t revision_ = 0;
+    uint64_t state_revision_ = 0;
+    uint64_t instance_values_revision_ = 0;
 };
 
 /**
@@ -130,6 +162,10 @@ public:
     SERIALIZABLE(pbr_material)
 
     auto clone() const -> std::shared_ptr<material> override;
+
+    /// Linear base color, linear subsurface color, emissive premultiplied by its intensity, surface data: what
+    /// fs_deferred_geom.sc reads as u_base_color, u_subsurface_color, u_emissive_color and u_surface_data.
+    auto write_instance_constants(math::vec4* out) const -> uint32_t override;
 
     /**
      * @brief Gets the base color of the material.
@@ -147,7 +183,7 @@ public:
     void set_base_color(const math::color& val)
     {
         base_color_ = val;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     /**
@@ -166,7 +202,7 @@ public:
     void set_subsurface_color(const math::color& val)
     {
         subsurface_color_ = val;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     /**
@@ -185,7 +221,7 @@ public:
     void set_emissive_color(const math::color& val)
     {
         emissive_color_ = val;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     auto get_emissive_intensity() const -> float
@@ -196,7 +232,7 @@ public:
     void set_emissive_intensity(float val)
     {
         emissive_intensity_ = val;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     /**
@@ -215,7 +251,7 @@ public:
     void set_roughness(float roughness)
     {
         surface_data_.x = roughness;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     /**
@@ -234,7 +270,7 @@ public:
     void set_metalness(float metalness)
     {
         surface_data_.y = metalness;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     /**
@@ -253,7 +289,7 @@ public:
     void set_bumpiness(float bumpiness)
     {
         surface_data_.z = bumpiness;
-        mark_changed();
+        mark_instance_value_changed();
     }
 
     /**
