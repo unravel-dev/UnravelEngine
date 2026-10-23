@@ -116,10 +116,15 @@ struct android_device
     std::string serial;
     /// "device" when it accepts commands; "unauthorized" until the phone allows this computer, "offline".
     std::string state;
-    /// The model adb reports, '_' read as ' '; empty when it reports none.
+    /// The model: as the phone reports it once it is ready ("SM-S948B"), else as adb lists it, '_' read as
+    /// ' '; empty when neither reports one.
     std::string model;
     /// The phone's own serial number (ro.serialno), the same over every connection; empty when unknown.
     std::string hardware_serial;
+    /// The name the phone's owner gave it (Settings > About phone, "Nikolay's S26 Ultra"); empty when unknown.
+    std::string device_name;
+    /// The Android version ("17"); empty when unknown.
+    std::string android_version;
     /// The serials of the other connections to the same phone, which merge_android_devices folded in.
     std::vector<std::string> aliases;
 
@@ -134,12 +139,25 @@ struct android_device
     /// Whether `name` is its serial or the serial of another connection to it.
     auto is_named(const std::string& name) const -> bool;
 
-    /// The model and serial, for a device list.
+    /// The name a device list shows first: the phone's own name, else its model, else its serial.
+    auto get_name() const -> std::string;
+    /// What tells devices apart besides the name: the model (unless it is the name), the Android version,
+    /// the connection, and the state when the device is not ready.
+    auto get_details() const -> std::string;
+    /// The name, then the details.
     auto get_label() const -> std::string;
 };
 
 /// The devices in the output of `adb devices -l`.
 auto parse_android_devices(const std::string& adb_output) -> std::vector<android_device>;
+
+/// The shell command (for `adb -s <serial> shell`) that prints a device's serial number, model, Android
+/// version and name, as the name=value lines read_android_device_properties reads.
+auto get_android_device_properties_command() -> std::string;
+
+/// Reads the output of get_android_device_properties_command into the device. Values the phone does not
+/// report leave the device's own; an unset name reads "null" and counts as none.
+void read_android_device_properties(const std::string& shell_output, android_device& device);
 
 /**
  * @brief One entry per phone: the ready devices with the same hardware serial become one.
@@ -150,6 +168,19 @@ auto parse_android_devices(const std::string& adb_output) -> std::vector<android
  * stay as they are.
  */
 auto merge_android_devices(std::vector<android_device> devices) -> std::vector<android_device>;
+
+/// A phone's wireless debugging service, as `adb mdns services` lists it.
+struct wireless_debugging_service
+{
+    /// The service instance, "adb-<serial>-<id>", with " (2)" after it when the phone announced it again.
+    std::string name;
+    /// ip:port, what `adb connect` takes.
+    std::string address;
+};
+
+/// The connect services in the output of `adb mdns services` (name, type and address separated by tabs); the
+/// pairing services are left out.
+auto parse_wireless_debugging_services(const std::string& adb_output) -> std::vector<wireless_debugging_service>;
 
 /// One line of `adb logcat -v threadtime`.
 struct logcat_line

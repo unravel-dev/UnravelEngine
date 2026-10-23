@@ -187,10 +187,12 @@ auto android_state_to_json(rtti::context& ctx, const deploy_settings& params) ->
     std::string devices = "[";
     for(const auto& device : deployment::get_android_devices())
     {
-        devices += fmt::format(R"({}{{"serial":{},"model":{},"state":{},"aliases":{}}})",
+        devices += fmt::format(R"({}{{"serial":{},"name":{},"model":{},"android_version":{},"state":{},"aliases":{}}})",
                                devices.size() > 1 ? "," : "",
                                make_json_string(device.serial),
+                               make_json_string(device.device_name),
                                make_json_string(device.model),
+                               make_json_string(device.android_version),
                                make_json_string(device.state),
                                strings_to_json_array(device.aliases));
     }

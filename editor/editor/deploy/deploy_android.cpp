@@ -551,21 +551,116 @@ bool has_searched_tools{false};
 std::atomic<bool> is_listing_devices{false};
 std::atomic<bool> has_listed_devices{false};
 
+/// How long the connects to the discovered services may take together. adb keeps services it no longer
+/// hears, and an address nothing answers at holds `adb connect` for the system's TCP timeout (21 s on
+/// Windows), while a phone answers within a second.
+constexpr auto WIRELESS_CONNECT_WAIT = std::chrono::seconds(4);
+constexpr auto WIRELESS_CONNECTED_GRACE = std::chrono::milliseconds(500);
+/// What `adb connect` prints when it reached the phone: "connected to <address>" or "already connected to
+/// <address>"; a failure prints "failed to connect to" or "cannot connect to".
+constexpr const char* ADB_CONNECTED = "connected to";
+/// How long a listing waits for an adb server it started to discover the phones around.
+constexpr auto ADB_DISCOVERY_WAIT = std::chrono::seconds(3);
+constexpr auto ADB_POLL_INTERVAL = std::chrono::milliseconds(250);
+/// What adb prints when the call had to start its server.
+constexpr const char* ADB_SERVER_STARTED = "daemon started successfully";
+
+auto has_ready_device(const std::vector<android_device>& devices) -> bool
+{
+    return std::any_of(devices.begin(),
+                       devices.end(),
+                       [](const android_device& device)
+                       {
+                           return device.is_ready();
+                       });
+}
+
+auto read_devices(const std::string& adb) -> std::vector<android_device>
+{
+    return parse_android_devices(subprocess::call({adb, "devices", "-l"}).out_output);
+}
+
+/**
+ * @brief Connects adb to every discovered service at once. Waits for them no longer than WIRELESS_CONNECT_WAIT,
+ * and no longer than WIRELESS_CONNECTED_GRACE after the first one connected: the other phones answer as fast,
+ * and the rest are services nothing answers at anymore.
+ */
+void connect_wireless_services(const std::string& adb, const std::vector<wireless_debugging_service>& services)
+{
+    // Shared with the streams' reader threads, which may outlive this call's loop by a line.
+    auto has_connected = std::make_shared<std::atomic<bool>>(false);
+    std::vector<std::unique_ptr<subprocess::stream>> connects;
+    for(const auto& service : services)
+    {
+        auto connect = std::make_unique<subprocess::stream>();
+        const auto on_line = [has_connected](const std::string& line)
+        {
+            if(line.find(ADB_CONNECTED) != std::string::npos)
+            {
+                *has_connected = true;
+            }
+        };
+        if(connect->start({adb, "connect", service.address}, on_line))
+        {
+            connects.push_back(std::move(connect));
+        }
+    }
+    auto deadline = std::chrono::steady_clock::now() + WIRELESS_CONNECT_WAIT;
+    bool is_grace_set = false;
+    const auto is_waiting = [&connects]()
+    {
+        return std::any_of(connects.begin(),
+                           connects.end(),
+                           [](const std::unique_ptr<subprocess::stream>& connect)
+                           {
+                               return connect->is_running();
+                           });
+    };
+    while(is_waiting() && std::chrono::steady_clock::now() < deadline)
+    {
+        if(*has_connected && !is_grace_set)
+        {
+            deadline = std::min(deadline, std::chrono::steady_clock::now() + WIRELESS_CONNECTED_GRACE);
+            is_grace_set = true;
+        }
+        std::this_thread::sleep_for(ADB_POLL_INTERVAL);
+    }
+}
+
+/// The devices once an adb server that was just started has discovered a ready one, or ADB_DISCOVERY_WAIT passed.
+auto wait_for_discovery(const std::string& adb) -> std::vector<android_device>
+{
+    const auto deadline = std::chrono::steady_clock::now() + ADB_DISCOVERY_WAIT;
+    std::vector<android_device> devices;
+    do
+    {
+        std::this_thread::sleep_for(ADB_POLL_INTERVAL);
+        devices = read_devices(adb);
+    } while(!has_ready_device(devices) && std::chrono::steady_clock::now() < deadline);
+    return devices;
+}
+
 /// One entry per phone: each ready device's own serial number tells the connections to one phone apart
-/// from other phones.
+/// from other phones. The same call reads what the device list shows of each: its name, model and Android
+/// version.
 auto merge_connections(const std::string& adb, std::vector<android_device> devices) -> std::vector<android_device>
 {
+    const auto command = get_android_device_properties_command();
     for(auto& device : devices)
     {
         if(device.is_ready())
         {
-            device.hardware_serial = trim(subprocess::call({adb, "-s", device.serial, "shell", "getprop", "ro.serialno"}).out_output);
+            read_android_device_properties(subprocess::call({adb, "-s", device.serial, "shell", command}).out_output, device);
         }
     }
     return merge_android_devices(std::move(devices));
 }
 
-/// The devices adb lists; wireless debugging devices that paired before are connected first when none is.
+/**
+ * @brief The devices adb lists. When none is ready, the wireless debugging services adb discovered are
+ * connected first: adb does not connect a service again once it lost the connection, until the phone announces
+ * it anew. When this call started adb's server, the listing also waits for that server's discovery.
+ */
 auto list_devices(const android_toolchain& tools) -> std::vector<android_device>
 {
     if(tools.adb.empty())
@@ -573,25 +668,18 @@ auto list_devices(const android_toolchain& tools) -> std::vector<android_device>
         return {};
     }
     const auto adb = tools.adb.string();
-    auto devices = parse_android_devices(subprocess::call({adb, "devices", "-l"}).out_output);
-    if(!devices.empty())
+    const auto first = subprocess::call({adb, "devices", "-l"});
+    auto devices = parse_android_devices(first.out_output);
+    if(!has_ready_device(devices))
     {
-        return merge_connections(adb, std::move(devices));
+        connect_wireless_services(adb, parse_wireless_debugging_services(subprocess::call({adb, "mdns", "services"}).out_output));
+        devices = read_devices(adb);
     }
-    std::stringstream services(subprocess::call({adb, "mdns", "services"}).out_output);
-    std::string line;
-    while(std::getline(services, line))
+    if(!has_ready_device(devices) && first.out_output.find(ADB_SERVER_STARTED) != std::string::npos)
     {
-        std::stringstream words(line);
-        std::string name;
-        std::string type;
-        std::string address;
-        if(words >> name >> type >> address && type.find("_adb-tls-connect") != std::string::npos)
-        {
-            subprocess::call({adb, "connect", address});
-        }
+        devices = wait_for_discovery(adb);
     }
-    return merge_connections(adb, parse_android_devices(subprocess::call({adb, "devices", "-l"}).out_output));
+    return merge_connections(adb, std::move(devices));
 }
 /// A device command runs in the background: Clear Data or Uninstall.
 std::atomic<bool> is_running_device_command{false};

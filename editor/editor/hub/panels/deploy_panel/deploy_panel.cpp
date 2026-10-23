@@ -71,6 +71,9 @@ constexpr const char* PATCH_RELEASE_PATH = "deploy_patch_release";
 constexpr const char* NEW_PROFILE_POPUP = "##new_profile";
 constexpr const char* RENAME_PROFILE_POPUP = "##rename_profile";
 constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
+// The space between a device's name and its details, in item spacings.
+constexpr float DEVICE_DETAILS_GAP = 2.0f;
+constexpr const char* CHOOSE_DEVICE_LABEL = "Choose a device";
 
 void draw_header()
 {
@@ -284,6 +287,74 @@ void draw_message(const std::string& message, bool is_error)
                             is_error ? widgets::WARNING_COLOR : widgets::get_accent_u32(),
                             message.c_str(),
                             ImGui::GetColorU32(ImGuiCol_Text));
+}
+
+/// Draws text from `pos`, cut with an ellipsis at `max_x`. The end is given, so ImGui draws the text as it is
+/// and never reads "##" in it as the start of an id.
+void draw_plain_text(ImDrawList* draw_list, const ImVec2& pos, float max_x, const std::string& text)
+{
+    const char* text_end = text.c_str() + text.size();
+    const ImVec2 size = ImGui::CalcTextSize(text.c_str(), text_end);
+    ImGui::RenderTextEllipsis(draw_list, pos, ImVec2(max_x, pos.y + size.y), max_x, text.c_str(), text_end, &size);
+}
+
+/// A device as the device list shows it: its name, then its details dimmed. The name is the one the phone's
+/// owner typed, so it is drawn as text, never passed as an ImGui label.
+void draw_device_text(ImDrawList* draw_list, const ImVec2& pos, float max_x, const deployment::android_device& device)
+{
+    const auto name = device.get_name();
+    draw_plain_text(draw_list, pos, max_x, name);
+    const float details_x = pos.x + ImGui::CalcTextSize(name.c_str(), name.c_str() + name.size()).x +
+                            ImGui::GetStyle().ItemSpacing.x * DEVICE_DETAILS_GAP;
+    if(details_x >= max_x)
+    {
+        return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    draw_plain_text(draw_list, ImVec2(details_x, pos.y), max_x, device.get_details());
+    ImGui::PopStyleColor();
+}
+
+/// What tells a device apart when its name does not: two phones of one model can carry the same name.
+auto make_device_tooltip(const deployment::android_device& device) -> std::string
+{
+    if(device.hardware_serial.empty())
+    {
+        return fmt::format("adb reaches it as {}.", device.serial);
+    }
+    return fmt::format("Serial number {}. adb reaches it as {}.", device.hardware_serial, device.serial);
+}
+
+/**
+ * @brief Draws the closed device list's text: the chosen device, the serial of a chosen device that is not
+ * connected, or the prompt. Call right after the combo opened with ImGuiComboFlags_CustomPreview.
+ */
+void draw_device_preview(const deployment::android_device* chosen, const std::string& chosen_serial)
+{
+    if(!ImGui::BeginComboPreview())
+    {
+        return;
+    }
+    const ImRect& rect = ImGui::GetCurrentContext()->ComboPreviewData.PreviewRect;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 pos(rect.Min.x + style.FramePadding.x, rect.Min.y + style.FramePadding.y);
+    const float max_x = rect.Max.x - style.FramePadding.x;
+    auto* draw_list = ImGui::GetWindowDrawList();
+    if(chosen != nullptr)
+    {
+        draw_device_text(draw_list, pos, max_x, *chosen);
+    }
+    else if(!chosen_serial.empty())
+    {
+        draw_plain_text(draw_list, pos, max_x, ICON_MDI_ALERT " " + chosen_serial);
+    }
+    else
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        draw_plain_text(draw_list, pos, max_x, CHOOSE_DEVICE_LABEL);
+        ImGui::PopStyleColor();
+    }
+    ImGui::EndComboPreview();
 }
 } // namespace
 
@@ -1170,27 +1241,19 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
                                      {
                                          return device.is_named(params.android_device);
                                      });
-    std::string preview = "Choose a device";
-    if(chosen != devices.end())
+    // A second connection to the phone was folded into this entry: the entry's own serial is used.
+    if(chosen != devices.end() && chosen->serial != params.android_device)
     {
-        preview = chosen->get_label();
-        // A second connection to the phone was folded into this entry: the entry's own serial is used.
-        if(chosen->serial != params.android_device)
-        {
-            params.android_device = chosen->serial;
-            is_changed = true;
-        }
-    }
-    else if(!params.android_device.empty())
-    {
-        preview = ICON_MDI_ALERT " " + params.android_device;
+        params.android_device = chosen->serial;
+        is_changed = true;
     }
     entt::meta_any object = entt::forward_as_meta(params);
     property_layout layout(entt::resolve<deploy_settings>().data("android_device"_hs), object);
     // A square button, so the width kept for it beside the list is exactly what it takes.
     const ImVec2 refresh_size(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
     ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - refresh_size.x - ImGui::GetStyle().ItemSpacing.x));
-    if(ImGui::BeginCombo("##android_device", preview.c_str()))
+    // The preview and the rows draw the devices' text themselves (draw_device_text).
+    if(ImGui::BeginCombo("##android_device", "", ImGuiComboFlags_CustomPreview))
     {
         if(devices.empty())
         {
@@ -1198,15 +1261,22 @@ auto deploy_panel::draw_android_device_picker(rtti::context& ctx) -> bool
         }
         for(const auto& device : devices)
         {
-            const auto label = device.is_ready() ? device.get_label() : fmt::format("{} - {}", device.get_label(), device.state);
-            if(ImGui::Selectable(label.c_str(), device.serial == params.android_device))
+            // The row's id is the adb serial, unique per connection: an id made from the name would clash
+            // between two phones of one model that keep the name they came with.
+            ImGui::PushID(device.serial.c_str());
+            const ImVec2 row_min = ImGui::GetCursorScreenPos();
+            if(ImGui::Selectable("##device", device.serial == params.android_device, ImGuiSelectableFlags_None, ImVec2(0.0f, ImGui::GetTextLineHeight())))
             {
                 params.android_device = device.serial;
                 is_changed = true;
             }
+            ImGui::SetItemTooltipEx("%s", make_device_tooltip(device).c_str());
+            draw_device_text(ImGui::GetWindowDrawList(), row_min, ImGui::GetItemRectMax().x, device);
+            ImGui::PopID();
         }
         ImGui::EndCombo();
     }
+    draw_device_preview(chosen != devices.end() ? &*chosen : nullptr, params.android_device);
     ImGui::SameLine();
     ImGui::BeginDisabled(deployment::is_refreshing_android_devices());
     // The icon is drawn centered by its own shape: as button text it sits off center.

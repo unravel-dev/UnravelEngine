@@ -579,8 +579,9 @@ void test_android_devices()
     check(devices.size() == 3 && devices[1].serial == "adb-R3GL-x._adb-tls-connect._tcp", "a wireless debugging device");
     check(devices.size() == 3 && devices[2].state == "unauthorized" && !devices[2].is_ready() && devices[2].model.empty(),
           "a device that does not allow this computer yet");
-    check(devices.size() == 3 && devices[0].get_label() == "SM S948B (R3GL508T4SY)" && devices[2].get_label() == "emulator-5554",
-          "labels name the model when there is one");
+    check(devices.size() == 3 && devices[0].get_label() == "SM S948B - USB" && devices[1].get_label() == "SM S948B - Wi-Fi" &&
+              devices[2].get_label() == "emulator-5554 - Emulator, unauthorized",
+          "before a device reports its name, the label names its model, else its serial, then its connection and state");
     const std::string spaced = "adb-R5CR11EH5XE-jIeKII (2)._adb-tls-connect._tcp device product:p3sxeea model:SM_G998B "
                                "device:p3s transport_id:4\n"
                                "usb-0001 no permissions (missing udev rules?); see [http://developer.android.com]\n";
@@ -589,6 +590,39 @@ void test_android_devices()
               more[0].model == "SM G998B",
           "a serial with a space ends at the state word");
     check(more.size() == 2 && more[1].serial == "usb-0001" && more[1].state == "no permissions", "the two-word state is read");
+}
+
+void test_android_device_properties()
+{
+    std::printf("test_android_device_properties\n");
+    check(deployment::get_android_device_properties_command().find("settings get global device_name") != std::string::npos,
+          "the properties command asks for the name the owner gave the phone");
+    deployment::android_device device;
+    device.serial = "adb-R3GL508T4SY-pTACbH._adb-tls-connect._tcp";
+    device.state = "device";
+    device.model = "SM S948B";
+    deployment::read_android_device_properties("serial=R3GL508T4SY\r\nmodel=SM-S948B\r\nandroid=17\r\nname=Nikolay's S26 Ultra\r\n", device);
+    check(device.hardware_serial == "R3GL508T4SY" && device.model == "SM-S948B" && device.android_version == "17" &&
+              device.device_name == "Nikolay's S26 Ultra",
+          "each name=value line fills its property, line ends and an apostrophe in the name included");
+    check(device.get_name() == "Nikolay's S26 Ultra" && device.get_details() == "SM-S948B, Android 17, Wi-Fi",
+          "the name comes first, the model, Android version and connection after it");
+    check(device.get_label() == "Nikolay's S26 Ultra - SM-S948B, Android 17, Wi-Fi", "the label joins them");
+
+    deployment::android_device unnamed;
+    unnamed.serial = "R5CR11EH5XE";
+    unnamed.state = "device";
+    unnamed.model = "SM G998B";
+    deployment::read_android_device_properties("serial=R5CR11EH5XE\nmodel=SM-G998B\nandroid=\nname=null\nsh: weird line\n", unnamed);
+    check(unnamed.device_name.empty() && unnamed.android_version.empty() && unnamed.model == "SM-G998B",
+          "an unset name ('null'), an empty value and a line without '=' leave the property as it was");
+    check(unnamed.get_label() == "SM-G998B - USB", "without a name the model leads, and it is not repeated in the details");
+
+    deployment::android_device named_hash;
+    named_hash.serial = "192.168.0.7:5555";
+    named_hash.state = "device";
+    deployment::read_android_device_properties("name=Lab ## phone = 2\n", named_hash);
+    check(named_hash.device_name == "Lab ## phone = 2", "a name keeps every character after the first '=', '#' included");
 }
 
 void test_logcat_lines()
@@ -675,6 +709,23 @@ void test_merged_devices()
         {make_device("R3GL508T4SY", "R3GL508T4SY"), make_device(wireless, "R5CR11EH5XE"), make_device("emulator-5554", "")});
     check(merged.size() == 3 && !merged[1].is_named("R3GL508T4SY") && merged[2].aliases.empty(),
           "other phones and devices without a hardware serial stay apart");
+}
+
+void test_wireless_debugging_services()
+{
+    std::printf("test_wireless_debugging_services\n");
+    const std::string output = "List of discovered mdns services\r\n"
+                               "adb-R5CR11EH5XE-jIeKII (2)\t_adb-tls-connect._tcp\t192.168.0.119:44619\r\n"
+                               "adb-R5CR11EH5XE-jIeKII\t_adb-tls-connect._tcp\t192.168.0.119:35351\r\n"
+                               "adb-R5CR11EH5XE-jIeKII\t_adb-tls-pairing._tcp\t192.168.0.119:40001\r\n"
+                               "\r\n";
+    const auto services = deployment::parse_wireless_debugging_services(output);
+    check(services.size() == 2, "the connect services are read, the header and the pairing service are not");
+    check(services.size() == 2 && services[0].name == "adb-R5CR11EH5XE-jIeKII (2)" && services[0].address == "192.168.0.119:44619",
+          "a name announced again keeps its space, the address loses the line end");
+    check(services.size() == 2 && services[1].name == "adb-R5CR11EH5XE-jIeKII" && services[1].address == "192.168.0.119:35351",
+          "the plain name with its own address");
+    check(deployment::parse_wireless_debugging_services("List of discovered mdns services\n\n").empty(), "no service, none read");
 }
 
 void write_android_template(const fs::path& root, const std::string& version, const std::string& configuration)
@@ -1287,10 +1338,12 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_deploy_locations(temp / "locations");
         test_application_ids();
         test_android_devices();
+        test_android_device_properties();
         test_logcat_lines();
         test_game_log_lines();
         test_device_log_messages();
         test_merged_devices();
+        test_wireless_debugging_services();
         test_android_template(temp / "android");
         test_gradle_arguments();
         test_android_permissions();

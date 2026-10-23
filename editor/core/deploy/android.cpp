@@ -33,6 +33,21 @@ constexpr std::array<const char*, 4> GAME_LOG_TAGS = {ENGINE_LOG_TAG, "hidapi", 
 constexpr int ENGINE_LOG_PREFIX_GROUPS = 3;
 /// What a serial of a phone on wireless debugging holds: an mDNS service name, or an address with a port.
 constexpr const char* WIRELESS_SERVICE_MARKER = "._adb-tls-connect._tcp";
+/// The type `adb mdns services` names a phone's connect service with; pairing services have another.
+constexpr const char* WIRELESS_SERVICE_TYPE = "_adb-tls-connect._tcp";
+/// `adb mdns services` separates a service's name, type and address with tabs; a name can hold spaces.
+constexpr char SERVICE_FIELD_SEPARATOR = '\t';
+constexpr std::size_t SERVICE_FIELD_COUNT = 3;
+/// What adb names an emulator: "emulator-5554".
+constexpr const char* EMULATOR_SERIAL_PREFIX = "emulator-";
+/// A device's properties as name=value lines, one shell call for all of them. Each value comes with its
+/// name, so one the phone does not report cannot shift the others; `settings` sends its errors nowhere.
+constexpr const char* DEVICE_PROPERTIES_COMMAND = "echo \"serial=$(getprop ro.serialno)\"; "
+                                                  "echo \"model=$(getprop ro.product.model)\"; "
+                                                  "echo \"android=$(getprop ro.build.version.release)\"; "
+                                                  "echo \"name=$(settings get global device_name 2>/dev/null)\"";
+/// What `settings get` prints for a setting that was never set.
+constexpr const char* UNSET_SETTING = "null";
 constexpr char ADDRESS_PORT_SEPARATOR = ':';
 /// adb's suffix for a service name announced again: "adb-<serial>-<id> (2)._adb-tls-connect._tcp".
 constexpr const char* REPEATED_SERVICE_MARKER = " (";
@@ -372,9 +387,49 @@ auto android_device::is_named(const std::string& name) const -> bool
     return serial == name || std::find(aliases.begin(), aliases.end(), name) != aliases.end();
 }
 
+auto android_device::get_name() const -> std::string
+{
+    if(!device_name.empty())
+    {
+        return device_name;
+    }
+    return model.empty() ? serial : model;
+}
+
+auto android_device::get_details() const -> std::string
+{
+    std::vector<std::string> parts;
+    if(!model.empty() && model != get_name())
+    {
+        parts.push_back(model);
+    }
+    if(!android_version.empty())
+    {
+        parts.push_back("Android " + android_version);
+    }
+    if(serial.rfind(EMULATOR_SERIAL_PREFIX, 0) == 0)
+    {
+        parts.push_back("Emulator");
+    }
+    else
+    {
+        parts.push_back(is_wireless() ? "Wi-Fi" : "USB");
+    }
+    if(!is_ready())
+    {
+        parts.push_back(state);
+    }
+    std::string details;
+    for(const auto& part : parts)
+    {
+        details += details.empty() ? part : ", " + part;
+    }
+    return details;
+}
+
 auto android_device::get_label() const -> std::string
 {
-    return model.empty() ? serial : model + " (" + serial + ")";
+    return get_name() + " - " + get_details();
 }
 
 auto merge_android_devices(std::vector<android_device> devices) -> std::vector<android_device>
@@ -445,6 +500,72 @@ auto parse_android_devices(const std::string& adb_output) -> std::vector<android
         devices.push_back(std::move(device));
     }
     return devices;
+}
+
+auto parse_wireless_debugging_services(const std::string& adb_output) -> std::vector<wireless_debugging_service>
+{
+    std::vector<wireless_debugging_service> services;
+    std::stringstream lines(adb_output);
+    std::string line;
+    while(std::getline(lines, line))
+    {
+        while(!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        std::vector<std::string> fields;
+        std::stringstream columns(line);
+        for(std::string field; std::getline(columns, field, SERVICE_FIELD_SEPARATOR);)
+        {
+            fields.push_back(field);
+        }
+        if(fields.size() == SERVICE_FIELD_COUNT && fields[1] == WIRELESS_SERVICE_TYPE && !fields[2].empty())
+        {
+            services.push_back({fields[0], fields[2]});
+        }
+    }
+    return services;
+}
+
+auto get_android_device_properties_command() -> std::string
+{
+    return DEVICE_PROPERTIES_COMMAND;
+}
+
+void read_android_device_properties(const std::string& shell_output, android_device& device)
+{
+    std::stringstream lines(shell_output);
+    std::string line;
+    while(std::getline(lines, line))
+    {
+        while(!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        const auto separator = line.find('=');
+        if(separator == std::string::npos || separator + 1 == line.size())
+        {
+            continue;
+        }
+        const auto key = line.substr(0, separator);
+        const auto value = line.substr(separator + 1);
+        if(key == "serial")
+        {
+            device.hardware_serial = value;
+        }
+        else if(key == "model")
+        {
+            device.model = value;
+        }
+        else if(key == "android")
+        {
+            device.android_version = value;
+        }
+        else if(key == "name" && value != UNSET_SETTING)
+        {
+            device.device_name = value;
+        }
+    }
 }
 
 auto parse_logcat_line(const std::string& text, logcat_line& line) -> bool
