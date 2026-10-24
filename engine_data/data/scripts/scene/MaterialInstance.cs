@@ -183,14 +183,86 @@ namespace Unravel.Core
             internal_m2n_material_instance_revert_all(owner, slot);
         }
 
-        private Texture GetTexture(MaterialProperty property)
+        /// <summary>
+        /// Gets the color this renderer draws with: BaseColor, EmissiveColor or SubsurfaceColor.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a color property.</exception>
+        public Color GetColor(MaterialProperty property)
         {
+            MaterialPropertyTypes.RequireColor(property);
+            return internal_m2n_material_instance_get_color(owner, slot, (int)property);
+        }
+
+        /// <summary>
+        /// Overrides a color for this renderer: BaseColor, EmissiveColor or SubsurfaceColor. Per instance.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a color property.</exception>
+        public void SetColor(MaterialProperty property, Color value)
+        {
+            MaterialPropertyTypes.RequireColor(property);
+            internal_m2n_material_instance_set_color(owner, slot, (int)property, value);
+        }
+
+        /// <summary>
+        /// Gets the number this renderer draws with: EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
+        public float GetFloat(MaterialProperty property)
+        {
+            MaterialPropertyTypes.RequireFloat(property);
+            return internal_m2n_material_instance_get_float(owner, slot, (int)property);
+        }
+
+        /// <summary>
+        /// Overrides a number for this renderer: EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff.
+        /// Per instance, except AlphaCutoff, which is per material.
+        /// </summary>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
+        public void SetFloat(MaterialProperty property, float value)
+        {
+            MaterialPropertyTypes.RequireFloat(property);
+            internal_m2n_material_instance_set_float(owner, slot, (int)property, value);
+        }
+
+        /// <summary>Gets the vector this renderer draws with: Tiling.</summary>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a vector property.</exception>
+        public Vector2 GetVector(MaterialProperty property)
+        {
+            MaterialPropertyTypes.RequireVector(property);
+            return internal_m2n_material_instance_get_vector(owner, slot, (int)property);
+        }
+
+        /// <summary>Overrides a vector for this renderer: Tiling. Per material.</summary>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a vector property.</exception>
+        public void SetVector(MaterialProperty property, Vector2 value)
+        {
+            MaterialPropertyTypes.RequireVector(property);
+            internal_m2n_material_instance_set_vector(owner, slot, (int)property, value);
+        }
+
+        /// <summary>
+        /// Gets the texture this renderer draws with: ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or
+        /// AoMap.
+        /// </summary>
+        /// <returns>The texture, or null when the renderer uses the engine's default map.</returns>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a texture property.</exception>
+        public Texture GetTexture(MaterialProperty property)
+        {
+            MaterialPropertyTypes.RequireTexture(property);
             var uid = internal_m2n_material_instance_get_texture(owner, slot, (int)property);
             return uid == Guid.Empty ? null : new Texture { uid = uid };
         }
 
-        private void SetTexture(MaterialProperty property, Texture texture)
+        /// <summary>
+        /// Overrides a texture for this renderer: ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or
+        /// AoMap. Per material.
+        /// </summary>
+        /// <param name="property">The texture property.</param>
+        /// <param name="texture">The texture, or null for the engine's default map.</param>
+        /// <exception cref="ArgumentException"><paramref name="property"/> is not a texture property.</exception>
+        public void SetTexture(MaterialProperty property, Texture texture)
         {
+            MaterialPropertyTypes.RequireTexture(property);
             internal_m2n_material_instance_set_texture(owner, slot, (int)property, texture?.uid ?? Guid.Empty);
         }
 

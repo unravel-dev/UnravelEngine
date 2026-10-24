@@ -57,8 +57,10 @@ public class Texture : Asset<Texture>
 }
 
 /// <summary>
-/// A property of a material, as <see cref="MaterialInstance.IsOverridden"/> and <see cref="MaterialInstance.Revert"/>
-/// name it.
+/// A property of a material, as the typed getters and setters of <see cref="Material"/> and
+/// <see cref="MaterialInstance"/> (<see cref="Material.SetColor"/>, <see cref="Material.SetFloat"/>,
+/// <see cref="Material.SetVector"/>, <see cref="Material.SetTexture"/>),
+/// <see cref="MaterialInstance.IsOverridden"/> and <see cref="MaterialInstance.Revert"/> name it.
 /// </summary>
 public enum MaterialProperty
 {
@@ -96,6 +98,55 @@ public enum MaterialProperty
     AlphaMode,
     /// <summary>Which faces the material hides.</summary>
     CullMode,
+}
+
+/// <summary>
+/// The value type of each <see cref="MaterialProperty"/>: the typed getters and setters of <see cref="Material"/> and
+/// <see cref="MaterialInstance"/> reject a property that holds another type.
+/// </summary>
+internal static class MaterialPropertyTypes
+{
+    internal static void RequireColor(MaterialProperty property)
+    {
+        bool isColor = property == MaterialProperty.BaseColor ||
+                       property == MaterialProperty.EmissiveColor ||
+                       property == MaterialProperty.SubsurfaceColor;
+        Require(isColor, property, "BaseColor, EmissiveColor or SubsurfaceColor");
+    }
+
+    internal static void RequireFloat(MaterialProperty property)
+    {
+        bool isFloat = property == MaterialProperty.EmissiveIntensity ||
+                       property == MaterialProperty.Roughness ||
+                       property == MaterialProperty.Metalness ||
+                       property == MaterialProperty.Bumpiness ||
+                       property == MaterialProperty.AlphaCutoff;
+        Require(isFloat, property, "EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff");
+    }
+
+    internal static void RequireVector(MaterialProperty property)
+    {
+        Require(property == MaterialProperty.Tiling, property, "Tiling");
+    }
+
+    internal static void RequireTexture(MaterialProperty property)
+    {
+        bool isTexture = property == MaterialProperty.ColorMap ||
+                         property == MaterialProperty.NormalMap ||
+                         property == MaterialProperty.RoughnessMap ||
+                         property == MaterialProperty.MetalnessMap ||
+                         property == MaterialProperty.EmissiveMap ||
+                         property == MaterialProperty.AoMap;
+        Require(isTexture, property, "ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or AoMap");
+    }
+
+    private static void Require(bool isOfType, MaterialProperty property, string expected)
+    {
+        if (!isOfType)
+        {
+            throw new ArgumentException($"{property} is not one of {expected}.", nameof(property));
+        }
+    }
 }
 
 /// <summary>
@@ -254,14 +305,81 @@ public class Material : Asset<Material>
         set => internal_m2n_material_set_mode(uid, (int)MaterialProperty.CullMode, (int)value);
     }
 
-    private Texture GetTexture(MaterialProperty property)
+    /// <summary>Gets a color property: BaseColor, EmissiveColor or SubsurfaceColor.</summary>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a color property.</exception>
+    public Color GetColor(MaterialProperty property)
     {
+        MaterialPropertyTypes.RequireColor(property);
+        return internal_m2n_material_get_color(uid, (int)property);
+    }
+
+    /// <summary>
+    /// Sets a color property for every renderer that uses the material: BaseColor, EmissiveColor or SubsurfaceColor.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a color property.</exception>
+    public void SetColor(MaterialProperty property, Color value)
+    {
+        MaterialPropertyTypes.RequireColor(property);
+        internal_m2n_material_set_color(uid, (int)property, value);
+    }
+
+    /// <summary>Gets a number property: EmissiveIntensity, Roughness, Metalness, Bumpiness or AlphaCutoff.</summary>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
+    public float GetFloat(MaterialProperty property)
+    {
+        MaterialPropertyTypes.RequireFloat(property);
+        return internal_m2n_material_get_float(uid, (int)property);
+    }
+
+    /// <summary>
+    /// Sets a number property for every renderer that uses the material: EmissiveIntensity, Roughness, Metalness,
+    /// Bumpiness or AlphaCutoff.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a number property.</exception>
+    public void SetFloat(MaterialProperty property, float value)
+    {
+        MaterialPropertyTypes.RequireFloat(property);
+        internal_m2n_material_set_float(uid, (int)property, value);
+    }
+
+    /// <summary>Gets a vector property: Tiling.</summary>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a vector property.</exception>
+    public Vector2 GetVector(MaterialProperty property)
+    {
+        MaterialPropertyTypes.RequireVector(property);
+        return internal_m2n_material_get_vector(uid, (int)property);
+    }
+
+    /// <summary>Sets a vector property for every renderer that uses the material: Tiling.</summary>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a vector property.</exception>
+    public void SetVector(MaterialProperty property, Vector2 value)
+    {
+        MaterialPropertyTypes.RequireVector(property);
+        internal_m2n_material_set_vector(uid, (int)property, value);
+    }
+
+    /// <summary>
+    /// Gets a texture property: ColorMap, NormalMap, RoughnessMap, MetalnessMap, EmissiveMap or AoMap.
+    /// </summary>
+    /// <returns>The texture, or null when the material uses the engine's default map.</returns>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a texture property.</exception>
+    public Texture GetTexture(MaterialProperty property)
+    {
+        MaterialPropertyTypes.RequireTexture(property);
         var texture = internal_m2n_material_get_texture(uid, (int)property);
         return texture == Guid.Empty ? null : new Texture { uid = texture };
     }
 
-    private void SetTexture(MaterialProperty property, Texture texture)
+    /// <summary>
+    /// Sets a texture property for every renderer that uses the material: ColorMap, NormalMap, RoughnessMap,
+    /// MetalnessMap, EmissiveMap or AoMap.
+    /// </summary>
+    /// <param name="property">The texture property.</param>
+    /// <param name="texture">The texture, or null for the engine's default map.</param>
+    /// <exception cref="ArgumentException"><paramref name="property"/> is not a texture property.</exception>
+    public void SetTexture(MaterialProperty property, Texture texture)
     {
+        MaterialPropertyTypes.RequireTexture(property);
         internal_m2n_material_set_texture(uid, (int)property, texture?.uid ?? Guid.Empty);
     }
 

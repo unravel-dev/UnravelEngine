@@ -105,7 +105,11 @@ reset state there instead of in `OnStart`, which runs only once per instance.
   `model.GetSharedMaterial(slot)` / `SetSharedMaterial`) changes every renderer that uses it
   (`material.baseColor = c`; in the editor a script's change lasts until play stops). A
   **material instance** (`model.GetMaterialInstance(slot)`) changes one renderer:
-  `instance.emissiveIntensity = 3f`, `instance.baseColor = c`, `instance.colorMap = tex`; values it
+  `instance.emissiveIntensity = 3f`, `instance.baseColor = c`, `instance.colorMap = tex`, or by
+  property: `SetColor(MaterialProperty.BaseColor, c)`, `SetFloat(MaterialProperty.Roughness, r)`,
+  `SetVector(MaterialProperty.Tiling, v)`, `SetTexture(MaterialProperty.ColorMap, tex)` and the
+  matching `GetColor` / `GetFloat` / `GetVector` / `GetTexture` (also on `Material`; a property of
+  another type throws `ArgumentException`); values it
   does not override follow the shared material; `instance.Revert(MaterialProperty.X)`,
   `instance.RevertAll()`, `instance.IsOverridden(...)`. Colors and numbers are per instance (the
   renderer keeps sharing the material's instanced draw, `instance.sharesDraw`); textures, tiling
