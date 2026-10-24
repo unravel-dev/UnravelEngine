@@ -159,6 +159,14 @@ auto calc_flexible_width(float min_width, float max_width) -> float;
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// Search field of a strip: as wide as calc_flexible_width gives, with a hint while empty and a
+/// clear button over its right end while it holds text.
+/// </summary>
+//-----------------------------------------------------------------------------
+void search_field(ImGuiTextFilter& filter, const char* hint, const char* tooltip, float min_width, float max_width);
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// Draw a bar that only shows a text. It has no window and no item, so every click goes through
 /// to the viewport. It is sized and placed like a bar whose single item is that text, which puts
 /// the text exactly where the last item of a right anchored bar shows it - a host can fade from

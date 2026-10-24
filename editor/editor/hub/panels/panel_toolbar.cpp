@@ -1,5 +1,7 @@
 #include "panel_toolbar.h"
 
+#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+
 #include <editor/imgui/integration/imgui_style.h>
 #include <imgui_widgets/tooltips.h>
 #include <imgui_widgets/utils.h>
@@ -731,6 +733,51 @@ void end_field()
 {
     ImGui::PopStyleColor(FIELD_STYLE_COLORS);
     ImGui::PopStyleVar(FIELD_STYLE_VARS);
+}
+
+namespace
+{
+/// The clear button of a search field stays faint until it is pointed at.
+constexpr float SEARCH_CLEAR_ICON_ALPHA = 0.6f;
+
+/// Clears the filter: a button over the right end of the field just drawn.
+void draw_search_clear_button(ImGuiTextFilter& filter)
+{
+    const ImRect field(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    const ImRect bb(field.Max.x - field.GetHeight(), field.Min.y, field.Max.x, field.Max.y);
+    const ImGuiID id = ImGui::GetID("##clear_search");
+    if(!ImGui::ItemAdd(bb, id))
+    {
+        return;
+    }
+    bool is_hovered = false;
+    bool is_held = false;
+    if(ImGui::ButtonBehavior(bb, id, &is_hovered, &is_held))
+    {
+        filter.Clear();
+    }
+    const ImVec2 icon_size = ImGui::CalcTextSize(ICON_MDI_CLOSE);
+    ImGui::GetWindowDrawList()->AddText(ImFloor(bb.GetCenter() - icon_size * 0.5f),
+                                        ImGui::GetColorU32(ImGuiCol_Text, is_hovered ? 1.0f : SEARCH_CLEAR_ICON_ALPHA),
+                                        ICON_MDI_CLOSE);
+    ImGui::SetItemTooltipEx("%s", "Clear the search");
+}
+} // namespace
+
+void search_field(ImGuiTextFilter& filter, const char* hint, const char* tooltip, float min_width, float max_width)
+{
+    const float width = calc_flexible_width(min_width, max_width);
+    begin_field(width);
+    // The clear button is laid over the right end of the field.
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::DrawFilterWithHint(filter, hint, width);
+    ImGui::SetItemTooltipEx("%s", tooltip);
+    ImGui::DrawItemActivityOutline();
+    if(filter.IsActive())
+    {
+        draw_search_clear_button(filter);
+    }
+    end_field();
 }
 
 auto calc_flexible_width(float min_width, float max_width) -> float

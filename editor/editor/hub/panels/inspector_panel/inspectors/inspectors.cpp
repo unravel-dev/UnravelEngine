@@ -7,6 +7,7 @@
 #include "entt/core/any.hpp"
 #include "imgui_widgets/utils.h"
 #include "inspector.h"
+#include "inspector_container_widgets.h"
 #include "property_path_generator.h"
 
 
@@ -27,6 +28,7 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <iterator>
 #include <ser20/external/simdjson/simdjson.h>
@@ -1358,6 +1360,400 @@ auto get_inspector(rtti::context& ctx, const entt::meta_type& type) -> std::shar
 }
 
 
+namespace
+{
+/// The sibling array `prop` names to draw under its elements, read for this frame.
+auto make_array_pairing(const entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop)
+    -> hpp::optional<array_pairing>
+{
+    const auto paired_name = entt::get_attribute_as<std::string>(prop, PAIRED_PROPERTY_ATTRIBUTE);
+    if(paired_name.empty())
+    {
+        return hpp::nullopt;
+    }
+    const auto paired_prop = object.type().data(entt::hashed_string{paired_name.c_str()});
+    if(!paired_prop)
+    {
+        return hpp::nullopt;
+    }
+    array_pairing pairing{paired_prop.get(object), make_property_proxy(var_proxy, paired_prop), paired_prop};
+    if(!pairing.var.type().is_sequence_container())
+    {
+        return hpp::nullopt;
+    }
+    return pairing;
+}
+
+/// Whether another property of `type` draws `prop` under its own elements (PAIRED_PROPERTY_ATTRIBUTE).
+auto is_drawn_by_pair(const entt::meta_type& type, const entt::meta_data& prop) -> bool
+{
+    const auto name = entt::get_name(prop);
+    for(auto kvp : type.data())
+    {
+        if(entt::get_attribute_as<std::string>(kvp.second, PAIRED_PROPERTY_ATTRIBUTE) == name)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// How deep the inspector's filter looks into a property's values, and how many elements of an array it reads. A
+/// component's material rows are five steps down: model, instance list, instance, its material, the material's rows.
+constexpr int FILTER_SEARCH_DEPTH = 8;
+constexpr std::size_t FILTER_SEARCH_ELEMENTS = 64;
+
+auto get_filter(rtti::context& ctx) -> inspector_filter&
+{
+    return ctx.get_cached<inspector_context>().filter;
+}
+
+/// While alive, the rows drawn are a list of their own: a header on its first row has no rows above it.
+class property_rows_scope
+{
+public:
+    explicit property_rows_scope(rtti::context& ctx)
+        : rows_top_y_(ctx.get_cached<inspector_context>().rows_top_y)
+        , outer_rows_top_y_(rows_top_y_)
+    {
+        rows_top_y_ = ImGui::GetCursorPosY();
+    }
+
+    ~property_rows_scope()
+    {
+        rows_top_y_ = outer_rows_top_y_;
+    }
+
+    property_rows_scope(const property_rows_scope&) = delete;
+    auto operator=(const property_rows_scope&) -> property_rows_scope& = delete;
+
+private:
+    float& rows_top_y_;
+    float outer_rows_top_y_{};
+};
+
+/// A title row in the property list being drawn: after a blank line, unless it is the list's first row.
+void draw_header_row(rtti::context& ctx, const std::string& text)
+{
+    draw_property_header(text, ImGui::GetCursorPosY() > ctx.get_cached<inspector_context>().rows_top_y);
+}
+
+auto holds_text(const std::string& name, const std::string& lowercase_text) -> bool
+{
+    std::string lowercase_name = name;
+    std::transform(lowercase_name.begin(),
+                   lowercase_name.end(),
+                   lowercase_name.begin(),
+                   [](unsigned char c)
+                   {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    return lowercase_name.find(lowercase_text) != std::string::npos;
+}
+
+/// Calls visit with each reflected property of `value`'s type that the inspector draws, its bases' first, until visit
+/// returns false. Returns whether it visited them all.
+auto for_each_reflected_property(const entt::meta_any& value,
+                                 const entt::meta_type& type,
+                                 const std::function<bool(const entt::meta_data&)>& visit) -> bool
+{
+    for(auto base : type.base())
+    {
+        if(!for_each_reflected_property(value, base.second, visit))
+        {
+            return false;
+        }
+    }
+    for(auto kvp : type.data())
+    {
+        if(entt::is_property_visible(value, kvp.second) && !visit(kvp.second))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto contains_name(rtti::context& ctx, entt::meta_any value, const std::string& text, int depth) -> bool;
+
+/// Whether one of the reflected properties of `value`, or what one of them holds, has a name holding the text. A
+/// component's properties are its rows even when an inspector of its own draws them.
+auto contains_name_in_properties(rtti::context& ctx, entt::meta_any value, const std::string& text, int depth) -> bool
+{
+    bool found = false;
+    for_each_reflected_property(value,
+                                value.type(),
+                                [&](const entt::meta_data& prop)
+                                {
+                                    found = holds_text(entt::get_pretty_name(prop), text) ||
+                                            contains_name(ctx, prop.get(value), text, depth - 1);
+                                    return !found;
+                                });
+    return found;
+}
+
+/// Whether `value` holds a property whose name holds the text: in its reflected properties and theirs, in the
+/// elements of an array, and in the rows of a block. Another inspector's value is one widget, with nothing inside,
+/// and so is an enum: its enumerators are the choices of its combo, each one a value of the enum again.
+auto contains_name(rtti::context& ctx, entt::meta_any value, const std::string& text, int depth) -> bool
+{
+    if(depth <= 0 || !value)
+    {
+        return false;
+    }
+    entt::as_derived(value);
+    const auto type = value.type();
+    if(const auto value_inspector = get_inspector(ctx, type))
+    {
+        return value_inspector->is_block() && contains_name(ctx, value_inspector->get_rows_object(value), text, depth - 1);
+    }
+    if(type.is_enum())
+    {
+        return false;
+    }
+    if(type.is_sequence_container())
+    {
+        std::size_t visited = 0;
+        for(auto element : value.as_sequence_container())
+        {
+            if(visited++ >= FILTER_SEARCH_ELEMENTS)
+            {
+                break;
+            }
+            if(contains_name(ctx, element, text, depth - 1))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    return contains_name_in_properties(ctx, value, text, depth);
+}
+
+auto contains_overridden_block(rtti::context& ctx, entt::meta_any value, int depth) -> bool;
+
+/// Whether one of the reflected properties of `value` holds a block drawing overridden values, as
+/// contains_name_in_properties looks.
+auto contains_overridden_block_in_properties(rtti::context& ctx, entt::meta_any value, int depth) -> bool
+{
+    bool found = false;
+    for_each_reflected_property(value,
+                                value.type(),
+                                [&](const entt::meta_data& prop)
+                                {
+                                    found = contains_overridden_block(ctx, prop.get(value), depth - 1);
+                                    return !found;
+                                });
+    return found;
+}
+
+/// Whether `value` holds a block drawing values something overrides (a model's material instances). It looks inside
+/// values as contains_name does.
+auto contains_overridden_block(rtti::context& ctx, entt::meta_any value, int depth) -> bool
+{
+    if(depth <= 0 || !value)
+    {
+        return false;
+    }
+    entt::as_derived(value);
+    const auto type = value.type();
+    if(const auto value_inspector = get_inspector(ctx, type))
+    {
+        return value_inspector->is_block() && value_inspector->has_overridden_rows(value);
+    }
+    if(type.is_enum())
+    {
+        return false;
+    }
+    if(type.is_sequence_container())
+    {
+        std::size_t visited = 0;
+        for(auto element : value.as_sequence_container())
+        {
+            if(visited++ >= FILTER_SEARCH_ELEMENTS)
+            {
+                break;
+            }
+            if(contains_overridden_block(ctx, element, depth - 1))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    return contains_overridden_block_in_properties(ctx, value, depth);
+}
+
+/// Whether the inspected prefab instance overrides `component_path`, something under it, or something it is in.
+auto is_prefab_override_touching(rtti::context& ctx, const std::string& component_path) -> bool
+{
+    const auto& override_ctx = ctx.get_cached<prefab_override_context>();
+    if(!override_ctx.is_active || !override_ctx.prefab_root_entity)
+    {
+        return false;
+    }
+    const auto* prefab = override_ctx.prefab_root_entity.try_get<prefab_component>();
+    return prefab != nullptr && prefab->has_override_touching(override_ctx.path_context.get_entity_uuid(), component_path);
+}
+
+/// Whether the value at `component_path` is overridden, or holds a block drawing overridden values. Inside a scope of
+/// marks (a settings profile, a material instance's slot) the marks alone say it: a prefab instance overrides a slot as
+/// one value, and the slot's rows show the instance's own overrides.
+auto is_overridden_value(rtti::context& ctx, const std::string& component_path, const entt::meta_any& value) -> bool
+{
+    const auto& marks = ctx.get_cached<property_override_view>();
+    const bool is_marked = marks.is_active() ? marks.get_current_mark() != override_mark::none
+                                             : is_prefab_override_touching(ctx, component_path);
+    return is_marked || contains_overridden_block(ctx, value, FILTER_SEARCH_DEPTH);
+}
+
+/// The filter match of `prop`, whose segment the override contexts have just taken: a property drawing its sibling's
+/// elements (PAIRED_PROPERTY_ATTRIBUTE) answers for them too.
+auto match_property_filter(rtti::context& ctx, entt::meta_any& object, const entt::meta_data& prop) -> filter_match
+{
+    const auto& filter = get_filter(ctx);
+    filter_match match{};
+    if(!filter.is_active())
+    {
+        return match;
+    }
+    const auto pairing = make_array_pairing(object, {}, prop);
+    if(!filter.text.empty() && filter.matched_ancestors == 0)
+    {
+        match.is_whole = holds_text(entt::get_pretty_name(prop), filter.text);
+        const bool has_inner_match =
+            contains_name(ctx, prop.get(object), filter.text, FILTER_SEARCH_DEPTH) ||
+            (pairing && contains_name(ctx, pairing->var, filter.text, FILTER_SEARCH_DEPTH));
+        if(!match.is_whole && !has_inner_match)
+        {
+            match.is_shown = false;
+            return match;
+        }
+    }
+    if(filter.only_overridden)
+    {
+        const auto& override_ctx = ctx.get_cached<prefab_override_context>();
+        const std::string path = override_ctx.path_context.get_current_path_with_component_type();
+        bool is_overridden = is_overridden_value(ctx, path, prop.get(object));
+        if(pairing)
+        {
+            const std::string name = entt::get_name(prop);
+            const std::string sibling_path = path.substr(0, path.size() - std::min(path.size(), name.size())) +
+                                             entt::get_name(pairing->prop);
+            is_overridden = is_overridden || is_overridden_value(ctx, sibling_path, pairing->var);
+        }
+        match.is_shown = is_overridden;
+    }
+    return match;
+}
+
+/// Whether the filter shows `prop` of `object`, read with the property's segment taken as inspect_property takes it.
+auto is_property_shown(rtti::context& ctx, entt::meta_any& object, const entt::meta_data& prop) -> bool
+{
+    auto& override_ctx = ctx.get_cached<prefab_override_context>();
+    auto& profile_overrides = ctx.get_cached<property_override_view>();
+    const std::string name = entt::get_name(prop);
+    override_ctx.push_segment(name, entt::get_pretty_name(prop));
+    profile_overrides.push_segment(name);
+    const bool is_shown = match_property_filter(ctx, object, prop).is_shown;
+    profile_overrides.pop_segment();
+    override_ctx.pop_segment();
+    return is_shown;
+}
+
+/// Whether one of a group's properties sets the attribute: the attributes of a group (the "group" attribute) ride on
+/// its properties.
+auto has_group_attribute(const std::vector<entt::meta_data>& props, const char* name) -> bool
+{
+    return std::any_of(props.begin(),
+                       props.end(),
+                       [name](const entt::meta_data& prop)
+                       {
+                           return entt::get_attribute_as<bool>(prop, name);
+                       });
+}
+
+/// The filter match of a group of `object`'s properties (the "group" attribute): shown whole when its name holds the
+/// text, otherwise shown when one of its properties is.
+auto match_group_filter(rtti::context& ctx,
+                        entt::meta_any& object,
+                        const std::string& name,
+                        const std::vector<entt::meta_data>& props) -> filter_match
+{
+    const auto& filter = get_filter(ctx);
+    filter_match match{};
+    if(!filter.is_active())
+    {
+        return match;
+    }
+    match.is_whole = !filter.text.empty() && filter.matched_ancestors == 0 && holds_text(name, filter.text);
+    // Within a whole match only the overridden toggle still picks among the properties.
+    const inspector_filter_whole_scope whole(ctx, match.is_whole);
+    match.is_shown = std::any_of(props.begin(),
+                                 props.end(),
+                                 [&](const entt::meta_data& prop)
+                                 {
+                                     return is_property_shown(ctx, object, prop);
+                                 });
+    return match;
+}
+} // namespace
+
+auto match_component_filter(rtti::context& ctx,
+                            entt::meta_any component,
+                            const std::string& pretty_name,
+                            const std::string& type_name) -> filter_match
+{
+    const auto& filter = get_filter(ctx);
+    filter_match match{};
+    if(!filter.is_active())
+    {
+        return match;
+    }
+    if(!filter.text.empty())
+    {
+        match.is_whole = holds_text(pretty_name, filter.text);
+        if(!match.is_whole && !contains_name_in_properties(ctx, component, filter.text, FILTER_SEARCH_DEPTH))
+        {
+            match.is_shown = false;
+            return match;
+        }
+    }
+    if(filter.only_overridden)
+    {
+        match.is_shown = is_prefab_override_touching(ctx, type_name) ||
+                         contains_overridden_block_in_properties(ctx, component, FILTER_SEARCH_DEPTH);
+    }
+    return match;
+}
+
+inspector_filter_whole_scope::inspector_filter_whole_scope(rtti::context& ctx, bool is_whole)
+{
+    auto& filter = get_filter(ctx);
+    if(is_whole && filter.is_active())
+    {
+        filter_ = &filter;
+        ++filter_->matched_ancestors;
+    }
+}
+
+inspector_filter_whole_scope::~inspector_filter_whole_scope()
+{
+    if(filter_ != nullptr)
+    {
+        --filter_->matched_ancestors;
+    }
+}
+
+void open_next_node_while_filtering()
+{
+    auto& ctx = engine::context();
+    if(ctx.has<inspector_context>() && get_filter(ctx).is_active())
+    {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+    }
+}
+
 auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> inspect_result
 {
     if(!entt::is_property_visible(object, prop))
@@ -1395,6 +1791,22 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     override_ctx.push_segment(prop_name, pretty_name);
     auto& profile_overrides = ctx.get_cached<property_override_view>();
     profile_overrides.push_segment(prop_name);
+    // The inspector's filter: a property without a match is not drawn; one whose name matched is drawn whole.
+    const filter_match match = match_property_filter(ctx, object, prop);
+    if(!match.is_shown)
+    {
+        profile_overrides.pop_segment();
+        override_ctx.pop_segment();
+        return {};
+    }
+    const inspector_filter_whole_scope whole_match(ctx, match.is_whole);
+    // A section title above the property, as C#'s [Header] draws one. Above a sub-object, it takes the place of the
+    // sub-object's own title.
+    const auto header = entt::get_attribute_as<std::string>(prop, "header");
+    if(!header.empty())
+    {
+        draw_header_row(ctx, header);
+    }
     // A setting every profile shares is edited in the project settings, not in a profile.
     is_readonly |= profile_overrides.is_current_shared();
     info.read_only = is_readonly;
@@ -1412,7 +1824,8 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     {
         if(is_array)
         {
-            result |= inspect_array(ctx, prop_var, prop_proxy, prop, info, prop.custom());
+            auto pairing = make_array_pairing(object, var_proxy, prop);
+            result |= inspect_array(ctx, prop_var, prop_proxy, prop, info, prop.custom(), pairing ? &*pairing : nullptr);
         }
         else if(is_associative_container)
         {
@@ -1429,14 +1842,18 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
             {
                 result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
             }
-            else if(!is_flattable)
+            // A sub-object: a section titled with its name by default, a foldout when it is "foldable" (folded at
+            // first when also "collapsed"), its rows joining the list untitled when it is "flattable".
+            else if(entt::get_attribute_as<bool>(prop, "foldable"))
             {
 
                 property_layout_group group(pretty_name);
 
-                ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
+                ImGui::SetNextItemOpen(!entt::get_attribute_as<bool>(prop, "collapsed"), ImGuiCond_Appearing);
+                open_next_node_while_filtering();
                 ImGui::AlignTextToFramePadding();
                 ImGui::BeginGroup();
+                const float header_x = ImGui::GetCursorScreenPos().x;
 
                 ImGui::PushFont(ImGui::Font::SemiBold);
                 bool open = ImGui::TreeNodeEx(pretty_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
@@ -1446,23 +1863,23 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
                 {
                     ImGui::TreePush(pretty_name.c_str());
                     ImGui::PushID(pretty_name.c_str());
-
-                    result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
-
+                    {
+                        const container_widgets::body_frame body(header_x);
+                        result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
+                    }
                     ImGui::PopID();
 
                     ImGui::TreePop();
                     ImGui::TreePop();
                 }
                 ImGui::EndGroup();
-
-                if(open)
-                {
-                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
-                }
             }
             else
             {
+                if(!is_flattable && header.empty())
+                {
+                    draw_header_row(ctx, pretty_name);
+                }
                 ImGui::PushID(pretty_name.c_str());
 
                 result |= inspect_var(ctx, prop_var, prop_proxy, info, prop.custom());
@@ -1716,7 +2133,7 @@ auto inspect_var_properties_impl(rtti::context& ctx,
         for(auto kvp : properties)
         {
             const auto& prop = kvp.second;
-            if(!entt::is_property_visible(var, prop))
+            if(!entt::is_property_visible(var, prop) || is_drawn_by_pair(type, prop))
             {
                 continue;
             }
@@ -1761,9 +2178,36 @@ auto inspect_var_properties_impl(rtti::context& ctx,
             }
             else
             {
+                // The inspector's filter: a group without a match is not drawn; one whose name matched is drawn whole.
+                const filter_match group_match = match_group_filter(ctx, var, group_name, props);
+                if(!group_match.is_shown)
+                {
+                    // The properties after the group keep their ids while the filter hides it.
+                    i += props.size();
+                    continue;
+                }
+                const inspector_filter_whole_scope whole_group(ctx, group_match.is_whole);
+                // A group is a section titled with its name, as a sub-object is. "group_foldable" on one of its
+                // properties makes it a foldout, folded at first with "group_collapsed".
+                if(!has_group_attribute(props, "group_foldable"))
+                {
+                    draw_header_row(ctx, group_name);
+                    ImGui::PushID(group_name.c_str());
+                    for(auto& prop : props)
+                    {
+                        ImGui::PushID(i);
+                        draw(prop);
+                        ImGui::PopID();
+                        i++;
+                    }
+                    ImGui::PopID();
+                    continue;
+                }
                 property_layout_group group(group_name);
-                ImGui::SetNextItemOpen(true, ImGuiCond_Appearing);
+                ImGui::SetNextItemOpen(!has_group_attribute(props, "group_collapsed"), ImGuiCond_Appearing);
+                open_next_node_while_filtering();
                 ImGui::BeginGroup();
+                const float header_x = ImGui::GetCursorScreenPos().x;
                 ImGui::AlignTextToFramePadding();
                 ImGui::PushFont(ImGui::Font::SemiBold);
                 bool open = ImGui::TreeNodeEx(group_name.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
@@ -1773,25 +2217,29 @@ auto inspect_var_properties_impl(rtti::context& ctx,
                 {
                     ImGui::TreePush(group_name.c_str());
                     ImGui::PushID(group_name.c_str());
-
-                    for(auto& prop : props)
                     {
-                        ImGui::PushID(i);
-                        draw(prop);
-                        ImGui::PopID();
-                        i++;
+                        const container_widgets::body_frame body(header_x);
+                        const property_rows_scope rows(ctx);
+                        for(auto& prop : props)
+                        {
+                            ImGui::PushID(i);
+                            draw(prop);
+                            ImGui::PopID();
+                            i++;
+                        }
                     }
                     ImGui::PopID();
                     ImGui::TreePop();
 
                     ImGui::TreePop();
                 }
-         
-                ImGui::EndGroup();
-                if(open)
+                else
                 {
-                    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
+                    // The properties after the group keep their ids while it is folded.
+                    i += props.size();
                 }
+
+                ImGui::EndGroup();
 
             }
         }
@@ -1817,6 +2265,7 @@ auto inspect_var_properties(rtti::context& ctx,
                             const property_drawer& drawer) -> inspect_result
 {
     inspect_result result{};
+    const property_rows_scope rows(ctx);
     for(auto base : var.type().base())
     {
         result |= inspect_var_properties_impl(ctx, var, var_proxy, base.second, info, custom, drawer);

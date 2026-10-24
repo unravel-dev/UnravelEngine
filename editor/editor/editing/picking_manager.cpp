@@ -621,6 +621,12 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                 [&](auto e, auto&& transform_comp, auto&& ui_document_comp, auto&& active)
                 {
                     const auto& world_transform = transform_comp.get_transform_global();
+
+                    if(ui_document_comp.render_mode == ui_render_mode::screen_space_overlay)
+                    {
+                        return;
+                    }
+                    
                     const auto bbox = ui_document_comp.get_bounds();
 
                     if(!pick_camera.test_obb(bbox, world_transform))

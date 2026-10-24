@@ -398,7 +398,11 @@ auto inspect_map_entry(rtti::context& ctx,
     inspect_result result{};
     const entt::meta_any& key = entry.first;
     ImGui::PushID(index);
-    ImGui::Separator();
+    // The body's frame is the first entry's top edge.
+    if(index > 0)
+    {
+        ImGui::Separator();
+    }
 
     map_key_cell cell{};
     cell.row_id = ImGui::GetID("##entry");
@@ -468,6 +472,7 @@ auto inspect_associative_container(rtti::context& ctx,
         if(open)
         {
             layout.pop_layout();
+            const container_widgets::body_frame body;
 
             if(view.size() == 0)
             {
@@ -489,7 +494,6 @@ auto inspect_associative_container(rtti::context& ctx,
         }
     }
     ImGui::EndGroup();
-    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
 
     return result;
 }

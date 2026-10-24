@@ -20,6 +20,23 @@ constexpr ImU32 CONTAINER_BUTTON_HELD_COLOR = IM_COL32(255, 255, 255, 46);
 constexpr ImU32 CONTAINER_REMOVE_COLOR = IM_COL32(255, 95, 95, 255);
 constexpr ImU32 CONTAINER_REMOVE_FILL_COLOR = IM_COL32(255, 95, 95, 40);
 constexpr const char* CONTAINER_PENDING_COUNT_ID = "##container_pending_count";
+/// How far an open container's rows sit inside its frame, in units of the font size.
+constexpr float CONTAINER_BODY_PADDING = 0.35f;
+/// How far the body's background goes from the window's color toward the fields'.
+constexpr float CONTAINER_BODY_SHADE = 0.4f;
+/// The frame reaches this share of the item spacing past its first and last rows, so it never meets its neighbors.
+constexpr float CONTAINER_BODY_MARGIN_SHARE = 0.5f;
+/// The body's rows are drawn into one channel and its background, once their extent is known, into the one below.
+constexpr int CONTAINER_BODY_BACKGROUND_CHANNEL = 0;
+constexpr int CONTAINER_BODY_ROWS_CHANNEL = 1;
+constexpr int CONTAINER_BODY_CHANNEL_COUNT = 2;
+
+auto get_body_color() -> ImU32
+{
+    const ImVec4 window = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    const ImVec4 field = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+    return ImGui::GetColorU32(ImLerp(window, field, CONTAINER_BODY_SHADE));
+}
 
 auto get_icon_color(const icon_button& button, bool is_hovered) -> ImU32
 {
@@ -127,13 +144,41 @@ auto draw_row_remove_button(const ImRect& label_rect, const ImRect& row_rect, co
     return draw_icon_button({"##remove", ICON_MDI_DELETE_OUTLINE, tooltip, true}, remove_rect);
 }
 
-void draw_empty_hint()
+void draw_empty_hint(const std::string& text)
 {
-    ImGui::Separator();
     ImGui::Indent();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%s", "Empty");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", text.empty() ? "Empty" : text.c_str());
+    ImGui::PopTextWrapPos();
     ImGui::Unindent();
+}
+
+body_frame::body_frame(float left_x)
+    : draw_list_(ImGui::GetWindowDrawList())
+    , left_x_(ImMin(left_x, ImGui::GetCursorScreenPos().x))
+    , padding_(to_pixels(CONTAINER_BODY_PADDING))
+{
+    splitter_.Split(draw_list_, CONTAINER_BODY_CHANNEL_COUNT);
+    splitter_.SetCurrentChannel(draw_list_, CONTAINER_BODY_ROWS_CHANNEL);
+    ImGui::BeginGroup();
+    ImGui::Indent(padding_);
+}
+
+body_frame::~body_frame()
+{
+    ImGui::Unindent(padding_);
+    ImGui::EndGroup();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float margin = style.ItemSpacing.y * CONTAINER_BODY_MARGIN_SHARE;
+    const ImVec2 rows_min = ImGui::GetItemRectMin();
+    const ImVec2 rows_max = ImGui::GetItemRectMax();
+    const ImVec2 frame_min(left_x_, rows_min.y - margin);
+    const ImVec2 frame_max(ImMax(rows_max.x, ImGui::GetCurrentWindow()->WorkRect.Max.x), rows_max.y + margin);
+    splitter_.SetCurrentChannel(draw_list_, CONTAINER_BODY_BACKGROUND_CHANNEL);
+    draw_list_->AddRectFilled(frame_min, frame_max, get_body_color(), style.FrameRounding);
+    splitter_.Merge(draw_list_);
+    draw_list_->AddRect(frame_min, frame_max, ImGui::GetColorU32(ImGuiCol_TableBorderLight), style.FrameRounding);
 }
 
 } // namespace unravel::container_widgets

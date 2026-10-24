@@ -705,6 +705,9 @@ void inspector_asset_handle_material::inspect_import_origin(rtti::context& ctx, 
 
 namespace
 {
+/// The mark of a value a material instance overrides: apart from the accent of prefab overrides.
+constexpr ImVec4 MATERIAL_INSTANCE_OVERRIDE_COLOR{61.0f / 255.0f, 191.0f / 255.0f, 166.0f / 255.0f, 1.0f};
+
 /// @p mat as its most derived reflected type, so its base type's properties and its own are found.
 auto make_material_view(material& mat) -> entt::meta_any
 {
@@ -747,7 +750,9 @@ void draw_instance_status(const material_instance& instance, const entt::meta_ty
 {
     if(!instance.has_overrides())
     {
+        ImGui::PushTextWrapPos(0.0f);
         ImGui::TextDisabled("No overrides: the model draws exactly like %s.", shared.c_str());
+        ImGui::PopTextWrapPos();
         return;
     }
     const auto own_draw = find_own_draw_override(instance, type);
@@ -778,7 +783,71 @@ auto make_instance_marks(const material_instance& instance, hpp::optional<entt::
     };
     marks.revert_label = "Revert to Shared Material";
     marks.overridden_note = "This model overrides the shared material's value.";
+    marks.marker_color = MATERIAL_INSTANCE_OVERRIDE_COLOR;
     return marks;
+}
+
+/// The slot's value under the name of one of its rows: the undo step of that row's edit or revert takes the name, so
+/// undo and redo point at the row, not at the end of the slot.
+auto make_row_proxy(const meta_any_proxy& slot_proxy, const entt::meta_data& row) -> meta_any_proxy
+{
+    meta_any_proxy row_proxy;
+    row_proxy.impl->parent = slot_proxy.impl;
+    row_proxy.impl->type_name = slot_proxy.impl->type_name;
+    row_proxy.impl->name = make_property_proxy_name(slot_proxy.impl->name, row);
+    row_proxy.impl->getter = [parent_proxy = slot_proxy](entt::meta_any& result)
+    {
+        return parent_proxy.impl->getter(result);
+    };
+    row_proxy.impl->setter =
+        [parent_proxy = slot_proxy](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+    {
+        return parent_proxy.impl->setter(parent_proxy, value, execution_count);
+    };
+    return row_proxy;
+}
+
+/// Applies a row's revert, or the edits made on the view, to the instance, and records the change as the undo step of
+/// the row that changed.
+auto apply_row_change(rtti::context& ctx,
+                      material_instance& instance,
+                      entt::meta_any& view,
+                      const meta_any_proxy& slot_proxy,
+                      const hpp::optional<entt::id_type>& reverted,
+                      const entt::meta_custom& custom) -> inspect_result
+{
+    const material_instance before = instance;
+    entt::meta_data row{};
+    if(reverted)
+    {
+        instance.revert(*reverted);
+        row = view.type().data(*reverted);
+    }
+    else
+    {
+        for_each_material_property(view.type(),
+                                   [&](entt::id_type property, const entt::meta_data& prop)
+                                   {
+                                       auto edited = prop.get(view);
+                                       if(!(instance.get_value(property) == edited))
+                                       {
+                                           instance.set_override(property, edited);
+                                           row = prop;
+                                       }
+                                   });
+    }
+    inspect_result result{};
+    result.changed = true;
+    result.edit_finished = reverted.has_value();
+    meta_any_proxy step_proxy = row ? make_row_proxy(slot_proxy, row) : slot_proxy;
+    add_property_action(ctx,
+                        ctx.get_cached<prefab_override_context>(),
+                        result,
+                        step_proxy,
+                        entt::meta_any{before},
+                        entt::meta_any{instance},
+                        custom);
+    return result;
 }
 
 /// A color as the theme sets it: the value under the first push of it this frame.
@@ -831,6 +900,23 @@ private:
 };
 } // namespace
 
+auto inspector_material_instance::get_rows_object(const entt::meta_any& value) const -> entt::meta_any
+{
+    const auto* data = value.try_cast<material_instance>();
+    const auto shared = data != nullptr ? data->get_shared_material().get() : nullptr;
+    if(!shared || asset_handle<material>::is_empty(shared))
+    {
+        return {};
+    }
+    return make_material_view(*shared);
+}
+
+auto inspector_material_instance::has_overridden_rows(const entt::meta_any& value) const -> bool
+{
+    const auto* data = value.try_cast<material_instance>();
+    return data != nullptr && data->has_overrides();
+}
+
 auto inspector_material_instance::inspect(rtti::context& ctx,
                                           entt::meta_any& var,
                                           const meta_any_proxy& var_proxy,
@@ -846,47 +932,32 @@ auto inspector_material_instance::inspect(rtti::context& ctx,
         ImGui::TextDisabled("The slot has no shared material.");
         return result;
     }
-    // Open at first when there is something to see.
-    const ImGuiTreeNodeFlags flags =
-        ImGuiTreeNodeFlags_AllowOverlap | (data.has_overrides() ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-    if(!ImGui::TreeNodeEx("Material Instance", flags))
-    {
-        return result;
-    }
+    // A block: the slot's row folds the values out, and they line up with the model's other rows.
     const unmarked_slot_scope unmarked(ctx);
     auto values = make_instance_values(data, *shared);
     auto view = make_material_view(*values);
-    draw_instance_status(data, view.type(), shared_handle.name());
+    // A text search shows the matching rows only: the slot's status and its Revert All are no rows.
+    const bool is_searching = !ctx.get_cached<inspector_context>().filter.text.empty();
+    if(!is_searching)
+    {
+        draw_instance_status(data, view.type(), shared_handle.name());
+    }
     // The values are edited on a copy, as the shared material with the overrides; what changed becomes overrides of
-    // the instance, and the instance is what the model's undo step records.
+    // the instance, and the instance is what the model's undo step records. The rows are named after the slot, as
+    // that step is (make_row_proxy).
     hpp::optional<entt::id_type> reverted;
     inspect_result view_result;
     {
         property_override_scope marked(ctx, {}, make_instance_marks(data, reverted));
         inspect_without_undo_scope no_undo;
-        view_result = ::unravel::inspect_var(ctx, view, make_proxy(view));
+        view_result = ::unravel::inspect_var(ctx, view, make_proxy(view, var_proxy.impl->name));
     }
-    if(reverted)
+    if(reverted || view_result.changed)
     {
-        data.revert(*reverted);
-        result.changed = true;
-        result.edit_finished = true;
-    }
-    else if(view_result.changed)
-    {
-        for_each_material_property(view.type(),
-                                   [&](entt::id_type property, const entt::meta_data& prop)
-                                   {
-                                       auto edited = prop.get(view);
-                                       if(!(data.get_value(property) == edited))
-                                       {
-                                           data.set_override(property, edited);
-                                       }
-                                   });
-        result.changed = true;
+        result |= apply_row_change(ctx, data, view, var_proxy, reverted, custom);
     }
     result.edit_finished |= view_result.edit_finished;
-    if(data.has_overrides())
+    if(data.has_overrides() && !is_searching)
     {
         if(ImGui::Button("Revert All"))
         {
@@ -896,7 +967,6 @@ auto inspector_material_instance::inspect(rtti::context& ctx,
         }
         ImGui::SetItemTooltipEx("Drop every override: the model draws exactly like its shared material.");
     }
-    ImGui::TreePop();
     return result;
 }
 

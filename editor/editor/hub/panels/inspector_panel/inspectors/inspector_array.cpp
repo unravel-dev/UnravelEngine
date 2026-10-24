@@ -103,11 +103,16 @@ auto resize_array(entt::meta_sequence_container& view, std::size_t& size, const 
     return result;
 }
 
-/// An element with an inspector of its own is one widget: it shares the row with its label.
-/// Anything else is a set of properties and folds out under its label.
+/// An element with an inspector of its own is one widget: it shares the row with its label. A block inspector's
+/// element, and anything else, is a set of rows and folds out under its label.
 auto is_inline_array_element(rtti::context& ctx, const entt::meta_type& type) -> bool
 {
-    return type.is_enum() || get_inspector(ctx, type) != nullptr;
+    if(type.is_enum())
+    {
+        return true;
+    }
+    const auto element_inspector = get_inspector(ctx, type);
+    return element_inspector != nullptr && !element_inspector->is_block();
 }
 
 /// An element folding out is named after its first property when that is a string with text in
@@ -193,6 +198,98 @@ auto make_array_element_proxy(const meta_any_proxy& var_proxy, const entt::meta_
     return value_proxy;
 }
 
+/**
+ * @brief While alive, the prefab override path names element `index` of the paired property in place of the same
+ * element of the array ("<paired>[index]" for "<array>[index]"): overrides are read and recorded as the paired
+ * element's.
+ */
+class paired_element_path_scope
+{
+public:
+    /// @param is_styled Whether what is drawn in the scope takes the bold style of an overridden path.
+    paired_element_path_scope(prefab_override_context& override_ctx,
+                              const array_pairing& pairing,
+                              std::size_t index,
+                              bool is_styled)
+        : override_ctx_(override_ctx)
+        , array_path_(override_ctx.path_context)
+        , array_pretty_path_(override_ctx.pretty_path_context)
+        , is_active_(override_ctx.is_active)
+        , is_styled_(is_styled)
+    {
+        if(!is_active_)
+        {
+            return;
+        }
+        override_ctx_.path_context.pop_segment();
+        override_ctx_.path_context.pop_segment();
+        override_ctx_.pretty_path_context.pop_segment();
+        override_ctx_.pretty_path_context.pop_segment();
+        const std::string name = entt::get_name(pairing.prop);
+        const std::string pretty_name = entt::get_pretty_name(pairing.prop);
+        const std::string index_segment = "[" + std::to_string(index) + "]";
+        if(is_styled_)
+        {
+            override_ctx_.push_segment(name, pretty_name);
+            override_ctx_.push_segment(index_segment, index_segment);
+            return;
+        }
+        override_ctx_.path_context.push_segment(name);
+        override_ctx_.path_context.push_segment(index_segment);
+        override_ctx_.pretty_path_context.push_segment(pretty_name);
+        override_ctx_.pretty_path_context.push_segment(index_segment);
+    }
+
+    ~paired_element_path_scope()
+    {
+        if(!is_active_)
+        {
+            return;
+        }
+        if(is_styled_)
+        {
+            override_ctx_.pop_segment();
+            override_ctx_.pop_segment();
+        }
+        override_ctx_.path_context = array_path_;
+        override_ctx_.pretty_path_context = array_pretty_path_;
+    }
+
+    paired_element_path_scope(const paired_element_path_scope&) = delete;
+    auto operator=(const paired_element_path_scope&) -> paired_element_path_scope& = delete;
+
+private:
+    prefab_override_context& override_ctx_;
+    property_path_context array_path_;
+    property_path_context array_pretty_path_;
+    bool is_active_{};
+    bool is_styled_{};
+};
+
+/// Element `index` of the paired array, drawn under the element of the same index. Its path is the paired
+/// property's, so its edits are recorded, for undo and as prefab overrides, as edits of that property; only whether
+/// an edit finished goes up to the array.
+auto inspect_paired_element(rtti::context& ctx, array_pairing& pairing, std::size_t index, const var_info& info)
+    -> inspect_result
+{
+    auto view = pairing.var.as_sequence_container();
+    auto value = view[index];
+    const meta_any_proxy value_proxy = make_array_element_proxy(pairing.proxy, value, index);
+    const std::string name = entt::get_name(pairing.prop);
+    inspect_result element_result{};
+    {
+        const paired_element_path_scope paired_path(ctx.get_cached<prefab_override_context>(), pairing, index, true);
+        ImGui::PushID(name.c_str());
+        ImGui::PushReadonly(info.read_only);
+        element_result = inspect_var(ctx, value, value_proxy, info, pairing.prop.custom());
+        ImGui::PopReadonly();
+        ImGui::PopID();
+    }
+    inspect_result result{};
+    result.edit_finished = element_result.edit_finished;
+    return result;
+}
+
 /// Makes the last item a handle to drag the element by.
 void begin_array_element_drag(const array_element_row& row)
 {
@@ -213,7 +310,9 @@ void draw_array_element_label(array_element_row& row)
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const float height = ImGui::GetFrameHeight();
     row.label_rect = ImRect(min, ImVec2(min.x + ImGui::GetContentRegionAvail().x, min.y + height));
-    const ImRect grip_rect(min, ImVec2(min.x + container_widgets::to_pixels(ARRAY_GRIP_WIDTH), min.y + height));
+    // An element that cannot move has no grip, and gives its room to the label.
+    const float grip_width = row.is_movable ? container_widgets::to_pixels(ARRAY_GRIP_WIDTH) : 0.0f;
+    const ImRect grip_rect(min, ImVec2(min.x + grip_width, min.y + height));
     if(row.is_foldout)
     {
         if(row.is_movable)
@@ -228,6 +327,7 @@ void draw_array_element_label(array_element_row& row)
         // The node is the last item, so the property menu of the row stays on it.
         const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_AllowOverlap |
                                          ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
+        open_next_node_while_filtering();
         row.is_open = ImGui::TreeNodeEx("##element", flags, "%s", row.label.c_str());
         begin_array_element_drag(row);
     }
@@ -358,6 +458,7 @@ auto inspect_array_element(rtti::context& ctx,
                            const var_info& info,
                            const entt::meta_custom& custom,
                            const array_state& state,
+                           array_pairing* pairing,
                            array_edit& edit) -> inspect_result
 {
     inspect_result result{};
@@ -368,7 +469,11 @@ auto inspect_array_element(rtti::context& ctx,
     const bool is_structure_editable = !item_info.read_only && state.is_resizeable;
 
     ImGui::PushID(element_index);
-    ImGui::Separator();
+    // The body's frame is the first element's top edge.
+    if(index > 0)
+    {
+        ImGui::Separator();
+    }
 
     // Track array index in property path
     auto& override_ctx = ctx.get_cached<prefab_override_context>();
@@ -380,7 +485,8 @@ auto inspect_array_element(rtti::context& ctx,
     row.array_id = state.id;
     row.index = element_index;
     row.is_movable = is_structure_editable;
-    row.is_foldout = !is_inline_array_element(ctx, value.type());
+    const bool has_paired_element = pairing != nullptr && index < pairing->var.as_sequence_container().size();
+    row.is_foldout = has_paired_element || !is_inline_array_element(ctx, value.type());
     row.label = make_array_element_label(value, index, row.is_foldout, state.element_label);
     const std::string element_name = "Element " + std::to_string(index);
     const float element_x = ImGui::GetCursorScreenPos().x;
@@ -389,15 +495,41 @@ auto inspect_array_element(rtti::context& ctx,
     if(row.is_foldout)
     {
         {
+            // Declared before the layout, so it is alive when the layout ends and draws the row's override mark.
+            hpp::optional<paired_element_path_scope> paired_mark;
             property_layout layout(element_name, [&]() { draw_array_element_label(row); });
+            // The element keeps its value on its row; the paired element folds out under it.
+            if(has_paired_element)
+            {
+                ImGui::PushReadonly(item_info.read_only);
+                result |= inspect_var(ctx, value, value_proxy, item_info, custom);
+                ImGui::PopReadonly();
+                // The paired element has no row of its own: when only it is a prefab override, the row's mark and
+                // its revert are the paired element's.
+                if(override_ctx.is_active && !override_ctx.is_path_overridden())
+                {
+                    paired_mark.emplace(override_ctx, *pairing, index, false);
+                    if(!override_ctx.is_path_overridden())
+                    {
+                        paired_mark.reset();
+                    }
+                }
+            }
         }
         if(row.is_open)
         {
             const float indent = ImMax(0.0f, row.text_x - element_x);
             ImGui::Indent(indent);
-            ImGui::PushReadonly(item_info.read_only);
-            result |= inspect_var(ctx, value, value_proxy, item_info, custom);
-            ImGui::PopReadonly();
+            if(has_paired_element)
+            {
+                result |= inspect_paired_element(ctx, *pairing, index, item_info);
+            }
+            else
+            {
+                ImGui::PushReadonly(item_info.read_only);
+                result |= inspect_var(ctx, value, value_proxy, item_info, custom);
+                ImGui::PopReadonly();
+            }
             ImGui::Unindent(indent);
         }
     }
@@ -434,7 +566,8 @@ auto inspect_array(rtti::context& ctx,
                    const std::string& name,
                    const std::string& tooltip,
                    const var_info& info,
-                   const entt::meta_custom& custom) -> inspect_result
+                   const entt::meta_custom& custom,
+                   array_pairing* pairing) -> inspect_result
 {
     auto view = var.as_sequence_container();
     auto size = view.size();
@@ -457,7 +590,9 @@ auto inspect_array(rtti::context& ctx,
         {
             state.element_label = "Element";
         }
-        const bool is_fixed_size_array = entt::get_attribute_as<bool>(custom, "is_fixed_size_array");
+        // A paired array keeps one element per index of its sibling: its elements neither come, go nor move.
+        const bool is_fixed_size_array =
+            entt::get_attribute_as<bool>(custom, "is_fixed_size_array") || pairing != nullptr;
         state.is_resizeable = !is_fixed_size_array && view.resize(size);
         state.is_readonly = info.read_only || !state.is_resizeable;
 
@@ -472,16 +607,18 @@ auto inspect_array(rtti::context& ctx,
         if(open)
         {
             layout.pop_layout();
+            const container_widgets::body_frame body;
 
             if(size == 0)
             {
-                container_widgets::draw_empty_hint();
+                // The array may say why it is empty, such as what fills it.
+                container_widgets::draw_empty_hint(entt::get_attribute_as<std::string>(custom, "empty_hint"));
             }
 
             array_edit edit{};
             for(std::size_t i = 0; i < size; ++i)
             {
-                result |= inspect_array_element(ctx, view, i, var_proxy, info, custom, state, edit);
+                result |= inspect_array_element(ctx, view, i, var_proxy, info, custom, state, pairing, edit);
             }
 
             if(apply_array_edit(view, edit))
@@ -492,7 +629,6 @@ auto inspect_array(rtti::context& ctx,
         }
     }
     ImGui::EndGroup();
-    ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_Separator), 1.0f);
 
     return result;
 }
@@ -502,13 +638,14 @@ auto inspect_array(rtti::context& ctx,
                    const meta_any_proxy& var_proxy,
                    const entt::meta_data& prop,
                    const var_info& info,
-                   const entt::meta_custom& custom) -> inspect_result
+                   const entt::meta_custom& custom,
+                   array_pairing* pairing) -> inspect_result
 {
     auto name = entt::get_pretty_name(prop);
 
     auto tooltip = entt::get_attribute_as<std::string>(prop, "tooltip");
 
-    return inspect_array(ctx, var, var_proxy, name, tooltip, info, custom);
+    return inspect_array(ctx, var, var_proxy, name, tooltip, info, custom, pairing);
 }
 
 } // namespace unravel

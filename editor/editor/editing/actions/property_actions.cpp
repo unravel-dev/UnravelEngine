@@ -66,6 +66,9 @@ void property_action_t::merge_with(const editing_action_t& previous)
 {
     const auto& prev = static_cast<const property_action_t&>(previous);
     old_value.assign(prev.old_value);
+    // The merged step undoes to where the earliest one began, so what it undoes along with the value (a prefab
+    // override the edit created) is the earliest one's: later frames of a drag find the override already there.
+    on_undo = prev.on_undo;
 }
 
 auto property_action_t::is_valid() const -> bool

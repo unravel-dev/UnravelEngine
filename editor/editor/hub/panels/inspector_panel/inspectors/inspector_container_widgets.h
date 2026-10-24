@@ -3,6 +3,7 @@
 #include <imgui/imgui_internal.h>
 
 #include <cstddef>
+#include <string>
 
 /// What the inspectors of arrays and maps share: the controls of the header row, the flat icon
 /// buttons of the rows, and the hint of an empty container.
@@ -69,7 +70,31 @@ auto get_row_button_width() -> float;
 //-----------------------------------------------------------------------------
 auto draw_row_remove_button(const ImRect& label_rect, const ImRect& row_rect, const char* tooltip) -> bool;
 
-/// The single row of an open container that has nothing in it.
-void draw_empty_hint();
+/// The single row of an open container that has nothing in it: `text`, wrapped, or "Empty" when it is empty.
+void draw_empty_hint(const std::string& text = {});
+
+/**
+ * @brief While alive, the rows drawn are the body of an open container (an array, a map, a group): they sit inside a
+ * light border, on a background a step darker than the window, out to the right end of the content region. The
+ * container's header row stays outside, above it.
+ */
+class body_frame
+{
+public:
+    /// @param left_x Where the frame's left edge goes when the rows start further right, as a group's rows are
+    /// indented under its header. Otherwise the frame starts where the rows do.
+    explicit body_frame(float left_x = FLT_MAX);
+    ~body_frame();
+
+    body_frame(const body_frame&) = delete;
+    auto operator=(const body_frame&) -> body_frame& = delete;
+
+private:
+    ImDrawList* draw_list_{};
+    /// The background is drawn once the rows are, below them.
+    ImDrawListSplitter splitter_;
+    float left_x_{};
+    float padding_{};
+};
 
 } // namespace unravel::container_widgets

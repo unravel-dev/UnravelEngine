@@ -292,6 +292,7 @@ auto draw_component_header(inspector_context& inspector_ctx, const std::string& 
     {
         ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
     }
+    open_next_node_while_filtering();
     // The header takes the look of a frame: a collapsing header in the selection color would
     // make every component read as selected.
     ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetColorU32(ImGuiCol_FrameBg));
@@ -1133,6 +1134,17 @@ auto find_disable_notes(const component_disable_notes& notes, entt::id_type type
     return it != notes.end() ? it->second : std::vector<std::string>{};
 }
 
+/// Says why the component list is empty when the inspector's filter left every component out.
+void draw_filter_empty_note(const inspector_filter& filter)
+{
+    const char* note = "No property matches the search.";
+    if(filter.only_overridden)
+    {
+        note = filter.text.empty() ? "Nothing on this entity is overridden." : "No overridden property matches the search.";
+    }
+    ImGui::TextDisabled("%s", note);
+}
+
 } // namespace
 
 auto get_component_icon(const entt::meta_type& type) -> std::string
@@ -1262,6 +1274,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
         }
 
         const auto disable_notes = collect_disable_notes(data);
+        int shown_components = 0;
 
         hpp::for_each_tuple_type<all_inspectable_components>(
             [&](auto index)
@@ -1387,7 +1400,17 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 
                 callbacks.icon = get_component_icon<ctype>();
                 callbacks.disable_notes = find_disable_notes(disable_notes, entt::type_id<ctype>().hash());
-                
+
+                // The inspector's filter: a component without a match is left out; one whose name matched shows
+                // whole.
+                const filter_match match =
+                    match_component_filter(ctx, entt::forward_as_meta(*component), pretty_name, std::string(name));
+                if(!match.is_shown)
+                {
+                    return;
+                }
+                ++shown_components;
+                const inspector_filter_whole_scope whole_match(ctx, match.is_whole);
                 result |= inspect_component(inspector_ctx, pretty_name, callbacks);
             });
 
@@ -1534,7 +1557,15 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 std::string pretty_segment = fmt::format("Scripts[{}]/{}", i, pretty_name);
                 override_ctx.push_segment(segment, pretty_segment);
 
-                result |= inspect_component(inspector_ctx, pretty_name, callbacks);
+                // The inspector's filter, by the script's name: its fields are not reflected.
+                const filter_match match =
+                    match_component_filter(ctx, {}, pretty_name, std::string(script_type_name) + "/" + segment);
+                if(match.is_shown)
+                {
+                    ++shown_components;
+                    const inspector_filter_whole_scope whole_match(ctx, match.is_whole);
+                    result |= inspect_component(inspector_ctx, pretty_name, callbacks);
+                }
 
                 override_ctx.pop_segment();
 
@@ -1561,6 +1592,11 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 result.changed |= true;
                 result.edit_finished |= true;
             }
+        }
+
+        if(shown_components == 0 && inspector_ctx.filter.is_active())
+        {
+            draw_filter_empty_note(inspector_ctx.filter);
         }
 
         ImGui::EndChild();

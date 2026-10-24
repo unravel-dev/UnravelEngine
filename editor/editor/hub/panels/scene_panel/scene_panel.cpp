@@ -730,6 +730,11 @@ auto handle_ui_document_component_bounds_manipulation(entt::handle active_select
         return false;
     }
 
+    if(ui_document_comp->render_mode == ui_render_mode::screen_space_overlay)
+    {
+        return false;
+    }
+
     if(!ui_document_comp->size.is_valid())
     {
         return false;

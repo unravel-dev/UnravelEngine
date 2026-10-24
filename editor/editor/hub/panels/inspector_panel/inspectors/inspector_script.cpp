@@ -4,6 +4,7 @@
 #include "imgui/imgui.h"
 #include "imgui/imgui_internal.h"
 #include "inspectors.h"
+#include "inspector_container_widgets.h"
 #include <engine/assets/asset_manager.h>
 #include <dotnetpp/dotnetpp.h>
 #include <engine/scripting/ecs/systems/script_interop.h>
@@ -328,11 +329,25 @@ auto make_nested_property_proxy(const meta_any_proxy& obj_proxy, const Invoker& 
     return nested_proxy;
 }
 
+/// How a nested serializable object is presented: a section titled with the member's name, as C++ sub-objects are,
+/// or a foldout when the member has [Foldable].
+struct nested_object_layout
+{
+    /// The member's name: the section's title or the foldout's label.
+    std::string name;
+    /// [Foldable]: a foldout instead of a titled section.
+    bool is_foldable{};
+    /// [Header] titles the member already, so the section draws no title of its own.
+    bool has_header{};
+    /// Members are drawn above this one, so its title follows a blank line.
+    bool has_rows_above{};
+};
+
 // Forward declaration for recursive serializable object inspection
 auto inspect_serializable_object(rtti::context& ctx,
                                  dotnet::object_pinned_ptr pinned_ptr,
                                  const meta_any_proxy& obj_proxy,
-                                 const std::string& name,
+                                 const nested_object_layout& layout,
                                  const var_info& info) -> inspect_result;
 
 /**
@@ -2494,16 +2509,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 std::string header = get_header(field);
                 if(!header.empty())
                 {
-                    ImGui::PushFont(ImGui::Font::Bold);
-                    {
-                        if(i != 0)
-                        {
-                            ImGui::NewLine();
-                        }
-                        ImGui::SeparatorText( header.c_str());
-                        ImGui::Spacing();
-                    }
-                    ImGui::PopFont();
+                    draw_property_header(header, i != 0);
                 }
                 
 
@@ -2551,7 +2557,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     {
                         auto nested_pinned = dotnet::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_object_proxy(obj_proxy, invoker);
-                        result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, field.get_name(), info);
+                        const nested_object_layout layout{.name = field.get_name(),
+                                                          .is_foldable = field.has_attribute("FoldableAttribute"),
+                                                          .has_header = !header.empty(),
+                                                          .has_rows_above = i != 0};
+                        result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, layout, info);
                     }
                     else
                     {
@@ -2712,16 +2722,7 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                 std::string header = get_header(prop);
                 if(!header.empty())
                 {
-                    ImGui::PushFont(ImGui::Font::Bold);
-                    {
-                        if(i != 0)
-                        {
-                            ImGui::NewLine();
-                        }
-                        ImGui::SeparatorText(header.c_str());
-                        ImGui::Spacing();
-                    }
-                    ImGui::PopFont();
+                    draw_property_header(header, i != 0);
                 }
                 const auto& prop_type = prop.get_type();
 
@@ -2798,7 +2799,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     {
                         auto nested_pinned = dotnet::make_object_pinned(nested_obj);
                         auto nested_proxy = make_nested_property_proxy(obj_proxy, invoker);
-                        result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, prop.get_name(), info);
+                        const nested_object_layout layout{.name = prop.get_name(),
+                                                          .is_foldable = prop.has_attribute("FoldableAttribute"),
+                                                          .has_header = !header.empty(),
+                                                          .has_rows_above = i != 0};
+                        result |= inspect_serializable_object(ctx, nested_pinned, nested_proxy, layout, info);
                     }
                     else if(is_read)
                     {
@@ -2927,35 +2932,45 @@ auto inspector_mono_object_pinned::inspect(rtti::context& ctx,
 }
 
 /**
- * @brief Recursively inspects a serializable object using the main inspector
- * 
- * This function creates a tree node and recursively calls the main inspector
- * to handle all fields and properties of a serializable object.
+ * @brief Inspects a serializable object held by a member, its fields and properties drawn by the main inspector: in a
+ * section titled with the member's name, or in a foldout when the member has [Foldable].
  */
 auto inspect_serializable_object(rtti::context& ctx,
                                  dotnet::object_pinned_ptr pinned_ptr,
                                  const meta_any_proxy& obj_proxy,
-                                 const std::string& name,
+                                 const nested_object_layout& layout,
                                  const var_info& info) -> inspect_result
 {
     inspect_result result{};
-    
-    // Create a collapsible tree node for the nested object
-    bool tree_open = ImGui::TreeNodeEx(name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
-    
-    if(tree_open)
+    auto obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
+    inspector_mono_object inspector;
+    if(!layout.is_foldable)
+    {
+        if(!layout.has_header)
+        {
+            draw_property_header(layout.name, layout.has_rows_above);
+        }
+        // The nested members' ids stay apart from those of the members around the object.
+        ImGui::PushID(layout.name.c_str());
+        result |= inspector.inspect(ctx, obj_var, obj_proxy, info, {});
+        ImGui::PopID();
+        return result;
+    }
+    const float header_x = ImGui::GetCursorScreenPos().x;
+    // Labelled as the rows are, identified by the member's name.
+    if(ImGui::TreeNodeEx(layout.name.c_str(),
+                         ImGuiTreeNodeFlags_DefaultOpen,
+                         "%s",
+                         string_utils::capitalize(layout.name).c_str()))
     {
         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
-        
-        // Create a meta_any wrapper for the nested pinned object and call the main inspector
-        auto obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
-        inspector_mono_object inspector;
-        result |= inspector.inspect(ctx, obj_var, obj_proxy, info, {});
-        
+        {
+            const container_widgets::body_frame body(header_x);
+            result |= inspector.inspect(ctx, obj_var, obj_proxy, info, {});
+        }
         ImGui::PopStyleVar();
         ImGui::TreePop();
     }
-
     return result;
 }
 

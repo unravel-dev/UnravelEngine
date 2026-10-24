@@ -14,6 +14,7 @@
 #include <uuid/uuid.h>
 #include <engine/assets/asset_manager.h>
 #include <algorithm>
+#include <cctype>
 #include <functional>
 
 namespace unravel
@@ -21,6 +22,13 @@ namespace unravel
 
 namespace
 {
+constexpr float INSPECTOR_SEARCH_FIELD_MIN_WIDTH = 60.0f;
+constexpr float INSPECTOR_SEARCH_FIELD_MAX_WIDTH = 100000.0f;
+constexpr const char* INSPECTOR_SEARCH_TOOLTIP =
+    "Shows the properties whose name holds the text, and what holds them. A component or a group whose name holds "
+    "it shows whole.";
+constexpr const char* INSPECTOR_OVERRIDDEN_TOOLTIP =
+    "Shows only the values something overrides: the prefab, a settings profile or a material instance.";
 
 auto should_use_prefab_inspection(entt::meta_any& selected) -> bool
 {
@@ -116,7 +124,10 @@ void inspector_panel::draw_ui(rtti::context& ctx)
     }
     em.push_undo_stack_enabled(true);
     inspector_ctx.component_headers = {};
+    // The filter holds for the inspected object only: other windows drawing properties show all of them.
+    inspector_ctx.filter = make_filter();
     draw_inspected_object(ctx, selected, em.get_selections().size());
+    inspector_ctx.filter = {};
     inspector_ctx.component_headers_open_request.reset();
     em.pop_undo_stack_enabled();
     if(debug_)
@@ -130,7 +141,9 @@ void inspector_panel::draw_toolbar(const entt::meta_any& selected, inspector_con
     if(panel_toolbar::begin_strip("##inspector_toolbar"))
     {
         draw_lock_toggle(selected);
+        draw_search_field();
         panel_toolbar::align_right();
+        draw_overridden_toggle();
         draw_fold_buttons(inspector_ctx);
         panel_toolbar::separator();
         draw_debug_toggle();
@@ -169,6 +182,43 @@ void inspector_panel::draw_fold_buttons(inspector_context& inspector_ctx)
     }
     ImGui::EndDisabled();
     panel_toolbar::end_segment();
+}
+
+void inspector_panel::draw_search_field()
+{
+    // The last item of the left group: it takes the room the right group leaves.
+    panel_toolbar::search_field(search_,
+                                ICON_MDI_MAGNIFY " Search...",
+                                INSPECTOR_SEARCH_TOOLTIP,
+                                INSPECTOR_SEARCH_FIELD_MIN_WIDTH,
+                                INSPECTOR_SEARCH_FIELD_MAX_WIDTH);
+}
+
+void inspector_panel::draw_overridden_toggle()
+{
+    if(panel_toolbar::toggle("##only_overridden", ICON_MDI_FORMAT_BOLD, only_overridden_, INSPECTOR_OVERRIDDEN_TOOLTIP))
+    {
+        only_overridden_ = !only_overridden_;
+    }
+}
+
+auto inspector_panel::make_filter() const -> inspector_filter
+{
+    inspector_filter filter;
+    filter.text = search_.InputBuf;
+    std::transform(filter.text.begin(),
+                   filter.text.end(),
+                   filter.text.begin(),
+                   [](unsigned char c)
+                   {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    // Spaces around the text are not part of what is searched.
+    const auto first = filter.text.find_first_not_of(' ');
+    const auto last = filter.text.find_last_not_of(' ');
+    filter.text = first == std::string::npos ? std::string{} : filter.text.substr(first, last - first + 1);
+    filter.only_overridden = only_overridden_;
+    return filter;
 }
 
 void inspector_panel::draw_debug_toggle()

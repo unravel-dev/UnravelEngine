@@ -97,15 +97,38 @@ struct component_header_counts
     }
 };
 
+/**
+ * @brief What the inspector panel's toolbar filters: rows whose name holds the text (or that hold such rows), and,
+ * with only_overridden, rows something overrides (or that hold such rows). Inactive in every other window.
+ */
+struct inspector_filter
+{
+    /// The text to find, in lower case; empty: no text filter.
+    std::string text;
+    bool only_overridden{};
+    /// Rows under a row whose name held the text: they all pass the text filter.
+    int matched_ancestors{};
+
+    auto is_active() const -> bool
+    {
+        return !text.empty() || only_overridden;
+    }
+};
+
 struct inspector_context
 {
     entt::registry* inspected_registry{};
+    /// The toolbar's filter, set while the inspector panel draws the inspected object.
+    inspector_filter filter;
     /// Open state every component header drawn in this frame takes: expand and collapse all of
     /// the inspector toolbar. The inspector panel drops it once it drew the inspected object.
     hpp::optional<bool> component_headers_open_request;
     /// Component headers of the inspected object. The inspector panel restarts the count before
     /// it draws the object, so its toolbar, drawn first, reads what the last frame showed.
     component_header_counts component_headers;
+    /// Where, in the window, the rows of the property list being drawn start: a property header there has no rows
+    /// above it.
+    float rows_top_y{};
 };
 
 /**
@@ -461,12 +484,58 @@ auto inspect_var_properties(rtti::context& ctx,
                             const entt::meta_custom& custom,
                             const property_drawer& drawer) -> inspect_result;
 
+/// Whether something passes the inspector's filter, and whether all of it does because its name held the text.
+struct filter_match
+{
+    bool is_shown{true};
+    bool is_whole{};
+};
+
+/// The filter match of a component of the inspected entity, by its name and everything its properties hold (none for
+/// a component without reflected properties); type_name is the component's in prefab override paths.
+auto match_component_filter(rtti::context& ctx,
+                            entt::meta_any component,
+                            const std::string& pretty_name,
+                            const std::string& type_name) -> filter_match;
+
+/// While alive with `is_whole` set, every row passes the inspector's text filter: they are inside a match.
+class inspector_filter_whole_scope
+{
+public:
+    inspector_filter_whole_scope(rtti::context& ctx, bool is_whole);
+    ~inspector_filter_whole_scope();
+    inspector_filter_whole_scope(const inspector_filter_whole_scope&) = delete;
+    auto operator=(const inspector_filter_whole_scope&) -> inspector_filter_whole_scope& = delete;
+
+private:
+    inspector_filter* filter_{};
+};
+
+/// While the inspector filters, the next tree node opens, so what passes the filter shows.
+void open_next_node_while_filtering();
+
 /**
  * @brief Inspects one reflected property of `object` the way inspect_var_properties draws each of
  * its properties: a labeled row (or group), its tooltip, and the edit recorded for undo.
  */
 auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any_proxy& var_proxy, const entt::meta_data& prop)
     -> inspect_result;
+
+/// Custom attribute of an array property: the name of a sibling array property whose element i is drawn under
+/// element i, so the two read as one list (a model's shared materials and their material instances). The sibling
+/// has no row of its own, and the array keeps one element per index: no adding, removing or moving.
+inline constexpr const char* PAIRED_PROPERTY_ATTRIBUTE = "paired_property";
+
+/**
+ * @brief The sibling array an array draws under its elements (PAIRED_PROPERTY_ATTRIBUTE).
+ */
+struct array_pairing
+{
+    /// The sibling array, read for this frame; an element edited in it is written back through `proxy`.
+    entt::meta_any var;
+    meta_any_proxy proxy;
+    entt::meta_data prop;
+};
 
 /**
  * @brief Inspects array-like containers with add/remove functionality
@@ -476,6 +545,7 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
  * @param prop Meta property information for the array
  * @param info Metadata about the container
  * @param custom Custom attributes for specialized behavior
+ * @param pairing The sibling array drawn under the elements, if any
  * @return Result indicating what changes occurred during inspection
  */
 auto inspect_array(rtti::context& ctx,
@@ -483,7 +553,8 @@ auto inspect_array(rtti::context& ctx,
                        const meta_any_proxy& var_proxy,
                        const entt::meta_data& prop,
                        const var_info& info = {},
-                       const entt::meta_custom& custom = {}) -> inspect_result;
+                       const entt::meta_custom& custom = {},
+                       array_pairing* pairing = nullptr) -> inspect_result;
 
 /**
  * @brief Inspects array-like containers with custom name and tooltip
@@ -502,7 +573,8 @@ auto inspect_array(rtti::context& ctx,
                        const std::string& name,
                        const std::string& tooltip,
                        const var_info& info = {},
-                       const entt::meta_custom& custom = {}) -> inspect_result;
+                       const entt::meta_custom& custom = {},
+                       array_pairing* pairing = nullptr) -> inspect_result;
 
 /// Custom attribute of an associative container: a std::vector<entt::meta_any> of keys a new entry
 /// may take, tried in order. For a key type that cannot list its own values, like a C# enum.

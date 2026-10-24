@@ -8,6 +8,7 @@
 namespace unravel
 {
 struct inspector_context;
+struct inspector_filter;
 
 class inspector_panel : public entity_panel
 {
@@ -28,6 +29,11 @@ private:
     /// not in its state yet.
     void draw_fold_buttons(inspector_context& inspector_ctx);
     void draw_debug_toggle();
+    /// The search field and the overridden toggle: what the inspected object shows of its rows.
+    void draw_search_field();
+    void draw_overridden_toggle();
+    /// What the filter shows, for the inspection about to be drawn.
+    auto make_filter() const -> inspector_filter;
     /// The locked object, else the selection: inspected when it is one object, summed up
     /// when it is several.
     void draw_inspected_object(rtti::context& ctx, entt::meta_any& selected, size_t selections_count);
@@ -40,5 +46,7 @@ private:
     /// The object the panel showed last frame, to tell its inspector when it leaves.
     entt::meta_any shown_object_;
     bool debug_{};
+    ImGuiTextFilter search_;
+    bool only_overridden_{};
 };
 } // namespace unravel

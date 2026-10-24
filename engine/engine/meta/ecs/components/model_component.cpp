@@ -56,6 +56,8 @@ REFLECT(model_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "model"},
             entt::attribute{"pretty_name", "Model"},
+            // Its materials and LODs are the component's own rows, not a "Model" fold inside the Model component.
+            entt::attribute{"flattable", true},
         });
 }
 

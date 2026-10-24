@@ -8,6 +8,10 @@
 #include "imgui/imgui.h"
 #include <imgui/imgui_internal.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <editor/imgui/integration/imgui_context_menu_style.h>
+
+#include <cstring>
+#include <string>
 
 namespace unravel
 {
@@ -16,6 +20,101 @@ namespace
 
 
 float DRAG_SPEED = 0.01f;
+
+/// A vector's fields name their axis with a colored edge rather than a button, so the numbers keep the room.
+constexpr float AXIS_EDGE_WIDTH = 2.0f;
+constexpr std::array<const char*, 4> AXIS_NAMES{{"X", "Y", "Z", "W"}};
+constexpr std::array<ImU32, 4> AXIS_EDGE_COLORS{
+    {IM_COL32(205, 72, 64, 255), IM_COL32(92, 172, 74, 255), IM_COL32(74, 123, 217, 255), IM_COL32(64, 172, 172, 255)}};
+/// Below this width, in font heights, a color drops its channel fields: one swatch the width of the value.
+constexpr float COMPACT_COLOR_EM = 14.0f;
+
+/// A vector's fields, each with a colored edge naming its axis. A field's context menu resets its component when
+/// the vector has a reset value.
+bool drag_vector_fields(ImGuiDataType data_type,
+                        void* data,
+                        int components,
+                        const void* reset,
+                        const char* format)
+{
+    const float width = ImGui::CalcItemWidth();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const size_t type_size = ImGui::DataTypeGetInfo(data_type)->Size;
+    auto* component = static_cast<char*>(data);
+    const auto* reset_component = static_cast<const char*>(reset);
+    bool changed = false;
+    ImGui::BeginGroup();
+    ImGui::PushID("##compact_vector");
+    ImGui::PushMultiItemsWidths(components, width);
+    for(int i = 0; i < components; ++i)
+    {
+        ImGui::PushID(i);
+        if(i > 0)
+        {
+            ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+        }
+        changed |= ImGui::DragScalar("", data_type, component, DRAG_SPEED, nullptr, nullptr, format);
+        ImGui::DrawItemActivityOutline();
+        const ImVec2 min = ImGui::GetItemRectMin();
+        ImGui::GetWindowDrawList()->AddRectFilled(min,
+                                                  ImVec2(min.x + AXIS_EDGE_WIDTH, ImGui::GetItemRectMax().y),
+                                                  AXIS_EDGE_COLORS[size_t(i) % AXIS_EDGE_COLORS.size()]);
+        if(reset_component != nullptr && ImGui::BeginPopupContextItem("##axis_menu"))
+        {
+            {
+                ImGui::ContextMenuStyleScope style_scope;
+                const std::string item = std::string("Reset ") + AXIS_NAMES[size_t(i) % AXIS_NAMES.size()];
+                if(ImGui::MenuItem(item.c_str()))
+                {
+                    std::memcpy(component, reset_component, type_size);
+                    changed = true;
+                }
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        ImGui::PopItemWidth();
+        component += type_size;
+        if(reset_component != nullptr)
+        {
+            reset_component += type_size;
+        }
+    }
+    ImGui::PopID();
+    ImGui::EndGroup();
+    return changed;
+}
+
+/// What a color edit did: changed the value, and finished an edit.
+struct color_edit_result
+{
+    bool changed{};
+    bool edit_finished{};
+};
+
+/// A color as one swatch the width of the value, opening the picker: for a value too narrow for the channels.
+auto edit_color_swatch(math::vec4& value, bool is_opaque) -> color_edit_result
+{
+    color_edit_result result{};
+    const ImVec2 size(ImGui::CalcItemWidth(), ImGui::GetFrameHeight());
+    const ImVec4 shown(value.x, value.y, value.z, is_opaque ? 1.0f : value.w);
+    const ImGuiColorEditFlags swatch_flags =
+        is_opaque ? ImGuiColorEditFlags_NoAlpha : ImGuiColorEditFlags_AlphaPreviewHalf;
+    if(ImGui::ColorButton("##swatch", shown, swatch_flags, size))
+    {
+        ImGui::OpenPopup("##swatch_picker");
+    }
+    if(ImGui::BeginPopup("##swatch_picker"))
+    {
+        result.changed = is_opaque ? ImGui::ColorPicker3("##picker", math::value_ptr(value))
+                                   : ImGui::ColorPicker4("##picker",
+                                                         math::value_ptr(value),
+                                                         ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf);
+        result.edit_finished = ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::EndPopup();
+    }
+    return result;
+}
 
 auto quat_to_vec4(math::quat q) -> math::vec4
 {
@@ -87,15 +186,11 @@ bool DragFloat4(math::vec4& data,
 
 bool DragVec2(math::vec2& data, const var_info& info, const math::vec2* reset = nullptr, const char* format = "%.3f")
 {
-    bool result = ImGui::DragVecN("##",
-                                  ImGuiDataType_Float,
-                                  math::value_ptr(data),
-                                  data.length(),
-                                  DRAG_SPEED,
-                                  nullptr,
-                                  nullptr,
-                                  reset ? math::value_ptr(*reset) : nullptr,
-                                  format);
+    bool result = drag_vector_fields(ImGuiDataType_Float,
+                                     math::value_ptr(data),
+                                     data.length(),
+                                     reset ? math::value_ptr(*reset) : nullptr,
+                                     format);
     ImGui::ActiveItemWrapMousePos();
 
     return result;
@@ -103,15 +198,11 @@ bool DragVec2(math::vec2& data, const var_info& info, const math::vec2* reset = 
 
 bool DragVec3(math::vec3& data, const var_info& info, const math::vec3* reset = nullptr, const char* format = "%.3f")
 {
-    bool result = ImGui::DragVecN("##",
-                                  ImGuiDataType_Float,
-                                  math::value_ptr(data),
-                                  data.length(),
-                                  DRAG_SPEED,
-                                  nullptr,
-                                  nullptr,
-                                  reset ? math::value_ptr(*reset) : nullptr,
-                                  format);
+    bool result = drag_vector_fields(ImGuiDataType_Float,
+                                     math::value_ptr(data),
+                                     data.length(),
+                                     reset ? math::value_ptr(*reset) : nullptr,
+                                     format);
 
     ImGui::ActiveItemWrapMousePos();
 
@@ -169,15 +260,11 @@ auto make_euler_rotation_proxy(const meta_any_proxy& transform_proxy) -> meta_an
 
 bool DragVec4(math::vec4& data, const var_info& info, const math::vec4* reset = nullptr, const char* format = "%.3f")
 {
-    bool result = ImGui::DragVecN("##",
-                                  ImGuiDataType_Float,
-                                  math::value_ptr(data),
-                                  data.length(),
-                                  DRAG_SPEED,
-                                  nullptr,
-                                  nullptr,
-                                  reset ? math::value_ptr(*reset) : nullptr,
-                                  format);
+    bool result = drag_vector_fields(ImGuiDataType_Float,
+                                     math::value_ptr(data),
+                                     data.length(),
+                                     reset ? math::value_ptr(*reset) : nullptr,
+                                     format);
 
     ImGui::ActiveItemWrapMousePos();
 
@@ -386,6 +473,13 @@ auto inspector_color::inspect(rtti::context& ctx,
 
     // "opaque": the property uses no alpha, so none is shown.
     const bool is_opaque = entt::get_attribute_as<bool>(custom, "opaque");
+    if(ImGui::CalcItemWidth() < COMPACT_COLOR_EM * ImGui::GetFontSize())
+    {
+        const color_edit_result swatch = edit_color_swatch(data.value, is_opaque);
+        result.changed = swatch.changed;
+        result.edit_finished = swatch.edit_finished;
+        return result;
+    }
     const bool is_edited = is_opaque ? ImGui::ColorEdit3("##", math::value_ptr(data.value))
                                      : ImGui::ColorEdit4("##",
                                                          math::value_ptr(data.value),
@@ -508,7 +602,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
-        layout.push_layout(false);
+        // The reset button shares the label cell.
+        layout.push_layout(false, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
 
         ImGui::SameLine();
 
@@ -545,6 +640,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
         }
         ImGui::PopItemWidth();
 
+        // The row ends while the path still names the property: its end draws the override mark.
+        layout.pop_layout();
         override_ctx.pop_segment();
     }
     ImGui::PopID();
@@ -559,7 +656,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
-        layout.push_layout(false);
+        // The reset button shares the label cell.
+        layout.push_layout(false, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
 
         ImGui::SameLine();
 
@@ -643,6 +741,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         ImGui::PopItemWidth();
 
+        // The row ends while the path still names the property: its end draws the override mark.
+        layout.pop_layout();
         override_ctx.pop_segment();
     }
     ImGui::PopID();
@@ -657,15 +757,18 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
-        layout.push_layout(false);
-
-        ImGui::SameLine();
         static bool locked_scale = false;
         auto label = locked_scale ? ICON_MDI_LOCK : ICON_MDI_LOCK_OPEN_VARIANT;
+        const float buttons_width =
+            ImGui::CalcItemSize(label).x + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
+        // The lock and reset buttons share the label cell.
+        layout.push_layout(false, buttons_width + ImGui::GetStyle().ItemSpacing.x);
+
+        ImGui::SameLine();
         ImGui::AlignedItem(
             1.0f,
             ImGui::GetContentRegionAvail().x,
-            ImGui::CalcItemSize(label).x + ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x,
+            buttons_width,
             [&]()
             {
                 if(ImGui::Button(label))
@@ -718,6 +821,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
         }
         ImGui::PopItemWidth();
 
+        // The row ends while the path still names the property: its end draws the override mark.
+        layout.pop_layout();
         override_ctx.pop_segment();
     }
     ImGui::PopID();
@@ -732,7 +837,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
 
         property_layout layout;
         layout.set_data(prop_pretty_name);
-        layout.push_layout(false);
+        // The reset button shares the label cell.
+        layout.push_layout(false, ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
 
         ImGui::SameLine();
 
@@ -770,6 +876,8 @@ auto inspector_transform::inspect(rtti::context& ctx,
         }
         ImGui::PopItemWidth();
 
+        // The row ends while the path still names the property: its end draws the override mark.
+        layout.pop_layout();
         override_ctx.pop_segment();
     }
     ImGui::PopID();

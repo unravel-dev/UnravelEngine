@@ -65,6 +65,16 @@ REFLECT_INSPECTOR_INLINE(inspector_asset_handle_material, asset_handle<material>
  */
 struct inspector_material_instance : public crtp_meta_type<inspector_material_instance, inspector>
 {
+    /// The instance's values are rows under its slot, lined up with the model's other rows.
+    auto is_block() const -> bool override
+    {
+        return true;
+    }
+
+    /// The rows are the shared material's properties.
+    auto get_rows_object(const entt::meta_any& value) const -> entt::meta_any override;
+    auto has_overridden_rows(const entt::meta_any& value) const -> bool override;
+
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
 };
 REFLECT_INSPECTOR_INLINE(inspector_material_instance, material_instance)

@@ -137,6 +137,21 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// Shows a nested serializable object as a foldout the user can collapse, instead of a section titled with the
+    /// member's name.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, Inherited = true, AllowMultiple = false)]
+    public sealed class FoldableAttribute : Attribute
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="FoldableAttribute"/> class.
+        /// </summary>
+        public FoldableAttribute()
+        {
+        }
+    }
+
+    /// <summary>
     /// Hides a field from the inspector, preventing it from being displayed or edited.
     /// </summary>
     [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, Inherited = true, AllowMultiple = false)]

@@ -94,7 +94,6 @@ constexpr ImU32 HIERARCHY_SCENE_ROW_COLOR = IM_COL32(0, 0, 0, 36);
 constexpr float HIERARCHY_UNMATCHED_ALPHA = 0.45f;
 constexpr float HIERARCHY_HIGHLIGHT_ALPHA = 0.45f;
 constexpr float HIERARCHY_HIGHLIGHT_ROUNDING = 0.2f;
-constexpr float HIERARCHY_CLEAR_ICON_ALPHA = 0.6f;
 constexpr ImVec4 HIERARCHY_FOCUS_FRAME_COLOR{1.0f, 1.0f, 0.0f, 1.0f};
 
 // A search term after this prefix matches component names only ("t:Light").
@@ -1585,28 +1584,6 @@ void collect_component_matches(entt::registry& registry,
 }
 
 /// A cross over the right end of the search field just submitted, which empties it.
-void draw_search_clear_button(ImGuiTextFilter& filter)
-{
-    const ImRect field(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    const ImRect bb(field.Max.x - field.GetHeight(), field.Min.y, field.Max.x, field.Max.y);
-    const ImGuiID id = ImGui::GetID("##clear_search");
-    if(!ImGui::ItemAdd(bb, id))
-    {
-        return;
-    }
-    bool is_hovered = false;
-    bool is_held = false;
-    if(ImGui::ButtonBehavior(bb, id, &is_hovered, &is_held))
-    {
-        filter.Clear();
-    }
-    const ImVec2 icon_size = ImGui::CalcTextSize(ICON_MDI_CLOSE);
-    ImGui::GetWindowDrawList()->AddText(ImFloor(bb.GetCenter() - icon_size * 0.5f),
-                                        ImGui::GetColorU32(ImGuiCol_Text, is_hovered ? 1.0f : HIERARCHY_CLEAR_ICON_ALPHA),
-                                        ICON_MDI_CLOSE);
-    ImGui::SetItemTooltipEx("%s", "Clear the search");
-}
-
 } // namespace
 
 // ============================================================================
@@ -1685,18 +1662,11 @@ void hierarchy_panel::draw_create_dropdown(rtti::context& ctx)
 
 void hierarchy_panel::draw_search_field()
 {
-    const float width = panel_toolbar::calc_flexible_width(HIERARCHY_SEARCH_FIELD_MIN_WIDTH, HIERARCHY_SEARCH_FIELD_MAX_WIDTH);
-    panel_toolbar::begin_field(width);
-    // The clear button is laid over the right end of the field.
-    ImGui::SetNextItemAllowOverlap();
-    ImGui::DrawFilterWithHint(filter_, ICON_MDI_MAGNIFY " Search...", width);
-    ImGui::SetItemTooltipEx("%s", HIERARCHY_SEARCH_TOOLTIP);
-    ImGui::DrawItemActivityOutline();
-    if(filter_.IsActive())
-    {
-        draw_search_clear_button(filter_);
-    }
-    panel_toolbar::end_field();
+    panel_toolbar::search_field(filter_,
+                                ICON_MDI_MAGNIFY " Search...",
+                                HIERARCHY_SEARCH_TOOLTIP,
+                                HIERARCHY_SEARCH_FIELD_MIN_WIDTH,
+                                HIERARCHY_SEARCH_FIELD_MAX_WIDTH);
 }
 
 void hierarchy_panel::update_search(scene& target_scene)

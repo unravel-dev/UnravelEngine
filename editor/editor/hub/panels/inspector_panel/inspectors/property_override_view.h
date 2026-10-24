@@ -53,6 +53,8 @@ struct property_override_marks
     /// The revert item's text, such as "Revert to Project Settings".
     std::string revert_label;
     override_style style{override_style::owned};
+    /// The color of an overridden property's mark in the row gutter; none (alpha 0) takes the style's color.
+    ImVec4 marker_color{};
     /// The tooltip line of an overridden property, such as "Profile Android overrides this setting."
     std::string overridden_note;
     /// The tooltip line of a group holding overridden properties.
@@ -87,6 +89,8 @@ public:
     void revert_current() const;
     /// The line the property's tooltip adds about its overrides; empty when it has none.
     auto get_tooltip_note() const -> const std::string&;
+    /// The color the row gutter marks an overridden property with.
+    auto get_marker_color() const -> ImVec4;
     /// Whether the property being drawn is shared by every profile, so it cannot be edited here.
     auto is_current_shared() const -> bool;
 

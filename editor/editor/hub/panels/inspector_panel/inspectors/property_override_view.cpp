@@ -1,6 +1,7 @@
 #include "property_override_view.h"
 
 #include <editor/imgui/integration/imgui.h>
+#include <editor/imgui/integration/imgui_style.h>
 
 #include <algorithm>
 
@@ -109,6 +110,22 @@ void property_override_view::revert_current() const
     {
         marks_.revert(path_);
     }
+}
+
+auto property_override_view::get_marker_color() const -> ImVec4
+{
+    if(marks_.marker_color.w > 0.0f)
+    {
+        return marks_.marker_color;
+    }
+    if(marks_.style == override_style::shadowing)
+    {
+        return OVERRIDE_SHADOWING_COLOR;
+    }
+    // The accent is a translucent fill; a mark is drawn solid.
+    ImVec4 accent = imgui_style::get_accent_color();
+    accent.w = 1.0f;
+    return accent;
 }
 
 auto property_override_view::is_current_shared() const -> bool

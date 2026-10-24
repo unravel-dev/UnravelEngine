@@ -33,6 +33,7 @@ REFLECT(light_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light"},
             entt::attribute{"pretty_name", "Light"},
+            entt::attribute{"flattable", true}
         });
 }
 

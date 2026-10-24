@@ -97,10 +97,15 @@ public:
 
     /**
      * @brief Initializes ImGui layout with tables and property label
+     *
+     * Every row of a window puts its value at the same x, the window's label column divider, whatever its
+     * indentation; a row drawn inside another row's value splits that value on its own. A label wider than its
+     * cell ends in an ellipsis.
      * @param auto_proceed_to_next_column Whether to automatically move to next column
+     * @param label_reserve Width the caller draws into the label cell after the label (buttons), kept free
      */
-    void push_layout(bool auto_proceed_to_next_column = true);
-    
+    void push_layout(bool auto_proceed_to_next_column = true, float label_reserve = 0.0f);
+
     /**
      * @brief Creates a collapsible tree node layout for nested properties
      * @param flags ImGui tree node flags for customization
@@ -125,6 +130,20 @@ public:
     static auto get_current() -> property_layout*;
 
 private:
+    /// Opens the row's table, its label column sized to the window's divider, and drags the divider.
+    void begin_columns();
+
+    /// The label's context menu (resets, reverts) and tooltip, and the help marker when it fits. A shortened label
+    /// gets a tooltip naming it in full.
+    void draw_label_menu_and_tooltip(bool show_help_marker, bool is_label_shortened);
+
+    /// Whether the row is drawn inside the value cell of another row.
+    static auto is_inside_value_cell(const property_layout* self) -> bool;
+
+    /// An overridden row's mark: a bar at the window's content edge, in the color of who overrides it, and the
+    /// button reverting it in the row's gutter.
+    void draw_override_gutter();
+
     hpp::optional<property_layout_group> group_;
     /// Whether ImGui state has been pushed and needs cleanup
     bool pushed_{};
@@ -142,6 +161,11 @@ private:
     bool open_{};
     /// Whether ImGui table is currently active
     bool columns_open_{};
+    /// Whether the row keeps the gutter right of its value for the revert button: every row of a window does,
+    /// except rows drawn inside another row's value.
+    bool has_gutter_{};
+    /// Whether the row stacks its label over its value, as every row of a narrow window does.
+    bool stacked_{};
 };
 
 /**
@@ -317,6 +341,14 @@ auto make_entity_proxy(entt::meta_any& var, const std::string& name = {}) -> met
 
 auto make_property_proxy(const meta_any_proxy& var_proxy, const entt::meta_data& prop) -> meta_any_proxy;
 
+/// The title row a C# [Header] or a C++ "header" attribute puts above a property: bold text on a separator line,
+/// after a blank line when rows are drawn above it.
+void draw_property_header(const std::string& text, bool has_rows_above);
+
+/// The name of the proxy make_property_proxy makes for `prop` under a proxy named `parent_name`. Undo steps take
+/// their proxy's name, and undo and redo point at the property whose name is the step's.
+auto make_property_proxy_name(const std::string& parent_name, const entt::meta_data& prop) -> std::string;
+
 /**
  * @brief Base class for type-specific property inspectors in the editor
  * 
@@ -369,6 +401,30 @@ struct inspector : crtp_meta_type<inspector>
      */
     virtual void end_inspection(rtti::context& ctx)
     {
+    }
+
+    /**
+     * @brief Whether the inspector draws rows of its own rather than one widget in a value cell: an array
+     * element it inspects folds out under its label, and its rows line up with every other row.
+     */
+    virtual auto is_block() const -> bool
+    {
+        return false;
+    }
+
+    /**
+     * @brief The object whose reflected properties a block draws as its rows, for the inspector's search; empty
+     * when it has none.
+     */
+    virtual auto get_rows_object(const entt::meta_any& value) const -> entt::meta_any
+    {
+        return {};
+    }
+
+    /// @brief Whether a block draws values something overrides, for the inspector's overridden filter.
+    virtual auto has_overridden_rows(const entt::meta_any& value) const -> bool
+    {
+        return false;
     }
 
     /**

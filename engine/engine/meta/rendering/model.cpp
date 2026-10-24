@@ -107,15 +107,22 @@ REFLECT(model)
         .data<&model::set_shared_materials, &model::get_shared_materials>("materials"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "materials"},
-            entt::attribute{"pretty_name", "Shared Materials"},
-            entt::attribute{"tooltip", "The shared material of each slot: editing one changes every model that uses it."},
+            entt::attribute{"pretty_name", "Materials"},
+            entt::attribute{"tooltip", "One row per material slot: its shared material, which every model using it shares, and "
+                                       "under it this model's material instance, its overrides of the shared material."},
+            entt::attribute{"element_label", "Slot"},
+            // The mesh decides how many slots there are: without one there is none to fill.
+            entt::attribute{"empty_hint", "Assign a mesh to get its material slots."},
+            // The inspector draws each slot's material instance under the slot.
+            entt::attribute{"paired_property", "material_instances"},
         })
         .data<&model::set_material_instances, &model::get_material_instances>("material_instances"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "material_instances"},
             entt::attribute{"pretty_name", "Material Instances"},
             entt::attribute{"tooltip", "This model's overrides of each slot's shared material. A value that is not overridden follows the shared material."},
-            // One per slot: the shared materials decide how many there are.
+            // One per slot: the shared materials decide how many there are. The inspector shows them under the
+            // slots of "materials".
             entt::attribute{"is_fixed_size_array", true},
             entt::attribute{"element_label", "Slot"},
         })
