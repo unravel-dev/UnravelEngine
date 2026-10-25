@@ -322,6 +322,11 @@ struct animation_binding_report
     bool has_source_rest{};
     /// The binding retargets rest aligned (Rest Aligned, and the clip has its source rest pose).
     bool is_rest_aligned{};
+    /// Rest Aligned: the retarget is baked into constants per bone, so a frame samples only the
+    /// mapped bones and turns them; otherwise it retargets the whole source skeleton. It bakes
+    /// when nothing between two mapped bones moves, no scale animates and no frame is non-uniformly
+    /// scaled.
+    bool is_retarget_baked{};
     /// Reached bones whose recorded source rest differs from the target bone's bind pose: clips
     /// made on another skeleton, which Copy plays wrong.
     size_t rest_mismatches{};
@@ -642,6 +647,25 @@ private:
         bool locks_to_rest{};
     };
 
+    /**
+     * @brief The rest-aligned retarget of one mapped channel as constants: the bone's local rotation
+     * is pre_rotation * key rotation * post_rotation, and its position the bind position plus
+     * offset_map times the key's offset from the channel's rest position.
+     *
+     * Exact when the retarget is linear (nothing between the bone's channel and the channel of its
+     * nearest mapped ancestor moves, no scale animates) and every frame on both skeletons is a plain
+     * uniform-scale transform: the posed frames on the source and target sides then turn together,
+     * and what is left between them is constant.
+     */
+    struct baked_retarget_bone
+    {
+        math::quat pre_rotation{math::identity<math::quat>()};
+        math::quat post_rotation{math::identity<math::quat>()};
+        math::mat3 offset_map{1.0f};
+        /// Source local axes to target local axes, for carrying a scale change (carry_scale_ratio).
+        math::quat source_to_target{math::identity<math::quat>()};
+    };
+
     /// Target-skeleton mapping of one clip, cached per binding version.
     struct clip_binding
     {
@@ -677,13 +701,9 @@ private:
         math::quat frame_rotation{math::identity<math::quat>()};
         root_motion_frame root_position_frame;
         root_motion_frame root_rotation_frame;
-        /// Identity of the source skeleton (channel names, parents, rest poses): clips with equal
-        /// values sample one skeleton. Valid when rest_aligned.
-        size_t source_skeleton_hash{};
-        /// The retarget turns and scales each channel's local transform by constants only, so clips
-        /// of one skeleton that all retarget linearly blend before the retarget to the same pose as
-        /// after it. Valid when rest_aligned.
-        bool is_linear_retarget{};
+        /// The retarget baked per ordered channel (same order), or empty: then every sample runs
+        /// the full retarget. Valid when rest_aligned.
+        std::vector<baked_retarget_bone> baked_retarget;
     };
 
     /// The channels a source sample took root motion from, or -1.
@@ -701,8 +721,6 @@ private:
         std::vector<math::transform> source_parent_global;
         std::vector<math::transform> source_global;
         std::vector<math::transform> target_global;
-        /// One source pose per clip of a blend sampled in its source skeleton.
-        std::vector<std::vector<math::transform>> point_source_local;
     };
 
     auto get_layer(size_t index) -> animation_layer&;
@@ -718,6 +736,9 @@ private:
                                       const animation_target_skeleton& skeleton,
                                       animation_binding_report& report);
     static auto make_root_motion_frame(const animation_clip& clip, int channel_index) -> root_motion_frame;
+    /// Fills binding.baked_retarget when the retarget of `clip` onto `target` bakes (see
+    /// baked_retarget_bone), from one full retarget of the source rest pose; leaves it empty otherwise.
+    void bake_retarget(const animation_clip& clip, const animation_target_skeleton& target, clip_binding& binding);
 
     void sample_animation(const std::shared_ptr<animation_clip>& anim_clip,
                           seconds_t time,
@@ -756,15 +777,16 @@ private:
                             const animation_target_skeleton& target,
                             const root_channels& roots,
                             animation_pose& pose) const;
-    /**
-     * @brief Samples a blend space's clips in their shared source skeleton, blends them there and
-     * retargets the blend once. False, sampling nothing, unless every clip is loaded, retargets rest
-     * aligned and linearly, and samples the same skeleton.
-     */
-    auto sample_blend_in_source_space(animation_state& state,
-                                      const animation_skeleton_binding& binding,
-                                      bool extract_root_motion,
-                                      animation_pose& pose) -> bool;
+    /// Rest-aligned sampling through a baked retarget: the mapped channels and the root-motion
+    /// channels are sampled, the rest of the source skeleton is not.
+    void sample_baked_retarget(const animation_clip& anim_clip,
+                               const clip_binding& binding,
+                               const animation_target_skeleton& target,
+                               seconds_t time,
+                               uint64_t loop_count,
+                               bool extract_root_motion,
+                               bool track_root_motion,
+                               animation_pose& pose) const;
     void sample_root_position(const animation_clip& anim_clip,
                               const animation_channel& channel,
                               uint32_t target_index,

@@ -98,6 +98,10 @@ otherwise only the channels that reached no bone are listed. Read:
 
 - rest_aligned: false while pose_retargeting is copy, or when the clip
   recorded no rest pose (reimport it).
+- retarget_baked: the rest-aligned retarget is baked into constants per bone,
+  so a frame costs about what copy costs. False when a channel between two
+  mapped bones moves, a scale animates or a frame is non-uniformly scaled; the
+  clip still plays right, through the full retarget every frame.
 - matches: channels per kind (index, name, name without namespace, role,
   none). Role matches mean the names differ; that is fine.
 - unreached_bones: bones that keep the bind pose. Fingers, tails and

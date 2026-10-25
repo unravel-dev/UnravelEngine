@@ -440,7 +440,7 @@ auto describe_retarget_check(rtti::context& ctx,
     rest += "]";
     return fmt::format(
         R"({{"clip":{},"retargeting_mode":{},"pose_retargeting":{},"retarget_pose":{},"retarget_pose_offsets":{},)"
-        R"("rest_aligned":{},"clip_has_rest":{},)"
+        R"("rest_aligned":{},"retarget_baked":{},"clip_has_rest":{},)"
         R"("channel_count":{},"matched":{},"matches":{},"{}":{},"unreached_bones":{},"height_ratio":{},)"
         R"("frame_turn_degrees":{},"frame_turn_axis":[{},{},{}],"root_motion":{{"position":{},"rotation":{}}},)"
         R"("rest_mismatches":{},"rest_differences":{},"warnings":{}}})",
@@ -450,6 +450,7 @@ auto describe_retarget_check(rtti::context& ctx,
         enum_name_json(ctx, animation.get_retarget_pose()),
         pose_offsets_json(ctx, animation.get_retarget_pose_offsets()),
         bool_to_json(report.is_rest_aligned),
+        bool_to_json(report.is_retarget_baked),
         bool_to_json(report.has_source_rest),
         report.channels.size(),
         count_matched_channels(check),
@@ -639,7 +640,8 @@ void register_animation_tools(mcp_tool_registry& registry)
              "settings - the Animation inspector's Retarget Check. clip is an animation clip key; without it, the "
              "clip the base layer plays, else the clip the controller starts in, else the component's Animation "
              "clip. Reports whether it plays Rest "
-             "Aligned or copied, how many channels reach a bone and how (index, name, name without namespace, "
+             "Aligned or copied (and whether the Rest Aligned retarget is baked, the cheap path), how many "
+             "channels reach a bone and how (index, name, name without namespace, "
              "role), the channels that reach none (or every channel with channels true), the bones no channel "
              "reaches (they keep the bind pose), height ratio and frame turn, which bone the root motion moves, "
              "rest pose differences per limb (measured in the retarget poses), the retarget pose (bind_pose or "

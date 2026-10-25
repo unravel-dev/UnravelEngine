@@ -281,57 +281,41 @@ auto holds_rest_pose(const animation_channel& channel) -> bool
                        });
 }
 
-/// Identity of a clip's source skeleton: its channels' names, parents and rest poses.
-auto hash_source_skeleton(const animation_clip& clip) -> size_t
+/// A sampled scale over the channel's rest scale, per axis (1 on an axis that rests at zero).
+auto get_scale_ratio(const math::vec3& scale, const math::vec3& rest_scale) -> math::vec3
 {
-    size_t seed = clip.channels.size();
-    const auto combine_vec3 = [&](const math::vec3& value)
-    {
-        utils::hash_combine(seed, value.x);
-        utils::hash_combine(seed, value.y);
-        utils::hash_combine(seed, value.z);
-    };
-    for(const auto& channel : clip.channels)
-    {
-        utils::hash_combine(seed, channel.node_name);
-        utils::hash_combine(seed, channel.parent_channel);
-        for(const auto* transform : {&channel.rest_local, &channel.parent_offset})
-        {
-            combine_vec3(transform->get_position());
-            combine_vec3(transform->get_scale());
-            const math::quat rotation = transform->get_rotation();
-            utils::hash_combine(seed, rotation.x);
-            utils::hash_combine(seed, rotation.y);
-            utils::hash_combine(seed, rotation.z);
-            utils::hash_combine(seed, rotation.w);
-        }
-    }
-    for(const auto& entry : clip.humanoid_overrides)
-    {
-        utils::hash_combine(seed, size_t(entry.role));
-        utils::hash_combine(seed, entry.bone);
-    }
-    return seed;
+    return {rest_scale.x != 0.0f ? scale.x / rest_scale.x : 1.0f,
+            rest_scale.y != 0.0f ? scale.y / rest_scale.y : 1.0f,
+            rest_scale.z != 0.0f ? scale.z / rest_scale.z : 1.0f};
 }
 
-/// Blends source poses channel by channel with the incremental weights blend_poses() uses, so the
-/// blend matches blending the poses after a linear retarget.
-void blend_source_poses(const std::vector<std::vector<math::transform>>& poses,
-                        const std::vector<float>& weights,
-                        std::vector<math::transform>& result)
+/**
+ * @brief Whether a transform composes as a plain rotation, translation and uniform scale: no skew, no
+ * perspective, axes scaled alike within math::transform's own tolerance. Frames like that multiply
+ * their rotations, which a baked retarget relies on.
+ */
+auto is_plain_uniform_frame(const math::transform& frame) -> bool
 {
-    result = poses.front();
-    float total_weight = weights.front();
-    for(size_t p = 1; p < poses.size(); ++p)
-    {
-        const float denom = total_weight + weights[p];
-        const float factor = denom > 0.0f ? weights[p] / denom : 0.0f;
-        for(size_t c = 0; c < result.size(); ++c)
-        {
-            result[c] = blend(result[c], poses[p][c], factor);
-        }
-        total_weight += weights[p];
-    }
+    const math::vec3& scale = frame.get_scale();
+    const float max_axis = std::max({std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z), 1.0f});
+    const float tolerance = math::k_scale_uniform_tolerance<float> * max_axis;
+    const bool is_uniform = std::fabs(scale.x - scale.y) <= tolerance && std::fabs(scale.y - scale.z) <= tolerance &&
+                            std::fabs(scale.x - scale.z) <= tolerance;
+    return is_uniform && is_near(frame.get_skew(), math::vec3(0.0f), math::k_skew_zero_tolerance<float>) &&
+           frame.get_perspective() == math::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+}
+
+/// Whether every frame a rest-aligned retarget composes is plain (is_plain_uniform_frame): each
+/// channel's rest and parent offset, and each target bone's bind transform.
+auto has_plain_uniform_frames(const animation_clip& clip, const animation_target_skeleton& target) -> bool
+{
+    return std::all_of(clip.channels.begin(),
+                       clip.channels.end(),
+                       [](const animation_channel& channel)
+                       {
+                           return is_plain_uniform_frame(channel.rest_local) && is_plain_uniform_frame(channel.parent_offset);
+                       }) &&
+           std::all_of(target.bind_local.begin(), target.bind_local.end(), is_plain_uniform_frame);
 }
 
 /// Resets the root motion a sample reports before it is taken.
@@ -355,8 +339,7 @@ auto get_parent_global(const animation_clip& clip, const std::vector<math::trans
  * constants only. A bone's retargeted rotation depends on its source global relative to the source
  * channel of its nearest mapped target ancestor; when every channel between the two holds its rest
  * pose (all the way up when there is no such ancestor) and no scale animates, that relation is its
- * own local transform between two constant frames. Slerp and lerp keep constant frames, so clips
- * of one skeleton then blend the same before the retarget as after it.
+ * own local transform between two constant frames, which bake_retarget reads once.
  */
 auto is_linear_retarget(const animation_clip& clip,
                         const std::vector<int>& channel_targets,
@@ -1510,10 +1493,6 @@ auto animation_player::update_pose(animation_layer_state& layer,
         // Every clip is sampled at the shared phase, so clips of different lengths stay in step.
         state.blend_poses.resize(state.blend_clips.size());
         state.blend_weights.resize(state.blend_clips.size());
-        if(!additive && sample_blend_in_source_space(state, binding, extract_root_motion, pose))
-        {
-            return true;
-        }
         for(size_t i = 0; i < state.blend_clips.size(); ++i)
         {
             const auto& clip_weight = state.blend_clips[i];
@@ -1951,6 +1930,7 @@ void animation_player::describe_rest_aligned(const animation_clip& clip,
                                              animation_binding_report& report)
 {
     report.height_ratio = entry.height_ratio;
+    report.is_retarget_baked = !entry.baked_retarget.empty();
     const math::quat frame = math::normalize(entry.frame_rotation);
     const math::vec3 axis(frame.x, frame.y, frame.z);
     report.frame_degrees = math::degrees(2.0f * std::atan2(math::length(axis), std::fabs(frame.w)));
@@ -2110,13 +2090,10 @@ auto animation_player::find_binding(const std::shared_ptr<animation_clip>& clip_
     entry->source_reference_global.clear();
     entry->height_ratio = 1.0f;
     entry->frame_rotation = math::identity<math::quat>();
-    entry->source_skeleton_hash = 0;
-    entry->is_linear_retarget = false;
+    entry->baked_retarget.clear();
     if(entry->rest_aligned)
     {
         entry->source_rest_global = std::move(source_rest);
-        entry->source_skeleton_hash = hash_source_skeleton(clip);
-        entry->is_linear_retarget = is_linear_retarget(clip, entry->channel_targets, entry->target_channels, *target);
         const auto source_roles = find_channel_roles(clip, entry->source_rest_global);
         // Motion is measured from the source's retarget pose: its rest, or the same skeleton
         // straightened to a T-pose when the target is, so skeletons resting in other poses agree.
@@ -2183,10 +2160,55 @@ auto animation_player::find_binding(const std::shared_ptr<animation_clip>& clip_
                 entry->height_ratio = target_height / source_height;
             }
         }
+        bake_retarget(clip, *target, *entry);
     }
     entry->root_position_target = find_root_motion_target(clip, *entry, entry->root_position_channel);
     entry->root_rotation_target = find_root_motion_target(clip, *entry, entry->root_rotation_channel);
     return *entry;
+}
+
+void animation_player::bake_retarget(const animation_clip& clip, const animation_target_skeleton& target, clip_binding& binding)
+{
+    binding.baked_retarget.clear();
+    if(!is_linear_retarget(clip, binding.channel_targets, binding.target_channels, target) ||
+       !has_plain_uniform_frames(clip, target))
+    {
+        return;
+    }
+    // The constants are the frames of one full retarget, of the source rest pose: the frames turn
+    // together at every pose, so any pose shows what stays between them.
+    std::vector<math::transform> rest_local;
+    rest_local.reserve(clip.channels.size());
+    for(const auto& channel : clip.channels)
+    {
+        rest_local.push_back(channel.rest_local);
+    }
+    animation_pose rest_pose;
+    retarget_source_pose(clip, binding, target, rest_local, rest_pose);
+    const auto& source_parent_global = retarget_scratch_.source_parent_global;
+    const auto& target_global = retarget_scratch_.target_global;
+    const math::quat& frame = binding.frame_rotation;
+    binding.baked_retarget.reserve(binding.ordered_channels.size());
+    for(const auto& [t, c] : binding.ordered_channels)
+    {
+        // As retarget_source_pose reads them: the target parent's global, the source channel's frame.
+        const int parent = target.parents[t];
+        const math::transform parent_global = parent >= 0 && size_t(parent) < t ? target_global[size_t(parent)] : math::transform{};
+        const math::transform& source_parent = source_parent_global[c];
+        const math::quat source_reference = binding.source_reference_global[c].get_rotation();
+        const math::quat target_reference = target.reference_global[t].get_rotation();
+        auto& bone = binding.baked_retarget.emplace_back();
+        bone.pre_rotation = math::normalize(glm::inverse(parent_global.get_rotation()) * frame * source_parent.get_rotation());
+        bone.post_rotation = math::normalize(glm::inverse(source_reference) * glm::inverse(frame) * target_reference);
+        for(int axis = 0; axis < 3; ++axis)
+        {
+            math::vec3 unit(0.0f);
+            unit[axis] = 1.0f;
+            bone.offset_map[axis] = inverse_transform_offset(parent_global, frame * transform_offset(source_parent, unit)) *
+                                    binding.height_ratio;
+        }
+        bone.source_to_target = glm::inverse(target_reference) * frame * source_reference;
+    }
 }
 
 auto animation_player::make_root_motion_frame(const animation_clip& clip, int channel_index) -> root_motion_frame
@@ -2530,10 +2552,83 @@ void animation_player::sample_rest_aligned(const animation_clip& anim_clip,
                                            bool track_root_motion,
                                            animation_pose& pose)
 {
+    if(!clip_binding.baked_retarget.empty())
+    {
+        sample_baked_retarget(anim_clip, clip_binding, target, time, loop_count, extract_root_motion, track_root_motion, pose);
+        return;
+    }
     auto& source_local = retarget_scratch_.source_local;
     const auto roots =
         sample_source_pose(anim_clip, clip_binding, time, loop_count, extract_root_motion, track_root_motion, source_local, pose);
     retarget_source_pose(anim_clip, clip_binding, target, source_local, pose);
+    convert_root_delta(anim_clip, clip_binding, target, roots, pose);
+}
+
+void animation_player::sample_baked_retarget(const animation_clip& anim_clip,
+                                             const clip_binding& clip_binding,
+                                             const animation_target_skeleton& target,
+                                             seconds_t time,
+                                             uint64_t loop_count,
+                                             bool extract_root_motion,
+                                             bool track_root_motion,
+                                             animation_pose& pose) const
+{
+    const auto& channels = anim_clip.channels;
+    root_channels roots;
+    math::quat pose_turn = math::identity<math::quat>();
+    // Root motion as sample_source_pose takes it, from the source local before the retarget.
+    const auto take_root_motion = [&](size_t c, math::transform& local)
+    {
+        const auto& channel = channels[c];
+        if(!channel.position_keys.empty() && int(c) == clip_binding.root_position_channel && clip_binding.root_position_target >= 0)
+        {
+            sample_root_position(anim_clip, channel, uint32_t(clip_binding.root_position_target), time, loop_count,
+                                 extract_root_motion, clip_binding.root_position_frame, local, pose);
+            roots.position = int(c);
+        }
+        if(!channel.rotation_keys.empty() && int(c) == clip_binding.root_rotation_channel && clip_binding.root_rotation_target >= 0)
+        {
+            pose_turn = sample_root_rotation(anim_clip, channel, uint32_t(clip_binding.root_rotation_target), loop_count,
+                                             extract_root_motion, clip_binding.root_rotation_frame, local, pose);
+            roots.rotation = int(c);
+        }
+    };
+    // A root channel the target does not map still moves the entity; one channel can be both roots.
+    const auto take_unmapped_root_motion = [&](int c)
+    {
+        if(c >= 0 && clip_binding.channel_targets[size_t(c)] < 0)
+        {
+            math::transform local = sample_channel(channels[size_t(c)], time, channels[size_t(c)].rest_local);
+            take_root_motion(size_t(c), local);
+        }
+    };
+    if(track_root_motion)
+    {
+        take_unmapped_root_motion(clip_binding.root_position_channel);
+        if(clip_binding.root_rotation_channel != clip_binding.root_position_channel)
+        {
+            take_unmapped_root_motion(clip_binding.root_rotation_channel);
+        }
+    }
+    for(size_t i = 0; i < clip_binding.ordered_channels.size(); ++i)
+    {
+        const auto [t, c] = clip_binding.ordered_channels[i];
+        const auto& channel = channels[c];
+        const auto& bone = clip_binding.baked_retarget[i];
+        math::transform local = sample_channel(channel, time, channel.rest_local);
+        if(track_root_motion)
+        {
+            take_root_motion(c, local);
+        }
+        const math::transform& bind = target.bind_local[t];
+        auto& node = pose.nodes.emplace_back();
+        node.desc.index = t;
+        node.transform.set_rotation(math::normalize(bone.pre_rotation * local.get_rotation() * bone.post_rotation));
+        node.transform.set_position(bind.get_position() + bone.offset_map * (local.get_position() - channel.rest_local.get_position()));
+        node.transform.set_scale(bind.get_scale() * carry_scale_ratio(get_scale_ratio(local.get_scale(), channel.rest_local.get_scale()),
+                                                                      bone.source_to_target));
+    }
+    rebase_root_translation(clip_binding, pose_turn, pose);
     convert_root_delta(anim_clip, clip_binding, target, roots, pose);
 }
 
@@ -2640,10 +2735,7 @@ void animation_player::retarget_source_pose(const animation_clip& anim_clip,
         math::transform local;
         local.set_rotation(math::normalize(glm::inverse(parent_global.get_rotation()) * global_rotation));
         local.set_position(target.bind_local[t].get_position() + target_offset);
-        const math::vec3 rest_scale = channel.rest_local.get_scale();
-        const math::vec3 scale_ratio(rest_scale.x != 0.0f ? source_local[size_t(c)].get_scale().x / rest_scale.x : 1.0f,
-                                     rest_scale.y != 0.0f ? source_local[size_t(c)].get_scale().y / rest_scale.y : 1.0f,
-                                     rest_scale.z != 0.0f ? source_local[size_t(c)].get_scale().z / rest_scale.z : 1.0f);
+        const math::vec3 scale_ratio = get_scale_ratio(source_local[size_t(c)].get_scale(), channel.rest_local.get_scale());
         const math::quat source_to_target = glm::inverse(target_reference) * frame * source_reference;
         local.set_scale(target.bind_local[t].get_scale() * carry_scale_ratio(scale_ratio, source_to_target));
         target_global[t] = parent_global * local;
@@ -2689,71 +2781,6 @@ void animation_player::convert_root_delta(const animation_clip& anim_clip,
         pose.motion_result.root_transform_delta.set_rotation(
             math::normalize(frame * pose.motion_result.root_transform_delta.get_rotation() * glm::inverse(frame)));
     }
-}
-
-auto animation_player::sample_blend_in_source_space(animation_state& state,
-                                                    const animation_skeleton_binding& binding,
-                                                    bool extract_root_motion,
-                                                    animation_pose& pose) -> bool
-{
-    const auto& clips = state.blend_loaded_clips;
-    if(!binding.rest_aligned_target || clips.size() < 2)
-    {
-        return false;
-    }
-    size_t skeleton_hash = 0;
-    for(size_t i = 0; i < clips.size(); ++i)
-    {
-        if(!clips[i])
-        {
-            return false;
-        }
-        const auto& clip_binding = find_binding(clips[i], binding);
-        // Equal channel counts make the channel-by-channel blend safe even if two skeletons
-        // ever shared a hash.
-        const bool is_same_skeleton = i == 0 || (clip_binding.source_skeleton_hash == skeleton_hash &&
-                                                 clips[i]->channels.size() == clips.front()->channels.size());
-        if(!clip_binding.rest_aligned || !clip_binding.is_linear_retarget || !is_same_skeleton)
-        {
-            return false;
-        }
-        skeleton_hash = clip_binding.source_skeleton_hash;
-    }
-
-    const auto& target = *binding.rest_aligned_target;
-    auto& point_source_local = retarget_scratch_.point_source_local;
-    point_source_local.resize(clips.size());
-    for(size_t i = 0; i < clips.size(); ++i)
-    {
-        const auto& clip = clips[i];
-        const auto& clip_weight = state.blend_clips[i];
-        auto& point_pose = state.blend_poses[i];
-        auto& motion_state = state.point_motion_states[clip_weight.point];
-        state.blend_weights[i] = clip_weight.weight;
-        // A point's pose carries its root motion and curves; its bones come from the one retarget.
-        point_pose.nodes.clear();
-        clear_root_motion(point_pose);
-        point_pose.motion_state = motion_state;
-        set_baseline_position(point_pose.motion_state, clip->duration * state.step_begin_phase, state.step_begin_loop_count);
-        const auto& clip_binding = find_binding(clip, binding);
-        const auto roots = sample_source_pose(*clip,
-                                              clip_binding,
-                                              clip->duration * state.phase,
-                                              state.loop_count,
-                                              extract_root_motion,
-                                              true,
-                                              point_source_local[i],
-                                              point_pose);
-        convert_root_delta(*clip, clip_binding, target, roots, point_pose);
-        motion_state = point_pose.motion_state;
-        sample_curves(*clip, state.phase, point_pose);
-    }
-
-    // Curves and root motion blend as they always do; the bones are the retarget of the blend.
-    blend_poses(state.blend_poses, state.blend_weights, pose);
-    blend_source_poses(point_source_local, state.blend_weights, retarget_scratch_.source_local);
-    retarget_source_pose(*clips.front(), find_binding(clips.front(), binding), target, retarget_scratch_.source_local, pose);
-    return true;
 }
 
 auto animation_player::get_fired_events() const -> const std::vector<animation_event_hit>&

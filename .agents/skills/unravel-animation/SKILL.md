@@ -83,12 +83,17 @@ description: >-
 - Rest-aligned retargeting carries offsets and root motion as LENGTHS through
   scaled frames (`transform_offset`); `transform_normal` keeps the input length
   and silently drops a x100 unit scale.
-- A blend space whose clips share one source skeleton and retarget linearly
-  (`is_linear_retarget`: no scale animates, and every channel between a mapped
-  channel and its mapped parent holds its rest pose) is blended in the source
-  skeleton and retargeted once; root motion still converts per clip. Anything
-  else retargets each clip and blends after. A change to the retarget must keep
-  the two equal (`test_blend_space_retargets_once_like_each_clip`).
+- A clip that retargets linearly (`is_linear_retarget`: no scale animates, and
+  every channel between a mapped channel and its mapped parent holds its rest
+  pose) on skeletons whose frames are all plain uniform-scale transforms BAKES:
+  `bake_retarget` reads two rotations and an offset map per mapped bone from one
+  full retarget of the source rest pose, and `sample_baked_retarget` samples only
+  the mapped and root-motion channels (root motion is taken from the source local
+  exactly as before). Anything else runs the full retarget every sample. A change
+  to the full retarget must keep both equal
+  (`test_baked_retarget_matches_the_full_retarget` compares them through a twin
+  clip whose animated-scale leaf forces the full path); `animation_get_retarget`
+  reports `retarget_baked`.
 
 ## Humanoid retargeting
 

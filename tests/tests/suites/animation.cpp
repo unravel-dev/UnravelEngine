@@ -3085,18 +3085,233 @@ void check_blend_matches_blend_of_retargets(const std::shared_ptr<animation_clip
     check(math::length(frame_a.motion.root_transform_delta.get_position()) > 1e-3f, "the clips move their root");
 }
 
-void test_blend_space_retargets_once_like_each_clip()
+void test_blend_space_blends_each_clips_retarget()
 {
-    std::printf("test_blend_space_retargets_once_like_each_clip\n");
-    // Clips whose every unmapped channel holds still: blended in their own skeleton, then retargeted once.
+    std::printf("test_blend_space_blends_each_clips_retarget\n");
+    // Clips whose every unmapped channel holds still bake their retarget.
     check_blend_matches_blend_of_retargets(make_source_skeleton_clip(0.4f, 0.1f, 30.0f, 20.0f),
                                            make_source_skeleton_clip(1.2f, -0.05f, -50.0f, 70.0f),
-                                           "one retarget of the blend is the blend of each clip's retarget");
-    // An unmapped channel between hips and spine turns differently in each clip: the blend of the
-    // clips' own retargets is no longer the retarget of their blend, so each clip retargets alone.
+                                           "a blend of baked clips is the blend of each clip's retarget");
+    // An unmapped channel between hips and spine turns differently in each clip: each retargets in full.
     check_blend_matches_blend_of_retargets(make_source_skeleton_clip(0.4f, 0.1f, 30.0f, 0.0f, 0.0f),
                                            make_source_skeleton_clip(1.2f, -0.05f, -50.0f, 140.0f, 140.0f),
-                                           "clips with a moving unmapped channel still blend after their own retargets");
+                                           "clips with a moving unmapped channel blend after their own retargets");
+}
+
+/// A uniformly random rotation: a normalized 4D Gaussian sample.
+auto make_random_rotation(std::mt19937& rng) -> math::quat
+{
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    return math::normalize(math::quat(gauss(rng), gauss(rng), gauss(rng), gauss(rng)));
+}
+
+/// A random offset with every axis in [-length, length].
+auto make_random_offset(std::mt19937& rng, float length) -> math::vec3
+{
+    std::uniform_real_distribution<float> axis(-length, length);
+    return {axis(rng), axis(rng), axis(rng)};
+}
+
+/// A clip, its twin that cannot bake, and the binding that plays both on a target skeleton.
+struct baked_retarget_case
+{
+    std::shared_ptr<animation_clip> clip;
+    std::shared_ptr<animation_clip> unbaked;
+    std::shared_ptr<animation_target_skeleton> target;
+    animation_skeleton_binding binding;
+};
+
+constexpr float BAKED_CASE_DEGREES = 50.0f;
+constexpr float BAKED_CASE_TRAVEL = 0.6f;
+
+/**
+ * A random source chain root > hips > between > spine > head that retargets linearly: every channel
+ * animates except `between`, which holds its rest (unmapped), and no scale animates. The source may be
+ * in centimeters (`source_scale` on the root); the target root may be scaled, and the target has a bone
+ * between hips and spine no channel reaches. Root motion is on the hips. The twin adds an unmapped
+ * leaf whose scale animates: it changes no mapped bone but stops the retarget from baking.
+ */
+auto make_baked_retarget_case(uint32_t seed, float source_scale, float target_root_scale) -> baked_retarget_case
+{
+    std::mt19937 rng(seed);
+    auto clip = std::make_shared<animation_clip>();
+    clip->duration = seconds_t{1.0f};
+    const float unit = 1.0f / source_scale;
+    const auto add_channel = [&](const std::string& name, int parent, const math::vec3& rest_position, bool is_animated)
+    {
+        auto& channel = clip->channels.emplace_back();
+        channel.node_name = name;
+        channel.node_index = clip->channels.size() - 1;
+        channel.parent_channel = parent;
+        channel.has_rest = true;
+        channel.rest_local.set_rotation(make_random_rotation(rng));
+        channel.rest_local.set_position(rest_position);
+        channel.rest_local.set_scale(math::vec3(parent < 0 ? source_scale : 1.0f));
+        const math::quat rest_rotation = channel.rest_local.get_rotation();
+        channel.scaling_keys = {{seconds_t{0.0f}, channel.rest_local.get_scale()}};
+        if(!is_animated)
+        {
+            channel.position_keys = {{seconds_t{0.0f}, rest_position}};
+            channel.rotation_keys = {{seconds_t{0.0f}, rest_rotation}};
+            return;
+        }
+        for(const float time : {0.0f, 0.4f, 1.0f})
+        {
+            const math::quat turn = math::angleAxis(math::radians(BAKED_CASE_DEGREES * time), math::normalize(make_random_offset(rng, 1.0f)));
+            channel.rotation_keys.push_back({seconds_t{time}, math::normalize(rest_rotation * turn)});
+            channel.position_keys.push_back({seconds_t{time}, rest_position + make_random_offset(rng, BAKED_CASE_TRAVEL * unit) * time});
+        }
+    };
+    add_channel("root", -1, {}, true);
+    add_channel("hips", 0, make_random_offset(rng, unit), true);
+    add_channel("between", 1, make_random_offset(rng, 0.3f * unit), false);
+    add_channel("spine", 2, make_random_offset(rng, 0.5f * unit), true);
+    add_channel("head", 3, make_random_offset(rng, 0.5f * unit), true);
+    clip->root_motion.position_node_name = "hips";
+    clip->root_motion.rotation_node_name = "hips";
+    auto unbaked = std::make_shared<animation_clip>(*clip);
+    auto& leaf = unbaked->channels.emplace_back();
+    leaf.node_name = "scaler";
+    leaf.node_index = unbaked->channels.size() - 1;
+    leaf.parent_channel = 4;
+    leaf.has_rest = true;
+    leaf.scaling_keys = {{seconds_t{0.0f}, math::vec3(1.0f)}, {seconds_t{1.0f}, math::vec3(1.5f)}};
+    auto target = std::make_shared<animation_target_skeleton>();
+    target->names = {"root", "hips", "spine_offset", "spine", "head"};
+    target->parents = {-1, 0, 1, 2, 3};
+    target->bind_local.resize(target->parents.size());
+    for(size_t bone = 0; bone < target->bind_local.size(); ++bone)
+    {
+        target->bind_local[bone].set_rotation(make_random_rotation(rng));
+        target->bind_local[bone].set_position(bone == 0 ? math::vec3(0.0f) : make_random_offset(rng, 0.8f));
+    }
+    target->bind_local[0].set_scale(math::vec3(target_root_scale));
+    target->compute_rest_globals();
+    baked_retarget_case result{clip, unbaked, target, {}};
+    result.binding.version = 1000 + seed;
+    result.binding.resolve = [](const animation_channel& channel)
+    {
+        static const std::map<std::string, int> bones{{"root", 0}, {"hips", 1}, {"spine", 3}, {"head", 4}};
+        const auto it = bones.find(channel.node_name);
+        return it != bones.end() ? it->second : -1;
+    };
+    result.binding.rest_aligned_target = target;
+    return result;
+}
+
+/// Steps a player by `dt` and returns the bones and root motion its pose update wrote.
+auto play_one_step(animation_player& player, const animation_skeleton_binding& binding, bool extract_root_motion, float dt)
+    -> retargeted_frame
+{
+    static const animation_pose empty_ref_pose{};
+    retargeted_frame frame;
+    player.update_time(seconds_t{dt});
+    player.update_poses(empty_ref_pose,
+                        binding,
+                        extract_root_motion,
+                        [&](const animation_pose::node_desc& desc, const math::transform& transform, const auto& motion)
+                        {
+                            frame.nodes[desc.index] = transform;
+                            frame.motion = motion;
+                        });
+    return frame;
+}
+
+auto is_same_rotation(const math::quat& lhs, const math::quat& rhs, float tolerance) -> bool
+{
+    const float sign = math::dot(lhs, rhs) < 0.0f ? -1.0f : 1.0f;
+    return std::fabs(lhs.x - sign * rhs.x) <= tolerance && std::fabs(lhs.y - sign * rhs.y) <= tolerance &&
+           std::fabs(lhs.z - sign * rhs.z) <= tolerance && std::fabs(lhs.w - sign * rhs.w) <= tolerance;
+}
+
+auto is_same_position(const math::vec3& lhs, const math::vec3& rhs, float tolerance) -> bool
+{
+    return math::length(lhs - rhs) <= tolerance * std::max(1.0f, math::length(rhs));
+}
+
+void test_baked_retarget_matches_the_full_retarget()
+{
+    std::printf("test_baked_retarget_matches_the_full_retarget\n");
+    constexpr uint32_t CASES = 12;
+    constexpr int STEPS = 9;
+    constexpr float STEP = 0.13f;
+    constexpr float ROTATION_TOLERANCE = 1e-4f;
+    constexpr float POSITION_TOLERANCE = 1e-4f;
+    int baked_cases = 0;
+    int mismatched_steps = 0;
+    int steps = 0;
+    for(uint32_t seed = 1; seed <= CASES; ++seed)
+    {
+        for(const auto [source_scale, target_root_scale] : {std::pair{1.0f, 1.0f}, std::pair{100.0f, 0.5f}})
+        {
+            for(const bool extract_root_motion : {false, true})
+            {
+                const auto test_case = make_baked_retarget_case(seed, source_scale, target_root_scale);
+                const auto& binding = test_case.binding;
+                const auto baked_report = animation_player::describe_binding(test_case.clip, binding, *test_case.target);
+                const auto unbaked_report = animation_player::describe_binding(test_case.unbaked, binding, *test_case.target);
+                baked_cases += baked_report.is_retarget_baked && !unbaked_report.is_retarget_baked && unbaked_report.is_rest_aligned ? 1 : 0;
+                animation_player baked;
+                baked.blend_to(0, make_clip_handle(test_case.clip), seconds_t{0.0f}, true);
+                baked.play();
+                animation_player full;
+                full.blend_to(0, make_clip_handle(test_case.unbaked), seconds_t{0.0f}, true);
+                full.play();
+                for(int step = 0; step < STEPS; ++step)
+                {
+                    const auto baked_frame = play_one_step(baked, binding, extract_root_motion, STEP);
+                    const auto full_frame = play_one_step(full, binding, extract_root_motion, STEP);
+                    bool is_matching = baked_frame.nodes.size() == full_frame.nodes.size() &&
+                                       baked_frame.motion.root_position_node_index == full_frame.motion.root_position_node_index &&
+                                       baked_frame.motion.root_rotation_node_index == full_frame.motion.root_rotation_node_index &&
+                                       is_same_position(baked_frame.motion.root_transform_delta.get_position(),
+                                                        full_frame.motion.root_transform_delta.get_position(), POSITION_TOLERANCE) &&
+                                       is_same_rotation(baked_frame.motion.root_transform_delta.get_rotation(),
+                                                        full_frame.motion.root_transform_delta.get_rotation(), ROTATION_TOLERANCE);
+                    for(const auto& [index, transform] : baked_frame.nodes)
+                    {
+                        const auto it = full_frame.nodes.find(index);
+                        is_matching = is_matching && it != full_frame.nodes.end() &&
+                                      is_same_rotation(transform.get_rotation(), it->second.get_rotation(), ROTATION_TOLERANCE) &&
+                                      is_same_position(transform.get_position(), it->second.get_position(), POSITION_TOLERANCE) &&
+                                      is_same_position(transform.get_scale(), it->second.get_scale(), POSITION_TOLERANCE);
+                    }
+                    mismatched_steps += is_matching ? 0 : 1;
+                    ++steps;
+                }
+            }
+        }
+    }
+    check(baked_cases == int(CASES) * 4, "every linear clip bakes and its twin does not (" + std::to_string(baked_cases) + ")");
+    check(mismatched_steps == 0,
+          "the baked retarget writes what the full retarget writes (" + std::to_string(mismatched_steps) + " of " +
+              std::to_string(steps) + " steps differ)");
+}
+
+void test_retarget_bakes_only_linear_clips()
+{
+    std::printf("test_retarget_bakes_only_linear_clips\n");
+    const auto test_case = make_baked_retarget_case(7, 1.0f, 1.0f);
+    const auto& target = *test_case.target;
+    const auto is_baked = [&](const std::shared_ptr<animation_clip>& clip, const animation_skeleton_binding& binding)
+    {
+        return animation_player::describe_binding(clip, binding, target).is_retarget_baked;
+    };
+    check(is_baked(test_case.clip, test_case.binding), "a clip whose unmapped channels hold still bakes");
+    check(!is_baked(test_case.unbaked, test_case.binding), "an animated scale keeps the full retarget");
+    auto moving_between = std::make_shared<animation_clip>(*test_case.clip);
+    moving_between->channels[2].rotation_keys.push_back(
+        {seconds_t{1.0f}, math::normalize(moving_between->channels[2].rest_local.get_rotation() *
+                                          math::angleAxis(math::radians(30.0f), math::vec3(0.0f, 0.0f, 1.0f)))});
+    check(!is_baked(moving_between, test_case.binding), "a moving channel between two mapped bones keeps the full retarget");
+    auto stretched = std::make_shared<animation_clip>(*test_case.clip);
+    stretched->channels[2].rest_local.set_scale({1.0f, 2.0f, 1.0f});
+    stretched->channels[2].scaling_keys = {{seconds_t{0.0f}, stretched->channels[2].rest_local.get_scale()}};
+    check(!is_baked(stretched, test_case.binding), "a non-uniformly scaled frame keeps the full retarget");
+    auto copy_binding = test_case.binding;
+    copy_binding.rest_aligned_target = nullptr;
+    const auto copy_report = animation_player::describe_binding(test_case.clip, copy_binding, target);
+    check(!copy_report.is_rest_aligned && !copy_report.is_retarget_baked, "Copy neither retargets nor bakes");
 }
 
 void test_rest_aligned_onto_own_skeleton_is_a_copy()
@@ -4215,7 +4430,9 @@ auto run_animation_suite(rtti::context& ctx) -> int
     test_clip_overrides_choose_the_source_bone();
     test_proportions_do_not_tilt_the_frame();
     test_rest_aligned_onto_own_skeleton_is_a_copy();
-    test_blend_space_retargets_once_like_each_clip();
+    test_blend_space_blends_each_clips_retarget();
+    test_baked_retarget_matches_the_full_retarget();
+    test_retarget_bakes_only_linear_clips();
     test_root_motion_accumulates_across_loops();
     test_root_motion_no_teleport_on_replay();
     test_phase_synced_blend_has_no_motion_spike();
