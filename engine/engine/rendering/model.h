@@ -823,6 +823,46 @@ public:
                                              const model_submit_extras& extras = {}) const -> bool;
 
     /**
+     * @brief Collects the SKINNED submeshes of this model for instanced skinned rendering, an instance per submesh with
+     * its bones at the palette rows skinning_palette_buffer::acquire gave. The per-submesh rules of submit()'s skinned
+     * path apply (resolve_skinned_submesh). The non-skinned submeshes are submit_for_batching's.
+     * @param world_transform The owner's world matrix; the instances point at it, only sorting reads it.
+     * @param palette_rows The first row of each skinning palette, indexed by submesh.
+     * @param prev_palette_rows The previous-frame rows (velocity runs); empty = the instances take palette_rows.
+     */
+    void submit_for_skinned_batching(batch_collector& collector,
+                                     const math::mat4& world_transform,
+                                     const submesh_pose_mat4& submesh_transforms,
+                                     hpp::span<const uint32_t> palette_rows,
+                                     hpp::span<const uint32_t> prev_palette_rows,
+                                     uint32_t lod_index,
+                                     float lod_param,
+                                     const math::frustum* frustum,
+                                     const camera* view,
+                                     const model_submit_extras& extras) const;
+
+    /**
+     * @brief The skinned counterpart of submit_for_shadow_batching_cascaded: the SKINNED submeshes into per-cascade
+     * shadow collectors, an instance per submesh with its bones at @p palette_rows. Each submesh refines
+     * @p cascade_mask with its animated bounds (compute_shadow_view_mask); one without them goes wherever the model
+     * can reach.
+     */
+    auto submit_for_skinned_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
+                                                     uint8_t cascade_count,
+                                                     uint8_t cascade_mask,
+                                                     const shadow_reach& reach,
+                                                     const math::mat4& world_transform,
+                                                     const submesh_pose_mat4& submesh_transforms,
+                                                     hpp::span<const uint32_t> palette_rows,
+                                                     uint32_t lod_index,
+                                                     const math::frustum* frustums,
+                                                     bool nested_cascades,
+                                                     const model_submit_extras& extras) const -> bool;
+
+    /// An empty palette list: submit() draws only a model's non-skinned submeshes with it (the skinned ones are batched).
+    static auto get_empty_skinning() -> const std::vector<pose_mat4>&;
+
+    /**
      * @brief Gets the default material.
      * @return A reference to the default material asset handle.
      */
@@ -855,6 +895,27 @@ private:
     /// A material instance that overrides only per-instance values draws in its shared material's batch, carrying
     /// its resolved material; any other slot keys on the material it draws with.
     auto get_slot_batch_material(uint32_t index) const -> slot_batch_material;
+
+    /// The submesh (at its LOD) a skinned submesh draw binds; null when it is not drawn.
+    struct skinned_submesh_choice
+    {
+        const mesh::submesh* submesh{};
+        uint32_t lod{};
+    };
+
+    /**
+     * @brief What every skinned submesh draw decides per submesh (submit() and the skinned batching paths): nothing
+     * when the owning node is inactive or, in a shadow pass, casts no shadow, or when the animated bounds lie outside
+     * @p frustum (meshes with several submeshes); otherwise the submesh to bind, at the per-submesh LOD of those bounds
+     * when @p view is given.
+     */
+    auto resolve_skinned_submesh(const mesh& m,
+                                 uint32_t lod,
+                                 uint32_t submesh_index,
+                                 const submesh_pose_mat4& pose,
+                                 const math::frustum* frustum,
+                                 const camera* view,
+                                 const model_submit_extras& extras) const -> skinned_submesh_choice;
 
     /**
      * @brief Shared core of the per-submesh LOD selection working on a world-space sphere.

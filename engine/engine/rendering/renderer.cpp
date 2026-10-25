@@ -5,6 +5,7 @@
 #include "spdlog/common.h"
 #include "gpu_pass_log.h"
 #include "gpu_program.h"
+#include "skinning_palette_buffer.h"
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
 #include <engine/settings/boot_config.h>
@@ -40,6 +41,7 @@ thread_local std::vector<uint32_t> s_bgfx_profiler_scope_stack;
 }
 
 renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
+    : skinning_palettes_(std::make_unique<skinning_palette_buffer>())
 {
     gfx::set_debug_logger(
         [](const std::string& msg, const char* file_path, uint16_t line)
@@ -654,6 +656,7 @@ renderer::~renderer()
         return;
     }
 
+    skinning_palettes_->destroy();
     gfx::frames(2, BGFX_FRAME_FLUSH);
 
     gfx::set_trace_logger(nullptr);
@@ -710,6 +713,11 @@ void renderer::set_vsync(bool vsync)
     bgfx::reset(reset_flags_);
 }
 
+auto renderer::get_skinning_palettes() -> skinning_palette_buffer&
+{
+    return *skinning_palettes_;
+}
+
 void renderer::sync_main_surface()
 {
     if(!render_window_)
@@ -750,6 +758,7 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
         const settings::graphics_settings& graphics = ctx.get<settings>().graphics;
         update_eviction(graphics.eviction);
         batch_collector::set_static_mesh_batching_enabled(graphics.static_mesh_batching);
+        batch_collector::set_skinned_mesh_batching_enabled(graphics.skinned_mesh_batching);
         const auto& particles = graphics.particles;
         ps_soa::set_quality({particles.spawn_scale,
                              particles.sorting,
@@ -761,6 +770,7 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
     }
 
     sync_main_surface();
+    skinning_palettes_->begin_frame();
     auto window = get_main_window();
     if(window)
     {
@@ -776,6 +786,9 @@ void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
     gfx::render_pass pass(gfx::render_pass::get_max_pass_id(), "Backbuffer/Update Pass");
     pass.bind();
 
+    // Every view of the frame is recorded: one upload of the palettes they acquired. bgfx applies it ahead of the
+    // frame's draws.
+    skinning_palettes_->flush();
     gfx::frame();
     if(gpu_pass_log_)
     {

@@ -162,6 +162,11 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
 - `material` - `engine/engine/rendering/material.h`
 - `model_component` / `submesh_component` - mesh rendering
 - `batch_collector` - static mesh batching stats in `pipeline_stats`
+- Skinned mesh batching (`graphics.skinned_mesh_batching`): skinned submeshes instance by (mesh, material,
+  LOD, submesh) in the G-buffer, velocity and shadow passes; the bones live in `skinning_palette_buffer`
+  (one upload per frame, read by every view; shaders include `skinning_palette.sh`, buffer at stage 7).
+  The G-buffer and velocity skinned shaders must call the same `skin_palette_matrix` (EQUAL depth test).
+  Editor picking / outline / wireframe keep the per-draw `u_world` palette path.
 - `layer_mask` - culling/filtering per pass
 
 ## Editor vs scene rendering

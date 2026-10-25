@@ -75,6 +75,12 @@ inline auto static_mesh_batching_enabled() -> bool&
     return enabled;
 }
 
+inline auto skinned_mesh_batching_enabled() -> bool&
+{
+    static bool enabled = true;
+    return enabled;
+}
+
 /// Final avalanche over a key hash (the splitmix64 finalizer). The group index masks the LOW
 /// bits of the hash, which hash_combine over aligned pointers and small indices spreads poorly.
 inline auto mix_hash(size_t hash) -> size_t
@@ -119,6 +125,18 @@ public:
     static void set_static_mesh_batching_enabled(bool enabled)
     {
         batch_collector_detail::static_mesh_batching_enabled() = enabled;
+    }
+
+    /// Skinned submeshes instanced with their bone palettes in the skinning palette buffer, instead of a draw per
+    /// submesh with the palette in uniforms. Independent of the static mesh batching.
+    static auto is_skinned_mesh_batching_enabled() -> bool
+    {
+        return batch_collector_detail::skinned_mesh_batching_enabled();
+    }
+
+    static void set_skinned_mesh_batching_enabled(bool enabled)
+    {
+        batch_collector_detail::skinned_mesh_batching_enabled() = enabled;
     }
 
     ~batch_collector_t() = default;

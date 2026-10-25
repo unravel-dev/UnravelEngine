@@ -491,6 +491,23 @@ auto draw_switch(const char* id, const ImRect& bb, bool is_on, const char* toolt
     return is_pressed;
 }
 
+/// A muted label and a switch right aligned on the row; true when the switch was clicked.
+auto draw_switch_row(const char* label, const char* id, bool is_on, const char* tooltip) -> bool
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetTextLineHeight();
+    ImGui::GetWindowDrawList()->AddText(ImVec2(min.x + panel_section::get_row_indent(), min.y),
+                                        imgui_style::get_muted_text_color_u32(),
+                                        label);
+    const ImVec2 switch_size(to_pixels(SWITCH_WIDTH), to_pixels(SWITCH_HEIGHT));
+    const ImVec2 switch_min(min.x + width - switch_size.x, min.y + (height - switch_size.y) * 0.5f);
+    const bool is_pressed = draw_switch(id, ImRect(switch_min, switch_min + switch_size), is_on, tooltip);
+    ImGui::SetCursorScreenPos(min);
+    ImGui::Dummy(ImVec2(width, height));
+    return is_pressed;
+}
+
 } // namespace
 
 auto get_scene_draw_counts() -> scene_draw_counts
@@ -690,7 +707,7 @@ void draw_particles_section(const rendering::pipeline_stats& pstats)
 }
 
 /// Batching statistics, under a header whose switch turns the project's static mesh batching on
-/// and off: the numbers above show what it saves.
+/// and off, with a row switching the skinned mesh batching: the numbers above show what they save.
 void draw_batching_section(rtti::context& ctx, const batch_stats& batch)
 {
     auto& pm = ctx.get_cached<project_manager>();
@@ -716,11 +733,20 @@ void draw_batching_section(rtti::context& ctx, const batch_stats& batch)
     {
         return;
     }
+    if(draw_switch_row("Skinned Meshes",
+                       "##skinned_mesh_batching",
+                       graphics.skinned_mesh_batching,
+                       "Skinned mesh batching: skinned meshes that share a mesh and a material are drawn with\n"
+                       "one instanced draw call. A project setting, also under Project Settings > Graphics."))
+    {
+        graphics.skinned_mesh_batching = !graphics.skinned_mesh_batching;
+        pm.save_project_settings(ctx);
+    }
     if(!graphics.static_mesh_batching)
     {
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + panel_section::get_row_indent());
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(imgui_style::get_muted_text_color_u32()), "%s", "Off: every mesh is a draw call of its own.");
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(imgui_style::get_muted_text_color_u32()), "%s", "Off: every static mesh is a draw call of its own.");
         ImGui::PopTextWrapPos();
         return;
     }

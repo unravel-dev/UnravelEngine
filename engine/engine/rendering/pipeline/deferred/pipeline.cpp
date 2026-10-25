@@ -26,6 +26,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/render_scale.h>
 #include <engine/rendering/renderer.h>
+#include <engine/rendering/skinning_palette_buffer.h>
 #include <engine/settings/settings.h>
 #include <hpp/optional.hpp>
 
@@ -1233,7 +1234,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     if(is_probe_capture)
     {
         blit_to_output(rview, target, output);
-        batch_collector_.clear();
+        finish_run_batches();
         return;
     }
 
@@ -1296,8 +1297,16 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     const bool gtao_active = static_cast<bool>(rview.tex_find("GTAO"));
     snapshot_prev_depth(rview, render_size, hiz_active || gi_active || taa_active || gtao_active);
 
-    // Clear batch collector for this frame
+    finish_run_batches();
+}
+
+void deferred::finish_run_batches()
+{
     batch_collector_.clear();
+    skinned_batch_collector_.clear();
+    // The palettes this run acquired are packed now, while their models certainly hold them: the editor may change or
+    // delete entities between this run and the frame's upload.
+    engine::context().get_cached<renderer>().get_skinning_palettes().pack_pending();
 }
 
 auto deferred::collect_visible_models(scene& scn,
@@ -1473,6 +1482,9 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
     // Clear batch collector for this frame
     batch_collector_.clear();
+    skinned_batch_collector_.clear();
+    skinned_batching_run_ = is_skinned_batching_active();
+    auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
 
     const auto& view_frustum = camera.get_frustum();
 
@@ -1580,7 +1592,42 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         // instanced matrix math (vs_velocity_instanced mirrors vs_deferred_geom_instanced
         // bit for bit), so the EQUAL depth test holds without excluding them here.
         const bool is_skinned = !skinning_matrices.empty();
-        const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && !is_skinned;
+        // Skinned batching takes the skinned submeshes; the model's other submeshes then batch like a static model's.
+        const bool batch_skinned = is_skinned && skinned_batching_run_;
+        const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && (!is_skinned || batch_skinned);
+
+        if(batch_skinned)
+        {
+            // Movers carry their previous palettes for the velocity pass, which draws these batches again.
+            const auto* prev_skinning = velocity_run_active_ && model_comp.has_motion()
+                                            ? &model_comp.get_prev_skinning_transforms()
+                                            : nullptr;
+            const auto rows = skinning_palettes.acquire(&model_comp, skinning_matrices, prev_skinning);
+            model.submit_for_skinned_batching(skinned_batch_collector_,
+                                              world_transform,
+                                              submesh_transforms,
+                                              rows.current,
+                                              rows.previous,
+                                              current_lod_index,
+                                              params.x,
+                                              &view_frustum,
+                                              &camera,
+                                              extras);
+            stats_.drawn_skinned_models++;
+            if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
+            {
+                model.submit_for_skinned_batching(skinned_batch_collector_,
+                                                  world_transform,
+                                                  submesh_transforms,
+                                                  rows.current,
+                                                  rows.previous,
+                                                  target_lod_index,
+                                                  params_inv.x,
+                                                  &view_frustum,
+                                                  &camera,
+                                                  extras);
+            }
+        }
 
         if (can_batch)
         {
@@ -1594,21 +1641,25 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
             }
             // Collect this model for batching with appropriate transforms
             model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum, &camera, batch_extras);
-            stats_.drawn_models++;
+            // A skinned model counted as a skinned one above.
+            const uint32_t counted_models = is_skinned ? 0u : 1u;
+            stats_.drawn_models += counted_models;
             // Handle LOD transitions for batched models
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
                 model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum, &camera, batch_extras);
-                stats_.drawn_models++;
+                stats_.drawn_models += counted_models;
             }
         }
         else
         {
-            // Render individually (skinned meshes, complex transforms, etc.)
+            // Render individually (skinned meshes, complex transforms, etc.). With skinned batching on, only the
+            // model's other submeshes are left: no palettes = no skinned submeshes.
+            const auto& individual_skinning = batch_skinned ? model::get_empty_skinning() : skinning_matrices;
             model.submit(world_transform,
                          submesh_transforms,
                          bone_transforms,
-                         skinning_matrices,
+                         individual_skinning,
                          current_lod_index,
                          callbacks,
                          &view_frustum,
@@ -1626,7 +1677,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                 model.submit(world_transform,
                              submesh_transforms,
                              bone_transforms,
-                             skinning_matrices,
+                             individual_skinning,
                              target_lod_index,
                              callbacks,
                              &view_frustum,
@@ -1648,6 +1699,10 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     if (batch_collector::is_static_mesh_batching_enabled() || has_mesh_particle_instances_)
     {
         submit_batched_geometry(pass, camera);
+    }
+    if(skinned_batching_run_)
+    {
+        submit_batched_skinned_geometry(pass, camera);
     }
     bgfx::discard();
 }
@@ -1822,6 +1877,74 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
     // collector at the end of the run, which also invalidates the transform pointers.
 }
 
+auto deferred::is_skinned_batching_active() const -> bool
+{
+    const auto is_usable = [](const auto& program) { return program.program && program.program->is_valid(); };
+    return batch_collector::is_skinned_mesh_batching_enabled() && is_usable(geom_program_skinned_instanced_) &&
+           is_usable(geom_program_skinned_instanced_material_) && is_usable(velocity_program_skinned_instanced_);
+}
+
+void deferred::submit_batched_skinned_geometry(gfx::render_pass& pass, const camera& camera)
+{
+    APP_SCOPE_PERF("Rendering/Submit Batched Skinned Geometry");
+
+    submit_context context;
+    context.view_id = pass.id;
+    context.camera_position = camera.get_position();
+    context.enable_distance_sorting = false;
+    context.max_instances_per_batch = 1024;
+    context.enable_profiling = true;
+    skinned_batch_collector_.prepare_batches(context);
+    const auto& prepared_batches = skinned_batch_collector_.get_prepared_batches();
+    if(prepared_batches.empty())
+    {
+        return;
+    }
+
+    auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
+    const auto camera_pos = camera.get_position();
+    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    plain_batches_.clear();
+    material_value_batches_.clear();
+    for(const auto* batch : prepared_batches)
+    {
+        (batch->has_material_overrides ? material_value_batches_ : plain_batches_).push_back(batch);
+    }
+    const auto draw_batches = [&](geom_program& program, const std::vector<const batch_group*>& batches, auto layout)
+    {
+        using instance_data = decltype(layout);
+        if(batches.empty())
+        {
+            return;
+        }
+        program.program->begin();
+        gfx::set_uniform(program.u_camera_wpos, camera_pos);
+        gfx::set_uniform(program.u_camera_clip_planes, clip_planes);
+        submit_prepared_batches_instanced<instance_data>(
+            batches,
+            [](const batch_instance&) { return true; },
+            [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
+            {
+                stats_.drawn_skinned_submeshes += instance_count;
+                const bool material_submitted = mat.submit(program.program.get());
+                if(!material_submitted && mat.is<pbr_material>())
+                {
+                    submit_pbr_material(program, static_cast<const pbr_material&>(mat));
+                }
+                skinning_palettes.bind();
+                bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+            });
+        program.program->end();
+    };
+    draw_batches(geom_program_skinned_instanced_, plain_batches_, skinned_instance_vertex_data{});
+    draw_batches(geom_program_skinned_instanced_material_,
+                 material_value_batches_,
+                 skinned_instance_material_vertex_data{});
+
+    stats_.add_batch_stats(skinned_batch_collector_.get_stats());
+    // NOT cleared here: the velocity pass draws these batches again (submit_batched_skinned_velocity).
+}
+
 auto deferred::is_velocity_wanted(const run_params& params) const -> bool
 {
     const bool has_temporal_effect = params.fill_taa_params || params.fill_gtao_params || params.fill_ssr_params ||
@@ -1923,8 +2046,10 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             // Batchable movers were collected into the shared batches with their previous
             // transforms and are drawn by submit_batched_velocity below - mirroring the
             // G-buffer's can_batch split exactly so nothing draws twice.
-            const bool batched = batch_collector::is_static_mesh_batching_enabled() &&
-                                 model_comp.get_skinning_transforms().empty();
+            const bool is_skinned = !model_comp.get_skinning_transforms().empty();
+            const bool batch_skinned = is_skinned && skinned_batching_run_;
+            const bool batched =
+                batch_collector::is_static_mesh_batching_enabled() && (!is_skinned || batch_skinned);
             if(batched)
             {
                 continue;
@@ -1934,7 +2059,9 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             const auto& world_transform = transform_comp.get_transform_global();
             const auto& submesh_transforms = model_comp.get_submesh_transforms();
             const auto& bone_transforms = model_comp.get_bone_transforms();
-            const auto& skinning_matrices = model_comp.get_skinning_transforms();
+            // Batched skinned submeshes are submit_batched_skinned_velocity's; the model's other submeshes stay here.
+            const auto& skinning_matrices =
+                batch_skinned ? model::get_empty_skinning() : model_comp.get_skinning_transforms();
 
             auto extras = model_comp.get_submit_extras(false);
             extras.prev_world_transform = &model_comp.get_prev_world_transform();
@@ -1994,6 +2121,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         {
             submit_batched_velocity(pass, prev_vp);
         }
+        submit_batched_skinned_velocity(pass, prev_vp);
         bgfx::discard();
     }
 }
@@ -2032,6 +2160,41 @@ void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::trans
         });
 
     velocity_program_instanced_.program->end();
+}
+
+void deferred::submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp)
+{
+    auto& program = velocity_program_skinned_instanced_;
+    if(!program.program || !program.program->is_valid())
+    {
+        return;
+    }
+    // The batches submit_batched_skinned_geometry drew this run; their instances carry the previous palette rows.
+    const auto& prepared_batches = skinned_batch_collector_.get_prepared_batches();
+    if(prepared_batches.empty())
+    {
+        return;
+    }
+
+    APP_SCOPE_PERF("Rendering/Velocity Batched Skinned Geometry");
+
+    auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
+    program.program->begin();
+    gfx::set_uniform(program.u_prev_view_proj, prev_vp.get_matrix());
+    submit_prepared_batches_instanced<skinned_instance_vertex_data>(
+        prepared_batches,
+        // Every skinned model is a mover (model_component::has_motion).
+        [](const batch_instance&) { return true; },
+        [&](const auto& /*batch*/, const material& mat, uint32_t /*instance_count*/)
+        {
+            // Match the material's cull (two-sided coverage), own the depth/write bits: EQUAL test against the
+            // G-buffer depth, no depth write, color only.
+            const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+            skinning_palettes.bind();
+            bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+        });
+    program.program->end();
 }
 
 void deferred::run_velocity_debug_pass(const camera& camera,
@@ -4292,6 +4455,15 @@ auto deferred::init(rtti::context& ctx) -> bool
     geom_program_instanced_material_.program = load_program("deferred_geom/vs_deferred_geom_instanced_material",
                                                             "deferred_geom/fs_deferred_geom_instance_material");
 
+    geom_program_skinned_instanced_.cache_uniforms();
+    geom_program_skinned_instanced_.program =
+        load_program("deferred_geom/vs_deferred_geom_skinned_instanced", "deferred_geom/fs_deferred_geom");
+
+    geom_program_skinned_instanced_material_.cache_uniforms();
+    geom_program_skinned_instanced_material_.program =
+        load_program("deferred_geom/vs_deferred_geom_skinned_instanced_material",
+                     "deferred_geom/fs_deferred_geom_instance_material");
+
     card_capture_program_.cache_uniforms();
     card_capture_program_.program =
         load_program("deferred_geom/vs_deferred_geom_card_capture", "deferred_geom/fs_deferred_geom_card_capture");
@@ -4304,6 +4476,10 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     velocity_program_instanced_.cache_uniforms();
     velocity_program_instanced_.program = load_program("velocity/vs_velocity_instanced", "velocity/fs_velocity");
+
+    velocity_program_skinned_instanced_.cache_uniforms();
+    velocity_program_skinned_instanced_.program =
+        load_program("velocity/vs_velocity_skinned_instanced", "velocity/fs_velocity");
 
     velocity_camera_program_.cache_uniforms();
     velocity_camera_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_camera");

@@ -33,9 +33,12 @@ struct batch_instance
     /// LOD blending parameters (x = transition factor: +[0,1] = fade out, -[0,1] = fade in; y,z reserved)
     math::vec3 lod_params = math::vec3(0.0f, 0.0f, 0.0f);
 
-    /// Padding to ensure alignment (unused, reserved for future use)
-    float padding = 0.0f;
-    
+    /// Skinned instances only: the first row of the submesh's bone palette in this frame's palette buffer
+    /// (skinning_palette_buffer). world_transform_ptr then points at the owner's world matrix, which only sorting reads.
+    uint32_t palette_row = 0;
+    /// Skinned instances only: the first row of the previous-frame palette (velocity runs), else palette_row.
+    uint32_t prev_palette_row = 0;
+
     /**
      * @brief Default constructor
      */
@@ -175,6 +178,44 @@ struct instance_material_vertex_data
 
     instance_material_vertex_data() = default;
     instance_material_vertex_data(const batch_instance& instance, const material& batch_material);
+};
+
+/**
+ * @brief GPU instance data of an instanced skinned draw (i_data0): the first row of the instance's bone palette, the
+ * first row of its previous-frame palette and the LOD parameter. The rows are float values, exact up to 2^24.
+ * 16-byte stride; the G-buffer, velocity and shadow passes all read this layout.
+ */
+struct skinned_instance_vertex_data
+{
+    static auto packed_size() -> size_t
+    {
+        return 16;
+    }
+
+    /// x = palette row, y = previous palette row, z = LOD parameter, w unused.
+    math::vec4 palette;
+
+    skinned_instance_vertex_data() = default;
+    explicit skinned_instance_vertex_data(const batch_instance& instance);
+};
+
+/**
+ * @brief skinned_instance_vertex_data followed by the material's instance constants (i_data1..4,
+ * material::write_instance_constants) - the instance's own material, else the batch's. 80-byte stride, packed only for
+ * batches whose instances carry per-instance material values.
+ */
+struct skinned_instance_material_vertex_data
+{
+    static auto packed_size() -> size_t
+    {
+        return 80;
+    }
+
+    math::vec4 palette;
+    math::vec4 constants[instance_material_vertex_data::CONSTANT_COUNT]{};
+
+    skinned_instance_material_vertex_data() = default;
+    skinned_instance_material_vertex_data(const batch_instance& instance, const material& batch_material);
 };
 
 /**

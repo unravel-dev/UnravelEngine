@@ -566,6 +566,8 @@ struct Programs
                 m_packDepthCutout[ii][jj].reset();
                 m_packDepthInstancedCutout[ii][jj].reset();
                 m_packDepthSkinnedCutout[ii][jj].reset();
+                m_packDepthSkinnedInstanced[ii][jj].reset();
+                m_packDepthSkinnedInstancedCutout[ii][jj].reset();
             }
         }
 
@@ -601,6 +603,10 @@ struct Programs
     gpu_program::ptr m_packDepthCutout[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinnedCutout[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthInstancedCutout[DepthImpl::Count][PackDepth::Count];
+    /// Instanced skinned casters, the bones from the skinning palette buffer (vs_*_skinned_instanced*.sc). Reached from
+    /// the settings table's skinned program through resolve_skinned_instanced_pack_program.
+    gpu_program::ptr m_packDepthSkinnedInstanced[DepthImpl::Count][PackDepth::Count];
+    gpu_program::ptr m_packDepthSkinnedInstancedCutout[DepthImpl::Count][PackDepth::Count];
 };
 
 struct ShadowMapSettings
@@ -858,10 +864,13 @@ private:
                                      const camera* cam,
                                      ::unravel::rendering::pipeline_stats* stats = nullptr) -> bool;
     
+    /// @param skinned The collector holds skinned instances (cascade_skinned_batch_collectors_): drawn with the instanced
+    ///        skinned programs, the bones from the skinning palette buffer.
     void submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
-                                               bgfx::ViewId viewId, 
+                                               bgfx::ViewId viewId,
                                                ShadowMapSettings* currentSmSettings,
                                                const RenderState& renderState,
+                                               bool skinned,
                                                ::unravel::rendering::pipeline_stats* stats = nullptr);
 
     /// Fills the geometric bias conversions (depth scale, map axes, perspective texel size)
@@ -926,6 +935,8 @@ private:
     
     // Static mesh batching system for shadow maps - one collector per cascade/view
     std::vector<shadow_batch_collector> cascade_batch_collectors_;
+    /// The skinned casters' submeshes, one collector per cascade/view (skinned mesh batching).
+    std::vector<shadow_batch_collector> cascade_skinned_batch_collectors_;
     
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 

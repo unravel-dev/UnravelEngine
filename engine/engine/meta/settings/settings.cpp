@@ -530,9 +530,16 @@ REFLECT_INLINE(settings::graphics_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "static_mesh_batching"},
             entt::attribute{"pretty_name", "Static Mesh Batching"},
+            entt::attribute{"tooltip", "Draw the meshes that share a mesh and a material with one instanced draw call."},
+        })
+        .data<&settings::graphics_settings::skinned_mesh_batching>("skinned_mesh_batching"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "skinned_mesh_batching"},
+            entt::attribute{"pretty_name", "Skinned Mesh Batching"},
             entt::attribute{"tooltip",
-                            "Draw the meshes that share a mesh and a material with one instanced draw call. "
-                            "Skinned meshes are always drawn one by one."},
+                            "Draw the skinned meshes that share a mesh and a material with one instanced draw call. "
+                            "Their bone palettes reach the GPU once per frame for every view, instead of once per "
+                            "draw."},
         })
         .data<&settings::graphics_settings::render_scale>("render_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -578,6 +585,7 @@ SAVE_INLINE(settings::graphics_settings)
     try_save(ar, ser20::make_nvp("particles", obj.particles));
     try_save(ar, ser20::make_nvp("render_scale", obj.render_scale));
     try_save(ar, ser20::make_nvp("limits", obj.limits));
+    try_save(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
 }
 
 LOAD_INLINE(settings::graphics_settings)
@@ -588,6 +596,7 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("particles", obj.particles));
     try_load(ar, ser20::make_nvp("render_scale", obj.render_scale));
     try_load(ar, ser20::make_nvp("limits", obj.limits));
+    try_load(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
 }
 
 REFLECT_INLINE(gi_project_settings::atlas_size)

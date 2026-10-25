@@ -481,8 +481,13 @@ private:
     /// The instanced program of batches whose instances carry per-instance material values
     /// (vs_deferred_geom_instanced_material.sc, instance_material_vertex_data).
     geom_program geom_program_instanced_material_;
+    /// The instanced skinned programs (vs_deferred_geom_skinned_instanced*.sc, skinned_instance_vertex_data and
+    /// skinned_instance_material_vertex_data); the bones come from the skinning palette buffer.
+    geom_program geom_program_skinned_instanced_;
+    geom_program geom_program_skinned_instanced_material_;
     card_capture_program card_capture_program_;
-    /// This frame's prepared batches split by layout (submit_batched_geometry); kept for their capacity.
+    /// This frame's prepared batches split by layout (submit_batched_geometry, submit_batched_skinned_geometry);
+    /// kept for their capacity.
     std::vector<const batch_group*> plain_batches_;
     std::vector<const batch_group*> material_value_batches_;
 
@@ -501,6 +506,7 @@ private:
     velocity_geom_program velocity_program_;
     velocity_geom_program velocity_program_skinned_;
     velocity_geom_program velocity_program_instanced_;
+    velocity_geom_program velocity_program_skinned_instanced_;
 
     struct velocity_camera_program : uniforms_cache
     {
@@ -808,6 +814,18 @@ private:
     /// batches (instance stream doubled with the previous world matrix) into the velocity
     /// target, depth-tested EQUAL. Batches without movers cost nothing.
     void submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
+    /// Skinned batching is switched on and its G-buffer and velocity programs are usable; otherwise skinned models
+    /// keep the per-draw path.
+    auto is_skinned_batching_active() const -> bool;
+    /// End of a run: drops the run's batches (they hold frame-lifetime pointers) and packs the skinning palettes it
+    /// acquired.
+    void finish_run_batches();
+    /// Draws this frame's skinned batches (skinned_batch_collector_) into the G-buffer, the bones read from the
+    /// skinning palette buffer.
+    void submit_batched_skinned_geometry(gfx::render_pass& pass, const camera& camera);
+    /// Velocity for the skinned batches the G-buffer drew: every skinned instance is a mover, drawn with its current
+    /// and previous palette, depth-tested EQUAL.
+    void submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
 
     color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
     /// PCF programs with the 3x3 and the 7x7 tent (common_shadow.sh PCF_TENT_SIZE); the PCF programs of
@@ -819,6 +837,9 @@ private:
 
     // Static mesh batching system
     batch_collector batch_collector_;
+    /// The skinned submeshes of this run's G-buffer, instanced by (mesh, material, LOD, submesh); cleared with
+    /// batch_collector_, reused by the velocity pass.
+    batch_collector skinned_batch_collector_;
 
     /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
     /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity
@@ -928,6 +949,9 @@ private:
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
+    /// is_skinned_batching_active() for the CURRENT run, decided once by the G-buffer pass so the velocity pass draws
+    /// the skinned models the same way (EQUAL depth test).
+    bool skinned_batching_run_{false};
     /// This run draws for a camera (not a probe or a capture): particle lights and mesh particles take part.
     bool is_camera_run_{false};
     /// The layers this run draws.

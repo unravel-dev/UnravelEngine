@@ -17,6 +17,7 @@
 namespace unravel
 {
 class gpu_pass_log;
+class skinning_palette_buffer;
 
 struct ENGINE_EXPORT renderer
 {
@@ -97,6 +98,9 @@ struct ENGINE_EXPORT renderer
     auto get_vsync() const -> bool;
     void set_vsync(bool vsync);
 
+    /// The bone palettes of this frame's instanced skinned draws, uploaded once in frame_end.
+    auto get_skinning_palettes() -> skinning_palette_buffer&;
+
 protected:
     auto init_backend(const cmd_line::parser& parser) -> bool;
     /**
@@ -136,6 +140,8 @@ protected:
     /// Logs the GPU time of every render pass (--gfx-profile) or the frame times alone (--gfx-frame-log);
     /// null when off.
     std::unique_ptr<gpu_pass_log> gpu_pass_log_{};
+    /// Created with the renderer, its GPU buffer on first use; released before the backend shuts down.
+    std::unique_ptr<skinning_palette_buffer> skinning_palettes_{};
     /// The graphics backend's debug features (BGFX_DEBUG_*) and the scale of the overlay's text.
     uint32_t debug_flags_{};
     uint8_t debug_text_scale_{1};

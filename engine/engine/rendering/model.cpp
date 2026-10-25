@@ -7,6 +7,7 @@
 #include "mesh.h"
 #include "camera.h"
 #include "batch_collector.h"
+#include "skinning_palette_buffer.h"
 
 #include <engine/assets/asset_manager.h>
 
@@ -954,7 +955,7 @@ void model::submit(const math::mat4& world_transform,
             callbacks.setup_params_per_instance(params);
         }
 
-        auto render_submesh_skinned = [this, frustum, cull_submeshes, per_submesh_lod, view, &extras]
+        auto render_submesh_skinned = [this, frustum, view, &extras]
                                       (const std::shared_ptr<unravel::mesh>& mesh,
                                        uint32_t lod,
                                        uint32_t group_id,
@@ -969,7 +970,6 @@ void model::submit(const math::mat4& world_transform,
                 return;
             }
 
-            const auto& submeshes = mesh->get_submeshes(lod);
             const auto& indices = mesh->get_skinned_submeshes_indices(group_id, lod);
 
             for(const auto& index : indices)
@@ -978,77 +978,32 @@ void model::submit(const math::mat4& world_transform,
                 {
                     continue;
                 }
-
-                // Per-submesh enable/shadow flags authored on the owning node entity apply to
-                // skinned submeshes too (the node transform itself is unused for skinning).
-                if(pose.has_transforms(index))
-                {
-                    if(!pose.get_transform_active(index, 0))
-                    {
-                        continue;
-                    }
-                    if(extras.shadow_pass && !pose.get_transform_casts_shadow(index, 0))
-                    {
-                        continue;
-                    }
-                }
-
-                // Skinned submeshes cull identically to static ones using the retained
-                // animated world bounds (union of bone-transformed bind-space bounds).
-                if(cull_submeshes && frustum != nullptr)
-                {
-                    const auto* bounds = get_cached_submesh_bounds(extras, static_cast<uint32_t>(index), 0, true);
-                    if(bounds != nullptr && frustum->classify_aabb(*bounds) == math::volume_query::outside)
-                    {
-                        continue;
-                    }
-                }
-
                 const auto& submesh_skinning_transforms = skinning_transforms[index];
-
-                if(!submesh_skinning_transforms.transforms.empty())
+                if(submesh_skinning_transforms.transforms.empty())
                 {
-                    // Per-submesh LOD for skinned submeshes uses the animated world bounds;
-                    // submesh indices are stable across internal LODs so the same palette
-                    // still applies to the simplified index range.
-                    const auto* base_sm = submeshes[index];
-                    const auto* sm = base_sm;
-                    uint32_t sm_lod = lod;
-                    if(per_submesh_lod)
-                    {
-                        const auto* bounds = get_cached_submesh_bounds(extras, static_cast<uint32_t>(index), 0, true);
-                        if(bounds != nullptr)
-                        {
-                            const uint32_t effective_lod = calculate_submesh_lod_from_world_bounds(
-                                *mesh, static_cast<uint32_t>(index), lod, *bounds, *view);
-                            if(effective_lod != lod)
-                            {
-                                const auto& lod_submeshes = mesh->get_submeshes(effective_lod);
-                                if(index < lod_submeshes.size() && lod_submeshes[index] != nullptr)
-                                {
-                                    sm = lod_submeshes[index];
-                                    sm_lod = effective_lod;
-                                }
-                            }
-                        }
-                    }
-
-                    gfx::set_world_transform(submesh_skinning_transforms.transforms);
-                    if(extras.prev_skinning_transforms != nullptr)
-                    {
-                        const auto& prev_all = *extras.prev_skinning_transforms;
-                        const bool has_matching_prev =
-                            index < prev_all.size() &&
-                            prev_all[index].transforms.size() == submesh_skinning_transforms.transforms.size();
-                        gfx::set_prev_world_transform(has_matching_prev ? prev_all[index].transforms
-                                                                        : submesh_skinning_transforms.transforms);
-                    }
-
-                    mesh->bind_render_buffers_for_submesh(sm, sm_lod);
-                    params.preserve_state = &index != &indices.back();
-                    callbacks.setup_params_per_submesh(params, *group_mat);
+                    continue;
                 }
-                
+                const auto choice =
+                    resolve_skinned_submesh(*mesh, lod, static_cast<uint32_t>(index), pose, frustum, view, extras);
+                if(choice.submesh == nullptr)
+                {
+                    continue;
+                }
+
+                gfx::set_world_transform(submesh_skinning_transforms.transforms);
+                if(extras.prev_skinning_transforms != nullptr)
+                {
+                    const auto& prev_all = *extras.prev_skinning_transforms;
+                    const bool has_matching_prev =
+                        index < prev_all.size() &&
+                        prev_all[index].transforms.size() == submesh_skinning_transforms.transforms.size();
+                    gfx::set_prev_world_transform(has_matching_prev ? prev_all[index].transforms
+                                                                    : submesh_skinning_transforms.transforms);
+                }
+
+                mesh->bind_render_buffers_for_submesh(choice.submesh, choice.lod);
+                params.preserve_state = &index != &indices.back();
+                callbacks.setup_params_per_submesh(params, *group_mat);
             }
         };
 
@@ -1610,6 +1565,179 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
         }
     }
 
+    return collected_any;
+}
+
+auto model::get_empty_skinning() -> const std::vector<pose_mat4>&
+{
+    static const std::vector<pose_mat4> empty;
+    return empty;
+}
+
+auto model::resolve_skinned_submesh(const mesh& m,
+                                    uint32_t lod,
+                                    uint32_t submesh_index,
+                                    const submesh_pose_mat4& pose,
+                                    const math::frustum* frustum,
+                                    const camera* view,
+                                    const model_submit_extras& extras) const -> skinned_submesh_choice
+{
+    // Per-submesh enable/shadow flags authored on the owning node entity apply to skinned submeshes too (the node
+    // transform itself is unused for skinning).
+    if(pose.has_transforms(submesh_index))
+    {
+        if(!pose.get_transform_active(submesh_index, 0))
+        {
+            return {};
+        }
+        if(extras.shadow_pass && !pose.get_transform_casts_shadow(submesh_index, 0))
+        {
+            return {};
+        }
+    }
+    const auto& submeshes = m.get_submeshes(lod);
+    if(submesh_index >= submeshes.size())
+    {
+        return {};
+    }
+    // Skinned submeshes cull identically to static ones using the retained animated world bounds (union of
+    // bone-transformed bind-space bounds).
+    const bool cull_submeshes = frustum != nullptr && m.get_submeshes_count(lod) > 1;
+    const auto* bounds = get_cached_submesh_bounds(extras, submesh_index, 0, true);
+    if(cull_submeshes && bounds != nullptr && frustum->classify_aabb(*bounds) == math::volume_query::outside)
+    {
+        return {};
+    }
+    skinned_submesh_choice choice{submeshes[submesh_index], lod};
+    // Per-submesh LOD from the animated world bounds; submesh indices are stable across internal LODs, so the same
+    // palette still applies to the simplified index range.
+    if(cull_submeshes && view != nullptr && bounds != nullptr)
+    {
+        const uint32_t effective_lod = calculate_submesh_lod_from_world_bounds(m, submesh_index, lod, *bounds, *view);
+        const auto& lod_submeshes = m.get_submeshes(effective_lod);
+        if(effective_lod != lod && submesh_index < lod_submeshes.size() && lod_submeshes[submesh_index] != nullptr)
+        {
+            choice = {lod_submeshes[submesh_index], effective_lod};
+        }
+    }
+    return choice;
+}
+
+void model::submit_for_skinned_batching(batch_collector& collector,
+                                        const math::mat4& world_transform,
+                                        const submesh_pose_mat4& submesh_transforms,
+                                        hpp::span<const uint32_t> palette_rows,
+                                        hpp::span<const uint32_t> prev_palette_rows,
+                                        uint32_t lod_index,
+                                        float lod_param,
+                                        const math::frustum* frustum,
+                                        const camera* view,
+                                        const model_submit_extras& extras) const
+{
+    auto mesh_asset = get_lod(lod_index);
+    auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
+    if(!mesh)
+    {
+        return;
+    }
+    const auto data_group_count = mesh->get_data_groups_count();
+    for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
+    {
+        // A material instance that overrides only per-instance values keys on its shared material and carries its own
+        // values per instance, as in submit_for_batching.
+        const auto [group_material, material_override] = get_slot_batch_material(data_group_id);
+        if(!group_material)
+        {
+            continue;
+        }
+        for(size_t submesh_idx : mesh->get_skinned_submeshes_indices(data_group_id, lod_index))
+        {
+            const auto submesh_index = static_cast<uint32_t>(submesh_idx);
+            if(submesh_index >= palette_rows.size() || palette_rows[submesh_index] == skinning_palette_rows::INVALID_ROW)
+            {
+                continue;
+            }
+            const auto choice =
+                resolve_skinned_submesh(*mesh, lod_index, submesh_index, submesh_transforms, frustum, view, extras);
+            if(choice.submesh == nullptr)
+            {
+                continue;
+            }
+            batch_instance instance(&world_transform);
+            instance.lod_params.x = lod_param;
+            instance.material_override = material_override;
+            instance.palette_row = palette_rows[submesh_index];
+            instance.prev_palette_row =
+                submesh_index < prev_palette_rows.size() ? prev_palette_rows[submesh_index] : instance.palette_row;
+            collector.collect_renderable(batch_key(mesh, group_material, choice.lod, submesh_index), instance);
+        }
+    }
+}
+
+auto model::submit_for_skinned_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
+                                                        uint8_t cascade_count,
+                                                        uint8_t cascade_mask,
+                                                        const shadow_reach& reach,
+                                                        const math::mat4& world_transform,
+                                                        const submesh_pose_mat4& submesh_transforms,
+                                                        hpp::span<const uint32_t> palette_rows,
+                                                        uint32_t lod_index,
+                                                        const math::frustum* frustums,
+                                                        bool nested_cascades,
+                                                        const model_submit_extras& extras) const -> bool
+{
+    auto mesh_asset = get_lod(lod_index);
+    auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
+    if(!mesh)
+    {
+        return false;
+    }
+    bool collected_any = false;
+    const auto data_group_count = mesh->get_data_groups_count();
+    for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
+    {
+        auto group_material = get_render_material(data_group_id);
+        if(!group_material)
+        {
+            continue;
+        }
+        for(size_t submesh_idx : mesh->get_skinned_submeshes_indices(data_group_id, lod_index))
+        {
+            const auto submesh_index = static_cast<uint32_t>(submesh_idx);
+            if(submesh_index >= palette_rows.size() || palette_rows[submesh_index] == skinning_palette_rows::INVALID_ROW)
+            {
+                continue;
+            }
+            // The cascades do the culling here: no frustum, no per-submesh LOD (the caster's LOD follows the camera).
+            const auto choice =
+                resolve_skinned_submesh(*mesh, lod_index, submesh_index, submesh_transforms, nullptr, nullptr, extras);
+            if(choice.submesh == nullptr)
+            {
+                continue;
+            }
+            const shadow_batch_key key = make_shadow_batch_key(mesh, choice.lod, submesh_index, group_material);
+            if(!key.is_valid())
+            {
+                continue;
+            }
+            const auto* bounds = get_cached_submesh_bounds(extras, submesh_index, 0, true);
+            const uint8_t submesh_mask =
+                bounds != nullptr
+                    ? compute_shadow_view_mask(frustums, cascade_count, *bounds, nested_cascades, reach, cascade_mask)
+                    : cascade_mask;
+            batch_instance instance(&world_transform);
+            instance.palette_row = palette_rows[submesh_index];
+            instance.prev_palette_row = instance.palette_row;
+            for(uint8_t ii = 0; ii < cascade_count; ++ii)
+            {
+                if((submesh_mask & (1u << ii)) != 0u)
+                {
+                    collectors[ii].collect_renderable(key, instance);
+                    collected_any = true;
+                }
+            }
+        }
+    }
     return collected_any;
 }
 

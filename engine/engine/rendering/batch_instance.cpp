@@ -71,6 +71,33 @@ instance_material_vertex_data::instance_material_vertex_data(const batch_instanc
     source.write_instance_constants(constants);
 }
 
+namespace
+{
+auto make_skinned_palette_data(const batch_instance& instance) -> math::vec4
+{
+    return math::vec4(static_cast<float>(instance.palette_row),
+                      static_cast<float>(instance.prev_palette_row),
+                      instance.lod_params.x,
+                      0.0f);
+}
+} // namespace
+
+static_assert(sizeof(skinned_instance_vertex_data) == 16, "i_data0");
+static_assert(sizeof(skinned_instance_material_vertex_data) == 80, "i_data0..4");
+
+skinned_instance_vertex_data::skinned_instance_vertex_data(const batch_instance& instance)
+    : palette(make_skinned_palette_data(instance))
+{
+}
+
+skinned_instance_material_vertex_data::skinned_instance_material_vertex_data(const batch_instance& instance,
+                                                                             const material& batch_material)
+    : palette(make_skinned_palette_data(instance))
+{
+    const auto& source = instance.material_override != nullptr ? *instance.material_override : batch_material;
+    source.write_instance_constants(constants);
+}
+
 void instance_vertex_data::set_lod_param(float lod_param)
 {
     world_matrix[3][3] = lod_param;
