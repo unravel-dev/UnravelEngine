@@ -164,6 +164,20 @@ public:
                                gfx::render_view& rview,
                                delta_t dt) -> gfx::frame_buffer::ptr;
 
+    /**
+     * @brief Renders the height fog (fog_pass) over the lit scene in @p target, the colour-only light buffer,
+     * after the sky and the clouds and before the particles: the froxels first when its volumetric layer is on.
+     * @param use_shadow_maps The run built this camera's shadow maps: the volumetric fog may read the sun's.
+     * @return The fog the scene was composited with, for the particles; fog off (default) when the run has no fog
+     *         or the camera is orthographic.
+     */
+    auto run_fog_pass(scene& scn,
+                      const camera& camera,
+                      gfx::render_view& rview,
+                      const gfx::frame_buffer::ptr& target,
+                      const run_params& rparams,
+                      bool use_shadow_maps) -> fog_pass::shader_params;
+
     /// Renders the cloud shadow map for this run into cloud_shadow_ (before the lighting passes).
     void run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview);
 
@@ -336,6 +350,9 @@ public:
     /// limit it.
     void build_reflections(scene& scn, const camera& camera, delta_t dt, const feature_limits& limits);
 
+    /// Reserves the shadow atlas tiles of the local lights @p camera sees, before any of them renders.
+    void reserve_shadow_atlas_tiles(scene& scn, const camera& camera, const feature_limits& limits);
+
     /// Renders the shadow maps the camera needs, every light as `limits` limit it (limit_light).
     void build_shadows(scene& scn,
                        const camera& camera,
@@ -350,9 +367,6 @@ public:
 
     /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
     auto run_hiz_pass(const camera& camera,
-    /// Reserves the shadow atlas tiles of the local lights @p camera sees, before any of them renders.
-    void reserve_shadow_atlas_tiles(scene& scn, const camera& camera, const feature_limits& limits);
-
                       gfx::render_view& rview,
                       const run_params& params,
                       const usize32_t& viewport_size,
@@ -569,6 +583,8 @@ private:
             cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_cloudShadow, "u_cloudShadow", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_cloudShadow2, "u_cloudShadow2", bgfx::UniformType::Vec4);
+            // Set by the light's shadowmap_generator; registered here so it exists before the program links (GL).
+            cache_uniform(program.get(), u_shadowAtlasRect, "u_shadowAtlasRect", bgfx::UniformType::Vec4);
 
             cache_uniform(program.get(), s_tex[0], "s_tex0", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[1], "s_tex1", bgfx::UniformType::Sampler);
@@ -583,14 +599,13 @@ private:
         gfx::program::uniform_ptr u_light_direction;
         gfx::program::uniform_ptr u_light_data;
         /// Point and spot lights' emitter: xyz = the tube's axis scaled by its length, w = the sphere radius.
-            // Set by the light's shadowmap_generator; registered here so it exists before the program links (GL).
-            cache_uniform(program.get(), u_shadowAtlasRect, "u_shadowAtlasRect", bgfx::UniformType::Vec4);
         gfx::program::uniform_ptr u_light_source;
         gfx::program::uniform_ptr u_contact_shadow;
         gfx::program::uniform_ptr u_light_color_intensity;
         gfx::program::uniform_ptr u_camera_position;
         gfx::program::uniform_ptr u_cloudShadow;
         gfx::program::uniform_ptr u_cloudShadow2;
+        gfx::program::uniform_ptr u_shadowAtlasRect;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
         gfx::program::uniform_ptr s_cloudShadow;
 
@@ -605,7 +620,6 @@ private:
             cache_uniform(program.get(), u_irradiance_tint_intensity, "u_irradiance_tint_intensity", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sun_direction, "u_sun_direction", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sky_luminance_xyz, "u_sky_luminance_xyz", bgfx::UniformType::Vec4);
-        gfx::program::uniform_ptr u_shadowAtlasRect;
             cache_uniform(program.get(), u_exposition, "u_exposition", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_perez_coeff, "u_perez_coeff", bgfx::UniformType::Vec4, 5);
             cache_uniform(program.get(), s_env, "s_env", bgfx::UniformType::Sampler);
@@ -626,6 +640,8 @@ private:
     /// Cloud shadow map of the current run (rendered before the lighting passes, consumed by
     /// the directional light and the irradiance bake).
     atmospheric_pass_perez::cloud_shadow_result cloud_shadow_{};
+    /// The atlas requests of the view being rendered (reserve_shadow_atlas_tiles), kept to reuse the allocation.
+    std::vector<shadow::shadow_atlas_request> shadow_atlas_requests_;
 
     struct indirect_lighting_program : uniforms_cache
     {
@@ -640,8 +656,6 @@ private:
             cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[5], "s_tex5", bgfx::UniformType::Sampler);
-    /// The atlas requests of the view being rendered (reserve_shadow_atlas_tiles), kept to reuse the allocation.
-    std::vector<shadow::shadow_atlas_request> shadow_atlas_requests_;
             cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_ssil, "s_ssil", bgfx::UniformType::Sampler);

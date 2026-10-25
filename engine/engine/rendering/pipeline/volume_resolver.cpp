@@ -3,6 +3,7 @@
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
+#include <engine/rendering/ecs/components/fog_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
 #include <engine/rendering/ecs/components/ssr_component.h>
@@ -157,6 +158,7 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_gtao = true;
     bool first_gi = true;
     bool first_taa = true;
+    bool first_fog = true;
     enabled_resolver auto_exposure_enabled;
     enabled_resolver bloom_enabled;
     enabled_resolver tonemapping_enabled;
@@ -167,6 +169,7 @@ auto resolve_post_process_volumes(scene& scn,
     enabled_resolver gtao_enabled;
     enabled_resolver gi_enabled;
     enabled_resolver taa_enabled;
+    enabled_resolver fog_enabled;
 
     for(const auto& c : contributions)
     {
@@ -267,6 +270,16 @@ auto resolve_post_process_volumes(scene& scn,
                 first_gi = false;
             }
         }
+
+        if(auto* fog = handle.try_get<fog_component>(); fog && contrib > 0.0f)
+        {
+            fog_enabled.accumulate(fog->enabled, contrib);
+            if(fog->enabled)
+            {
+                fog_component::merge_into(result.fog, fog->settings, contrib, first_fog);
+                first_fog = false;
+            }
+        }
     }
 
     result.has_auto_exposure = auto_exposure_enabled.resolve();
@@ -279,6 +292,7 @@ auto resolve_post_process_volumes(scene& scn,
     result.has_ssil = ssil_enabled.resolve();
     result.has_gtao = gtao_enabled.resolve();
     result.has_gi = gi_enabled.resolve();
+    result.has_fog = fog_enabled.resolve();
 
     return result;
 }

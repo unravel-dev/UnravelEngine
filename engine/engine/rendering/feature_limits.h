@@ -38,6 +38,8 @@ struct feature_limits
     bool ambient_occlusion{true};
     /// Bloom.
     bool bloom{true};
+    /// Volumetric fog (fog_pass): off, fog components that ask for it render the analytic fog alone.
+    bool volumetric_fog{true};
     /// The most expensive anti-aliasing a view may use.
     anti_aliasing_limit max_anti_aliasing{anti_aliasing_limit::temporal};
     /// The largest shadow map a light may use; larger ones render at this resolution.

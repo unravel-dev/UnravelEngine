@@ -156,6 +156,7 @@ void test_settings_round_trip()
     settings saved;
     saved.graphics.render_scale = 0.75f;
     saved.graphics.limits.bloom = false;
+    saved.graphics.limits.volumetric_fog = false;
     saved.graphics.limits.max_anti_aliasing = anti_aliasing_limit::fxaa;
     saved.graphics.limits.max_shadow_resolution = sm_resolution::medium;
     const auto document = serialization::save_to_document(saved, LIMITS_DOCUMENT_ROOT);

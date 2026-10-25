@@ -1,6 +1,8 @@
 $input v_color0, v_texcoord0, v_texcoord1, v_particle
 
 #include <bgfx_shader.sh>
+// Unlit particles read the volumetric fog's froxel column (particle_fragment.sh).
+#define FOG_VOLUME_SAMPLER s_particle_fog_volume
 #include "particle_fragment.sh"
 
 void main()

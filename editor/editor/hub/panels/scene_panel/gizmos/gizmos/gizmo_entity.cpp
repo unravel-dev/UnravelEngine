@@ -254,6 +254,32 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         }
     }
 
+    if(e.all_of<fog_volume_component>() && em.gizmos.show_volume)
+    {
+        const auto& volume_comp = e.get<fog_volume_component>();
+        // The unit shape (box -1..1 or unit sphere) stretched by the extents, under the entity's transform.
+        const math::mat4 shape_transform =
+            world_transform.get_matrix() * glm::scale(math::mat4(1.0f), volume_comp.settings.extents);
+        DebugDrawEncoderScopePush scope(dd.encoder);
+        dd.encoder.pushTransform(glm::value_ptr(shape_transform));
+        dd.encoder.setColor(0xffffc040);
+        dd.encoder.setWireframe(true);
+        if(volume_comp.settings.shape == fog_volume_shape::ellipsoid)
+        {
+            dd.encoder.drawCircle(Axis::X, 0.0f, 0.0f, 0.0f, 1.0f);
+            dd.encoder.drawCircle(Axis::Y, 0.0f, 0.0f, 0.0f, 1.0f);
+            dd.encoder.drawCircle(Axis::Z, 0.0f, 0.0f, 0.0f, 1.0f);
+        }
+        else
+        {
+            bx::Aabb aabb;
+            aabb.min = bx::Vec3(-1.0f, -1.0f, -1.0f);
+            aabb.max = bx::Vec3(1.0f, 1.0f, 1.0f);
+            dd.encoder.draw(aabb);
+        }
+        dd.encoder.popTransform();
+    }
+
     if(e.all_of<model_component>() && em.gizmos.show_model)
     {
         const auto& frustum = cam.get_frustum();

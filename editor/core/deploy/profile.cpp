@@ -227,6 +227,7 @@ void set_platform_starting_values(target_platform platform, settings& resolved)
     limits.screen_space_reflections = false;
     limits.screen_space_indirect_lighting = false;
     limits.ambient_occlusion = false;
+    limits.volumetric_fog = false;
     limits.max_anti_aliasing = std::min(limits.max_anti_aliasing, anti_aliasing_limit::fxaa);
     limits.max_shadow_resolution = std::min(limits.max_shadow_resolution, sm_resolution::high);
     limits.soft_shadows = false;

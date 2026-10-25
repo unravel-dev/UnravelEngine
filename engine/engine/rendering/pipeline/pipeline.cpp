@@ -20,6 +20,7 @@
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/fog_component.h>
 #include <engine/rendering/ecs/components/gtao_component.h>
 #include <engine/rendering/pipeline/volume_resolver.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
@@ -82,6 +83,9 @@ constexpr uint8_t k_particle_irradiance_stage = 12;
 /// Surface lighting's normal map.
 constexpr uint8_t k_particle_normal_stage = 14;
 constexpr uint8_t k_particle_shadow_stage = 8;
+/// The volumetric fog's froxel column in the unlit programs (particle_fragment.sh); the lit ones hold the sun's
+/// cascades there.
+constexpr uint8_t k_particle_fog_volume_stage = 8;
 /// Cosine a point light's cone mask passes everything at (LocalLightSpotMask).
 constexpr float k_point_light_cos_outer = -2.0f;
 
@@ -716,6 +720,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
     auto_exposure_pass_.init(ctx);
     bloom_pass_.init(ctx);
     fxaa_pass_.init(ctx);
+    // Before the particle programs: they read the fog's uniforms, which it creates.
+    fog_pass_.init(ctx);
     taa_pass_.init(ctx);
     tonemapping_pass_.init(ctx);
     assao_pass_.init(ctx);
@@ -1058,6 +1064,17 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
         };
     }
 
+    if(auto fog_comp = camera_ent.try_get<fog_component>(); fog_comp && fog_comp->enabled)
+    {
+        params.fill_fog_params = [camera_ent](fog_pass::run_params& params)
+        {
+            if(auto fog_comp = camera_ent.try_get<fog_component>())
+            {
+                params.config = fog_comp->settings;
+            }
+        };
+    }
+
     return params;
 }
 
@@ -1071,7 +1088,7 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
     auto resolved = resolve_post_process_volumes(*scn, cam->get_position(), camera_ent);
     const bool has_any_volume = resolved.has_auto_exposure || resolved.has_bloom || resolved.has_tonemapping ||
                                 resolved.has_fxaa || resolved.has_taa || resolved.has_ssr || resolved.has_assao || resolved.has_ssil || resolved.has_gtao ||
-                                resolved.has_gi;
+                                resolved.has_gi || resolved.has_fog;
     if(!has_any_volume)
     {
         return params;
@@ -1136,6 +1153,11 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
         {
             gi = s;
         };
+    }
+    if(resolved.has_fog)
+    {
+        fog_pass::settings s = resolved.fog;
+        params.fill_fog_params = [s](fog_pass::run_params& p) { p.config = s; };
     }
     if(params.fill_taa_params)
     {
@@ -1337,6 +1359,7 @@ auto pipeline::run_particle_pass(scene& scn,
                                  bool use_shadow_maps,
                                  bool wants_reactive,
                                  delta_t dt,
+                                 const fog_pass::shader_params& fog,
                                  layer_mask render_mask) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/Particle Pass");
@@ -1395,6 +1418,16 @@ auto pipeline::run_particle_pass(scene& scn,
                 params.environment_texture = pre_exposure.gpu_texture;
                 params.environment_sampler = particle_irradiance_sampler_->native_handle();
                 params.environment_stage = k_particle_irradiance_stage;
+                // Every draw sets the fog, also when it is off: uniform values outlive the draw that set them, so a
+                // draw that left them would fog with whichever view set them last.
+                params.bind_fog = [&](bool is_lit)
+                {
+                    fog_pass_.bind_uniforms(fog);
+                    if(!is_lit)
+                    {
+                        fog_pass_.bind_particle_volume(k_particle_fog_volume_stage, fog);
+                    }
+                };
                 // Lit batches read the scene's light, gathered once per view and bound before each of their draws.
                 particle_scene_lighting lighting;
                 if(has_lit_batches && particle_program_lit_->begin() && particle_program_lit_mask_->begin())

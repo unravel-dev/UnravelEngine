@@ -69,6 +69,16 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Scale of the light in the fog (its glow and light shafts); 0 leaves it out. Point and spot lights show
+        /// only in volumetric fog.
+        /// </summary>
+        public float volumetricIntensity
+        {
+            get => internal_m2n_light_get_volumetric_intensity(owner);
+            set => internal_m2n_light_set_volumetric_intensity(owner, value);
+        }
+
+        /// <summary>
         /// Whether the light casts shadows.
         /// </summary>
         public bool castsShadows
@@ -147,6 +157,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_light_set_indirect_intensity(Entity eid, float indirectIntensity);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_light_get_volumetric_intensity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_light_set_volumetric_intensity(Entity eid, float volumetricIntensity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_light_get_enabled(Entity eid);

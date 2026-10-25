@@ -300,6 +300,9 @@ struct render_view_params
     bgfx::ProgramHandle lit_program = BGFX_INVALID_HANDLE;
     bgfx::ProgramHandle lit_mask_program = BGFX_INVALID_HANDLE;
     std::function<void(const render_batch&)> bind_lighting;
+    /// Sets the view's fog (fog.sh) before each draw: the color passes fog the particles with it. Called with whether
+    /// the draw is lit (its programs hold the sun's cascades where the unlit ones read the froxel column).
+    std::function<void(bool)> bind_fog;
     const float* view_matrix = nullptr;
     math::vec3 eye{0.0f};
     /// The camera's velocity (m/s): stretched particles may stretch against it.

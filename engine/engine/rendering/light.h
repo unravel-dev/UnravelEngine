@@ -223,6 +223,10 @@ struct light
     /// The light's scale in the global illumination: the surface cache is lit with
     /// intensity x this, so what the light bounces scales with it; 0 leaves the light out of the GI.
     float indirect_intensity = 1.0f;
+    /// The light's scale in the fog (fog_pass): the fog scatters intensity x this, so a light's glow and shafts in
+    /// the fog scale with it; 0 leaves the light out of the fog. Point and spot lights reach only the volumetric
+    /// fog.
+    float volumetric_intensity = 1.0f;
 
     /// Whether the light casts shadows.
     bool casts_shadows{true};

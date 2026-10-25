@@ -1690,6 +1690,10 @@ public:
             const bool is_lit = batch.lighting != particle_lighting::unlit && params.prev_view_proj == nullptr &&
                                 !is_overdraw && bgfx::isValid(params.lit_program) &&
                                 bgfx::isValid(params.lit_mask_program) && params.bind_lighting;
+            if(params.bind_fog)
+            {
+                params.bind_fog(is_lit);
+            }
             if(is_lit)
             {
                 draw.program = is_mask ? params.lit_mask_program : params.lit_program;

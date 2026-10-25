@@ -7,6 +7,12 @@ SAMPLER2D(s_particle_irradiance, 12);
 #define PRE_EXPOSURE_ENVIRONMENT s_particle_irradiance
 #include "../pre_exposure.sh"
 #include "../shaderlib.sh"
+#ifdef FOG_VOLUME_SAMPLER
+// The volumetric fog's integrated froxel column, read by the unlit programs, which define FOG_VOLUME_SAMPLER. The
+// lit programs hold the sun's cascades at stages 8-11 (particle_lighting.sh) and fog with the analytic fog alone.
+SAMPLER3D(s_particle_fog_volume, 8);
+#endif
+#include "../fog/fog.sh"
 
 // Stages above the vertex shaders' buffers (particle_gpu_schema.h).
 SAMPLER2D(s_texColor, 13);
@@ -17,8 +23,14 @@ SAMPLER2D(s_sceneDepth, 15);
 /// blends its texture sheet frames.
 uniform vec4 u_particleParams;
 
+#define PARTICLE_BLEND_ADDITIVE 1.0
 #define PARTICLE_BLEND_MULTIPLY 2.0
 #define PARTICLE_BLEND_PREMULTIPLIED 3.0
+
+bool particle_is_additive()
+{
+	return abs(u_particleParams.y - PARTICLE_BLEND_ADDITIVE) < 0.5;
+}
 
 bool particle_is_multiply()
 {
@@ -68,6 +80,38 @@ vec4 particle_output(vec3 color, float coverage)
 		return vec4(mix(vec3_splat(1.0), color, coverage), 1.0);
 	}
 	return vec4(color * coverage * u_pre_exposure_value, coverage);
+}
+
+/**
+ * The fog between the camera and the particle (fog.sh) on what the blend state takes, @p color. The particles draw
+ * after the fog composite, over a frame that holds the fog up to whatever is behind them. Normal and premultiplied
+ * particles are seen through the fog in front of them and hide its in-scatter from behind them where they cover
+ * the pixel: rgb x transmittance + in-scatter x alpha. Additive ones only dim with the transmittance. A multiply
+ * filter fades toward white. @p particle_depth is the particle's view depth.
+ */
+vec4 particle_apply_fog(vec4 color, vec4 frag_coord, float particle_depth)
+{
+	if(!fog_is_enabled())
+	{
+		return color;
+	}
+	vec2 uv = frag_coord.xy * u_viewTexel.xy;
+	// The pixel's ray at the particle's view depth (clip w of the perspective projection the fog requires).
+	vec3 far_point = computeViewSpacePosition(uv, 1.0);
+	vec3 view_position = far_point * (particle_depth / far_point.z);
+	vec3 offset = mul(u_invView, vec4(view_position, 0.0)).xyz;
+	float point_distance = length(offset);
+	vec3 view_direction = offset / max(point_distance, 1e-6);
+	vec4 fog = fog_to_point(s_particle_irradiance, uv, view_direction, point_distance, false, u_pre_exposure_value);
+	if(particle_is_multiply())
+	{
+		return vec4(mix(vec3_splat(1.0), color.rgb, fog.a), color.a);
+	}
+	if(particle_is_additive())
+	{
+		return vec4(color.rgb * fog.a, color.a);
+	}
+	return vec4(color.rgb * fog.a + fog.rgb * color.a, color.a);
 }
 
 /// Alpha erosion: texels below @p threshold vanish and the rest rescale to stay whole at 1.
@@ -120,9 +164,12 @@ void particle_shade_multi_channel(vec4 color,
 		// The texel's color carries its alpha already; erosion rescales both together.
 		float erosion_scale = texel.a > 1e-4 ? alpha / texel.a : 0.0;
 		out_color = vec4(texel.rgb * erosion_scale * color.rgb * light * fade * u_pre_exposure_value, alpha * fade);
-		return;
 	}
-	out_color = particle_output(texel.rgb * color.rgb * light, alpha * fade);
+	else
+	{
+		out_color = particle_output(texel.rgb * color.rgb * light, alpha * fade);
+	}
+	out_color = particle_apply_fog(out_color, frag_coord, particle.z);
 }
 
 /**
@@ -147,11 +194,14 @@ void particle_shade_mask(vec4 color,
 	{
 		// A multiply mask filters by the particle color where the mask is bright.
 		out_color = particle_output(color.rgb, fade * luminance);
-		return;
 	}
-	out_color = particle_output(texel.rgb * color.rgb * light, fade);
-	// The color is already as bright as the mask; only the occlusion takes the luminance.
-	out_color.a *= luminance;
+	else
+	{
+		out_color = particle_output(texel.rgb * color.rgb * light, fade);
+		// The color is already as bright as the mask; only the occlusion takes the luminance.
+		out_color.a *= luminance;
+	}
+	out_color = particle_apply_fog(out_color, frag_coord, particle.z);
 }
 
 // Lit particles: the normal map of surface lighting, read when u_particle_lighting.z is 1.

@@ -19,6 +19,7 @@
 #include "passes/atmospheric_pass_skybox.h"
 #include "passes/auto_exposure_pass.h"
 #include "passes/blit_pass.h"
+#include "passes/fog_pass.h"
 #include "passes/fxaa_pass.h"
 #include "passes/hiz_pass.h"
 #include "passes/particle_half_res_pass.h"
@@ -191,6 +192,8 @@ public:
         /// Global illumination. Unset means off, exactly like the hooks above -- the feature runs only
         /// where a gi_component asks for it.
         std::function<void(gi_settings&)> fill_gi_params;
+        /// Height fog (fog_pass). Unset means off, like the hooks above.
+        std::function<void(fog_pass::run_params& params)> fill_fog_params;
 
         /// Camera runs: the fraction of the render resolution the scene renders at, from MIN_RENDER_SCALE to 1.
         /// The finished scene is resampled into the output, at the camera's viewport size.
@@ -344,6 +347,7 @@ public:
      *        particles write only the light buffer.
      * @param dt The frame's time step: the camera's velocity over it stretches the particles that stretch against
      *        it.
+     * @param fog The fog the scene was composited with (fog_pass::run); the particles fog themselves with it.
      * @return The particles' TAA reactive coverage (R8: the largest coverage x taa_response over each pixel)
      *         when particles drew into it this frame; null otherwise.
      */
@@ -356,6 +360,7 @@ public:
                                    bool use_shadow_maps,
                                    bool wants_reactive,
                                    delta_t dt,
+                                   const fog_pass::shader_params& fog,
                                    layer_mask render_mask) -> gfx::texture::ptr;
 
     /// Whether @p entity is on a layer @p render_mask draws (an entity without layers is drawn).
@@ -392,6 +397,7 @@ protected:
     auto_exposure_pass auto_exposure_pass_{};
     bloom_pass bloom_pass_{};
     fxaa_pass fxaa_pass_{};
+    fog_pass fog_pass_{};
     taa_pass taa_pass_{};
     tonemapping_pass tonemapping_pass_{};
     ssr_pass ssr_pass_{};

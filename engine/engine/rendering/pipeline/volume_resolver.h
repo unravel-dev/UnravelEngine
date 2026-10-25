@@ -4,6 +4,7 @@
 #include <engine/rendering/pipeline/passes/assao_pass.h>
 #include <engine/rendering/pipeline/passes/auto_exposure_pass.h>
 #include <engine/rendering/pipeline/passes/bloom_pass.h>
+#include <engine/rendering/pipeline/passes/fog_pass.h>
 #include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/pipeline/passes/fxaa_pass.h>
 #include <engine/rendering/pipeline/passes/ssr_pass.h>
@@ -43,6 +44,8 @@ struct resolved_post_process_settings
     gtao_pass::settings gtao{};
     bool has_gi = false;
     gi_settings gi{};
+    bool has_fog = false;
+    fog_pass::settings fog{};
 };
 
 /**

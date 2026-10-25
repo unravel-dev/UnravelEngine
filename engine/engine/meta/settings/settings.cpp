@@ -450,6 +450,13 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"pretty_name", "Bloom"},
             entt::attribute{"tooltip", "Allow bloom."},
         })
+        .data<&feature_limits::volumetric_fog>("volumetric_fog"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "volumetric_fog"},
+            entt::attribute{"pretty_name", "Volumetric Fog"},
+            entt::attribute{"tooltip", "Allow volumetric fog. When off, fog that asks for it renders without its "
+                                       "shadows and light shafts."},
+        })
         .data<&feature_limits::max_anti_aliasing>("max_anti_aliasing"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_anti_aliasing"},
@@ -483,6 +490,7 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("screen_space_indirect_lighting", obj.screen_space_indirect_lighting));
     try_save(ar, ser20::make_nvp("ambient_occlusion", obj.ambient_occlusion));
     try_save(ar, ser20::make_nvp("bloom", obj.bloom));
+    try_save(ar, ser20::make_nvp("volumetric_fog", obj.volumetric_fog));
     try_save(ar, ser20::make_nvp("max_anti_aliasing", obj.max_anti_aliasing));
     try_save(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
     try_save(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
@@ -496,6 +504,7 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("screen_space_indirect_lighting", obj.screen_space_indirect_lighting));
     try_load(ar, ser20::make_nvp("ambient_occlusion", obj.ambient_occlusion));
     try_load(ar, ser20::make_nvp("bloom", obj.bloom));
+    try_load(ar, ser20::make_nvp("volumetric_fog", obj.volumetric_fog));
     try_load(ar, ser20::make_nvp("max_anti_aliasing", obj.max_anti_aliasing));
     try_load(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
     try_load(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));

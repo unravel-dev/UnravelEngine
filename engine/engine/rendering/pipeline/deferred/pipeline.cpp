@@ -6,6 +6,7 @@
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
+#include <engine/rendering/ecs/components/fog_volume_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
@@ -220,6 +221,7 @@ void strip_post_effects_for_reflection_probe_capture(pipeline::run_params& param
     params.fill_ssr_params = {};
     params.fill_ssil_params = {};
     params.fill_hdr_params = {};
+    params.fill_fog_params = {};
     params.force_hdr_buffers = true;
 }
 
@@ -824,8 +826,6 @@ void deferred::refresh_shadow_casters(scene& scn, const camera& camera, delta_t 
     }
 }
 
-void deferred::build_shadows(scene& scn,
-                             const camera& camera,
 namespace
 {
 /// How much of @p camera's view a light reaching @p reach covers: its angular radius, up to 1 from inside it. The
@@ -863,16 +863,18 @@ void deferred::reserve_shadow_atlas_tiles(scene& scn, const camera& camera, cons
     shadow::shadow_atlas::get().reserve(shadow_atlas_requests_);
 }
 
+void deferred::build_shadows(scene& scn,
+                             const camera& camera,
                              delta_t dt,
                              const feature_limits& limits,
                              layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Shadow Generation Pass");
 
-    bool queried = false;
-
     // Before any light renders: reserving can grow the atlas or step lights down, which moves tiles.
     reserve_shadow_atlas_tiles(scn, camera, limits);
+
+    bool queried = false;
 
     scn.registry->view<transform_component, light_component>().each(
         [&](auto e, auto&& transform_comp, auto&& light_comp)
@@ -1210,13 +1212,16 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         target = run_atmospherics_pass(target, scn, camera, rview, dt);
     }
 
+    // Over the sky and the clouds; the particles drawn next fog themselves with the same fog.
+    const fog_pass::shader_params fog = run_fog_pass(scn, camera, rview, target, params, build_shadowmaps);
+
     gfx::texture::ptr particle_reactive;
     if(stages & pipeline_steps::particles_pass)
     {
         const gfx::texture::ptr hiz_depth = hiz_active ? rview.tex_find("HIZBUFFER") : gfx::texture::ptr{};
         const bool wants_reactive = static_cast<bool>(params.fill_taa_params);
         particle_reactive =
-            run_particle_pass(scn, camera, rview, target, pre_exposure, hiz_depth, build_shadowmaps, wants_reactive, dt, render_mask);
+            run_particle_pass(scn, camera, rview, target, pre_exposure, hiz_depth, build_shadowmaps, wants_reactive, dt, fog, render_mask);
     }
 
     if(is_camera_run)
@@ -3224,6 +3229,139 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
     }
 
     return input;
+}
+
+namespace
+{
+/**
+ * The sun the fog scatters: the strongest enabled directional light, as the lit particles pick it, with its shadow
+ * cascades when @p use_shadow_maps (the run built them) and the light renders them as `limits` limit it. ESM maps
+ * store exponential depth, which the fog's depth test cannot read: such a sun leaves the fog unshadowed.
+ */
+auto find_fog_sun(scene& scn, bool use_shadow_maps, const feature_limits& limits) -> fog_pass::sun_light
+{
+    fog_pass::sun_light sun;
+    float strongest = -1.0f;
+    scn.registry->view<transform_component, light_component, active_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& light_comp, auto&& active)
+        {
+            const auto light = limit_light(light_comp.get_light(), limits);
+            if(!light_comp.is_enabled() || light.type != light_type::directional || light.intensity <= strongest)
+            {
+                return;
+            }
+            strongest = light.intensity;
+            // The light travels along its z axis; the fog wants the direction toward it.
+            sun.direction = -transform_comp.get_transform_global().z_unit_axis();
+            sun.illuminance = light_comp.get_linear_color() * (light.intensity * light.volumetric_intensity);
+            const auto& generator = light_comp.get_shadowmap_generator();
+            const bool has_shadow = use_shadow_maps && light.casts_shadows && light.shadow_params.type != sm_impl::esm &&
+                                    bgfx::isValid(generator.get_rt_texture(0));
+            sun.shadow = has_shadow ? &generator : nullptr;
+            sun.shadow_cascades = has_shadow ? std::uint32_t(light.directional_shadow_params.num_splits) : 0u;
+            sun.shadow_depth_offset = light.shadow_params.depth == sm_depth::linear ? 0.5f : 0.0f;
+        });
+    return sun;
+}
+
+/// The enabled fog volumes @p camera sees.
+auto gather_fog_volumes(scene& scn, const camera& camera) -> std::vector<fog_pass::fog_volume>
+{
+    std::vector<fog_pass::fog_volume> volumes;
+    scn.registry->view<transform_component, fog_volume_component, active_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& volume_comp, auto&& active)
+        {
+            if(!volume_comp.enabled)
+            {
+                return;
+            }
+            const auto& world = transform_comp.get_transform_global();
+            const math::vec3& extents = volume_comp.settings.extents;
+            if(!camera.test_obb(math::bbox(-extents, extents), world))
+            {
+                return;
+            }
+            volumes.push_back({world, volume_comp.settings});
+        });
+    return volumes;
+}
+
+/// The enabled point and spot lights that scatter in the fog (volumetric intensity above 0).
+/// The map the fog may read for @p generator's light: its atlas tile, once this frame's casters are in it (a tile the
+/// view did not resolve may hold another light's map since the atlas last moved).
+auto find_fog_light_shadow(const shadow::shadowmap_generator& generator) -> const shadow::shadowmap_generator*
+{
+    return generator.get_atlas_tile() && generator.already_resolved() ? &generator : nullptr;
+}
+
+auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fog_pass::local_light>
+{
+    std::vector<fog_pass::local_light> lights;
+    scn.registry->view<transform_component, light_component, active_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& light_comp, auto&& active)
+        {
+            const auto& light = light_comp.get_light();
+            if(!light_comp.is_enabled() || light.type == light_type::directional || light.intensity <= 0.0f ||
+               light.volumetric_intensity <= 0.0f)
+            {
+                return;
+            }
+            // Scale must not skew the light's axis.
+            auto world = transform_comp.get_transform_global();
+            world.reset_scale();
+            fog_pass::local_light local;
+            local.position = world.get_position();
+            local.direction = world.z_unit_axis();
+            local.is_spot = light.type == light_type::spot;
+            local.range = local.is_spot ? light.spot_data.get_range() : light.point_data.range;
+            // Half angles, as the direct lighting gets them.
+            local.cos_inner = math::cos(math::radians(light.spot_data.get_inner_angle() * 0.5f));
+            local.cos_outer = math::cos(math::radians(light.spot_data.get_outer_angle() * 0.5f));
+            local.intensity = light_comp.get_linear_color() * (light.intensity * light.volumetric_intensity);
+            if(use_shadow_maps)
+            {
+                local.shadow = find_fog_light_shadow(light_comp.get_shadowmap_generator());
+            }
+            lights.push_back(local);
+        });
+    return lights;
+}
+} // namespace
+
+auto deferred::run_fog_pass(scene& scn,
+                            const camera& camera,
+                            gfx::render_view& rview,
+                            const gfx::frame_buffer::ptr& target,
+                            const run_params& rparams,
+                            bool use_shadow_maps) -> fog_pass::shader_params
+{
+    // The fog integrates along rays from the camera's position, which an orthographic view does not have.
+    if(!rparams.fill_fog_params || camera.get_projection_mode() != projection_mode::perspective)
+    {
+        fog_pass_.release_volumetric(rview);
+        return {};
+    }
+    APP_SCOPE_PERF("Rendering/Fog Pass");
+    fog_pass::run_params params;
+    rparams.fill_fog_params(params);
+    params.target = target;
+    params.depth = rview.tex_find("DEPTH");
+    params.environment = rview.tex_find("IRRADIANCE_SH");
+    params.pre_exposure = get_pre_exposure(rview);
+    params.sun = find_fog_sun(scn, use_shadow_maps, rparams.limits);
+    // The same cloud shadow the directional light applies.
+    const auto cloud_shadow = ANONYMOUS::make_cloud_shadow_uniforms(cloud_shadow_);
+    params.clouds.map = cloud_shadow.is_applied ? cloud_shadow_.map : gfx::texture::ptr{};
+    params.clouds.placement = cloud_shadow.placement;
+    params.clouds.layer = cloud_shadow.layer;
+    params.allows_volumetric = rparams.limits.volumetric_fog;
+    params.volumes = gather_fog_volumes(scn, camera);
+    if(params.config.volumetric && params.allows_volumetric)
+    {
+        params.local_lights = gather_fog_local_lights(scn, use_shadow_maps);
+    }
+    params.is_camera_cut = is_camera_cut(camera);
+    return fog_pass_.run(camera, rview, params);
 }
 
 void deferred::run_ssr_pass(const camera& camera,
