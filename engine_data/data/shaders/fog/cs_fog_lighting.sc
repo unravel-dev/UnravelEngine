@@ -5,22 +5,21 @@
  * reprojected with last frame's camera, so the noise of the jitter and of the single shadow tap averages out
  * without TAA.
  *
- * The point and spot lights (u_fog_lights) are added after the blend, at the froxel's centre, into a second volume
- * the integration reads: they never enter the history, so a moving light leaves no trail. Each froxel visits only the
- * lights that reach its cluster (b_fog_light_masks, cs_fog_cull.sc). A light whose map sits in
- * the shadow atlas is shadowed by four fixed taps spread over the froxel: no jitter, so no noise without the history,
- * and a shadow edge crossing a froxel fades through quarters rather than switching the froxel on and off.
+ * The point and spot lights (u_fog_lights) are lit at the same sample and enter the same history: each froxel
+ * converges to a light's average over its extent, so neither the inverse-squared peak at a light nor a cone or shadow
+ * edge flickers as the grid moves with the camera. A light that changed since the previous frame shortens the history
+ * of the froxels it reaches (FOG_CHANGED_LIGHT_HISTORY), so a moving light leaves no lasting trail. Each froxel visits
+ * only the lights that reach its cluster (b_fog_light_masks, cs_fog_cull.sc); a light whose map sits in the shadow
+ * atlas shadows the sample with one tap.
  *
- * Both write rgb = scattered radiance per metre (sigma_s x in-scattered light, pre-exposed), a = extinction (1/m).
+ * Writes rgb = scattered radiance per metre (sigma_s x in-scattered light, pre-exposed), a = extinction (1/m).
  */
 
 #include "../bgfx_compute.sh"
 #include "../common.sh"
 
-// The sun and sky light, next frame's history.
+// This frame's lit froxels: what the integration reads, and next frame's history.
 IMAGE3D_WO(i_fog_lit, rgba16f, 0);
-// The same with the point and spot lights added: what the integration reads.
-IMAGE3D_WO(i_fog_scatter, rgba16f, 1);
 // Last frame's lit froxels (this pass's i_fog_lit then), read filtered at the reprojected froxel centre.
 SAMPLER3D(s_fog_history, 2);
 // The view's environment SH (IRRADIANCE_SH): the sky, and in texel 9 the GPU's share of the pre-exposure.
@@ -72,8 +71,8 @@ uniform vec4 u_fog_shadow;
 #define FOG_LIGHT_SHADOW_MATRICES 2
 /// Metres each local light's shadow tap is pulled toward the light.
 #define FOG_LOCAL_SHADOW_BIAS 0.1
-/// Where a froxel's local-light shadow taps sit around its centre, in froxels along each axis.
-#define FOG_SHADOW_TAP_SPREAD 0.25
+/// The most history a froxel keeps while a light that reaches it changes: follows the light within a few frames.
+#define FOG_CHANGED_LIGHT_HISTORY 0.5
 
 /// The sun's visibility through one cascade at @p position, one tap; -1 when the cascade does not cover it.
 float fog_cascade_visibility(sampler2D shadow_map, mat4 shadow_matrix, vec3 position)
@@ -156,23 +155,6 @@ vec4 fog_medium_at(vec3 offset)
 	return vec4(scattering, extinction) * (1.0 - carve);
 }
 
-/// The medium and its in-scattered light from the sun and the sky at the camera-relative @p offset.
-vec4 fog_light_froxel(vec3 offset)
-{
-	vec4 medium = fog_medium_at(offset);
-	if(medium.a <= 0.0)
-	{
-		return vec4_splat(0.0);
-	}
-	vec3 view_direction = offset / max(length(offset), 1e-6);
-	vec3 position = u_fog_camera.xyz + offset;
-	vec3 sun_direction = u_fog_sun_direction.xyz;
-	float sun_visibility = fog_sun_visibility(position) * CloudShadow(position, sun_direction);
-	float sun_phase = fog_phase_hg(dot(view_direction, sun_direction), u_fog_range.w);
-	vec3 light = u_fog_light.rgb * (sun_phase * sun_visibility) + u_fog_light.w * fog_sky_inscatter(s_fog_environment, view_direction);
-	return vec4(medium.rgb * light * u_pre_exposure_value, medium.a);
-}
-
 /// The face of a point light's tetrahedron map that the light-relative @p offset falls in: 0 green, 1 yellow, 2 blue,
 /// 3 red, picked as fs_pbr_lighting.sh picks it.
 int fog_point_shadow_face(vec3 offset)
@@ -223,10 +205,10 @@ float fog_light_shadow_tap(int record, vec4 params, vec3 position, vec3 light_of
 }
 
 /**
- * The share of light @p light's shadow taps that see it: the camera-relative @p tap0..3 spread over the froxel, pulled
- * toward the light by @p bias. @p light_position is camera-relative. 1 for a light without a map in the atlas.
+ * Light @p light's visibility at the camera-relative @p offset: one tap of its map in the atlas, 1 for a light without
+ * one. @p light_position is camera-relative.
  */
-float fog_light_visibility(int light, vec3 light_position, vec3 bias, vec3 tap0, vec3 tap1, vec3 tap2, vec3 tap3)
+float fog_light_visibility(int light, vec3 light_position, vec3 offset)
 {
 	int record = light * FOG_LIGHT_SHADOW_VEC4S;
 	vec4 params = b_fog_light_shadows[record + 1];
@@ -234,24 +216,16 @@ float fog_light_visibility(int light, vec3 light_position, vec3 bias, vec3 tap0,
 	{
 		return 1.0;
 	}
-	vec3 camera = u_fog_camera.xyz;
-	float lit = fog_light_shadow_tap(record, params, camera + tap0 + bias, tap0 + bias - light_position) +
-	            fog_light_shadow_tap(record, params, camera + tap1 + bias, tap1 + bias - light_position) +
-	            fog_light_shadow_tap(record, params, camera + tap2 + bias, tap2 + bias - light_position) +
-	            fog_light_shadow_tap(record, params, camera + tap3 + bias, tap3 + bias - light_position);
-	return lit * 0.25;
+	return fog_light_shadow_tap(record, params, u_fog_camera.xyz + offset, offset - light_position);
 }
 
 /**
- * The light the point and spot lights scatter toward the camera per unit of scattering coefficient, at the
- * camera-relative @p offset seen along the unit @p view_direction at @p view_depth, shadowed at the froxel's taps
- * @p tap0..3: the lights of the mask @p lights, those that reach the froxel's cluster. The inverse-squared falloff is
- * biased by half a froxel, the extent its one sample stands for, so a light inside a froxel does not spike it.
+ * The light the point and spot lights of the mask @p lights scatter toward the camera per unit of scattering
+ * coefficient, at the camera-relative @p offset seen along the unit @p view_direction. Their inverse-squared falloff is
+ * biased by @p bias_squared, the extent of the froxel the sample stands for.
  */
-vec3 fog_local_inscatter(vec3 offset, vec3 view_direction, float view_depth, uint lights, vec3 tap0, vec3 tap1, vec3 tap2, vec3 tap3)
+vec3 fog_local_inscatter(vec3 offset, vec3 view_direction, uint lights, float bias_squared)
 {
-	float half_cell = view_depth * u_fog_light_info.y;
-	float bias_squared = max(half_cell * half_cell, LOCAL_LIGHT_DISTANCE_BIAS_SQR);
 	int count = int(u_fog_light_info.x);
 	vec3 total = vec3_splat(0.0);
 	for(int i = 0; i < FOG_MAX_LOCAL_LIGHTS; ++i)
@@ -275,18 +249,41 @@ vec3 fog_local_inscatter(vec3 offset, vec3 view_direction, float view_depth, uin
 		{
 			continue;
 		}
-		mask *= fog_light_visibility(i, placement.xyz, light_direction * FOG_LOCAL_SHADOW_BIAS, tap0, tap1, tap2, tap3);
+		mask *= fog_light_visibility(i, placement.xyz, offset + light_direction * FOG_LOCAL_SHADOW_BIAS);
 		float phase = fog_phase_hg(dot(view_direction, light_direction), u_fog_range.w);
 		total += intensity.rgb * (mask * phase / (distance_squared + bias_squared));
 	}
 	return total;
 }
 
-/// The camera-relative point at grid coordinate @p coord (0..1 along each axis, clamped).
-vec3 fog_grid_point(vec3 coord)
+/**
+ * The medium and the light it scatters toward the camera at the camera-relative @p offset: the sun and the sky, and the
+ * point and spot lights of the mask @p lights with their falloff biased by @p bias_squared.
+ */
+vec4 fog_light_froxel(vec3 offset, uint lights, float bias_squared)
 {
-	vec3 clamped = clamp(coord, vec3_splat(0.0), vec3_splat(1.0));
-	return fog_grid_ray(clamped.xy) * fog_slice_depth(clamped.z);
+	vec4 medium = fog_medium_at(offset);
+	if(medium.a <= 0.0)
+	{
+		return vec4_splat(0.0);
+	}
+	vec3 view_direction = offset / max(length(offset), 1e-6);
+	vec3 position = u_fog_camera.xyz + offset;
+	vec3 sun_direction = u_fog_sun_direction.xyz;
+	float sun_visibility = fog_sun_visibility(position) * CloudShadow(position, sun_direction);
+	float sun_phase = fog_phase_hg(dot(view_direction, sun_direction), u_fog_range.w);
+	vec3 light = u_fog_light.rgb * (sun_phase * sun_visibility) + u_fog_light.w * fog_sky_inscatter(s_fog_environment, view_direction);
+	if(lights != 0u)
+	{
+		light += fog_local_inscatter(offset, view_direction, lights, bias_squared);
+	}
+	return vec4(medium.rgb * light * u_pre_exposure_value, medium.a);
+}
+
+/// The lights of u_fog_lights that changed since the previous frame (fog_pass::find_changed_lights), one bit each.
+uint fog_changed_lights()
+{
+	return uint(u_fog_light_info.y) | (uint(u_fog_light_info.z) << 16u);
 }
 
 /// The froxel at the camera-relative @p offset in last frame's grid; outside 0..1 when it was not in view.
@@ -311,12 +308,33 @@ void main()
 	{
 		return;
 	}
+	// The lights that reach the froxel's cluster.
+	uint lights = 0u;
+	if(u_fog_light_info.x > 0.5)
+	{
+		lights = b_fog_light_masks[fog_cluster_index(fog_cell_cluster(cell))];
+	}
 	vec3 sample_coord = (vec3(cell) + u_fog_jitter.xyz) / grid;
-	vec4 lit = fog_light_froxel(fog_grid_ray(sample_coord.xy) * fog_slice_depth(sample_coord.z));
+	vec3 sample_offset = fog_grid_ray(sample_coord.xy) * fog_slice_depth(sample_coord.z);
+	// A light's falloff is biased by the froxel's diagonal, depth included (as Unreal's volumetric fog does): the
+	// froxels are far deeper than wide, and a sample that lands next to a light must not spike its froxel.
+	float bias_squared = LOCAL_LIGHT_DISTANCE_BIAS_SQR;
+	if(lights != 0u)
+	{
+		vec3 next_coord = sample_coord + 1.0 / grid;
+		vec3 diagonal = fog_grid_ray(next_coord.xy) * fog_slice_depth(next_coord.z) - sample_offset;
+		bias_squared = max(dot(diagonal, diagonal), LOCAL_LIGHT_DISTANCE_BIAS_SQR);
+	}
+	vec4 lit = fog_light_froxel(sample_offset, lights, bias_squared);
 	vec3 center_coord = (vec3(cell) + 0.5) / grid;
-	float center_depth = fog_slice_depth(center_coord.z);
-	vec3 center = fog_grid_ray(center_coord.xy) * center_depth;
+	vec3 center = fog_grid_ray(center_coord.xy) * fog_slice_depth(center_coord.z);
 	float history_weight = u_fog_jitter.w;
+	// A light that changed since the previous frame (moved, turned, dimmed) left a stale history where it reaches: a
+	// shorter one follows it closely, with a little more noise while it changes.
+	if((lights & fog_changed_lights()) != 0u)
+	{
+		history_weight = min(history_weight, FOG_CHANGED_LIGHT_HISTORY);
+	}
 	if(history_weight > 0.0)
 	{
 		vec3 previous = fog_previous_coordinate(center);
@@ -333,25 +351,4 @@ void main()
 	}
 	lit = min(lit, vec4_splat(FOG_HALF_MAX));
 	imageStore(i_fog_lit, cell, lit);
-	vec4 scatter = lit;
-	// The lights that reach the froxel's cluster; none skips the medium and the taps too.
-	uint lights = 0u;
-	if(u_fog_light_info.x > 0.5)
-	{
-		lights = b_fog_light_masks[fog_cluster_index(fog_cell_cluster(cell))];
-	}
-	if(lights != 0u && lit.a > 0.0)
-	{
-		// The medium at the centre, where the lights are sampled: no jitter, so no noise without the history.
-		vec4 medium = fog_medium_at(center);
-		// The shadow taps at the corners of a tetrahedron around the centre: together they span the froxel on every axis.
-		vec3 spread = FOG_SHADOW_TAP_SPREAD / grid;
-		vec3 tap0 = fog_grid_point(center_coord + vec3(-1.0, -1.0, -1.0) * spread);
-		vec3 tap1 = fog_grid_point(center_coord + vec3(1.0, 1.0, -1.0) * spread);
-		vec3 tap2 = fog_grid_point(center_coord + vec3(1.0, -1.0, 1.0) * spread);
-		vec3 tap3 = fog_grid_point(center_coord + vec3(-1.0, 1.0, 1.0) * spread);
-		vec3 local = fog_local_inscatter(center, normalize(center), center_depth, lights, tap0, tap1, tap2, tap3);
-		scatter.rgb = min(scatter.rgb + local * medium.rgb * u_pre_exposure_value, vec3_splat(FOG_HALF_MAX));
-	}
-	imageStore(i_fog_scatter, cell, scatter);
 }

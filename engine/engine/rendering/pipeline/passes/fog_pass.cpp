@@ -28,7 +28,6 @@ constexpr std::uint8_t FOG_ENVIRONMENT_STAGE = 1;
 constexpr std::uint8_t FOG_VOLUME_STAGE = 2;
 /// Stages of the froxel lighting (fog/cs_fog_lighting.sc). The images stay below 8 (GL image units).
 constexpr std::uint8_t LIGHTING_OUTPUT_STAGE = 0;
-constexpr std::uint8_t LIGHTING_SCATTER_STAGE = 1;
 constexpr std::uint8_t LIGHTING_HISTORY_STAGE = 2;
 constexpr std::uint8_t LIGHTING_ENVIRONMENT_STAGE = 3;
 constexpr std::uint8_t LIGHTING_CLOUD_SHADOW_STAGE = 4;
@@ -65,13 +64,14 @@ constexpr std::uint32_t MIN_GRID_COLUMNS = 16;
 constexpr std::uint32_t MAX_GRID_COLUMNS = 512;
 /// Aspect of a view without a size.
 constexpr float DEFAULT_ASPECT = 16.0f / 9.0f;
-/// The render view's froxel volumes: the two lit volumes alternate between this frame's and the history; the
-/// scatter volume adds the point and spot lights to this frame's.
+/// The render view's froxel volumes: the two lit volumes alternate between this frame's and the history.
 constexpr std::array<const char*, 2> LIT_VOLUME_KEYS{"FOG_LIT_0", "FOG_LIT_1"};
-constexpr const char* SCATTER_VOLUME_KEY = "FOG_SCATTER";
 constexpr const char* INTEGRATED_VOLUME_KEY = "FOG_INTEGRATED";
 /// vec4s per light in u_fog_lights.
 constexpr std::uint32_t LOCAL_LIGHT_VEC4S = 3;
+/// The changed-light mask travels in two floats of u_fog_light_info, 16 bits each (exact in a float).
+constexpr std::uint32_t CHANGED_LIGHTS_HALF_BITS = 16;
+constexpr std::uint32_t CHANGED_LIGHTS_HALF_MASK = 0xFFFFu;
 /// A point light's cos outer half angle: below every dot product, so its cone mask is 1.
 constexpr float POINT_LIGHT_COS_OUTER = -2.0f;
 /// vec4s per light in b_fog_light_shadows: the atlas rect, the parameters, then one matrix per map.
@@ -106,6 +106,8 @@ struct volumetric_view_state
     fog_pass::volumetric_grid grid{};
     float range = 0.0f;
     float slice_distribution = 0.0f;
+    /// The point and spot lights lit last frame: a light that differs from its entry here changed.
+    std::vector<fog_pass::local_light> lights;
 };
 
 /// Layout of b_fog_light_shadows: a flat array of vec4 (BUFFER_RO(_, vec4, _)).
@@ -439,6 +441,36 @@ auto fog_pass::pick_local_lights(std::vector<local_light> lights, const math::ve
     return lights;
 }
 
+auto fog_pass::find_changed_lights(const std::vector<local_light>& previous, const std::vector<local_light>& current)
+    -> std::uint32_t
+{
+    // What the froxels see of a light: its placement, reach, cone and color. Exact comparisons: a light nothing
+    // touched rebuilds the same values from the same transform every frame.
+    const auto is_same = [](const local_light& lhs, const local_light& rhs)
+    {
+        return lhs.position == rhs.position && lhs.direction == rhs.direction && lhs.range == rhs.range &&
+               lhs.is_spot == rhs.is_spot && lhs.cos_inner == rhs.cos_inner && lhs.cos_outer == rhs.cos_outer &&
+               lhs.intensity == rhs.intensity;
+    };
+    std::uint32_t changed = 0;
+    const size_t count = math::min(current.size(), size_t(max_local_lights));
+    for(size_t i = 0; i < count; ++i)
+    {
+        const auto& light = current[i];
+        const auto before = std::find_if(previous.begin(),
+                                         previous.end(),
+                                         [&](const local_light& candidate)
+                                         {
+                                             return candidate.id == light.id;
+                                         });
+        if(before == previous.end() || !is_same(*before, light))
+        {
+            changed |= 1u << i;
+        }
+    }
+    return changed;
+}
+
 auto fog_pass::pick_fog_volumes(std::vector<fog_volume> volumes, const math::vec3& camera_position) -> std::vector<fog_volume>
 {
     const auto get_distance = [&](const fog_volume& volume)
@@ -538,7 +570,6 @@ void fog_pass::release_volumetric(gfx::render_view& rview)
     {
         rview.tex_remove(key);
     }
-    rview.tex_remove(SCATTER_VOLUME_KEY);
     rview.tex_remove(INTEGRATED_VOLUME_KEY);
     rview.data().get_or_emplace<volumetric_view_state>(volumetric_view_state::view_key) = {};
 }
@@ -568,9 +599,8 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
                                  .kind = gfx::texture_kind::tex_3d};
     const gfx::texture::ptr history = rview.tex_acquire(LIT_VOLUME_KEYS[1u - current], desc);
     const gfx::texture::ptr lit = rview.tex_acquire(LIT_VOLUME_KEYS[current], desc);
-    const gfx::texture::ptr scatter = rview.tex_acquire(SCATTER_VOLUME_KEY, desc);
     const gfx::texture::ptr integrated = rview.tex_acquire(INTEGRATED_VOLUME_KEY, desc);
-    if(!history || !lit || !scatter || !integrated)
+    if(!history || !lit || !integrated)
     {
         return {};
     }
@@ -597,9 +627,11 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
                      0,
                      bgfx::copy(packed_shadows.data(), std::uint32_t(packed_shadows.size() * sizeof(math::vec4))));
     }
-    // Half a froxel's height per metre of view depth: the screen's height at depth 1 over the rows, halved.
-    const float half_cell_per_depth = 0.5f * math::length(math::vec3(rays[2] - rays[0])) / float(grid.height);
-    const math::vec4 light_info(float(lights.size()), half_cell_per_depth, 0.0f, 0.0f);
+    const std::uint32_t changed = find_changed_lights(state.lights, lights);
+    const math::vec4 light_info(float(lights.size()),
+                                float(changed & CHANGED_LIGHTS_HALF_MASK),
+                                float(changed >> CHANGED_LIGHTS_HALF_BITS),
+                                0.0f);
     // Bound even without lights, which the lighting then never reads.
     const auto clusters = get_cluster_counts(grid);
     const auto light_masks = light_buffers.get_masks(clusters.get_total());
@@ -624,7 +656,6 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         gfx::render_pass pass("Fog/Froxel Lighting");
         volumetric_.lighting->begin();
         gfx::set_image_3d(LIGHTING_OUTPUT_STAGE, lit->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
-        gfx::set_image_3d(LIGHTING_SCATTER_STAGE, scatter->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         gfx::set_texture(volumetric_.s_fog_history, LIGHTING_HISTORY_STAGE, history);
         gfx::set_texture(volumetric_.s_fog_environment, LIGHTING_ENVIRONMENT_STAGE, params.environment);
         const auto& white = default_textures::get().white_texture();
@@ -695,7 +726,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         gfx::render_pass pass("Fog/Froxel Integration");
         volumetric_.integrate->begin();
         gfx::set_image_3d(INTEGRATE_OUTPUT_STAGE, integrated->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
-        gfx::set_texture(volumetric_.s_fog_lit, INTEGRATE_LIT_STAGE, scatter);
+        gfx::set_texture(volumetric_.s_fog_lit, INTEGRATE_LIT_STAGE, lit);
         gfx::set_uniform(volumetric_.u_fog_grid, grid_uniform);
         gfx::set_uniform(volumetric_.u_fog_rays, rays.data(), std::uint16_t(rays.size()));
         bind_uniforms(shader);
@@ -712,6 +743,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
     state.grid = grid;
     state.range = range;
     state.slice_distribution = slice_distribution;
+    state.lights = lights;
     return integrated;
 }
 

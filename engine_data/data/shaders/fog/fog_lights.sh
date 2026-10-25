@@ -16,7 +16,8 @@
 #define FOG_CLUSTER_COLUMNS 8
 #define FOG_CLUSTER_SLICES 8
 
-/// x = point and spot lights, y = half a froxel's height per metre of view depth (the falloff's distance bias).
+/// x = point and spot lights, y / z = the low / high 16 bits of the mask of the lights that changed since the previous
+/// frame (fog_pass::find_changed_lights).
 uniform vec4 u_fog_light_info;
 /// Per light: (camera-relative position, 1 / range), (axis the light travels along, cos outer half angle; -2 for a
 /// point light), (linear color x candela x volumetric intensity, 1 / (cos inner - cos outer half angle)).

@@ -58,10 +58,10 @@ enum class fog_volume_mode : std::uint8_t
  *   unshadowed. One full-screen draw.
  * - **Volumetric** (@ref settings::volumetric): a camera-frustum grid of froxels out to
  *   @ref settings::volumetric_distance. A compute pass lights each froxel with the sun through its shadow cascades and
- *   the cloud shadow plus the sky, and blends it with the froxel's own history (no TAA needed), then adds the point
- *   and spot lights (@ref local_light, shadowed by their tiles in the shadow atlas) outside the history so moving
- *   lights leave no trail, each froxel visiting only the lights that a culling dispatch found reaching its cluster of
- *   froxels; a second
+ *   the cloud shadow, the sky and the point and spot lights (@ref local_light, shadowed by their tiles in the shadow
+ *   atlas), and blends it with the froxel's own history (no TAA needed). Each froxel visits only the lights that a
+ *   culling dispatch found reaching its cluster of froxels, and keeps less history where a light changed since the
+ *   previous frame (@ref find_changed_lights), so moving lights leave no lasting trail; a second
  *   integrates each column front to back (Hillaire's energy-conserving slab integral). The composite reads the column
  *   at each pixel's depth and continues with the analytic fog past the grid, from the same density, so the two meet
  *   without a seam.
@@ -137,6 +137,8 @@ public:
     /// A point or spot light the volumetric fog scatters.
     struct local_light
     {
+        /// The same from frame to frame (the light's entity): tells which light changed since the previous frame.
+        std::uint32_t id = 0;
         /// The light's shadow map, when it sits in the shadow atlas and holds this frame's casters; null: unshadowed.
         const shadow::shadowmap_generator* shadow = nullptr;
         /// World position.
@@ -292,6 +294,14 @@ public:
      */
     static auto pick_local_lights(std::vector<local_light> lights, const math::vec3& camera_position, float reach)
         -> std::vector<local_light>;
+
+    /**
+     * @brief Bit i set: light i of @p current (at most @ref max_local_lights) is new since @p previous, or moved, turned
+     * or changed its reach or color there (matched by @ref local_light::id). The froxels such a light reaches keep less
+     * history.
+     */
+    static auto find_changed_lights(const std::vector<local_light>& previous, const std::vector<local_light>& current)
+        -> std::uint32_t;
 
     /// The nearest @ref max_fog_volumes of @p volumes to @p camera_position, the farthest first (the order the
     /// analytic fog inserts them in).

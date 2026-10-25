@@ -3326,6 +3326,7 @@ auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fo
         });
     return lights;
 }
+            local.id = static_cast<std::uint32_t>(entt::to_integral(e));
 } // namespace
 
 auto deferred::run_fog_pass(scene& scn,

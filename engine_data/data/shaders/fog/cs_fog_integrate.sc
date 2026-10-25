@@ -9,7 +9,7 @@
 #include "../bgfx_compute.sh"
 
 IMAGE3D_WO(i_fog_integrated, rgba16f, 0);
-// This frame's lit froxels with the point and spot lights (cs_fog_lighting.sc i_fog_scatter).
+// This frame's lit froxels (cs_fog_lighting.sc i_fog_lit).
 SAMPLER3D(s_fog_lit, 1);
 
 #include "fog.sh"

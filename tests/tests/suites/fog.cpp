@@ -17,6 +17,7 @@
  *     limits of extreme aspects;
  *   - fog_pass::pick_local_lights: lights out of the fog's reach are dropped, the brightest at the camera come first,
  *     and no more than max_local_lights are kept;
+ *   - fog_pass::find_changed_lights: lights are matched by id, and a moved, dimmed or new light is marked changed;
  *   - a light's volumetric intensity round-trips and an older light without it loads at 1;
  *   - fog volumes: the nearest are kept and packed farthest first, the packed matrix maps a world point to its place
  *     in the unit shape, the fade band and shape codes are what fog.sh reads, and the component round-trips.
@@ -280,6 +281,30 @@ void test_local_light_picking()
               "the dimmest at the camera are the ones dropped");
 }
 
+void test_changed_lights()
+{
+    std::printf("test_changed_lights\n");
+    std::vector<fog_pass::local_light> previous;
+    for(std::uint32_t i = 0; i < 4; ++i)
+    {
+        previous.push_back(make_point_light({float(i), 0.0f, 0.0f}, 5.0f, 10.0f));
+        previous.back().id = 100 + i;
+    }
+    fog_check(fog_pass::find_changed_lights(previous, previous) == 0, "lights that stay as they were did not change");
+    // The same lights in another order, one moved, one dimmed, and one new in place of the last.
+    std::vector<fog_pass::local_light> current = {previous[1], previous[0], previous[2], previous[3]};
+    current[2].position.y = 0.5f;
+    current[1].intensity = math::vec3(2.0f);
+    current[3].id = 200;
+    const std::uint32_t changed = fog_pass::find_changed_lights(previous, current);
+    fog_check((changed & 0b0001u) == 0, "a light is matched by id, wherever it is in the list");
+    fog_check((changed & 0b0010u) != 0, "a dimmed light changed");
+    fog_check((changed & 0b0100u) != 0, "a moved light changed");
+    fog_check((changed & 0b1000u) != 0, "a light new since the previous frame changed");
+    std::vector<fog_pass::local_light> many(fog_pass::max_local_lights + 4);
+    fog_check(fog_pass::find_changed_lights({}, many) == 0xFFFFFFFFu, "only max_local_lights lights have bits");
+}
+
 void test_light_volumetric_intensity_round_trip()
 {
     std::printf("test_light_volumetric_intensity_round_trip\n");
@@ -392,6 +417,7 @@ auto run_fog_suite(rtti::context& /*ctx*/) -> int
     test_shader_params();
     test_volumetric_grids();
     test_local_light_picking();
+    test_changed_lights();
     test_light_volumetric_intensity_round_trip();
     test_fog_volumes();
     std::printf("fog: %d checks, %d failures\n", g_fog_checks, g_fog_failures);
