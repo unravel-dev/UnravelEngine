@@ -93,7 +93,8 @@ auto add_fog_volume(scene& scn, const std::string& name, volume_mode mode, const
     -> entt::handle
 {
     auto entity = scn.create_entity(name);
-    entity.get_or_emplace<active_component>();
+    auto& active = entity.get_or_emplace<active_component>();
+    (void)active;
     auto& volume = entity.emplace<volume_component>();
     volume.mode = mode;
     volume.extents = {5.0f, 5.0f, 5.0f};

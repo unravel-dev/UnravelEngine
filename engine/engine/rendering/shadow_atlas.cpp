@@ -405,6 +405,17 @@ auto shadow_atlas_allocator::take_square(std::uint16_t size) -> hpp::optional<sh
 
 void shadow_atlas_allocator::free_square(shadow_atlas_tile square)
 {
+    // find_if, not find: with clang, the MSVC STL sends std::find on a trivially equality comparable type to its
+    // vectorized path, which only supports 1, 2, 4 and 8 byte elements and fails to compile for this 6 byte tile.
+    const auto find_free_square = [this](const shadow_atlas_tile& tile)
+    {
+        return std::find_if(free_squares_.begin(),
+                            free_squares_.end(),
+                            [&tile](const shadow_atlas_tile& free)
+                            {
+                                return free == tile;
+                            });
+    };
     // Merge with the three siblings while they are all free, so large tiles can be taken again.
     while(square.size < size_)
     {
@@ -424,7 +435,7 @@ void shadow_atlas_allocator::free_square(shadow_atlas_tile square)
             {
                 continue;
             }
-            const auto it = std::find(free_squares_.begin(), free_squares_.end(), sibling);
+            const auto it = find_free_square(sibling);
             if(it == free_squares_.end())
             {
                 break;
@@ -439,7 +450,7 @@ void shadow_atlas_allocator::free_square(shadow_atlas_tile square)
         {
             if(!(sibling == square))
             {
-                free_squares_.erase(std::find(free_squares_.begin(), free_squares_.end(), sibling));
+                free_squares_.erase(find_free_square(sibling));
             }
         }
         square = {parent_x, parent_y, parent};
