@@ -350,6 +350,9 @@ public:
 
     /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
     auto run_hiz_pass(const camera& camera,
+    /// Reserves the shadow atlas tiles of the local lights @p camera sees, before any of them renders.
+    void reserve_shadow_atlas_tiles(scene& scn, const camera& camera, const feature_limits& limits);
+
                       gfx::render_view& rview,
                       const run_params& params,
                       const usize32_t& viewport_size,
@@ -580,6 +583,8 @@ private:
         gfx::program::uniform_ptr u_light_direction;
         gfx::program::uniform_ptr u_light_data;
         /// Point and spot lights' emitter: xyz = the tube's axis scaled by its length, w = the sphere radius.
+            // Set by the light's shadowmap_generator; registered here so it exists before the program links (GL).
+            cache_uniform(program.get(), u_shadowAtlasRect, "u_shadowAtlasRect", bgfx::UniformType::Vec4);
         gfx::program::uniform_ptr u_light_source;
         gfx::program::uniform_ptr u_contact_shadow;
         gfx::program::uniform_ptr u_light_color_intensity;
@@ -600,6 +605,7 @@ private:
             cache_uniform(program.get(), u_irradiance_tint_intensity, "u_irradiance_tint_intensity", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sun_direction, "u_sun_direction", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sky_luminance_xyz, "u_sky_luminance_xyz", bgfx::UniformType::Vec4);
+        gfx::program::uniform_ptr u_shadowAtlasRect;
             cache_uniform(program.get(), u_exposition, "u_exposition", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_perez_coeff, "u_perez_coeff", bgfx::UniformType::Vec4, 5);
             cache_uniform(program.get(), s_env, "s_env", bgfx::UniformType::Sampler);
@@ -634,6 +640,8 @@ private:
             cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[5], "s_tex5", bgfx::UniformType::Sampler);
+    /// The atlas requests of the view being rendered (reserve_shadow_atlas_tiles), kept to reuse the allocation.
+    std::vector<shadow::shadow_atlas_request> shadow_atlas_requests_;
             cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_ssil, "s_ssil", bgfx::UniformType::Sampler);

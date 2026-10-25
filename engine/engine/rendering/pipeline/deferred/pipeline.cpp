@@ -826,6 +826,43 @@ void deferred::refresh_shadow_casters(scene& scn, const camera& camera, delta_t 
 
 void deferred::build_shadows(scene& scn,
                              const camera& camera,
+namespace
+{
+/// How much of @p camera's view a light reaching @p reach covers: its angular radius, up to 1 from inside it. The
+/// shadow atlas keeps the resolution of the lights that cover more the longest.
+auto get_shadow_importance(const camera& camera, const math::bsphere& reach) -> float
+{
+    const float distance = math::distance(camera.get_position(), reach.position);
+    return reach.radius / math::max(distance, math::max(reach.radius, 1e-4f));
+}
+} // namespace
+
+void deferred::reserve_shadow_atlas_tiles(scene& scn, const camera& camera, const feature_limits& limits)
+{
+    shadow_atlas_requests_.clear();
+    scn.registry->view<transform_component, light_component, active_component>().each(
+        [&](auto e, auto&& transform_comp, auto&& light_comp, auto&& active)
+        {
+            const auto light = limit_light(light_comp.get_light(), limits);
+            if(!shadow::shadowmap_generator::uses_shadow_atlas(light) || !light_comp.is_enabled() ||
+               !ANONYMOUS::is_light_needed(light, light_comp.get_linear_color()))
+            {
+                return;
+            }
+            auto world_transform = transform_comp.get_transform_global();
+            world_transform.reset_scale();
+            const auto light_sphere = light_comp.get_world_bounds_sphere(world_transform);
+            if(!camera.get_frustum().test_sphere(light_sphere))
+            {
+                return;
+            }
+            const float importance = get_shadow_importance(camera, light_sphere);
+            shadow_atlas_requests_.push_back(light_comp.get_shadowmap_generator().make_atlas_request(light, importance));
+        });
+    // Every view reserves, with or without lights: a new frame first takes back the tiles no view asked for.
+    shadow::shadow_atlas::get().reserve(shadow_atlas_requests_);
+}
+
                              delta_t dt,
                              const feature_limits& limits,
                              layer_mask render_mask)
@@ -833,6 +870,9 @@ void deferred::build_shadows(scene& scn,
     APP_SCOPE_PERF("Rendering/Shadow Generation Pass");
 
     bool queried = false;
+
+    // Before any light renders: reserving can grow the atlas or step lights down, which moves tiles.
+    reserve_shadow_atlas_tiles(scn, camera, limits);
 
     scn.registry->view<transform_component, light_component>().each(
         [&](auto e, auto&& transform_comp, auto&& light_comp)
@@ -2493,11 +2533,12 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             const auto light = limit_light(light_comp_ref.get_light(), limits);
             auto world_transform = transform_comp_ref.get_transform_global();
             world_transform.reset_scale();
-            const bool has_shadows = light.casts_shadows && apply_shadows;
+            const auto& generator = light_comp_ref.get_shadowmap_generator();
+            const bool has_shadows = light.casts_shadows && apply_shadows && generator.has_shadow_map();
             submit_light(light,
                          world_transform,
                          light_comp_ref.get_linear_color(),
-                         has_shadows ? &light_comp_ref.get_shadowmap_generator() : nullptr,
+                         has_shadows ? &generator : nullptr,
                          context);
         });
     submit_particle_lights(scn, context);

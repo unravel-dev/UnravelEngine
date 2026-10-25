@@ -432,6 +432,14 @@ void shadowmap_generator::deinit_textures()
 
     valid_ = false;
 
+    shadow_atlas::get().release(get_atlas_owner());
+    atlas_tile_.reset();
+    atlas_generation_ = UINT64_MAX;
+    destroy_own_maps();
+}
+
+void shadowmap_generator::destroy_own_maps()
+{
     for(int i = 0; i < ShadowMapRenderTargets::Count; ++i)
     {
         if(bgfx::isValid(rt_shadow_map_[i]))
@@ -453,6 +461,11 @@ void shadowmap_generator::deinit_uniforms()
     if(bgfx::isValid(tex_color_))
     {
         bgfx::destroy(tex_color_);
+    }
+    if(bgfx::isValid(shadow_atlas_rect_))
+    {
+        bgfx::destroy(shadow_atlas_rect_);
+        shadow_atlas_rect_ = {bgfx::kInvalidHandle};
     }
 
     for(int i = 0; i < ShadowMapRenderTargets::Count; ++i)
@@ -477,6 +490,7 @@ void shadowmap_generator::init(rtti::context& ctx)
     // Uniforms.
     uniforms_.init();
     tex_color_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
+    shadow_atlas_rect_ = bgfx::createUniform("u_shadowAtlasRect", bgfx::UniformType::Vec4);
     shadow_map_[0] = bgfx::createUniform("s_shadowMap0", bgfx::UniformType::Sampler);
     shadow_map_[1] = bgfx::createUniform("s_shadowMap1", bgfx::UniformType::Sampler);
     shadow_map_[2] = bgfx::createUniform("s_shadowMap2", bgfx::UniformType::Sampler);
@@ -1130,6 +1144,10 @@ auto shadowmap_generator::get_depth_type() const -> PackDepth::Enum
 
 auto shadowmap_generator::get_rt_texture(uint8_t split) const -> bgfx::TextureHandle
 {
+    if(uses_atlas_)
+    {
+        return split == 0 && atlas_tile_ ? shadow_atlas::get().get_color_texture() : bgfx::TextureHandle{bgfx::kInvalidHandle};
+    }
     if(!bgfx::isValid(rt_shadow_map_[split]))
     {
         return {bgfx::kInvalidHandle};
@@ -1157,6 +1175,23 @@ void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) 
     // two surfaces it lies between) and clamped edges. Blurred VSM / ESM maps interpolate.
     const bool filtered_map = (SmImpl::VSM == settings_.m_smImpl) || (SmImpl::ESM == settings_.m_smImpl);
     const uint32_t sampler_flags = (filtered_map ? 0u : uint32_t(BGFX_SAMPLER_POINT)) | BGFX_SAMPLER_UVW_CLAMP;
+    // Bilinear comparison: each fetch filters the results of the 2x2 texels around it.
+    constexpr uint32_t compare_flags = BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_UVW_CLAMP;
+    if(uses_atlas_)
+    {
+        if(!atlas_tile_)
+        {
+            return;
+        }
+        const auto& atlas = shadow_atlas::get();
+        bgfx::setTexture(stage, shadow_map_[0], atlas.get_color_texture(), sampler_flags);
+        if(compare_stage != no_compare_stage)
+        {
+            bgfx::setTexture(compare_stage, shadow_depth_[0], atlas.get_depth_texture(), compare_flags);
+        }
+        bgfx::setUniform(shadow_atlas_rect_, atlas_rect_);
+        return;
+    }
     for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
     {
         if(!bgfx::isValid(rt_shadow_map_[ii]))
@@ -1170,8 +1205,6 @@ void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) 
     {
         return;
     }
-    // Bilinear comparison: each fetch filters the results of the 2x2 texels around it.
-    constexpr uint32_t compare_flags = BGFX_SAMPLER_COMPARE_LEQUAL | BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_UVW_CLAMP;
     constexpr uint8_t depth_attachment = 1;
     for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
     {
@@ -1188,17 +1221,89 @@ void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) 
 
 auto shadowmap_generator::already_resolved() const -> bool
 {
-    return last_resolve_frame_ == gfx::get_render_frame();
+    // A tile rendered before the atlas last moved its tiles holds another light's texels, or none.
+    const bool is_tile_current = !uses_atlas_ || atlas_generation_ == shadow_atlas::get().get_generation();
+    return last_resolve_frame_ == gfx::get_render_frame() && is_tile_current;
 }
 
 void shadowmap_generator::mark_resolved()
 {
     last_resolve_frame_ = gfx::get_render_frame();
+    atlas_generation_ = shadow_atlas::get().get_generation();
 }
 
 auto shadowmap_generator::needs_clear() const -> bool
 {
-    return needs_clear_;
+    // A new or moved tile holds whatever the atlas held there.
+    return needs_clear_ || (uses_atlas_ && atlas_generation_ != shadow_atlas::get().get_generation());
+}
+
+auto shadowmap_generator::uses_shadow_atlas(const light& l) -> bool
+{
+    const bool is_local = l.type == light_type::spot || l.type == light_type::point;
+    const bool compares_depth = l.shadow_params.type == sm_impl::hard || l.shadow_params.type == sm_impl::pcf ||
+                                l.shadow_params.type == sm_impl::pcss;
+    return l.casts_shadows && is_local && compares_depth;
+}
+
+auto shadowmap_generator::make_atlas_request(const light& l, float importance) const -> shadow_atlas_request
+{
+    return {get_atlas_owner(), std::uint16_t(1u << uint32_t(convert(l.shadow_params.resolution))), importance};
+}
+
+auto shadowmap_generator::has_shadow_map() const -> bool
+{
+    return uses_atlas_ ? atlas_tile_.has_value() : bgfx::isValid(rt_shadow_map_[0]);
+}
+
+auto shadowmap_generator::get_map_uv_rect() const -> math::vec4
+{
+    return uses_atlas_ ? math::vec4(atlas_rect_[0], atlas_rect_[1], atlas_rect_[2], atlas_rect_[3]) : math::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+}
+
+auto shadowmap_generator::get_atlas_tile() const -> hpp::optional<shadow_atlas_tile>
+{
+    return uses_atlas_ ? atlas_tile_ : hpp::optional<shadow_atlas_tile>{};
+}
+
+auto shadowmap_generator::has_linear_depth() const -> bool
+{
+    return settings_.m_depthImpl == DepthImpl::Linear;
+}
+
+auto shadowmap_generator::get_world_to_map(uint8_t face) const -> math::mat4
+{
+    // The lighting pass: u_lightMtx for a spot light; u_shadowMapMtx<face> after u_lightMtx for a point light.
+    const math::mat4 light_matrix = math::make_mat4(light_mtx_);
+    if(settings_.m_lightType != LightType::PointLight)
+    {
+        return light_matrix;
+    }
+    const uint8_t last_face = uint8_t(TetrahedronFaces::Count - 1);
+    return math::make_mat4(shadow_map_mtx_[face < last_face ? face : last_face]) * light_matrix;
+}
+
+void shadowmap_generator::update_atlas_tile()
+{
+    const auto& atlas = shadow_atlas::get();
+    const auto tile = atlas.find(get_atlas_owner());
+    if(tile != atlas_tile_)
+    {
+        needs_clear_ = true;
+    }
+    atlas_tile_ = tile;
+    if(!tile)
+    {
+        return;
+    }
+    const float atlas_size = float(atlas.get_size());
+    atlas_rect_[0] = float(tile->x) / atlas_size;
+    // View rects count rows from the top; with the texture origin at the bottom (GL) the tile's first row sits at the
+    // far end of v. Inside the tile the light's own matrices already flip v for that origin (mtxBias).
+    const bool is_origin_bottom_left = bgfx::getCaps()->originBottomLeft;
+    atlas_rect_[1] = is_origin_bottom_left ? 1.0f - float(tile->y + tile->size) / atlas_size : float(tile->y) / atlas_size;
+    atlas_rect_[2] = float(tile->size) / atlas_size;
+    atlas_rect_[3] = float(tile->size) / atlas_size;
 }
 
 void shadowmap_generator::update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active)
@@ -1327,6 +1432,23 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     recreateTextures |= last_settings.m_smImpl != settings_.m_smImpl;
     recreateTextures |= last_settings.m_numSplits != settings_.m_numSplits;
     recreateTextures |= last_settings.m_lightType != settings_.m_lightType;
+
+    const bool was_in_atlas = uses_atlas_;
+    uses_atlas_ = uses_shadow_atlas(l);
+    if(uses_atlas_)
+    {
+        // The map lives in the light's atlas tile, at the tile's edge (the request, or less while the atlas is full).
+        destroy_own_maps();
+        update_atlas_tile();
+        current_shadow_map_size_ = atlas_tile_ ? atlas_tile_->size : shadowMapSize;
+        recreateTextures = false;
+    }
+    else if(was_in_atlas)
+    {
+        shadow_atlas::get().release(get_atlas_owner());
+        atlas_tile_.reset();
+        recreateTextures = true;
+    }
 
     if(recreateTextures)
     {
@@ -1934,6 +2056,15 @@ void shadowmap_generator::update_bias_uniforms(bool origin_bottom_left)
 void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models, const camera& cam, ::unravel::rendering::pipeline_stats* stats)
 {
     mark_resolved();
+    if(uses_atlas_ && !atlas_tile_)
+    {
+        // Not even the smallest tile was free: the light shades unshadowed this frame (has_shadow_map).
+        return;
+    }
+    // Where the spot and point maps go: the light's atlas tile, or its own map.
+    const bgfx::FrameBufferHandle map_target = uses_atlas_ ? shadow_atlas::get().get_frame_buffer() : rt_shadow_map_[0];
+    const uint16_t map_x = uses_atlas_ ? atlas_tile_->x : uint16_t(0);
+    const uint16_t map_y = uses_atlas_ ? atlas_tile_->y : uint16_t(0);
 
     auto& lightView = light_view_;
     auto& lightProj = light_proj_;
@@ -1987,8 +2118,8 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
          * RENDERVIEW_HBLUR_0_ID - Horizontal blur.
          */
 
-        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
-        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
+        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_0_ID, map_x, map_y, current_shadow_map_size_, current_shadow_map_size_);
+        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, map_x, map_y, current_shadow_map_size_, current_shadow_map_size_);
         bgfx::setViewRect(RENDERVIEW_VBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
         bgfx::setViewRect(RENDERVIEW_HBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
 
@@ -1997,8 +2128,8 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         bgfx::setViewTransform(RENDERVIEW_VBLUR_0_ID, screenView, screenProj);
         bgfx::setViewTransform(RENDERVIEW_HBLUR_0_ID, screenView, screenProj);
 
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_0_ID, rt_shadow_map_[0]);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_1_ID, rt_shadow_map_[0]);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_0_ID, map_target);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_1_ID, map_target);
         bgfx::setViewFrameBuffer(RENDERVIEW_VBLUR_0_ID, rt_blur_);
         bgfx::setViewFrameBuffer(RENDERVIEW_HBLUR_0_ID, rt_shadow_map_[0]);
     }
@@ -2014,23 +2145,23 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
          * RENDERVIEW_HBLUR_0_ID - Horizontal blur.
          */
 
-        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
+        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_0_ID, map_x, map_y, current_shadow_map_size_, current_shadow_map_size_);
         if(settings_.m_stencilPack)
         {
             const uint16_t f = current_shadow_map_size_;     // full size
             const uint16_t h = current_shadow_map_size_ / 2; // half size
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, 0, 0, f, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_2_ID, 0, h, f, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_3_ID, 0, 0, h, f);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_4_ID, h, 0, h, f);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, map_x, map_y, f, h);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_2_ID, map_x, uint16_t(map_y + h), f, h);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_3_ID, map_x, map_y, h, f);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_4_ID, uint16_t(map_x + h), map_y, h, f);
         }
         else
         {
             const uint16_t h = current_shadow_map_size_ / 2; // half size
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, 0, 0, h, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_2_ID, h, 0, h, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_3_ID, 0, h, h, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_4_ID, h, h, h, h);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, map_x, map_y, h, h);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_2_ID, uint16_t(map_x + h), map_y, h, h);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_3_ID, map_x, uint16_t(map_y + h), h, h);
+            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_4_ID, uint16_t(map_x + h), uint16_t(map_y + h), h, h);
         }
         bgfx::setViewRect(RENDERVIEW_VBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
         bgfx::setViewRect(RENDERVIEW_HBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
@@ -2067,11 +2198,11 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         bgfx::setViewTransform(RENDERVIEW_VBLUR_0_ID, screenView, screenProj);
         bgfx::setViewTransform(RENDERVIEW_HBLUR_0_ID, screenView, screenProj);
 
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_0_ID, rt_shadow_map_[0]);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_1_ID, rt_shadow_map_[0]);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_2_ID, rt_shadow_map_[0]);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_3_ID, rt_shadow_map_[0]);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_4_ID, rt_shadow_map_[0]);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_0_ID, map_target);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_1_ID, map_target);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_2_ID, map_target);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_3_ID, map_target);
+        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_4_ID, map_target);
         bgfx::setViewFrameBuffer(RENDERVIEW_VBLUR_0_ID, rt_blur_);
         bgfx::setViewFrameBuffer(RENDERVIEW_HBLUR_0_ID, rt_shadow_map_[0]);
     }
@@ -2139,18 +2270,24 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
                                ? 0
                                : BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
 
-    bgfx::setViewClear(RENDERVIEW_SHADOWMAP_0_ID,
+    // A spot light's map clears in its one draw view, which has the same target and rect: a view of its own for the
+    // clear opens one more render pass per light. A point light clears in view 0, ahead of its stencil mask and faces.
+    const bgfx::ViewId clear_view =
+        (LightType::SpotLight == settings_.m_lightType) ? RENDERVIEW_SHADOWMAP_1_ID : RENDERVIEW_SHADOWMAP_0_ID;
+    bgfx::setViewClear(clear_view,
                        flags0,
                        0xfefefefe // blur fails on completely white regions
                        ,
                        clear_values_.clear_depth,
                        clear_values_.clear_stencil);
-    bgfx::touch(RENDERVIEW_SHADOWMAP_0_ID);
+    bgfx::touch(clear_view);
 
     const uint8_t flags1 =
         (LightType::DirectionalLight == settings_.m_lightType) ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH : 0;
 
-    for(uint8_t ii = 0; ii < 4; ++ii)
+    // Only the cascades clear here (the local lights cleared above): a view without a clear needs no touch, and an empty
+    // view left untouched costs nothing, where a touched one still opens a render pass.
+    for(uint8_t ii = 0; ii < 4 && flags1 != 0; ++ii)
     {
         bgfx::setViewClear(RENDERVIEW_SHADOWMAP_1_ID + ii,
                            flags1,

@@ -9,6 +9,7 @@
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/assao_component.h>
+#include <engine/rendering/shadow_atlas.h>
 #include <engine/rendering/ecs/components/gtao_component.h>
 #include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -747,6 +748,7 @@ auto defaults::deinit(rtti::context& ctx) -> bool
     material::default_normal_map() = {};
     default_textures::get().clear();
     return true;
+    shadow::shadow_atlas::get().clear();
 }
 
 auto defaults::init_assets(rtti::context& ctx) -> bool

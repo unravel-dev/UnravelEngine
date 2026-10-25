@@ -139,6 +139,22 @@ float texcoordInRange(vec2 _texcoord)
 uniform vec4 u_params2;
 #define u_shadowMapTexelSize u_params2.z
 
+#if SM_ATLAS
+/// The light's tile in the shared shadow atlas (shadow::shadow_atlas): xy = its origin, zw = its extent, in atlas uv.
+/// Spot and point lights with depth-compared shadows render their maps there; every coordinate in this file stays in
+/// the light's own map uv (0..1, texel size u_shadowMapTexelSize) and turns into atlas uv only at the fetch.
+uniform vec4 u_shadowAtlasRect;
+/// Map uv @p _uv in the atlas, held half a texel inside the tile: a filtered fetch or a comparison footprint never
+/// reaches a neighbour's texels, it reads the tile's edge as a map of its own would (clamp to edge).
+vec2 shadowMapFetchUV(vec2 _uv)
+{
+    vec2 halfTexel = vec2_splat(0.5 * u_shadowMapTexelSize);
+    return u_shadowAtlasRect.xy + clamp(_uv, halfTexel, vec2_splat(1.0) - halfTexel) * u_shadowAtlasRect.zw;
+}
+#else
+#define shadowMapFetchUV(_uv) (_uv)
+#endif
+
 // Smallest filter radius in texels: below one texel, point-sampled taps all land on the same
 // texel and the kernel stops filtering (blocky edges in the far cascades).
 #define SHADOW_MIN_FILTER_RADIUS_TEXELS 1.0
@@ -174,7 +190,7 @@ float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bia
 #endif
 
     float receiver = _shadowCoord.z/_shadowCoord.w - _bias + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
-    float occluder = texture2DLod(_sampler, texCoord, lod).x;
+    float occluder = texture2DLod(_sampler, shadowMapFetchUV(texCoord), lod).x;
 
     float visibility = step(receiver, occluder);
     return visibility;
@@ -292,7 +308,7 @@ float compareShadowTap(sampler2DShadow _sampler, vec2 _sampleUV, vec2 _receiverU
 
     float receiver = _receiverDepth + dot(_sampleUV - _receiverUV, _planeGrad) - comparePlaneSlack(_sampleUV, _planeGrad);
     float hardwareDepth = receiver * u_shadowHardwareDepthScale + (1.0 - u_shadowHardwareDepthScale);
-    return shadow2D(_sampler, vec3(_sampleUV, hardwareDepth));
+    return shadow2D(_sampler, vec3(shadowMapFetchUV(_sampleUV), hardwareDepth));
 }
 
 // The tents: _baseUV is the centre of the texel below and left of the texel corner nearest the
@@ -439,7 +455,7 @@ float transmittanceLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _
 #endif
 
     float receiver = _shadowCoord.z/_shadowCoord.w - _bias + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
-    float occluder = texture2DLod(_sampler, texCoord, lod).x;
+    float occluder = texture2DLod(_sampler, shadowMapFetchUV(texCoord), lod).x;
     return exp(-shadowOccluderDistance(receiver, occluder, _model) * _density);
 }
 
@@ -598,7 +614,7 @@ vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float 
 #if SM_CSM
         sampleUV = saturate(sampleUV);
 #endif
-        float shadowMapDepth = texture2D(_sampler, sampleUV).x;
+        float shadowMapDepth = texture2D(_sampler, shadowMapFetchUV(sampleUV)).x;
         if (shadowMapDepth < receiverDepth + receiverPlaneDelta(sampleUV, texCoord, _planeGrad))
         {
             avgBlockerDepth += shadowMapDepth;

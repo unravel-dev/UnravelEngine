@@ -8,6 +8,7 @@
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
+#include <engine/rendering/shadow_atlas.h>
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
@@ -785,6 +786,32 @@ public:
     void submit_uniforms(uint8_t stage, uint8_t compare_stage = no_compare_stage) const;
 
 
+    /// Whether @p l renders its map into the shared shadow atlas (shadow_atlas): spot and point lights whose shadows
+    /// compare depth (hard, PCF, PCSS). VSM and ESM lights store moments or blur their maps, and the cascades fit the
+    /// view: those keep maps of their own.
+    static auto uses_shadow_atlas(const light& l) -> bool;
+
+    /// What @p l asks the atlas for in a view it reaches with @p importance (shadow_atlas_request::importance).
+    auto make_atlas_request(const light& l, float importance) const -> shadow_atlas_request;
+
+    /// Whether the light has a map to sample: its own, or its tile in the atlas.
+    auto has_shadow_map() const -> bool;
+
+    /// The light's map inside the texture get_rt_texture(0) returns, in uv (x, y, width, height): its atlas tile, or
+    /// the whole texture for a map of its own.
+    auto get_map_uv_rect() const -> math::vec4;
+
+    /// The light's tile in the shadow atlas; none while it keeps a map of its own or has no tile.
+    auto get_atlas_tile() const -> hpp::optional<shadow_atlas_tile>;
+
+    /// Whether the map stores linear depth (sm_depth::linear): a receiver's stored depth is then z + 0.5 of its map
+    /// coordinates, not z / w.
+    auto has_linear_depth() const -> bool;
+
+    /// World position -> map coordinates (before the divide by w) of map @p face: a spot light's one map (0), or a
+    /// point light's tetrahedron face (0 green, 1 yellow, 2 blue, 3 red), as the lighting pass projects a receiver.
+    auto get_world_to_map(uint8_t face) const -> math::mat4;
+
     /// Edge of every split's map in texels.
     auto get_shadow_map_size() const -> uint16_t
     {
@@ -873,6 +900,26 @@ private:
     bool valid_{};
     /// See needs_clear.
     bool needs_clear_{true};
+
+    /// The light renders into the shadow atlas (uses_shadow_atlas) instead of maps of its own.
+    bool uses_atlas_{};
+    /// Its tile this frame, when it has one.
+    hpp::optional<shadow_atlas_tile> atlas_tile_;
+    /// The atlas generation the tile's content was rendered under: under another one it is stale.
+    uint64_t atlas_generation_ = UINT64_MAX;
+    /// u_shadowAtlasRect: the tile in atlas uv (common_shadow.sh shadowMapFetchUV).
+    bgfx::UniformHandle shadow_atlas_rect_{bgfx::kInvalidHandle};
+    float atlas_rect_[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+
+    /// The key of this light's tile in the atlas.
+    auto get_atlas_owner() const -> std::uintptr_t
+    {
+        return reinterpret_cast<std::uintptr_t>(this);
+    }
+    /// Frees the maps of its own (a light that moved into the atlas).
+    void destroy_own_maps();
+    /// Picks up its tile for this frame from the atlas (update).
+    void update_atlas_tile();
 
     /// Render frame this light was last resolved in; see already_resolved.
     uint64_t last_resolve_frame_ = -1;

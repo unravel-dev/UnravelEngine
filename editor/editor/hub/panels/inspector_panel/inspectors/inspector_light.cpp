@@ -28,9 +28,12 @@ auto inspector_light_component::inspect(rtti::context& ctx,
             ImGui::BeginGroup();
             auto program = generator.get_depth_render_program(depth_type);
             program->begin();
-            ImGui::Image(
-                ImGui::ToTex(generator.get_rt_texture(0), 0, program->native_handle()).id,
-                ImVec2(256, 250));
+            // A light in the shadow atlas shows its tile, not the whole atlas.
+            const auto uv_rect = generator.get_map_uv_rect();
+            ImGui::Image(ImGui::ToTex(generator.get_rt_texture(0), 0, program->native_handle()).id,
+                         ImVec2(256, 250),
+                         ImVec2(uv_rect.x, uv_rect.y),
+                         ImVec2(uv_rect.x + uv_rect.z, uv_rect.y + uv_rect.w));
 
             if(light_val.type == light_type::directional)
             {

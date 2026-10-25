@@ -3,6 +3,11 @@
 
 #include "common.sh"
 #include "lighting.sh"
+// Spot and point lights with depth-compared shadows read their maps from the shared shadow atlas; VSM and ESM maps
+// (moments, blurred) and the cascades keep textures of their own.
+#if (SM_SPOT || SM_OMNI) && !SM_VSM && !SM_ESM
+#define SM_ATLAS 1
+#endif
 #include "shadowmaps/common_shadow.sh"
 
 SAMPLER2D(s_tex0, 0);
