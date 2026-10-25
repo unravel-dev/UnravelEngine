@@ -16,6 +16,14 @@ namespace
 constexpr const char* LEGACY_DEPLOY_BACKUP = "deploy.cfg.before-profiles";
 constexpr const char* DEPLOY_SETTINGS_FILE = "deploy/deploy.cfg";
 
+/// Whether two profile names are one name: letter case is ignored on every system, not only where the file system
+/// ignores it, because a project carries its profiles' folders between systems and one that ignores case would take
+/// "Android" and "android" for one folder.
+auto is_same_profile_name(const std::string& lhs, const std::string& rhs) -> bool
+{
+    return string_utils::to_lower(lhs) == string_utils::to_lower(rhs);
+}
+
 void sort_by_name(std::vector<settings_profile>& profiles)
 {
     std::sort(profiles.begin(),
@@ -320,10 +328,11 @@ auto project_profiles::check_new_name(const std::string& name, const std::string
                                       profiles_.end(),
                                       [&](const settings_profile& profile)
                                       {
-                                          return profile.name != renamed && is_same_folder_name(profile.name, name);
+                                          return profile.name != renamed && is_same_profile_name(profile.name, name);
                                       });
+    // A change of letter case finds the renamed profile's own folder where the file system ignores case.
     fs::error_code ec;
-    const bool is_on_disk = (renamed.empty() || !is_same_folder_name(renamed, name)) && fs::exists(get_profile_folder(project_root_, name), ec);
+    const bool is_on_disk = (renamed.empty() || !is_same_profile_name(renamed, name)) && fs::exists(get_profile_folder(project_root_, name), ec);
     if(is_taken || is_on_disk)
     {
         return result::failure(fmt::format("A profile named {} exists already.", name));
