@@ -881,16 +881,10 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
 vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
-    GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
-    vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
+    // The depth first: the position tells whether a local light reaches the pixel at all.
+    GBufferDataDepth gbuffer_depth = DecodeGBufferDepthTexel(gbuf_texel, s_tex4);
+    vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, gbuffer_depth.depth, s_tex4);
     vec3 world_position = u_camera_position.xyz + clipToWorld(u_invViewProjRelative, clip);
-    float filtered_roughness = GeometricSpecularAA(data.world_normal, GetLightingRoughness(data.roughness));
-    vec3 light_color = u_light_color_intensity.xyz;
-    // The CPU scaled the intensity by its share of the pre-exposure; the GPU's share joins it here.
-    float intensity = u_light_color_intensity.w * u_pre_exposure_gpu_scale;
-    vec3 specular_color = data.specular_color;
-    vec3 diffuse_color = data.diffuse_color;
-
 
 #if DIRECTIONAL_LIGHT
     vec3 vector_to_light = -u_light_direction.xyz;
@@ -898,8 +892,6 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 vector_to_light = u_light_position.xyz - world_position;
 #endif
     float distance_sqr = dot( vector_to_light, vector_to_light );
-    vec3 N = data.world_normal;
-    vec3 V = normalize(u_camera_position.xyz - world_position);
     vec3 L = vector_to_light / sqrt( distance_sqr );
 
     // Inverse-squared local lights: the capsule emitter carries the 1 / d^2 falloff and the
@@ -909,10 +901,41 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 #if SPOT_LIGHT
     light_mask *= LocalLightSpotMask(L, normalize(u_light_direction.xyz), vec2(u_light_data.z, 1.0f / (u_light_data.y - u_light_data.z)));
 #endif
+    // A local light's quad covers the screen rect of its bounding sphere, mostly pixels outside its range and cone:
+    // they leave here, before the rest of the G-buffer read, and the discard skips their blend (the shadow coverage
+    // view still shades them).
+    BRANCH
+    if(u_shadowMapShowCoverage <= 0.0 && light_mask <= 0.0)
+    {
+        discard;
+    }
+#else
+    float light_mask = 1.0f;
+#endif
+
+    GBufferData data = ConstructGBuffer(DecodeGBufferColorAndAOTexel(gbuf_texel, s_tex0),
+                                        DecodeGBufferNormalMetalRoughnessTexel(gbuf_texel, s_tex1),
+                                        DecodeGBufferEmissiveTexel(gbuf_texel, s_tex2),
+                                        DecodeGBufferSubsurfaceTexel(gbuf_texel, s_tex3),
+                                        gbuffer_depth);
+#if POINT_LIGHT || SPOT_LIGHT
+    // Other pixels of the quad may have left at the discard, and a screen derivative would read their values: the
+    // specular AA reads the quad partners' normals from the G-buffer instead.
+    float filtered_roughness = GeometricSpecularAATexel(gbuf_texel, data.world_normal, GetLightingRoughness(data.roughness), s_tex1);
+#else
+    float filtered_roughness = GeometricSpecularAA(data.world_normal, GetLightingRoughness(data.roughness));
+#endif
+    vec3 light_color = u_light_color_intensity.xyz;
+    // The CPU scaled the intensity by its share of the pre-exposure; the GPU's share joins it here.
+    float intensity = u_light_color_intensity.w * u_pre_exposure_gpu_scale;
+    vec3 specular_color = data.specular_color;
+    vec3 diffuse_color = data.diffuse_color;
+    vec3 N = data.world_normal;
+    vec3 V = normalize(u_camera_position.xyz - world_position);
+#if POINT_LIGHT || SPOT_LIGHT
     CapsuleLight capsule = MakeCapsuleLight(vector_to_light, u_light_source.xyz, u_light_source.w);
     AreaLight area_light = MakeCapsuleAreaLight(capsule, filtered_roughness, normalize(N), V);
 #else
-    float light_mask = 1.0f;
     AreaLight area_light = MakeDirectionalAreaLight(normalize(N), L);
 #endif
 
@@ -930,12 +953,16 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     // them, attenuated by its extinction.
     bool has_subsurface = max(data.subsurface_color.x, max(data.subsurface_color.y, data.subsurface_color.z)) > 0.0;
     // Outside the light's range and cone, or facing away without a subsurface colour to carry
-    // light through, the light adds nothing whatever the shadow says: skip the shadow map taps.
-    // The cascade coverage view still needs them.
+    // light through, the light adds nothing whatever the shadow says: skip the shadow map taps
+    // (and, for a local light, the blend). The cascade coverage view still needs them.
     BRANCH
     if(u_shadowMapShowCoverage <= 0.0 && (light_mask <= 0.0 || (NoL <= 0.0 && !has_subsurface)))
     {
+#if POINT_LIGHT || SPOT_LIGHT
+        discard;
+#else
         return vec4(0.0, 0.0, 0.0, 1.0);
+#endif
     }
     float subsurface_density = 0.0;
     if(has_subsurface)

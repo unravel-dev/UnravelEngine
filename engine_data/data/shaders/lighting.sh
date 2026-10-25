@@ -184,11 +184,8 @@ float GetLightingRoughness(float roughness)
 //
 // Works in alpha-space (perceptualRoughness^2) to match the GGX parameterisation.
 // SCREEN_SPACE_VARIANCE scales the measured variance; THRESHOLD^2 caps what it adds to alpha.
-#if BGFX_SHADER_TYPE_FRAGMENT
-float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
+float GeometricSpecularAAFromDerivatives(vec3 dNdx, vec3 dNdy, float perceptualRoughness)
 {
-    vec3 dNdx = dFdx(worldNormal);
-    vec3 dNdy = dFdy(worldNormal);
     float variance = dot(dNdx, dNdx) + dot(dNdy, dNdy);
 
     const float SCREEN_SPACE_VARIANCE = 0.85f;
@@ -198,6 +195,12 @@ float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
     float alpha = perceptualRoughness * perceptualRoughness;
     float filteredAlpha = saturate(alpha + kernelRoughnessSq);
     return sqrt(filteredAlpha);
+}
+
+#if BGFX_SHADER_TYPE_FRAGMENT
+float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
+{
+    return GeometricSpecularAAFromDerivatives(dFdx(worldNormal), dFdy(worldNormal), perceptualRoughness);
 }
 #endif
 float F0ToMetallic(float F0)
@@ -254,6 +257,19 @@ GBufferDataColorAndAO DecodeGBufferColorAndAOLod(
     return data;
 }
 
+GBufferDataColorAndAO DecodeGBufferColorAndAOTexel(
+    ivec2 texel,
+    sampler2D colorTex)
+{
+    GBufferDataColorAndAO data;
+    vec4 data0 = texelFetch(colorTex, texel, 0);   // base_color (linear from the sRGB target), ao
+
+    data.base_color = data0.xyz;
+    data.ambient_occlusion = data0.w;
+
+    return data;
+}
+
 GBufferDataNormalMetalRoughness DecodeGBufferNormalMetalRoughness(
     vec2 texcoord,
     sampler2D normalMetalRoughnessTex)
@@ -275,6 +291,20 @@ GBufferDataNormalMetalRoughness DecodeGBufferNormalMetalRoughnessLod(
 {
     GBufferDataNormalMetalRoughness data;
     vec4 data1 = texture2DLod(normalMetalRoughnessTex, texcoord, lod);   // normal, metalness, roughness
+
+    data.world_normal = decodeNormalOctahedron(data1.xy);
+    data.metalness = data1.z;
+    data.roughness = data1.w;
+
+    return data;
+}
+
+GBufferDataNormalMetalRoughness DecodeGBufferNormalMetalRoughnessTexel(
+    ivec2 texel,
+    sampler2D normalMetalRoughnessTex)
+{
+    GBufferDataNormalMetalRoughness data;
+    vec4 data1 = texelFetch(normalMetalRoughnessTex, texel, 0);   // normal, metalness, roughness
 
     data.world_normal = decodeNormalOctahedron(data1.xy);
     data.metalness = data1.z;
@@ -308,12 +338,37 @@ GBufferDataEmissive DecodeGBufferEmissiveLod(
     return data;
 }
 
+GBufferDataEmissive DecodeGBufferEmissiveTexel(
+    ivec2 texel,
+    sampler2D emissiveTex)
+{
+    GBufferDataEmissive data;
+    vec4 data2 = texelFetch(emissiveTex, texel, 0);   // emissive_color
+
+    data.emissive_color = data2.xyz;
+
+    return data;
+}
+
 GBufferDataSubsurface DecodeGBufferSubsurface(
     vec2 texcoord,
     sampler2D subsurfaceTex)
 {
     GBufferDataSubsurface data;
     vec4 data3 = texture2D(subsurfaceTex, texcoord);   // subsurface_color, subsurface_opacity
+
+    data.subsurface_color = data3.xyz;
+    data.subsurface_opacity = data3.w;
+
+    return data;
+}
+
+GBufferDataSubsurface DecodeGBufferSubsurfaceTexel(
+    ivec2 texel,
+    sampler2D subsurfaceTex)
+{
+    GBufferDataSubsurface data;
+    vec4 data3 = texelFetch(subsurfaceTex, texel, 0);   // subsurface_color, subsurface_opacity
 
     data.subsurface_color = data3.xyz;
     data.subsurface_opacity = data3.w;
@@ -348,29 +403,51 @@ GBufferDataDepth DecodeGBufferDepthLod(
     return data;
 }
 
-GBufferData DecodeGBuffer(vec2 texcoord, sampler2D tex0, sampler2D tex1, sampler2D tex2, sampler2D tex3, sampler2D tex4)
+GBufferDataDepth DecodeGBufferDepthTexel(
+    ivec2 texel,
+    sampler2D depthTex)
+{
+    GBufferDataDepth data;
+    float deviceDepth = texelFetch(depthTex, texel, 0).x;
+
+    data.depth = toClipSpaceDepth(deviceDepth);
+    data.depth01 = deviceDepth;
+
+    return data;
+}
+
+// The G-buffer of one pixel from its attachments, decoded one by one: a pass can decode the attachments it needs
+// first and the others only where it goes on (pbr_light).
+GBufferData ConstructGBuffer(
+    GBufferDataColorAndAO colorAndAO,
+    GBufferDataNormalMetalRoughness normalMetalRoughness,
+    GBufferDataEmissive emissive,
+    GBufferDataSubsurface subsurface,
+    GBufferDataDepth depth)
 {
     GBufferData data;
-
-    GBufferDataColorAndAO data0 = DecodeGBufferColorAndAO(texcoord, tex0);
-    GBufferDataNormalMetalRoughness data1 = DecodeGBufferNormalMetalRoughness(texcoord, tex1);
-    GBufferDataEmissive data2 = DecodeGBufferEmissive(texcoord, tex2);
-    GBufferDataSubsurface data3 = DecodeGBufferSubsurface(texcoord, tex3);
-    GBufferDataDepth data4 = DecodeGBufferDepth(texcoord, tex4);
-
-    data.base_color = data0.base_color;    
-    data.ambient_occlusion = data0.ambient_occlusion;
-    data.world_normal = data1.world_normal;
-    data.metalness = data1.metalness;
-    data.roughness = data1.roughness;
-    data.emissive_color = data2.emissive_color;
-    data.subsurface_color = data3.subsurface_color;
-    data.subsurface_opacity = data3.subsurface_opacity;
-    data.depth01 = data4.depth01;
-    data.depth = data4.depth;
+    data.base_color = colorAndAO.base_color;
+    data.ambient_occlusion = colorAndAO.ambient_occlusion;
+    data.world_normal = normalMetalRoughness.world_normal;
+    data.metalness = normalMetalRoughness.metalness;
+    data.roughness = normalMetalRoughness.roughness;
+    data.emissive_color = emissive.emissive_color;
+    data.subsurface_color = subsurface.subsurface_color;
+    data.subsurface_opacity = subsurface.subsurface_opacity;
+    data.depth01 = depth.depth01;
+    data.depth = depth.depth;
     data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metalness);
     data.specular_color = ComputeF0(0.5f, data.base_color, data.metalness);
     return data;
+}
+
+GBufferData DecodeGBuffer(vec2 texcoord, sampler2D tex0, sampler2D tex1, sampler2D tex2, sampler2D tex3, sampler2D tex4)
+{
+    return ConstructGBuffer(DecodeGBufferColorAndAO(texcoord, tex0),
+                            DecodeGBufferNormalMetalRoughness(texcoord, tex1),
+                            DecodeGBufferEmissive(texcoord, tex2),
+                            DecodeGBufferSubsurface(texcoord, tex3),
+                            DecodeGBufferDepth(texcoord, tex4));
 }
 
 // Integer texel for UV; clamps so texcoord==1 stays on the last texel (avoids out-of-range with floor).
@@ -393,26 +470,27 @@ GBufferData DecodeGBufferTexel(
     sampler2D tex3,
     sampler2D tex4)
 {
-    GBufferData data;
-    vec4 d0 = texelFetch(tex0, texel, 0);
-    vec4 d1 = texelFetch(tex1, texel, 0);
-    vec4 d2 = texelFetch(tex2, texel, 0);
-    vec4 d3 = texelFetch(tex3, texel, 0);
-    float deviceDepth = texelFetch(tex4, texel, 0).x;
+    return ConstructGBuffer(DecodeGBufferColorAndAOTexel(texel, tex0),
+                            DecodeGBufferNormalMetalRoughnessTexel(texel, tex1),
+                            DecodeGBufferEmissiveTexel(texel, tex2),
+                            DecodeGBufferSubsurfaceTexel(texel, tex3),
+                            DecodeGBufferDepthTexel(texel, tex4));
+}
 
-    data.base_color = d0.xyz;
-    data.ambient_occlusion = d0.w;
-    data.world_normal = decodeNormalOctahedron(d1.xy);
-    data.metalness = d1.z;
-    data.roughness = d1.w;
-    data.emissive_color = d2.xyz;
-    data.subsurface_color = d3.xyz;
-    data.subsurface_opacity = d3.w;
-    data.depth01 = deviceDepth;
-    data.depth = toClipSpaceDepth(deviceDepth);
-    data.diffuse_color = ComputeDiffuseColor(data.base_color, data.metalness);
-    data.specular_color = ComputeF0(0.5f, data.base_color, data.metalness);
-    return data;
+// GeometricSpecularAA at G-buffer @p texel without screen derivatives: the normal's differences to its row and
+// column partners in the 2x2 pixel quad, read from the G-buffer. The same values fine derivatives give, but no quad
+// operation: valid where other pixels of the quad have already left (discard), whose values a derivative would read.
+float GeometricSpecularAATexel(
+    ivec2 texel,
+    vec3 worldNormal,
+    float perceptualRoughness,
+    sampler2D normalMetalRoughnessTex)
+{
+    ivec2 lastTexel = textureSize(normalMetalRoughnessTex, 0) - ivec2(1, 1);
+    ivec2 partner = min(texel ^ ivec2(1, 1), lastTexel);
+    vec3 rowPartnerNormal = DecodeGBufferNormalMetalRoughnessTexel(ivec2(partner.x, texel.y), normalMetalRoughnessTex).world_normal;
+    vec3 columnPartnerNormal = DecodeGBufferNormalMetalRoughnessTexel(ivec2(texel.x, partner.y), normalMetalRoughnessTex).world_normal;
+    return GeometricSpecularAAFromDerivatives(rowPartnerNormal - worldNormal, columnPartnerNormal - worldNormal, perceptualRoughness);
 }
 
 // G-buffer texel for the current framebuffer pixel (assumes lighting pass viewport matches G-buffer size).
