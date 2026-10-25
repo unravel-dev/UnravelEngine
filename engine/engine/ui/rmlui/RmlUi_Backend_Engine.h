@@ -16,6 +16,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <graphics/frame_buffer.h>
+#include <hpp/optional.hpp>
 #include "RmlUi_RenderLayerStack.h"
 
 namespace unravel
@@ -36,6 +37,13 @@ struct RmlUi_FrameState
     gfx::frame_buffer::ptr framebuffer;
     bool clear_to_transparent = false;
     std::shared_ptr<RmlUi_RenderLayerStack> render_layers;
+    /// Set to draw the document straight into @c framebuffer, a 3D view, instead of into a base layer
+    /// of its own: maps document pixels to the view's clip space. The draws test the view's depth,
+    /// and the frame ends by writing the document's plane into it.
+    hpp::optional<Rml::Matrix4f> document_to_clip;
+    /// Set by the renderer when a frame drawn straight into a 3D view met something only a base layer
+    /// of its own can draw: a clip mask or a backdrop filter.
+    bool needs_render_target = false;
 };
 
 /**

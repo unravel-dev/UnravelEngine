@@ -21,8 +21,13 @@
 #include <engine/assets/asset_handle.h>
 #include "RmlUi_Backend_Engine.h"
 #include "RmlUi_RenderLayerStack.h"
+#include "RmlUi_WorldMesh.h"
+#include "RmlUi_WorldMeshCache.h"
+#include "RmlUi_WorldMeshPool.h"
 
 #include <bx/handlealloc.h>
+#include <algorithm>
+#include <array>
 #include <bitset>
 #include <memory>
 #include <vector>
@@ -196,6 +201,10 @@ enum class RmlUi_ProgramId : uint8_t
     BlendMask,      // Mask blending
     Blur,           // Blur effect
     DropShadow,     // Drop shadow effect
+    WorldColor,     // Color-only rendering straight into a 3D view, with anti-aliased outlines
+    WorldTexture,   // Textured rendering straight into a 3D view, with anti-aliased outlines
+    WorldGradient,  // Gradient rendering straight into a 3D view, with anti-aliased outlines
+    WorldCreation,  // Creation shader effect straight into a 3D view, with anti-aliased outlines
     Count
 };
 
@@ -223,6 +232,13 @@ enum class RmlUi_UniformId : uint8_t
     Value,              // Time/animation value
     Dimensions,         // Shader dimensions
     TexRequiresPremultiplication, // 1 when texture RGB must be premultiplied by alpha before blending
+    // Document-space clipping
+    ElementTransform,   // The element's transform alone: geometry to document pixels
+    ClipRect,           // Kept region in document pixels: left, top, right, bottom
+    // Drawing straight into a 3D view
+    DocumentEdge,       // Document size in pixels and the screen pixels its outline grows by
+    TextureRect,        // Texture coordinate bounds of the draw's geometry
+    TextureSize,        // Texel size of the bound texture and whether the draw filters its footprint
     Count
 };
 
@@ -333,6 +349,31 @@ private:
         Transient   // Small geometries use transient buffers
     };
 
+    /// One of the draws after a geometry's draw: its mesh, and where it sits relative to the geometry.
+    struct WorldNeighbour
+    {
+        std::shared_ptr<const RmlUi_ResidentWorldMesh> mesh;
+        Rml::Vector2f offset;
+
+        auto operator==(const WorldNeighbour& other) const -> bool
+        {
+            return mesh == other.mesh && offset == other.offset;
+        }
+    };
+
+    /// The draws after a geometry's draw that its outline is compared with: at most the queue's length.
+    struct WorldNeighbours
+    {
+        static constexpr size_t MAX_COUNT = 4;
+        std::array<WorldNeighbour, MAX_COUNT> items;
+        size_t count = 0;
+
+        auto operator==(const WorldNeighbours& other) const -> bool
+        {
+            return count == other.count && std::equal(items.begin(), items.begin() + static_cast<std::ptrdiff_t>(count), other.items.begin());
+        }
+    };
+
     struct CompiledGeometry
     {
         // Static buffer handles (used when buffer_type == Static)
@@ -346,10 +387,26 @@ private:
         uint32_t num_vertices;
         uint32_t num_indices;
         GeometryBufferType buffer_type = GeometryBufferType::Static;
-        
+
+        // Texture coordinate bounds of the vertices. A draw straight into a 3D view keeps its samples
+        // inside them, so the neighbours of a sprite in an atlas never blend in.
+        Rml::Vector2f tex_coord_min{0.0f, 0.0f};
+        Rml::Vector2f tex_coord_max{1.0f, 1.0f};
+
+        // The mesh as a draw straight into a 3D view reads it (RmlUi_WorldMesh), resident in the world mesh
+        // pool and shared with every geometry of the same content (RmlUi_WorldMeshCache); null until the
+        // geometry is first drawn so.
+        std::shared_ptr<const RmlUi_ResidentWorldMesh> world_mesh;
+        // The draws after this geometry's last draw whose outline boxes overlapped its own, and the mesh
+        // drawn for them: world_mesh, or its variant for the edges of theirs that run along its own. Kept
+        // while the same meshes follow at the same offsets, which saves comparing the outlines again.
+        WorldNeighbours world_neighbours;
+        std::shared_ptr<const RmlUi_ResidentWorldMesh> world_drawn_mesh;
+
         // Helper functions
         void bind_buffers(const bgfx::VertexLayout& vertex_layout) const;
         void destroy_buffers();
+        void release_world_meshes();
         auto is_valid() const -> bool;
         auto is_transient() const -> bool { return buffer_type == GeometryBufferType::Transient; }
     };
@@ -404,16 +461,99 @@ private:
         Rml::Vector2f dimensions{0.0f, 0.0f};
     };
 
+    /**
+     * @brief A draw into the 3D view of a world target, held back for a few draws: where a later draw's
+     * outline runs along its own, it reaches under the later draw or pulls in beneath it instead of
+     * fading its own edge, which would let it, or what lies behind, show through the later fading edge.
+     */
+    struct PendingWorldDraw
+    {
+        RmlUi_ProgramId program_id = RmlUi_ProgramId::WorldColor;
+        uint16_t geometry_index = 0;
+        bgfx::ViewId view_id = 0;
+        Rml::Vector2f translation;
+        Rml::Matrix4f element_transform;
+        Rml::Rectanglef clip_region;
+        uint64_t state = 0;
+        // Texture draws
+        bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+        bool requires_premultiplication = false;
+        usize32_t texture_size;
+        // Shader draws
+        uint16_t shader_index = 0;
+        float elapsed_time = 0.0f;
+    };
+
     // Initialization
     auto init_shaders() -> bool;
     auto init_vertex_layout() -> bool;
+
+    /// Finds or builds the mesh a draw straight into a 3D view reads, the first time; false for an empty mesh.
+    auto ensure_world_mesh(CompiledGeometry& geometry) -> bool;
+    /// The mesh @p draw of @p geometry draws, given the queued draws after it: the base mesh, or its
+    /// variant for the edges of theirs that run along its outline.
+    auto get_drawn_world_mesh(CompiledGeometry& geometry, const PendingWorldDraw& draw, Rml::Span<const PendingWorldDraw> later_draws)
+        -> const RmlUi_ResidentWorldMesh*;
+    /// Recycles the world mesh pool and trims its cache, once per frame.
+    void begin_world_mesh_frame();
     void cleanup_resources();
+
+    /// The texture a draw with RmlUi's @p texture samples: the loaded asset, a generated texture, or a
+    /// transparent one while an image is missing; null for an invalid handle.
+    auto get_sampled_texture(Rml::TextureHandle texture, bool& requires_premultiplication) -> gfx::texture::ptr;
+    void set_premultiplication_uniform(bool requires_premultiplication);
+
+    // Draws into a world target's 3D view
+    auto make_pending_world_draw(RmlUi_ProgramId program_id, uint16_t geometry_index, Rml::Vector2f translation) -> PendingWorldDraw;
+    /// Queues @p draw and submits the oldest once the queue is full.
+    void queue_world_draw(const PendingWorldDraw& draw);
+    void flush_world_draws();
+    /// Submits @p draw, given the queued draws after it.
+    void submit_world_draw(const PendingWorldDraw& draw, Rml::Span<const PendingWorldDraw> later_draws);
+    /// The draws among @p later_draws under the same transform as @p draw whose outline box overlaps its own.
+    auto collect_world_neighbours(const CompiledGeometry& geometry,
+                                  const PendingWorldDraw& draw,
+                                  Rml::Span<const PendingWorldDraw> later_draws) const -> WorldNeighbours;
+    void set_gradient_uniforms(const CompiledShader& shader);
+    void set_creation_uniforms(const CompiledShader& shader, float elapsed_time);
 
     // Shader management
     void use_program(RmlUi_ProgramId program_id);
     auto get_uniform_handle(RmlUi_UniformId uniform_id) const -> bgfx::UniformHandle;
     void submit_transform_uniform(Rml::Vector2f translation);
+    /// @param outline_growth Screen pixels the document's outline grows by, 0 to draw it as it is.
+    void set_transform_uniforms(const Rml::Matrix4f& projection, const Rml::Matrix4f& element_transform,
+                                Rml::Vector2f translation, float outline_growth);
+    /**
+     * @brief Sets how the texture program samples: within @p tex_coord_min .. @p tex_coord_max, and with
+     * @p filters_footprint averaging taps across each pixel's footprint where the texture is minified,
+     * as a document drawn straight into a 3D view is when seen from afar.
+     */
+    void set_texture_sampling(Rml::Vector2f tex_coord_min, Rml::Vector2f tex_coord_max, usize32_t texture_size,
+                              bool filters_footprint);
     void set_scissor();
+    /// Clips the next draw to the scissor region: by the hardware scissor in a layer of its own, by
+    /// the clip rectangle in the shaders when drawing straight into a 3D view.
+    void apply_clip();
+    void set_clip_rect_uniform(const Rml::Rectanglef& region);
+    /// The region a draw straight into a 3D view keeps, in document pixels: the scissor region when
+    /// one is set, else the whole document, as a render target of the document's size would clip.
+    auto get_world_clip_region() const -> Rml::Rectanglei;
+    /// The blend state of a draw into the current layer; a draw straight into a 3D view also tests
+    /// the view's depth.
+    auto get_draw_state(Rml::BlendMode blend_mode) -> uint64_t;
+
+    // Drawing straight into a 3D view (RmlUi_FrameState::document_to_clip)
+    auto is_world_target_layer(Rml::LayerHandle layer_handle) const -> bool;
+    auto is_drawing_to_world_target() const -> bool;
+    /// Records that the frame met something only a base layer of its own can draw.
+    void request_render_target();
+    /// Draws the document's whole rectangle straight into the 3D view with @p program_id, its outline grown
+    /// by @p outline_growth screen pixels.
+    void submit_document_quad(RmlUi_ProgramId program_id, uint64_t state, bgfx::ViewId view_id, float outline_growth);
+    /// Writes the document's plane into the 3D view's depth, so what is drawn later hides behind it.
+    void write_document_depth();
+    void composite_to_world_target(Rml::LayerHandle destination);
     void set_view_scissor(bgfx::ViewId pass_id, const Rml::Rectanglei& region);
     auto get_viewport_size() const -> Rml::Vector2i;
 
@@ -446,6 +586,7 @@ private:
     
     // Layer binding management
     auto get_layer_pass_id() -> bgfx::ViewId;
+    auto get_layer_view(Rml::LayerHandle layer_handle) -> bgfx::ViewId;
     auto get_layer_id_from_handle(Rml::LayerHandle handle) const -> uint64_t;
 
     // State
@@ -458,11 +599,21 @@ private:
     // Transform matrices
     Rml::Matrix4f transform_;
     Rml::Matrix4f projection_;
+    Rml::Matrix4f element_transform_;
 
     // Shaders and programs
     std::array<gpu_program, static_cast<size_t>(RmlUi_ProgramId::Count)> programs_;
     std::array<bgfx::UniformHandle, static_cast<size_t>(RmlUi_UniformId::Count)> uniforms_ = {BGFX_INVALID_HANDLE};
     bgfx::VertexLayout vertex_layout_;
+    /// The second vertex stream of a draw straight into a 3D view: RmlUi_WorldShapeVertex.
+    bgfx::VertexLayout world_shape_layout_;
+    /// World draws held back until a later draw tells whether it covers them (PendingWorldDraw).
+    std::vector<PendingWorldDraw> pending_world_draws_;
+    /// Where the meshes of draws straight into a 3D view live on the GPU, and the meshes shared by content.
+    /// Declared before the geometries that hold meshes, so it outlives them.
+    RmlUi_WorldMeshPool world_mesh_pool_;
+    RmlUi_WorldMeshCache world_mesh_cache_{world_mesh_pool_};
+    uint32_t world_mesh_frame_ = 0;
 
     // Active state
     RmlUi_ProgramId active_program_ = RmlUi_ProgramId::Color;

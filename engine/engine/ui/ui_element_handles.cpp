@@ -23,6 +23,8 @@ struct handle_slot
 {
     Rml::Element* element = nullptr;
     uint32_t generation = 1;
+    /// Script listeners for pointer presses, one per event type and phase.
+    uint32_t pointer_listeners = 0;
 };
 
 struct orphan_element
@@ -66,6 +68,7 @@ void release_element(Rml::Element* element)
     auto& slot = table.slots[index];
     const auto handle = make_handle(index, slot.generation);
     slot.element = nullptr;
+    slot.pointer_listeners = 0;
     ++slot.generation;
     table.free_slots.push_back(index);
     table.slot_by_element.erase(it);
@@ -196,6 +199,35 @@ auto take_orphan_ui_element(Rml::Element* element) -> Rml::ElementPtr
     return owned;
 }
 
+void add_ui_script_pointer_listener(Rml::Element* element)
+{
+    auto& table = get_table();
+    if(auto it = table.slot_by_element.find(element); it != table.slot_by_element.end())
+    {
+        ++table.slots[it->second].pointer_listeners;
+    }
+}
+
+void remove_ui_script_pointer_listener(Rml::Element* element)
+{
+    auto& table = get_table();
+    if(auto it = table.slot_by_element.find(element); it != table.slot_by_element.end())
+    {
+        auto& slot = table.slots[it->second];
+        if(slot.pointer_listeners > 0)
+        {
+            --slot.pointer_listeners;
+        }
+    }
+}
+
+auto has_ui_script_pointer_listener(Rml::Element* element) -> bool
+{
+    const auto& table = get_table();
+    const auto it = table.slot_by_element.find(element);
+    return it != table.slot_by_element.end() && table.slots[it->second].pointer_listeners > 0;
+}
+
 void mark_ui_layout_stale()
 {
     ++get_table().layout_serial;
@@ -230,6 +262,7 @@ void unregister_ui_element_handles()
         auto& slot = table.slots[index];
         table.destroyed.push_back(make_handle(index, slot.generation));
         slot.element = nullptr;
+        slot.pointer_listeners = 0;
         ++slot.generation;
         table.free_slots.push_back(index);
     }

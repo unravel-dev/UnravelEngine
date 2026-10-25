@@ -253,7 +253,7 @@ void ui_system::update_ui_document_common(entt::handle handle, ui_document_compo
 }                                 
 
 
-void ui_system::update_world_space_document(rtti::context& ctx, scene& scn, entt::handle handle, ui_document_component& comp,
+void ui_system::update_world_space_document(rtti::context& ctx, entt::handle handle, ui_document_component& comp,
                                             const camera& cam, float dp_ratio, bool process_input, bool& hit_found)
 {
     APP_SCOPE_PERF("UI/Update World Space Document");
@@ -284,14 +284,14 @@ void ui_system::update_world_space_document(rtti::context& ctx, scene& scn, entt
             py = static_cast<int>(pixel.y);
         }
     }
-    if(process_mouse_move(scn, comp.context, px, py))
+    if(process_mouse_move(comp.context, px, py))
     {
         hit_found = true;
     }
 }
 
 void ui_system::update_screen_space_document(rtti::context& ctx, Rml::Context* context, int viewport_width,
-                                            int viewport_height, float dp_ratio, scene& scn, bool process_input, bool& hit_found)
+                                            int viewport_height, float dp_ratio, bool process_input, bool& hit_found)
 {
     APP_SCOPE_PERF("UI/Update Screen Space Document");
     auto doc_size = Rml::Vector2i(viewport_width, viewport_height);
@@ -306,7 +306,7 @@ void ui_system::update_screen_space_document(rtti::context& ctx, Rml::Context* c
     {
         auto mouse_x = input.manager.get_mouse().get_position().x;
         auto mouse_y = input.manager.get_mouse().get_position().y;
-        if(process_mouse_move(scn, context, static_cast<int>(mouse_x), static_cast<int>(mouse_y)))
+        if(process_mouse_move(context, static_cast<int>(mouse_x), static_cast<int>(mouse_y)))
         {
             hit_found = true;
         }
@@ -371,7 +371,7 @@ void ui_system::update_world_space(rtti::context& ctx, entt::handle camera_entit
     {
         auto& ui_comp = *entry.comp;
         auto handle = entry.handle;
-        update_world_space_document(ctx, scn, handle, ui_comp, cam, dp_ratio, process_input, hit_found);
+        update_world_space_document(ctx, handle, ui_comp, cam, dp_ratio, process_input, hit_found);
     }
 
     if(process_input)
@@ -409,6 +409,12 @@ void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entit
             return;
         }
         ui_comp.last_render_frame = current_frame;
+        if(ui_comp.draws_into_scene())
+        {
+            ui_comp.framebuffer.reset();
+            ui_comp.context->Update();
+            return;
+        }
         ensure_document_framebuffer(ui_comp);
         if(!ui_comp.framebuffer || !ui_comp.framebuffer->is_valid())
         {
@@ -430,6 +436,34 @@ void ui_system::render_world_space(rtti::context& ctx, entt::handle camera_entit
         ui_comp.context->Render();
         RmlUi_Backend_Engine::end_frame();
     });
+}
+
+void ui_system::render_world_space_into(ui_document_component& comp,
+                                        const gfx::frame_buffer::ptr& output,
+                                        const math::mat4& document_to_clip)
+{
+    APP_SCOPE_PERF("UI/Render World Space Into Scene");
+    if(!comp.context || !comp.document)
+    {
+        return;
+    }
+    if(!comp.render_layer_stack)
+    {
+        comp.render_layer_stack = std::make_shared<RmlUi_RenderLayerStack>();
+    }
+    RmlUi_FrameState frame_state;
+    frame_state.viewport_width = static_cast<int>(comp.size.width);
+    frame_state.viewport_height = static_cast<int>(comp.size.height);
+    frame_state.framebuffer = output;
+    frame_state.render_layers = comp.render_layer_stack;
+    frame_state.document_to_clip = Rml::Matrix4f::FromColumnMajor(math::value_ptr(document_to_clip));
+    RmlUi_Backend_Engine::begin_frame(frame_state);
+    comp.context->Render();
+    RmlUi_Backend_Engine::end_frame();
+    if(frame_state.needs_render_target)
+    {
+        comp.needs_render_target = true;
+    }
 }
 
 void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, bool& process_input)
@@ -476,14 +510,14 @@ void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_enti
                 return;
             }
             update_screen_space_document(ctx, ui_comp.context, screen_space_viewport_width,
-                                        screen_space_viewport_height, screen_space_dp_ratio, scn, process_input,
+                                        screen_space_viewport_height, screen_space_dp_ratio, process_input,
                                         hit_found);
         });
     if(debug_context_)
     {
         bool debug_hit_found = false;
         update_screen_space_document(ctx, debug_context_, screen_space_viewport_width,
-                                    screen_space_viewport_height, screen_space_dp_ratio, scn, process_input,
+                                    screen_space_viewport_height, screen_space_dp_ratio, process_input,
                                     debug_hit_found);
     }
 
@@ -801,6 +835,8 @@ auto ui_system::load_ui_document(entt::handle handle, ui_document_component& com
     }
     component.document = raw_document;
     component.version = component.asset.version();
+    // A changed document may draw straight into the scene again.
+    component.needs_render_target = false;
 
     return true;
 }

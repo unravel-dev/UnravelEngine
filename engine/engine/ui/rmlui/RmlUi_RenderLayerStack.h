@@ -67,10 +67,15 @@ public:
     auto get_postprocess_secondary() -> const RmlUi_LayerFramebuffer& { return ensure_framebuffer_postprocess(1); }
     auto get_postprocess_tertiary() -> const RmlUi_LayerFramebuffer& { return ensure_framebuffer_postprocess(2); }
     auto get_blend_mask() -> const RmlUi_LayerFramebuffer& { return ensure_framebuffer_postprocess(3); }
+    /// A copy target with a mip chain, which bgfx fills after each render into it: a layer composited
+    /// into a 3D view is filtered through it where the view shows the document small.
+    auto get_world_composite() -> const RmlUi_LayerFramebuffer&;
 
     void swap_postprocess_primary_secondary();
 
-    void begin_frame(int new_width, int new_height);
+    /// Starts a frame with its base layer. @p owns_base_layer false gives the base layer no frame buffer:
+    /// the renderer draws it straight into the frame's target.
+    void begin_frame(int new_width, int new_height, bool owns_base_layer = true);
     void end_frame();
 
 private:
@@ -79,14 +84,17 @@ private:
     auto create_layer_framebuffer(int width, int height, int samples, bool with_depth_stencil,
                                  gfx::texture::ptr depth_texture) -> RmlUi_LayerFramebuffer;
     void destroy_layer_framebuffer(RmlUi_LayerFramebuffer& fb);
+    auto find_shared_depth_stencil() const -> gfx::texture::ptr;
 
     int width_ = 0;
     int height_ = 0;
+    bool owns_base_layer_ = true;
     uint64_t next_layer_id_ = 1;
     int layers_size_ = 0;
 
     std::vector<RmlUi_LayerFramebuffer> fb_layers_;
     std::vector<RmlUi_LayerFramebuffer> fb_postprocess_;
+    RmlUi_LayerFramebuffer fb_world_composite_;
 };
 
 } // namespace unravel

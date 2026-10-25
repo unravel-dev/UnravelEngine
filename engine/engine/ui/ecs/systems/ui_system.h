@@ -64,8 +64,20 @@ struct ui_system
 
     /**
      * @brief Render world-space UI documents (sort + frame-state render). Call after update_world_space.
+     * Documents drawn straight into the scene (ui_document_component::draws_into_scene) are only
+     * updated here: the scene's UI pass draws them with render_world_space_into.
      */
     void render_world_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, delta_t dt);
+
+    /**
+     * @brief Draws a world-space document straight into @p output, a camera's target with its depth,
+     * through @p document_to_clip from document pixels to the target's clip space. The document tests
+     * the depth and leaves its plane in it. A document that meets a clip mask or a backdrop filter
+     * renders to its own framebuffer from the next frame on.
+     */
+    void render_world_space_into(ui_document_component& comp,
+                                 const gfx::frame_buffer::ptr& output,
+                                 const math::mat4& document_to_clip);
 
     /**
      * @brief Update screen-space UI documents (common + screen-space specific). Call before render_screen_space.
@@ -121,14 +133,13 @@ struct ui_system
     /**
      * @brief Update a single world-space document (dimensions, density, input). Call from render path, back-to-front.
      * @param ctx Engine context for input
-     * @param scn Scene for process_mouse_move
      * @param handle Entity handle with ui_document_component and transform_component
      * @param comp UI document component
      * @param cam Camera for projection
      * @param dp_ratio Density-independent pixel ratio
-     * @param hit_found In/out: true if a closer doc already consumed the mouse
+     * @param hit_found In/out: true if a closer doc already has its content under the mouse
      */
-    void update_world_space_document(rtti::context& ctx, scene& scn, entt::handle handle, ui_document_component& comp,
+    void update_world_space_document(rtti::context& ctx, entt::handle handle, ui_document_component& comp,
                                     const camera& cam, float dp_ratio, bool process_input, bool& hit_found);
 
     /**
@@ -138,11 +149,10 @@ struct ui_system
      * @param viewport_width Viewport width
      * @param viewport_height Viewport height
      * @param dp_ratio Density-independent pixel ratio
-     * @param scn Scene for process_mouse_move
-     * @param hit_found In/out: true if a previous doc already consumed the mouse
+     * @param hit_found In/out: true if a previous doc already has its content under the mouse
      */
     void update_screen_space_document(rtti::context& ctx, Rml::Context* context, int viewport_width,
-                                     int viewport_height, float dp_ratio, scene& scn, bool process_input, bool& hit_found);
+                                     int viewport_height, float dp_ratio, bool process_input, bool& hit_found);
     
 
     void update_ui_document_common(entt::handle handle, ui_document_component& ui_comp, bool is_playing);                                 
@@ -155,8 +165,6 @@ struct ui_system
     auto load_ui_document(entt::handle entity, ui_document_component& component, bool log_error = true) -> bool;
 
 
-
-    auto is_not_root_element(scene& scn, Rml::Element* element) -> bool;
 
     // OS event input routing (implemented in ui_system_input.cpp)
     struct ui_pointer_dispatch_result
@@ -182,17 +190,34 @@ struct ui_system
     void visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit);
     /**
      * @brief Hands a finger to the documents as an RmlUi touch, which presses, drags scroll containers
-     * and releases. A finger that lands on an element is the UI's: the event is cleared for the game.
+     * and releases. A finger that lands on a document's content (is_ui_content_at) is the UI's: the
+     * event is cleared for the game.
      */
     void dispatch_touch_event(rtti::context& ctx, scene& scn, os::event& event);
     /**
      * @brief The platform's mouse copy of a finger. The documents take the finger itself, so this only
-     * clears a press that lands on an element, which keeps the game from acting on a tap on the UI.
+     * clears a press that lands on a document's content, which keeps the game from acting on a tap on
+     * the UI.
      */
     void consume_touch_mouse_press(rtti::context& ctx, scene& scn, os::event& event);
-    void refresh_mouse_state(rtti::context& ctx, scene& scn);
-    auto process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool;
-    auto process_event(scene& scn, Rml::Context* context, os::event& event) -> bool;
+    /**
+     * @brief Moves the mouse in every document to where the pointer is over it.
+     * @return The documents with their content under the pointer (see process_mouse_move).
+     */
+    auto refresh_mouse_state(rtti::context& ctx, scene& scn) -> std::vector<Rml::Context*>;
+    /**
+     * @brief Moves the mouse in @p context to @p x, @p y (its pixels).
+     * @return Whether the document's content is under it (is_ui_content_at), which then keeps the
+     * pointer from the documents behind and presses from the game.
+     */
+    auto process_mouse_move(Rml::Context* context, int x, int y) -> bool;
+    /**
+     * @brief Hands @p event to @p context.
+     * @param is_pointer_on_content Whether the document's content is under the pointer, from
+     * refresh_mouse_state for this event.
+     * @return Whether the event is the UI's: a mouse button or motion on the document's content.
+     */
+    auto process_event(Rml::Context* context, os::event& event, bool is_pointer_on_content) -> bool;
 
     void load_font(const std::string& path);
 

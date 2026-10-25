@@ -27,6 +27,8 @@
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
+#include <engine/ui/ecs/systems/ui_system.h>
+#include <engine/engine.h>
 #include <RmlUi/Core/ElementDocument.h>
 
 #include <graphics/format.h>
@@ -1212,10 +1214,16 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     // every document and text by up to half a pixel each frame.
     const auto proj = camera.get_projection_unjittered();
 
-    gfx::render_pass pass("World UI/Elements Pass");
-    pass.bind(output.get());
-    pass.set_view_proj(view, proj);
-
+    // Documents drawn straight into the output draw in views of their own: what follows them draws in
+    // a view started after theirs, so the order stays far to near.
+    const auto start_ui_view = [&]() -> bgfx::ViewId
+    {
+        gfx::render_pass pass("World UI/Elements Pass");
+        pass.bind(output.get());
+        pass.set_view_proj(view, proj);
+        return pass.id;
+    };
+    bgfx::ViewId ui_view_id = start_ui_view();
 
     struct world_space_ui_entry
     {
@@ -1247,7 +1255,11 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
                 {
                     return;
                 }
-                if(!ui_comp.is_enabled() || !ui_comp.framebuffer || !ui_comp.document || !ui_comp.document->IsVisible())
+                if(!ui_comp.is_enabled() || !ui_comp.document || !ui_comp.document->IsVisible())
+                {
+                    return;
+                }
+                if(!ui_comp.draws_into_scene() && !ui_comp.framebuffer)
                 {
                     return;
                 }
@@ -1268,18 +1280,27 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
             return a.distance > b.distance;
         });
 
+        auto& ui = engine::context().get_cached<ui_system>();
+        const math::mat4 world_to_clip = proj.get_matrix() * view.get_matrix();
         for(const auto& entry : ui_cache.entries)
         {
             auto& ui_comp = *entry.comp;
             auto handle = entry.handle;
             const auto& world_transform = entry.transform_comp->get_transform_global();
+            if(ui_comp.draws_into_scene())
+            {
+                ui.render_world_space_into(ui_comp, output, world_to_clip * ui_comp.get_document_to_world(world_transform));
+                ui_view_id = start_ui_view();
+                continue;
+            }
             const auto scale = ui_comp.get_world_space_scale();
             const auto model = world_transform * math::transform::scaling(scale);
             auto topology = gfx::clip_quad(0.0f, 0.5f, 0.5f);
             bgfx::setState(topology | world_ui_state);
             world_quad_program_->set_texture(0, "s_tex", ui_comp.framebuffer.get(), 0);
             gfx::set_world_transform(model);
-            bgfx::submit(pass.id, world_quad_program_->native_handle());        }
+            bgfx::submit(ui_view_id, world_quad_program_->native_handle());
+        }
 
         ui_cache.entries.clear();
 
@@ -1329,7 +1350,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         auto& text_comp = *entry.comp;
         auto handle = entry.handle;
         const auto& world_transform = entry.transform_comp->get_transform_global();
-        text_comp.submit(pass.id, world_transform, BGFX_STATE_DEPTH_TEST_LESS);
+        text_comp.submit(ui_view_id, world_transform, BGFX_STATE_DEPTH_TEST_LESS);
     }
 
     text_cache.entries.clear();

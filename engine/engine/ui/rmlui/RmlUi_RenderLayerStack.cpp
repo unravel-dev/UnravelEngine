@@ -38,16 +38,21 @@ auto RmlUi_RenderLayerStack::push_layer(bool clears_depth_stencil) -> Rml::Layer
 {
     RMLUI_ASSERT(layers_size_ <= static_cast<int>(fb_layers_.size()));
 
+    const bool is_external_base_layer = layers_size_ == 0 && !owns_base_layer_;
     if(layers_size_ == static_cast<int>(fb_layers_.size()))
     {
-        gfx::texture::ptr shared_depth_stencil = nullptr;
-        if(!fb_layers_.empty())
+        if(is_external_base_layer)
         {
-            shared_depth_stencil = fb_layers_.front().get_depth_texture();
+            fb_layers_.emplace_back();
         }
-
-        fb_layers_.push_back(
-            create_layer_framebuffer(width_, height_, RMLUI_NUM_MSAA_SAMPLES, true, shared_depth_stencil));
+        else
+        {
+            fb_layers_.push_back(create_layer_framebuffer(width_,
+                                                          height_,
+                                                          RMLUI_NUM_MSAA_SAMPLES,
+                                                          true,
+                                                          find_shared_depth_stencil()));
+        }
     }
 
     layers_size_++;
@@ -57,15 +62,21 @@ auto RmlUi_RenderLayerStack::push_layer(bool clears_depth_stencil) -> Rml::Layer
     layer.needs_rebind = true;
 
     gfx::render_pass::push_scope(fmt::format("Layer {}", layer.layer_id).c_str());
+    if(is_external_base_layer)
+    {
+        return layer_handle;
+    }
     gfx::render_pass layer_pass("Layer Clear Pass");
     layer_pass.bind(layer.framebuffer.get());
     auto view = Rml::Matrix4f::Identity();
     auto proj = Rml::Matrix4f::Identity();
     layer_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
-    // The layers share one depth-stencil: only the frame's base layer starts it cleared, so a nested
-    // layer keeps the clip mask of the layer it was pushed from.
-    const uint16_t clear_flags =
-        clears_depth_stencil ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL : BGFX_CLEAR_COLOR;
+    // The layers share one depth-stencil: only the frame's first layer with a frame buffer starts it
+    // cleared, so a nested layer keeps the clip mask of the layer it was pushed from.
+    const bool is_first_owned_layer = layers_size_ == 2 && !owns_base_layer_;
+    const uint16_t clear_flags = clears_depth_stencil || is_first_owned_layer
+                                     ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL
+                                     : BGFX_CLEAR_COLOR;
     layer_pass.clear(clear_flags, 0x00000000, 1.0f, 0);
 
     return layer_handle;
@@ -124,14 +135,15 @@ void RmlUi_RenderLayerStack::swap_postprocess_primary_secondary()
     std::swap(fb_postprocess_[0], fb_postprocess_[1]);
 }
 
-void RmlUi_RenderLayerStack::begin_frame(int new_width, int new_height)
+void RmlUi_RenderLayerStack::begin_frame(int new_width, int new_height, bool owns_base_layer)
 {
     RMLUI_ASSERT(layers_size_ == 0);
 
-    if(new_width != width_ || new_height != height_)
+    if(new_width != width_ || new_height != height_ || owns_base_layer != owns_base_layer_)
     {
         width_ = new_width;
         height_ = new_height;
+        owns_base_layer_ = owns_base_layer;
         destroy_framebuffers();
     }
 
@@ -161,6 +173,7 @@ void RmlUi_RenderLayerStack::destroy_framebuffers()
     {
         destroy_layer_framebuffer(fb);
     }
+    destroy_layer_framebuffer(fb_world_composite_);
 }
 
 auto RmlUi_RenderLayerStack::ensure_framebuffer_postprocess(int index) -> const RmlUi_LayerFramebuffer&
@@ -172,6 +185,27 @@ auto RmlUi_RenderLayerStack::ensure_framebuffer_postprocess(int index) -> const 
         fb = create_layer_framebuffer(width_, height_, 1, false, nullptr);
     }
     return fb;
+}
+
+auto RmlUi_RenderLayerStack::get_world_composite() -> const RmlUi_LayerFramebuffer&
+{
+    if(fb_world_composite_.is_valid())
+    {
+        return fb_world_composite_;
+    }
+    auto color_texture = std::make_shared<gfx::texture>(static_cast<uint16_t>(width_),
+                                                       static_cast<uint16_t>(height_),
+                                                       true,
+                                                       1,
+                                                       bgfx::TextureFormat::RGBA8,
+                                                       BGFX_TEXTURE_RT);
+    if(!color_texture->is_valid())
+    {
+        APPLOG_ERROR("Failed to create the world composite texture");
+        return fb_world_composite_;
+    }
+    fb_world_composite_.framebuffer = std::make_shared<gfx::frame_buffer>(std::vector<gfx::texture::ptr>{color_texture});
+    return fb_world_composite_;
 }
 
 auto RmlUi_RenderLayerStack::create_layer_framebuffer(int width,
@@ -253,6 +287,19 @@ void RmlUi_RenderLayerStack::destroy_layer_framebuffer(RmlUi_LayerFramebuffer& f
 {
     fb.framebuffer.reset();
     fb = RmlUi_LayerFramebuffer{};
+}
+
+auto RmlUi_RenderLayerStack::find_shared_depth_stencil() const -> gfx::texture::ptr
+{
+    // A base layer drawn straight into the frame's target has none: the next layer holds it.
+    for(const RmlUi_LayerFramebuffer& layer : fb_layers_)
+    {
+        if(auto depth_stencil = layer.get_depth_texture())
+        {
+            return depth_stencil;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace unravel

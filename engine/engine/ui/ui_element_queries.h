@@ -2,6 +2,8 @@
 #include <engine/engine_export.h>
 
 #include <RmlUi/Core/Box.h>
+#include <RmlUi/Core/Types.h>
+#include <hpp/string_view.hpp>
 #include <math/math.h>
 
 #include <string>
@@ -54,5 +56,26 @@ auto is_ui_element_styled_visible(Rml::Element& element) -> bool;
  * current; null when the point is over no element of this document.
  */
 auto get_ui_element_at(Rml::ElementDocument& document, const math::vec2& point) -> Rml::Element*;
+
+/**
+ * @brief Whether a handler for @p event_type makes its element take pointer presses: click,
+ * dblclick, mousedown, mouseup and the drag events. Hover events (mouseover, ...) do not.
+ */
+auto is_ui_pointer_press_event(hpp::string_view event_type) -> bool;
+
+/**
+ * @brief Whether a pointer at @p point (its context's pixels) is on the UI, which then keeps
+ * presses from the game.
+ *
+ * It is when something paints there: text, an image, a background, a border, a decorator or a
+ * backdrop filter of an element that takes the pointer (not 'pointer-events: none'), inside its
+ * rounded corners. It is also when @p target, the element under the point, or an ancestor takes
+ * presses: a form control, a draggable or scrolling element, or an element with a pointer press
+ * handler in its markup ('onclick', 'data-event-click', ...) or from a script. Empty space is not
+ * the UI's, even inside a container that spans the whole document, and neither are the handlers of
+ * the document itself, which see every press in it.
+ * @return false when @p target is null or in no document (the context's root).
+ */
+auto is_ui_content_at(Rml::Element* target, Rml::Vector2f point) -> bool;
 
 } // namespace unravel

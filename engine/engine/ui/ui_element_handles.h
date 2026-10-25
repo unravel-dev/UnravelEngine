@@ -54,6 +54,22 @@ auto adopt_orphan_ui_element(Rml::ElementDocument* document, Rml::ElementPtr ele
 auto take_orphan_ui_element(Rml::Element* element) -> Rml::ElementPtr;
 
 /**
+ * @brief Records that a script started listening on @p element for a pointer press event (see
+ * is_ui_pointer_press_event), once per event type and phase.
+ */
+void add_ui_script_pointer_listener(Rml::Element* element);
+
+/**
+ * @brief Undoes one add_ui_script_pointer_listener. An element's destruction drops all of them.
+ */
+void remove_ui_script_pointer_listener(Rml::Element* element);
+
+/**
+ * @brief Whether a script listens on @p element for a pointer press event.
+ */
+auto has_ui_script_pointer_listener(Rml::Element* element) -> bool;
+
+/**
  * @brief Records that a script changed a document (content, classes, styles): layout read after
  * this must update the document first.
  */

@@ -4,6 +4,7 @@
 
 #include "RmlUi_RenderInterface.h"
 #include "RmlUi_FileInterface.h"
+#include "RmlUi_WorldMesh.h"
 
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/DecorationTypes.h>
@@ -27,10 +28,90 @@
 #include <logging/logging.h>
 #include <string_utils/utils.h>
 
+#include <algorithm>
 #include <array>
 
 namespace unravel
 {
+namespace
+{
+/// The frame's first layer: drawn straight into a 3D view when the frame has a document_to_clip.
+constexpr Rml::LayerHandle BASE_LAYER = 0;
+/// Half the side of a clip rectangle that keeps everything: a layer of its own clips with the hardware
+/// scissor instead.
+constexpr float UNCLIPPED_EXTENT = 1.0e6f;
+/// The document rectangle's corners (top left, top right, bottom right, bottom left) as two triangles.
+constexpr std::array<int, 6> DOCUMENT_QUAD_INDICES = {0, 1, 2, 0, 2, 3};
+constexpr uint32_t DOCUMENT_QUAD_VERTEX_COUNT = 4;
+/// Screen pixels the outline of a document drawn straight into a 3D view grows by, so the pixels across
+/// it are drawn and the clip coverage fades them. More than one pixel keeps them drawn on a tilted
+/// document, where a step along the document covers less than a pixel on screen.
+constexpr float OUTLINE_GROWTH_PIXELS = 1.5f;
+/// World draws held back at most before the oldest is submitted: enough for an element's background and the
+/// decorators drawn over it.
+constexpr size_t MAX_PENDING_WORLD_DRAWS = 4;
+constexpr int RGBA8_BYTES_PER_TEXEL = 4;
+
+auto get_next_mip_size(Rml::Vector2i size) -> Rml::Vector2i
+{
+    return Rml::Math::Max(size / 2, Rml::Vector2i(1));
+}
+
+auto get_rgba8_bytes(Rml::Vector2i size) -> uint32_t
+{
+    return static_cast<uint32_t>(size.x * size.y * RGBA8_BYTES_PER_TEXEL);
+}
+
+auto get_mip_chain_bytes(Rml::Vector2i size) -> uint32_t
+{
+    uint32_t chain_bytes = get_rgba8_bytes(size);
+    for(; size != Rml::Vector2i(1); size = get_next_mip_size(size))
+    {
+        chain_bytes += get_rgba8_bytes(get_next_mip_size(size));
+    }
+    return chain_bytes;
+}
+
+/// Fills @p level with the next mip of @p source: each texel averages the 2 x 2 texels it covers, and a
+/// side of odd length drops its last row or column. Premultiplied texels average correctly as they are.
+void downsample_rgba8(const uint8_t* source, Rml::Vector2i source_size, uint8_t* level)
+{
+    const Rml::Vector2i level_size = get_next_mip_size(source_size);
+    const auto read = [&](int x, int y, int channel) -> int
+    {
+        const int clamped_x = Rml::Math::Min(x, source_size.x - 1);
+        const int clamped_y = Rml::Math::Min(y, source_size.y - 1);
+        return source[(clamped_y * source_size.x + clamped_x) * RGBA8_BYTES_PER_TEXEL + channel];
+    };
+    for(int y = 0; y < level_size.y; ++y)
+    {
+        for(int x = 0; x < level_size.x; ++x)
+        {
+            for(int channel = 0; channel < RGBA8_BYTES_PER_TEXEL; ++channel)
+            {
+                const int sum = read(2 * x, 2 * y, channel) + read(2 * x + 1, 2 * y, channel) +
+                                read(2 * x, 2 * y + 1, channel) + read(2 * x + 1, 2 * y + 1, channel);
+                level[(y * level_size.x + x) * RGBA8_BYTES_PER_TEXEL + channel] = static_cast<uint8_t>((sum + 2) / 4);
+            }
+        }
+    }
+}
+
+/// An RGBA8 image with its whole mip chain, down to 1 x 1, as one bgfx memory block.
+auto create_mip_chain_rgba8(Rml::Span<const Rml::byte> image, Rml::Vector2i size) -> const bgfx::Memory*
+{
+    const bgfx::Memory* chain = bgfx::alloc(get_mip_chain_bytes(size));
+    bx::memCopy(chain->data, image.data(), image.size());
+    uint8_t* source = chain->data;
+    for(; size != Rml::Vector2i(1); size = get_next_mip_size(size))
+    {
+        uint8_t* level = source + get_rgba8_bytes(size);
+        downsample_rgba8(source, size, level);
+        source = level;
+    }
+    return chain;
+}
+} // namespace
 
 /// Helper function that creates a positioned quad for blitting (no scissor needed)
 /// @param src_rect Source rectangle in texture coordinates
@@ -222,6 +303,7 @@ auto RmlUi_RenderInterface::init(rtti::context& ctx) -> bool
         APPLOG_ERROR("Failed to initialize vertex layout");
         return false;
     }
+    world_mesh_pool_.init(vertex_layout_, world_shape_layout_);
 
     // Initialize shaders
     if(!init_shaders())
@@ -234,6 +316,7 @@ auto RmlUi_RenderInterface::init(rtti::context& ctx) -> bool
     // Projection matrix is set in begin_frame from frame state
     projection_ = Rml::Matrix4f::Identity();
     transform_ = Rml::Matrix4f::Identity();
+    element_transform_ = Rml::Matrix4f::Identity();
 
     is_initialized_ = true;
     return true;
@@ -287,13 +370,26 @@ void RmlUi_RenderInterface::begin_frame(RmlUi_FrameState& state)
     clip_mask_enabled_ = false;
     stencil_test_ref_ = 1;
 
-    render_layers_->begin_frame(viewport_w, viewport_h);
+    pending_world_draws_.clear();
+    begin_world_mesh_frame();
+    render_layers_->begin_frame(viewport_w, viewport_h, !state.document_to_clip.has_value());
 }
 
 void RmlUi_RenderInterface::end_frame()
 {
     if(!is_initialized_ || !frame_state_)
     {
+        return;
+    }
+
+    if(frame_state_->document_to_clip)
+    {
+        // The document drew straight into its target: there is no base layer to composite.
+        flush_world_draws();
+        write_document_depth();
+        render_layers_->end_frame();
+        frame_state_ = nullptr;
+        render_layers_ = nullptr;
         return;
     }
 
@@ -391,6 +487,13 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
     geometry.buffer_type = classify_geometry(geometry.num_vertices, geometry.num_indices);
     geometry.vertices = vertices;
     geometry.indices = indices;
+    geometry.tex_coord_min = vertices[0].tex_coord;
+    geometry.tex_coord_max = vertices[0].tex_coord;
+    for(const Rml::Vertex& vertex : vertices)
+    {
+        geometry.tex_coord_min = Rml::Math::Min(geometry.tex_coord_min, vertex.tex_coord);
+        geometry.tex_coord_max = Rml::Math::Max(geometry.tex_coord_max, vertex.tex_coord);
+    }
 
     // Handle transient buffers (smallest geometries)
     if(geometry.buffer_type == GeometryBufferType::Transient)
@@ -472,8 +575,10 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
     }
 
     // Get geometry using internal handle
-    const auto& geometry = geometry_manager_.get(internal_handle.idx);
+    auto& geometry = geometry_manager_.get(internal_handle.idx);
 
+    // Straight into a 3D view the shapes anti-alias themselves: there is a single sample per pixel.
+    const bool is_world = is_drawing_to_world_target();
     RmlUi_ProgramId program_id = RmlUi_ProgramId::Count;
     if(texture == TexturePostprocess)
     {
@@ -481,11 +586,11 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
     }
     else if(texture != 0)
     {
-        program_id = RmlUi_ProgramId::Texture;
+        program_id = is_world ? RmlUi_ProgramId::WorldTexture : RmlUi_ProgramId::Texture;
     }
     else
     {
-        program_id = RmlUi_ProgramId::Color;
+        program_id = is_world ? RmlUi_ProgramId::WorldColor : RmlUi_ProgramId::Color;
     }
 
     if(program_id == RmlUi_ProgramId::Count)
@@ -493,6 +598,23 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
         // Set vertex and index buffers
         geometry.bind_buffers(vertex_layout_);
 
+        return;
+    }
+
+    if(is_world)
+    {
+        PendingWorldDraw draw = make_pending_world_draw(program_id, internal_handle.idx, translation);
+        if(texture != 0)
+        {
+            const gfx::texture::ptr sampled_texture = get_sampled_texture(texture, draw.requires_premultiplication);
+            if(!sampled_texture)
+            {
+                return;
+            }
+            draw.texture = sampled_texture->native_handle();
+            draw.texture_size = sampled_texture->get_size();
+        }
+        queue_world_draw(draw);
         return;
     }
 
@@ -512,47 +634,18 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
         // Submit transform uniforms
         submit_transform_uniform(translation);
 
-        // Apply scissor if enabled (BGfx requires per-draw-call scissor setting)
-        set_scissor();
+        apply_clip();
 
         // Set texture if provided
         if(texture != 0)
         {
-            // Convert RmlUi handle to internal handle
-            compiled_texture_handle internal_handle = texture_manager_.from_rml_handle(texture);
-            if(texture_manager_.is_valid(internal_handle.idx))
+            bool requires_premultiplication = false;
+            const gfx::texture::ptr sampled_texture = get_sampled_texture(texture, requires_premultiplication);
+            if(sampled_texture)
             {
-                const auto& tex = texture_manager_.get(internal_handle.idx);
-                auto texture_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-                auto requires_premultiplication_uniform = get_uniform_handle(RmlUi_UniformId::TexRequiresPremultiplication);
-                if(bgfx::isValid(requires_premultiplication_uniform))
-                {
-                    const std::array<float, 4> requires_premultiplication_data = {
-                        tex.requires_premultiplication ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
-                    bgfx::setUniform(requires_premultiplication_uniform, requires_premultiplication_data.data());
-                }
-
-                if(tex.loaded)
-                {
-                    bgfx::setTexture(0, texture_uniform, tex.loaded->native_handle());
-                }
-                else if(tex.generated_texture_ptr && tex.generated_texture_ptr->is_valid())
-                {
-                    bgfx::setTexture(0, texture_uniform, tex.generated_texture_ptr->native_handle());
-                }
-                else if(!tex.source.empty())
-                {
-                    // An image that is not there (yet) draws nothing until its asset arrives.
-                    bgfx::setTexture(0, texture_uniform, default_textures::get().transparent_texture()->native_handle());
-                }
-                else
-                {
-                    APPLOG_ERROR("Invalid texture uniform or handle: uniform={}", bgfx::isValid(texture_uniform));
-                }
-            }
-            else
-            {
-                APPLOG_ERROR("Invalid texture handle: {}", texture);
+                set_premultiplication_uniform(requires_premultiplication);
+                bgfx::setTexture(0, get_uniform_handle(RmlUi_UniformId::Tex), sampled_texture->native_handle());
+                set_texture_sampling(geometry.tex_coord_min, geometry.tex_coord_max, sampled_texture->get_size(), false);
             }
         }
 
@@ -565,10 +658,7 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
             bgfx::setStencil(stencil_state, BGFX_STENCIL_NONE);
         }
 
-        // Set up bgfx state for UI rendering
-        // Enable alpha blending for UI elements
-        uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);;
-        bgfx::setState(state);
+        bgfx::setState(get_draw_state(Rml::BlendMode::Blend));
 
         // Submit draw call
         bgfx::submit(pass_id, render_program.native_handle());
@@ -680,17 +770,16 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
         return 0;
     }
 
-    // Use bgfx::copy() instead of make_ref() because RmlUi's texture data has limited lifetime
-    // bgfx::copy() creates an internal copy that bgfx owns and automatically releases
-    const bgfx::Memory* mem = bgfx::copy(source_data.data(), source_data.size());
+    // RmlUi provides RGBA8 data with premultiplied alpha, alive only for this call: the chain is a copy
+    // bgfx owns. Generated textures are mostly glyph atlases, and a document drawn straight into a 3D
+    // view shows its text far smaller than the glyphs were rasterized: the mips keep it from aliasing.
+    const bgfx::Memory* mem = create_mip_chain_rgba8(source_data, source_dimensions);
 
-    // Create bgfx texture shared pointer directly from raw RGBA data
-    // RmlUi provides RGBA8 data with premultiplied alpha
     // Use linear filtering for smooth text rendering
     auto generated_texture = std::make_shared<gfx::texture>(
         static_cast<uint16_t>(source_dimensions.x),
         static_cast<uint16_t>(source_dimensions.y),
-        false, // no mips
+        true,
         1,     // num layers
         bgfx::TextureFormat::RGBA8,
         BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
@@ -811,6 +900,12 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
 
     using Rml::ClipMaskOperation;
 
+    if(is_drawing_to_world_target())
+    {
+        request_render_target();
+        return;
+    }
+
     // Handle stencil buffer clearing for Set and SetInverse operations (like GL3)
     auto pass_id = get_layer_pass_id();
     
@@ -875,8 +970,7 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
         // Submit transform uniforms
         submit_transform_uniform(translation);
 
-        // Apply scissor if enabled (BGfx requires per-draw-call scissor setting)
-        set_scissor();
+        apply_clip();
 
         // Set stencil state using BGfx's dedicated stencil function
         bgfx::setStencil(stencil_state, BGFX_STENCIL_NONE);
@@ -907,8 +1001,8 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
 
 void RmlUi_RenderInterface::SetTransform(const Rml::Matrix4f* new_transform)
 {
-    // Match GL3 implementation: combine projection with transform
-    transform_ = (new_transform ? (projection_ * (*new_transform)) : projection_);
+    // Combined with the projection per draw: the projection depends on the layer drawn into.
+    element_transform_ = new_transform ? *new_transform : Rml::Matrix4f::Identity();
 
     // Mark all programs as needing transform update
     program_transform_dirty_.set();
@@ -917,6 +1011,8 @@ void RmlUi_RenderInterface::SetTransform(const Rml::Matrix4f* new_transform)
 // Layer management - stub implementations for now
 auto RmlUi_RenderInterface::PushLayer() -> Rml::LayerHandle
 {
+    // Held-back draws into the 3D view go first: they were drawn before the layer.
+    flush_world_draws();
     return render_layers_->push_layer();
 }
 
@@ -925,6 +1021,13 @@ void RmlUi_RenderInterface::CompositeLayers(Rml::LayerHandle source,
                                             Rml::BlendMode blend_mode,
                                             Rml::Span<const Rml::CompiledFilterHandle> filters)
 {
+    // A backdrop filter reads the base layer: a 3D view has nothing of the document's own to read.
+    if(is_world_target_layer(source))
+    {
+        request_render_target();
+        return;
+    }
+
     // Blit source layer to postprocessing primary buffer
     blit_layer_to_postprocess_primary(source);
 
@@ -932,6 +1035,11 @@ void RmlUi_RenderInterface::CompositeLayers(Rml::LayerHandle source,
     render_filters(filters);
 
     // Composite result to destination layer with blend mode
+    if(is_world_target_layer(destination))
+    {
+        composite_to_world_target(destination);
+        return;
+    }
     composite_to_destination_layer(destination, blend_mode);
 }
 
@@ -942,6 +1050,11 @@ void RmlUi_RenderInterface::PopLayer()
 
 auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
 {
+    if(is_drawing_to_world_target())
+    {
+        request_render_target();
+        return 0;
+    }
     RMLUI_ASSERT(scissor_state_.Valid());
     const Rml::Rectanglei bounds = scissor_state_;
 
@@ -1072,6 +1185,11 @@ auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
 
 auto RmlUi_RenderInterface::SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle
 {
+    if(is_drawing_to_world_target())
+    {
+        request_render_target();
+        return 0;
+    }
     // Blit top layer to postprocess primary (resolve MSAA if needed)
     blit_layer_to_postprocess_primary(render_layers_->get_top_layer_handle());
 
@@ -1415,147 +1533,145 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
     const CompiledShader& shader = shader_manager_.get(internal_shader_handle.idx);
     const CompiledGeometry& geometry = geometry_manager_.get(internal_geometry_handle.idx);
 
+    // The time drives the creation shader's animation.
+    double time = 0.0;
+    if(auto* sys_interface = Rml::GetSystemInterface())
+    {
+        time = sys_interface->GetElapsedTime();
+    }
+
+    const bool is_world = is_drawing_to_world_target();
+    RmlUi_ProgramId program_id = RmlUi_ProgramId::Count;
     switch(shader.type)
     {
         case CompiledShaderType::Gradient:
-        {
-            RMLUI_ASSERT(shader.stop_positions.size() == shader.stop_colors.size());
-            const int num_stops = (int)shader.stop_positions.size();
-
-            use_program(RmlUi_ProgramId::Gradient);
-            auto render_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Gradient)];
-
-            if(render_program.begin())
-            {
-                // Ensure we have the correct layer bound before submitting
-                // If we have layers, render to the top layer, otherwise main framebuffer
-                auto pass_id = get_layer_pass_id();
-
-                // Set vertex and index buffers
-                geometry.bind_buffers(vertex_layout_);
-
-                // Set gradient uniforms
-                auto func_uniform = get_uniform_handle(RmlUi_UniformId::Func);
-                auto p_uniform = get_uniform_handle(RmlUi_UniformId::P);
-                auto v_uniform = get_uniform_handle(RmlUi_UniformId::V);
-                auto num_stops_uniform = get_uniform_handle(RmlUi_UniformId::NumStops);
-                auto stop_positions_uniform = get_uniform_handle(RmlUi_UniformId::StopPositions);
-                auto stop_colors_uniform = get_uniform_handle(RmlUi_UniformId::StopColors);
-
-                if(bgfx::isValid(func_uniform))
-                {
-                    std::array<float, 4> func_data = {static_cast<float>(shader.gradient_function), 0.0f, 0.0f, 0.0f};
-                    bgfx::setUniform(func_uniform, func_data.data());
-                }
-
-                if(bgfx::isValid(p_uniform))
-                {
-                    std::array<float, 4> p_data = {shader.p.x, shader.p.y, 0.0f, 0.0f};
-                    bgfx::setUniform(p_uniform, p_data.data());
-                }
-
-                if(bgfx::isValid(v_uniform))
-                {
-                    std::array<float, 4> v_data = {shader.v.x, shader.v.y, 0.0f, 0.0f};
-                    bgfx::setUniform(v_uniform, v_data.data());
-                }
-
-                if(bgfx::isValid(num_stops_uniform))
-                {
-                    std::array<float, 4> num_stops_data = {static_cast<float>(num_stops), 0.0f, 0.0f, 0.0f};
-                    bgfx::setUniform(num_stops_uniform, num_stops_data.data());
-                }
-
-                if(bgfx::isValid(stop_positions_uniform) && !shader.stop_positions.empty())
-                {
-                    std::array<float, 4 * max_uniform_gradient_stop_positions> stop_positions_data = {};
-                    auto max_stops = std::min<int>(num_stops, stop_positions_data.size());
-                    for(int i = 0; i < max_stops; i++)
-                    {
-                        stop_positions_data[i] = shader.stop_positions[i];
-                    }
-                    bgfx::setUniform(stop_positions_uniform, stop_positions_data.data(), max_uniform_gradient_stop_positions);
-                }
-
-                if(bgfx::isValid(stop_colors_uniform) && !shader.stop_colors.empty())
-                {
-                    std::array<std::array<float, 4>, max_uniform_gradient_stop_colors> stop_colors_data = {};
-                    auto max_stops = std::min<int>(num_stops, stop_colors_data.size());
-                    for(int i = 0; i < max_stops; i++)
-                    {
-                        stop_colors_data[i][0] = shader.stop_colors[i].red;
-                        stop_colors_data[i][1] = shader.stop_colors[i].green;
-                        stop_colors_data[i][2] = shader.stop_colors[i].blue;
-                        stop_colors_data[i][3] = shader.stop_colors[i].alpha;
-                    }
-                    bgfx::setUniform(stop_colors_uniform, stop_colors_data.data(), max_uniform_gradient_stop_colors);
-                }
-
-                submit_transform_uniform(translation);
-
-                uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
-                bgfx::setState(state);
-
-                bgfx::submit(pass_id, render_program.native_handle());
-                render_program.end();
-            }
-        }
-        break;
-
+            program_id = is_world ? RmlUi_ProgramId::WorldGradient : RmlUi_ProgramId::Gradient;
+            break;
         case CompiledShaderType::Creation:
-        {
-            // Get current time from system interface
-            double time = 0.0;
-            if(auto* sys_interface = Rml::GetSystemInterface())
-            {
-                time = sys_interface->GetElapsedTime();
-            }
-
-            use_program(RmlUi_ProgramId::Creation);
-            auto render_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Creation)];
-
-            if(render_program.begin())
-            {
-                // Ensure we have the correct layer bound before submitting
-                // If we have layers, render to the top layer, otherwise main framebuffer
-                auto pass_id = get_layer_pass_id();
-
-                // Set vertex and index buffers
-                geometry.bind_buffers(vertex_layout_);
-
-                // Set creation shader uniforms
-                auto value_uniform = get_uniform_handle(RmlUi_UniformId::Value);
-                auto dimensions_uniform = get_uniform_handle(RmlUi_UniformId::Dimensions);
-
-                if(bgfx::isValid(value_uniform))
-                {
-                    std::array<float, 4> value_data = {static_cast<float>(time), 0.0f, 0.0f, 0.0f};
-                    bgfx::setUniform(value_uniform, value_data.data());
-                }
-
-                if(bgfx::isValid(dimensions_uniform))
-                {
-                    std::array<float, 4> dimensions_data = {shader.dimensions.x, shader.dimensions.y, 0.0f, 0.0f};
-                    bgfx::setUniform(dimensions_uniform, dimensions_data.data());
-                }
-
-                submit_transform_uniform(translation);
-
-                uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);;
-                bgfx::setState(state);
-
-                bgfx::submit(pass_id, render_program.native_handle());
-                render_program.end();
-            }
-        }
-        break;
-
+            program_id = is_world ? RmlUi_ProgramId::WorldCreation : RmlUi_ProgramId::Creation;
+            break;
         case CompiledShaderType::Invalid:
         default:
-        {
             APPLOG_WARNING("Unhandled render shader type {}", static_cast<int>(shader.type));
+            return;
+    }
+
+    if(is_world)
+    {
+        PendingWorldDraw draw = make_pending_world_draw(program_id, internal_geometry_handle.idx, translation);
+        draw.shader_index = internal_shader_handle.idx;
+        draw.elapsed_time = static_cast<float>(time);
+        queue_world_draw(draw);
+        return;
+    }
+
+    use_program(program_id);
+    auto render_program = programs_[static_cast<size_t>(program_id)];
+    if(!render_program.begin())
+    {
+        return;
+    }
+    // Ensure we have the correct layer bound before submitting
+    // If we have layers, render to the top layer, otherwise main framebuffer
+    auto pass_id = get_layer_pass_id();
+
+    // Set vertex and index buffers
+    geometry.bind_buffers(vertex_layout_);
+
+    if(shader.type == CompiledShaderType::Gradient)
+    {
+        set_gradient_uniforms(shader);
+    }
+    else
+    {
+        set_creation_uniforms(shader, static_cast<float>(time));
+    }
+
+    submit_transform_uniform(translation);
+    apply_clip();
+    bgfx::setState(get_draw_state(Rml::BlendMode::Blend));
+
+    bgfx::submit(pass_id, render_program.native_handle());
+    render_program.end();
+}
+
+void RmlUi_RenderInterface::set_gradient_uniforms(const CompiledShader& shader)
+{
+    RMLUI_ASSERT(shader.stop_positions.size() == shader.stop_colors.size());
+    const int num_stops = (int)shader.stop_positions.size();
+
+    auto func_uniform = get_uniform_handle(RmlUi_UniformId::Func);
+    auto p_uniform = get_uniform_handle(RmlUi_UniformId::P);
+    auto v_uniform = get_uniform_handle(RmlUi_UniformId::V);
+    auto num_stops_uniform = get_uniform_handle(RmlUi_UniformId::NumStops);
+    auto stop_positions_uniform = get_uniform_handle(RmlUi_UniformId::StopPositions);
+    auto stop_colors_uniform = get_uniform_handle(RmlUi_UniformId::StopColors);
+
+    if(bgfx::isValid(func_uniform))
+    {
+        std::array<float, 4> func_data = {static_cast<float>(shader.gradient_function), 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(func_uniform, func_data.data());
+    }
+
+    if(bgfx::isValid(p_uniform))
+    {
+        std::array<float, 4> p_data = {shader.p.x, shader.p.y, 0.0f, 0.0f};
+        bgfx::setUniform(p_uniform, p_data.data());
+    }
+
+    if(bgfx::isValid(v_uniform))
+    {
+        std::array<float, 4> v_data = {shader.v.x, shader.v.y, 0.0f, 0.0f};
+        bgfx::setUniform(v_uniform, v_data.data());
+    }
+
+    if(bgfx::isValid(num_stops_uniform))
+    {
+        std::array<float, 4> num_stops_data = {static_cast<float>(num_stops), 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(num_stops_uniform, num_stops_data.data());
+    }
+
+    if(bgfx::isValid(stop_positions_uniform) && !shader.stop_positions.empty())
+    {
+        std::array<float, 4 * max_uniform_gradient_stop_positions> stop_positions_data = {};
+        auto max_stops = std::min<int>(num_stops, stop_positions_data.size());
+        for(int i = 0; i < max_stops; i++)
+        {
+            stop_positions_data[i] = shader.stop_positions[i];
         }
-        break;
+        bgfx::setUniform(stop_positions_uniform, stop_positions_data.data(), max_uniform_gradient_stop_positions);
+    }
+
+    if(bgfx::isValid(stop_colors_uniform) && !shader.stop_colors.empty())
+    {
+        std::array<std::array<float, 4>, max_uniform_gradient_stop_colors> stop_colors_data = {};
+        auto max_stops = std::min<int>(num_stops, stop_colors_data.size());
+        for(int i = 0; i < max_stops; i++)
+        {
+            stop_colors_data[i][0] = shader.stop_colors[i].red;
+            stop_colors_data[i][1] = shader.stop_colors[i].green;
+            stop_colors_data[i][2] = shader.stop_colors[i].blue;
+            stop_colors_data[i][3] = shader.stop_colors[i].alpha;
+        }
+        bgfx::setUniform(stop_colors_uniform, stop_colors_data.data(), max_uniform_gradient_stop_colors);
+    }
+}
+
+void RmlUi_RenderInterface::set_creation_uniforms(const CompiledShader& shader, float elapsed_time)
+{
+    auto value_uniform = get_uniform_handle(RmlUi_UniformId::Value);
+    auto dimensions_uniform = get_uniform_handle(RmlUi_UniformId::Dimensions);
+
+    if(bgfx::isValid(value_uniform))
+    {
+        std::array<float, 4> value_data = {elapsed_time, 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(value_uniform, value_data.data());
+    }
+
+    if(bgfx::isValid(dimensions_uniform))
+    {
+        std::array<float, 4> dimensions_data = {shader.dimensions.x, shader.dimensions.y, 0.0f, 0.0f};
+        bgfx::setUniform(dimensions_uniform, dimensions_data.data());
     }
 }
 
@@ -1597,7 +1713,222 @@ auto RmlUi_RenderInterface::init_vertex_layout() -> bool
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
 
+    // RmlUi_WorldShapeVertex: six float4 of rectangle or triangle data.
+    world_shape_layout_.begin()
+        .add(bgfx::Attrib::TexCoord1, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord2, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord3, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord4, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord5, 4, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord6, 4, bgfx::AttribType::Float)
+        .end();
+
     return true;
+}
+
+auto RmlUi_RenderInterface::ensure_world_mesh(CompiledGeometry& geometry) -> bool
+{
+    if(!geometry.world_mesh)
+    {
+        geometry.world_mesh = world_mesh_cache_.get(geometry.vertices, geometry.indices, {});
+    }
+    return geometry.world_mesh != nullptr;
+}
+
+auto RmlUi_RenderInterface::get_drawn_world_mesh(CompiledGeometry& geometry,
+                                                 const PendingWorldDraw& draw,
+                                                 Rml::Span<const PendingWorldDraw> later_draws) -> const RmlUi_ResidentWorldMesh*
+{
+    const WorldNeighbours neighbours = collect_world_neighbours(geometry, draw, later_draws);
+    if(geometry.world_drawn_mesh && neighbours == geometry.world_neighbours)
+    {
+        return geometry.world_drawn_mesh.get();
+    }
+    std::vector<RmlUi_WorldOutlineEdge> later_edges;
+    for(size_t index = 0; index < neighbours.count; ++index)
+    {
+        const WorldNeighbour& neighbour = neighbours.items[index];
+        append_touching_edges(geometry.world_mesh->get_outline(), neighbour.mesh->get_outline(), neighbour.offset, later_edges);
+    }
+    std::shared_ptr<const RmlUi_ResidentWorldMesh> drawn =
+        later_edges.empty() ? nullptr : world_mesh_cache_.get(geometry.vertices, geometry.indices, later_edges);
+    geometry.world_drawn_mesh = drawn ? std::move(drawn) : geometry.world_mesh;
+    geometry.world_neighbours = neighbours;
+    return geometry.world_drawn_mesh.get();
+}
+
+void RmlUi_RenderInterface::begin_world_mesh_frame()
+{
+    const uint32_t frame = gfx::get_render_frame();
+    if(frame == world_mesh_frame_)
+    {
+        return;
+    }
+    world_mesh_frame_ = frame;
+    world_mesh_pool_.recycle(frame);
+    world_mesh_cache_.trim(frame);
+}
+
+auto RmlUi_RenderInterface::get_sampled_texture(Rml::TextureHandle texture, bool& requires_premultiplication) -> gfx::texture::ptr
+{
+    compiled_texture_handle internal_handle = texture_manager_.from_rml_handle(texture);
+    if(!texture_manager_.is_valid(internal_handle.idx))
+    {
+        APPLOG_ERROR("Invalid texture handle: {}", texture);
+        return nullptr;
+    }
+    const auto& tex = texture_manager_.get(internal_handle.idx);
+    requires_premultiplication = tex.requires_premultiplication;
+    if(tex.loaded)
+    {
+        return tex.loaded;
+    }
+    if(tex.generated_texture_ptr && tex.generated_texture_ptr->is_valid())
+    {
+        return tex.generated_texture_ptr;
+    }
+    if(!tex.source.empty())
+    {
+        // An image that is not there (yet) draws nothing until its asset arrives.
+        return default_textures::get().transparent_texture();
+    }
+    APPLOG_ERROR("Texture handle {} has no texture to draw", texture);
+    return nullptr;
+}
+
+void RmlUi_RenderInterface::set_premultiplication_uniform(bool requires_premultiplication)
+{
+    auto requires_premultiplication_uniform = get_uniform_handle(RmlUi_UniformId::TexRequiresPremultiplication);
+    if(bgfx::isValid(requires_premultiplication_uniform))
+    {
+        const std::array<float, 4> requires_premultiplication_data = {requires_premultiplication ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+        bgfx::setUniform(requires_premultiplication_uniform, requires_premultiplication_data.data());
+    }
+}
+
+auto RmlUi_RenderInterface::make_pending_world_draw(RmlUi_ProgramId program_id, uint16_t geometry_index, Rml::Vector2f translation)
+    -> PendingWorldDraw
+{
+    PendingWorldDraw draw;
+    draw.program_id = program_id;
+    draw.geometry_index = geometry_index;
+    draw.view_id = get_layer_pass_id();
+    draw.translation = translation;
+    draw.element_transform = element_transform_;
+    draw.clip_region = Rml::Rectanglef(get_world_clip_region());
+    draw.state = get_draw_state(Rml::BlendMode::Blend);
+    return draw;
+}
+
+void RmlUi_RenderInterface::queue_world_draw(const PendingWorldDraw& draw)
+{
+    if(!ensure_world_mesh(geometry_manager_.get(draw.geometry_index)))
+    {
+        return;
+    }
+    pending_world_draws_.push_back(draw);
+    if(pending_world_draws_.size() > MAX_PENDING_WORLD_DRAWS)
+    {
+        submit_world_draw(pending_world_draws_.front(), {pending_world_draws_.data() + 1, pending_world_draws_.size() - 1});
+        pending_world_draws_.erase(pending_world_draws_.begin());
+    }
+}
+
+void RmlUi_RenderInterface::flush_world_draws()
+{
+    for(size_t index = 0; index < pending_world_draws_.size(); ++index)
+    {
+        submit_world_draw(pending_world_draws_[index],
+                          {pending_world_draws_.data() + index + 1, pending_world_draws_.size() - index - 1});
+    }
+    pending_world_draws_.clear();
+}
+
+auto RmlUi_RenderInterface::collect_world_neighbours(const CompiledGeometry& geometry,
+                                                     const PendingWorldDraw& draw,
+                                                     Rml::Span<const PendingWorldDraw> later_draws) const -> WorldNeighbours
+{
+    WorldNeighbours neighbours;
+    const RmlUi_WorldOutline& outline = geometry.world_mesh->get_outline();
+    if(outline.edges.empty())
+    {
+        return neighbours;
+    }
+    for(const PendingWorldDraw& later : later_draws)
+    {
+        if(neighbours.count == WorldNeighbours::MAX_COUNT)
+        {
+            break;
+        }
+        if(!geometry_manager_.is_valid(later.geometry_index))
+        {
+            continue;
+        }
+        const auto& later_mesh = geometry_manager_.get(later.geometry_index).world_mesh;
+        if(!later_mesh || later_mesh->get_outline().edges.empty())
+        {
+            continue;
+        }
+        const RmlUi_WorldOutline& later_outline = later_mesh->get_outline();
+        const Rml::Vector2f offset = later.translation - draw.translation;
+        const bool overlaps = later_outline.min.x + offset.x <= outline.max.x && later_outline.min.y + offset.y <= outline.max.y &&
+                              later_outline.max.x + offset.x >= outline.min.x && later_outline.max.y + offset.y >= outline.min.y;
+        // Compared in the elements' own pixels, where only draws under the same transform line up.
+        if(overlaps && later.element_transform == draw.element_transform)
+        {
+            neighbours.items[neighbours.count++] = {later_mesh, offset};
+        }
+    }
+    return neighbours;
+}
+
+void RmlUi_RenderInterface::submit_world_draw(const PendingWorldDraw& draw, Rml::Span<const PendingWorldDraw> later_draws)
+{
+    if(!geometry_manager_.is_valid(draw.geometry_index))
+    {
+        return;
+    }
+    auto render_program = programs_[static_cast<size_t>(draw.program_id)];
+    if(!render_program.begin())
+    {
+        return;
+    }
+    CompiledGeometry& geometry = geometry_manager_.get(draw.geometry_index);
+    const RmlUi_ResidentWorldMesh* mesh = get_drawn_world_mesh(geometry, draw, later_draws);
+    if(mesh == nullptr)
+    {
+        render_program.end();
+        return;
+    }
+    world_mesh_pool_.bind(mesh->get_allocation());
+    set_transform_uniforms(*frame_state_->document_to_clip, draw.element_transform, draw.translation, OUTLINE_GROWTH_PIXELS);
+    set_clip_rect_uniform(draw.clip_region);
+    if(bgfx::isValid(draw.texture))
+    {
+        set_premultiplication_uniform(draw.requires_premultiplication);
+        bgfx::setTexture(0, get_uniform_handle(RmlUi_UniformId::Tex), draw.texture);
+        set_texture_sampling(geometry.tex_coord_min, geometry.tex_coord_max, draw.texture_size, true);
+    }
+    if(draw.program_id == RmlUi_ProgramId::WorldGradient || draw.program_id == RmlUi_ProgramId::WorldCreation)
+    {
+        if(!shader_manager_.is_valid(draw.shader_index))
+        {
+            render_program.end();
+            return;
+        }
+        const CompiledShader& shader = shader_manager_.get(draw.shader_index);
+        if(draw.program_id == RmlUi_ProgramId::WorldGradient)
+        {
+            set_gradient_uniforms(shader);
+        }
+        else
+        {
+            set_creation_uniforms(shader, draw.elapsed_time);
+        }
+    }
+    bgfx::setState(draw.state);
+    bgfx::submit(draw.view_id, render_program.native_handle());
+    render_program.end();
 }
 
 auto RmlUi_RenderInterface::init_shaders() -> bool
@@ -1634,10 +1965,16 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     auto fs_blend_mask_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_blend_mask.sc");
     auto fs_blur_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_blur.sc");
     auto fs_drop_shadow_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_drop_shadow.sc");
+    auto vs_world_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_world.sc");
+    auto fs_world_color_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_color.sc");
+    auto fs_world_texture_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_texture.sc");
+    auto fs_world_gradient_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_gradient.sc");
+    auto fs_world_creation_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_creation.sc");
 
     if(!vs_passthrough_shader || !vs_blur_shader || !fs_color_shader || !fs_texture_shader || !fs_gradient_shader ||
        !fs_creation_shader || !fs_passthrough_shader || !fs_color_matrix_shader || !fs_blend_mask_shader ||
-       !fs_blur_shader || !fs_drop_shadow_shader)
+       !fs_blur_shader || !fs_drop_shadow_shader || !vs_world_shader || !fs_world_color_shader || !fs_world_texture_shader ||
+       !fs_world_gradient_shader || !fs_world_creation_shader)
     {
         APPLOG_ERROR("Failed to load RmlUi shaders");
         return false;
@@ -1657,6 +1994,10 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     programs_[static_cast<size_t>(RmlUi_ProgramId::Blur)] = gpu_program(vs_blur_shader, fs_blur_shader);
     programs_[static_cast<size_t>(RmlUi_ProgramId::DropShadow)] =
         gpu_program(vs_passthrough_shader, fs_drop_shadow_shader);
+    programs_[static_cast<size_t>(RmlUi_ProgramId::WorldColor)] = gpu_program(vs_world_shader, fs_world_color_shader);
+    programs_[static_cast<size_t>(RmlUi_ProgramId::WorldTexture)] = gpu_program(vs_world_shader, fs_world_texture_shader);
+    programs_[static_cast<size_t>(RmlUi_ProgramId::WorldGradient)] = gpu_program(vs_world_shader, fs_world_gradient_shader);
+    programs_[static_cast<size_t>(RmlUi_ProgramId::WorldCreation)] = gpu_program(vs_world_shader, fs_world_creation_shader);
 
     // Verify programs are valid
     for(size_t i = 0; i < static_cast<size_t>(RmlUi_ProgramId::Count); ++i)
@@ -1709,6 +2050,20 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Dimensions)] =
         bgfx::createUniform("u_dimensions", bgfx::UniformType::Vec4);
 
+    // Document-space clipping
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::ElementTransform)] =
+        bgfx::createUniform("u_element_transform", bgfx::UniformType::Mat4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::ClipRect)] =
+        bgfx::createUniform("u_clip_rect", bgfx::UniformType::Vec4);
+
+    // Drawing straight into a 3D view
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::DocumentEdge)] =
+        bgfx::createUniform("u_document_edge", bgfx::UniformType::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::TextureRect)] =
+        bgfx::createUniform("u_texture_rect", bgfx::UniformType::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::TextureSize)] =
+        bgfx::createUniform("u_texture_size", bgfx::UniformType::Vec4);
+
     // Verify uniforms are valid
     for(size_t i = 0; i < static_cast<size_t>(RmlUi_UniformId::Count); ++i)
     {
@@ -1729,6 +2084,9 @@ void RmlUi_RenderInterface::cleanup_resources()
     geometry_manager_.cleanup_all([](CompiledGeometry& geometry) {
         geometry.destroy_buffers();
     });
+    // The geometries no longer hold world meshes: the cache lets go of its own, then the pool's buffers go.
+    world_mesh_cache_.clear();
+    world_mesh_pool_.destroy();
 
     // Cleanup all compiled textures using the texture manager
     texture_manager_.cleanup_all([](CompiledTexture& texture) {
@@ -1804,6 +2162,177 @@ void RmlUi_RenderInterface::set_scissor()
     }
 }
 
+void RmlUi_RenderInterface::apply_clip()
+{
+    if(is_drawing_to_world_target())
+    {
+        set_clip_rect_uniform(Rml::Rectanglef(get_world_clip_region()));
+        return;
+    }
+    set_clip_rect_uniform(Rml::Rectanglef::FromCorners(Rml::Vector2f(-UNCLIPPED_EXTENT), Rml::Vector2f(UNCLIPPED_EXTENT)));
+    set_scissor();
+}
+
+void RmlUi_RenderInterface::set_texture_sampling(Rml::Vector2f tex_coord_min,
+                                                 Rml::Vector2f tex_coord_max,
+                                                 usize32_t texture_size,
+                                                 bool filters_footprint)
+{
+    auto texture_rect_uniform = get_uniform_handle(RmlUi_UniformId::TextureRect);
+    if(bgfx::isValid(texture_rect_uniform))
+    {
+        const std::array<float, 4> texture_rect_data = {tex_coord_min.x, tex_coord_min.y, tex_coord_max.x, tex_coord_max.y};
+        bgfx::setUniform(texture_rect_uniform, texture_rect_data.data());
+    }
+    auto texture_size_uniform = get_uniform_handle(RmlUi_UniformId::TextureSize);
+    if(bgfx::isValid(texture_size_uniform))
+    {
+        const std::array<float, 4> texture_size_data = {static_cast<float>(texture_size.width),
+                                                        static_cast<float>(texture_size.height),
+                                                        filters_footprint ? 1.0f : 0.0f,
+                                                        0.0f};
+        bgfx::setUniform(texture_size_uniform, texture_size_data.data());
+    }
+}
+
+void RmlUi_RenderInterface::set_clip_rect_uniform(const Rml::Rectanglef& region)
+{
+    auto clip_rect_uniform = get_uniform_handle(RmlUi_UniformId::ClipRect);
+    if(bgfx::isValid(clip_rect_uniform))
+    {
+        const std::array<float, 4> clip_rect_data = {region.Left(), region.Top(), region.Right(), region.Bottom()};
+        bgfx::setUniform(clip_rect_uniform, clip_rect_data.data());
+    }
+}
+
+auto RmlUi_RenderInterface::get_world_clip_region() const -> Rml::Rectanglei
+{
+    const auto document = Rml::Rectanglei::FromSize(get_viewport_size());
+    if(!scissor_enabled_)
+    {
+        return document;
+    }
+    // A scissor region entirely outside the document keeps nothing.
+    return scissor_state_.Intersects(document) ? scissor_state_.Intersect(document) : Rml::Rectanglei::FromSize({0, 0});
+}
+
+auto RmlUi_RenderInterface::get_draw_state(Rml::BlendMode blend_mode) -> uint64_t
+{
+    const uint64_t state = convert_blend_mode(blend_mode);
+    return is_drawing_to_world_target() ? state | BGFX_STATE_DEPTH_TEST_LESS : state;
+}
+
+auto RmlUi_RenderInterface::is_world_target_layer(Rml::LayerHandle layer_handle) const -> bool
+{
+    return frame_state_ && frame_state_->document_to_clip && layer_handle == BASE_LAYER;
+}
+
+auto RmlUi_RenderInterface::is_drawing_to_world_target() const -> bool
+{
+    return render_layers_ && is_world_target_layer(render_layers_->get_top_layer_handle());
+}
+
+void RmlUi_RenderInterface::request_render_target()
+{
+    if(frame_state_)
+    {
+        frame_state_->needs_render_target = true;
+    }
+}
+
+void RmlUi_RenderInterface::submit_document_quad(RmlUi_ProgramId program_id,
+                                                 uint64_t state,
+                                                 bgfx::ViewId view_id,
+                                                 float outline_growth)
+{
+    auto render_program = programs_[static_cast<size_t>(program_id)];
+    if(!render_program.begin())
+    {
+        return;
+    }
+    bgfx::TransientVertexBuffer vertex_buffer;
+    bgfx::TransientIndexBuffer index_buffer;
+    if(!allocate_transient_buffers(DOCUMENT_QUAD_VERTEX_COUNT,
+                                   static_cast<uint32_t>(DOCUMENT_QUAD_INDICES.size()),
+                                   vertex_layout_,
+                                   vertex_buffer,
+                                   index_buffer))
+    {
+        render_program.end();
+        return;
+    }
+    const auto size = Rml::Vector2f(get_viewport_size());
+    // Layer textures are sampled upside down where render targets start at the bottom.
+    const float top_v = gfx::is_origin_bottom_left() ? 1.0f : 0.0f;
+    const float bottom_v = 1.0f - top_v;
+    const Rml::ColourbPremultiplied white(255, 255, 255, 255);
+    const std::array<Rml::Vertex, DOCUMENT_QUAD_VERTEX_COUNT> corners = {
+        Rml::Vertex{{0.0f, 0.0f}, white, {0.0f, top_v}},
+        Rml::Vertex{{size.x, 0.0f}, white, {1.0f, top_v}},
+        Rml::Vertex{{size.x, size.y}, white, {1.0f, bottom_v}},
+        Rml::Vertex{{0.0f, size.y}, white, {0.0f, bottom_v}},
+    };
+    bx::memCopy(vertex_buffer.data, corners.data(), vertex_layout_.getSize(DOCUMENT_QUAD_VERTEX_COUNT));
+    bx::memCopy(index_buffer.data, DOCUMENT_QUAD_INDICES.data(), sizeof(DOCUMENT_QUAD_INDICES));
+    bgfx::setVertexBuffer(0, &vertex_buffer);
+    bgfx::setIndexBuffer(&index_buffer);
+    set_transform_uniforms(*frame_state_->document_to_clip, Rml::Matrix4f::Identity(), {}, outline_growth);
+    bgfx::setState(state);
+    bgfx::submit(view_id, render_program.native_handle());
+    render_program.end();
+}
+
+void RmlUi_RenderInterface::write_document_depth()
+{
+    constexpr uint64_t depth_only_state = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
+    // Starting a view drops the draw state set before it: the view comes first.
+    const bgfx::ViewId view_id = get_layer_view(BASE_LAYER);
+    set_clip_rect_uniform(Rml::Rectanglef::FromSize(Rml::Vector2f(get_viewport_size())));
+    // The plane ends at the document's own edge: grown, it would hide what lies just beside the document.
+    submit_document_quad(RmlUi_ProgramId::Color, depth_only_state, view_id, 0.0f);
+}
+
+void RmlUi_RenderInterface::composite_to_world_target(Rml::LayerHandle destination)
+{
+    const RmlUi_LayerFramebuffer& source_fb = render_layers_->get_postprocess_primary();
+    const RmlUi_LayerFramebuffer& mipped_fb = render_layers_->get_world_composite();
+    auto copy_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Passthrough)];
+    if(!source_fb.is_valid() || !mipped_fb.is_valid() || !copy_program.begin())
+    {
+        APPLOG_ERROR("Invalid framebuffers for composition");
+        return;
+    }
+    flush_world_draws();
+    // The 3D view may show the layer far smaller than the document: a copy with mips filters it there.
+    // The copy keeps only the clip region, in whole document pixels, so the mips fade the clipped edges
+    // as a document drawn into a texture does and the composite needs no clip of its own: a clip that
+    // fades across a screen pixel would fade the content along the edge a second time.
+    {
+        gfx::render_pass copy_pass("World Composite Copy Pass");
+        copy_pass.bind(mipped_fb.framebuffer.get());
+        copy_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
+        auto view = Rml::Matrix4f::Identity();
+        auto proj = Rml::Matrix4f::Identity();
+        copy_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
+        bgfx::setTexture(0, get_uniform_handle(RmlUi_UniformId::Tex), source_fb.get_color_texture()->native_handle());
+        set_scissor();
+        bgfx::setState(gfx::clip_quad_ex({}) | convert_blend_mode(Rml::BlendMode::Replace));
+        bgfx::submit(copy_pass.id, copy_program.native_handle());
+        copy_program.end();
+    }
+    // In a view after the ones that drew the layers.
+    render_layers_->get_layer(destination).needs_rebind = true;
+    const bgfx::ViewId view_id = get_layer_view(destination);
+    const auto& layer_texture = mipped_fb.get_color_texture();
+    bgfx::setTexture(0, get_uniform_handle(RmlUi_UniformId::Tex), layer_texture->native_handle());
+    set_premultiplication_uniform(false);
+    set_texture_sampling(Rml::Vector2f(0.0f), Rml::Vector2f(1.0f), layer_texture->get_size(), true);
+    set_clip_rect_uniform(Rml::Rectanglef::FromSize(Rml::Vector2f(get_viewport_size())));
+    // The world has no layer to replace into: every composite blends.
+    const uint64_t state = convert_blend_mode(Rml::BlendMode::Blend) | BGFX_STATE_DEPTH_TEST_LESS;
+    submit_document_quad(RmlUi_ProgramId::Texture, state, view_id, OUTLINE_GROWTH_PIXELS);
+}
+
 void RmlUi_RenderInterface::set_view_scissor(bgfx::ViewId pass_id, const Rml::Rectanglei& region)
 {
     const auto vp = get_viewport_size();
@@ -1821,11 +2350,37 @@ void RmlUi_RenderInterface::set_view_scissor(bgfx::ViewId pass_id, const Rml::Re
 
 void RmlUi_RenderInterface::submit_transform_uniform(Rml::Vector2f translation)
 {
+    const bool is_world = is_drawing_to_world_target();
+    const Rml::Matrix4f& projection = is_world ? *frame_state_->document_to_clip : projection_;
+    set_transform_uniforms(projection, element_transform_, translation, is_world ? OUTLINE_GROWTH_PIXELS : 0.0f);
+}
+
+void RmlUi_RenderInterface::set_transform_uniforms(const Rml::Matrix4f& projection,
+                                                   const Rml::Matrix4f& element_transform,
+                                                   Rml::Vector2f translation,
+                                                   float outline_growth)
+{
+    transform_ = projection * element_transform;
+
+    auto document_edge_uniform = get_uniform_handle(RmlUi_UniformId::DocumentEdge);
+    if(bgfx::isValid(document_edge_uniform))
+    {
+        const auto document_size = Rml::Vector2f(get_viewport_size());
+        const std::array<float, 4> document_edge_data = {document_size.x, document_size.y, outline_growth, 0.0f};
+        bgfx::setUniform(document_edge_uniform, document_edge_data.data());
+    }
+
     // Set transform uniform
     auto transform_uniform = get_uniform_handle(RmlUi_UniformId::Transform);
     if(bgfx::isValid(transform_uniform))
     {
         bgfx::setUniform(transform_uniform, transform_.Transpose().data());
+    }
+
+    auto element_transform_uniform = get_uniform_handle(RmlUi_UniformId::ElementTransform);
+    if(bgfx::isValid(element_transform_uniform))
+    {
+        bgfx::setUniform(element_transform_uniform, element_transform.Transpose().data());
     }
 
     // Set translation uniform (for shader convenience)
@@ -1986,7 +2541,11 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     bgfx::setTexture(0, tex_uniform, color_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
-                    auto topology = gfx::clip_quad_ex({});
+                    // Each shadow pixel takes the content's alpha one offset back.
+                    const Rml::Vector2f viewport_size(get_viewport_size());
+                    const auto shadow_quad = gfx::clip_quad_def{.uv_offset_x = -filter.offset.x / viewport_size.x,
+                                                                .uv_offset_y = -filter.offset.y / viewport_size.y};
+                    auto topology = gfx::clip_quad_ex(shadow_quad);
                     bgfx::setState(topology | state);
 
                     bgfx::submit(pass.id, render_program.native_handle());
@@ -2010,12 +2569,13 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                 auto passthrough_program = programs_[static_cast<size_t>(RmlUi_ProgramId::Passthrough)];
                 if(passthrough_program.begin())
                 {
-                    auto source = render_layers_->get_postprocess_secondary();
-                    auto destination = render_layers_->get_postprocess_primary();
+                    // The content goes over its shadow: the shadow buffer becomes the result.
+                    auto source = render_layers_->get_postprocess_primary();
+                    auto destination = render_layers_->get_postprocess_secondary();
 
                     gfx::render_pass pass("Drop Shadow Composite Pass");
                     pass.bind(destination.framebuffer.get());
-                    
+
                     auto view = Rml::Matrix4f::Identity();
                     auto proj = Rml::Matrix4f::Identity();
                     pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
@@ -2023,9 +2583,8 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
                     bgfx::setTexture(0, tex_uniform, source.get_color_texture()->native_handle());
 
-            
-                    // Set render state - disable blending for upscale
-                    uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
+
+                    uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
                     auto topology = gfx::clip_quad_ex({});
                     bgfx::setState(topology | state);
                     bgfx::submit(pass.id, passthrough_program.native_handle());
@@ -2209,7 +2768,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             // Set render state - disable blending for downscaling
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
 
-            auto def = gfx::clip_quad_def{0.0f, 1.0f, 1.0f, 0.0f, 0.0f, uv_scaling.x, uv_scaling.y};
+            auto def = gfx::clip_quad_def{.uv_scaling_x = uv_scaling.x, .uv_scaling_y = uv_scaling.y};
             auto topology = gfx::clip_quad_ex(def);
             bgfx::setState(topology | state);
 
@@ -2253,9 +2812,13 @@ void RmlUi_RenderInterface::render_blur(float sigma,
     {
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
         auto texel_offset_uniform = get_uniform_handle(RmlUi_UniformId::TexelOffset);
-
-        set_blur_weights(sigma);
-        set_tex_coord_limits(scissor, {fb_width, fb_height});
+        // Binding or clearing a pass touches its view, and a touch drops the uniforms set before it:
+        // each blur pass sets them after its own setup.
+        const auto set_blur_uniforms = [&]()
+        {
+            set_blur_weights(sigma);
+            set_tex_coord_limits(scissor, {fb_width, fb_height});
+        };
 
         // Blur render pass - vertical
         {
@@ -2269,7 +2832,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             set_view_scissor(vertical_blur_pass.id, scissor.Extend(1));
 
             vertical_blur_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
-
+            set_blur_uniforms();
 
             auto temp_texture = temp.get_color_texture();
             bgfx::setTexture(0, tex_uniform, temp_texture->native_handle());
@@ -2297,6 +2860,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             set_view_scissor(horizontal_blur_pass.id, scissor.Extend(1));
             
             horizontal_blur_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
+            set_blur_uniforms();
 
             auto source_texture = source_destination.get_color_texture();
             bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
@@ -2582,13 +3146,21 @@ void RmlUi_RenderInterface::composite_to_destination_layer(Rml::LayerHandle dest
 
 auto RmlUi_RenderInterface::get_layer_pass_id() -> bgfx::ViewId
 {
-    auto& target_layer = render_layers_->get_top_layer();
+    return get_layer_view(render_layers_->get_top_layer_handle());
+}
+
+auto RmlUi_RenderInterface::get_layer_view(Rml::LayerHandle layer_handle) -> bgfx::ViewId
+{
+    auto& target_layer = render_layers_->get_layer(layer_handle);
 
     if(target_layer.needs_rebind)
     {
-        // Create a new render pass for this layer
+        // Create a new render pass for this layer. A base layer drawn straight into a 3D view has no
+        // frame buffer of its own: the pass binds the frame's target, which keeps what it holds.
+        const auto* framebuffer =
+            is_world_target_layer(layer_handle) ? frame_state_->framebuffer.get() : target_layer.framebuffer.get();
         gfx::render_pass layer_pass("Layer Pass");
-        layer_pass.bind(target_layer.framebuffer.get());
+        layer_pass.bind(framebuffer);
         auto view = Rml::Matrix4f::Identity();
         auto proj = Rml::Matrix4f::Identity();
         layer_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
@@ -2642,8 +3214,16 @@ void RmlUi_RenderInterface::CompiledGeometry::bind_buffers(const bgfx::VertexLay
     }
 }
 
+void RmlUi_RenderInterface::CompiledGeometry::release_world_meshes()
+{
+    world_mesh.reset();
+    world_neighbours = {};
+    world_drawn_mesh.reset();
+}
+
 void RmlUi_RenderInterface::CompiledGeometry::destroy_buffers()
 {
+    release_world_meshes();
     switch(buffer_type)
     {
         case GeometryBufferType::Transient:

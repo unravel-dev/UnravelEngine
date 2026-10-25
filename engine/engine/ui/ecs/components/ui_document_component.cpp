@@ -19,6 +19,24 @@ auto ui_document_component::get_world_space_quad(const math::transform& entity_w
     return entity_world * math::transform::scaling(get_world_space_scale());
 }
 
+auto ui_document_component::get_document_to_world(const math::transform& entity_world) const -> math::mat4
+{
+    // Document pixel (0, 0) is the quad's local (-0.5, 0.5) and y runs down the quad. The document reads
+    // from local -z, so a CSS transform that lifts an element toward the viewer moves it along -z, one
+    // world unit per pixels_per_world_unit pixels.
+    math::mat4 document_to_local(1.0f);
+    document_to_local[0][0] = 1.0f / static_cast<float>(size.width);
+    document_to_local[1][1] = -1.0f / static_cast<float>(size.height);
+    document_to_local[2][2] = -1.0f / pixels_per_world_unit;
+    document_to_local[3] = math::vec4(-0.5f, 0.5f, 0.0f, 1.0f);
+    return get_world_space_quad(entity_world).get_matrix() * document_to_local;
+}
+
+auto ui_document_component::draws_into_scene() const -> bool
+{
+    return render_mode == ui_render_mode::world_space && !needs_render_target;
+}
+
 auto ui_document_component::get_bounds() const -> math::bbox
 {
     const auto scale = get_world_space_scale();

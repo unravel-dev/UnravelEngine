@@ -430,6 +430,10 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_handle, 
         return;
     }
     element->AddEventListener(event_type, get_listener(capture), capture);
+    if(is_ui_pointer_press_event(event_type))
+    {
+        add_ui_script_pointer_listener(element);
+    }
     APPLOG_TRACE("Ensured native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
     // RmlUi sends a click to the nearest element that can take focus: under 'focus: none'
     // (an inherited property) that is an ancestor, and the event never reaches this element.
@@ -448,6 +452,10 @@ void internal_m2n_ui_remove_native_event_listener(std::intptr_t element_handle, 
     if(auto* element = resolve_ui_element_handle(element_handle))
     {
         element->RemoveEventListener(event_type, get_listener(capture), capture);
+        if(is_ui_pointer_press_event(event_type))
+        {
+            remove_ui_script_pointer_listener(element);
+        }
         APPLOG_TRACE("Removed native UI event listener: element='{}', event='{}'", element->GetId(), event_type);
     }
 }

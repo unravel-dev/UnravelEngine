@@ -68,6 +68,11 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
     /// Framebuffer for world-space render-to-texture (owned by component)
     gfx::frame_buffer::ptr framebuffer;
 
+    /// Set when the document drew something only a render target of its own can draw (a clip mask or a
+    /// backdrop filter): a world-space document then renders to its framebuffer instead of straight
+    /// into the scene, until it loads again.
+    bool needs_render_target = false;
+
     /// Last frame this world-space document was rendered (for render-once-per-frame)
     uint32_t last_render_frame = 0;
 
@@ -82,6 +87,18 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
      * with document pixel (0, 0) at local (-0.5, 0.5).
      */
     auto get_world_space_quad(const math::transform& entity_world) const -> math::transform;
+
+    /**
+     * @brief Maps document pixels (x right, y down, z toward the reader) to world space on the quad of
+     * get_world_space_quad.
+     */
+    auto get_document_to_world(const math::transform& entity_world) const -> math::mat4;
+
+    /**
+     * @brief Whether the scene's UI pass draws this world-space document straight into its target,
+     * with no framebuffer of its own.
+     */
+    [[nodiscard]] auto draws_into_scene() const -> bool;
 
     /**
      * @brief The quad a world-space document is drawn on, in the entity's local space: centred on the

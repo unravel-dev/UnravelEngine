@@ -7,12 +7,15 @@
 #include <engine/input/input.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/ui/ui_element_queries.h>
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 
 #include <RmlUi/Debugger/Debugger.h>
+
+#include <algorithm>
 
 namespace unravel
 {
@@ -187,14 +190,19 @@ auto ui_system::dispatch_pointer_event(rtti::context& ctx, scene& scn, os::event
 {
     ui_pointer_dispatch_result result;
 
+    std::vector<Rml::Context*> content_contexts;
     if(is_pointer_tracking_event(event))
     {
-        refresh_mouse_state(ctx, scn);
+        content_contexts = refresh_mouse_state(ctx, scn);
     }
+    const auto is_on_content = [&](const Rml::Context* context)
+    {
+        return std::find(content_contexts.begin(), content_contexts.end(), context) != content_contexts.end();
+    };
 
     if(Rml::Debugger::IsVisible() && debug_context_)
     {
-        if(process_event(scn, debug_context_, event))
+        if(process_event(debug_context_, event, is_on_content(debug_context_)))
         {
             result.target_context = debug_context_;
         }
@@ -205,7 +213,7 @@ auto ui_system::dispatch_pointer_event(rtti::context& ctx, scene& scn, os::event
         {
             if(ui_comp.context && ui_comp.is_enabled())
             {
-                if(process_event(scn, ui_comp.context, event))
+                if(process_event(ui_comp.context, event, is_on_content(ui_comp.context)))
                 {
                     result.target_context = ui_comp.context;
                 }
@@ -259,35 +267,12 @@ void ui_system::apply_mouse_press_focus(scene& scn,
     }
 }
 
-auto ui_system::is_not_root_element(scene& scn, Rml::Element* element) -> bool
-{
-    if(!element)
-    {
-        return false;
-    }
-    if(element->GetTagName() == "#root")
-    {
-        return false;
-    }
-
-    auto view = scn.registry->view<ui_document_component>();
-    for(auto entity : view)
-    {
-        auto& ui_comp = view.get<ui_document_component>(entity);
-        if(static_cast<Rml::Element*>(ui_comp.document) == element)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-auto ui_system::process_mouse_move(scene& scn, Rml::Context* context, int x, int y) -> bool
+auto ui_system::process_mouse_move(Rml::Context* context, int x, int y) -> bool
 {
     if(!context->ProcessMouseMove(x, y, 0))
     {
-        auto hover_element = context->GetHoverElement();
-        if(is_not_root_element(scn, hover_element))
+        const Rml::Vector2f point(static_cast<float>(x), static_cast<float>(y));
+        if(is_ui_content_at(context->GetHoverElement(), point))
         {
             if(debug_target_context_ != context)
             {
@@ -301,7 +286,7 @@ auto ui_system::process_mouse_move(scene& scn, Rml::Context* context, int x, int
     return false;
 }
 
-auto ui_system::process_event(scene& scn, Rml::Context* context, os::event& event) -> bool
+auto ui_system::process_event(Rml::Context* context, os::event& event, bool is_pointer_on_content) -> bool
 {
     if(!context)
     {
@@ -319,11 +304,7 @@ auto ui_system::process_event(scene& scn, Rml::Context* context, os::event& even
     {
         if(event.type == os::events::mouse_button || event.type == os::events::mouse_motion)
         {
-            auto hover_element = context->GetHoverElement();
-            if(is_not_root_element(scn, hover_element))
-            {
-                return true;
-            }
+            return is_pointer_on_content;
         }
     }
     return false;
@@ -345,30 +326,31 @@ void ui_system::blur_ui_context(Rml::Context* context) const
     }
 }
 
-void ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn)
+auto ui_system::refresh_mouse_state(rtti::context& ctx, scene& scn) -> std::vector<Rml::Context*>
 {
+    std::vector<Rml::Context*> content_contexts;
     auto& input = ctx.get_cached<input_system>();
     if(!input.manager.is_input_allowed())
     {
-        return;
+        return content_contexts;
     }
 
     visit_pointer_documents(scn,
                             input.manager.get_mouse().get_position(),
                             [&](Rml::Context* context, bool is_over, Rml::Vector2f position)
                             {
-                                if(is_over)
-                                {
-                                    process_mouse_move(scn,
-                                                       context,
-                                                       static_cast<int>(position.x),
-                                                       static_cast<int>(position.y));
-                                }
-                                else
+                                if(!is_over)
                                 {
                                     context->ProcessMouseLeave();
                                 }
+                                else if(process_mouse_move(context,
+                                                           static_cast<int>(position.x),
+                                                           static_cast<int>(position.y)))
+                                {
+                                    content_contexts.push_back(context);
+                                }
                             });
+    return content_contexts;
 }
 
 void ui_system::visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit)
@@ -445,7 +427,7 @@ void ui_system::dispatch_touch_event(rtti::context& ctx, scene& scn, os::event& 
                                         if(is_over)
                                         {
                                             context->ProcessTouchStart(touches, key_modifiers);
-                                            if(is_not_root_element(scn, context->GetHoverElement()))
+                                            if(is_ui_content_at(context->GetHoverElement(), document_position))
                                             {
                                                 target_context = context;
                                             }
@@ -509,7 +491,8 @@ void ui_system::consume_touch_mouse_press(rtti::context& ctx, scene& scn, os::ev
                             position,
                             [&](Rml::Context* context, bool is_over, Rml::Vector2f document_position)
                             {
-                                if(is_over && is_not_root_element(scn, context->GetElementAtPoint(document_position)))
+                                if(is_over &&
+                                   is_ui_content_at(context->GetElementAtPoint(document_position), document_position))
                                 {
                                     is_on_element = true;
                                 }
