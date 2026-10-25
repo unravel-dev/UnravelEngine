@@ -6,8 +6,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <uuid/uuid.h>
 
@@ -21,6 +23,10 @@ struct asset_handle;
 
 namespace asset_detail
 {
+
+/// Accesses closer together than this share one last-access stamp (nanoseconds). Idle eviction
+/// measures idleness in seconds, so the stamp loses nothing it needs.
+inline constexpr int64_t LAST_ACCESS_RESOLUTION_NS = 1'000'000;
 
 /// Portable atomic-shared-ptr wrapper.
 ///
@@ -36,7 +42,7 @@ namespace asset_detail
 /// deprecation diagnostic in both branches.
 ///
 /// API mirrors the subset of `std::atomic<std::shared_ptr<T>>` that `asset_handle` actually uses
-/// (.load() / .store() with explicit memory orders), so the rest of this header is unchanged.
+/// (.load() / .store() / .exchange() with explicit memory orders), so the rest of this header is unchanged.
 template<typename T>
 class atomic_shared_ptr
 {
@@ -62,6 +68,15 @@ public:
 #endif
     }
 
+    auto exchange(std::shared_ptr<T> desired, std::memory_order order = std::memory_order_seq_cst) -> std::shared_ptr<T>
+    {
+#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
+        return ptr_.exchange(std::move(desired), order);
+#else
+        return std::atomic_exchange_explicit(&ptr_, std::move(desired), order);
+#endif
+    }
+
 private:
 #if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
     std::atomic<std::shared_ptr<T>> ptr_{};
@@ -84,9 +99,16 @@ private:
  *
  * The weak-asset cache and the last-access timestamp are kept *outside* the
  * snapshot so they can be updated without allocating a new snapshot on every
- * cache hit / get() call. `weak_asset` is guarded by a small mutex (weak_ptr
- * cannot be portably made atomic), `last_access_ns` is a relaxed int64
- * atomic.
+ * cache hit / get() call. `weak_asset` is guarded by a small reader-writer
+ * mutex (weak_ptr cannot be portably made atomic), `last_access_ns` is a
+ * relaxed int64 atomic.
+ *
+ * A crowd of models drawing one mesh reads the same link from every pool
+ * thread at once, so the read paths avoid writing to it: `has_task` answers
+ * validity without loading the snapshot (the MS STL loads a
+ * `std::atomic<std::shared_ptr>` under a lock bit), cache hits share the
+ * weak-asset lock, and the access stamp is only rewritten once it is older
+ * than its resolution.
  */
 template<typename T>
 struct asset_link
@@ -97,7 +119,7 @@ struct asset_link
     /**
      * @brief Immutable snapshot of the link's logical state.
      *
-     * New snapshots are published via `state.store(...)`. Once published,
+     * New snapshots are published via asset_handle::store_state. Once published,
      * `state_t` instances are read-only and safe to share between threads
      * without further synchronization.
      */
@@ -116,14 +138,23 @@ struct asset_link
     /// Wrapped in `asset_detail::atomic_shared_ptr` rather than `std::atomic<std::shared_ptr<...>>`
     /// directly because the C++20 specialisation isn't available on libstdc++ < 11 / libc++ < 16
     /// and the primary `std::atomic<T>` template static_asserts on shared_ptr's non-trivial
-    /// copyability. The wrapper presents the same `.load()` / `.store()` member API.
+    /// copyability. The wrapper presents the same `.load()` / `.store()` / `.exchange()` member API.
+    /// Written only through asset_handle::store_state, together with `has_task`.
     asset_detail::atomic_shared_ptr<state_t> state{std::make_shared<state_t>()};
 
+    /// Whether the current snapshot holds a task (`state.load()->task.valid()`), published with
+    /// it so asset_handle::is_valid() reads one flag instead of loading the snapshot.
+    std::atomic<bool> has_task{false};
+
+    /// Makes each snapshot store and its `has_task` store one step, so after concurrent writers
+    /// the flag describes the snapshot that was stored last.
+    std::mutex state_write_mtx;
+
     /// Best-effort cache of the resolved asset. Updated on cache miss in get().
-    /// Guarded by `weak_asset_mtx` (weak_ptr can't be portably atomic). The
-    /// critical section is just a load or assignment, so contention is
-    /// negligible.
-    mutable std::mutex weak_asset_mtx;
+    /// Guarded by `weak_asset_mtx` (weak_ptr can't be portably atomic): cache
+    /// reads take it shared, so threads reading one asset at once do not queue
+    /// behind each other; assignments and resets take it exclusively.
+    mutable std::shared_mutex weak_asset_mtx;
     mutable weak_asset_t weak_asset;
 
     /// Last-access timestamp in nanoseconds-since-steady-epoch. Stored as
@@ -258,8 +289,8 @@ struct asset_handle
      */
     auto is_valid() const -> bool
     {
-        auto s = load_state();
-        return s && s->task.valid();
+        // The flag published with the snapshot, see asset_link::has_task.
+        return link_ && link_->has_task.load(std::memory_order_acquire);
     }
 
     /**
@@ -323,9 +354,9 @@ struct asset_handle
             fresh->uid = old->uid;
             fresh->id = old->id;
         }
-        link_->state.store(std::move(fresh), std::memory_order_release);
+        store_state(std::move(fresh));
 
-        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
         link_->weak_asset.reset();
     }
 
@@ -369,7 +400,7 @@ struct asset_handle
                 fresh.task = future;
             });
 
-        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
         link_->weak_asset.reset();
     }
 
@@ -425,9 +456,9 @@ struct asset_handle
         {
             return;
         }
-        link_->state.store(std::make_shared<state_t>(), std::memory_order_release);
+        store_state(std::make_shared<state_t>());
 
-        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
         link_->weak_asset.reset();
     }
 
@@ -470,7 +501,7 @@ struct asset_handle
         {
             return nullptr;
         }
-        std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+        std::shared_lock<std::shared_mutex> lock(link_->weak_asset_mtx);
         return link_->weak_asset.lock();
     }
 
@@ -532,7 +563,7 @@ private:
         auto value = task.get();
         if(value)
         {
-            std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+            std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
             link_->weak_asset = value;
             return value;
         }
@@ -566,7 +597,24 @@ private:
             *fresh = *old;
         }
         std::forward<F>(mutator)(*fresh);
-        link_->state.store(std::move(fresh), std::memory_order_release);
+        store_state(std::move(fresh));
+    }
+
+    /**
+     * @brief Publishes @p fresh as the link's snapshot together with its `has_task` flag.
+     *
+     * The replaced snapshot is released after the lock: dropping it can destroy its task and,
+     * with that, the asset it loaded.
+     */
+    void store_state(state_ptr fresh)
+    {
+        const bool has_task = fresh->task.valid();
+        state_ptr replaced;
+        {
+            std::lock_guard<std::mutex> lock(link_->state_write_mtx);
+            replaced = link_->state.exchange(std::move(fresh), std::memory_order_acq_rel);
+            link_->has_task.store(has_task, std::memory_order_release);
+        }
     }
 
     /**
@@ -587,6 +635,13 @@ private:
         }
         const auto now = std::chrono::steady_clock::now().time_since_epoch();
         const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+        // Read before writing: threads reading one asset together then keep the stamp's cache line
+        // shared instead of taking it from each other on every access. A time older than the stored
+        // stamp is never written, so the stamp never moves back.
+        if(ns - link_->last_access_ns.load(std::memory_order_relaxed) < asset_detail::LAST_ACCESS_RESOLUTION_NS)
+        {
+            return;
+        }
         link_->last_access_ns.store(ns, std::memory_order_relaxed);
     }
 
