@@ -581,6 +581,7 @@ private:
             cache_uniform(program.get(), u_contact_shadow, "u_contact_shadow", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_light_color_intensity, "u_light_color_intensity", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_inv_view_proj_relative, "u_invViewProjRelative", bgfx::UniformType::Mat4);
             cache_uniform(program.get(), u_cloudShadow, "u_cloudShadow", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_cloudShadow2, "u_cloudShadow2", bgfx::UniformType::Vec4);
             // Set by the light's shadowmap_generator; registered here so it exists before the program links (GL).
@@ -603,6 +604,8 @@ private:
         gfx::program::uniform_ptr u_contact_shadow;
         gfx::program::uniform_ptr u_light_color_intensity;
         gfx::program::uniform_ptr u_camera_position;
+        /// The inverse of the camera-relative view-projection (get_inverse_view_projection_relative).
+        gfx::program::uniform_ptr u_inv_view_proj_relative;
         gfx::program::uniform_ptr u_cloudShadow;
         gfx::program::uniform_ptr u_cloudShadow2;
         gfx::program::uniform_ptr u_shadowAtlasRect;
@@ -649,6 +652,7 @@ private:
         {
             cache_uniform(program.get(), u_light_data, "u_light_data", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_inv_view_proj_relative, "u_invViewProjRelative", bgfx::UniformType::Mat4);
 
             cache_uniform(program.get(), s_tex[0], "s_tex0", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[1], "s_tex1", bgfx::UniformType::Sampler);
@@ -673,6 +677,7 @@ private:
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
+        gfx::program::uniform_ptr u_inv_view_proj_relative;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
         gfx::program::uniform_ptr s_irradiance;
         gfx::program::uniform_ptr s_ssil;
@@ -776,6 +781,8 @@ private:
         gfx::frame_buffer::ptr gbuffer;
         usize32_t buffer_size{};
         pre_exposure_state pre_exposure{};
+        /// The camera's get_inverse_view_projection_relative, once for every light of the pass.
+        math::mat4 inv_view_proj_relative{1.0f};
     };
 
     /**

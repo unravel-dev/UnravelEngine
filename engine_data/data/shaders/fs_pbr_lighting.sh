@@ -27,6 +27,10 @@ uniform vec4 u_light_source;
 /// z = opacity, w = temporal frame index for the dither (0 when no TAA integrates it).
 uniform vec4 u_contact_shadow;
 uniform vec4 u_camera_position;
+/// The inverse of the camera-relative view-projection (the view without its translation). A pixel's offset from the
+/// camera rebuilt through it keeps its precision anywhere in the world; through the absolute u_invViewProj it is off by
+/// centimetres a few hundred metres from the origin, which depth-compared shadows read as self-shadowing.
+uniform mat4 u_invViewProjRelative;
 
 #if DIRECTIONAL_LIGHT
 SAMPLER2D(s_cloudShadow, 11);
@@ -879,7 +883,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
     GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
-    vec3 world_position = clipToWorld(u_invViewProj, clip);
+    vec3 world_position = u_camera_position.xyz + clipToWorld(u_invViewProjRelative, clip);
     float filtered_roughness = GeometricSpecularAA(data.world_normal, GetLightingRoughness(data.roughness));
     vec3 light_color = u_light_color_intensity.xyz;
     // The CPU scaled the intensity by its share of the pre-exposure; the GPU's share joins it here.
@@ -1003,7 +1007,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
     GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
-    vec3 world_position = clipToWorld(u_invViewProj, clip);
+    vec3 world_position = u_camera_position.xyz + clipToWorld(u_invViewProjRelative, clip);
 
     vec3 N = normalize(data.world_normal);
     vec3 V = normalize(u_camera_position.xyz - world_position);

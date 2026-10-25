@@ -2499,6 +2499,19 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
     return result;
 }
 
+namespace
+{
+/**
+ * The inverse of @p camera's camera-relative view-projection: the light passes rebuild each pixel's offset from the
+ * camera through it (fs_pbr_lighting.sh u_invViewProjRelative), which keeps millimetres anywhere in the world. Inverted
+ * in double, so the inversion adds no rounding of its own.
+ */
+auto get_inverse_view_projection_relative(const camera& camera) -> math::mat4
+{
+    return math::mat4(glm::inverse(glm::dmat4(camera.get_view_projection_relative().get_matrix())));
+}
+} // namespace
+
 auto deferred::run_direct_lighting_pass(scene& scn,
                                         const camera& camera,
                                         gfx::render_view& rview,
@@ -2528,6 +2541,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
     context.gbuffer = gbuffer;
     context.buffer_size = buffer_size;
     context.pre_exposure = get_pre_exposure(rview);
+    context.inv_view_proj_relative = get_inverse_view_projection_relative(camera);
     scn.registry->view<transform_component, light_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
@@ -2659,6 +2673,7 @@ void deferred::submit_light(const light& light,
     gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
 
     gfx::set_uniform(lprogram.u_camera_position, camera_pos);
+    gfx::set_uniform(lprogram.u_inv_view_proj_relative, context.inv_view_proj_relative);
 
     size_t i = 0;
     for(; i < context.gbuffer->get_attachment_count(); ++i)
@@ -2779,6 +2794,7 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
     gfx::set_uniform(iprogram.u_light_data, light_data);
     gfx::set_uniform(iprogram.u_camera_position, camera_pos);
+    gfx::set_uniform(iprogram.u_inv_view_proj_relative, get_inverse_view_projection_relative(camera));
 
     size_t i = 0;
     for(; i < gbuffer->get_attachment_count(); ++i)
@@ -3310,6 +3326,7 @@ auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fo
             auto world = transform_comp.get_transform_global();
             world.reset_scale();
             fog_pass::local_light local;
+            local.id = static_cast<std::uint32_t>(entt::to_integral(e));
             local.position = world.get_position();
             local.direction = world.z_unit_axis();
             local.is_spot = light.type == light_type::spot;
@@ -3326,7 +3343,6 @@ auto gather_fog_local_lights(scene& scn, bool use_shadow_maps) -> std::vector<fo
         });
     return lights;
 }
-            local.id = static_cast<std::uint32_t>(entt::to_integral(e));
 } // namespace
 
 auto deferred::run_fog_pass(scene& scn,

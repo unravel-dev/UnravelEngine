@@ -255,6 +255,56 @@ void test_edited_resolution()
     atlas_check(!atlas.find(1).has_value() && atlas.find(2).has_value(), "a released light gives its tile back alone");
 }
 
+void test_random_frames_keep_valid_layouts()
+{
+    std::printf("test_random_frames_keep_valid_layouts\n");
+    // Lights come and go, change resolution and importance, and several views a frame ask for overlapping sets: after
+    // every reservation each asking light has a tile inside the atlas, and no two tiles overlap.
+    shadow_atlas_allocator atlas;
+    std::uint32_t seed = 12345u;
+    const auto next = [&seed](std::uint32_t range) -> std::uint32_t
+    {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) % range;
+    };
+    constexpr std::uint32_t light_pool = 64;
+    std::vector<std::uint16_t> sizes(light_pool);
+    std::vector<float> importances(light_pool);
+    for(std::uint32_t i = 0; i < light_pool; ++i)
+    {
+        sizes[i] = std::uint16_t(128u << next(5));
+        importances[i] = float(next(1000)) / 1000.0f;
+    }
+    int invalid_frames = 0;
+    for(std::uint64_t frame = 1; frame <= 3000; ++frame)
+    {
+        if(next(10) == 0)
+        {
+            sizes[next(light_pool)] = std::uint16_t(128u << next(5));
+        }
+        for(auto& importance : importances)
+        {
+            importance = std::max(0.0f, importance + (float(next(200)) - 100.0f) / 2000.0f);
+        }
+        const std::uint32_t views = 1 + next(3);
+        for(std::uint32_t view = 0; view < views; ++view)
+        {
+            std::vector<shadow_atlas_request> requests;
+            const std::uint32_t first = next(light_pool);
+            const std::uint32_t count = 8 + next(48);
+            for(std::uint32_t i = 0; i < count; ++i)
+            {
+                const std::uint32_t light = (first + i) % light_pool;
+                requests.push_back({std::uintptr_t(light + 1), sizes[light], importances[light] * float(1 + view)});
+            }
+            atlas.reserve(frame, requests);
+            invalid_frames += is_valid_layout(atlas, requests) ? 0 : 1;
+        }
+    }
+    atlas_check(invalid_frames == 0, "every reservation of 3000 random frames leaves a valid layout (" +
+                                         std::to_string(invalid_frames) + " invalid)");
+}
+
 auto run_shadow_atlas_suite(rtti::context& /*ctx*/) -> int
 {
     g_atlas_checks = 0;
@@ -266,6 +316,7 @@ auto run_shadow_atlas_suite(rtti::context& /*ctx*/) -> int
     test_views_agree();
     test_eviction_and_shrink();
     test_edited_resolution();
+    test_random_frames_keep_valid_layouts();
     std::printf("shadow atlas: %d checks, %d failures\n", g_atlas_checks, g_atlas_failures);
     return g_atlas_failures;
 }
