@@ -17,6 +17,9 @@
  *   - the perspective divide in transform_coord producing NaNs at w = 0;
  *   - compare() overriding the caller's tolerance for one matrix element;
  *   - look_rotation / from_to_rotation NaN-ing on degenerate inputs.
+ *
+ * And the glm SIMD fix of 2026-10: a vec3 cut from a vec4 measured with the vec4's w (length, dot, normalize), which
+ * left frustum planes degenerate far from the origin.
  */
 
 #include "../tests.h"
@@ -1333,6 +1336,43 @@ void run_transform_benches()
               });
 }
 
+// ---------------------------------------------------------------------------------
+// glm's aligned vec3 (16 bytes) never initializes its w lane. glm #1427 summed it into the SIMD dot product of a vec3
+// cut from a vec4 under Clang, which broke length, normalize and the frustum planes built from them.
+
+void test_vec3_from_vec4_ignores_w()
+{
+    std::printf("test_vec3_from_vec4_ignores_w\n");
+    // volatile: the values reach the math at run time, as they do in the engine, not folded at compile time.
+    volatile float w = 300.0f;
+    const math::vec4 a(0.0f, 2.0f, 0.0f, w);
+    const math::vec4 b(3.0f, 0.0f, 4.0f, -w);
+    check_near(math::length(math::vec3(a)), 2.0f, 1e-5f, "a vec3 cut from a vec4 has the length of its xyz");
+    check_near(math::dot(math::vec3(a), math::vec3(b)), 0.0f, 1e-5f, "and the dot product of its xyz");
+    const math::vec3 unit = math::normalize(math::vec3(b));
+    check_near(unit.x, 0.6f, 1e-5f, "and normalizes by its xyz (x)");
+    check_near(unit.z, 0.8f, 1e-5f, "and normalizes by its xyz (z)");
+    check(math::xyz0(math::vec3(a)).w == 0.0f, "xyz0 sets w to 0");
+    const math::plane plane = math::plane::normalize(math::plane(a));
+    check_near(plane.data.y, 1.0f, 1e-5f, "a plane normalizes by its normal's length");
+    check_near(plane.data.w, 150.0f, 1e-3f, "and keeps its distance in the same units");
+}
+
+void test_frustum_far_from_origin()
+{
+    std::printf("test_frustum_far_from_origin\n");
+    // Far from the origin the planes carry large distances, which the broken dot product mixed into their normals.
+    const math::vec3 eye(392.0f, 3.0f, 388.0f);
+    const math::vec3 forward = math::normalize(math::vec3(0.561035f, -0.207977f, 0.801239f));
+    math::frustum frustum;
+    frustum.update(math::transform(math::lookAt(eye, eye + forward, math::vec3(0.0f, 1.0f, 0.0f))),
+                   math::transform(math::perspectiveZO(math::radians(60.0f), 1.75f, 0.1f, 1000.0f)),
+                   false);
+    check(!frustum.test_sphere(math::bsphere(math::vec3(0.0f, 2.0f, 0.0f), 12.0f)),
+          "a sphere behind a camera far from the origin is outside its frustum");
+    check(frustum.test_sphere(math::bsphere(eye + forward * 20.0f, 1.0f)), "a sphere in front of it is inside");
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------------
@@ -1359,6 +1399,8 @@ auto run_transform_math_suite(rtti::context& /*ctx*/) -> int
         test_recompose_matches_reference();
         test_operator_multiply_matches_matrix_reference();
         test_inverse_and_axis_fast_paths();
+        test_vec3_from_vec4_ignores_w();
+        test_frustum_far_from_origin();
         run_property_tests();
     }
 
