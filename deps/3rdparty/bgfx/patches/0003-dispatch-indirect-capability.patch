@@ -1,0 +1,121 @@
+Indirect compute dispatch has its own capability
+
+Encoder::dispatch with an indirect buffer asserted BGFX_CAPS_DRAW_INDIRECT. Vulkan reports that cap
+only with multiDrawIndirect and drawIndirectFirstInstance, which many mobile GPUs lack (Mali-G78),
+although vkCmdDispatchIndirect is core Vulkan; D3D11, D3D12, Metal and GL 4.3 / ES 3.1 dispatch
+indirectly wherever they dispatch at all. BGFX_CAPS_DISPATCH_INDIRECT is set with compute on every
+renderer (on Metal with its indirect buffer support), and the indirect dispatch checks it instead.
+
+diff --git a/include/bgfx/defines.h b/include/bgfx/defines.h
+--- a/include/bgfx/defines.h
++++ b/include/bgfx/defines.h
+@@ -504,6 +504,7 @@
+ #define BGFX_CAPS_VERTEX_ATTRIB_UINT10            UINT64_C(0x0000000000200000) //!< Vertex attribute 10_10_10_2 is supported.
+ #define BGFX_CAPS_VIDEO_DECODE                    UINT64_C(0x0000000000400000) //!< Hardware video decode is supported.
+ #define BGFX_CAPS_VIEWPORT_LAYER_ARRAY            UINT64_C(0x0000000000800000) //!< Viewport layer is available in vertex shader.
++#define BGFX_CAPS_DISPATCH_INDIRECT               UINT64_C(0x0000000001000000) //!< Indirect compute dispatch is supported.
+ 
+ #define BGFX_CAPS_FORMAT_TEXTURE_NONE             UINT32_C(0x00000000) //!< Texture format is not supported.
+ #define BGFX_CAPS_FORMAT_TEXTURE_2D               UINT32_C(0x00000001) //!< Texture format is supported.
+diff --git a/src/bgfx.cpp b/src/bgfx.cpp
+--- a/src/bgfx.cpp
++++ b/src/bgfx.cpp
+@@ -1994,6 +1994,7 @@
+ 		CAPS_FLAGS(BGFX_CAPS_BLEND_INDEPENDENT),
+ 		CAPS_FLAGS(BGFX_CAPS_COMPUTE),
+ 		CAPS_FLAGS(BGFX_CAPS_CONSERVATIVE_RASTER),
++		CAPS_FLAGS(BGFX_CAPS_DISPATCH_INDIRECT),
+ 		CAPS_FLAGS(BGFX_CAPS_DRAW_INDIRECT),
+ 		CAPS_FLAGS(BGFX_CAPS_FRAGMENT_ORDERING),
+ 		CAPS_FLAGS(BGFX_CAPS_GRAPHICS_DEBUGGER),
+@@ -5207,7 +5208,7 @@
+ 
+ 	void Encoder::dispatch(ViewId _id, ProgramHandle _program, IndirectBufferHandle _indirectHandle, uint32_t _start, uint32_t _num, uint8_t _flags)
+ 	{
+-		BGFX_CHECK_CAPS(BGFX_CAPS_DRAW_INDIRECT, "Dispatch indirect is not supported!");
++		BGFX_CHECK_CAPS(BGFX_CAPS_DISPATCH_INDIRECT, "Dispatch indirect is not supported!");
+ 		BGFX_CHECK_CAPS(BGFX_CAPS_COMPUTE, "Compute is not supported!");
+ 		BGFX_CHECK_HANDLE_INVALID_OK("dispatch", s_ctx->m_programHandle, _program);
+ 		BGFX_CHECK_HANDLE("dispatch", s_ctx->m_vertexBufferHandle, _indirectHandle);
+@@ -7885,6 +7886,7 @@
+ 	| BGFX_CAPS_PRIMITIVE_ID
+ 	| BGFX_CAPS_VIEWPORT_LAYER_ARRAY
+ 	| BGFX_CAPS_DRAW_INDIRECT_COUNT
++	| BGFX_CAPS_DISPATCH_INDIRECT
+ 	) == (0
+ 	^ BGFX_CAPS_BLEND_INDEPENDENT
+ 	^ BGFX_CAPS_COMPUTE
+@@ -7904,6 +7906,7 @@
+ 	^ BGFX_CAPS_PRIMITIVE_ID
+ 	^ BGFX_CAPS_VIEWPORT_LAYER_ARRAY
+ 	^ BGFX_CAPS_DRAW_INDIRECT_COUNT
++	^ BGFX_CAPS_DISPATCH_INDIRECT
+ 	) );
+ 
+ #undef FLAGS_MASK_TEST
+diff --git a/src/renderer_d3d11.cpp b/src/renderer_d3d11.cpp
+--- a/src/renderer_d3d11.cpp
++++ b/src/renderer_d3d11.cpp
+@@ -1353,6 +1353,7 @@
+ 				g_caps.supported |= 0
+ 					| BGFX_CAPS_BLEND_INDEPENDENT
+ 					| BGFX_CAPS_COMPUTE
++					| BGFX_CAPS_DISPATCH_INDIRECT
+ 					| BGFX_CAPS_INDEX32
+ 					;
+ 
+diff --git a/src/renderer_d3d12.cpp b/src/renderer_d3d12.cpp
+--- a/src/renderer_d3d12.cpp
++++ b/src/renderer_d3d12.cpp
+@@ -1788,6 +1788,7 @@
+ 				g_caps.supported |= ( 0
+ 					| BGFX_CAPS_BLEND_INDEPENDENT
+ 					| BGFX_CAPS_COMPUTE
++					| BGFX_CAPS_DISPATCH_INDIRECT
+ 					| ( (D3D12_CONSERVATIVE_RASTERIZATION_TIER_NOT_SUPPORTED != m_options.ConservativeRasterizationTier)
+ 						? BGFX_CAPS_CONSERVATIVE_RASTER
+ 						: 0)
+diff --git a/src/renderer_vk.cpp b/src/renderer_vk.cpp
+--- a/src/renderer_vk.cpp
++++ b/src/renderer_vk.cpp
+@@ -2105,6 +2105,7 @@
+ 				g_caps.supported |= ( 0
+ 					| (m_deviceFeatures.independentBlend ? BGFX_CAPS_BLEND_INDEPENDENT : 0)
+ 					| BGFX_CAPS_COMPUTE
++					| BGFX_CAPS_DISPATCH_INDIRECT
+ 					| (indirectDrawSupport ? BGFX_CAPS_DRAW_INDIRECT : 0)
+ 					| BGFX_CAPS_IMAGE_RW
+ 					| (m_deviceFeatures.fullDrawIndexUint32 ? BGFX_CAPS_INDEX32 : 0)
+diff --git a/src/renderer_gl.cpp b/src/renderer_gl.cpp
+--- a/src/renderer_gl.cpp
++++ b/src/renderer_gl.cpp
+@@ -3004,6 +3004,7 @@
+ 				g_caps.supported |= 0
+ 					| (m_conservativeRasterSupport ? BGFX_CAPS_CONSERVATIVE_RASTER    : 0)
+ 					| (computeSupport              ? BGFX_CAPS_COMPUTE                : 0)
++					| (computeSupport              ? BGFX_CAPS_DISPATCH_INDIRECT      : 0)
+ 					| (m_imageLoadStoreSupport     ? BGFX_CAPS_IMAGE_RW               : 0)
+ 					;
+ 
+diff --git a/src/renderer_mtl.cpp b/src/renderer_mtl.cpp
+--- a/src/renderer_mtl.cpp
++++ b/src/renderer_mtl.cpp
+@@ -1042,6 +1042,7 @@
+ 			g_caps.limits.maxFBAttachments = 8;
+ 			g_caps.supported |= (m_device->supportsFamily(MTL::GPUFamilyApple3) || m_device->supportsFamily(MTL::GPUFamilyMac2) )
+ 				? BGFX_CAPS_DRAW_INDIRECT
++				| BGFX_CAPS_DISPATCH_INDIRECT
+ 				| BGFX_CAPS_TEXTURE_CUBE_ARRAY
+ 				: 0
+ 				;
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -1462,6 +1462,7 @@
+ 						g_caps.supported = 0
+ 							| BGFX_CAPS_BLEND_INDEPENDENT
+ 							| BGFX_CAPS_COMPUTE
++							| BGFX_CAPS_DISPATCH_INDIRECT
+ 							| BGFX_CAPS_DRAW_INDIRECT
+ 							| BGFX_CAPS_IMAGE_RW
+ 							| BGFX_CAPS_INDEX32
