@@ -280,6 +280,8 @@ private:
         /// The compensation curve LUT's EV100 -> u scale and bias.
         gfx::program::uniform_ptr u_average_params5;
         gfx::program::uniform_ptr s_compensation_curve;
+        /// AUTO_EXPOSURE as the last frame left it: a copy, so the average only writes AUTO_EXPOSURE.
+        gfx::program::uniform_ptr s_previous_exposure;
 
         void cache_uniforms()
         {
@@ -290,6 +292,7 @@ private:
             cache_uniform(program.get(), u_average_params4, "u_average_params4", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_average_params5, "u_average_params5", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_compensation_curve, "s_compensation_curve", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_previous_exposure, "s_previous_exposure", bgfx::UniformType::Sampler);
         }
     } average_program_;
 
@@ -342,11 +345,17 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr s_exposure;
         gfx::program::uniform_ptr u_pre_exposure_params;
+        /// The share the last frame left in the environment SH: a copy, so the SH is only written.
+        gfx::program::uniform_ptr s_previous_pre_exposure;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_pre_exposure_params, "u_pre_exposure_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(),
+                          s_previous_pre_exposure,
+                          "s_previous_pre_exposure",
+                          bgfx::UniformType::Sampler);
         }
     } pre_exposure_program_;
 

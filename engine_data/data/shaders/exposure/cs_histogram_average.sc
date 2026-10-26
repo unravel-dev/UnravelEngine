@@ -13,7 +13,9 @@
  * slope matched to the linear phase. A falling exposure (scene got brighter) uses speed_up.
  *
  * Output AUTO_EXPOSURE: r = adapted exposure, g = target exposure, b = applied bias in stops
- * (compensation plus the curve), a = average local exposure (kept).
+ * (compensation plus the curve), a = average local exposure (kept). The last frame's values come
+ * from a copy of it (s_previous_exposure), so AUTO_EXPOSURE is only written: a read-write image
+ * of a four-channel float format is optional on D3D11 feature level 11_0 and on some Vulkan devices.
  * Instruments: the exposure history ring and the normalized histogram.
  */
 
@@ -22,11 +24,13 @@
 BUFFER_RW(s_histogram, uint, 0);
 // Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
 // a program declares, so an image named like a sampler is rebound to that sampler's stage.
-IMAGE2D_RW(i_exposure, rgba32f, 1);
+IMAGE2D_WO(i_exposure, rgba32f, 1);
 IMAGE2D_WO(i_exposure_history, rgba32f, 2);
 IMAGE2D_WO(i_histogram_display, r32f, 3);
 /// The compensation curve LUT: 2^curve at evenly spaced EV100 values (white = no curve).
 SAMPLER2D(s_compensation_curve, 4);
+/// AUTO_EXPOSURE as the last frame left it, copied out before this dispatch.
+SAMPLER2D(s_previous_exposure, 5);
 
 uniform vec4 u_average_params0;
 uniform vec4 u_average_params1;
@@ -127,7 +131,7 @@ void main()
         imageStore(i_histogram_display, ivec2(int(bin), 0), vec4(display_share, 0.0, 0.0, 0.0));
     }
 
-    vec4 previous = imageLoad(i_exposure, ivec2(0, 0));
+    vec4 previous = texelFetch(s_previous_exposure, ivec2(0, 0), 0);
     bool previous_valid = (previous.x == previous.x) && previous.x > 0.0 && previous.x < MAX_EXPOSURE;
 
     bool has_measurement = weight_sum > 0.0;

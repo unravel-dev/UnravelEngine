@@ -6,6 +6,7 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/feature_limits.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/rendering/particles/ps/particle_types.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
@@ -238,6 +239,12 @@ public:
      * for temporal AA under an FXAA limit gets FXAA, and `params.limits` is set for the passes that read it.
      */
     static void apply_feature_limits(run_params& params, const feature_limits& limits);
+
+    /**
+     * @brief Turns off in `params` the effects the device cannot run that no feature limit covers: GTAO (ASSAO
+     * takes over when the device runs it), ASSAO and auto exposure (the camera keeps its fixed exposure).
+     */
+    static void apply_feature_support(run_params& params, const render_feature_support& support);
 
     /**
      * @brief Gathers visible models from the scene based on the given query.

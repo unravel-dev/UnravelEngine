@@ -3,6 +3,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/camera.h>
+#include <graphics/graphics.h>
 
 #include <algorithm>
 #include <cmath>
@@ -222,7 +223,7 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
                                     is_lowpass_ ? 1.0f : 0.0f,
                                     0.0f};
     gfx::set_uniform(program_.u_probe_params2, probe_params2);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    program_.program->native_handle(),
                    (uint32_t(width_) + compute_group - 1u) / compute_group,
                    (uint32_t(height_) + compute_group - 1u) / compute_group,

@@ -1,4 +1,5 @@
 #include "program.h"
+#include "device_caps.h"
 #include "frame_buffer.h"
 #include "shader.h"
 #include "texture.h"
@@ -8,7 +9,9 @@ namespace gfx
 {
 program::program(const shader& compute_shader)
 {
-    if(compute_shader.is_valid())
+    // Without compute the backend creates no compute program; a simulated device (device_caps_mask) gets the
+    // same invalid program, so every pass meets the state a real device without compute leaves it in.
+    if(compute_shader.is_valid() && get_device_caps().has_compute)
     {
         handle_ = bgfx::createProgram(compute_shader.native_handle());
 

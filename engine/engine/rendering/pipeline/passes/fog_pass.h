@@ -282,7 +282,8 @@ public:
 
     auto init(rtti::context& ctx) -> bool;
 
-    /// Whether the GPU renders the volumetric fog: compute, and RGBA16F volumes it can write and filter.
+    /// Whether the device runs the volumetric fog (render_feature::volumetric_fog: compute, the froxel lighting's
+    /// compute bindings and RGBA16F volumes it can write).
     static auto is_volumetric_supported() -> bool;
 
     /// The froxel grid of @p quality for a view of @p aspect (width / height).

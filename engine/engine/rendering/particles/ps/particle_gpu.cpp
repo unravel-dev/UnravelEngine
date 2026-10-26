@@ -3,6 +3,8 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/render_feature_support.h>
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <logging/logging.h>
@@ -145,7 +147,8 @@ auto load_compute(asset_manager& assets, const char* key, const char* label) -> 
         return {};
     }
     auto program = std::make_shared<gpu_program>(shader);
-    if(!program->is_valid())
+    // Without compute the program is never built; the renderer's feature log says so once.
+    if(!program->is_valid() && gfx::get_device_caps().has_compute)
     {
         APPLOG_WARNING("Particles: {} does not compile yet", label);
     }
@@ -181,7 +184,7 @@ void dispatch_threads(bgfx::ViewId view, bgfx::ProgramHandle program, uint32_t t
 {
     const uint32_t groups = std::max((threads + gpu_group_threads - 1) / gpu_group_threads, 1u);
     const uint32_t rows = (groups + k_max_dispatch_groups - 1) / k_max_dispatch_groups;
-    bgfx::dispatch(view, program, rows > 1 ? k_max_dispatch_groups : groups, rows, 1);
+    gfx::dispatch(view, program, rows > 1 ? k_max_dispatch_groups : groups, rows, 1);
 }
 
 } // namespace
@@ -218,11 +221,11 @@ void particle_gpu::init(rtti::context& ctx)
     refresh_programs();
     if(!can_draw())
     {
-        APPLOG_ERROR("Particles: the record scatter did not load; particles will not draw");
+        APPLOG_ERROR("Particles: the record scatter cannot run. Particles do not draw.");
     }
     else if(!can_sort())
     {
-        APPLOG_WARNING("Particles: GPU cull / sort unavailable; particles cull and sort on the CPU");
+        APPLOG_WARNING("Particles: GPU culling and sorting cannot run. Particles cull and sort on the CPU.");
     }
 }
 
@@ -255,8 +258,11 @@ auto particle_gpu::get_noise_texture() const -> bgfx::TextureHandle
 
 void particle_gpu::refresh_programs()
 {
-    can_draw_ = refresh(scatter_program_);
-    can_sort_ = can_draw_ && refresh(keygen_program_) && refresh(sort_program_) && refresh(args_program_);
+    const auto& support = get_render_feature_support();
+    can_draw_ = support.is_available(render_feature::gpu_particles) && refresh(scatter_program_);
+    // The GPU path draws with indirect arguments; without indirect draws the CPU culls, sorts and counts.
+    can_sort_ = can_draw_ && support.is_available(render_feature::gpu_particles_indirect) && refresh(keygen_program_) &&
+                refresh(sort_program_) && refresh(args_program_);
 }
 
 void particle_gpu::shutdown()
@@ -963,7 +969,7 @@ auto particle_gpu::dispatch_view(bgfx::ViewId view,
             const float sort[4] = {mode, float(stage), float(distance), 0.0f};
             bgfx::setUniform(u_sort_, sort);
             bgfx::setBuffer(0, sort_, bgfx::Access::ReadWrite);
-            bgfx::dispatch(view, sort_program_->native_handle(), block_groups, 1, 1);
+            gfx::dispatch(view, sort_program_->native_handle(), block_groups, 1, 1);
             ++stats.dispatches;
         };
         dispatch_sort(0.0f, 0, 0);
@@ -986,7 +992,7 @@ auto particle_gpu::dispatch_view(bgfx::ViewId view,
         bgfx::setBuffer(1, draw_args_, bgfx::Access::Write);
         bgfx::setBuffer(2, buffers.batches, bgfx::Access::Read);
         bgfx::setBuffer(3, batch_counts_, bgfx::Access::Write);
-        bgfx::dispatch(view, args_program_->native_handle(), (batch_count + gpu_group_threads - 1) / gpu_group_threads, 1, 1);
+        gfx::dispatch(view, args_program_->native_handle(), (batch_count + gpu_group_threads - 1) / gpu_group_threads, 1, 1);
         args_program_->end();
         ++stats.dispatches;
     }
@@ -1063,7 +1069,7 @@ void particle_gpu::submit_draw(const draw_params& params)
         bgfx::submit(params.view, params.program);
         return;
     }
-    bgfx::submit(params.view, params.program, draw_args_, params.batch, 1);
+    gfx::submit_indirect(params.view, params.program, draw_args_, params.batch, 1);
 }
 
 } // namespace ps_soa

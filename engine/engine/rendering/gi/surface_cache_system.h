@@ -237,7 +237,7 @@ public:
         gi_cards_.release_build_debug();
     }
 
-    /// The backend runs compute (checked at init) and the atlas exists.
+    /// The device runs global illumination (render_feature_support, checked at init) and the atlas exists.
     auto is_enabled() const -> bool
     {
         return supported_ && atlas_.is_valid();

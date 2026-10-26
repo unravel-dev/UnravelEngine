@@ -1434,7 +1434,10 @@ public:
     void init_gpu(rtti::context& ctx)
     {
         gpu_.init(ctx);
-        APPLOG_INFO("Particles: {}", gpu_.can_sort() ? "GPU cull and sort" : "CPU cull and sort");
+        if(gpu_.can_draw())
+        {
+            APPLOG_INFO("Particles: {}", gpu_.can_sort() ? "GPU cull and sort" : "CPU cull and sort");
+        }
     }
 
     void shutdown()

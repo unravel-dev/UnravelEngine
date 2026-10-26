@@ -10,6 +10,7 @@
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 
 #include <algorithm>
@@ -834,7 +835,7 @@ void gi_visualize_pass::print_radiance_cache_stats(const overlay_params& params,
     params.print->bind(rc_stats_print_stage, params.scene_depth->get_size());
     gfx::set_uniform(program.u_gi_rc_stats,
                      math::vec4(radiance_cache->get_trace_cost_budget(), 0.0f, float(first_line), 0.0f));
-    bgfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
     program.program->end();
 }
 
@@ -854,7 +855,7 @@ void gi_visualize_pass::print_probe_counts(const overlay_params& params)
     const float lattice_probes = placement.probes[0] * placement.probes[1];
     gfx::set_uniform(program.u_gi_visualize_counts,
                      math::vec4(lattice_probes, float(placement.adaptive_capacity), 0.0f, 0.0f));
-    bgfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
     program.program->end();
 }
 
@@ -921,7 +922,7 @@ void gi_visualize_pass::draw_reflection_trace(const overlay_params& params, uint
     const math::vec4 view(float(size.width), float(size.height), 1.0f / float(size.width), 1.0f / float(size.height));
     gfx::set_uniform(program.u_gi_view, view);
     gfx::set_uniform(program.u_gi_reflection_quality, math::vec4(float(downsample), 0.0f, 0.0f, 0.0f));
-    bgfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
     program.program->end();
     draw_lines(params, reflection_lines_, reflection_trace_lines, true);
 }

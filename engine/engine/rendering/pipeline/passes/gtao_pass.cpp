@@ -169,7 +169,7 @@ void gtao_pass::run_prefilter(gfx::render_view& rview,
     {
         bgfx::setImage(uint8_t(1 + mip), depth_mips->native_handle(), mip, bgfx::Access::Write);
     }
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    prefilter_program_.program->native_handle(),
                    group_count(ctx.ao_size.width, prefilter_tile),
                    group_count(ctx.ao_size.height, prefilter_tile),
@@ -188,7 +188,7 @@ auto gtao_pass::run_main(gfx::render_view& rview,
     gfx::set_texture(main_program_.s_gtao_depth_mips, 0, depth_mips);
     gfx::set_texture(main_program_.s_gtao_normal, 1, params.g_buffer->get_texture(1));
     bgfx::setImage(2, raw->native_handle(), 0, bgfx::Access::Write);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    main_program_.program->native_handle(),
                    group_count(ctx.ao_size.width, group_size),
                    group_count(ctx.ao_size.height, group_size),
@@ -222,7 +222,7 @@ auto gtao_pass::run_denoise(gfx::render_view& rview,
         gfx::set_texture(denoise_program_.s_gtao_depth_mips, 1, depth_mips);
         gfx::set_texture(denoise_program_.s_gtao_normal, 2, params.g_buffer->get_texture(1));
         bgfx::setImage(3, output->native_handle(), 0, bgfx::Access::Write);
-        bgfx::dispatch(pass.id,
+        gfx::dispatch(pass.id,
                        denoise_program_.program->native_handle(),
                        group_count(ctx.ao_size.width, group_size),
                        group_count(ctx.ao_size.height, group_size),
@@ -273,7 +273,7 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
     gfx::set_texture(temporal_program_.s_gtao_depth_mips, 3, depth_mips);
     gfx::set_texture(temporal_program_.s_gtao_prev_depth, 4, params.prev_depth ? params.prev_depth : default_textures::get().white_texture());
     bgfx::setImage(5, output->native_handle(), 0, bgfx::Access::Write);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    temporal_program_.program->native_handle(),
                    group_count(ctx.ao_size.width, group_size),
                    group_count(ctx.ao_size.height, group_size),
@@ -298,7 +298,7 @@ auto gtao_pass::run_upsample(gfx::render_view& rview,
     gfx::set_texture(upsample_program_.s_gtao_depth, 2, params.g_buffer->get_texture(4));
     bgfx::setImage(3, output->native_handle(), 0, bgfx::Access::Write);
     gfx::set_texture(upsample_program_.s_gtao_normal, 4, params.g_buffer->get_texture(1));
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    upsample_program_.program->native_handle(),
                    group_count(ctx.full_size.width, group_size),
                    group_count(ctx.full_size.height, group_size),

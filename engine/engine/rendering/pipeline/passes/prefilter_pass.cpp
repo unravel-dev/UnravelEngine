@@ -4,6 +4,8 @@
 #include <bx/math.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/render_feature_support.h>
+#include <graphics/graphics.h>
 namespace unravel
 {
 
@@ -18,6 +20,16 @@ auto prefilter_pass::init(rtti::context& ctx) -> bool
 
 auto prefilter_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
+    // The filter needs its compute program and a device that writes RGBA16F cube faces; without either the
+    // probe keeps its blitted, unfiltered faces instead of a cubemap nothing wrote.
+    const bool can_prefilter = get_render_feature_support().is_available(render_feature::reflection_probe_prefilter) &&
+                               cs_.program && cs_.program->begin();
+    if(params.apply_prefilter && !can_prefilter)
+    {
+        run_params blit_params = params;
+        blit_params.apply_prefilter = false;
+        return run_compute(rview, blit_params);
+    }
     return run_compute(rview, params);
 }
 
@@ -101,7 +113,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             uint32_t num_groups_z = 1; // All 6 faces handled by workgroup size
 
             // Dispatch compute shader for all faces at once
-            bgfx::dispatch(pass.id, cs_.program->native_handle(), num_groups_x, num_groups_y, num_groups_z);
+            gfx::dispatch(pass.id, cs_.program->native_handle(), num_groups_x, num_groups_y, num_groups_z);
 
             cs_.program->end();
 

@@ -1204,6 +1204,27 @@ void pipeline::apply_feature_limits(run_params& params, const feature_limits& li
     }
 }
 
+void pipeline::apply_feature_support(run_params& params, const render_feature_support& support)
+{
+    const bool wants_gtao = static_cast<bool>(params.fill_gtao_params);
+    if(!support.is_available(render_feature::gtao))
+    {
+        params.fill_gtao_params = {};
+    }
+    if(!support.is_available(render_feature::assao))
+    {
+        params.fill_assao_params = {};
+    }
+    else if(wants_gtao && !params.fill_gtao_params && !params.fill_assao_params)
+    {
+        params.fill_assao_params = [](assao_pass::run_params&) {};
+    }
+    if(!support.is_available(render_feature::auto_exposure))
+    {
+        params.fill_auto_exposure_params = {};
+    }
+}
+
 void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
 {
     APP_SCOPE_PERF("Rendering/3D Text Pass");
@@ -1416,7 +1437,7 @@ auto pipeline::run_particle_pass(scene& scn,
                 // vectors). The coverage needs independent blend, and without a TAA reading it the particles
                 // write the light buffer alone (a second target costs fill on every particle pixel).
                 const bool has_reactive_target =
-                    wants_reactive && (bgfx::getCaps()->supported & BGFX_CAPS_BLEND_INDEPENDENT) != 0;
+                    wants_reactive && get_render_feature_support().is_available(render_feature::particle_reactive_mask);
                 const auto targets = has_reactive_target ? acquire_particle_targets(rview, lbuffer_depth) : lbuffer_depth;
                 ps_soa::render_view_params params;
                 params.has_reactive_target = has_reactive_target;

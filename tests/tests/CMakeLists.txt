@@ -22,6 +22,12 @@ target_compile_definitions(${target_name} PRIVATE
     GI_TESTS_SHADERC="$<TARGET_FILE_DIR:${target_name}>/shaderc.exe"
 )
 
+# The rendering feature shader test reads the committed compiled shaders next to their sources, so the
+# requirement table cannot drift from the binding stages and storage formats the shaders use.
+target_compile_definitions(${target_name} PRIVATE
+    ENGINE_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../engine_data"
+)
+
 set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-tests")
 
 set_target_properties(${target_name} PROPERTIES

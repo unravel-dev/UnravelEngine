@@ -12,6 +12,7 @@
 #include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
+#include <engine/rendering/render_feature_support.h>
 
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
@@ -450,7 +451,8 @@ void gi_surface_cache::ensure_radiosity_targets(const gi_pass::radiosity_layout&
 
 auto gi_surface_cache::get_feedback() -> gi_surface_cache_feedback*
 {
-    return uses_hi_res_pages_ && feedback_.is_ready() && has_targets() ? &feedback_ : nullptr;
+    const bool can_feed_back = get_render_feature_support().is_available(render_feature::gi_page_feedback);
+    return uses_hi_res_pages_ && can_feed_back && feedback_.is_ready() && has_targets() ? &feedback_ : nullptr;
 }
 
 auto gi_surface_cache::has_lighting() const -> bool
@@ -988,7 +990,7 @@ void gi_surface_cache::copy_captures()
     const math::vec4 params(float(copy_tile_count_), float(copy_tile_words_base_), get_store_frame_index(), 0.0f);
     gfx::set_uniform(uniforms_.u_gi_card_copy, params);
     const math::uvec2 groups = get_copy_dispatch(copy_tile_count_);
-    bgfx::dispatch(pass.id, copy_program_->native_handle(), groups.x, groups.y, 1);
+    gfx::dispatch(pass.id, copy_program_->native_handle(), groups.x, groups.y, 1);
     copy_program_->end();
 }
 
@@ -1012,7 +1014,7 @@ void gi_surface_cache::resample_lighting()
     const math::vec4 params(float(copy_tile_count_), float(copy_tile_words_base_), 0.0f, 0.0f);
     gfx::set_uniform(uniforms_.u_gi_card_copy, params);
     const math::uvec2 groups = get_copy_dispatch(copy_tile_count_);
-    bgfx::dispatch(pass.id, resample_program_->native_handle(), groups.x, groups.y, 1);
+    gfx::dispatch(pass.id, resample_program_->native_handle(), groups.x, groups.y, 1);
     resample_program_->end();
 }
 
@@ -1069,7 +1071,7 @@ void gi_surface_cache::dispatch_direct(const lighting_inputs& inputs, uint32_t f
     gfx::set_uniform(uniforms_.u_gi_surface_cache, get_surface_cache_params());
     const math::vec4 lighting(float(first), float(count), float(light_tile_words_base_), get_store_frame_index());
     gfx::set_uniform(uniforms_.u_gi_card_lighting, lighting);
-    bgfx::dispatch(pass.id, lighting_program_->native_handle(), count, 1, 1);
+    gfx::dispatch(pass.id, lighting_program_->native_handle(), count, 1, 1);
     lighting_program_->end();
 }
 
@@ -1113,7 +1115,7 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
         gfx::set_uniform(uniforms_.u_gi_card_lighting, lighting);
         gfx::set_uniform(uniforms_.u_gi_radiosity, radiosity);
         inputs.view_exposure.bind();
-        bgfx::dispatch(pass.id, radiosity_trace_program_->native_handle(), count, trace_groups_per_tile, 1);
+        gfx::dispatch(pass.id, radiosity_trace_program_->native_handle(), count, trace_groups_per_tile, 1);
         radiosity_trace_program_->end();
     }
     {
@@ -1130,7 +1132,7 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
         gfx::set_uniform(uniforms_.u_gi_surface_cache, get_surface_cache_params());
         gfx::set_uniform(uniforms_.u_gi_card_lighting, lighting);
         gfx::set_uniform(uniforms_.u_gi_radiosity, radiosity);
-        bgfx::dispatch(pass.id, radiosity_sh_program_->native_handle(), count, filter_groups_per_tile, 1);
+        gfx::dispatch(pass.id, radiosity_sh_program_->native_handle(), count, filter_groups_per_tile, 1);
         radiosity_sh_program_->end();
     }
     {
@@ -1152,7 +1154,7 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
         gfx::set_uniform(uniforms_.u_gi_surface_cache, get_surface_cache_params());
         gfx::set_uniform(uniforms_.u_gi_card_lighting, lighting);
         gfx::set_uniform(uniforms_.u_gi_radiosity, radiosity);
-        bgfx::dispatch(pass.id, radiosity_integrate_program_->native_handle(), count, 1, 1);
+        gfx::dispatch(pass.id, radiosity_integrate_program_->native_handle(), count, 1, 1);
         radiosity_integrate_program_->end();
     }
 }

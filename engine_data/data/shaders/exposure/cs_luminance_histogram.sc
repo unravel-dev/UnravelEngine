@@ -21,6 +21,8 @@
  */
 
 #include "bgfx_compute.sh"
+// Below stage 8: D3D11 at feature level 11_0 binds only compute stages 0-7.
+#define PRE_EXPOSURE_STAGE 3
 #include "../pre_exposure.sh"
 
 SAMPLER2D(s_hdr_input, 0);

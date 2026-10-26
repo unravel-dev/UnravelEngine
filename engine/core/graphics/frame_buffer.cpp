@@ -1,10 +1,38 @@
 #include "frame_buffer.h"
+#include "graphics.h"
+
+#include <bimg/bimg.h>
+
+#include <mutex>
+#include <set>
+#include <string>
 
 namespace gfx
 {
 namespace
 {
+/// Logs the first failure of each attachment format list: a target the device cannot render to, which a pass
+/// would otherwise use without a word.
+void report_invalid_frame_buffer(const std::vector<fbo_attachment>& attachments)
+{
+    std::string formats;
+    for(const auto& attachment : attachments)
+    {
+        formats += formats.empty() ? "" : ", ";
+        formats += bimg::getName(static_cast<bimg::TextureFormat::Enum>(attachment.texture->info.format));
+    }
+    static std::mutex mutex;
+    static std::set<std::string> reported_formats;
+    std::lock_guard<std::mutex> lock(mutex);
+    if(reported_formats.insert(formats).second)
+    {
+        log("error",
+            "A frame buffer of " + formats + " attachments could not be created on this device.",
+            __FILE__,
+            __LINE__);
+    }
 }
+} // namespace
 frame_buffer::frame_buffer(std::uint16_t _width,
                            std::uint16_t _height,
                            bgfx::TextureFormat::Enum _format,
@@ -73,6 +101,10 @@ void frame_buffer::populate(const std::vector<fbo_attachment>& textures)
     dispose();
     handle_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(buffer.size()), buffer.data(), false);
     cached_size_ = size;
+    if(!bgfx::isValid(handle_) && !textures.empty())
+    {
+        report_invalid_frame_buffer(textures);
+    }
 }
 
 auto frame_buffer::get_size() const -> usize32_t

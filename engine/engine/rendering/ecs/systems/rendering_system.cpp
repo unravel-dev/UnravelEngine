@@ -5,6 +5,7 @@
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/profiler/profiler.h>
 
 #include <engine/animation/ecs/systems/animation_system.h>
@@ -37,12 +38,20 @@ void apply_view_params(rtti::context& ctx, rendering::pipeline::run_params& para
     params.is_being_edited = view.is_being_edited;
     params.render_resolution = view.render_resolution;
     params.needs_output_depth = view.needs_output_depth;
+    // What the device cannot run stays off in every view, the engine's defaults included.
+    const auto& support = get_render_feature_support();
+    const auto device_limits = support.get_device_limits();
     if(view.settings_use == graphics_settings_use::project && ctx.has<settings>())
     {
         const auto& graphics = ctx.get<settings>().graphics;
-        rendering::pipeline::apply_feature_limits(params, graphics.limits);
+        rendering::pipeline::apply_feature_limits(params, intersect_feature_limits(graphics.limits, device_limits));
         params.render_scale = graphics.render_scale;
     }
+    else
+    {
+        rendering::pipeline::apply_feature_limits(params, device_limits);
+    }
+    rendering::pipeline::apply_feature_support(params, support);
     if(view.render_scale)
     {
         params.render_scale = *view.render_scale;

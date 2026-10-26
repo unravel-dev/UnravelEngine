@@ -5,6 +5,7 @@
 #include "spdlog/common.h"
 #include "gpu_pass_log.h"
 #include "gpu_program.h"
+#include "render_feature_support.h"
 #include "shadow.h"
 #include "skinning_palette_buffer.h"
 #include <engine/engine.h>
@@ -17,6 +18,7 @@
 #include <base/platform/config.hpp>
 #include <filesystem/filesystem.h>
 #include <graphics/debugdraw.h>
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 
@@ -151,6 +153,13 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
                               "gfx-frame-log",
                               false,
                               "Log the frame and GPU frame times every few seconds, without the per-pass timers.");
+    parser.set_optional<std::string>("",
+                                     "gfx-disable",
+                                     "",
+                                     "Render as a device without the named graphics features would, as a "
+                                     "comma-separated list (compute, draw_indirect, dispatch_indirect, image_rw, "
+                                     "blend_independent, typed_image_loads, extended_storage_formats, bindings8, "
+                                     "format:rg11b10f:write).");
     parser.set_optional<std::string>("W",
                                      "window",
                                      "",
@@ -248,6 +257,8 @@ constexpr uint32_t MAX_BACKEND_START_ATTEMPTS = 3;
 /// Shown when Vulkan, the only backend built for Android, does not start.
 constexpr const char* NO_VULKAN_MESSAGE = "The game needs Vulkan graphics, which this device could not start.";
 #endif
+/// Starts the message shown when the device lacks what the engine cannot render without.
+constexpr const char* MINIMUM_REQUIREMENTS_MESSAGE = "This graphics device cannot run the application.";
 /// The largest scale bgfx draws its debug text at.
 constexpr float MAX_DEBUG_TEXT_SCALE = 4.0f;
 /// The fingers on the screen at once that switch the statistics overlay (--gfx-stats-gesture). Games
@@ -321,6 +332,59 @@ auto wait_for_native_window(const os::window& window) -> void*
     }
 #endif
     return native_window;
+}
+
+/// Sets the device the engine renders as from --gfx-disable: the real one, or one without the named features.
+void apply_device_caps_mask_option(const cmd_line::parser& parser)
+{
+    std::string disabled;
+    parser.try_get("gfx-disable", disabled);
+    std::vector<std::string> unknown_names;
+    const auto mask = gfx::parse_device_caps_mask(disabled, unknown_names);
+    for(const auto& name : unknown_names)
+    {
+        APPLOG_WARNING("--gfx-disable names no graphics feature called '{}'.", name);
+    }
+    gfx::set_device_caps_mask(mask);
+}
+
+/// Logs the device the backend runs on, and the simulated one when --gfx-disable masks it.
+void log_device_caps()
+{
+    APPLOG_INFO("Graphics device: {}", gfx::describe_device_caps(gfx::get_real_device_caps()));
+    if(!gfx::get_device_caps_mask().is_empty())
+    {
+        APPLOG_WARNING("Rendering as a simulated device (--gfx-disable): {}",
+                       gfx::describe_device_caps(gfx::get_device_caps()));
+    }
+}
+
+/// Resolves which rendering features the device runs and logs the ones it does not, with what renders instead.
+void resolve_render_feature_support()
+{
+    const auto support = render_feature_support::resolve(gfx::get_device_caps());
+    set_render_feature_support(support);
+    const std::string unavailable = support.describe_unavailable();
+    if(!unavailable.empty())
+    {
+        APPLOG_WARNING("Rendering features this device does not run:\n{}", unavailable);
+    }
+}
+
+/// The message for a device that lacks what the engine cannot render without; empty when it has everything.
+auto get_minimum_requirements_message() -> std::string
+{
+    const auto missing = gfx::get_missing_minimum_requirements(gfx::get_real_device_caps());
+    if(missing.empty())
+    {
+        return {};
+    }
+    std::string message = MINIMUM_REQUIREMENTS_MESSAGE;
+    for(const auto& sentence : missing)
+    {
+        message += " " + sentence;
+    }
+    return message;
 }
 
 void strip_window_geometry_arguments(std::vector<std::string>& arguments)
@@ -475,6 +539,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         init_data.platformData.type = bgfx::NativeWindowHandleType::Wayland;
     }
     reset_flags_ = init_data.reset;
+    apply_device_caps_mask_option(parser);
 
     if(!start_backend(init_data))
     {
@@ -491,6 +556,19 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     backbuffer_size_ = {init_data.swapChain.width, init_data.swapChain.height};
     backbuffer_window_ = init_data.swapChain.nwh;
     APPLOG_TRACE("Using {0} rendering backend.", bgfx::getRendererName(bgfx::getRendererType()));
+    log_device_caps();
+    // Checked on the real device: a simulation masks features to test their fallbacks, not to refuse to start.
+    const std::string requirements_message = get_minimum_requirements_message();
+    if(!requirements_message.empty())
+    {
+        APPLOG_ERROR("{}", requirements_message);
+        if(!engine::is_interrupted())
+        {
+            os::message_box::show(os::message_box::kind::error, window.get_title(), requirements_message);
+        }
+        return false;
+    }
+    resolve_render_feature_support();
     const auto debug = read_debug_options(parser, window);
     debug_text_scale_ = debug.text_scale;
     can_toggle_stats_by_touch_ = debug.can_toggle_stats;
@@ -769,7 +847,10 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
         const settings::graphics_settings& graphics = ctx.get<settings>().graphics;
         update_eviction(graphics.eviction);
         batch_collector::set_static_mesh_batching_enabled(graphics.static_mesh_batching);
-        batch_collector::set_skinned_mesh_batching_enabled(graphics.skinned_mesh_batching);
+        // The batched draws read the bone palettes from a buffer in the vertex shader.
+        batch_collector::set_skinned_mesh_batching_enabled(
+            graphics.skinned_mesh_batching &&
+            get_render_feature_support().is_available(render_feature::skinned_mesh_batching));
         shadow::set_map_caching_enabled(graphics.shadow_map_caching);
         const auto& particles = graphics.particles;
         ps_soa::set_quality({particles.spawn_scale,

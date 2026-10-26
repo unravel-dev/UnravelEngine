@@ -235,7 +235,7 @@ void gi_radiance_cache::run_bookkeeping(bookkeeping mode) const
     bgfx::setBuffer(0, counters_, bgfx::Access::ReadWrite);
     bgfx::setBuffer(1, args_, bgfx::Access::ReadWrite);
     set_cache_uniforms(mode);
-    bgfx::dispatch(pass.id, bookkeeping_program_->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, bookkeeping_program_->native_handle(), 1, 1, 1);
     bookkeeping_program_->end();
 }
 
@@ -260,7 +260,7 @@ void gi_radiance_cache::run_over_indirection(gpu_program& program, const char* n
         bgfx::setBuffer(3, traces_, bgfx::Access::ReadWrite);
     }
     set_cache_uniforms(bookkeeping::frame_start);
-    bgfx::dispatch(pass.id, program.native_handle(), (indirection_size + indirection_group - 1u) / indirection_group, 1, 1);
+    gfx::dispatch(pass.id, program.native_handle(), (indirection_size + indirection_group - 1u) / indirection_group, 1, 1);
     program.end();
 }
 
@@ -275,7 +275,7 @@ void gi_radiance_cache::run_mark(const frame_inputs& inputs) const
     gfx::set_uniform(uniforms_.u_gi_probes, inputs.probes);
     gfx::set_uniform(uniforms_.u_gi_view, inputs.view);
     set_cache_uniforms(bookkeeping::frame_start);
-    bgfx::dispatch(pass.id, mark_program_->native_handle(), (inputs.probes_x + 7u) / 8u, (inputs.probe_rows + 7u) / 8u, 1);
+    gfx::dispatch(pass.id, mark_program_->native_handle(), (inputs.probes_x + 7u) / 8u, (inputs.probe_rows + 7u) / 8u, 1);
     mark_program_->end();
 }
 
@@ -290,7 +290,7 @@ void gi_radiance_cache::run_trace(const frame_inputs& inputs) const
         bgfx::setBuffer(1, traces_, bgfx::Access::Read);
         bgfx::setBuffer(2, tiles_, bgfx::Access::Write);
         set_cache_uniforms(bookkeeping::frame_start);
-        bgfx::dispatch(pass.id, tiles_program_->native_handle(), args_, 0, 1);
+        gfx::dispatch_indirect(pass.id, tiles_program_->native_handle(), args_, 0, 1);
         tiles_program_->end();
     }
     run_bookkeeping(bookkeeping::trace_args);
@@ -323,7 +323,7 @@ void gi_radiance_cache::run_trace(const frame_inputs& inputs) const
                      gi_pass::make_settings_uniform(inputs.params->settings, inputs.params->is_being_edited).data());
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-    bgfx::dispatch(pass.id, trace_program_->native_handle(), args_, 1, 1);
+    gfx::dispatch_indirect(pass.id, trace_program_->native_handle(), args_, 1, 1);
     trace_program_->end();
 }
 
@@ -336,7 +336,7 @@ void gi_radiance_cache::run_filter() const
     bgfx::setBuffer(3, traces_, bgfx::Access::Read);
     bgfx::setImage(5, final_atlas_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     set_cache_uniforms(bookkeeping::frame_start);
-    bgfx::dispatch(pass.id, filter_program_->native_handle(), args_, 2, 1);
+    gfx::dispatch_indirect(pass.id, filter_program_->native_handle(), args_, 2, 1);
     filter_program_->end();
 }
 

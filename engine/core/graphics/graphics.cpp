@@ -1,5 +1,6 @@
 #include "graphics.h"
 #include "bgfx/bgfx.h"
+#include "device_caps.h"
 #include "eviction.h"
 #include "uniform.h"
 #include "utils/bgfx_utils.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdarg>
+#include <mutex>
 #include <cstdio>
 #include <hpp/filesystem.hpp>
 #include <map>
@@ -394,6 +396,77 @@ auto get_allocation_failure_policy() -> allocation_failure_policy
     return s_context.allocation_policy;
 }
 
+namespace
+{
+/// Logs the first skipped submission of each program: the pass that submitted it does not check its feature.
+void report_skipped_submission(bgfx::ProgramHandle program, const char* submission)
+{
+    static std::mutex mutex;
+    static std::set<uint16_t> reported_programs;
+    std::lock_guard<std::mutex> lock(mutex);
+    if(!reported_programs.insert(program.idx).second)
+    {
+        return;
+    }
+    log("error",
+        std::string("A ") + submission + " of program " + std::to_string(program.idx) +
+            " was skipped because the device cannot run it. The pass that submitted it does not check its rendering "
+            "feature.",
+        __FILE__,
+        __LINE__);
+}
+} // namespace
+
+void dispatch(bgfx::ViewId _id,
+              bgfx::ProgramHandle _handle,
+              uint32_t _numX,
+              uint32_t _numY,
+              uint32_t _numZ,
+              uint8_t _flags)
+{
+    if(!get_device_caps().has_compute)
+    {
+        report_skipped_submission(_handle, "compute dispatch");
+        bgfx::discard(_flags);
+        return;
+    }
+    bgfx::dispatch(_id, _handle, _numX, _numY, _numZ, _flags);
+}
+
+void dispatch_indirect(bgfx::ViewId _id,
+                       bgfx::ProgramHandle _handle,
+                       bgfx::IndirectBufferHandle _indirectHandle,
+                       uint32_t _start,
+                       uint32_t _num,
+                       uint8_t _flags)
+{
+    const auto& caps = get_device_caps();
+    if(!caps.has_compute || !caps.has_dispatch_indirect)
+    {
+        report_skipped_submission(_handle, "indirect compute dispatch");
+        bgfx::discard(_flags);
+        return;
+    }
+    bgfx::dispatch(_id, _handle, _indirectHandle, _start, _num, _flags);
+}
+
+void submit_indirect(bgfx::ViewId _id,
+                     bgfx::ProgramHandle _program,
+                     bgfx::IndirectBufferHandle _indirectHandle,
+                     uint32_t _start,
+                     uint32_t _num,
+                     uint32_t _depth,
+                     uint8_t _flags)
+{
+    if(!get_device_caps().has_draw_indirect)
+    {
+        report_skipped_submission(_program, "indirect draw");
+        bgfx::discard(_flags);
+        return;
+    }
+    bgfx::submit(_id, _program, _indirectHandle, _start, _num, _depth, _flags);
+}
+
 auto fallback_texture() -> bgfx::TextureHandle
 {
     return s_context.fallback_texture;
@@ -413,6 +486,7 @@ bool init(bgfx::Init init_data)
         log("error", "The graphics backend failed to start.", __FILE__, __LINE__);
         return false;
     }
+    init_device_caps();
     s_context.u_world = bgfx::createUniform("u_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
     s_context.u_prev_world = bgfx::createUniform("u_prev_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
 

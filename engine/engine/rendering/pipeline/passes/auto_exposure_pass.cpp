@@ -2,6 +2,8 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/default_textures.h>
+#include <engine/rendering/render_feature_support.h>
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <bx/math.h>
@@ -52,6 +54,25 @@ constexpr std::uint32_t metering_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAM
 
 /// Pre-exposure values outside this range are treated as invalid input to the histogram.
 constexpr float min_valid_pre_exposure = 1e-12f;
+
+/// The stage cs_luminance_histogram.sc declares s_pre_exposure at (PRE_EXPOSURE_STAGE): below 8, the compute
+/// bindings of D3D11 feature level 11_0.
+constexpr std::uint8_t histogram_pre_exposure_stage = 3;
+/// One-texel copies of what the average and the pre-exposure read from last frame, so they only write
+/// AUTO_EXPOSURE and the environment SH: read-write images of four-channel float formats are optional on
+/// D3D11 feature level 11_0 and on some Vulkan devices.
+constexpr const char* previous_exposure_key = "AUTO_EXPOSURE_PREVIOUS";
+constexpr const char* previous_pre_exposure_key = "PRE_EXPOSURE_PREVIOUS";
+/// The stages cs_histogram_average.sc and cs_pre_exposure.sc declare the copies at.
+constexpr std::uint8_t average_previous_exposure_stage = 5;
+constexpr std::uint8_t previous_pre_exposure_stage = 2;
+
+/// A one-texel copy target of the value a compute pass carries from frame to frame.
+auto acquire_previous_texel(gfx::render_view& rview, const char* key) -> const gfx::texture::ptr&
+{
+    return rview.tex_acquire(key,
+                             {.size = {1, 1}, .format = bgfx::TextureFormat::RGBA32F, .flags = BGFX_TEXTURE_BLIT_DST});
+}
 
 /**
  * Slope multiplier for the exponential adaptation phase so its speed at the transition matches
@@ -267,7 +288,7 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
     histogram_program_.program->begin();
 
     gfx::set_texture(histogram_program_.s_hdr_input, 0, params.input->get_texture(), metering_sampler_flags);
-    params.pre_exposure.bind();
+    params.pre_exposure.bind(histogram_pre_exposure_stage);
 
     bgfx::setBuffer(1, histogram_buffer_, bgfx::Access::ReadWrite);
     bgfx::setImage(2, log_lum_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
@@ -289,7 +310,7 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
 
     const std::uint32_t groups_x = (meter_width + 15) / 16;
     const std::uint32_t groups_y = (meter_height + 15) / 16;
-    bgfx::dispatch(pass.id, histogram_program_.program->native_handle(), groups_x, groups_y, 1);
+    gfx::dispatch(pass.id, histogram_program_.program->native_handle(), groups_x, groups_y, 1);
 
     histogram_program_.program->end();
 }
@@ -380,11 +401,16 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
     state.history_index = (state.history_index + 1u) % history_length;
 
     gfx::render_pass pass("Auto Exposure/Average");
+    // A view runs its blits before its dispatches: the copy holds the last frame's exposure.
+    const auto& previous_tex = acquire_previous_texel(rview, previous_exposure_key);
+    bgfx::blit(pass.id,
+               bgfx::TextureRegion{.handle = previous_tex->native_handle(), .width = 1, .height = 1},
+               bgfx::TextureRegion{.handle = exposure_tex->native_handle(), .width = 1, .height = 1});
 
     average_program_.program->begin();
 
     bgfx::setBuffer(0, histogram_buffer_, bgfx::Access::ReadWrite);
-    bgfx::setImage(1, exposure_tex->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F);
+    bgfx::setImage(1, exposure_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
     bgfx::setImage(2, history_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
     bgfx::setImage(3, histogram_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R32F);
 
@@ -424,8 +450,12 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
                      4,
                      curve_tex ? curve_tex : default_textures::get().white_texture(),
                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    gfx::set_texture(average_program_.s_previous_exposure,
+                     average_previous_exposure_stage,
+                     previous_tex,
+                     local_point_clamp);
 
-    bgfx::dispatch(pass.id, average_program_.program->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, average_program_.program->native_handle(), 1, 1, 1);
 
     average_program_.program->end();
 }
@@ -434,7 +464,9 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
 {
     const settings& config = params.config;
     const bool wants_local_exposure =
-        config.is_local_exposure_enabled() && local_grid_program_.program && local_grid_program_.program->is_valid() &&
+        config.is_local_exposure_enabled() &&
+        get_render_feature_support().is_available(render_feature::local_exposure) &&
+        local_grid_program_.program && local_grid_program_.program->is_valid() &&
         local_downsample_program_.program && local_downsample_program_.program->is_valid() &&
         local_blur_program_.program && local_blur_program_.program->is_valid();
     if(!wants_local_exposure)
@@ -482,7 +514,7 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
         const float grid_range[4] = {min_log_lum, 1.0f / log_range, float(tiles_x), float(tiles_y)};
         gfx::set_uniform(local_grid_program_.u_local_grid_range, grid_range);
         // One workgroup per tile (cs_local_exposure_grid.sc).
-        bgfx::dispatch(pass.id, local_grid_program_.program->native_handle(), tiles_x, tiles_y, 1);
+        gfx::dispatch(pass.id, local_grid_program_.program->native_handle(), tiles_x, tiles_y, 1);
         local_grid_program_.program->end();
     }
     run_local_exposure_blur(rview, config, meter_size);
@@ -517,7 +549,7 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
                                             float(blur_size.width),
                                             float(blur_size.height)};
         gfx::set_uniform(local_downsample_program_.u_local_downsample_params, downsample_params);
-        bgfx::dispatch(pass.id, local_downsample_program_.program->native_handle(), groups_x, groups_y, 1);
+        gfx::dispatch(pass.id, local_downsample_program_.program->native_handle(), groups_x, groups_y, 1);
         local_downsample_program_.program->end();
     }
     // The kernel size is a DIAMETER as a percentage of the view width.
@@ -535,7 +567,7 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
         bgfx::setImage(1, blur_passes[axis].second->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
         const float blur_params[4] = {float(blur_size.width), float(blur_size.height), radius, float(axis)};
         gfx::set_uniform(local_blur_program_.u_local_blur_params, blur_params);
-        bgfx::dispatch(pass.id, local_blur_program_.program->native_handle(), groups_x, groups_y, 1);
+        gfx::dispatch(pass.id, local_blur_program_.program->native_handle(), groups_x, groups_y, 1);
         local_blur_program_.program->end();
     }
 }
@@ -558,8 +590,10 @@ void auto_exposure_pass::update_gpu_pre_exposure(gfx::render_view& rview,
                                                  float manual_exposure,
                                                  bool is_auto_exposure_active)
 {
-    // begin() links the program once its shader has loaded (it may compile after init).
-    if(!environment_sh || !pre_exposure_program_.program || !pre_exposure_program_.program->begin())
+    // begin() links the program once its shader has loaded (it may compile after init). Without it, or on a
+    // device that cannot run it, the share stays at the 1 the environment SH starts with.
+    if(!environment_sh || !get_render_feature_support().is_available(render_feature::gpu_pre_exposure) ||
+       !pre_exposure_program_.program || !pre_exposure_program_.program->begin())
     {
         return;
     }
@@ -569,10 +603,22 @@ void auto_exposure_pass::update_gpu_pre_exposure(gfx::render_view& rview,
     const float params[4] = {manual_exposure, pre_exposure_state::min_value, pre_exposure_state::max_value, 0.0f};
 
     gfx::render_pass pass("Auto Exposure/Pre-Exposure");
+    // A view runs its blits before its dispatches: the copy holds the share the last frame left.
+    const auto& previous_tex = acquire_previous_texel(rview, previous_pre_exposure_key);
+    bgfx::blit(pass.id,
+               bgfx::TextureRegion{.handle = previous_tex->native_handle(), .width = 1, .height = 1},
+               bgfx::TextureRegion{.handle = environment_sh->native_handle(),
+                                   .x = pre_exposure_state::gpu_texel,
+                                   .width = 1,
+                                   .height = 1});
     gfx::set_uniform(pre_exposure_program_.u_pre_exposure_params, params);
     gfx::set_texture(pre_exposure_program_.s_exposure, 0, input);
-    bgfx::setImage(1, environment_sh->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F);
-    bgfx::dispatch(pass.id, pre_exposure_program_.program->native_handle(), 1, 1, 1);
+    gfx::set_texture(pre_exposure_program_.s_previous_pre_exposure,
+                     previous_pre_exposure_stage,
+                     previous_tex,
+                     local_point_clamp);
+    bgfx::setImage(1, environment_sh->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
+    gfx::dispatch(pass.id, pre_exposure_program_.program->native_handle(), 1, 1, 1);
     pre_exposure_program_.program->end();
 }
 
@@ -587,6 +633,7 @@ void auto_exposure_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove(local_blur_temp_key);
     rview.tex_remove(local_blurred_key);
     rview.tex_remove(compensation_curve_key);
+    rview.tex_remove(previous_exposure_key);
     rview.data().get_or_emplace<metering_state>(metering_state::view_key).force_snap = true;
 }
 

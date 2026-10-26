@@ -365,7 +365,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
                                     float(kernel_radius)};
         gfx::set_uniform(denoise_program_.u_denoise_params2, denoise_params2);
 
-        bgfx::dispatch(pass.id, denoise_program_.program->native_handle(), dgx, dgy, 1);
+        gfx::dispatch(pass.id, denoise_program_.program->native_handle(), dgx, dgy, 1);
 
         denoise_program_.program->end();
     };
@@ -437,7 +437,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         float ds_params[4] = {depth_sigma, normal_power, has_downsampled_variance ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_downsample_params, ds_params);
 
-        bgfx::dispatch(ds_pass.id, downsample_program_.program->native_handle(), hgx, hgy, 1);
+        gfx::dispatch(ds_pass.id, downsample_program_.program->native_handle(), hgx, hgy, 1);
         downsample_program_.program->end();
     }
 

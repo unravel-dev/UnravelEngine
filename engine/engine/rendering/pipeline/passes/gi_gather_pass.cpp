@@ -457,7 +457,7 @@ void gi_gather_pass::run_place(const gi_run_params& params,
     bind_image(2, targets.records, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
     adaptive_probes_.bind_state(3, bgfx::Access::ReadWrite);
     set_layout_uniforms(layout);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    place_program_->native_handle(),
                    divide_round_up(layout.probes_x, group_edge),
                    divide_round_up(layout.atlas_rows, group_edge),
@@ -507,7 +507,7 @@ void gi_gather_pass::dispatch_trace_args(uint16_t view_id,
     far_field_args_program_->begin();
     bgfx::setBuffer(trace_args_count_stage, rays, bgfx::Access::Read);
     bgfx::setBuffer(trace_args_output_stage, args, bgfx::Access::ReadWrite);
-    bgfx::dispatch(view_id, far_field_args_program_->native_handle(), 1, 1, 1);
+    gfx::dispatch(view_id, far_field_args_program_->native_handle(), 1, 1, 1);
     far_field_args_program_->end();
 }
 
@@ -545,7 +545,7 @@ void gi_gather_pass::run_trace(const gi_run_params& params,
     bind_image(trace_output_stage, targets.trace_radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     bgfx::setBuffer(trace_rays_far_field_stage, trace_rays_, bgfx::Access::ReadWrite);
     bgfx::setBuffer(trace_hits_stage, trace_hits_, bgfx::Access::ReadWrite);
-    bgfx::dispatch(pass.id, programs_->trace_far_field->native_handle(), far_field_args_, 0, 1);
+    gfx::dispatch_indirect(pass.id, programs_->trace_far_field->native_handle(), far_field_args_, 0, 1);
     programs_->trace_far_field->end();
     // One thread per distance-field hit the far-field pass compacted, not per far ray.
     gfx::render_pass hit_pass("GI/Probe Trace Hits");
@@ -556,7 +556,7 @@ void gi_gather_pass::run_trace(const gi_run_params& params,
     bind_image(trace_output_stage, targets.trace_radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     bgfx::setBuffer(trace_rays_far_field_stage, trace_rays_, bgfx::Access::Read);
     bgfx::setBuffer(trace_hits_stage, trace_hits_, bgfx::Access::Read);
-    bgfx::dispatch(hit_pass.id, programs_->trace_hit_shade->native_handle(), hit_args_, 0, 1);
+    gfx::dispatch_indirect(hit_pass.id, programs_->trace_hit_shade->native_handle(), hit_args_, 0, 1);
     programs_->trace_hit_shade->end();
 }
 
@@ -584,7 +584,7 @@ void gi_gather_pass::run_visualize_traces(const gi_run_params& params,
     const math::vec4 query(cursor.x, cursor.y, 0.0f, 0.0f);
     gfx::set_uniform(uniforms_.u_gi_visualize_traces, query);
     // One group: the probe's rays.
-    bgfx::dispatch(pass.id, programs_->trace_visualize->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, programs_->trace_visualize->native_handle(), 1, 1, 1);
     programs_->trace_visualize->end();
     has_visualized_traces_ = true;
     visualized_trace_resolution_ = layout.trace_resolution;
@@ -737,7 +737,7 @@ void gi_gather_pass::run_integrate(const gi_run_params& params,
     gfx::set_uniform(uniforms_.u_gi_temporal, temporal);
     gfx::set_uniform(uniforms_.u_pre_exposure, params.pre_exposure.to_uniform().data());
     params.pre_exposure.bind(integrate_pre_exposure_stage);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    program->native_handle(),
                    divide_round_up(layout.view_size.width, group_edge),
                    divide_round_up(layout.view_size.height, group_edge),

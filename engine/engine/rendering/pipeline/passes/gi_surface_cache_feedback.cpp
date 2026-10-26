@@ -152,7 +152,7 @@ void gi_surface_cache_feedback::end_frame(uint16_t view_id, uint32_t samples)
     bgfx::setImage(2, table_image_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RG32U);
     const math::vec4 params(float(hash_slots), float(readback_width), 0.0f, 0.0f);
     gfx::set_uniform(copy_.u_gi_feedback_copy, params);
-    bgfx::dispatch(view_id, copy_.program->native_handle(), gi_pass::divide_round_up(hash_slots, copy_group_size), 1, 1);
+    gfx::dispatch(view_id, copy_.program->native_handle(), gi_pass::divide_round_up(hash_slots, copy_group_size), 1, 1);
     copy_.program->end();
     clear(view_id);
     // A view after the copy's: its blit runs once the copy is done. bgfx reads the texture after every view.

@@ -3,6 +3,7 @@
 #include <engine/assets/asset_manager.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
+#include <algorithm>
 #include <string>
 
 namespace unravel
@@ -104,8 +105,23 @@ auto assao_pass::init(rtti::context& ctx) -> bool
     return true;
 }
 
+auto assao_pass::has_programs() const -> bool
+{
+    return !m_programs.empty() && std::all_of(m_programs.begin(),
+                                               m_programs.end(),
+                                               [](const gpu_program::ptr& program)
+                                               {
+                                                   return program && program->is_valid();
+                                               });
+}
+
 void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_params& params)
 {
+    if(!has_programs())
+    {
+        release_resources(rview);
+        return;
+    }
     m_settings = params.params;
 
     const auto size = params.depth->get_size();
@@ -197,7 +213,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                               bgfx::Access::Write);
             }
 
-            bgfx::dispatch(view,
+            gfx::dispatch(view,
                            m_settings.generate_normals ? m_prepareDepthsAndNormalsHalfProgram
                                                        : m_prepareDepthsHalfProgram,
                            (dims.halfSize[0] + 7) / 8,
@@ -210,7 +226,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             bgfx::setImage(3, halfDepths2->native_handle(), 0, bgfx::Access::Write);
             bgfx::setImage(4, halfDepths3->native_handle(), 0, bgfx::Access::Write);
 
-            bgfx::dispatch(view,
+            gfx::dispatch(view,
                            m_settings.generate_normals ? m_prepareDepthsAndNormalsProgram : m_prepareDepthsProgram,
                            (dims.halfSize[0] + 7) / 8,
                            (dims.halfSize[1] + 7) / 8);
@@ -241,7 +257,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             float rect[4] = {0.0f, 0.0f, (float)mipWidth, (float)mipHeight};
             bgfx::setUniform(u_rect, rect);
 
-            bgfx::dispatch(view, m_prepareDepthMipProgram, (mipWidth + 7) / 8, (mipHeight + 7) / 8);
+            gfx::dispatch(view, m_prepareDepthMipProgram, (mipWidth + 7) / 8, (mipHeight + 7) / 8);
         }
     }
 
@@ -362,7 +378,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
                 m_uniforms.m_layer = blurPasses == 0 ? (float)pass : 0.0f;
                 m_uniforms.submit();
-                bgfx::dispatch(view, programs[programIndex], halfResNumX, halfResNumY);
+                gfx::dispatch(view, programs[programIndex], halfResNumX, halfResNumY);
             }
 
             // Blur
@@ -393,17 +409,17 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                     {
                         if(wideBlursRemaining > 0)
                         {
-                            bgfx::dispatch(view, m_smartBlurWideProgram, halfResNumX, halfResNumY);
+                            gfx::dispatch(view, m_smartBlurWideProgram, halfResNumX, halfResNumY);
                             wideBlursRemaining--;
                         }
                         else
                         {
-                            bgfx::dispatch(view, m_smartBlurProgram, halfResNumX, halfResNumY);
+                            gfx::dispatch(view, m_smartBlurProgram, halfResNumX, halfResNumY);
                         }
                     }
                     else
                     {
-                        bgfx::dispatch(view,
+                        gfx::dispatch(view,
                                        m_nonSmartBlurProgram,
                                        halfResNumX,
                                        halfResNumY); // just for quality level 0 (and -1)
@@ -421,7 +437,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             m_uniforms.submit();
             bgfx::setImage(0, importanceMap->native_handle(), 0, bgfx::Access::Write);
             bgfx::setTexture(1, s_finalSSAO, finalResults->native_handle(), SAMPLER_POINT_CLAMP);
-            bgfx::dispatch(view,
+            gfx::dispatch(view,
                            m_generateImportanceMapProgram,
                            (dims.quarterSize[0] + 7) / 8,
                            (dims.quarterSize[1] + 7) / 8);
@@ -429,19 +445,19 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             m_uniforms.submit();
             bgfx::setImage(0, importanceMapPong->native_handle(), 0, bgfx::Access::Write);
             bgfx::setTexture(1, s_importanceMap, importanceMap->native_handle());
-            bgfx::dispatch(view,
+            gfx::dispatch(view,
                            m_postprocessImportanceMapAProgram,
                            (dims.quarterSize[0] + 7) / 8,
                            (dims.quarterSize[1] + 7) / 8);
 
             bgfx::setBuffer(0, m_loadCounter, bgfx::Access::ReadWrite);
-            bgfx::dispatch(view, m_loadCounterClearProgram, 1, 1);
+            gfx::dispatch(view, m_loadCounterClearProgram, 1, 1);
 
             m_uniforms.submit();
             bgfx::setImage(0, importanceMap->native_handle(), 0, bgfx::Access::Write);
             bgfx::setTexture(1, s_importanceMap, importanceMapPong->native_handle());
             bgfx::setBuffer(2, m_loadCounter, bgfx::Access::ReadWrite);
-            bgfx::dispatch(view,
+            gfx::dispatch(view,
                            m_postprocessImportanceMapBProgram,
                            (dims.quarterSize[0] + 7) / 8,
                            (dims.quarterSize[1] + 7) / 8);
@@ -468,7 +484,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             program = m_nonSmartApplyProgram;
         else
             program = m_applyProgram;
-        bgfx::dispatch(view,
+        gfx::dispatch(view,
                        program,
                        (dims.fullResOutScissorRect[2] - dims.fullResOutScissorRect[0] + 7) / 8,
                        (dims.fullResOutScissorRect[3] - dims.fullResOutScissorRect[1] + 7) / 8);

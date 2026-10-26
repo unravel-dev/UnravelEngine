@@ -226,7 +226,7 @@ void gi_reflection_pass::run_screen(const run_params& params, const frame_target
                           gather.cam->get_prev_view_projection_unjittered().get_matrix(),
                           experiments_);
     gather.pre_exposure.bind();
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    screen_program_->native_handle(),
                    divide_round_up(trace_size_.width, group_edge),
                    divide_round_up(trace_size_.height, group_edge),
@@ -268,7 +268,7 @@ void gi_reflection_pass::run_feedback(const run_params& params, const frame_targ
     gfx::set_uniform(uniforms_.u_gi_feedback, feedback_params);
     const uint32_t tiles_x = divide_round_up(trace_size_.width, feedback_tile_texels);
     const uint32_t tiles_y = divide_round_up(trace_size_.height, feedback_tile_texels);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    feedback_program_->native_handle(),
                    divide_round_up(tiles_x, group_edge),
                    divide_round_up(tiles_y, group_edge),
@@ -306,7 +306,7 @@ void gi_reflection_pass::run_world(const run_params& params, const frame_targets
                           experiments_);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    world_program_->native_handle(),
                    divide_round_up(trace_size_.width, group_edge),
                    divide_round_up(trace_size_.height, group_edge),
@@ -328,7 +328,7 @@ void gi_reflection_pass::run_resolve(const run_params& params, const frame_targe
     gfx::set_texture(uniforms_.s_gi_normal, 12, gather.g_buffer->get_texture(1));
     gfx::set_texture(uniforms_.s_gi_reflection_tiles, 13, targets.tiles_write);
     set_frame_uniforms(params, targets);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    resolve_program_->native_handle(),
                    divide_round_up(view_size_.width, group_edge),
                    divide_round_up(view_size_.height, group_edge),
@@ -359,7 +359,7 @@ void gi_reflection_pass::run_temporal(const run_params& params, const frame_targ
                           gather.cam->get_prev_view_projection_unjittered().get_matrix(),
                           experiments_);
     gather.pre_exposure.bind(temporal_pre_exposure_stage);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    temporal_program_->native_handle(),
                    divide_round_up(view_size_.width, group_edge),
                    divide_round_up(view_size_.height, group_edge),
@@ -380,7 +380,7 @@ void gi_reflection_pass::run_spatial(const run_params& params, const frame_targe
     gfx::set_texture(uniforms_.s_gi_normal, 11, gather.g_buffer->get_texture(1));
     gfx::set_texture(uniforms_.s_gi_reflection_tiles, 13, targets.tiles_write);
     set_frame_uniforms(params, targets);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    spatial_program_->native_handle(),
                    divide_round_up(view_size_.width, group_edge),
                    divide_round_up(view_size_.height, group_edge),

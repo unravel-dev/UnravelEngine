@@ -38,6 +38,8 @@ namespace stl = tinystl;
 #include <algorithm>
 #include <iterator>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 namespace entry
@@ -350,6 +352,33 @@ static uint64_t applyContainerSrgbFlag(const bimg::ImageContainer* imageContaine
     return _flags;
 }
 
+// A format the GPU cannot sample is decoded to RGBA8 (BGRA8 on Direct3D and Vulkan) when the texture is created:
+// it loads slower, takes four to eight times the memory and loses its sRGB view. Warned once per format, so a
+// texture compression the deploy target lacks shows in the log.
+static void warnEmulatedFormat(const bimg::ImageContainer* imageContainer)
+{
+    constexpr uint32_t emulatedCaps = BGFX_CAPS_FORMAT_TEXTURE_2D_EMULATED | BGFX_CAPS_FORMAT_TEXTURE_3D_EMULATED |
+                                      BGFX_CAPS_FORMAT_TEXTURE_CUBE_EMULATED;
+    const uint32_t formatCaps = bgfx::getCaps()->formats[bgfx::TextureFormat::Enum(imageContainer->m_format)];
+    if(0 == (formatCaps & emulatedCaps))
+    {
+        return;
+    }
+    static std::mutex mutex;
+    static std::set<int> warnedFormats;
+    std::lock_guard<std::mutex> lock(mutex);
+    if(!warnedFormats.insert(int(imageContainer->m_format)).second)
+    {
+        return;
+    }
+    gfx::log("warning",
+             std::string("Textures in ") + bimg::getName(bimg::TextureFormat::Enum(imageContainer->m_format)) +
+                 " are decoded when they load because this GPU cannot sample the format. They take more memory "
+                 "and lose their sRGB view.",
+             __FILE__,
+             uint16_t(__LINE__));
+}
+
 static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageContainer,
                                                     uint64_t _flags,
                                                     bgfx::TextureInfo* _info,
@@ -361,6 +390,7 @@ static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageC
     }
 
     readEtc1AsEtc2(*imageContainer);
+    warnEmulatedFormat(imageContainer);
     _flags = applyContainerSrgbFlag(imageContainer, _flags);
 
     const bgfx::Memory* mem = bgfx::makeRef(

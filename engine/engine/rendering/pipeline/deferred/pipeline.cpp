@@ -2425,7 +2425,8 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
 
     irradiance_pass_result result;
 
-    if(irradiance_compute_program_.program && irradiance_compute_program_.program->is_valid())
+    if(get_render_feature_support().is_available(render_feature::irradiance_sh) &&
+       irradiance_compute_program_.program && irradiance_compute_program_.program->is_valid())
     {
         const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
 
@@ -2612,7 +2613,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         float mode_vec[4] = {float(mode), dominant.sun_weight, couple_clouds ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(irradiance_compute_program_.u_mode, mode_vec);
 
-        bgfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
+        gfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
         irradiance_compute_program_.program->end();
 
         result.irradiance_tex = irradiance_tex;
@@ -3352,6 +3353,11 @@ auto gather_skylight_params(scene& scn,
 void deferred::run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview)
 {
     cloud_shadow_ = {};
+    // The map is an R8 target with mips the backend builds; without them the lights take no cloud shadow.
+    if(!get_render_feature_support().is_available(render_feature::cloud_shadow))
+    {
+        return;
+    }
     atmospheric_pass_perez::run_params params_perez;
     atmospheric_pass_skybox::run_params params_skybox;
     skylight_component::sky_mode mode{};
@@ -4035,9 +4041,10 @@ auto deferred::get_gi_resolve_scale(gfx::render_view& rview) -> float
 
 auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool
 {
-    // Off unless a gi_component asks for it, the same contract every other pass here follows. The
+    // Off unless a gi_component asks for it, the same contract every other pass here follows, and off while
+    // the surface cache does not run: then GTAO, ASSAO and SSR keep the AO and reflections GI would own. The
     // settings left in `gi` are meaningless when this returns false.
-    if(!rparams.fill_gi_params)
+    if(!rparams.fill_gi_params || !engine::context().get_cached<surface_cache_system>().is_enabled())
     {
         return false;
     }
@@ -4391,8 +4398,9 @@ auto deferred::run_hiz_pass(const camera& camera,
     const bool gi_wants_hiz = params.run_type == pipeline_run_type::camera && resolve_gi_settings(params, gi) &&
                               (gi.diffuse.screen_traces || (gi.reflections.enabled && gi.reflections.screen_traces));
     const bool want_hiz =
-        (reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params)) ||
-        gi_wants_hiz;
+        ((reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params)) ||
+         gi_wants_hiz) &&
+        get_render_feature_support().is_available(render_feature::hiz);
 
     if(!want_hiz)
     {

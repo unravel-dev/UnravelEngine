@@ -14,6 +14,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
+#include <engine/rendering/render_feature_support.h>
 
 #include <concurrency/parallel.h>
 #include <logging/logging.h>
@@ -77,19 +78,13 @@ namespace unravel
 
 auto surface_cache_system::init(rtti::context& ctx) -> bool
 {
-    // The whole feature is compute-shaped: the clipmap compose and every GI pass are
-    // dispatches, and even the debug views read SSBOs. A backend without compute (for example
-    // Mesa handing bgfx a GL 3.1 compatibility context) cannot run ANY of it - the dispatches
-    // are silently dropped, every volume keeps its allocation garbage, and the views paint
-    // that garbage with nothing in the log to say why. Refusing loudly here is the honest
-    // degradation: no GI, no debug views, one line naming the reason.
-    const auto* caps = bgfx::getCaps();
-    supported_ = caps != nullptr && 0 != (caps->supported & BGFX_CAPS_COMPUTE);
+    // The whole feature is compute-shaped: the clipmap compose and every GI pass are dispatches, and even the
+    // debug views read SSBOs. On a device that cannot run it (no compute, too few compute bindings, a storage
+    // format it cannot write) the surface cache, its debug views and every GI pass stay off; the renderer's
+    // feature log names the reason.
+    supported_ = get_render_feature_support().is_available(render_feature::global_illumination);
     if(!supported_)
     {
-        APPLOG_WARNING("[SurfaceCache] GI disabled: this renderer backend reports no compute "
-                       "shader support. The surface cache, its debug views and every GI pass "
-                       "stay off; use the Vulkan backend for GI on this machine.");
         return true;
     }
     sdf_atlas::settings atlas_settings;

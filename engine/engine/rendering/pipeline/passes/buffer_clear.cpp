@@ -61,7 +61,7 @@ void buffer_clear::dispatch(uint16_t view_id, bgfx::DynamicIndexBufferHandle buf
     bgfx::setBuffer(CLEAR_BUFFER_STAGE, buffer, bgfx::Access::Write);
     // u_clear_uints: the range's first uint and its length; the shader skips the threads past the range's end.
     gfx::set_uniform(program_.u_clear_uints, math::vec4(float(first), float(count), 0.0f, 0.0f));
-    bgfx::dispatch(view_id, program_.program->native_handle(), get_clear_groups(count), 1, 1);
+    gfx::dispatch(view_id, program_.program->native_handle(), get_clear_groups(count), 1, 1);
     program_.program->end();
 }
 

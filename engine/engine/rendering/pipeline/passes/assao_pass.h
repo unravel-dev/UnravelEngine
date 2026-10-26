@@ -139,9 +139,13 @@ public:
     }
 
     auto init(rtti::context& ctx) -> bool;
+    /// Runs the pass; without its compute programs (a device without compute) it releases its targets instead,
+    /// so the lighting reads no AO rather than a map nothing wrote.
     void run(const camera& camera, gfx::render_view& rview, const run_params& params);
     auto shutdown() -> int32_t;
     void release_resources(gfx::render_view& rview);
+    /// Whether every compute program of the pass was built.
+    auto has_programs() const -> bool;
 
     /// The full-resolution AO this view's last run produced (RGBA8, the visibility in every
     /// channel), or null when the pass is not running. The lighting reads it as the

@@ -241,7 +241,7 @@ void gi_object_grid::update(const surface_cache_system& gi_scene, const surface_
         const uint32_t row = std::min(entry.bricks, object_grid_max_bricks_per_row);
         const math::vec4 dispatch(float(entry.first_box), float(entry.box_count), float(entry.bricks), float(row));
         gfx::set_uniform(uniforms_.u_brick_dispatch, dispatch);
-        bgfx::dispatch(pass.id, program_->native_handle(), row, (entry.bricks + row - 1u) / row, 1);
+        gfx::dispatch(pass.id, program_->native_handle(), row, (entry.bricks + row - 1u) / row, 1);
         program_->end();
     }
 }

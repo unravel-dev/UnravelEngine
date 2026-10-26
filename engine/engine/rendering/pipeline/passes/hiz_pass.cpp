@@ -1,6 +1,7 @@
 #include "hiz_pass.h"
 #include <engine/assets/asset_manager.h>
 #include <algorithm>
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <engine/profiler/profiler.h>
@@ -42,6 +43,14 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
     {
         return;
     }
+    // Without its programs (a device without compute) the pyramid is not written; the pipeline turns its readers
+    // off on such a device (render_feature::hiz), so nothing reads the unwritten texture.
+    // begin() links a program whose shader loaded after init.
+    if(!hiz_generate_.program || !hiz_generate_.program->begin() || !hiz_downsample_.program ||
+       !hiz_downsample_.program->begin())
+    {
+        return;
+    }
 
     const uint32_t hiz_width = output_hiz->info.width;
     const uint32_t hiz_height = output_hiz->info.height;
@@ -67,7 +76,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
         // Dispatch compute shader with 8x8 thread groups
         uint32_t num_groups_x = (hiz_width + 7) / 8;
         uint32_t num_groups_y = (hiz_height + 7) / 8;
-        bgfx::dispatch(pass.id, hiz_generate_.program->native_handle(), num_groups_x, num_groups_y, 1);
+        gfx::dispatch(pass.id, hiz_generate_.program->native_handle(), num_groups_x, num_groups_y, 1);
 
         hiz_generate_.program->end();
     }
@@ -106,7 +115,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
             // Dispatch compute shader with 8x8 thread groups
             uint32_t num_groups_x = (current_mip_width + 7) / 8;
             uint32_t num_groups_y = (current_mip_height + 7) / 8;
-            bgfx::dispatch(pass.id, hiz_downsample_.program->native_handle(), num_groups_x, num_groups_y, 1);
+            gfx::dispatch(pass.id, hiz_downsample_.program->native_handle(), num_groups_x, num_groups_y, 1);
         }
 
         // End the program once after all dispatches

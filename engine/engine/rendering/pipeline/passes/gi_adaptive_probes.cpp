@@ -109,7 +109,7 @@ void gi_adaptive_probes::bind_state(uint8_t stage, bgfx::Access::Enum access) co
 
 void gi_adaptive_probes::dispatch(bgfx::ViewId view, const gpu_program& program, args_slot slot) const
 {
-    bgfx::dispatch(view, program.native_handle(), args_, uint16_t(slot), 1);
+    gfx::dispatch_indirect(view, program.native_handle(), args_, uint16_t(slot), 1);
 }
 
 void gi_adaptive_probes::set_uniforms(const frame_inputs& inputs) const
@@ -136,7 +136,7 @@ void gi_adaptive_probes::run_mark(const frame_inputs& inputs) const
     bind_state(3, bgfx::Access::ReadWrite);
     set_uniforms(inputs);
     const auto group_tiles = get_group_tiles(inputs.layout);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    mark_program_->native_handle(),
                    gi_pass::divide_round_up(inputs.probes_x, group_tiles.width),
                    gi_pass::divide_round_up(inputs.probes_y, group_tiles.height),
@@ -156,7 +156,7 @@ void gi_adaptive_probes::run_spawn(const frame_inputs& inputs) const
     gi_pass::bind_image(3, inputs.probe_records, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
     set_uniforms(inputs);
     const auto group_tiles = get_group_tiles(inputs.layout);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    spawn_program_->native_handle(),
                    gi_pass::divide_round_up(inputs.probes_x, group_tiles.width),
                    gi_pass::divide_round_up(inputs.probes_y, group_tiles.height),
@@ -171,7 +171,7 @@ void gi_adaptive_probes::run_args(const frame_inputs& inputs) const
     bind_state(0, bgfx::Access::ReadWrite);
     bgfx::setBuffer(1, args_, bgfx::Access::ReadWrite);
     set_uniforms(inputs);
-    bgfx::dispatch(pass.id, args_program_->native_handle(), 1, 1, 1);
+    gfx::dispatch(pass.id, args_program_->native_handle(), 1, 1, 1);
     args_program_->end();
 }
 

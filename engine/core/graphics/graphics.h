@@ -63,6 +63,36 @@ void set_image_3d(uint8_t _stage,
                   bgfx::Access::Enum _access,
                   bgfx::TextureFormat::Enum _format = bgfx::TextureFormat::Count);
 
+/**
+ * Compute dispatch checked against the device the engine renders as (get_device_caps, a simulated one
+ * included). bgfx checks its capabilities in debug builds only; on a device without compute this skips the
+ * dispatch, discards the bindings set for it and logs the first skip of each program as an error: a pass
+ * that submits without checking its render_feature.
+ */
+void dispatch(bgfx::ViewId _id,
+              bgfx::ProgramHandle _handle,
+              uint32_t _numX = 1,
+              uint32_t _numY = 1,
+              uint32_t _numZ = 1,
+              uint8_t _flags = BGFX_DISCARD_ALL);
+
+/// Indirect compute dispatch, skipped like @ref dispatch on a device without compute or indirect dispatch.
+void dispatch_indirect(bgfx::ViewId _id,
+                       bgfx::ProgramHandle _handle,
+                       bgfx::IndirectBufferHandle _indirectHandle,
+                       uint32_t _start = 0,
+                       uint32_t _num = 1,
+                       uint8_t _flags = BGFX_DISCARD_ALL);
+
+/// Indirect draw, skipped like @ref dispatch on a device without indirect draws.
+void submit_indirect(bgfx::ViewId _id,
+                     bgfx::ProgramHandle _program,
+                     bgfx::IndirectBufferHandle _indirectHandle,
+                     uint32_t _start = 0,
+                     uint32_t _num = 1,
+                     uint32_t _depth = 0,
+                     uint8_t _flags = BGFX_DISCARD_ALL);
+
 //---------------------------------------------------------------------------
 //---------------------------------------------------------------------------
 //---------------------------------------------------------------------------

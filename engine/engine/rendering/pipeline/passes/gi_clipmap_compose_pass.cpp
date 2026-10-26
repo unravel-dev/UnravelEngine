@@ -281,7 +281,7 @@ void gi_clipmap_compose_pass::build_level_mip(const global_sdf_clipmap_gpu& clip
         gfx::set_uniform(mip_program_.u_clipmap_mip_params, params);
         const math::vec4 mode(step == 0u ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
         gfx::set_uniform(mip_program_.u_clipmap_mip_mode, mode);
-        bgfx::dispatch(pass.id, mip_program_.program->native_handle(), groups, groups, groups);
+        gfx::dispatch(pass.id, mip_program_.program->native_handle(), groups, groups, groups);
         mip_program_.program->end();
     }
 }
@@ -331,7 +331,7 @@ void gi_clipmap_compose_pass::dispatch_compose_bricks(gfx::render_pass& pass,
     const uint32_t row = std::min(bricks.bricks, max_bricks_per_row);
     const math::vec4 dispatch(float(bricks.first_box), float(bricks.box_count), float(bricks.bricks), float(row));
     gfx::set_uniform(compose_program_.u_brick_dispatch, dispatch);
-    bgfx::dispatch(pass.id, compose_program_.program->native_handle(), row, (bricks.bricks + row - 1u) / row, 1);
+    gfx::dispatch(pass.id, compose_program_.program->native_handle(), row, (bricks.bricks + row - 1u) / row, 1);
     compose_program_.program->end();
 }
 

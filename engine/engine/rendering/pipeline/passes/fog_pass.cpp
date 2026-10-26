@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/default_textures.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/rendering/shadow.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
@@ -379,10 +380,7 @@ auto fog_pass::init(rtti::context& ctx) -> bool
 
 auto fog_pass::is_volumetric_supported() -> bool
 {
-    const auto* caps = bgfx::getCaps();
-    constexpr std::uint32_t volume_caps = BGFX_CAPS_FORMAT_TEXTURE_3D | BGFX_CAPS_FORMAT_TEXTURE_IMAGE_WRITE;
-    const std::uint32_t format_caps = caps->formats[bgfx::TextureFormat::RGBA16F];
-    return (caps->supported & BGFX_CAPS_COMPUTE) != 0 && (format_caps & volume_caps) == volume_caps;
+    return get_render_feature_support().is_available(render_feature::volumetric_fog);
 }
 
 auto fog_pass::get_volumetric_grid(volumetric_fog_quality quality, float aspect) -> volumetric_grid
@@ -645,7 +643,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         gfx::set_uniform(volumetric_.u_fog_grid, grid_uniform);
         gfx::set_uniform(volumetric_.u_fog_rays, rays.data(), std::uint16_t(rays.size()));
         bind_uniforms(shader);
-        bgfx::dispatch(pass.id,
+        gfx::dispatch(pass.id,
                        volumetric_.cull->native_handle(),
                        get_group_count(clusters.x, CULL_GROUP_SIZE),
                        get_group_count(clusters.y, CULL_GROUP_SIZE),
@@ -715,7 +713,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         const auto pre_exposure = params.pre_exposure.to_uniform();
         gfx::set_uniform(volumetric_.u_pre_exposure, pre_exposure.data());
         bind_uniforms(shader);
-        bgfx::dispatch(pass.id,
+        gfx::dispatch(pass.id,
                        volumetric_.lighting->native_handle(),
                        get_group_count(grid.width, LIGHTING_GROUP_SIZE),
                        get_group_count(grid.height, LIGHTING_GROUP_SIZE),
@@ -730,7 +728,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         gfx::set_uniform(volumetric_.u_fog_grid, grid_uniform);
         gfx::set_uniform(volumetric_.u_fog_rays, rays.data(), std::uint16_t(rays.size()));
         bind_uniforms(shader);
-        bgfx::dispatch(pass.id,
+        gfx::dispatch(pass.id,
                        volumetric_.integrate->native_handle(),
                        get_group_count(grid.width, INTEGRATE_GROUP_SIZE),
                        get_group_count(grid.height, INTEGRATE_GROUP_SIZE),

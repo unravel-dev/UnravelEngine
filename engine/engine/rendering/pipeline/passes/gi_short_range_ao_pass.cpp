@@ -140,7 +140,7 @@ auto gi_short_range_ao_pass::run_search(gfx::render_view& rview, const run_param
                      gi_pass::make_settings_uniform(gather.settings, gather.is_being_edited).data());
     set_short_range_ao_uniform(params, false);
     const auto search_size = get_search_size(size, params.layout.downsample_factor);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    search_program_->native_handle(),
                    divide_round_up(search_size.width, group_edge),
                    divide_round_up(search_size.height, group_edge),
@@ -184,7 +184,7 @@ void gi_short_range_ao_pass::resolve_screen(const frame_targets& targets, const 
     gfx::set_texture(uniforms_.s_gi_short_range_ao_accumulation, 2, targets.history_write);
     bind_image(3, targets.screen, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
     gfx::set_uniform(uniforms_.u_gi_view, params.view);
-    bgfx::dispatch(pass.id,
+    gfx::dispatch(pass.id,
                    screen_program_->native_handle(),
                    divide_round_up(size.width, group_edge),
                    divide_round_up(size.height, group_edge),

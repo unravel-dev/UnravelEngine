@@ -246,7 +246,7 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
         // Dispatch compute shader
         uint32_t num_groups_x = (mip_width + 7) / 8;
         uint32_t num_groups_y = (mip_height + 7) / 8;
-        bgfx::dispatch(pass.id, blur_compute_program_.program->native_handle(), num_groups_x, num_groups_y, 1);
+        gfx::dispatch(pass.id, blur_compute_program_.program->native_handle(), num_groups_x, num_groups_y, 1);
 
         blur_compute_program_.program->end();
     }
@@ -320,7 +320,7 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
             settings.spatial_denoise.luma_sigma};
         gfx::set_uniform(spatial_denoise_compute_program_.u_denoise_params, denoise_params);
 
-        bgfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), gx, gy, 1);
+        gfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), gx, gy, 1);
 
         spatial_denoise_compute_program_.program->end();
 

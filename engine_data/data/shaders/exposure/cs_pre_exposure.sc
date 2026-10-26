@@ -6,9 +6,11 @@
  * adapted exposure and the average local exposure the last frame left in AUTO_EXPOSURE, clamped to the
  * pre-exposure range; the GPU's share is that over the manual exposure. Without auto exposure the input is a white texture: share 1.
  *
- * Output (i_pre_exposure, the view's environment SH, read and written in place at PRE_EXPOSURE_GPU_TEXEL,
- * after the nine coefficients the irradiance pass writes later in the frame): x = share, y = 1 / share,
- * z = share / the last frame's share, w = the last frame's share.
+ * Output (i_pre_exposure, the view's environment SH, written at PRE_EXPOSURE_GPU_TEXEL, after the nine
+ * coefficients the irradiance pass writes later in the frame): x = share, y = 1 / share,
+ * z = share / the last frame's share, w = the last frame's share. The last frame's texel comes from a
+ * copy (s_previous_pre_exposure), so the SH is only written: a read-write image of a four-channel
+ * float format is optional on D3D11 feature level 11_0 and on some Vulkan devices.
  */
 
 #include "bgfx_compute.sh"
@@ -17,7 +19,10 @@
 SAMPLER2D(s_exposure, 0);
 // Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
 // a program declares, so an image named like a sampler is rebound to that sampler's stage.
-IMAGE2D_RW(i_pre_exposure, rgba32f, 1);
+IMAGE2D_WO(i_pre_exposure, rgba32f, 1);
+/// The texel PRE_EXPOSURE_GPU_TEXEL of the environment SH as the last frame left it, copied out before this
+/// dispatch.
+SAMPLER2D(s_previous_pre_exposure, 2);
 
 /// x = the manual exposure (the CPU's share), y / z = the range the whole pre-exposure is clamped to
 /// (pre_exposure_state::min_value / max_value).
@@ -46,7 +51,7 @@ void main()
 	float manual = max(u_manual_exposure, u_min_pre_exposure);
 	float pre_exposure = clamp(manual * adapted, u_min_pre_exposure, u_max_pre_exposure);
 	float share = pre_exposure / manual;
-	float previous = imageLoad(i_pre_exposure, ivec2(PRE_EXPOSURE_GPU_TEXEL, 0)).x;
+	float previous = texelFetch(s_previous_pre_exposure, ivec2(0, 0), 0).x;
 	if(!(previous > 0.0 && previous < MAX_VALID_EXPOSURE))
 	{
 		previous = share;
