@@ -4167,6 +4167,13 @@ void deferred::run_gi_surface_cache(const camera& camera,
     }
     if(is_updating_camera)
     {
+        const auto& scene_stats = gi_surface_cache_pass_.get_scene().get_stats();
+        stats_.gi_cards = scene_stats.cards;
+        stats_.gi_captures = scene_stats.captures;
+        stats_.gi_material_changes = scene_stats.material_changes;
+        stats_.gi_direct_dirty_pages = scene_stats.direct_dirty_pages;
+        stats_.gi_pages_used = scene_stats.pages_used;
+        stats_.gi_direct_invalidated = scene_stats.direct_invalidated;
         capture_gi_cards(camera, gi_scene);
         gi_surface_cache_pass_.copy_captures();
     }

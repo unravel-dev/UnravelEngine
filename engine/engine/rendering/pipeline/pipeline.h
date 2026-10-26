@@ -90,6 +90,15 @@ struct pipeline_stats
     /// Of the rendered maps, the spot and point lights' that started from their static copy: only the casters that
     /// move were drawn.
     uint32_t shadow_maps_restored = 0;
+    /// The GI surface cache this frame (the camera that updated it): its cards, the pages it captured, the placements
+    /// whose material changed, and the resident pages whose direct lighting is due.
+    uint32_t gi_cards = 0;
+    uint32_t gi_captures = 0;
+    uint32_t gi_material_changes = 0;
+    uint32_t gi_direct_dirty_pages = 0;
+    /// The GI pages resident, and those this frame's lighting changes (a light, an occluder) marked for relighting.
+    uint32_t gi_pages_used = 0;
+    uint32_t gi_direct_invalidated = 0;
     /// Particle emitters: enabled in the scene, simulated this frame (the others are frozen by
     /// renderer-based culling), and drawn by this camera.
     uint32_t active_particle_emitters = 0;

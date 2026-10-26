@@ -1651,6 +1651,12 @@ void pipeline_stats::add_stats(const pipeline_stats& stats)
     shadow_maps_rendered += stats.shadow_maps_rendered;
     shadow_maps_reused += stats.shadow_maps_reused;
     shadow_maps_restored += stats.shadow_maps_restored;
+    gi_cards += stats.gi_cards;
+    gi_captures += stats.gi_captures;
+    gi_material_changes += stats.gi_material_changes;
+    gi_direct_dirty_pages += stats.gi_direct_dirty_pages;
+    gi_pages_used += stats.gi_pages_used;
+    gi_direct_invalidated += stats.gi_direct_invalidated;
     // Every camera of a scene counts the same emitters as active and simulated: kept, not summed.
     active_particle_emitters = (std::max)(active_particle_emitters, stats.active_particle_emitters);
     simulated_particle_emitters = (std::max)(simulated_particle_emitters, stats.simulated_particle_emitters);
