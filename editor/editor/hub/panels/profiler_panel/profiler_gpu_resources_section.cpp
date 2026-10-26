@@ -173,13 +173,9 @@ void draw_device_summary()
     ImGui::PopStyleColor();
     const auto& support = get_render_feature_support();
     ImGui::PushStyleColor(ImGuiCol_Text, usage_medium_color);
-    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
+    for(const auto feature : support.get_unavailable_features())
     {
-        const std::string hint = support.get_hint(static_cast<render_feature>(index));
-        if(!hint.empty())
-        {
-            ImGui::TextWrapped("%s", hint.c_str());
-        }
+        ImGui::TextWrapped("%s", support.get_hint(feature).c_str());
     }
     ImGui::PopStyleColor();
 }

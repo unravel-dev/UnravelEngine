@@ -239,20 +239,15 @@ auto graphics_status_json() -> std::string
     const auto& caps = gfx::get_device_caps();
     const auto& support = get_render_feature_support();
     std::string unavailable;
-    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
+    for(const auto feature : support.get_unavailable_features())
     {
-        const auto feature = static_cast<render_feature>(index);
         const auto& status = support.get_status(feature);
-        if(status.is_available)
-        {
-            continue;
-        }
         const auto& needs = get_render_feature_requirements(feature);
         unavailable += fmt::format(R"({}{{"feature":{},"reason":{},"fallback":{}}})",
                                    unavailable.empty() ? "" : ",",
                                    make_json_string(needs.name),
                                    make_json_string(status.reason),
-                                   make_json_string(needs.fallback));
+                                   make_json_string(support.get_fallback(feature)));
     }
     return fmt::format(R"({{"backend":{},"vendor":{},"device_id":{},"compute_bindings":{},"simulated":{},"unavailable":[{}]}})",
                        make_json_string(bgfx::getRendererName(caps.renderer)),

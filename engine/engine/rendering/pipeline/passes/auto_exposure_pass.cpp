@@ -55,17 +55,11 @@ constexpr std::uint32_t metering_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAM
 /// Pre-exposure values outside this range are treated as invalid input to the histogram.
 constexpr float min_valid_pre_exposure = 1e-12f;
 
-/// The stage cs_luminance_histogram.sc declares s_pre_exposure at (PRE_EXPOSURE_STAGE): below 8, the compute
-/// bindings of D3D11 feature level 11_0.
-constexpr std::uint8_t histogram_pre_exposure_stage = 3;
 /// One-texel copies of what the average and the pre-exposure read from last frame, so they only write
 /// AUTO_EXPOSURE and the environment SH: read-write images of four-channel float formats are optional on
 /// D3D11 feature level 11_0 and on some Vulkan devices.
 constexpr const char* previous_exposure_key = "AUTO_EXPOSURE_PREVIOUS";
 constexpr const char* previous_pre_exposure_key = "PRE_EXPOSURE_PREVIOUS";
-/// The stages cs_histogram_average.sc and cs_pre_exposure.sc declare the copies at.
-constexpr std::uint8_t average_previous_exposure_stage = 5;
-constexpr std::uint8_t previous_pre_exposure_stage = 2;
 
 /// A one-texel copy target of the value a compute pass carries from frame to frame.
 auto acquire_previous_texel(gfx::render_view& rview, const char* key) -> const gfx::texture::ptr&
@@ -288,7 +282,7 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
     histogram_program_.program->begin();
 
     gfx::set_texture(histogram_program_.s_hdr_input, 0, params.input->get_texture(), metering_sampler_flags);
-    params.pre_exposure.bind(histogram_pre_exposure_stage);
+    params.pre_exposure.bind(stages::histogram_pre_exposure);
 
     bgfx::setBuffer(1, histogram_buffer_, bgfx::Access::ReadWrite);
     bgfx::setImage(2, log_lum_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
@@ -451,7 +445,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
                      curve_tex ? curve_tex : default_textures::get().white_texture(),
                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     gfx::set_texture(average_program_.s_previous_exposure,
-                     average_previous_exposure_stage,
+                     stages::average_previous_exposure,
                      previous_tex,
                      local_point_clamp);
 
@@ -614,7 +608,7 @@ void auto_exposure_pass::update_gpu_pre_exposure(gfx::render_view& rview,
     gfx::set_uniform(pre_exposure_program_.u_pre_exposure_params, params);
     gfx::set_texture(pre_exposure_program_.s_exposure, 0, input);
     gfx::set_texture(pre_exposure_program_.s_previous_pre_exposure,
-                     previous_pre_exposure_stage,
+                     stages::previous_pre_exposure,
                      previous_tex,
                      local_point_clamp);
     bgfx::setImage(1, environment_sh->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);

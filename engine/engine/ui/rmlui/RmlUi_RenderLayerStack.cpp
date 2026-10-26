@@ -8,29 +8,17 @@
 #include <logging/logging.h>
 #include <string_utils/utils.h>
 #include <graphics/render_pass.h>
-#include <base/platform/config.hpp>
 #include <engine/rendering/render_feature_support.h>
-
-// Samples per pixel of the UI layers: smoother edges, especially under transforms. bgfx stores every
-// sample of a multisampled target and resolves it in a separate copy, so on a phone the full-screen
-// layer costs more memory traffic than the smoother edges are worth.
-#ifndef RMLUI_NUM_MSAA_SAMPLES
-#if UNRAVEL_PLATFORM_ANDROID
-#define RMLUI_NUM_MSAA_SAMPLES 1
-#else
-#define RMLUI_NUM_MSAA_SAMPLES 2
-#endif
-#endif
 
 namespace unravel
 {
 namespace
 {
-/// The samples per pixel the UI layers render with: RMLUI_NUM_MSAA_SAMPLES where the device multisamples the
+/// The samples per pixel the UI layers render with: UI_LAYER_MSAA_SAMPLES where the device multisamples the
 /// layers' formats, else one.
 auto get_layer_samples() -> int
 {
-    return get_render_feature_support().is_available(render_feature::ui_msaa) ? RMLUI_NUM_MSAA_SAMPLES : 1;
+    return get_render_feature_support().is_available(render_feature::ui_msaa) ? UI_LAYER_MSAA_SAMPLES : 1;
 }
 
 /// The render target flags for @p samples per pixel. The MSAA modes are values of one field, of which

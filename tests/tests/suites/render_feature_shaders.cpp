@@ -13,16 +13,20 @@
  *   - its highest binding stage plus one is within the feature's compute bindings;
  *   - no storage image binds at stage 8 or above (OpenGL has image units 0-7);
  *   - every storage image format, dimension and access is one the feature lists;
- *   - every shader prefix of the table matches a shader.
+ *   - every shader prefix of the table matches a shader;
+ *   - the stages a pass binds textures at by number are the ones the shaders declare them at.
  * A pass that binds a new stage or writes a new format then fails here instead of breaking a device that lacks
  * it.
  */
 
 #include "../tests.h"
 
+#include <engine/rendering/pipeline/passes/auto_exposure_pass.h>
 #include <engine/rendering/render_feature_support.h>
 
 #include <bimg/bimg.h>
+
+#include <filesystem/filesystem.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -34,7 +38,6 @@
 #include <vector>
 
 using namespace unravel;
-namespace fs = std::filesystem;
 
 namespace
 {
@@ -80,10 +83,17 @@ struct shader_image
     bool is_read_only{};
 };
 
+struct shader_sampler
+{
+    std::string name;
+    int stage{};
+};
+
 struct shader_bindings
 {
     int max_stage{-1};
     std::vector<shader_image> images;
+    std::vector<shader_sampler> samplers;
 };
 
 auto read_file(const fs::path& path) -> std::string
@@ -130,6 +140,10 @@ auto parse_spirv_bindings(const std::string& data) -> shader_bindings
         }
         const int stage = int(reg_index) - SPIRV_BIND_SHIFT;
         result.max_stage = std::max(result.max_stage, stage);
+        if(is_sampler)
+        {
+            result.samplers.push_back({name, stage});
+        }
         if(is_storage && reg_count == DESCRIPTOR_STORAGE_IMAGE)
         {
             result.images.push_back({std::move(name),
@@ -142,18 +156,37 @@ auto parse_spirv_bindings(const std::string& data) -> shader_bindings
     return result;
 }
 
-/// Whether the GLSL text declares image @p name read and written (no readonly / writeonly qualifier).
-auto is_read_write_in_glsl(const std::string& glsl, const std::string& name) -> bool
+/// How the shader uses image @p name, from the GLSL text: the compiler marks an image the code only reads readonly
+/// and one it only writes writeonly, whatever the source declared.
+auto get_glsl_image_access(const std::string& glsl, const std::string& name) -> image_access
 {
     const std::regex declaration("layout\\s*\\([^)]*\\)\\s*uniform\\s+((?:\\w+\\s+)*)\\w*image\\w+\\s+" + name +
                                  "\\s*;");
     std::smatch match;
     if(!std::regex_search(glsl, match, declaration))
     {
-        return false;
+        return image_access::write;
     }
     const std::string qualifiers = match[1].str();
-    return qualifiers.find("readonly") == std::string::npos && qualifiers.find("writeonly") == std::string::npos;
+    if(qualifiers.find("writeonly") != std::string::npos)
+    {
+        return image_access::write;
+    }
+    return qualifiers.find("readonly") != std::string::npos ? image_access::read : image_access::read_write;
+}
+
+auto get_access_text(image_access access) -> const char*
+{
+    switch(access)
+    {
+        case image_access::read:
+            return ", read";
+        case image_access::read_write:
+            return ", read-write";
+        case image_access::write:
+        default:
+            return "";
+    }
 }
 
 auto get_format_name(bgfx::TextureFormat::Enum format) -> std::string
@@ -197,14 +230,19 @@ auto is_dimension_covered(gfx::texture_dimension listed, std::uint8_t dimension)
     }
 }
 
-auto is_image_listed(const render_feature_requirements& needs, const shader_image& image, bool is_read_write) -> bool
+/// Whether a listed access covers what the shader does: read-write covers both, the others only themselves.
+auto is_access_covered(image_access listed, image_access used) -> bool
+{
+    return listed == used || listed == image_access::read_write;
+}
+
+auto is_image_listed(const render_feature_requirements& needs, const shader_image& image, image_access access) -> bool
 {
     return std::any_of(needs.images.begin(),
                        needs.images.end(),
                        [&](const image_need& need)
                        {
-                           const bool access_matches = !is_read_write || need.access == image_access::read_write;
-                           return need.format == image.format && access_matches &&
+                           return need.format == image.format && is_access_covered(need.access, access) &&
                                   is_dimension_covered(need.dimension, image.dimension);
                        });
 }
@@ -241,10 +279,13 @@ void check_shader(const std::string& shader,
     {
         check(image.stage <= MAX_IMAGE_STAGE,
               shader + ": image " + image.name + " binds at stage " + std::to_string(image.stage) + ", below 8");
-        const bool is_read_write = !image.is_read_only && is_read_write_in_glsl(glsl, image.name);
-        check(is_image_listed(needs, image, is_read_write),
-              shader + ": image " + image.name + " (" + get_format_name(image.format) +
-                  (is_read_write ? ", read-write" : "") + ") is listed by " + needs.name);
+        // A read-only declaration is a texture on D3D, and on Vulkan a storage image that needs the format's storage
+        // support, like a written one.
+        const image_access access =
+            image.is_read_only ? image_access::write : get_glsl_image_access(glsl, image.name);
+        check(is_image_listed(needs, image, access),
+              shader + ": image " + image.name + " (" + get_format_name(image.format) + get_access_text(access) +
+                  ") is listed by " + needs.name);
     }
 }
 
@@ -290,11 +331,55 @@ void test_compiled_compute_shaders()
 #endif
 }
 
+/// A texture a pass binds by stage number, and the shader that declares it.
+struct hand_bound_sampler
+{
+    const char* shader;
+    const char* name;
+    int expected_stage;
+};
+
+void test_hand_bound_stages()
+{
+    std::printf("the stages passes bind textures at by number match the compiled shaders\n");
+#if !defined(ENGINE_DATA_DIR)
+    std::printf("  SKIP: the engine_data location is not configured\n");
+#else
+    using stages = auto_exposure_pass::stages;
+    const hand_bound_sampler samplers[] = {
+        {"exposure/cs_luminance_histogram", "s_pre_exposure", stages::histogram_pre_exposure},
+        {"exposure/cs_histogram_average", "s_previous_exposure", stages::average_previous_exposure},
+        {"exposure/cs_pre_exposure", "s_previous_pre_exposure", stages::previous_pre_exposure},
+    };
+    const fs::path compiled_dir = fs::path(ENGINE_DATA_DIR) / "compiled" / "shaders";
+    for(const auto& sampler : samplers)
+    {
+        const fs::path compiled = compiled_dir / (std::string(sampler.shader) + ".sc.asset.spirv");
+        const auto bindings = parse_spirv_bindings(read_file(compiled));
+        const auto found = std::find_if(bindings.samplers.begin(),
+                                        bindings.samplers.end(),
+                                        [&](const shader_sampler& declared)
+                                        {
+                                            return declared.name == sampler.name;
+                                        });
+        const std::string what = std::string(sampler.shader) + " declares " + sampler.name;
+        check(found != bindings.samplers.end(), what);
+        if(found != bindings.samplers.end())
+        {
+            check(found->stage == sampler.expected_stage,
+                  what + " at stage " + std::to_string(found->stage) + ", where the pass binds it (" +
+                      std::to_string(sampler.expected_stage) + ")");
+        }
+    }
+#endif
+}
+
 auto run_render_feature_shaders_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
     g_failures = 0;
     test_compiled_compute_shaders();
+    test_hand_bound_stages();
     std::printf("\nrender feature shaders: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

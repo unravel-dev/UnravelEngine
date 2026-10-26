@@ -42,8 +42,8 @@ struct device_caps
     bool has_image_read_write{};
     /// A blend state per color attachment.
     bool has_blend_independent{};
-    /// More than one window.
-    bool has_swap_chain{};
+    /// Storage buffer reads in vertex shaders. bgfx reports no limit; OpenGL ES 3.1 guarantees none.
+    bool has_vertex_storage_buffers{};
     /// The resources a compute dispatch binds: stages at or above it are not bound.
     std::uint8_t max_compute_bindings{};
     std::uint32_t max_texture_size{};
@@ -55,6 +55,9 @@ struct device_caps
     auto has_format_caps(bgfx::TextureFormat::Enum format, std::uint32_t caps) const -> bool;
     /// Whether a compute shader can write @p format as a storage image of @p dimension.
     auto can_write_image(bgfx::TextureFormat::Enum format, texture_dimension dimension = texture_dimension::two_d) const
+        -> bool;
+    /// Whether a compute shader can load @p format from a storage image of @p dimension.
+    auto can_read_image(bgfx::TextureFormat::Enum format, texture_dimension dimension = texture_dimension::two_d) const
         -> bool;
     /// Whether a compute shader can read and write @p format through one image binding.
     auto can_read_write_image(bgfx::TextureFormat::Enum format) const -> bool;
@@ -81,6 +84,7 @@ struct device_caps_mask
     bool drops_typed_image_loads{};
     /// The storage formats Vulkan offers only with shaderStorageImageExtendedFormats lose image access.
     bool drops_extended_storage_formats{};
+    bool drops_vertex_storage_buffers{};
     /// The compute bindings of the simulated device; 0 keeps the real count.
     std::uint8_t max_compute_bindings{};
     /// BGFX_CAPS_FORMAT_TEXTURE_* removed from single formats.
@@ -91,8 +95,9 @@ struct device_caps_mask
 
 /**
  * @brief Reads a --gfx-disable value: comma-separated names among compute, draw_indirect, dispatch_indirect,
- * image_rw, blend_independent, typed_image_loads, extended_storage_formats, bindings8, and
- * format:<name>:<write|read|render|msaa|mips|all> (for example format:rg11b10f:write).
+ * image_rw, blend_independent, typed_image_loads, extended_storage_formats, vertex_storage_buffers,
+ * bindings<count> (for example bindings8) and format:<name>:<write|read|render|msaa|mips|all> (for example
+ * format:rg11b10f:write).
  * @param unknown_names Receives each name that matched nothing.
  */
 auto parse_device_caps_mask(hpp::string_view text, std::vector<std::string>& unknown_names) -> device_caps_mask;

@@ -3,15 +3,26 @@
 #include <engine/engine_export.h>
 #include <engine/rendering/feature_limits.h>
 
+#include <base/platform/config.hpp>
 #include <graphics/device_caps.h>
 
 #include <array>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace unravel
 {
+
+/// Samples per pixel of the UI layers where the device multisamples them (render_feature::ui_msaa): smoother edges,
+/// especially under transforms. bgfx stores every sample of a multisampled target and resolves it in a separate copy,
+/// so on a phone the full-screen layer costs more memory traffic than the smoother edges are worth.
+#if UNRAVEL_PLATFORM_ANDROID
+constexpr std::uint8_t UI_LAYER_MSAA_SAMPLES = 1;
+#else
+constexpr std::uint8_t UI_LAYER_MSAA_SAMPLES = 2;
+#endif
 
 /// A rendering feature whose GPU needs the device may not meet. Listed after the features they depend on.
 enum class render_feature : std::uint8_t
@@ -41,11 +52,14 @@ enum class render_feature : std::uint8_t
     count
 };
 
-/// How a compute shader of a feature uses a storage image.
+/// How a compute shader of a feature uses a storage image (a read-only image declared IMAGE*_RO is a texture
+/// binding on D3D and needs nothing).
 enum class image_access : std::uint8_t
 {
-    /// Written only (or read only, which needs the same format support).
+    /// Written only.
     write,
+    /// Loaded only, through a read-write binding: a typed UAV load on D3D.
+    read,
     /// Read and written through one binding.
     read_write,
 };
@@ -78,10 +92,14 @@ struct render_feature_requirements
     const char* name{};
     /// What renders instead when the feature is unavailable, as a sentence.
     const char* fallback{};
+    /// The feature @ref fallback names, if any (render_feature::count for none): while it is unavailable too, its
+    /// own fallback is what renders.
+    render_feature fallback_feature{render_feature::count};
     bool needs_compute{};
     bool needs_draw_indirect{};
     bool needs_dispatch_indirect{};
     bool needs_blend_independent{};
+    bool needs_vertex_storage_buffers{};
     /// The highest binding stage of the feature's compute shaders, plus one.
     std::uint8_t compute_bindings{};
     std::span<const image_need> images;
@@ -120,12 +138,18 @@ public:
     /// The feature limits the device allows: what the project's limits are ANDed with.
     auto get_device_limits() const -> feature_limits;
 
+    /// The features the device does not run, in table order.
+    auto get_unavailable_features() const -> std::vector<render_feature>;
+
     /// One line per unavailable feature: its name, the reason and its fallback.
     auto describe_unavailable() const -> std::string;
 
     /// What the editor shows about @p feature on this device: its name, the reason and its fallback as sentences,
     /// or empty when the device runs it.
     auto get_hint(render_feature feature) const -> std::string;
+
+    /// What renders instead of @p feature on this device, as a sentence.
+    auto get_fallback(render_feature feature) const -> const char*;
 
 private:
     std::array<render_feature_status, static_cast<std::size_t>(render_feature::count)> statuses_{};

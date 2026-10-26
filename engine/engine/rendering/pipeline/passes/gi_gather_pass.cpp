@@ -8,6 +8,7 @@
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
 
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <logging/logging.h>
@@ -77,7 +78,7 @@ auto get_probe_border_resolution(uint32_t trace_resolution) -> uint32_t
 /// which the bordered probe atlas of a @p view_size view, adaptive rows included, fits the largest texture.
 auto clamp_probe_downsample(uint32_t downsample, const usize32_t& view_size, uint32_t trace_resolution) -> uint32_t
 {
-    const uint32_t max_texture_size = bgfx::getCaps()->limits.maxTextureSize;
+    const uint32_t max_texture_size = gfx::get_device_caps().max_texture_size;
     const uint32_t probe_resolution = get_probe_border_resolution(trace_resolution);
     const auto atlas_height =
         view_size.height + uint32_t(float(view_size.height) * float(GI_ADAPTIVE_ALLOCATION_FRACTION));

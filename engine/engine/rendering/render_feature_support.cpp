@@ -88,10 +88,8 @@ constexpr render_feature PARTICLES_INDIRECT_DEPENDS[] = {render_feature::gpu_par
 
 constexpr render_target_need SOFT_SHADOW_TARGETS[] = {{bgfx::TextureFormat::RG32F}, {bgfx::TextureFormat::R32F}};
 
-/// RmlUi layers render with two samples per pixel on desktop.
-constexpr std::uint8_t UI_MSAA_SAMPLES = 2;
-constexpr render_target_need UI_MSAA_TARGETS[] = {{bgfx::TextureFormat::RGBA8, UI_MSAA_SAMPLES},
-                                                  {bgfx::TextureFormat::D24S8, UI_MSAA_SAMPLES}};
+constexpr render_target_need UI_MSAA_TARGETS[] = {{bgfx::TextureFormat::RGBA8, UI_LAYER_MSAA_SAMPLES},
+                                                  {bgfx::TextureFormat::D24S8, UI_LAYER_MSAA_SAMPLES}};
 
 constexpr image_need TEMPORAL_PROBE_IMAGES[] = {
     {bgfx::TextureFormat::R32F},
@@ -142,6 +140,7 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
      .shader_prefixes = SSIL_SHADERS},
     {.name = "Ground truth ambient occlusion",
      .fallback = "ASSAO renders the ambient occlusion instead.",
+     .fallback_feature = render_feature::assao,
      .needs_compute = true,
      .compute_bindings = 6,
      .images = GTAO_IMAGES,
@@ -202,7 +201,10 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
     {.name = "Particle reactive mask",
      .fallback = "Temporal anti-aliasing treats particles like the rest of the scene.",
      .needs_blend_independent = true},
-    {.name = "Skinned mesh batching", .fallback = "Skinned meshes draw one by one.", .needs_compute = true},
+    {.name = "Skinned mesh batching",
+     .fallback = "Skinned meshes draw one by one.",
+     .needs_compute = true,
+     .needs_vertex_storage_buffers = true},
     {.name = "Soft shadows", .fallback = "Soft shadows filter with PCF.", .render_targets = SOFT_SHADOW_TARGETS},
     {.name = "UI multisampling",
      .fallback = "UI layers render without multisampling.",
@@ -264,7 +266,12 @@ auto find_missing_image(const gfx::device_caps& caps, const render_feature_requi
             return "This GPU cannot read and write " + get_texture_format_name(image.format) +
                    " images through one compute binding.";
         }
-        if(!caps.can_write_image(image.format, image.dimension))
+        if(image.access == image_access::read && !caps.can_read_image(image.format, image.dimension))
+        {
+            return "This GPU cannot load " + get_texture_format_name(image.format) + " " +
+                   get_texture_dimension_text(image.dimension) + "images in compute shaders.";
+        }
+        if(image.access != image_access::read && !caps.can_write_image(image.format, image.dimension))
         {
             return "This GPU cannot write " + get_texture_format_name(image.format) + " " +
                    get_texture_dimension_text(image.dimension) + "images from compute shaders.";
@@ -307,6 +314,10 @@ auto find_missing_capability(const gfx::device_caps& caps, const render_feature_
     if(needs.needs_blend_independent && !caps.has_blend_independent)
     {
         return "This GPU cannot blend each render target on its own.";
+    }
+    if(needs.needs_vertex_storage_buffers && !caps.has_vertex_storage_buffers)
+    {
+        return "This GPU cannot read storage buffers in vertex shaders.";
     }
     if(needs.compute_bindings > caps.max_compute_bindings)
     {
@@ -380,16 +391,26 @@ auto render_feature_support::get_device_limits() const -> feature_limits
     return limits;
 }
 
+auto render_feature_support::get_unavailable_features() const -> std::vector<render_feature>
+{
+    std::vector<render_feature> features;
+    for(std::size_t index = 0; index < RENDER_FEATURE_COUNT; ++index)
+    {
+        const auto feature = static_cast<render_feature>(index);
+        if(!is_available(feature))
+        {
+            features.push_back(feature);
+        }
+    }
+    return features;
+}
+
 auto render_feature_support::describe_unavailable() const -> std::string
 {
     std::string text;
-    for(std::size_t index = 0; index < RENDER_FEATURE_COUNT; ++index)
+    for(const auto feature : get_unavailable_features())
     {
-        const std::string hint = get_hint(static_cast<render_feature>(index));
-        if(!hint.empty())
-        {
-            text += hint + "\n";
-        }
+        text += get_hint(feature) + "\n";
     }
     return text;
 }
@@ -402,7 +423,15 @@ auto render_feature_support::get_hint(render_feature feature) const -> std::stri
         return {};
     }
     const auto& needs = get_render_feature_requirements(feature);
-    return std::string(needs.name) + " is unavailable on this device. " + status.reason + " " + needs.fallback;
+    return std::string(needs.name) + " is unavailable on this device. " + status.reason + " " + get_fallback(feature);
+}
+
+auto render_feature_support::get_fallback(render_feature feature) const -> const char*
+{
+    const auto& needs = get_render_feature_requirements(feature);
+    const bool is_fallback_unavailable =
+        needs.fallback_feature != render_feature::count && !is_available(needs.fallback_feature);
+    return is_fallback_unavailable ? get_fallback(needs.fallback_feature) : needs.fallback;
 }
 
 auto get_render_feature_support() -> const render_feature_support&

@@ -1,4 +1,5 @@
 #include "format.h"
+#include "device_caps.h"
 
 namespace gfx
 {
@@ -289,8 +290,8 @@ auto get_default_rt_sampler_flags() -> uint64_t
 
 auto is_format_supported(uint16_t flags, bgfx::TextureFormat::Enum format) -> bool
 {
-    const std::uint32_t formatCaps = bgfx::getCaps()->formats[format];
-    return 0 != (formatCaps & flags);
+    // The device snapshot, so a simulated device (--gfx-disable format:...) reaches format selection too.
+    return 0 != (get_device_caps().formats[format] & flags);
 }
 
 auto get_format_info(bgfx::TextureFormat::Enum fmt) -> format_details

@@ -93,9 +93,6 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             gfx::render_pass pass("Prefilter Compute Pass");
             pass.touch();
 
-            // Begin compute program
-            cs_.program->begin();
-
             // Bind input cubemap
             gfx::set_texture(cs_.s_env, 0, input_cube);
 

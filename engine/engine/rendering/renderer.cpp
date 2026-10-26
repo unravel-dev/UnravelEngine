@@ -158,8 +158,9 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
                                      "",
                                      "Render as a device without the named graphics features would, as a "
                                      "comma-separated list (compute, draw_indirect, dispatch_indirect, image_rw, "
-                                     "blend_independent, typed_image_loads, extended_storage_formats, bindings8, "
-                                     "format:rg11b10f:write).");
+                                     "blend_independent, typed_image_loads, extended_storage_formats, "
+                                     "vertex_storage_buffers, bindings<count> such as bindings8, "
+                                     "format:<name>:<write|read|render|msaa|mips|all> such as format:rg11b10f:write).");
     parser.set_optional<std::string>("W",
                                      "window",
                                      "",
@@ -566,6 +567,9 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         {
             os::message_box::show(os::message_box::kind::error, window.get_title(), requirements_message);
         }
+        // The destructor skips the shutdown of a renderer that never finished init, and the
+        // backend still presents to the main window.
+        gfx::shutdown();
         return false;
     }
     resolve_render_feature_support();

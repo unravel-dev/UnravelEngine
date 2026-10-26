@@ -913,13 +913,6 @@ auto get_half_texel() -> float
     return half_texel;
 }
 
-auto is_supported(uint64_t flag) -> bool
-{
-    const auto caps = bgfx::getCaps();
-    bool supported = 0 != (caps->supported & flag);
-    return supported;
-}
-
 bool check_avail_transient_buffers(uint32_t _numVertices,
                                    const bgfx::VertexLayout& _layout,
                                    uint32_t _numIndices,

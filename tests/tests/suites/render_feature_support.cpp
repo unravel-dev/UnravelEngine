@@ -11,6 +11,7 @@
  *   - a Vulkan device without multi-draw indirect (the S21) loses only the GPU particle culling;
  *   - a device without Vulkan's extended storage formats loses the features that write them;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
+ *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one;
  *   - a feature whose dependency is unavailable is unavailable, and says why;
  *   - the --gfx-disable names parse into the mask they describe;
  *   - every requirement entry has a name and a fallback sentence.
@@ -60,7 +61,7 @@ auto make_desktop_caps() -> gfx::device_caps
     caps.has_dispatch_indirect = true;
     caps.has_image_read_write = true;
     caps.has_blend_independent = true;
-    caps.has_swap_chain = true;
+    caps.has_vertex_storage_buffers = true;
     caps.max_compute_bindings = ALL_COMPUTE_BINDINGS;
     caps.max_texture_size = 16384;
     caps.max_frame_buffer_attachments = DESKTOP_ATTACHMENTS;
@@ -191,6 +192,22 @@ void test_no_compute()
     check(!limits.global_illumination && !limits.screen_space_reflections && !limits.ambient_occlusion,
           "no compute: GI, SSR and AO are off");
     check(!gfx::get_missing_minimum_requirements(caps).empty(), "no compute: the minimum requirements fail");
+    check(hpp::string_view(support.get_fallback(render_feature::gtao)) ==
+              get_render_feature_requirements(render_feature::assao).fallback,
+          "no compute: GTAO's fallback is ASSAO's, which does not run either");
+}
+
+void test_no_vertex_storage_buffers()
+{
+    std::printf("a device without vertex storage buffers loses only the skinned mesh batching\n");
+    gfx::device_caps_mask mask;
+    mask.drops_vertex_storage_buffers = true;
+    const auto support = render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask));
+    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
+    {
+        const auto feature = static_cast<render_feature>(index);
+        check_available(support, feature, feature != render_feature::skinned_mesh_batching, "no vertex storage");
+    }
 }
 
 void test_dependency_reason()
@@ -211,9 +228,10 @@ void test_mask_parsing()
     std::printf("the --gfx-disable names parse into their mask\n");
     std::vector<std::string> unknown;
     const auto mask = gfx::parse_device_caps_mask(
-        "Compute, draw_indirect,bindings8,format:rg11b10f:write,extended_storage_formats,bogus",
+        "Compute, draw_indirect,bindings8,format:rg11b10f:write,extended_storage_formats,vertex_storage_buffers,bogus",
         unknown);
-    check(mask.drops_compute && mask.drops_draw_indirect && mask.drops_extended_storage_formats,
+    check(mask.drops_compute && mask.drops_draw_indirect && mask.drops_extended_storage_formats &&
+              mask.drops_vertex_storage_buffers,
           "the flag names set their drops");
     check(mask.max_compute_bindings == FEATURE_LEVEL_11_0_BINDINGS, "bindings8 sets eight compute bindings");
     check(mask.dropped_format_caps.size() == 1 && mask.dropped_format_caps[0].first == bgfx::TextureFormat::RG11B10F &&
@@ -262,6 +280,7 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_vulkan_without_multi_draw();
     test_extended_storage_formats();
     test_no_compute();
+    test_no_vertex_storage_buffers();
     test_dependency_reason();
     test_mask_parsing();
     test_limits_intersection();

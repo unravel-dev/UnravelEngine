@@ -38,6 +38,18 @@ enum class exposure_metering_mode : std::uint8_t
 class auto_exposure_pass
 {
 public:
+    /// The sampler stages the exposure compute shaders declare the textures this pass binds by stage at. The suite
+    /// "render feature shaders" checks them against the compiled shaders.
+    struct stages
+    {
+        /// s_pre_exposure of cs_luminance_histogram.sc: below 8, the compute bindings of D3D11 feature level 11_0.
+        static constexpr std::uint8_t histogram_pre_exposure = 3;
+        /// s_previous_exposure of cs_histogram_average.sc.
+        static constexpr std::uint8_t average_previous_exposure = 5;
+        /// s_previous_pre_exposure of cs_pre_exposure.sc.
+        static constexpr std::uint8_t previous_pre_exposure = 2;
+    };
+
     auto_exposure_pass() = default;
     ~auto_exposure_pass()
     {

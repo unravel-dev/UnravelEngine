@@ -26,23 +26,6 @@ auto make_device_hint(render_feature feature) -> entt::property_predicate_t<std:
             return get_render_feature_support().get_hint(feature);
         });
 }
-
-/// The ambient occlusion row's hint: GTAO's when the device does not run it, and ASSAO's when neither runs.
-auto make_ambient_occlusion_device_hint() -> entt::property_predicate_t<std::string>
-{
-    return entt::property_predicate<std::string>(
-        [](const entt::meta_any&) -> std::string
-        {
-            const auto& support = get_render_feature_support();
-            std::string hint = support.get_hint(render_feature::gtao);
-            const std::string assao_hint = support.get_hint(render_feature::assao);
-            if(!assao_hint.empty())
-            {
-                hint += (hint.empty() ? "" : " ") + assao_hint;
-            }
-            return hint;
-        });
-}
 } // namespace
 
 REFLECT_INLINE(settings::app_settings)
@@ -476,7 +459,7 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"name", "ambient_occlusion"},
             entt::attribute{"pretty_name", "Ambient Occlusion"},
             entt::attribute{"tooltip", "Allow screen space ambient occlusion (GTAO and ASSAO)."},
-            entt::attribute{"hint", make_ambient_occlusion_device_hint()},
+            entt::attribute{"hint", make_device_hint(render_feature::gtao)},
         })
         .data<&feature_limits::bloom>("bloom"_hs)
         .custom<entt::attributes>(entt::attributes{

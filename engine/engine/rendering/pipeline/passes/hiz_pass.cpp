@@ -60,9 +60,6 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
     {
         gfx::render_pass pass("Hi-Z/Generate Compute Pass");
 
-        // Begin the compute program
-        hiz_generate_.program->begin();
-
         // Set input depth texture using gfx utilities
         gfx::set_texture(hiz_generate_.s_depth, 0, depth_buffer);
 
@@ -85,9 +82,6 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
     if (num_mips > 1)
     {
         gfx::render_pass pass("Hi-Z/Downsample Compute Pass");
-        
-        // Begin the downsampling compute program once for all mips
-        hiz_downsample_.program->begin();
 
         for (uint32_t mip = 1; mip < num_mips; ++mip)
         {

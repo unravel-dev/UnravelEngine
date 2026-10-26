@@ -161,8 +161,6 @@ const std::string& get_current_renderer_filename_extension();
 const std::set<std::string>& get_renderer_platform_supported_filename_extensions();
 bgfx::RendererType::Enum get_renderer_based_on_filename_extension(const std::string& _type);
 
-bool is_supported(uint64_t flag);
-
 bool check_avail_transient_buffers(uint32_t _numVertices,
                                    const bgfx::VertexLayout& _layout,
                                    uint32_t _numIndices,
