@@ -31,18 +31,13 @@ struct dirty_ids
         /// from model_pose: an entity can be an armature node of one model and the owner
         /// of another, and the two refreshes run in parallel. On transform_component.
         model_owner_pose = 3,
-        /// Velocity (motion vector) mover detection: consumed once per render frame by
-        /// model_system's before-render promotion (model_component::record_velocity_state).
-        /// A set bit means the world transform changed since the last consumption, so the
-        /// entity is drawn into the velocity buffer with per-object motion this frame.
-        /// On transform_component.
-        velocity = 4,
-        /// Shadow caster cache invalidation: consumed once per render frame by
-        /// model_system::on_frame_before_render, from BOTH components - the transform says
-        /// where a caster is, the model what it renders as (membership flags and world
-        /// bounds), and no transform change reports the latter. A set bit on a STATIC caster
-        /// retires the cached caster lists (see shadow_caster_revision).
-        shadow_caster = 5,
+        /// Render change tracking: consumed once per render frame by
+        /// model_system::on_frame_before_render, from BOTH components. On the transform it
+        /// is the placement change of the model's render_change_stamps (and the velocity
+        /// buffer's per-object motion); on the model it says its world bounds moved or a
+        /// setter touched it, which retires the cached caster lists for a STATIC caster
+        /// (see shadow_caster_revision).
+        render_change = 4,
     };
 };
 

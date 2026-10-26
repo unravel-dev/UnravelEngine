@@ -6,6 +6,8 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/mesh.h>
 
+#include <base/hash.hpp>
+
 #include <hpp/finally.hpp>
 
 #include <algorithm>
@@ -312,8 +314,9 @@ auto is_same_mapping(const submesh_mapping& lhs, const submesh_mapping& rhs) -> 
  *
  * @param owner_transform The model entity's own transform, or null.
  * @param is_pose_changed Set when the rebuild placed a bone or submesh node elsewhere, or mapped the submeshes
- *        differently, than the outputs it replaced (or @p force). A rebuild of the same pose leaves it false:
- *        animation writes its pose and an IK pass writes the same final one back every frame.
+ *        differently, than the outputs it replaced. A rebuild of the same pose leaves it false, forced or not:
+ *        animation writes its pose and an IK pass writes the same final one back every frame, and setting the same
+ *        model again forces a refresh.
  * @return True when a rebuild ran, false when everything was clean and outputs were kept.
  */
 auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
@@ -354,7 +357,7 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
     thread_local submesh_mapping previous_mapping;
     std::swap(previous_transforms, submesh_pose.transforms);
     std::swap(previous_mapping, submesh_pose.submesh_to_transform_indices);
-    is_pose_changed = force || bone_pose.transforms.size() != bone_count;
+    is_pose_changed = bone_pose.transforms.size() != bone_count;
 
     submesh_pose.clear();
     submesh_pose.reserve(submesh_count);
@@ -683,7 +686,7 @@ void model_component::resolve_pending_default_materials()
     auto& am = engine::context().get_cached<asset_manager>();
     if(model_.apply_default_materials(am, false))
     {
-        touch();
+        touch(render_change::material_aspects);
     }
 }
 
@@ -768,7 +771,7 @@ void model_component::refresh_world_bounds(const mesh& render_mesh, const math::
         {
             if(world_bounds_ != previous_world_bounds)
             {
-                render_dirty_.set(dirty_ids::shadow_caster);
+                render_dirty_.set(dirty_ids::render_change);
             }
         });
 
@@ -1002,6 +1005,8 @@ void model_component::on_create_component(entt::registry& r, entt::entity e)
     component.previous_armature_entities_.clear();
     component.stale_armature_entities_.clear();
     component.armature_rebuild_pending_ = false;
+    // Nor with its change history: to every system it is a new model.
+    component.pending_changes_ = render_change::all;
 }
 
 void model_component::on_destroy_component(entt::registry& r, entt::entity e)
@@ -1020,9 +1025,10 @@ void bump_shadow_caster_revision(entt::registry& registry, entt::entity /*entity
     }
 }
 
-void model_component::touch()
+void model_component::touch(render_change::mask reasons)
 {
     render_dirty_.set();
+    pending_changes_ |= reasons;
     // Membership of the caster set can change here (enabled / static / casts_shadow / a
     // different model), and the walk cannot tell a model that LEFT the set from one that was
     // never in it.
@@ -1050,7 +1056,7 @@ void model_component::set_enabled(bool enabled)
         return;
     }
 
-    touch();
+    touch(render_change::membership);
 
     enabled_ = enabled;
 }
@@ -1062,7 +1068,7 @@ void model_component::set_casts_shadow(bool cast_shadow)
         return;
     }
 
-    touch();
+    touch(render_change::membership);
 
     casts_shadow_ = cast_shadow;
 }
@@ -1074,7 +1080,7 @@ void model_component::set_static(bool is_static)
         return;
     }
 
-    touch();
+    touch(render_change::membership);
 
     static_ = is_static;
 }
@@ -1101,6 +1107,9 @@ auto model_component::get_model() const -> const model&
 
 void model_component::set_model(const model& model)
 {
+    // What the new model draws differently. The editor applies a material instance edit by setting a whole copy of
+    // the model, whose resolved materials start their revisions over, so the stamps cannot rely on those here.
+    const render_change::mask changes = model.get_changes_from(model_);
     const bool is_mesh_changed = model_.get_lod(0).uid() != model.get_lod(0).uid();
     model_ = model;
     if(is_mesh_changed && !armature_entities_.empty())
@@ -1121,14 +1130,15 @@ void model_component::set_model(const model& model)
     captured_proxies_version_ = ~0ULL;
     mark_pose_dirty();
 
-    touch();
+    touch(changes);
 }
 
 void model_component::set_shared_material(const asset_handle<material>& material, uint32_t index)
 {
     model_.set_shared_material(material, index);
 
-    touch();
+    // Another material's revisions may sum the same as the old one's.
+    touch(render_change::material_aspects);
 }
 
 auto model_component::get_material_instance(uint32_t index) const -> const material_instance&
@@ -1140,20 +1150,20 @@ auto model_component::set_material_instance_value(uint32_t index, entt::id_type 
     -> bool
 {
     const bool applied = model_.get_material_instance(index).set_override(property, value);
-    touch();
+    touch(render_change::none);
     return applied;
 }
 
 void model_component::revert_material_instance_value(uint32_t index, entt::id_type property)
 {
     model_.get_material_instance(index).revert(property);
-    touch();
+    touch(render_change::none);
 }
 
 void model_component::revert_material_instance(uint32_t index)
 {
     model_.get_material_instance(index).revert_all();
-    touch();
+    touch(render_change::none);
 }
 
 void model_component::update_material_instances()
@@ -1235,20 +1245,38 @@ auto model_component::has_motion() const -> bool
     return has_motion_;
 }
 
-void model_component::update_shadow_change(uint64_t frame, bool changed)
+void model_component::update_change_stamps(uint64_t frame, render_change::mask changes)
 {
-    // A material edit (a cutout threshold, a cull mode, a texture) changes the shadow without moving the model.
-    const uint64_t materials_revision = model_.get_materials_revision();
-    if(changed || materials_revision != shadow_materials_revision_)
+    changes |= pending_changes_;
+    pending_changes_ = render_change::none;
+    // A mesh that finished loading, or was reloaded in place, changes what the model draws without a setter.
+    std::size_t geometry_key = 0;
+    for(const auto& lod : model_.get_lods())
     {
-        shadow_change_frame_ = frame;
-        shadow_materials_revision_ = materials_revision;
+        utils::hash_combine(geometry_key, lod.version());
     }
+    if(geometry_key != geometry_key_)
+    {
+        geometry_key_ = geometry_key;
+        changes |= render_change::geometry;
+    }
+    // A material edit, or a texture loading or reloading, changes only the aspects it touched
+    // (get_material_property_traits).
+    const auto keys = model_.get_materials_change_keys();
+    for(uint32_t i = 0; i < render_change::count; ++i)
+    {
+        if(keys[i] != materials_change_keys_[i])
+        {
+            changes |= 1u << i;
+        }
+    }
+    materials_change_keys_ = keys;
+    change_stamps_.stamp(changes, frame);
 }
 
-auto model_component::get_shadow_change_frame() const noexcept -> uint64_t
+auto model_component::get_change_stamps() const noexcept -> const render_change_stamps&
 {
-    return shadow_change_frame_;
+    return change_stamps_;
 }
 
 auto model_component::get_prev_world_transform() const -> const math::mat4&
@@ -1308,7 +1336,7 @@ void model_component::set_armature_entities(const std::vector<entt::handle>& ent
     captured_proxies_version_ = ~0ULL;
     mark_pose_dirty();
 
-    touch();
+    touch(render_change::geometry);
 }
 
 void model_component::mark_pose_dirty() noexcept

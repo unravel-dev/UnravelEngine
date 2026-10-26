@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include "gpu_program.h"
+#include "render_change.h"
 #include <engine/assets/asset_handle.h>
 
 #include <graphics/format.h>
@@ -37,6 +38,89 @@ enum class alpha_mode : std::uint32_t
 };
 
 /**
+ * @brief The material properties the renderer reads. Each has one entry in get_material_property_traits: what an
+ * edit of it changes and whether a material instance overrides it per instance. The setters count their edits from
+ * that entry and the reflection takes its "per_instance" attribute from it, so the two cannot disagree.
+ */
+enum class material_property_id : std::uint8_t
+{
+    cull_type,
+    base_color,
+    subsurface_color,
+    emissive_color,
+    emissive_intensity,
+    roughness,
+    metalness,
+    bumpiness,
+    alpha_mode,
+    alpha_cutoff,
+    tiling,
+    dither_threshold,
+    color_map,
+    normal_map,
+    roughness_map,
+    metalness_map,
+    emissive_map,
+    ao_map,
+};
+
+/// What an edit of one material_property_id changes, and how the property is stored.
+struct material_property_traits
+{
+    /// The render_change aspects an edit of the property changes.
+    render_change::mask changes = render_change::none;
+    /// A material instance can override it without a separate draw (material_instance::shares_draw).
+    bool is_per_instance = false;
+};
+
+/// The one table of what each material property changes (see material_property_id).
+constexpr auto get_material_property_traits(material_property_id property) -> material_property_traits
+{
+    // Every texture is sampled with the tiling; the metalness and roughness maps are read as one texture when they
+    // are the same (pbr_material::metalness_roughness_combined), so either map moves both.
+    constexpr render_change::mask textured = render_change::coverage | render_change::albedo | render_change::normal |
+                                             render_change::specular | render_change::occlusion |
+                                             render_change::emission;
+    switch(property)
+    {
+        case material_property_id::cull_type:
+            return {render_change::sidedness, false};
+        case material_property_id::base_color:
+            // Its alpha is coverage: an edit of the color alone leaves coverage alone (pbr_material::set_base_color).
+            return {render_change::albedo | render_change::coverage, true};
+        case material_property_id::subsurface_color:
+            return {render_change::albedo, true};
+        case material_property_id::emissive_color:
+        case material_property_id::emissive_intensity:
+            return {render_change::emission, true};
+        case material_property_id::roughness:
+            return {render_change::specular, true};
+        case material_property_id::metalness:
+            return {render_change::albedo | render_change::specular, true};
+        case material_property_id::bumpiness:
+            return {render_change::normal, true};
+        case material_property_id::alpha_mode:
+        case material_property_id::alpha_cutoff:
+        case material_property_id::dither_threshold:
+            return {render_change::coverage, false};
+        case material_property_id::tiling:
+            return {textured, false};
+        case material_property_id::color_map:
+            return {render_change::albedo | render_change::coverage, false};
+        case material_property_id::normal_map:
+            return {render_change::normal, false};
+        case material_property_id::roughness_map:
+        case material_property_id::metalness_map:
+            return {render_change::albedo | render_change::specular, false};
+        case material_property_id::emissive_map:
+            return {render_change::emission, false};
+        case material_property_id::ao_map:
+            return {render_change::occlusion, false};
+    }
+    return {};
+}
+
+/**
  * @class material
  * @brief Base class for materials used in rendering.
  */
@@ -52,26 +136,40 @@ public:
     material() = default;
     virtual ~material() = default;
 
-    /// Counts the edits made through the setters: a cache of what the material looked like (the GI surface cache's
-    /// card captures) compares it to notice a change.
-    auto get_revision() const -> uint64_t
+    /// Counts the edits made through the setters that changed any of @p changes (render_change aspects): a cache of
+    /// what the material looked like keeps it for the aspects it reads (render_interest) and compares.
+    auto get_revision(render_change::mask changes = render_change::material_aspects) const -> uint64_t
     {
-        return state_revision_ + instance_values_revision_;
+        return state_revisions_.get(changes) + instance_values_revisions_.get(changes);
     }
 
-    /// Counts the edits of values that are not per instance (textures, modes, tiling): they change how the
-    /// material draws, so a cache of its look follows them at once.
-    auto get_state_revision() const -> uint64_t
+    /// The same for values that are not per instance (textures, modes, tiling): they change how the material draws,
+    /// so a cache of its look follows them at once.
+    auto get_state_revision(render_change::mask changes = render_change::material_aspects) const -> uint64_t
     {
-        return state_revision_;
+        return state_revisions_.get(changes);
     }
 
-    /// Counts the edits of per-instance values (colors and numbers a material instance can override without a
-    /// separate draw). A script may change them every frame, so a costly cache may follow them less often.
-    auto get_instance_values_revision() const -> uint64_t
+    /// The same for per-instance values (colors and numbers a material instance can override without a separate
+    /// draw). A script may change them every frame, so a costly cache may follow them less often.
+    auto get_instance_values_revision(render_change::mask changes = render_change::material_aspects) const
+        -> uint64_t
     {
-        return instance_values_revision_;
+        return instance_values_revisions_.get(changes);
     }
+
+    /**
+     * @brief The identity of the content of the textures whose properties change any of @p changes
+     * (asset_handle::version): a texture that finishes loading or is reloaded changes it without an edit.
+     */
+    auto get_content_version(render_change::mask changes = render_change::material_aspects) const -> uint64_t;
+
+    /**
+     * @brief Adds what the material looks like to @p keys, per render_change aspect: its edits (get_revision of each
+     * aspect) and the content of its textures (get_content_version). A cache compares the keys of the aspects it reads
+     * with the ones it was built with.
+     */
+    void add_change_keys(render_change_values& keys) const;
 
 
     /**
@@ -132,24 +230,30 @@ public:
     virtual auto write_instance_constants(math::vec4* out) const -> uint32_t;
 
 protected:
-    /// Every setter of a value that is not per instance calls this (get_state_revision).
-    void mark_changed()
+    /// Adds the content identity of each texture to the keys of the aspects its property changes; none here.
+    virtual void add_content_versions(render_change_values& keys) const;
+
+    /// Every setter calls this after an edit that changed the value: it counts the edit for the property's aspects
+    /// (get_material_property_traits), with the per-instance or the state values.
+    void mark_changed(material_property_id property)
     {
-        ++state_revision_;
+        mark_changed(property, get_material_property_traits(property).changes);
     }
 
-    /// Every setter of a per-instance value calls this (get_instance_values_revision).
-    void mark_instance_value_changed()
+    /// The same for an edit that changed only @p changes of the property's aspects.
+    void mark_changed(material_property_id property, render_change::mask changes)
     {
-        ++instance_values_revision_;
+        auto& revisions = get_material_property_traits(property).is_per_instance ? instance_values_revisions_
+                                                                                  : state_revisions_;
+        revisions.bump(changes);
     }
 
     ///< The culling type for this material.
     cull_type cull_type_ = cull_type::counter_clockwise;
 
 private:
-    uint64_t state_revision_ = 0;
-    uint64_t instance_values_revision_ = 0;
+    render_change_revisions state_revisions_;
+    render_change_revisions instance_values_revisions_;
 };
 
 /**
@@ -163,6 +267,10 @@ public:
 
     auto clone() const -> std::shared_ptr<material> override;
 
+protected:
+    void add_content_versions(render_change_values& keys) const override;
+
+public:
     /// Linear base color, linear subsurface color, emissive premultiplied by its intensity, surface data: what
     /// fs_deferred_geom.sc reads as u_base_color, u_subsurface_color, u_emissive_color and u_surface_data.
     auto write_instance_constants(math::vec4* out) const -> uint32_t override;
@@ -182,8 +290,18 @@ public:
      */
     void set_base_color(const math::color& val)
     {
+        if(base_color_ == val)
+        {
+            return;
+        }
+        // Coverage reads only the alpha.
+        auto changes = get_material_property_traits(material_property_id::base_color).changes;
+        if(base_color_.value.a == val.value.a)
+        {
+            changes &= ~render_change::mask(render_change::coverage);
+        }
         base_color_ = val;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::base_color, changes);
     }
 
     /**
@@ -201,8 +319,12 @@ public:
      */
     void set_subsurface_color(const math::color& val)
     {
+        if(subsurface_color_ == val)
+        {
+            return;
+        }
         subsurface_color_ = val;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::subsurface_color);
     }
 
     /**
@@ -220,8 +342,12 @@ public:
      */
     void set_emissive_color(const math::color& val)
     {
+        if(emissive_color_ == val)
+        {
+            return;
+        }
         emissive_color_ = val;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::emissive_color);
     }
 
     auto get_emissive_intensity() const -> float
@@ -231,8 +357,12 @@ public:
 
     void set_emissive_intensity(float val)
     {
+        if(emissive_intensity_ == val)
+        {
+            return;
+        }
         emissive_intensity_ = val;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::emissive_intensity);
     }
 
     /**
@@ -250,8 +380,12 @@ public:
      */
     void set_roughness(float roughness)
     {
+        if(surface_data_.x == roughness)
+        {
+            return;
+        }
         surface_data_.x = roughness;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::roughness);
     }
 
     /**
@@ -269,8 +403,12 @@ public:
      */
     void set_metalness(float metalness)
     {
+        if(surface_data_.y == metalness)
+        {
+            return;
+        }
         surface_data_.y = metalness;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::metalness);
     }
 
     /**
@@ -288,8 +426,12 @@ public:
      */
     void set_bumpiness(float bumpiness)
     {
+        if(surface_data_.z == bumpiness)
+        {
+            return;
+        }
         surface_data_.z = bumpiness;
-        mark_instance_value_changed();
+        mark_changed(material_property_id::bumpiness);
     }
 
     /**
@@ -381,8 +523,12 @@ public:
      */
     void set_tiling(const math::vec2& tiling)
     {
+        if(tiling_ == tiling)
+        {
+            return;
+        }
         tiling_ = tiling;
-        mark_changed();
+        mark_changed(material_property_id::tiling);
     }
 
     /**
@@ -400,8 +546,12 @@ public:
      */
     void set_dither_threshold(const math::vec2& threshold)
     {
+        if(dither_threshold_ == threshold)
+        {
+            return;
+        }
         dither_threshold_ = threshold;
-        mark_changed();
+        mark_changed(material_property_id::dither_threshold);
     }
 
     /**
@@ -419,8 +569,12 @@ public:
      */
     void set_color_map(const asset_handle<gfx::texture>& val)
     {
+        if(color_map_ == val)
+        {
+            return;
+        }
         color_map_ = val;
-        mark_changed();
+        mark_changed(material_property_id::color_map);
     }
 
     /**
@@ -438,8 +592,12 @@ public:
      */
     void set_normal_map(const asset_handle<gfx::texture>& val)
     {
+        if(normal_map_ == val)
+        {
+            return;
+        }
         normal_map_ = val;
-        mark_changed();
+        mark_changed(material_property_id::normal_map);
     }
 
     /**
@@ -457,8 +615,12 @@ public:
      */
     void set_roughness_map(const asset_handle<gfx::texture>& val)
     {
+        if(roughness_map_ == val)
+        {
+            return;
+        }
         roughness_map_ = val;
-        mark_changed();
+        mark_changed(material_property_id::roughness_map);
     }
 
     /**
@@ -476,8 +638,12 @@ public:
      */
     void set_metalness_map(const asset_handle<gfx::texture>& val)
     {
+        if(metalness_map_ == val)
+        {
+            return;
+        }
         metalness_map_ = val;
-        mark_changed();
+        mark_changed(material_property_id::metalness_map);
     }
 
     /**
@@ -495,8 +661,12 @@ public:
      */
     void set_ao_map(const asset_handle<gfx::texture>& val)
     {
+        if(ao_map_ == val)
+        {
+            return;
+        }
         ao_map_ = val;
-        mark_changed();
+        mark_changed(material_property_id::ao_map);
     }
 
     /**
@@ -514,8 +684,12 @@ public:
      */
     void set_emissive_map(const asset_handle<gfx::texture>& val)
     {
+        if(emissive_map_ == val)
+        {
+            return;
+        }
         emissive_map_ = val;
-        mark_changed();
+        mark_changed(material_property_id::emissive_map);
     }
 
 private:

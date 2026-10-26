@@ -27,6 +27,50 @@ auto is_loaded(const material::sptr& mat) -> bool
     return mat && !asset_handle<material>::is_empty(mat);
 }
 
+/// The aspects whose revisions differ between two snapshots of one material.
+auto get_moved_aspects(const material& before, const material& after) -> render_change::mask
+{
+    render_change::mask moved = render_change::none;
+    for(uint32_t i = 0; i < render_change::count; ++i)
+    {
+        const render_change::mask aspect = 1u << i;
+        if(before.get_revision(aspect) != after.get_revision(aspect))
+        {
+            moved |= aspect;
+        }
+    }
+    return moved;
+}
+
+/**
+ * The aspects an override going from @p before to @p after changes (null: the shared material's value), as the
+ * property's setter counts them: replayed on a copy of the shared material, so a setter that counts less than its
+ * table entry (a base color edit that keeps the alpha) does here too. The table entry while @p shared is not loaded.
+ */
+auto get_override_changes(const material::sptr& shared,
+                          const entt::meta_type& type,
+                          entt::id_type property,
+                          const entt::meta_any* before,
+                          const entt::meta_any* after) -> render_change::mask
+{
+    if(!is_loaded(shared))
+    {
+        return get_material_property_changes(type, property);
+    }
+    const auto scratch = shared->clone();
+    const auto shared_value = get_material_value(*shared, property);
+    if(!set_material_value(*scratch, property, before ? *before : shared_value))
+    {
+        return get_material_property_changes(type, property);
+    }
+    const auto snapshot = scratch->clone();
+    if(!set_material_value(*scratch, property, after ? *after : shared_value))
+    {
+        return get_material_property_changes(type, property);
+    }
+    return get_moved_aspects(*snapshot, *scratch);
+}
+
 } // namespace
 
 auto get_material_value(const material& mat, entt::id_type property) -> entt::meta_any
@@ -46,6 +90,17 @@ auto set_material_value(material& mat, entt::id_type property, const entt::meta_
     }
     auto converted = entt::copy_meta_any(value);
     return converted.allow_cast(data.type()) && data.set(object, converted);
+}
+
+auto get_material_property_changes(const entt::meta_type& type, entt::id_type property) -> render_change::mask
+{
+    const auto data = type ? type.data(property) : entt::meta_data{};
+    auto entry = data ? entt::get_attribute(data, "material_property") : entt::meta_any{};
+    if(!entry.allow_cast<material_property_id>())
+    {
+        return render_change::material_aspects;
+    }
+    return get_material_property_traits(entry.cast<material_property_id>()).changes;
 }
 
 void copy_material_values(const material& source, material& target)
@@ -194,6 +249,33 @@ auto material_instance::has_overrides() const -> bool
 auto material_instance::get_overrides() const -> const std::vector<property_override>&
 {
     return overrides_;
+}
+
+auto material_instance::get_changes_from(const material_instance& previous) const -> render_change::mask
+{
+    if(!(shared_ == previous.shared_) || legacy_copy_ || previous.legacy_copy_)
+    {
+        return render_change::material_aspects;
+    }
+    const auto shared = shared_.try_get();
+    const auto type = get_material_type();
+    render_change::mask changes = render_change::none;
+    for(const auto& entry : overrides_)
+    {
+        const auto* match = previous.find_override(entry.property);
+        if(match == nullptr || !are_equal(match->value, entry.value))
+        {
+            changes |= get_override_changes(shared, type, entry.property, match ? &match->value : nullptr, &entry.value);
+        }
+    }
+    for(const auto& entry : previous.overrides_)
+    {
+        if(find_override(entry.property) == nullptr)
+        {
+            changes |= get_override_changes(shared, type, entry.property, &entry.value, nullptr);
+        }
+    }
+    return changes;
 }
 
 auto material_instance::collect_overrides() const -> std::vector<property_override>

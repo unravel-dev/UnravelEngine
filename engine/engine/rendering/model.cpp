@@ -1581,24 +1581,72 @@ auto model::get_empty_skinning() -> const std::vector<pose_mat4>&
     return empty;
 }
 
-auto model::get_materials_revision() const -> uint64_t
+auto model::get_changes_from(const model& previous) const -> render_change::mask
 {
-    uint64_t revision = 0;
-    for(const auto& shared : get_shared_materials())
+    render_change::mask changes = render_change::none;
+    const bool is_same_geometry = mesh_lods_ == previous.mesh_lods_ &&
+                                  lod_override_enabled_ == previous.lod_override_enabled_ &&
+                                  lod_override_level_ == previous.lod_override_level_ &&
+                                  lod_selection_bias_ == previous.lod_selection_bias_ &&
+                                  lod_hysteresis_ == previous.lod_hysteresis_ &&
+                                  lod_transition_time_ == previous.lod_transition_time_ &&
+                                  lod_screen_sizes_ == previous.lod_screen_sizes_;
+    if(!is_same_geometry)
     {
-        if(const auto mat = shared.try_get())
+        changes |= render_change::geometry;
+    }
+    const size_t slot_count = std::max({materials_.size(),
+                                        previous.materials_.size(),
+                                        material_instances_.size(),
+                                        previous.material_instances_.size()});
+    for(uint32_t slot = 0; slot < slot_count; ++slot)
+    {
+        if(!(get_shared_material(slot) == previous.get_shared_material(slot)))
         {
-            revision += mat->get_revision();
+            changes |= render_change::material_aspects;
+            continue;
+        }
+        const bool has_instance = slot < material_instances_.size();
+        const bool had_instance = slot < previous.material_instances_.size();
+        if(has_instance && had_instance)
+        {
+            changes |= material_instances_[slot].get_changes_from(previous.material_instances_[slot]);
+        }
+        else if((has_instance && material_instances_[slot].has_overrides()) ||
+                (had_instance && previous.material_instances_[slot].has_overrides()))
+        {
+            changes |= render_change::material_aspects;
         }
     }
-    for(const auto& instance : material_instances_)
+    return changes;
+}
+
+auto model::get_materials_change_keys() const -> render_change_values
+{
+    render_change_values keys{};
+    const auto add = [&keys](const material& mat)
     {
-        if(const auto& resolved = instance.get_resolved())
+        mat.add_change_keys(keys);
+    };
+    const auto& shared_materials = get_shared_materials();
+    const size_t slot_count = std::max(shared_materials.size(), material_instances_.size());
+    for(size_t slot = 0; slot < slot_count; ++slot)
+    {
+        // The slot's render material (get_render_material), without waiting for a load.
+        if(slot < material_instances_.size() && material_instances_[slot].has_overrides() &&
+           material_instances_[slot].get_resolved())
         {
-            revision += resolved->get_revision();
+            add(*material_instances_[slot].get_resolved());
+        }
+        else if(slot < shared_materials.size())
+        {
+            if(const auto mat = shared_materials[slot].try_get())
+            {
+                add(*mat);
+            }
         }
     }
-    return revision;
+    return keys;
 }
 
 auto model::resolve_skinned_submesh(const mesh& m,

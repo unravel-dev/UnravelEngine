@@ -47,8 +47,42 @@ auto material::get_cull_type() const -> cull_type
 
 void material::set_cull_type(cull_type val)
 {
+    if(cull_type_ == val)
+    {
+        return;
+    }
     cull_type_ = val;
-    mark_changed();
+    mark_changed(material_property_id::cull_type);
+}
+
+auto material::get_content_version(render_change::mask changes) const -> uint64_t
+{
+    render_change_values versions{};
+    add_content_versions(versions);
+    uint64_t version = 0;
+    for(uint32_t i = 0; i < render_change::count; ++i)
+    {
+        if((changes & (1u << i)) != 0u)
+        {
+            version += versions[i];
+        }
+    }
+    return version;
+}
+
+void material::add_change_keys(render_change_values& keys) const
+{
+    const auto& state = state_revisions_.get_each();
+    const auto& instance_values = instance_values_revisions_.get_each();
+    for(uint32_t i = 0; i < render_change::count; ++i)
+    {
+        keys[i] += state[i] + instance_values[i];
+    }
+    add_content_versions(keys);
+}
+
+void material::add_content_versions(render_change_values& /*keys*/) const
+{
 }
 
 auto material::get_render_states(bool apply_cull, bool depth_write, bool depth_test) const -> uint64_t
@@ -94,6 +128,30 @@ auto pbr_material::clone() const -> material::sptr
     return mat;
 }
 
+void pbr_material::add_content_versions(render_change_values& keys) const
+{
+    // Spread over the key, which also sums edit counts: a loaded texture's identity is an address.
+    constexpr uint64_t version_multiplier = 0x9E3779B97F4A7C15ull;
+    const auto add = [&keys](material_property_id property, const asset_handle<gfx::texture>& map)
+    {
+        const uint64_t version = uint64_t(map.version()) * version_multiplier;
+        const auto changes = get_material_property_traits(property).changes;
+        for(uint32_t i = 0; i < render_change::count; ++i)
+        {
+            if((changes & (1u << i)) != 0u)
+            {
+                keys[i] += version;
+            }
+        }
+    };
+    add(material_property_id::color_map, color_map_);
+    add(material_property_id::normal_map, normal_map_);
+    add(material_property_id::roughness_map, roughness_map_);
+    add(material_property_id::metalness_map, metalness_map_);
+    add(material_property_id::emissive_map, emissive_map_);
+    add(material_property_id::ao_map, ao_map_);
+}
+
 auto pbr_material::write_instance_constants(math::vec4* out) const -> uint32_t
 {
     // Picker colors are authored sRGB-encoded; lighting math runs in linear, so decode them here.
@@ -107,20 +165,30 @@ auto pbr_material::write_instance_constants(math::vec4* out) const -> uint32_t
 
 void pbr_material::set_alpha_mode(alpha_mode mode)
 {
+    // Synced even when unchanged: a legacy load sets the cutoff directly and relies on this.
+    const bool is_changed = alpha_mode_ != mode;
     alpha_mode_ = mode;
     sync_surface_alpha_channel();
-    mark_changed();
+    if(is_changed)
+    {
+        mark_changed(material_property_id::alpha_mode);
+    }
 }
 
 void pbr_material::set_alpha_cutoff(float cutoff)
 {
-    alpha_cutoff_ = std::clamp(cutoff, 0.0f, 1.0f);
-    if(alpha_mode_ == alpha_mode::mask && alpha_cutoff_ <= 0.0f)
+    float value = std::clamp(cutoff, 0.0f, 1.0f);
+    if(alpha_mode_ == alpha_mode::mask && value <= 0.0f)
     {
-        alpha_cutoff_ = 0.5f;
+        value = 0.5f;
     }
+    const bool is_changed = alpha_cutoff_ != value;
+    alpha_cutoff_ = value;
     sync_surface_alpha_channel();
-    mark_changed();
+    if(is_changed)
+    {
+        mark_changed(material_property_id::alpha_cutoff);
+    }
 }
 
 void pbr_material::sync_surface_alpha_channel()

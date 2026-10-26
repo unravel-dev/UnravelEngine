@@ -6,9 +6,10 @@
  *   <build-dir>/bin/unravel-tests --suite "shadow caching"
  *
  * What it pins:
- *   - a model's materials revision moves when its shared material or a material instance override is edited;
- *   - model_component::update_shadow_change stamps the first update, a reported change and a material edit, and
- *     keeps the stamp otherwise;
+ *   - a model's materials revisions move per aspect: a shared material edit or a material instance override moves
+ *     only the aspects it changed;
+ *   - model_component::update_change_stamps stamps every aspect on the first update, then only what changed: the
+ *     reported placement, a setter's reasons, material aspects; an edit shadows do not read leaves their stamp;
  *   - the cached maps epoch moves on invalidate_cached_maps and when caching is switched, and not when the switch
  *     keeps its value.
  */
@@ -59,48 +60,121 @@ auto get_pbr(const asset_handle<material>& handle) -> std::shared_ptr<pbr_materi
     return std::static_pointer_cast<pbr_material>(handle.get());
 }
 
-void test_materials_revision()
+/// The aspects whose revisions differ between @p before and @p after.
+auto get_moved(const render_change_values& before, const render_change_values& after) -> render_change::mask
 {
-    std::printf("a model's materials revision follows material edits\n");
+    render_change::mask moved = render_change::none;
+    for(uint32_t i = 0; i < render_change::count; ++i)
+    {
+        if(before[i] != after[i])
+        {
+            moved |= 1u << i;
+        }
+    }
+    return moved;
+}
+
+void test_materials_revisions()
+{
+    std::printf("a model's materials revisions move per aspect\n");
     model empty;
-    check(empty.get_materials_revision() == 0, "a model without materials has revision 0");
+    check(empty.get_materials_change_keys() == render_change_values{}, "a model without materials has no keys");
     const auto shared = make_shared_material("revision");
     model mdl;
     mdl.set_shared_material(shared, 0);
     mdl.update_material_instances();
-    const uint64_t initial = mdl.get_materials_revision();
-    get_pbr(shared)->set_roughness(0.3f);
-    const uint64_t after_shared_edit = mdl.get_materials_revision();
-    check(after_shared_edit != initial, "editing the shared material moves it");
-    mdl.get_material_instance(0).set_override("metalness"_hs, 0.8f);
+    const auto initial = mdl.get_materials_change_keys();
+    get_pbr(shared)->set_roughness(0.6f);
+    const auto after_shared_edit = mdl.get_materials_change_keys();
+    check(after_shared_edit != initial, "editing the shared material moves them");
+    check(get_moved(initial, after_shared_edit) == render_change::specular, "a roughness edit moves only specular");
+    mdl.get_material_instance(0).set_override("emissive_intensity"_hs, 4.0f);
     mdl.update_material_instances();
-    check(mdl.get_materials_revision() != after_shared_edit, "an instance override moves it");
+    check(get_moved(after_shared_edit, mdl.get_materials_change_keys()) == render_change::emission,
+          "a first emissive override moves only emission");
 }
 
-void test_shadow_change_stamp()
+void test_change_stamps()
 {
-    std::printf("the shadow change stamp follows reported changes and material edits\n");
-    const auto shared = make_shared_material("stamp");
+    std::printf("the change stamps follow what changed, aspect by aspect\n");
+    const auto shared = make_shared_material("stamps");
     model mdl;
     mdl.set_shared_material(shared, 0);
     model_component comp;
     comp.set_model(mdl);
-    comp.update_material_instances();
-    comp.update_shadow_change(10, false);
-    check(comp.get_shadow_change_frame() == 10, "the first update stamps its frame");
-    comp.update_shadow_change(11, false);
-    check(comp.get_shadow_change_frame() == 10, "an update without a change keeps the stamp");
-    comp.update_shadow_change(12, true);
-    check(comp.get_shadow_change_frame() == 12, "a reported change stamps its frame");
-    get_pbr(shared)->set_roughness(0.6f);
-    comp.update_shadow_change(13, false);
-    check(comp.get_shadow_change_frame() == 13, "a shared material edit stamps the next update");
-    comp.update_shadow_change(14, false);
-    check(comp.get_shadow_change_frame() == 13, "and only that one");
-    check(comp.set_material_instance_value(0, "roughness"_hs, entt::meta_any{0.2f}), "an override applies");
-    comp.update_material_instances();
-    comp.update_shadow_change(15, false);
-    check(comp.get_shadow_change_frame() == 15, "an instance override stamps the next update");
+    const auto update = [&comp](uint64_t frame, render_change::mask changes)
+    {
+        comp.update_material_instances();
+        comp.update_change_stamps(frame, changes);
+    };
+    const auto& stamps = comp.get_change_stamps();
+    update(10, render_change::none);
+    check(stamps.get_last_change(render_change::all) == 10 && stamps.get_last_change(render_change::emission) == 10,
+          "the first update stamps every aspect");
+    update(11, render_change::none);
+    check(stamps.get_last_change(render_change::all) == 10, "an update without a change stamps nothing");
+    update(12, render_change::placement);
+    check(stamps.get_last_change(render_interest::shadow_caster) == 12, "a move stamps what shadows read");
+    check(stamps.get_last_change(render_interest::gi_card_capture) == 10, "and not what a card capture reads");
+    get_pbr(shared)->set_emissive_intensity(3.0f);
+    update(13, render_change::none);
+    check(stamps.get_last_change(render_change::emission) == 13, "an emissive edit stamps emission");
+    check(stamps.get_last_change(render_interest::shadow_caster) == 12, "and leaves the shadow stamp");
+    get_pbr(shared)->set_alpha_cutoff(0.75f);
+    update(14, render_change::none);
+    check(stamps.get_last_change(render_interest::shadow_caster) == 14, "a cutoff edit stamps the shadow aspects");
+    math::color color = get_pbr(shared)->get_base_color();
+    color.value.r = 0.5f;
+    check(comp.set_material_instance_value(0, "base_color"_hs, entt::meta_any{color}), "an override applies");
+    update(15, render_change::none);
+    check(stamps.get_last_change(render_change::albedo) == 15, "a color override stamps albedo");
+    check(stamps.get_last_change(render_interest::shadow_caster) == 14, "and leaves the shadow stamp");
+    comp.set_enabled(false);
+    update(16, render_change::none);
+    check(stamps.get_last_change(render_change::membership) == 16, "disabling stamps membership");
+    check(stamps.has_changed_within(render_interest::shadow_caster, 4, 19), "a change 3 frames ago is still settling");
+    check(!stamps.has_changed_within(render_interest::shadow_caster, 4, 20), "4 frames later it settled");
+    check(!stamps.has_changed_since(render_interest::shadow_caster, 16), "nothing changed since frame 16");
+}
+
+void test_model_swap_stamps()
+{
+    std::printf("a model set again stamps only what it draws differently\n");
+    const auto shared = make_shared_material("swap");
+    model mdl;
+    mdl.set_shared_material(shared, 0);
+    model_component comp;
+    comp.set_model(mdl);
+    const auto update = [&comp](uint64_t frame)
+    {
+        comp.update_material_instances();
+        comp.update_change_stamps(frame, render_change::none);
+    };
+    const auto& stamps = comp.get_change_stamps();
+    update(10);
+    model edited = comp.get_model();
+    edited.get_material_instance(0).set_override("emissive_intensity"_hs, 5.0f);
+    comp.set_model(edited);
+    update(11);
+    check(stamps.get_last_change(render_change::emission) == 11, "an emissive override set with the model stamps emission");
+    check(stamps.get_last_change(render_interest::shadow_caster) == 10, "and leaves the shadow stamp");
+    model recolored = comp.get_model();
+    math::color color = get_pbr(shared)->get_base_color();
+    color.value.b = 0.25f;
+    recolored.get_material_instance(0).set_override("base_color"_hs, color);
+    comp.set_model(recolored);
+    update(12);
+    check(stamps.get_last_change(render_change::albedo) == 12, "a color override set with the model stamps albedo");
+    check(stamps.get_last_change(render_interest::shadow_caster) == 10, "and leaves the shadow stamp: the alpha kept");
+    const model same = comp.get_model();
+    comp.set_model(same);
+    update(13);
+    check(stamps.get_last_change(render_interest::shadow_caster) == 10, "the same model set again leaves the shadow stamp");
+    model other = comp.get_model();
+    other.set_shared_material(make_shared_material("swap_other"), 0);
+    comp.set_model(other);
+    update(14);
+    check(stamps.get_last_change(render_interest::shadow_caster) == 14, "another shared material stamps the shadow aspects");
 }
 
 void test_cached_maps_epoch()
@@ -123,8 +197,9 @@ auto run_shadow_caching_suite(rtti::context& ctx) -> int
 {
     g_checks = 0;
     g_failures = 0;
-    test_materials_revision();
-    test_shadow_change_stamp();
+    test_materials_revisions();
+    test_change_stamps();
+    test_model_swap_stamps();
     test_cached_maps_epoch();
     std::printf("\nshadow caching: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

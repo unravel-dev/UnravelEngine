@@ -144,17 +144,16 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
 
                       auto& transform_comp = view.get<transform_component>(entity);
 
-                      // Velocity (motion vector) state: consume the transform dirty bit and
-                      // promote the previous-frame snapshot BEFORE update_armature overwrites
-                      // the pose caches (they still hold last frame's values here). The call
-                      // is frame-stamped internally and no-ops entirely while no pipeline
-                      // requests velocity recording.
-                      const bool transform_moved =
-                          transform_comp.is_dirty(dirty_ids::velocity);
-                      transform_comp.set_dirty(dirty_ids::velocity, false);
+                      // The transform's render change slot: where the model is, its own move or
+                      // a parent's. Velocity (motion vector) state promotes the previous-frame
+                      // snapshot BEFORE update_armature overwrites the pose caches (they still
+                      // hold last frame's values here). The call is frame-stamped internally and
+                      // no-ops entirely while no pipeline requests velocity recording.
+                      const bool is_moved = transform_comp.is_dirty(dirty_ids::render_change);
+                      transform_comp.set_dirty(dirty_ids::render_change, false);
                       model_comp.record_velocity_state(frame,
                                                        transform_comp.get_transform_global().get_matrix(),
-                                                       transform_moved);
+                                                       is_moved);
 
                       // Refresh pose-derived render data (submesh/bone poses, cached proxy
                       // bounds, skinning palettes) before world bounds are computed. This is
@@ -164,28 +163,29 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       // re-enter the frustum correctly. (Skipping animation work for culled
                       // models is the animation system's job via its renderer-based culling
                       // mode, which freezes the transforms and thus also skips this refresh.)
-                      const bool pose_refreshed = model_comp.update_armature();
+                      const bool is_pose_changed = model_comp.update_armature();
                       // Node/bone animation moves submeshes without touching the owner
                       // transform; a refresh that changed the pose is motion evidence.
-                      model_comp.mark_motion(pose_refreshed);
+                      model_comp.mark_motion(is_pose_changed);
 
                       model_comp.update_world_bounds(transform_comp.get_transform_global());
 
+                      // When each aspect of the model last changed, for every system that keeps
+                      // what it rendered (render_interest).
+                      const render_change::mask changes = (is_moved ? render_change::placement : render_change::none) |
+                                                          (is_pose_changed ? render_change::pose : render_change::none);
+                      model_comp.update_change_stamps(frame, changes);
+
                       // AFTER update_world_bounds: a bounds change it just published has to be
-                      // seen this frame, not next. The transform slot covers where the model
-                      // is (including a moved parent), the model slot what it renders as.
-                      const bool caster_dirty =
-                          transform_comp.is_dirty(dirty_ids::shadow_caster) ||
-                          model_comp.is_dirty(dirty_ids::shadow_caster);
-                      transform_comp.set_dirty(dirty_ids::shadow_caster, false);
-                      model_comp.set_dirty(dirty_ids::shadow_caster, false);
-                      // What a cached shadow map holding this model has to know (shadow map caching).
-                      model_comp.update_shadow_change(frame, caster_dirty || pose_refreshed);
+                      // seen this frame, not next. The model slot says its bounds moved or a
+                      // setter touched it.
+                      const bool are_bounds_changed = model_comp.is_dirty(dirty_ids::render_change);
+                      model_comp.set_dirty(dirty_ids::render_change, false);
 
                       // Dynamic casters are re-read every frame by the shadow pass, so only a
                       // static one can invalidate the cache. A model that STOPPED being a
                       // static caster bumped the revision through model_component::touch().
-                      if(caster_dirty && model_comp.is_static() && model_comp.casts_shadow())
+                      if((is_moved || are_bounds_changed) && model_comp.is_static() && model_comp.casts_shadow())
                       {
                           static_casters_changed.store(true, std::memory_order_relaxed);
                       }

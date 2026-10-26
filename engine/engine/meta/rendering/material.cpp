@@ -63,10 +63,10 @@ REFLECT(material)
             entt::attribute{"pretty_name", "Material"},
         })
         .data<&material::set_cull_type, &material::get_cull_type>("cull_type"_hs)
-        .custom<entt::attributes>(entt::attributes{
+        .custom<entt::attributes>(make_material_property_attributes(material_property_id::cull_type, entt::attributes{
             entt::attribute{"name", "cull_type"},
             entt::attribute{"pretty_name", "Cull Type"},
-        })
+        }))
         .func<&material::get_meta_type>("get_meta_type"_hs)
         .func<&material::get_static_meta_type>("get_static_meta_type"_hs)
         .func<&material::as_derived>("as_derived"_hs)

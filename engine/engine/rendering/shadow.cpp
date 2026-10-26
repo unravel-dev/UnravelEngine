@@ -2624,7 +2624,9 @@ void shadowmap_generator::compute_caster_facts(const shadow_map_models_t& models
         }
         const auto& model_comp = element.entity.get<model_component>();
         const auto& model = model_comp.get_model();
-        const uint64_t change_frame = model_comp.get_shadow_change_frame();
+        // When what a shadow reads of it last changed: an edit it does not read (an emissive pulse) keeps the map.
+        const auto& stamps = model_comp.get_change_stamps();
+        const uint64_t change_frame = stamps.get_last_change(render_interest::shadow_caster);
         facts.content_hash = mix_key(uint64_t(entt::to_integral(entity)), change_frame);
         if(model.is_valid())
         {
@@ -2640,7 +2642,7 @@ void shadowmap_generator::compute_caster_facts(const shadow_map_models_t& models
         }
         key = mix_key(key, facts.content_hash);
         mix_into_views(facts.view_mask, facts.content_hash);
-        facts.is_mover = frame < change_frame + MOVER_SETTLE_FRAMES;
+        facts.is_mover = stamps.has_changed_within(render_interest::shadow_caster, MOVER_SETTLE_FRAMES, frame);
         if(facts.is_mover)
         {
             collection.has_movers = true;

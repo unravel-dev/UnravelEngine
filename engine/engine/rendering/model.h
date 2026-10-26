@@ -864,10 +864,16 @@ public:
     /// An empty palette list: submit() draws only a model's non-skinned submeshes with it (the skinned ones are batched).
     static auto get_empty_skinning() -> const std::vector<pose_mat4>&;
 
-    /// Sum of the revisions of every material the slots draw with (shared materials and the materials their instances
-    /// resolve to): it changes with any edit of them. A material still loading counts 0. Never waits for a load, so it
-    /// can run on pool threads.
-    auto get_materials_revision() const -> uint64_t;
+    /// The change keys of the materials the slots draw with (each slot's resolved material instance when it has
+    /// overrides, else its shared material; material::add_change_keys), summed per render_change aspect: an edit or a
+    /// texture reload moves only the aspects it changed. A material still loading counts 0. Never waits for a load,
+    /// so it can run on pool threads.
+    auto get_materials_change_keys() const -> render_change_values;
+
+    /// The render_change aspects this model draws differently from @p previous: geometry when the LOD meshes or
+    /// their selection differ, and per slot every material aspect for another shared material, else the aspects of
+    /// the overrides that changed (material_instance::get_changes_from).
+    auto get_changes_from(const model& previous) const -> render_change::mask;
 
     /**
      * @brief Gets the default material.

@@ -2,6 +2,7 @@
 #include <engine/animation/animation_pose.h>
 #include <engine/ecs/components/basic_component.h>
 #include <engine/rendering/model.h>
+#include <engine/rendering/render_change.h>
 #include <engine/rendering/render_proxy.h>
 #include <atomic>
 #include <bitset>
@@ -40,14 +41,16 @@ public:
     /// this one what it renders as.
 
     /**
-     * @brief Marks every consumer of this model's render state dirty, and bumps the scene's
-     * shadow_caster_revision because the caster SET may have changed.
+     * @brief Marks every consumer of this model's render state dirty, bumps the scene's
+     * shadow_caster_revision because the caster SET may have changed, and records @p reasons
+     * (render_change aspects) for the next update_change_stamps.
      *
      * Hides basic_component::touch(), which is an empty function, so the flag setters that
      * already call it gain the signal. Name hiding is enough here: every caller is a member
-     * of this class or holds a model_component.
+     * of this class or holds a model_component. A caller that does not know what it changed
+     * passes nothing: every aspect.
      */
-    void touch();
+    void touch(render_change::mask reasons = render_change::all);
 
     /// @see transform_component::is_dirty(uint8_t)
     auto is_dirty(uint8_t id) const noexcept -> bool;
@@ -244,9 +247,9 @@ public:
      *  - Change-driven: visible models early-out when no armature entity transform changed
      *    since the last refresh (dirty_ids::model_pose bit-scan).
      *
-     * @return True when the refresh changed the pose (a bone or submesh node moved, the submeshes were mapped
-     *         differently, or a refresh was forced); false when it was skipped, no mesh is loaded, or it rebuilt
-     *         the same pose (animation and an IK pass rewriting the same final pose every frame).
+     * @return True when the refresh changed the pose (a bone or submesh node moved, or the submeshes were mapped
+     *         differently); false when it was skipped, no mesh is loaded, or it rebuilt the same pose, forced or not
+     *         (animation and an IK pass rewriting the same final pose every frame, the same model set again).
      */
     auto update_armature() -> bool;
 
@@ -329,14 +332,14 @@ public:
     auto has_motion() const -> bool;
 
     /**
-     * @brief Stamps the render frame when this model's shadow changed: it moved or was re-posed (@p changed: the
-     * caster dirty bits or a pose refresh of this frame), or a material it draws with was edited. Called once per
-     * frame per model by model_system; a shadow map that holds this model is reused only while the stamp is older
-     * than the map.
+     * @brief Brings the change stamps up to render frame @p frame: @p changes (the frame's placement and pose
+     * changes, from model_system), what the setters recorded since the last call (touch), a mesh that finished
+     * loading or was replaced in place (geometry), and the material aspects whose revisions moved. Called once per
+     * frame per model by model_system, from the model's own task.
      */
-    void update_shadow_change(uint64_t frame, bool changed);
-    /// The render frame of the last change update_shadow_change saw.
-    auto get_shadow_change_frame() const noexcept -> uint64_t;
+    void update_change_stamps(uint64_t frame, render_change::mask changes);
+    /// When each render_change aspect of this model last changed; render_interest says what a system reads.
+    auto get_change_stamps() const noexcept -> const render_change_stamps&;
     auto get_prev_world_transform() const -> const math::mat4&;
     auto get_prev_submesh_transforms() const -> const submesh_pose_mat4&;
     auto get_prev_skinning_transforms() const -> const std::vector<pose_mat4>&;
@@ -548,9 +551,12 @@ private:
     /// This model moved since the last rendered frame (or is skinned).
     bool has_motion_{false};
 
-    /// See update_shadow_change. The revision starts at a value no material sum has, so the first update stamps.
-    uint64_t shadow_change_frame_{0};
-    uint64_t shadow_materials_revision_{UINT64_MAX};
+    /// See update_change_stamps. Every aspect starts pending, so a new model stamps them all on its first update.
+    render_change_stamps change_stamps_;
+    render_change::mask pending_changes_{render_change::all};
+    /// The material change keys per aspect and the loaded LOD meshes the stamps were last brought up to.
+    render_change_values materials_change_keys_{};
+    uint64_t geometry_key_{0};
 
     /// Last render frame (+1, 0 = never) any pipeline requested velocity recording for.
     static std::atomic<uint32_t> velocity_recording_request_frame_;

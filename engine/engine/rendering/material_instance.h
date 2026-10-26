@@ -50,6 +50,12 @@ auto set_material_value(material& mat, entt::id_type property, const entt::meta_
 void copy_material_values(const material& source, material& target);
 
 /**
+ * @brief The render_change aspects an edit of one reflected property of a material type changes: its
+ * material_property_id entry (get_material_property_traits), or every material aspect for a property without one.
+ */
+auto get_material_property_changes(const entt::meta_type& type, entt::id_type property) -> render_change::mask;
+
+/**
  * @class material_instance
  * @brief One renderer's overrides of the shared material of one model slot.
  *
@@ -112,6 +118,13 @@ public:
 
     auto has_overrides() const -> bool;
     auto get_overrides() const -> const std::vector<property_override>&;
+
+    /**
+     * @brief The render_change aspects this instance draws differently from @p previous: every material aspect when
+     * the shared material differs (or a legacy copy waits), else the aspects of the properties whose override was
+     * added, dropped or changed.
+     */
+    auto get_changes_from(const material_instance& previous) const -> render_change::mask;
 
     /**
      * @brief The overrides to save: the stored ones and, while a legacy copy waits, the properties where it
