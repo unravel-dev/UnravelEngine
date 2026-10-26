@@ -9,6 +9,7 @@
 #include <string_utils/utils.h>
 #include <graphics/render_pass.h>
 #include <base/platform/config.hpp>
+#include <engine/rendering/render_feature_support.h>
 
 // Samples per pixel of the UI layers: smoother edges, especially under transforms. bgfx stores every
 // sample of a multisampled target and resolves it in a separate copy, so on a phone the full-screen
@@ -23,6 +24,38 @@
 
 namespace unravel
 {
+namespace
+{
+/// The samples per pixel the UI layers render with: RMLUI_NUM_MSAA_SAMPLES where the device multisamples the
+/// layers' formats, else one.
+auto get_layer_samples() -> int
+{
+    return get_render_feature_support().is_available(render_feature::ui_msaa) ? RMLUI_NUM_MSAA_SAMPLES : 1;
+}
+
+/// The render target flags for @p samples per pixel. The MSAA modes are values of one field, of which
+/// BGFX_TEXTURE_RT is the single-sample value, so a target takes exactly one of them.
+auto get_render_target_flags(int samples) -> uint64_t
+{
+    if(samples >= 16)
+    {
+        return BGFX_TEXTURE_RT_MSAA_X16;
+    }
+    if(samples >= 8)
+    {
+        return BGFX_TEXTURE_RT_MSAA_X8;
+    }
+    if(samples >= 4)
+    {
+        return BGFX_TEXTURE_RT_MSAA_X4;
+    }
+    if(samples >= 2)
+    {
+        return BGFX_TEXTURE_RT_MSAA_X2;
+    }
+    return BGFX_TEXTURE_RT;
+}
+} // namespace
 
 RmlUi_RenderLayerStack::RmlUi_RenderLayerStack()
 {
@@ -49,7 +82,7 @@ auto RmlUi_RenderLayerStack::push_layer(bool clears_depth_stencil) -> Rml::Layer
         {
             fb_layers_.push_back(create_layer_framebuffer(width_,
                                                           height_,
-                                                          RMLUI_NUM_MSAA_SAMPLES,
+                                                          get_layer_samples(),
                                                           true,
                                                           find_shared_depth_stencil()));
         }
@@ -218,17 +251,7 @@ auto RmlUi_RenderLayerStack::create_layer_framebuffer(int width,
     RmlUi_LayerFramebuffer fb{};
     fb.samples = samples;
 
-    uint64_t texture_flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST;
-    if(samples > 1)
-    {
-        texture_flags |= BGFX_TEXTURE_RT_MSAA_X2;
-        if(samples >= 4)
-            texture_flags |= BGFX_TEXTURE_RT_MSAA_X4;
-        if(samples >= 8)
-            texture_flags |= BGFX_TEXTURE_RT_MSAA_X8;
-        if(samples >= 16)
-            texture_flags |= BGFX_TEXTURE_RT_MSAA_X16;
-    }
+    const uint64_t texture_flags = get_render_target_flags(samples) | BGFX_TEXTURE_BLIT_DST;
 
     uint64_t depth_texture_flags = texture_flags;
     if(samples > 1)
