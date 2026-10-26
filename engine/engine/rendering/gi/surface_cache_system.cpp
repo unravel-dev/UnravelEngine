@@ -63,6 +63,12 @@ constexpr uint64_t instance_order_hash_prime = 1099511628211ull;
 /// own housing (clear_enclosed_emissive_light_sources). Sponza's lamp glass is 6-8x its bulb; a room or a building
 /// section around an emitter is two orders of magnitude larger and must not count.
 constexpr float emissive_enclosure_max_extent_ratio = 10.0f;
+
+/// The flag bits the GPU instance record and the clipmap entry carry: two-sided 1, emissive light source 2.
+auto pack_instance_flags(const ::unravel::surface_cache_system::instance& inst) -> uint32_t
+{
+    return (inst.is_two_sided ? 1u : 0u) | (inst.is_emissive_light_source ? 2u : 0u);
+}
 } // namespace ANONYMOUS
 } // namespace
 
@@ -690,6 +696,12 @@ void surface_cache_system::upload_instances()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
     clear_enclosed_emissive_light_sources();
+    // The clipmap compose reads these flags too: an entry with other flags is another entry (its hash), so a cull or
+    // emissive change recomposes the field.
+    for(size_t i = 0; i < instances_.size(); ++i)
+    {
+        clipmap_instances_[i].flags = ANONYMOUS::pack_instance_flags(instances_[i]);
+    }
     // resize, not assign: every float of every record is written below, so an assign's
     // zero-fill would be fully overwritten every frame.
     instance_data_.resize(size_t(instances_.size()) * instance_vec4_stride * 4u);
@@ -723,7 +735,7 @@ void surface_cache_system::upload_instances()
             // Lane 8: x = flags (1 two-sided: the global SDF's coverage; 2 emissive light source: kept by the
             // GI cascade however small), yzw = the world length of each local axis (SdfInstanceWorldDistance's
             // per-axis bounds). MIRROR OF SdfLoadInstance.
-            dst[32] = (inst.is_two_sided ? 1.0f : 0.0f) + (inst.is_emissive_light_source ? 2.0f : 0.0f);
+            dst[32] = float(ANONYMOUS::pack_instance_flags(inst));
             dst[33] = inst.axis_scale.x;
             dst[34] = inst.axis_scale.y;
             dst[35] = inst.axis_scale.z;
@@ -818,6 +830,11 @@ void surface_cache_system::walk_scene(scene& scn)
     scn.registry->view<transform_component, model_component, active_component>().each(
         [&](auto entity, auto&& transform_comp, auto&& model_comp, auto&& /*active*/)
         {
+            // A disabled model draws nothing, so it lights and occludes nothing either.
+            if(!model_comp.is_enabled())
+            {
+                return;
+            }
             const auto& mdl = model_comp.get_model();
             if(!mdl.is_valid())
             {

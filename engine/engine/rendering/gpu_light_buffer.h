@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/engine_export.h>
+#include <engine/ecs/ecs.h>
 
 #include <graphics/graphics.h>
 #include <math/math.h>
@@ -70,6 +71,12 @@ public:
         return data_;
     }
 
+    /// The entity of each record, in record order: what a light is from one update to the next.
+    auto get_light_entities() const -> const std::vector<entt::entity>&
+    {
+        return entities_;
+    }
+
 private:
     void ensure_capacity(uint32_t required_vec4);
 
@@ -77,6 +84,7 @@ private:
     uint32_t capacity_vec4_ = 0;
     uint32_t light_count_ = 0;
     std::vector<float> data_;
+    std::vector<entt::entity> entities_;
     /// FNV-1a of the bytes last uploaded; an unchanged light set skips the upload.
     uint64_t content_hash_ = 0;
     /// Whether the current buffer object holds the bytes content_hash_ describes. Cleared on

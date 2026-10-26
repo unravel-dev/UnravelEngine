@@ -128,6 +128,7 @@ auto global_sdf_clipmap::compute_instance_entry_hash(const global_sdf_instance& 
     }
     entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
     entry = (entry ^ reinterpret_cast<uintptr_t>(instance.coarse_sdf)) * 0x100000001b3ull;
+    entry = (entry ^ uint64_t(instance.flags)) * 0x100000001b3ull;
     return entry;
 }
 

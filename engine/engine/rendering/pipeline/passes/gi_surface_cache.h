@@ -453,6 +453,9 @@ private:
     /// The previous update's lights and each viewer's distance field's level recomposes, for
     /// collect_direct_lighting_changes; false before the first update.
     std::vector<float> previous_lights_;
+    std::vector<entt::entity> previous_light_entities_;
+    /// Scratch of collect_direct_lighting_changes: the previous record of each light entity.
+    std::unordered_map<entt::entity, size_t> previous_light_records_;
     std::unordered_map<const void*, std::array<uint64_t, global_sdf_clipmap::level_count>> previous_compose_serials_;
     uint64_t previous_cloud_signature_ = 0;
     bool has_previous_lighting_inputs_ = false;
@@ -496,10 +499,11 @@ private:
     /// Resident cards reallocated since the last stats line.
     uint32_t reallocated_since_log_ = 0;
 
-    /// The per-instance values revision a source's capture key shows (see gate_instance_values).
+    /// The per-instance values revisions a source's capture keys show (see gate_instance_values).
     struct instance_values_gate
     {
         uint64_t revision = 0;
+        uint64_t direct_revision = 0;
         ///< The update the key last took a new revision in.
         uint32_t taken_update = 0;
         ///< The last update the source was drawn in; sources gone for a while are dropped.
@@ -507,9 +511,18 @@ private:
     };
     std::unordered_map<uint64_t, instance_values_gate> instance_values_gates_;
 
-    /// The per-instance values revision of a source's material for its capture key: a script may change these values
-    /// every frame (a hit flash), so the key takes a new one at most every few updates, and always the last one.
-    auto gate_instance_values(uint64_t identity, uint64_t revision) -> uint64_t;
+    /// The per-instance values revisions of a source's material for its capture keys: of the aspects a capture reads,
+    /// and of the part the direct lighting reads, taken together.
+    struct gated_revisions
+    {
+        uint64_t capture = 0;
+        uint64_t direct = 0;
+    };
+
+    /// A script may change per-instance values every frame (a hit flash), so the keys take new revisions at most
+    /// every few updates, and always the last ones.
+    auto gate_instance_values(uint64_t identity, uint64_t capture_revision, uint64_t direct_revision)
+        -> gated_revisions;
     void drop_unseen_instance_values_gates();
 };
 

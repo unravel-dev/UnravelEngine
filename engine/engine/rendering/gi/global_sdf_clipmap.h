@@ -34,6 +34,9 @@ struct global_sdf_instance
     float local_to_world_scale = 1.0f;
     ///< World length of each local axis, for the per-axis box bounds of sample_instance_distance.
     math::vec3 axis_scale{1.0f};
+    ///< What the compose reads of the instance besides its field (the bits the GPU instance record packs: two-sided 1,
+    ///< emissive light source 2). Hashed with the placement, so a change recomposes.
+    uint32_t flags = 0;
 };
 
 /**

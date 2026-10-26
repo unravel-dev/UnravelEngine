@@ -91,10 +91,12 @@ void gpu_light_buffer::update(scene& scn)
 {
     APP_SCOPE_PERF("Rendering/GPU Light Buffer");
     data_.clear();
+    entities_.clear();
     light_count_ = 0;
     scn.registry->view<transform_component, light_component, active_component>().each(
-        [&](auto /*entity*/, auto&& transform_comp, auto&& light_comp, auto&& /*active*/)
+        [&](auto entity, auto&& transform_comp, auto&& light_comp, auto&& /*active*/)
         {
+            entities_.push_back(entity);
             const auto& light = light_comp.get_light();
             // A light that adds nothing to the GI (disabled, or indirect intensity 0) keeps a record
             // with zero intensity and no shadows: the record order and count stay stable, so turning

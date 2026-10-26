@@ -100,9 +100,12 @@ public:
         ///< resident down to one texel and down to a fifth of the minimum face area.
         bool is_emissive_light_source = false;
         ///< The material as captured (its identity, material::get_state_revision and, at most every few updates,
-        ///< material::get_instance_values_revision): a change queues the placement's pages for capture ahead of the
-        ///< refresh.
+        ///< material::get_instance_values_revision, over the aspects a capture reads: render_interest::
+        ///< gi_card_capture): a change queues the placement's pages for capture ahead of the refresh.
         uint64_t material_key = 0;
+        ///< The same over the aspects the direct lighting reads (render_interest::gi_card_direct, a part of the
+        ///< capture's): a change also relights the pages the capture takes.
+        uint64_t material_direct_key = 0;
     };
 
     /// One page to rasterize this frame.
@@ -468,6 +471,10 @@ public:
         uint32_t reallocated = 0;
         ///< Resident pages captured again this frame (the refresh), included in captures.
         uint32_t refreshed = 0;
+        ///< Placements whose material key changed this frame: their resident pages are captured again first.
+        uint32_t material_changes = 0;
+        ///< Resident pages this frame's lighting changes (a light, an occluder) marked direct-dirty.
+        uint32_t direct_invalidated = 0;
         ///< Card tiles each lighting context updates this frame, and the bucket its budget ran out in (16 = none).
         std::array<uint32_t, lighting_context_count> lit_tiles{};
         std::array<uint32_t, lighting_context_count> cut_bucket{};
@@ -507,6 +514,9 @@ private:
         ///< The page's direct lighting changed since it was last lit (its capture, its placement's transform, a
         ///< light reaching it, an occluder between it and a light): the direct lighting does not skip it.
         bool is_direct_dirty = true;
+        ///< A material change that the direct lighting reads (normal, coverage) waits for the page's capture, which
+        ///< then marks it direct-dirty.
+        bool has_material_direct_change = false;
     };
 
     /// A card's on-demand mip above its locked one: any of its pages mapped as the feedback asks for them.
@@ -550,8 +560,9 @@ private:
         ///< instance table carries it to the probe traces, which mark distance-field hits on it moving.
         float motion = 0.0f;
         uint64_t last_seen = 0;
-        ///< source::material_key at the last capture request.
+        ///< source::material_key and source::material_direct_key at the last capture request.
         uint64_t material_key = 0;
+        uint64_t material_direct_key = 0;
         ///< The source that last showed this placement (index into the update's sources).
         uint32_t source_index = 0;
     };

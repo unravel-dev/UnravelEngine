@@ -489,10 +489,11 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
     gi_scene::direct_lighting_changes changes;
     changes.all = !has_previous_lighting_inputs_ || gi_scene.has_global_lighting_change() ||
                   (experiment_flags_ & gi_pass::experiment_no_direct_page_skip) != 0u;
-    // The lights: a changed directional light or light count relights everything, a changed local light its reach
-    // before and after.
+    // The lights, matched by entity: a changed, added or removed directional light relights everything, a local light
+    // its reach before and after.
     const auto& light_buffer = gi_scene.get_light_buffer();
     const std::vector<float>& lights = light_buffer.get_light_data();
+    const std::vector<entt::entity>& light_entities = light_buffer.get_light_entities();
     const size_t record = size_t(gpu_light_buffer::light_vec4_stride) * 4u;
     const auto is_directional = [](const float* light)
     {
@@ -509,22 +510,50 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
     {
         return light[11] <= 0.0f;
     };
-    changes.all = changes.all || lights.size() != previous_lights_.size();
-    for(size_t base = 0; base + record <= lights.size() && !changes.all; base += record)
+    // A light that lights nothing changes nothing when it comes or goes.
+    const auto add_light_change = [&](const float* light)
     {
-        const float* light = lights.data() + base;
-        const float* previous = previous_lights_.data() + base;
-        if(std::equal(light, light + record, previous) || (is_dark(light) && is_dark(previous)))
+        if(is_dark(light))
+        {
+            return;
+        }
+        if(is_directional(light))
+        {
+            changes.all = true;
+            return;
+        }
+        changes.regions.push_back(reach_box(light));
+    };
+    previous_light_records_.clear();
+    for(size_t i = 0; i < previous_light_entities_.size(); ++i)
+    {
+        previous_light_records_[previous_light_entities_[i]] = i * record;
+    }
+    for(size_t i = 0; i < light_entities.size() && (i + 1) * record <= lights.size() && !changes.all; ++i)
+    {
+        const float* light = lights.data() + i * record;
+        const auto found = previous_light_records_.find(light_entities[i]);
+        if(found == previous_light_records_.end())
+        {
+            add_light_change(light);
+            continue;
+        }
+        const float* previous = previous_lights_.data() + found->second;
+        previous_light_records_.erase(found);
+        if(std::equal(light, light + record, previous))
         {
             continue;
         }
-        if(is_directional(light) || is_directional(previous))
+        add_light_change(previous);
+        add_light_change(light);
+    }
+    for(const auto& [entity, base] : previous_light_records_)
+    {
+        if(changes.all)
         {
-            changes.all = true;
             break;
         }
-        changes.regions.push_back(reach_box(previous));
-        changes.regions.push_back(reach_box(light));
+        add_light_change(previous_lights_.data() + base);
     }
     for(size_t base = 0; base + record <= lights.size(); base += record)
     {
@@ -541,6 +570,7 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
         changes.lights.push_back(reach);
     }
     previous_lights_ = lights;
+    previous_light_entities_ = light_entities;
     // The sun's cloud shadow: a new map relights every page a directional light reaches.
     const bool has_directional = std::any_of(changes.lights.begin(),
                                              changes.lights.end(),
@@ -593,18 +623,22 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
     return changes;
 }
 
-auto gi_surface_cache::gate_instance_values(uint64_t identity, uint64_t revision) -> uint64_t
+auto gi_surface_cache::gate_instance_values(uint64_t identity, uint64_t capture_revision, uint64_t direct_revision)
+    -> gated_revisions
 {
     auto [found, is_new] = instance_values_gates_.try_emplace(identity);
     auto& gate = found->second;
     gate.seen_update = update_count_;
-    // A source seen for the first time captures its values as they are.
-    if(is_new || (gate.revision != revision && update_count_ - gate.taken_update >= instance_values_recapture_updates))
+    // A source seen for the first time captures its values as they are. The direct aspects are a part of the
+    // capture's, so they move only when the capture's do.
+    if(is_new ||
+       (gate.revision != capture_revision && update_count_ - gate.taken_update >= instance_values_recapture_updates))
     {
-        gate.revision = revision;
+        gate.revision = capture_revision;
+        gate.direct_revision = direct_revision;
         gate.taken_update = update_count_;
     }
-    return gate.revision;
+    return {gate.revision, gate.direct_revision};
 }
 
 void gi_surface_cache::drop_unseen_instance_values_gates()
@@ -650,20 +684,35 @@ void gi_surface_cache::update(const surface_cache_system& gi_scene,
     const auto& instances = gi_scene.get_instances();
     for(const auto& src : gi_sources)
     {
-        const uint64_t material_identity = uint64_t(reinterpret_cast<uintptr_t>(src.material.get()));
-        const uint64_t material_key =
-            src.material
-                ? (material_identity * material_key_multiplier) ^
-                      (src.material->get_state_revision() * state_revision_multiplier) ^
-                      (gate_instance_values(src.identity, src.material->get_instance_values_revision()) *
-                       instance_values_revision_multiplier)
-                : 0u;
+        // Only the aspects a capture reads (render_interest): a roughness or AO edit keeps the cards.
+        uint64_t material_key = 0;
+        uint64_t material_direct_key = 0;
+        if(const auto* mat = src.material.get())
+        {
+            const uint64_t identity_key = uint64_t(reinterpret_cast<uintptr_t>(mat)) * material_key_multiplier;
+            const auto gated =
+                gate_instance_values(src.identity,
+                                     mat->get_instance_values_revision(render_interest::gi_card_capture),
+                                     mat->get_instance_values_revision(render_interest::gi_card_direct));
+            // A texture that loads or reloads changes the capture without an edit (material::get_content_version).
+            material_key = identity_key ^
+                           ((mat->get_state_revision(render_interest::gi_card_capture) +
+                             mat->get_content_version(render_interest::gi_card_capture)) *
+                            state_revision_multiplier) ^
+                           (gated.capture * instance_values_revision_multiplier);
+            material_direct_key = identity_key ^
+                                  ((mat->get_state_revision(render_interest::gi_card_direct) +
+                                    mat->get_content_version(render_interest::gi_card_direct)) *
+                                   state_revision_multiplier) ^
+                                  (gated.direct * instance_values_revision_multiplier);
+        }
         sources_.push_back({src.identity,
                             src.instance_index,
                             src.cards,
                             src.local_to_world,
                             instances[src.instance_index].is_emissive_light_source,
-                            material_key});
+                            material_key,
+                            material_direct_key});
     }
     drop_unseen_instance_values_gates();
     scene_.set_hold_resident_resolutions((experiment_flags_ & experiment_hold_card_resolution) != 0u);

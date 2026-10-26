@@ -774,13 +774,18 @@ auto gi_scene::refresh_placements(const std::vector<source>& sources) -> bool
         }
         if(entry.material_key != src.material_key)
         {
-            // The material changed: its resident pages read as never captured, so the refresh takes them first.
+            // The material changed: its resident pages read as never captured, so the refresh takes them first. The
+            // direct lighting reads only part of what a capture reads, so it relights them only for that part.
+            const bool is_direct_changed = entry.material_direct_key != src.material_direct_key;
             entry.material_key = src.material_key;
+            entry.material_direct_key = src.material_direct_key;
+            ++stats_.material_changes;
             for(auto& card : entry.card_states)
             {
                 for(auto& slot : card.slots)
                 {
                     slot.captured_frame = 0;
+                    slot.has_material_direct_change = slot.has_material_direct_change || is_direct_changed;
                 }
             }
         }
@@ -1581,8 +1586,11 @@ void gi_scene::refresh_captures(const std::vector<source>& sources, capture_pack
         cap.keeps_lighting = true;
         captures_.push_back(cap);
         // A periodic refresh captures the same geometry (its lighting is resampled in place) and the direct lighting
-        // reads only the capture's normal and depth; a forced one (a material change, captured_frame 0) may change them.
-        resident_slots_[i]->is_direct_dirty = resident_slots_[i]->is_direct_dirty || resident_slots_[i]->captured_frame == 0;
+        // reads only the capture's normal and depth; a material change of those (has_material_direct_change) does
+        // change them.
+        resident_slots_[i]->is_direct_dirty =
+            resident_slots_[i]->is_direct_dirty || resident_slots_[i]->has_material_direct_change;
+        resident_slots_[i]->has_material_direct_change = false;
         resident_slots_[i]->captured_frame = frame_;
         ++stats_.refreshed;
     }
@@ -1635,6 +1643,7 @@ void gi_scene::invalidate_direct_lighting(const direct_lighting_changes& changes
     {
         return;
     }
+    std::atomic<uint32_t> invalidated{0};
     poolstl::for_each_par_if(
         page_count >= k_parallel_invalidation_pages,
         poolstl::iota_iter<uint32_t>(0),
@@ -1658,8 +1667,13 @@ void gi_scene::invalidate_direct_lighting(const direct_lighting_changes& changes
                     }
                 }
                 slot.is_direct_dirty = is_changed;
+                if(is_changed)
+                {
+                    invalidated.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         });
+    stats_.direct_invalidated += invalidated.load(std::memory_order_relaxed);
 }
 
 void gi_scene::compute_page_priorities(const std::vector<viewer>& viewers)
