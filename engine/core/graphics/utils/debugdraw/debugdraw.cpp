@@ -1573,8 +1573,8 @@ struct DebugDrawEncoderImpl
             if(0 < _numIndices)
             {
                 uint32_t numIndices = _numIndices;
-                bgfx::TransientIndexBuffer tib;
-                if(!_lineList && wireframe)
+                const bool convertsToLines = !_lineList && wireframe;
+                if(convertsToLines)
                 {
                     numIndices = bgfx::topologyConvert(bgfx::TopologyConvert::TriListToLineList,
                                                        NULL,
@@ -1582,8 +1582,18 @@ struct DebugDrawEncoderImpl
                                                        _indices,
                                                        _numIndices,
                                                        false);
-
-                    bgfx::allocTransientIndexBuffer(&tib, numIndices);
+                }
+                // A nearly full transient pool hands out a shorter buffer than asked, which the copy below would
+                // overrun: the mesh skips this frame instead.
+                if(bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices)
+                {
+                    m_encoder->discard();
+                    return;
+                }
+                bgfx::TransientIndexBuffer tib;
+                bgfx::allocTransientIndexBuffer(&tib, numIndices);
+                if(convertsToLines)
+                {
                     bgfx::topologyConvert(bgfx::TopologyConvert::TriListToLineList,
                                           tib.data,
                                           numIndices * sizeof(uint16_t),
@@ -1593,7 +1603,6 @@ struct DebugDrawEncoderImpl
                 }
                 else
                 {
-                    bgfx::allocTransientIndexBuffer(&tib, numIndices);
                     bx::memCopy(tib.data, _indices, numIndices * sizeof(uint16_t));
                 }
 

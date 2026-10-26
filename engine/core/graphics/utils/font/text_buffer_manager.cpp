@@ -1208,6 +1208,16 @@ void text_buffer_manager::submit_text_buffer(text_buffer_handle handle,
 
         case buffer_type::Transient:
         {
+            // A nearly full transient pool hands out shorter buffers than asked, which the copies below would
+            // overrun: the text skips this frame instead.
+            const uint32_t index_count = bc.buffer->get_index_count();
+            const uint32_t vertex_count = bc.buffer->get_vertex_count();
+            if(bgfx::getAvailTransientIndexBuffer(index_count) < index_count ||
+               bgfx::getAvailTransientVertexBuffer(vertex_count, vertex_layout_) < vertex_count)
+            {
+                bgfx::discard();
+                return;
+            }
             bgfx::TransientIndexBuffer tib;
             bgfx::TransientVertexBuffer tvb;
             bgfx::allocTransientIndexBuffer(&tib, bc.buffer->get_index_count());
