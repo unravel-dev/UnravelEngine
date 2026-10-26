@@ -1,4 +1,5 @@
 #include "particle_emitter_component.hpp"
+#include <engine/meta/ecs/components/component_disables.h>
 #include "serialization/serialization.h"
 
 #include <serialization/associative_archive.h>
@@ -802,6 +803,7 @@ REFLECT(particle_emitter_component)
         .type("particle_emitter_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "particle_emitter_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::gpu_particles},
             entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Particle Emitter"},
         })

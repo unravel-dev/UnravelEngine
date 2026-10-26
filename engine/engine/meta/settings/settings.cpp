@@ -10,10 +10,40 @@
 #include <engine/meta/input/input.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/physics/physics_types.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/settings/boot_config.h>
 
 namespace unravel
 {
+namespace
+{
+/// The hint under an Allowed Features row whose feature the running device does not run.
+auto make_device_hint(render_feature feature) -> entt::property_predicate_t<std::string>
+{
+    return entt::property_predicate<std::string>(
+        [feature](const entt::meta_any&) -> std::string
+        {
+            return get_render_feature_support().get_hint(feature);
+        });
+}
+
+/// The ambient occlusion row's hint: GTAO's when the device does not run it, and ASSAO's when neither runs.
+auto make_ambient_occlusion_device_hint() -> entt::property_predicate_t<std::string>
+{
+    return entt::property_predicate<std::string>(
+        [](const entt::meta_any&) -> std::string
+        {
+            const auto& support = get_render_feature_support();
+            std::string hint = support.get_hint(render_feature::gtao);
+            const std::string assao_hint = support.get_hint(render_feature::assao);
+            if(!assao_hint.empty())
+            {
+                hint += (hint.empty() ? "" : " ") + assao_hint;
+            }
+            return hint;
+        });
+}
+} // namespace
 
 REFLECT_INLINE(settings::app_settings)
 {
@@ -425,24 +455,28 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"name", "global_illumination"},
             entt::attribute{"pretty_name", "Global Illumination"},
             entt::attribute{"tooltip", "Allow global illumination. When off, scenes are lit by their probes and the sky only."},
+            entt::attribute{"hint", make_device_hint(render_feature::global_illumination)},
         })
         .data<&feature_limits::screen_space_reflections>("screen_space_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "screen_space_reflections"},
             entt::attribute{"pretty_name", "Screen Space Reflections"},
             entt::attribute{"tooltip", "Allow screen space reflections."},
+            entt::attribute{"hint", make_device_hint(render_feature::screen_space_reflections)},
         })
         .data<&feature_limits::screen_space_indirect_lighting>("screen_space_indirect_lighting"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "screen_space_indirect_lighting"},
             entt::attribute{"pretty_name", "Screen Space Indirect Lighting"},
             entt::attribute{"tooltip", "Allow screen space indirect lighting."},
+            entt::attribute{"hint", make_device_hint(render_feature::screen_space_indirect_lighting)},
         })
         .data<&feature_limits::ambient_occlusion>("ambient_occlusion"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "ambient_occlusion"},
             entt::attribute{"pretty_name", "Ambient Occlusion"},
             entt::attribute{"tooltip", "Allow screen space ambient occlusion (GTAO and ASSAO)."},
+            entt::attribute{"hint", make_ambient_occlusion_device_hint()},
         })
         .data<&feature_limits::bloom>("bloom"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -456,6 +490,7 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"pretty_name", "Volumetric Fog"},
             entt::attribute{"tooltip", "Allow volumetric fog. When off, fog that asks for it renders without its "
                                        "shadows and light shafts."},
+            entt::attribute{"hint", make_device_hint(render_feature::volumetric_fog)},
         })
         .data<&feature_limits::max_anti_aliasing>("max_anti_aliasing"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -474,6 +509,7 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"name", "soft_shadows"},
             entt::attribute{"pretty_name", "Soft Shadows"},
             entt::attribute{"tooltip", "Allow soft shadows (PCSS, VSM and ESM). When off, those lights filter their shadows with PCF."},
+            entt::attribute{"hint", make_device_hint(render_feature::soft_shadows)},
         })
         .data<&feature_limits::contact_shadows>("contact_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -1,4 +1,5 @@
 #include "auto_exposure_component.hpp"
+#include <engine/meta/ecs/components/component_disables.h>
 
 #include "engine/meta/core/math/vector.hpp"
 
@@ -259,6 +260,7 @@ REFLECT(auto_exposure_component)
         .type("auto_exposure_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "auto_exposure_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::auto_exposure},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Auto Exposure"},
         })

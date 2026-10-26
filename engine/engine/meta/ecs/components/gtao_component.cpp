@@ -231,6 +231,7 @@ REFLECT(gtao_component)
         .type("gtao_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gtao_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::gtao},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "GTAO"},
             entt::attribute{COMPONENT_DISABLES_ATTRIBUTE, make_gtao_disable_rules()},

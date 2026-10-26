@@ -1408,6 +1408,12 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 
                 callbacks.icon = get_component_icon<ctype>();
                 callbacks.disable_notes = find_disable_notes(disable_notes, entt::type_id<ctype>().hash());
+                // A rendering feature the device does not run says so on the component that asks for it.
+                const std::string device_note = get_component_device_note(entt::resolve<ctype>());
+                if(!device_note.empty())
+                {
+                    callbacks.disable_notes.push_back(device_note);
+                }
 
                 // The inspector's filter: a component without a match is left out; one whose name matched shows
                 // whole.

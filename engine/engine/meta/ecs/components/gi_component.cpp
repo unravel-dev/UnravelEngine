@@ -466,11 +466,12 @@ LOAD_INSTANTIATE(gi_settings, ser20::iarchive_binary_t);
 
 namespace
 {
-/// Whether the GI runs at all on the entity the inspector reads.
+/// Whether the GI runs at all on the entity the inspector reads: enabled, on a device that runs it.
 auto get_running_gi(const entt::meta_any& obj) -> const gi_component*
 {
     const auto* gi = obj.try_cast<gi_component>();
-    return gi != nullptr && gi->enabled ? gi : nullptr;
+    const bool can_run = get_render_feature_support().is_available(render_feature::global_illumination);
+    return gi != nullptr && gi->enabled && can_run ? gi : nullptr;
 }
 
 /// The screen-space passes the GI takes over from, each with the setting that decides it.
@@ -515,6 +516,7 @@ REFLECT(gi_component)
         .type("gi_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gi_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::global_illumination},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Global Illumination"},
             entt::attribute{COMPONENT_DISABLES_ATTRIBUTE, make_gi_disable_rules()},

@@ -16,6 +16,7 @@
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/pipeline/pipeline.h>
+#include <engine/rendering/render_feature_support.h>
 #include <seq/seq.h>
 
 #include <chrono>
@@ -992,6 +993,12 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  math::vec3 position{};
                  math::quat rotation{};
              };
+             const auto& probe_status = get_render_feature_support().get_status(render_feature::temporal_probe);
+             if(!probe_status.is_available)
+             {
+                 return {.text = "This device cannot run the temporal stability probe. " + probe_status.reason,
+                         .is_error = true};
+             }
              hpp::optional<camera_pose> start_pose;
              auto armed = mcp.invoke_on_main(
                  [&]() -> bool

@@ -95,15 +95,18 @@ Use `unravel-shader-change` for step-by-step shader edits.
 
 ## bgfx calls vs gfx:: functions
 
-- Call bgfx directly (`bgfx::setState`, `bgfx::setTexture`, `bgfx::dispatch`, ...). Do not add
+- Call bgfx directly (`bgfx::setState`, `bgfx::setTexture`, `bgfx::setImage`, ...). Do not add
   pass-through wrappers to `engine/core/graphics/graphics.h`.
+- Exception: compute dispatches and indirect draws go through `gfx::dispatch`, `gfx::dispatch_indirect`
+  and `gfx::submit_indirect`. They check the device snapshot (GPU feature support, below) and skip, discard
+  and log what the device cannot run; bgfx checks its capabilities in debug builds only.
 - Use bgfx types directly too (`bgfx::TextureHandle`, `bgfx::ViewId`, `bgfx::Memory`,
   `bgfx::Access::Write`, ...); do not add `using` aliases for bgfx types to `gfx::`.
 - `gfx::` free functions are engine code only: they add behavior or change the API, e.g.
   `gfx::init` / `gfx::frame` / `gfx::shutdown` (eviction bookkeeping), `gfx::set_image_3d`,
   `gfx::clip_quad`. The prefix tells whether a call is ours or bgfx's.
 - Advance frames through `gfx::frame()` / `gfx::frames()` so eviction sees every frame.
-- The last argument of `bgfx::submit` / `bgfx::dispatch` is a `BGFX_DISCARD_*` mask, not a
+- The last argument of `bgfx::submit` / `gfx::dispatch` is a `BGFX_DISCARD_*` mask, not a
   bool: `true` compiles as `BGFX_DISCARD_BINDINGS` and `false` as `BGFX_DISCARD_NONE`. Model
   submesh callbacks map `preserve_state` to `BGFX_DISCARD_NONE`, otherwise `BGFX_DISCARD_ALL`.
 - The `gfx::set_uniform` / `gfx::set_texture` overloads taking `gfx::program::uniform_ptr` live
@@ -168,6 +171,39 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
   The G-buffer and velocity skinned shaders must call the same `skin_palette_matrix` (EQUAL depth test).
   Editor picking / outline / wireframe keep the per-draw `u_world` palette path.
 - `layer_mask` - culling/filtering per pass
+
+## GPU feature support
+
+Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_feature_support_plan.md`.
+
+- `gfx::get_device_caps()` (`engine/core/graphics/device_caps.h`) is the snapshot features decide from, taken
+  after bgfx starts; never read `bgfx::getCaps()` in feature code. It has `can_write_image(format,
+  dimension)`, `can_read_write_image(format)` (R32 formats need compute only), `can_render_to(format,
+  samples)` and `can_generate_mips(format)`.
+- `--gfx-disable=` masks the snapshot to test fallbacks on a desktop: `compute`, `draw_indirect`,
+  `dispatch_indirect`, `image_rw`, `blend_independent`, `typed_image_loads`, `extended_storage_formats`,
+  `bindings8`, `format:<name>:<write|read|render|msaa|mips|all>`. D3D11 feature level 11_0 is
+  `bindings8,image_rw,typed_image_loads`; the S21 is `draw_indirect`. Compute programs fail to build under
+  `compute`, as on a real device.
+- Minimum requirements (compute, RGBA16F and D32F targets, 4 color attachments, R32F image writes) are checked
+  on the real device at init; a device without them gets a message box.
+- `render_feature` (`engine/engine/rendering/render_feature_support.h`) lists what each feature needs:
+  compute, indirect draw or dispatch, independent blend, compute bindings, storage images (format, dimension,
+  access), render targets, dependencies and the compute shaders it owns. `get_render_feature_support()` holds
+  the resolution with a reason sentence per unavailable feature.
+- Where it applies: `apply_view_params` ANDs the device limits into the project's `feature_limits` in every
+  view; `pipeline::apply_feature_support` turns GTAO (ASSAO takes over), ASSAO and auto exposure off; the other
+  features check `is_available` where they decide to run (GI init, Hi-Z, prefilter, exposure, irradiance,
+  particles, fog, cloud shadow, skinned batching, UI MSAA, the temporal probe).
+- A new compute pass: list its storage images and binding count in the table (the "render feature shaders"
+  suite reads the committed compiled shaders and fails otherwise), check `is_available` where it is enabled,
+  keep image stages below 8 (OpenGL) and every stage below 8 if it must run on D3D11 feature level 11_0.
+- bgfx gates indirect dispatch on `BGFX_CAPS_DISPATCH_INDIRECT`, added by
+  `deps/3rdparty/bgfx/patches/0003-dispatch-indirect-capability.patch` (Vulkan reports draw indirect only with
+  multi-draw).
+- The editor shows unavailable features under the Allowed Features rows, on the components that ask for them
+  (`COMPONENT_RENDER_FEATURE_ATTRIBUTE`) and in the profiler's GPU Resources; MCP `editor_get_status` has a
+  `graphics` block.
 
 ## Render change tracking
 

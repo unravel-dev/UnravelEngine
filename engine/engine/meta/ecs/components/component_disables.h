@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/rendering/render_feature_support.h>
 #include <reflection/reflection.h>
 
 #include <string>
@@ -11,6 +12,10 @@ namespace unravel
 
 /// Meta attribute of a component type holding its @ref component_disable_rules.
 constexpr const char* COMPONENT_DISABLES_ATTRIBUTE = "disables";
+
+/// Meta attribute of a component type holding the render_feature it asks for: the inspector says on the
+/// component when the device does not run it.
+constexpr const char* COMPONENT_RENDER_FEATURE_ATTRIBUTE = "render_feature";
 
 /**
  * @brief One component whose work another component takes over, and what to tell the user about it.
@@ -51,6 +56,15 @@ inline auto get_component_disable_rules(const entt::meta_type& type) -> const co
     static const component_disable_rules none;
     const auto* rules = entt::get_attribute(type, COMPONENT_DISABLES_ATTRIBUTE).try_cast<component_disable_rules>();
     return rules != nullptr ? *rules : none;
+}
+
+/// What the inspector shows on a component of @p type whose rendering feature the device does not run; empty
+/// when it runs or the type names no feature.
+inline auto get_component_device_note(const entt::meta_type& type) -> std::string
+{
+    const auto attribute = entt::get_attribute(type, COMPONENT_RENDER_FEATURE_ATTRIBUTE);
+    const auto* feature = attribute.try_cast<render_feature>();
+    return feature != nullptr ? get_render_feature_support().get_hint(*feature) : std::string{};
 }
 
 /// Whether @p rule applies to @p source, the instance of the component that declared it.

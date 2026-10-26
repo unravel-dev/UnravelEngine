@@ -1,4 +1,5 @@
 #include "reflection_probe_component.hpp"
+#include <engine/meta/ecs/components/component_disables.h>
 #include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/rendering/reflection_probe.hpp>
 
@@ -20,6 +21,7 @@ REFLECT(reflection_probe_component)
         .type("reflection_probe_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "reflection_probe_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::reflection_probe_prefilter},
             entt::attribute{"category", "Lighting"},
             entt::attribute{"pretty_name", "Reflection Probe"},
         })

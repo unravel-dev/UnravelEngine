@@ -1,4 +1,5 @@
 #include "assao_component.hpp"
+#include <engine/meta/ecs/components/component_disables.h>
 #include "engine/rendering/pipeline/passes/assao_pass.h"
 
 #include <serialization/associative_archive.h>
@@ -179,6 +180,7 @@ REFLECT(assao_component)
         .type("assao_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "assao_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::assao},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "ASSAO"},
         })

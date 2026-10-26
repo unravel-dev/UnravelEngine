@@ -4,6 +4,8 @@
 
 #include <editor/format/format_bytes.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <engine/rendering/render_feature_support.h>
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <imgui/imgui.h>
 #include <imgui_widgets/tooltips.h>
@@ -159,6 +161,28 @@ void draw_resource_row(const char* name,
 
     ImGui::PopID();
 }
+/// The device the editor renders on, and each rendering feature it does not run with the reason and the fallback.
+void draw_device_summary()
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, muted_text_color);
+    ImGui::TextWrapped("%s", gfx::describe_device_caps(gfx::get_device_caps()).c_str());
+    if(!gfx::get_device_caps_mask().is_empty())
+    {
+        ImGui::TextWrapped("Simulated with --gfx-disable. The real device runs more.");
+    }
+    ImGui::PopStyleColor();
+    const auto& support = get_render_feature_support();
+    ImGui::PushStyleColor(ImGuiCol_Text, usage_medium_color);
+    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
+    {
+        const std::string hint = support.get_hint(static_cast<render_feature>(index));
+        if(!hint.empty())
+        {
+            ImGui::TextWrapped("%s", hint.c_str());
+        }
+    }
+    ImGui::PopStyleColor();
+}
 } // namespace
 
 void profiler_draw_gpu_resources_section()
@@ -173,6 +197,7 @@ void profiler_draw_gpu_resources_section()
     {
         return;
     }
+    draw_device_summary();
 
     constexpr ImGuiTableFlags table_flags =
         ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_NoBordersInBody;

@@ -1,4 +1,5 @@
 #include "ssil_component.hpp"
+#include <engine/meta/ecs/components/component_disables.h>
 #include <engine/meta/core/math/vector.hpp>
 
 #include <serialization/associative_archive.h>
@@ -352,6 +353,7 @@ REFLECT(ssil_component)
         .type("ssil_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "ssil_component"},
+            entt::attribute{COMPONENT_RENDER_FEATURE_ATTRIBUTE, render_feature::screen_space_indirect_lighting},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "SSIL"},
         })

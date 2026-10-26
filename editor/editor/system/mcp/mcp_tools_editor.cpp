@@ -16,6 +16,8 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/render_feature_support.h>
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <imgui/imgui_internal.h>
 
@@ -230,6 +232,37 @@ auto mcp_status_json(rtti::context& ctx) -> std::string
                        manager.get_tool_count());
 }
 
+/// The device the editor renders on and the rendering features it does not run, with why and what renders
+/// instead (render_feature_support). "simulated" is set when --gfx-disable masks the device.
+auto graphics_status_json() -> std::string
+{
+    const auto& caps = gfx::get_device_caps();
+    const auto& support = get_render_feature_support();
+    std::string unavailable;
+    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
+    {
+        const auto feature = static_cast<render_feature>(index);
+        const auto& status = support.get_status(feature);
+        if(status.is_available)
+        {
+            continue;
+        }
+        const auto& needs = get_render_feature_requirements(feature);
+        unavailable += fmt::format(R"({}{{"feature":{},"reason":{},"fallback":{}}})",
+                                   unavailable.empty() ? "" : ",",
+                                   make_json_string(needs.name),
+                                   make_json_string(status.reason),
+                                   make_json_string(needs.fallback));
+    }
+    return fmt::format(R"({{"backend":{},"vendor":{},"device_id":{},"compute_bindings":{},"simulated":{},"unavailable":[{}]}})",
+                       make_json_string(bgfx::getRendererName(caps.renderer)),
+                       make_json_string(gfx::get_vendor_name(caps.vendor_id)),
+                       caps.device_id,
+                       caps.max_compute_bindings,
+                       bool_to_json(!gfx::get_device_caps_mask().is_empty()),
+                       unavailable);
+}
+
 /// An emitter's playback and simulation state, as JSON fields without the braces.
 auto emitter_state_fields(const particle_emitter_component& emitter) -> std::string
 {
@@ -411,7 +444,8 @@ void register_editor_tools(mcp_tool_registry& registry)
          .description =
              "Where the editor is, in one call: the open project, the active scene, prefab mode, play state "
              "(phase, paused, frames running and simulated), the dialog the editor waits on (modal: title, "
-             "message, buttons; answer it with editor_answer_modal) and the active MCP profile.",
+             "message, buttons; answer it with editor_answer_modal), the active MCP profile, and the graphics "
+             "device (backend, vendor, the rendering features it does not run with the reason and the fallback).",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
@@ -420,13 +454,14 @@ void register_editor_tools(mcp_tool_registry& registry)
                  const auto prefab_json = ctx.has<editing_manager>()
                                               ? prefab_mode_status_json(ctx.get_cached<editing_manager>())
                                               : std::string(R"({"active":false})");
-                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"modal":{},"mcp":{}}})",
+                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"modal":{},"mcp":{},"graphics":{}}})",
                                              project_info_json(ctx),
                                              active_scene_status_json(ctx),
                                              prefab_json,
                                              play_json,
                                              modal_status_json(),
-                                             mcp_status_json(ctx)),
+                                             mcp_status_json(ctx),
+                                             graphics_status_json()),
                          .is_error = false};
              },
          .mutates_scene = false,
