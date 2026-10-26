@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace unravel
 {
@@ -160,25 +161,26 @@ auto model::is_valid() const -> bool
     return !mesh_lods_.empty();
 }
 
-auto model::get_lod(uint32_t lod) const -> asset_handle<mesh>
+auto model::get_lod(uint32_t lod) const -> const asset_handle<mesh>&
 {
+    static const asset_handle<mesh> none{};
     if(mesh_lods_.empty())
     {
-        return {};
+        return none;
     }
 
     lod = math::clamp<std::size_t>(lod, 0, mesh_lods_.size() - 1);
 
     for(int i = int(lod); i >= 0; --i)
     {
-        auto lod_mesh = mesh_lods_[i];
+        const auto& lod_mesh = mesh_lods_[i];
         if(lod_mesh)
         {
             return lod_mesh;
         }
     }
-    
-    return {};
+
+    return none;
 }
 
 void model::set_lod(asset_handle<mesh> mesh, uint32_t lod)
@@ -213,7 +215,7 @@ void model::set_shared_material(asset_handle<material> material, uint32_t index)
 
 auto model::apply_default_materials(asset_manager& am, bool wait) -> bool
 {
-    const auto lod = get_lod(0);
+    const auto& lod = get_lod(0);
     if(!lod)
     {
         return false;
@@ -270,11 +272,18 @@ auto model::get_lods_count() const -> uint32_t
         const auto& mesh_asset = mesh_lods_[0];
         if(mesh_asset)
         {
-            // One get(), not two: each resolves through the shared asset link (mutex, access
-            // stamp, refcount), and this runs per model per frame from every pool thread.
-            if(const auto mesh_ptr = mesh_asset.get())
+            // Read in place (waited for while it loads, as get() does): this runs per model per
+            // frame from every pool thread, and a get() counts a reference on the mesh every model
+            // of it shares.
+            const std::optional<uint32_t> count = mesh_asset.visit(
+                [](mesh* loaded) -> std::optional<uint32_t>
+                {
+                    return loaded != nullptr ? std::optional<uint32_t>(loaded->get_lod_count()) : std::nullopt;
+                },
+                true);
+            if(count)
             {
-                return mesh_ptr->get_lod_count();
+                return *count;
             }
         }
     }
@@ -317,11 +326,12 @@ void model::set_material_instances(const std::vector<material_instance>& instanc
     sync_material_instances();
 }
 
-auto model::get_shared_material(uint32_t index) const -> asset_handle<material>
+auto model::get_shared_material(uint32_t index) const -> const asset_handle<material>&
 {
+    static const asset_handle<material> none{};
     if(materials_.size() <= index)
     {
-        return {};
+        return none;
     }
     return materials_[index];
 }
@@ -351,7 +361,7 @@ auto model::get_render_material(uint32_t index) const -> material::sptr
             return instance.get_resolved();
         }
     }
-    const auto shared = get_shared_material(index);
+    const auto& shared = get_shared_material(index);
     return shared.is_valid() ? shared.get() : nullptr;
 }
 
@@ -397,11 +407,8 @@ void model::sync_material_instances()
 auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, const camera& cam, float dt) const -> bool
 {
     data.transition_time = get_lod_transition_time().count();
-    // The first LOD's handle, checked in place. get_lod(0) returned it BY VALUE, and every
-    // handle copy and get() touches the asset LINK that a crowd drawing one mesh shares:
-    // refcounts, the weak-asset mutex, the access stamp, and std::atomic_load on a shared_ptr,
-    // which the MS STL serialises on a global spinlock. Run from every pool thread at once, once
-    // per model, that lock traffic was the cost of the cull - not the culling.
+    // The first LOD's handle, checked in place: this runs once per model from every pool thread,
+    // and a copy of the handle counts a reference on the link every model of that mesh shares.
     if(mesh_lods_.empty() || !mesh_lods_.front())
     {
         return false;
@@ -789,7 +796,7 @@ void model::submit(const math::mat4& world_transform,
                    const camera* view,
                    const model_submit_extras& extras) const
 {
-    const auto lod_mesh = get_lod(lod);
+    const auto& lod_mesh = get_lod(lod);
     if(!lod_mesh)
     {
         return;
@@ -1028,7 +1035,7 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                                       const camera* view,
                                       const model_submit_extras& extras) const
 {
-    const auto lod_mesh = get_lod(lod);
+    const auto& lod_mesh = get_lod(lod);
     if(!lod_mesh)
     {
         return;
@@ -1293,7 +1300,7 @@ void model::submit_for_batching(batch_collector& collector,
                                 const camera* view,
                                 const model_submit_extras& extras) const
 {
-    auto mesh_asset = get_lod(lod_index);
+    const auto& mesh_asset = get_lod(lod_index);
     if(!mesh_asset)
     {
         return;
@@ -1484,7 +1491,7 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
                                                 bool nested_cascades,
                                                 const model_submit_extras& extras) const -> bool
 {
-    auto mesh_asset = get_lod(lod_index);
+    const auto& mesh_asset = get_lod(lod_index);
     if(!mesh_asset)
     {
         return false;
@@ -1654,7 +1661,7 @@ void model::submit_for_skinned_batching(batch_collector& collector,
                                         const camera* view,
                                         const model_submit_extras& extras) const
 {
-    auto mesh_asset = get_lod(lod_index);
+    const auto& mesh_asset = get_lod(lod_index);
     auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
     if(!mesh)
     {
@@ -1706,7 +1713,7 @@ auto model::submit_for_skinned_shadow_batching_cascaded(std::vector<shadow_batch
                                                         bool nested_cascades,
                                                         const model_submit_extras& extras) const -> bool
 {
-    auto mesh_asset = get_lod(lod_index);
+    const auto& mesh_asset = get_lod(lod_index);
     auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
     if(!mesh)
     {

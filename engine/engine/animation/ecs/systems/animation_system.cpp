@@ -190,7 +190,7 @@ void describe_target_skeleton(const model_component& model, animation_target_ske
 auto animation_system::get_skeleton_version(const model_component& model) -> uint64_t
 {
     size_t version = size_t(model.get_armature_version());
-    const auto lod = model.get_model().get_lod(0);
+    const auto& lod = model.get_model().get_lod(0);
     utils::hash_combine(version, lod ? lod.version() : uintptr_t{});
     return version;
 }

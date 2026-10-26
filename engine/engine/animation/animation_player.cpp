@@ -1574,6 +1574,24 @@ auto is_same_clip(const std::weak_ptr<const animation_clip>& cached, const std::
 {
     return !cached.owner_before(clip) && !clip.owner_before(cached) && !cached.expired();
 }
+
+/**
+ * @brief Keeps `cached` what `clip.try_get()` returns. The clip is compared in place first, and only taken again
+ * (a reference counted on the clip every character playing it shares) when it is another one: reloaded, loaded
+ * since, or gone. `cached` holds the clip it points to, so an equal address is that clip.
+ */
+void refresh_loaded_clip(const asset_handle<animation_clip>& clip, std::shared_ptr<animation_clip>& cached)
+{
+    const bool is_current = clip.visit(
+        [&](animation_clip* loaded)
+        {
+            return loaded == cached.get();
+        });
+    if(!is_current)
+    {
+        cached = clip.try_get();
+    }
+}
 } // namespace
 
 void animation_player::convert_to_additive(animation_layer_state& layer_state,
@@ -1612,12 +1630,14 @@ void animation_player::update_state(seconds_t delta_time, animation_layer_state&
     {
         // The weights decide how long one cycle takes, so they are computed with the time step.
         state.blend_space->compute_blend(layer_state.parameters, state.blend_clips);
-        state.blend_loaded_clips.clear();
+        state.blend_loaded_clips.resize(state.blend_clips.size());
         float weighted_duration = 0.0f;
         float total_weight = 0.0f;
-        for(const auto& clip_weight : state.blend_clips)
+        for(size_t i = 0; i < state.blend_clips.size(); ++i)
         {
-            const auto& clip = state.blend_loaded_clips.emplace_back(clip_weight.clip.try_get());
+            const auto& clip_weight = state.blend_clips[i];
+            auto& clip = state.blend_loaded_clips[i];
+            refresh_loaded_clip(clip_weight.clip, clip);
             if(clip)
             {
                 weighted_duration += clip->duration.count() * clip_weight.weight;
@@ -1646,7 +1666,7 @@ void animation_player::update_state(seconds_t delta_time, animation_layer_state&
     }
     else
     {
-        state.loaded_clip = state.clip.try_get();
+        refresh_loaded_clip(state.clip, state.loaded_clip);
         if(!state.loaded_clip)
         {
             // Still loading: time starts once the clip is there.

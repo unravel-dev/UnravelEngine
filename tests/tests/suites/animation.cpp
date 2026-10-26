@@ -301,6 +301,44 @@ void test_blend_space_actually_blends()
     check_near(frame.nodes[0].get_position().x, 2.5f, 1e-3f, "25/75 blend of both clips");
 }
 
+/// Replaces what `handle` (and every copy of it) loads with `clip`, as an asset reload does.
+void reload_clip(asset_handle<animation_clip> handle, const std::shared_ptr<animation_clip>& clip)
+{
+    handle.set_internal_job(pool().schedule("test_clip", [clip]() { return clip; }).share());
+    handle.get();
+}
+
+void test_reloaded_clip_plays_on_the_next_step()
+{
+    std::printf("test_reloaded_clip_plays_on_the_next_step\n");
+    // The player keeps the clips it resolved and only takes a clip again when the handle resolves to
+    // another one: a clip reloaded while it plays must be picked up on the next step.
+    const auto clip_handle = make_clip_handle(make_constant_clip(1.0f, 1.0f));
+    animation_player player;
+    player.blend_to(0, clip_handle, seconds_t{0.0f}, true);
+    player.play();
+    auto frame = step_player(player, 0.1f);
+    check_near(frame.nodes[0].get_position().x, 1.0f, 1e-4f, "the first clip plays");
+    reload_clip(clip_handle, make_constant_clip(7.0f, 1.0f));
+    frame = step_player(player, 0.1f);
+    check_near(frame.nodes[0].get_position().x, 7.0f, 1e-4f, "the reloaded clip plays on the next step");
+
+    const auto point_a = make_clip_handle(make_constant_clip(0.0f, 1.0f));
+    const auto point_b = make_clip_handle(make_constant_clip(10.0f, 1.0f));
+    auto blend_space = std::make_shared<blend_space_def>();
+    blend_space->add_clip({0.0f}, point_a);
+    blend_space->add_clip({1.0f}, point_b);
+    animation_player blended;
+    blended.set_blend_space(0, blend_space);
+    blended.set_blend_space_parameters(0, {0.5f});
+    blended.play();
+    frame = step_player(blended, 0.1f);
+    check_near(frame.nodes[0].get_position().x, 5.0f, 1e-3f, "the blend plays both points");
+    reload_clip(point_b, make_constant_clip(20.0f, 1.0f));
+    frame = step_player(blended, 0.1f);
+    check_near(frame.nodes[0].get_position().x, 10.0f, 1e-3f, "a reloaded blend point plays on the next step");
+}
+
 void test_blend_space_time_advances_and_loops()
 {
     std::printf("test_blend_space_time_advances_and_loops\n");
@@ -4392,6 +4430,7 @@ auto run_animation_suite(rtti::context& ctx) -> int
     test_multiway_blend_weighted_average();
     test_blends_cover_a_bone_some_poses_lack();
     test_blend_space_actually_blends();
+    test_reloaded_clip_plays_on_the_next_step();
     test_blend_space_time_advances_and_loops();
     test_blend_space_1d_param_edges();
     test_blend_space_2d_edges();

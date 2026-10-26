@@ -374,6 +374,12 @@ public:
 private:
     auto create_armature(bool force, std::vector<entt::handle>* created_roots = nullptr) -> bool;
 
+    /// The body of update_armature once its gate passed, on the model's first LOD mesh.
+    auto refresh_armature_pose(const mesh& render_mesh) -> bool;
+
+    /// The body of update_world_bounds, on the model's first LOD mesh.
+    void refresh_world_bounds(const mesh& render_mesh, const math::transform& world_transform);
+
     /// Ends a pending rebuild: the previous mesh's nodes the current armature does not bind
     /// again become stale.
     void settle_previous_armature();

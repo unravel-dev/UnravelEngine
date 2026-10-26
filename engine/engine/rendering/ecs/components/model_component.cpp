@@ -461,7 +461,7 @@ auto model_component::create_armature(bool force, std::vector<entt::handle>* cre
 
     if(force || !has_processed_armature)
     {
-        auto lod = model_.get_lod(0);
+        const auto& lod = model_.get_lod(0);
         if(!lod)
         {
             return false;
@@ -517,16 +517,25 @@ auto model_component::update_armature() -> bool
         return false;
     }
 
-    auto lod = model_.get_lod(0);
+    const auto& lod = model_.get_lod(0);
     if(!lod)
     {
         return false;
     }
+    // Read in place (waited for while it loads, as get() does): every model of one mesh reads it
+    // from its own pool thread each frame, and a get() counts a reference they all share.
+    return lod.visit(
+        [&](mesh* loaded)
+        {
+            return loaded != nullptr && refresh_armature_pose(*loaded);
+        },
+        true);
+}
 
-    auto mesh = lod.get();
-
+auto model_component::refresh_armature_pose(const mesh& render_mesh) -> bool
+{
     const auto& armature_entities = get_armature_entities();
-    const auto& skin_data = mesh->get_skin_bind_data();
+    const auto& skin_data = render_mesh.get_skin_bind_data();
     auto* owner_transform = get_owner().try_get<transform_component>();
 
     // Change-driven refresh in ONE walk: the dirty check and the rebuild share the same
@@ -536,7 +545,7 @@ auto model_component::update_armature() -> bool
     bool is_pose_changed = false;
     const bool refreshed = get_transforms_for_entities(armature_entities,
                                                        owner_transform,
-                                                       *mesh,
+                                                       render_mesh,
                                                        submesh_pose_,
                                                        bone_pose_,
                                                        render_proxies_,
@@ -555,7 +564,7 @@ auto model_component::update_armature() -> bool
     // Has skinning data?
     if(skin_data.has_bones())
     {
-        const auto& palettes = mesh->get_bone_palettes();
+        const auto& palettes = render_mesh.get_bone_palettes();
         const size_t palette_count = palettes.size();
         
         // Early exit if no palettes
@@ -574,8 +583,8 @@ auto model_component::update_armature() -> bool
         // bind-space bounds transformed by its current world transform. Any vertex skinned
         // by the palette is a convex combination of per-bone transformed points, so the
         // enclosing AABB of all bone boxes is a valid conservative bound.
-        render_proxies_.skinned_bounds.assign(mesh->get_submeshes_count(0), math::bbox{});
-        const auto& submeshes = mesh->get_submeshes(0);
+        render_proxies_.skinned_bounds.assign(render_mesh.get_submeshes_count(0), math::bbox{});
+        const auto& submeshes = render_mesh.get_submeshes(0);
 
         for(size_t i = 0; i < palette_count; ++i)
         {
@@ -623,7 +632,7 @@ auto model_component::update_armature() -> bool
 
 auto model_component::init_armature(bool force, std::vector<entt::handle>* created_roots) -> bool
 {
-    auto lod = model_.get_lod(0);
+    const auto& lod = model_.get_lod(0);
     if(!lod)
     {
         // No mesh binds any node: every node the previous mesh bound is stale.
@@ -631,15 +640,23 @@ auto model_component::init_armature(bool force, std::vector<entt::handle>* creat
         return false;
     }
 
-    auto mesh = lod.get();
-    const auto& skin_data = mesh->get_skin_bind_data();
-    const auto& armature = mesh->get_armature();
+    // Read in place (waited for while it loads, as get() does); building the armature happens
+    // outside the visit.
+    bool has_armature = false;
+    bool has_bones = false;
+    lod.visit(
+        [&](mesh* loaded)
+        {
+            has_armature = loaded != nullptr && static_cast<bool>(loaded->get_armature());
+            has_bones = loaded != nullptr && loaded->get_skin_bind_data().has_bones();
+        },
+        true);
 
     bool recreate_armature = force;
     // Built once its node entities exist. The pose is no proof: a model activated after this
     // frame's update reaches update_armature first, which fills the pose from no entities.
-    recreate_armature |= armature && get_armature_entities().empty();
-    recreate_armature |= skin_data.has_bones() && skinning_pose_.empty();
+    recreate_armature |= has_armature && get_armature_entities().empty();
+    recreate_armature |= has_bones && skinning_pose_.empty();
 
     if(recreate_armature)
     {
@@ -648,7 +665,7 @@ auto model_component::init_armature(bool force, std::vector<entt::handle>* creat
             return update_armature();
         }
     }
-    if(!armature)
+    if(!has_armature)
     {
         // A mesh without an armature binds no node: every node the previous mesh bound is stale.
         settle_previous_armature();
@@ -722,18 +739,25 @@ void model_component::settle_previous_armature()
 
 void model_component::update_world_bounds(const math::transform& world_transform)
 {
-    auto lod = model_.get_lod(0);
+    const auto& lod = model_.get_lod(0);
     if(!lod)
     {
         return;
     }
+    // Read in place, waited for while it loads, as get() does.
+    lod.visit(
+        [&](mesh* loaded)
+        {
+            if(loaded != nullptr)
+            {
+                refresh_world_bounds(*loaded, world_transform);
+            }
+        },
+        true);
+}
 
-    auto mesh = lod.get();
-    if(!mesh)
-    {
-        return;
-    }
-
+void model_component::refresh_world_bounds(const mesh& render_mesh, const math::transform& world_transform)
+{
     // Any real move of the box is a caster change, whatever produced it: node / bone
     // animation, the conservative fallback taking over from the tight pose box, or a mesh
     // asset finishing its load. None of those touch the owner's transform, so this is the
@@ -788,8 +812,8 @@ void model_component::update_world_bounds(const math::transform& world_transform
             // (legacy asset without per-bone bounds), the pose bounds don't cover the
             // skinned parts - keep the bind-pose box unioned in as a conservative
             // fallback instead of culling them away.
-            const bool skinned_uncovered = !has_animated && mesh->get_skinned_submeshes_count(0) > 0;
-            world_bounds_ = skinned_uncovered ? math::bbox::mul(mesh->get_bounds(), world_transform) : math::bbox{};
+            const bool skinned_uncovered = !has_animated && render_mesh.get_skinned_submeshes_count(0) > 0;
+            world_bounds_ = skinned_uncovered ? math::bbox::mul(render_mesh.get_bounds(), world_transform) : math::bbox{};
             if(has_instance)
             {
                 world_bounds_.add_point(render_proxies_.instance_bounds_union.min);
@@ -820,7 +844,7 @@ void model_component::update_world_bounds(const math::transform& world_transform
         }
         else
         {
-            world_bounds_ = math::bbox::mul(mesh->get_bounds(), world_transform);
+            world_bounds_ = math::bbox::mul(render_mesh.get_bounds(), world_transform);
         }
         return;
     }
@@ -845,7 +869,7 @@ void model_component::update_world_bounds(const math::transform& world_transform
     }
 
     // No pose bounds at all (plain mesh without armature-driven placements): bind-pose box.
-    world_bounds_ = math::bbox::mul(mesh->get_bounds(), world_transform);
+    world_bounds_ = math::bbox::mul(render_mesh.get_bounds(), world_transform);
 }
 
 auto model_component::get_world_bounds() const -> const math::bbox&

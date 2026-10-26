@@ -43,6 +43,23 @@ auto animation_component::get_controller_instance() -> animation_controller_inst
 
 auto animation_component::try_get_controller_instance() -> animation_controller_instance*
 {
+    // Still the bound definition: compared in place, so the definition every character shares is
+    // not counted each frame, and then bound again as bind_controller binds it (a revision check).
+    if(controller_ && controller_instance_.is_bound())
+    {
+        const auto& bound = controller_instance_.get_controller();
+        const bool is_bound_current = controller_.visit(
+            [&](animation_controller* definition)
+            {
+                return definition == bound.get();
+            });
+        if(is_bound_current)
+        {
+            controller_instance_.bind(bound);
+            controller_instance_.sync(player_);
+            return &controller_instance_;
+        }
+    }
     auto definition = controller_ ? controller_.try_get() : nullptr;
     if(controller_ && !definition)
     {

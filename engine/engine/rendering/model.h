@@ -356,9 +356,11 @@ public:
     /**
      * @brief Gets the LOD (Level of Detail) mesh for the specified level.
      * @param lod The level of detail.
-     * @return The asset handle for the mesh at the specified LOD.
+     * @return The asset handle for the mesh at the specified LOD (an empty handle without one). A
+     * reference into the model: callers on per-frame paths read it in place instead of counting a
+     * reference on the link every model of that mesh shares.
      */
-    auto get_lod(uint32_t lod) const -> asset_handle<mesh>;
+    auto get_lod(uint32_t lod) const -> const asset_handle<mesh>&;
 
     /**
      * @brief Sets the LOD (Level of Detail) mesh for the specified level.
@@ -433,9 +435,9 @@ public:
 
     /**
      * @brief Gets the shared material of a slot.
-     * @return An empty handle when the slot does not exist.
+     * @return An empty handle when the slot does not exist; a reference into the model, like get_lod().
      */
-    auto get_shared_material(uint32_t index) const -> asset_handle<material>;
+    auto get_shared_material(uint32_t index) const -> const asset_handle<material>&;
 
     /**
      * @brief Gets the material instance of a slot: this model's overrides of the slot's shared material.
