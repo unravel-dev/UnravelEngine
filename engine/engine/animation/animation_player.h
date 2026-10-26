@@ -662,8 +662,6 @@ private:
         math::quat pre_rotation{math::identity<math::quat>()};
         math::quat post_rotation{math::identity<math::quat>()};
         math::mat3 offset_map{1.0f};
-        /// Source local axes to target local axes, for carrying a scale change (carry_scale_ratio).
-        math::quat source_to_target{math::identity<math::quat>()};
     };
 
     /// Target-skeleton mapping of one clip, cached per binding version.
@@ -711,6 +709,19 @@ private:
     {
         int position{-1};
         int rotation{-1};
+    };
+
+    /// One sample's root motion from the source channels: what it is sampled with, and what it took.
+    struct source_root_motion
+    {
+        const animation_clip& clip;
+        const clip_binding& binding;
+        seconds_t time;
+        uint64_t loop_count;
+        bool extract_root_motion;
+        root_channels roots{};
+        /// The turn of the extracted heading (sample_root_rotation).
+        math::quat pose_turn{math::identity<math::quat>()};
     };
 
     /// Per-sample buffers of rest-aligned retargeting, reused across frames.
@@ -765,6 +776,12 @@ private:
                             bool track_root_motion,
                             std::vector<math::transform>& source_local,
                             animation_pose& pose) const -> root_channels;
+    /// Takes the root motion of source channel `c` from its sampled `local` (which the extraction may change):
+    /// the root channels and the heading turn go to `root_motion`, the motion to pose.motion_result.
+    void take_source_root_motion(source_root_motion& root_motion,
+                                 size_t c,
+                                 math::transform& local,
+                                 animation_pose& pose) const;
     /// Retargets a source pose onto the target skeleton, appending the bones to pose.nodes.
     void retarget_source_pose(const animation_clip& anim_clip,
                               const clip_binding& binding,

@@ -291,18 +291,12 @@ auto get_scale_ratio(const math::vec3& scale, const math::vec3& rest_scale) -> m
 
 /**
  * @brief Whether a transform composes as a plain rotation, translation and uniform scale: no skew, no
- * perspective, axes scaled alike within math::transform's own tolerance. Frames like that multiply
- * their rotations, which a baked retarget relies on.
+ * perspective, axes scaled alike, by math::transform's own tests. Frames like that multiply their
+ * rotations, which a baked retarget relies on.
  */
 auto is_plain_uniform_frame(const math::transform& frame) -> bool
 {
-    const math::vec3& scale = frame.get_scale();
-    const float max_axis = std::max({std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z), 1.0f});
-    const float tolerance = math::k_scale_uniform_tolerance<float> * max_axis;
-    const bool is_uniform = std::fabs(scale.x - scale.y) <= tolerance && std::fabs(scale.y - scale.z) <= tolerance &&
-                            std::fabs(scale.x - scale.z) <= tolerance;
-    return is_uniform && is_near(frame.get_skew(), math::vec3(0.0f), math::k_skew_zero_tolerance<float>) &&
-           frame.get_perspective() == math::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    return frame.is_scale_uniform() && frame.is_skew_zero() && frame.is_perspective_identity();
 }
 
 /// Whether every frame a rest-aligned retarget composes is plain (is_plain_uniform_frame): each
@@ -2227,7 +2221,6 @@ void animation_player::bake_retarget(const animation_clip& clip, const animation
             bone.offset_map[axis] = inverse_transform_offset(parent_global, frame * transform_offset(source_parent, unit)) *
                                     binding.height_ratio;
         }
-        bone.source_to_target = glm::inverse(target_reference) * frame * source_reference;
     }
 }
 
@@ -2594,32 +2587,15 @@ void animation_player::sample_baked_retarget(const animation_clip& anim_clip,
                                              animation_pose& pose) const
 {
     const auto& channels = anim_clip.channels;
-    root_channels roots;
-    math::quat pose_turn = math::identity<math::quat>();
     // Root motion as sample_source_pose takes it, from the source local before the retarget.
-    const auto take_root_motion = [&](size_t c, math::transform& local)
-    {
-        const auto& channel = channels[c];
-        if(!channel.position_keys.empty() && int(c) == clip_binding.root_position_channel && clip_binding.root_position_target >= 0)
-        {
-            sample_root_position(anim_clip, channel, uint32_t(clip_binding.root_position_target), time, loop_count,
-                                 extract_root_motion, clip_binding.root_position_frame, local, pose);
-            roots.position = int(c);
-        }
-        if(!channel.rotation_keys.empty() && int(c) == clip_binding.root_rotation_channel && clip_binding.root_rotation_target >= 0)
-        {
-            pose_turn = sample_root_rotation(anim_clip, channel, uint32_t(clip_binding.root_rotation_target), loop_count,
-                                             extract_root_motion, clip_binding.root_rotation_frame, local, pose);
-            roots.rotation = int(c);
-        }
-    };
+    source_root_motion root_motion{anim_clip, clip_binding, time, loop_count, extract_root_motion};
     // A root channel the target does not map still moves the entity; one channel can be both roots.
     const auto take_unmapped_root_motion = [&](int c)
     {
         if(c >= 0 && clip_binding.channel_targets[size_t(c)] < 0)
         {
             math::transform local = sample_channel(channels[size_t(c)], time, channels[size_t(c)].rest_local);
-            take_root_motion(size_t(c), local);
+            take_source_root_motion(root_motion, size_t(c), local, pose);
         }
     };
     if(track_root_motion)
@@ -2638,18 +2614,18 @@ void animation_player::sample_baked_retarget(const animation_clip& anim_clip,
         math::transform local = sample_channel(channel, time, channel.rest_local);
         if(track_root_motion)
         {
-            take_root_motion(c, local);
+            take_source_root_motion(root_motion, c, local, pose);
         }
         const math::transform& bind = target.bind_local[t];
         auto& node = pose.nodes.emplace_back();
         node.desc.index = t;
         node.transform.set_rotation(math::normalize(bone.pre_rotation * local.get_rotation() * bone.post_rotation));
         node.transform.set_position(bind.get_position() + bone.offset_map * (local.get_position() - channel.rest_local.get_position()));
-        node.transform.set_scale(bind.get_scale() * carry_scale_ratio(get_scale_ratio(local.get_scale(), channel.rest_local.get_scale()),
-                                                                      bone.source_to_target));
+        // A baked clip holds every channel at its rest scale (is_linear_retarget): the bones keep their bind scale.
+        node.transform.set_scale(bind.get_scale());
     }
-    rebase_root_translation(clip_binding, pose_turn, pose);
-    convert_root_delta(anim_clip, clip_binding, target, roots, pose);
+    rebase_root_translation(clip_binding, root_motion.pose_turn, pose);
+    convert_root_delta(anim_clip, clip_binding, target, root_motion.roots, pose);
 }
 
 auto animation_player::sample_source_pose(const animation_clip& anim_clip,
@@ -2666,31 +2642,41 @@ auto animation_player::sample_source_pose(const animation_clip& anim_clip,
 
     // Sample every channel - unmapped ancestors still carry their children, and an unmapped root
     // still moves the entity.
-    root_channels roots;
-    math::quat pose_turn = math::identity<math::quat>();
+    source_root_motion root_motion{anim_clip, clip_binding, time, loop_count, extract_root_motion};
     for(size_t c = 0; c < channels.size(); ++c)
     {
         const auto& channel = channels[c];
         source_local[c] = sample_channel(channel, time, channel.rest_local);
-        if(!track_root_motion)
+        if(track_root_motion)
         {
-            continue;
-        }
-        if(!channel.position_keys.empty() && int(c) == clip_binding.root_position_channel && clip_binding.root_position_target >= 0)
-        {
-            sample_root_position(anim_clip, channel, uint32_t(clip_binding.root_position_target), time, loop_count,
-                                 extract_root_motion, clip_binding.root_position_frame, source_local[c], pose);
-            roots.position = int(c);
-        }
-        if(!channel.rotation_keys.empty() && int(c) == clip_binding.root_rotation_channel && clip_binding.root_rotation_target >= 0)
-        {
-            pose_turn = sample_root_rotation(anim_clip, channel, uint32_t(clip_binding.root_rotation_target), loop_count,
-                                             extract_root_motion, clip_binding.root_rotation_frame, source_local[c], pose);
-            roots.rotation = int(c);
+            take_source_root_motion(root_motion, c, source_local[c], pose);
         }
     }
-    rebase_root_translation(clip_binding, pose_turn, pose);
-    return roots;
+    rebase_root_translation(clip_binding, root_motion.pose_turn, pose);
+    return root_motion.roots;
+}
+
+void animation_player::take_source_root_motion(source_root_motion& root_motion,
+                                               size_t c,
+                                               math::transform& local,
+                                               animation_pose& pose) const
+{
+    const auto& binding = root_motion.binding;
+    const auto& channel = root_motion.clip.channels[c];
+    if(!channel.position_keys.empty() && int(c) == binding.root_position_channel && binding.root_position_target >= 0)
+    {
+        sample_root_position(root_motion.clip, channel, uint32_t(binding.root_position_target), root_motion.time,
+                             root_motion.loop_count, root_motion.extract_root_motion, binding.root_position_frame, local,
+                             pose);
+        root_motion.roots.position = int(c);
+    }
+    if(!channel.rotation_keys.empty() && int(c) == binding.root_rotation_channel && binding.root_rotation_target >= 0)
+    {
+        root_motion.pose_turn = sample_root_rotation(root_motion.clip, channel, uint32_t(binding.root_rotation_target),
+                                                     root_motion.loop_count, root_motion.extract_root_motion,
+                                                     binding.root_rotation_frame, local, pose);
+        root_motion.roots.rotation = int(c);
+    }
 }
 
 void animation_player::retarget_source_pose(const animation_clip& anim_clip,

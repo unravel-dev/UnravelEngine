@@ -664,6 +664,13 @@ public:
      */
     auto get_matrix() const noexcept -> const mat4_t&;
 
+    /// Whether the skew is zero, within k_skew_zero_tolerance.
+    auto is_skew_zero() const noexcept -> bool;
+    /// Whether the perspective row is (0, 0, 0, 1), within glm::epsilon.
+    auto is_perspective_identity() const noexcept -> bool;
+    /// Whether every axis scales alike, within k_scale_uniform_tolerance of the largest axis (at least 1).
+    auto is_scale_uniform() const noexcept -> bool;
+
 private:
     /**
      * @brief Updates the transformation components from the transformation matrix.
@@ -708,11 +715,6 @@ private:
      * @brief Out-of-line general branch of inverse_transform_normal.
      */
     auto inverse_transform_normal_general(const vec3_t& v) const noexcept -> vec3_t;
-
-    // Helper functions to check if skew and perspective are zero/identity
-    auto is_skew_zero() const noexcept -> bool;
-    auto is_perspective_identity() const noexcept -> bool;
-    auto is_scale_uniform() const noexcept -> bool;
 
     auto can_use_simplified_calculations() const noexcept -> bool;
     auto can_use_simplified_calculations_without_uniform_scale() const noexcept -> bool;
