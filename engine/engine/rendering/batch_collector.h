@@ -30,12 +30,15 @@ struct batch_stats
     auto to_string() const -> std::string;
 };
 
+/// Instances one instanced draw takes at most; a larger batch is split.
+constexpr uint32_t MAX_INSTANCES_PER_BATCH = 1024;
+
 struct submit_context
 {
     bgfx::ViewId view_id = 0;
     math::vec3 camera_position = math::vec3(0.0f);
     bool enable_distance_sorting = false;
-    uint32_t max_instances_per_batch = 1024;
+    uint32_t max_instances_per_batch = MAX_INSTANCES_PER_BATCH;
     bool enable_profiling = true;
 };
 

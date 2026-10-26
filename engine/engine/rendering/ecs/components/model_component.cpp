@@ -11,6 +11,7 @@
 #include <hpp/finally.hpp>
 
 #include <algorithm>
+#include <utility>
 #include <atomic>
 #include <limits>
 
@@ -431,6 +432,12 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
     }
     is_pose_changed = is_pose_changed || submesh_pose.transforms != previous_transforms ||
                       !is_same_mapping(submesh_pose.submesh_to_transform_indices, previous_mapping);
+    if(!is_pose_changed)
+    {
+        // Equal contents: keep the previous storage, so the matrices stay at the addresses the draws were collected
+        // from (shadow map caching hashes them).
+        std::swap(previous_transforms, submesh_pose.transforms);
+    }
 
     // Owner-placed submeshes: the box the submit paths' fallback instance actually covers.
     if(owner_transform != nullptr)
@@ -1111,7 +1118,8 @@ void model_component::set_model(const model& model)
     // the model, whose resolved materials start their revisions over, so the stamps cannot rely on those here.
     const render_change::mask changes = model.get_changes_from(model_);
     const bool is_mesh_changed = model_.get_lod(0).uid() != model.get_lod(0).uid();
-    model_ = model;
+    auto previous_model = std::exchange(model_, model);
+    model_.adopt_resolved_materials(previous_model);
     if(is_mesh_changed && !armature_entities_.empty())
     {
         // The new mesh binds its own nodes: the armature is rebuilt, and the nodes of the old one
@@ -1149,21 +1157,19 @@ auto model_component::get_material_instance(uint32_t index) const -> const mater
 auto model_component::set_material_instance_value(uint32_t index, entt::id_type property, const entt::meta_any& value)
     -> bool
 {
-    const bool applied = model_.get_material_instance(index).set_override(property, value);
-    touch(render_change::none);
-    return applied;
+    // No touch(): the caster set does not change, and update_change_stamps sees the edit in the resolved material's
+    // change keys.
+    return model_.get_material_instance(index).set_override(property, value);
 }
 
 void model_component::revert_material_instance_value(uint32_t index, entt::id_type property)
 {
     model_.get_material_instance(index).revert(property);
-    touch(render_change::none);
 }
 
 void model_component::revert_material_instance(uint32_t index)
 {
     model_.get_material_instance(index).revert_all();
-    touch(render_change::none);
 }
 
 void model_component::update_material_instances()
@@ -1263,13 +1269,7 @@ void model_component::update_change_stamps(uint64_t frame, render_change::mask c
     // A material edit, or a texture loading or reloading, changes only the aspects it touched
     // (get_material_property_traits).
     const auto keys = model_.get_materials_change_keys();
-    for(uint32_t i = 0; i < render_change::count; ++i)
-    {
-        if(keys[i] != materials_change_keys_[i])
-        {
-            changes |= 1u << i;
-        }
-    }
+    changes |= get_changed_aspects(materials_change_keys_, keys);
     materials_change_keys_ = keys;
     change_stamps_.stamp(changes, frame);
 }

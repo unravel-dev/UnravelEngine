@@ -462,6 +462,10 @@ public:
      */
     void update_material_instances();
 
+    /// Takes the resolved materials of @p previous, the model this copy replaces, slot by slot
+    /// (material_instance::adopt_resolved).
+    void adopt_resolved_materials(model& previous);
+
     /**
      * @brief Gets whether LOD override is enabled.
      * @return True if LOD override is enabled, false otherwise.
@@ -831,8 +835,9 @@ public:
      * @param world_transform The owner's world matrix; the instances point at it, only sorting reads it.
      * @param palette_rows The first row of each skinning palette, indexed by submesh.
      * @param prev_palette_rows The previous-frame rows (velocity runs); empty = the instances take palette_rows.
+     * @return True when a submesh was collected.
      */
-    void submit_for_skinned_batching(batch_collector& collector,
+    auto submit_for_skinned_batching(batch_collector& collector,
                                      const math::mat4& world_transform,
                                      const submesh_pose_mat4& submesh_transforms,
                                      hpp::span<const uint32_t> palette_rows,
@@ -841,7 +846,7 @@ public:
                                      float lod_param,
                                      const math::frustum* frustum,
                                      const camera* view,
-                                     const model_submit_extras& extras) const;
+                                     const model_submit_extras& extras) const -> bool;
 
     /**
      * @brief The skinned counterpart of submit_for_shadow_batching_cascaded: the SKINNED submeshes into per-cascade

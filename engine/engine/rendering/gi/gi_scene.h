@@ -490,6 +490,12 @@ public:
         return stats_;
     }
 
+    /// Starts the stats of a frame over; update() does it too, for a frame that skips it.
+    void clear_stats()
+    {
+        stats_ = {};
+    }
+
 private:
     struct mip_desc
     {

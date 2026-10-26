@@ -734,6 +734,8 @@ void gi_surface_cache::update(const surface_cache_system& gi_scene,
     const std::vector<gi_scene::viewer> viewers = schedule_viewers(frame);
     if(viewers.empty())
     {
+        // Nothing updates: the stats must not repeat the last update's counts.
+        scene_.clear_stats();
         return;
     }
     scene_.update(sources_, uint32_t(gi_scene.get_instances().size()), viewers);

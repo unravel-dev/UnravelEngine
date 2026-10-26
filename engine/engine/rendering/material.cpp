@@ -60,13 +60,11 @@ auto material::get_content_version(render_change::mask changes) const -> uint64_
     render_change_values versions{};
     add_content_versions(versions);
     uint64_t version = 0;
-    for(uint32_t i = 0; i < render_change::count; ++i)
-    {
-        if((changes & (1u << i)) != 0u)
-        {
-            version += versions[i];
-        }
-    }
+    for_each_aspect(changes,
+                    [&](uint32_t i)
+                    {
+                        version += versions[i];
+                    });
     return version;
 }
 
@@ -130,19 +128,9 @@ auto pbr_material::clone() const -> material::sptr
 
 void pbr_material::add_content_versions(render_change_values& keys) const
 {
-    // Spread over the key, which also sums edit counts: a loaded texture's identity is an address.
-    constexpr uint64_t version_multiplier = 0x9E3779B97F4A7C15ull;
     const auto add = [&keys](material_property_id property, const asset_handle<gfx::texture>& map)
     {
-        const uint64_t version = uint64_t(map.version()) * version_multiplier;
-        const auto changes = get_material_property_traits(property).changes;
-        for(uint32_t i = 0; i < render_change::count; ++i)
-        {
-            if((changes & (1u << i)) != 0u)
-            {
-                keys[i] += version;
-            }
-        }
+        add_identity_key(keys, get_material_property_traits(property).changes, map.version());
     };
     add(material_property_id::color_map, color_map_);
     add(material_property_id::normal_map, normal_map_);

@@ -12,6 +12,11 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
+#include <base/hash.hpp>
+
+#define XXH_INLINE_ALL
+#include <filesystem/xxhash.h>
+
 #include <cmath>
 #include <cstring>
 
@@ -1723,6 +1728,23 @@ auto particle_emitter_component::collect_mesh_shadow_instances(std::vector<shado
                               }
                           });
     return is_collected;
+}
+
+auto particle_emitter_component::get_mesh_shadow_key() const -> uint64_t
+{
+    std::size_t key = XXH3_64bits(mesh_transforms_.data(), mesh_transforms_.size() * sizeof(math::mat4));
+    utils::hash_combine(key, XXH3_64bits(mesh_opacity_.data(), mesh_opacity_.size() * sizeof(float)));
+    for(const auto& lod : mesh_model_.get_lods())
+    {
+        utils::hash_combine(key, lod.version());
+    }
+    const auto material_keys = mesh_model_.get_materials_change_keys();
+    for_each_aspect(render_interest::shadow_caster & render_change::material_aspects,
+                    [&](uint32_t aspect)
+                    {
+                        utils::hash_combine(key, material_keys[aspect]);
+                    });
+    return key;
 }
 
 namespace

@@ -25,6 +25,8 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/skinning_palette_buffer.h>
 
+#include <entt/entity/registry.hpp>
+
 #include <math/math.h>
 
 #include <array>
@@ -162,10 +164,11 @@ void test_acquire_appends_once_per_frame()
     skinning_palette_buffer buffer;
     buffer.begin_frame();
     const std::vector<pose_mat4> input_palettes = {make_palette(4, 0.0f), make_palette(2, 1.0f)};
-    const int owner = 0;
-    const auto first = buffer.acquire(&owner, input_palettes, nullptr);
+    entt::registry registry;
+    const entt::const_handle owner(registry, registry.create());
+    const auto first = buffer.acquire(owner, input_palettes, nullptr);
     const std::vector<uint32_t> expected_rows(first.current.begin(), first.current.end());
-    const auto second = buffer.acquire(&owner, input_palettes, nullptr);
+    const auto second = buffer.acquire(owner, input_palettes, nullptr);
     check(expected_rows.size() == 2, "one first row per palette");
     check(expected_rows.size() == 2 && expected_rows[0] == 0 && expected_rows[1] == 4 * 3, "palettes are consecutive");
     check(std::vector<uint32_t>(second.current.begin(), second.current.end()) == expected_rows, "a second view reuses the rows");
@@ -179,10 +182,11 @@ void test_previous_rows()
     const std::vector<pose_mat4> input_current = {make_palette(4, 0.0f), make_palette(2, 1.0f), make_palette(3, 2.0f)};
     // Palette 1 changed its bone count, palette 2 has no previous pose at all.
     const std::vector<pose_mat4> input_previous = {make_palette(4, 5.0f), make_palette(1, 6.0f)};
-    const int owner = 0;
-    const auto shadow_view = buffer.acquire(&owner, input_current, nullptr);
+    entt::registry registry;
+    const entt::const_handle owner(registry, registry.create());
+    const auto shadow_view = buffer.acquire(owner, input_current, nullptr);
     const std::vector<uint32_t> current_rows(shadow_view.current.begin(), shadow_view.current.end());
-    const auto camera_view = buffer.acquire(&owner, input_current, &input_previous);
+    const auto camera_view = buffer.acquire(owner, input_current, &input_previous);
     check(std::vector<uint32_t>(camera_view.current.begin(), camera_view.current.end()) == current_rows,
           "asking for previous rows later keeps the current rows");
     check(camera_view.previous.size() == 3, "one previous row per palette");
@@ -204,10 +208,11 @@ void test_pack_pending_fills_the_rows()
     {
         input_models.push_back({make_palette(3, float(model)), make_palette(2, float(model) + 0.5f)});
     }
+    entt::registry registry;
     std::vector<uint32_t> first_rows;
     for(const auto& palettes : input_models)
     {
-        const auto rows = buffer.acquire(&palettes, palettes, &palettes);
+        const auto rows = buffer.acquire(entt::const_handle(registry, registry.create()), palettes, &palettes);
         first_rows.insert(first_rows.end(), rows.current.begin(), rows.current.end());
     }
     buffer.pack_pending();
@@ -235,13 +240,20 @@ void test_owners_are_separate_and_frames_reset()
     skinning_palette_buffer buffer;
     buffer.begin_frame();
     const std::vector<pose_mat4> input_palettes = {make_palette(2, 0.0f)};
-    const int owner_a = 0;
-    const int owner_b = 0;
-    const uint32_t actual_a = buffer.acquire(&owner_a, input_palettes, nullptr).current[0];
-    const uint32_t actual_b = buffer.acquire(&owner_b, input_palettes, nullptr).current[0];
+    entt::registry registry;
+    const entt::entity entity_a = registry.create();
+    const entt::const_handle owner_a(registry, entity_a);
+    const entt::const_handle owner_b(registry, registry.create());
+    const uint32_t actual_a = buffer.acquire(owner_a, input_palettes, nullptr).current[0];
+    const uint32_t actual_b = buffer.acquire(owner_b, input_palettes, nullptr).current[0];
     check(actual_a != actual_b, "two models get their own rows");
+    // The editor can delete an entity and create one between two runs of a frame; the new one may reuse the id.
+    registry.destroy(entity_a);
+    const entt::const_handle owner_recycled(registry, registry.create());
+    const uint32_t actual_recycled = buffer.acquire(owner_recycled, input_palettes, nullptr).current[0];
+    check(actual_recycled != actual_a, "an entity created in a deleted one's slot gets its own rows");
     buffer.begin_frame();
-    const uint32_t actual_next_frame = buffer.acquire(&owner_b, input_palettes, nullptr).current[0];
+    const uint32_t actual_next_frame = buffer.acquire(owner_b, input_palettes, nullptr).current[0];
     check(actual_next_frame == 0, "begin_frame starts the rows over");
 }
 

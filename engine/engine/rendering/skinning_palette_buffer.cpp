@@ -3,16 +3,21 @@
 
 #include <engine/profiler/profiler.h>
 
+#include <base/hash.hpp>
+
 #include <concurrency/parallel.h>
 
+#include <algorithm>
 #include <cassert>
 
 namespace unravel
 {
 namespace
 {
-/// Rows the buffer starts with (64 KiB); bgfx grows it on the upload that needs more.
+/// Rows the buffer starts with (64 KiB).
 constexpr uint32_t INITIAL_CAPACITY_ROWS = 4096;
+/// How much the buffer grows by when a frame needs more rows than it holds.
+constexpr uint32_t CAPACITY_GROWTH_FACTOR = 2;
 /// Fewer palettes than this are packed on the calling thread: the dispatch would cost more than the packing.
 constexpr size_t PARALLEL_PACK_MIN_PALETTES = 64;
 
@@ -114,12 +119,19 @@ void skinning_palette_buffer::begin_frame()
     flushed_ = false;
 }
 
-auto skinning_palette_buffer::acquire(const void* owner,
+auto skinning_palette_buffer::owner_key_hash::operator()(const owner_key& key) const noexcept -> std::size_t
+{
+    std::size_t hash = std::hash<const void*>{}(key.registry);
+    utils::hash_combine(hash, entt::to_integral(key.entity));
+    return hash;
+}
+
+auto skinning_palette_buffer::acquire(entt::const_handle owner,
                                       const std::vector<pose_mat4>& palettes,
                                       const std::vector<pose_mat4>* previous) -> model_rows
 {
     assert(!flushed_ && "palettes acquired after this frame's upload never reach the GPU");
-    auto& entry = owners_[owner];
+    auto& entry = owners_[owner_key{owner.registry(), owner.entity()}];
     reserve_rows(entry, palettes, previous);
     model_rows result;
     result.current = {first_rows_.data() + entry.first_current, entry.palette_count};
@@ -208,6 +220,13 @@ void skinning_palette_buffer::flush()
     // continue in a free storage.
     auto& upload = take_free_storage();
     rows_.swap_storage(upload.rows);
+    if(uploaded_row_count_ > capacity_rows_)
+    {
+        // bgfx resizes the buffer to the update that overflows it: the update carries the headroom, so a crowd that
+        // grows a little every frame does not recreate the buffer every frame.
+        capacity_rows_ = std::max(uploaded_row_count_, capacity_rows_ * CAPACITY_GROWTH_FACTOR);
+        upload.rows.resize(capacity_rows_);
+    }
     upload.in_flight.store(true, std::memory_order_relaxed);
     const auto size = static_cast<uint32_t>(upload.rows.size() * sizeof(math::vec4));
     bgfx::update(buffer_, 0, bgfx::makeRef(upload.rows.data(), size, &release_upload_storage, &upload.in_flight));
@@ -255,6 +274,7 @@ void skinning_palette_buffer::ensure_buffer()
     buffer_ = bgfx::createDynamicVertexBuffer(INITIAL_CAPACITY_ROWS,
                                               layout_,
                                               BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE);
+    capacity_rows_ = INITIAL_CAPACITY_ROWS;
 }
 
 } // namespace unravel

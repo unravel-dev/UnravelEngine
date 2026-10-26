@@ -1602,31 +1602,33 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
             const auto* prev_skinning = velocity_run_active_ && model_comp.has_motion()
                                             ? &model_comp.get_prev_skinning_transforms()
                                             : nullptr;
-            const auto rows = skinning_palettes.acquire(&model_comp, skinning_matrices, prev_skinning);
-            model.submit_for_skinned_batching(skinned_batch_collector_,
-                                              world_transform,
-                                              submesh_transforms,
-                                              rows.current,
-                                              rows.previous,
-                                              current_lod_index,
-                                              params.x,
-                                              &view_frustum,
-                                              &camera,
-                                              extras);
-            stats_.drawn_skinned_models++;
+            const auto rows = skinning_palettes.acquire(entity, skinning_matrices, prev_skinning);
+            bool is_drawn = model.submit_for_skinned_batching(skinned_batch_collector_,
+                                                              world_transform,
+                                                              submesh_transforms,
+                                                              rows.current,
+                                                              rows.previous,
+                                                              current_lod_index,
+                                                              params.x,
+                                                              &view_frustum,
+                                                              &camera,
+                                                              extras);
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
-                model.submit_for_skinned_batching(skinned_batch_collector_,
-                                                  world_transform,
-                                                  submesh_transforms,
-                                                  rows.current,
-                                                  rows.previous,
-                                                  target_lod_index,
-                                                  params_inv.x,
-                                                  &view_frustum,
-                                                  &camera,
-                                                  extras);
+                is_drawn = model.submit_for_skinned_batching(skinned_batch_collector_,
+                                                             world_transform,
+                                                             submesh_transforms,
+                                                             rows.current,
+                                                             rows.previous,
+                                                             target_lod_index,
+                                                             params_inv.x,
+                                                             &view_frustum,
+                                                             &camera,
+                                                             extras) ||
+                           is_drawn;
             }
+            // Counted like the shadow path: a model whose every submesh was culled draws nothing.
+            stats_.drawn_skinned_models += is_drawn ? 1 : 0;
         }
 
         if (can_batch)
@@ -1805,30 +1807,28 @@ void submit_prepared_batches_instanced(const BatchList& prepared_batches,
 }
 } // namespace
 
-void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& camera)
+template<typename PlainLayout, typename MaterialLayout, typename OnDraw>
+void deferred::submit_prepared_geometry(batch_collector& collector,
+                                        gfx::render_pass& pass,
+                                        const camera& camera,
+                                        geom_program& plain_program,
+                                        geom_program& material_program,
+                                        OnDraw&& on_draw)
 {
-    APP_SCOPE_PERF("Rendering/Submit Batched Geometry");
-
-    // Prepare batches for rendering
     submit_context context;
     context.view_id = pass.id;
     context.camera_position = camera.get_position();
-    context.enable_distance_sorting = false; // Opaque objects don't need distance sorting
-    context.max_instances_per_batch = 1024;  // BGFX instance limit
+    // Opaque geometry needs no distance sorting.
+    context.enable_distance_sorting = false;
     context.enable_profiling = true;
-
-    batch_collector_.prepare_batches(context);
-
-    const auto& prepared_batches = batch_collector_.get_prepared_batches();
-    if (prepared_batches.empty())
+    collector.prepare_batches(context);
+    const auto& prepared_batches = collector.get_prepared_batches();
+    if(prepared_batches.empty())
     {
         return;
     }
-
-    // Set up common uniforms
     const auto camera_pos = camera.get_position();
     const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
-
     // A batch whose instances carry per-instance material values (material instances sharing the draw) uses the
     // layout and program that read them; the others keep the matrix-only layout.
     plain_batches_.clear();
@@ -1852,25 +1852,37 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
             [](const batch_instance&) { return true; },
             [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
             {
-                stats_.drawn_static_submeshes += instance_count;
-                bool material_submitted = mat.submit(program.program.get());
+                const bool material_submitted = mat.submit(program.program.get());
                 if(!material_submitted && mat.is<pbr_material>())
                 {
                     submit_pbr_material(program, static_cast<const pbr_material&>(mat));
                 }
-                // Set LOD parameters (using global LOD settings for now)
-                const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
-                gfx::set_uniform(program.u_lod_params, lod_params);
+                on_draw(program, instance_count);
                 bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
             });
         program.program->end();
     };
-    draw_batches(geom_program_instanced_, plain_batches_, instance_vertex_data{});
-    draw_batches(geom_program_instanced_material_, material_value_batches_, instance_material_vertex_data{});
+    draw_batches(plain_program, plain_batches_, PlainLayout{});
+    draw_batches(material_program, material_value_batches_, MaterialLayout{});
+    stats_.add_batch_stats(collector.get_stats());
+}
 
-    // Update statistics
-    const auto& batch_stats = batch_collector_.get_stats();
-    stats_.add_batch_stats(batch_stats);
+void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& camera)
+{
+    APP_SCOPE_PERF("Rendering/Submit Batched Geometry");
+    submit_prepared_geometry<instance_vertex_data, instance_material_vertex_data>(
+        batch_collector_,
+        pass,
+        camera,
+        geom_program_instanced_,
+        geom_program_instanced_material_,
+        [&](geom_program& program, uint32_t instance_count)
+        {
+            stats_.drawn_static_submeshes += instance_count;
+            // No LOD transition: batched instances draw their LOD fully.
+            const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f};
+            gfx::set_uniform(program.u_lod_params, lod_params);
+        });
 
     // NOT cleared here: the velocity pass reuses the prepared batches (mover instances
     // carry their previous transforms) in the same frame. run_pipeline_impl clears the
@@ -1887,61 +1899,18 @@ auto deferred::is_skinned_batching_active() const -> bool
 void deferred::submit_batched_skinned_geometry(gfx::render_pass& pass, const camera& camera)
 {
     APP_SCOPE_PERF("Rendering/Submit Batched Skinned Geometry");
-
-    submit_context context;
-    context.view_id = pass.id;
-    context.camera_position = camera.get_position();
-    context.enable_distance_sorting = false;
-    context.max_instances_per_batch = 1024;
-    context.enable_profiling = true;
-    skinned_batch_collector_.prepare_batches(context);
-    const auto& prepared_batches = skinned_batch_collector_.get_prepared_batches();
-    if(prepared_batches.empty())
-    {
-        return;
-    }
-
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
-    const auto camera_pos = camera.get_position();
-    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
-    plain_batches_.clear();
-    material_value_batches_.clear();
-    for(const auto* batch : prepared_batches)
-    {
-        (batch->has_material_overrides ? material_value_batches_ : plain_batches_).push_back(batch);
-    }
-    const auto draw_batches = [&](geom_program& program, const std::vector<const batch_group*>& batches, auto layout)
-    {
-        using instance_data = decltype(layout);
-        if(batches.empty())
+    submit_prepared_geometry<skinned_instance_vertex_data, skinned_instance_material_vertex_data>(
+        skinned_batch_collector_,
+        pass,
+        camera,
+        geom_program_skinned_instanced_,
+        geom_program_skinned_instanced_material_,
+        [&](geom_program& /*program*/, uint32_t instance_count)
         {
-            return;
-        }
-        program.program->begin();
-        gfx::set_uniform(program.u_camera_wpos, camera_pos);
-        gfx::set_uniform(program.u_camera_clip_planes, clip_planes);
-        submit_prepared_batches_instanced<instance_data>(
-            batches,
-            [](const batch_instance&) { return true; },
-            [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
-            {
-                stats_.drawn_skinned_submeshes += instance_count;
-                const bool material_submitted = mat.submit(program.program.get());
-                if(!material_submitted && mat.is<pbr_material>())
-                {
-                    submit_pbr_material(program, static_cast<const pbr_material&>(mat));
-                }
-                skinning_palettes.bind();
-                bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
-            });
-        program.program->end();
-    };
-    draw_batches(geom_program_skinned_instanced_, plain_batches_, skinned_instance_vertex_data{});
-    draw_batches(geom_program_skinned_instanced_material_,
-                 material_value_batches_,
-                 skinned_instance_material_vertex_data{});
-
-    stats_.add_batch_stats(skinned_batch_collector_.get_stats());
+            stats_.drawn_skinned_submeshes += instance_count;
+            skinning_palettes.bind();
+        });
     // NOT cleared here: the velocity pass draws these batches again (submit_batched_skinned_velocity).
 }
 

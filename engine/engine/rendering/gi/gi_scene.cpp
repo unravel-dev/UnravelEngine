@@ -712,7 +712,7 @@ void gi_scene::update(const std::vector<source>& sources,
 {
     APP_SCOPE_PERF("GI/Scene Update");
     ++frame_;
-    stats_ = {};
+    clear_stats();
     const bool has_unique_placements = refresh_placements(sources);
     are_tables_dirty_ = collect_active(sources, instance_count) || are_tables_dirty_;
     // A placement repeated within the frame is shared by two sources, so its cards must be visited in order.
@@ -1139,6 +1139,8 @@ auto gi_scene::allocate_hi_res_page(const std::vector<source>& sources, const re
     }
     slot.captured_frame = frame_;
     slot.is_direct_dirty = true;
+    // Captured and relit now: a material change recorded on the page while it was unmapped is covered.
+    slot.has_material_direct_change = false;
     hi.is_mapped[page] = 1u;
     hi.last_used[page] = frame_;
     const source& src = sources[req.source];

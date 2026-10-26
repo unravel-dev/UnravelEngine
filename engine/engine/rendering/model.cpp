@@ -391,6 +391,15 @@ void model::update_material_instances()
     }
 }
 
+void model::adopt_resolved_materials(model& previous)
+{
+    const size_t slot_count = std::min(material_instances_.size(), previous.material_instances_.size());
+    for(size_t slot = 0; slot < slot_count; ++slot)
+    {
+        material_instances_[slot].adopt_resolved(previous.material_instances_[slot]);
+    }
+}
+
 void model::sync_material_instances()
 {
     if(material_instances_.size() < materials_.size())
@@ -1633,17 +1642,21 @@ auto model::get_materials_change_keys() const -> render_change_values
     for(size_t slot = 0; slot < slot_count; ++slot)
     {
         // The slot's render material (get_render_material), without waiting for a load.
+        const auto shared = slot < shared_materials.size() ? shared_materials[slot].try_get() : nullptr;
+        if(shared)
+        {
+            // A reload is a new object whose loaded values counted no edits. Counted whichever material the slot
+            // draws, so a slot that starts or stops drawing its resolved instance keeps this part of the key.
+            add_identity_key(keys, render_change::material_aspects, reinterpret_cast<std::uintptr_t>(shared.get()));
+        }
         if(slot < material_instances_.size() && material_instances_[slot].has_overrides() &&
            material_instances_[slot].get_resolved())
         {
             add(*material_instances_[slot].get_resolved());
         }
-        else if(slot < shared_materials.size())
+        else if(shared)
         {
-            if(const auto mat = shared_materials[slot].try_get())
-            {
-                add(*mat);
-            }
+            add(*shared);
         }
     }
     return keys;
@@ -1698,7 +1711,7 @@ auto model::resolve_skinned_submesh(const mesh& m,
     return choice;
 }
 
-void model::submit_for_skinned_batching(batch_collector& collector,
+auto model::submit_for_skinned_batching(batch_collector& collector,
                                         const math::mat4& world_transform,
                                         const submesh_pose_mat4& submesh_transforms,
                                         hpp::span<const uint32_t> palette_rows,
@@ -1707,14 +1720,15 @@ void model::submit_for_skinned_batching(batch_collector& collector,
                                         float lod_param,
                                         const math::frustum* frustum,
                                         const camera* view,
-                                        const model_submit_extras& extras) const
+                                        const model_submit_extras& extras) const -> bool
 {
     const auto& mesh_asset = get_lod(lod_index);
     auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
     if(!mesh)
     {
-        return;
+        return false;
     }
+    bool collected_any = false;
     const auto data_group_count = mesh->get_data_groups_count();
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
@@ -1745,8 +1759,10 @@ void model::submit_for_skinned_batching(batch_collector& collector,
             instance.prev_palette_row =
                 submesh_index < prev_palette_rows.size() ? prev_palette_rows[submesh_index] : instance.palette_row;
             collector.collect_renderable(batch_key(mesh, group_material, choice.lod, submesh_index), instance);
+            collected_any = true;
         }
     }
+    return collected_any;
 }
 
 auto model::submit_for_skinned_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,

@@ -1542,6 +1542,10 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     recreateTextures |= last_settings.m_smImpl != settings_.m_smImpl;
     recreateTextures |= last_settings.m_numSplits != settings_.m_numSplits;
     recreateTextures |= last_settings.m_lightType != settings_.m_lightType;
+    // The blur target exists only while the map is blurred.
+    const bool is_blurred =
+        (SmImpl::VSM == settings_.m_smImpl || SmImpl::ESM == settings_.m_smImpl) && currentSmSettings->m_doBlur;
+    recreateTextures |= is_blurred && !bgfx::isValid(rt_blur_);
 
     const bool was_in_atlas = uses_atlas_;
     uses_atlas_ = uses_shadow_atlas(l);
@@ -2616,9 +2620,10 @@ void shadowmap_generator::compute_caster_facts(const shadow_map_models_t& models
         }
         if(element.particles != nullptr)
         {
-            // Particles move without their instances changing: a light that reaches them renders every frame.
-            key = mix_key(key, frame);
-            mix_into_views(facts.view_mask, frame);
+            // A playing emitter's particles move every frame; a paused or frozen one keeps its shadow.
+            const uint64_t particles_key = element.particles->get_mesh_shadow_key();
+            key = mix_key(key, particles_key);
+            mix_into_views(facts.view_mask, particles_key);
             collection.has_movers = true;
             continue;
         }
@@ -2760,7 +2765,7 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
         if(batch_skinned)
         {
             // The palettes the G-buffer and every other view of this frame share.
-            const auto rows = skinning_palettes.acquire(&model_comp, skinning_matrices, nullptr);
+            const auto rows = skinning_palettes.acquire(entity, skinning_matrices, nullptr);
             const bool collected = model.submit_for_skinned_shadow_batching_cascaded(cascade_skinned_batch_collectors_,
                                                                                      drawNum,
                                                                                      view_mask,
@@ -2874,6 +2879,13 @@ auto shadowmap_generator::compute_view_settings_key(uint8_t view) const -> uint6
     key = mix_key(key,
                   uint64_t(settings_.m_lightType) | uint64_t(settings_.m_depthImpl) << 8u |
                       uint64_t(settings_.m_smImpl) << 16u | uint64_t(settings_.m_stencilPack) << 24u);
+    // VSM and ESM blur the map once it rendered: the blur is part of what the map holds.
+    const ShadowMapSettings& sm_settings = sm_settings_[settings_.m_lightType][settings_.m_depthImpl][settings_.m_smImpl];
+    if(sm_settings.m_doBlur)
+    {
+        const float blur_offsets[] = {sm_settings.m_xOffset, sm_settings.m_yOffset};
+        key = mix_floats(mix_key(key, 1), blur_offsets, 2);
+    }
     // The matrices the view renders with (generate_shadowmaps' setViewTransform).
     const bool is_directional = LightType::DirectionalLight == settings_.m_lightType;
     const bool is_vertical_face =
@@ -3060,8 +3072,9 @@ void shadowmap_generator::submit_stencil_mask(bgfx::ViewId view) const
 void shadowmap_generator::submit_static_copy_restore(bgfx::ViewId view, bool origin_bottom_left) const
 {
     // The atlas colour stores ndc z * 0.5 + 0.5; the device depth is ndc z where depth runs 0..1, and already
-    // ndc z * 0.5 + 0.5 where it runs -1..1.
-    const bool is_homogeneous = gfx::is_homogeneous_depth();
+    // ndc z * 0.5 + 0.5 where it runs -1..1. The backend's own clip depth range decides, not the engine's projection
+    // convention (gfx::is_homogeneous_depth).
+    const bool is_homogeneous = bgfx::getCaps()->homogeneousDepth;
     const float params[4] = {is_homogeneous ? 1.0f : 0.5f, is_homogeneous ? 0.0f : 0.5f, 0.0f, 0.0f};
     bgfx::setUniform(restore_params_, params);
     bgfx::setTexture(0,
@@ -3165,7 +3178,8 @@ void shadowmap_generator::submit_individual_caster(const individual_caster& cast
         const bgfx::ViewId viewId = shadowmap_1_id + ii;
         const RenderState _renderState = get_face_render_state(ii, writes_color);
 
-        // Render skinned models individually (original behavior)
+        // One draw per submesh: the models the batches do not take (skinned without skinned batching, or with
+        // batching off).
         model::submit_callbacks callbacks;
         callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
         {
@@ -3266,7 +3280,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
     submit_context context;
     context.view_id = viewId;
     context.enable_distance_sorting = false; // Shadow maps don't need distance sorting
-    context.max_instances_per_batch = 1024;
+    context.max_instances_per_batch = MAX_INSTANCES_PER_BATCH;
     context.enable_profiling = false;
     
     collector.prepare_batches(context);

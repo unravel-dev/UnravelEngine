@@ -809,6 +809,19 @@ private:
     /// Scratch of submit_particle_lights.
     std::vector<ps_soa::particle_light> particle_lights_;
     void submit_pbr_material(geom_program& program, const pbr_material& mat);
+    /**
+     * @brief Prepares the batches of @p collector and draws them instanced into the G-buffer: the batches whose
+     * instances carry material values with @p material_program and MaterialLayout, the others with @p plain_program
+     * and PlainLayout. @p on_draw(program, instance_count) counts each draw and sets what the program reads besides
+     * the material, right before its submit.
+     */
+    template<typename PlainLayout, typename MaterialLayout, typename OnDraw>
+    void submit_prepared_geometry(batch_collector& collector,
+                                  gfx::render_pass& pass,
+                                  const camera& camera,
+                                  geom_program& plain_program,
+                                  geom_program& material_program,
+                                  OnDraw&& on_draw);
     void submit_batched_geometry(gfx::render_pass& pass, const camera& camera);
     /// Velocity for batched movers: draws the mover instances of this frame's prepared
     /// batches (instance stream doubled with the previous world matrix) into the velocity

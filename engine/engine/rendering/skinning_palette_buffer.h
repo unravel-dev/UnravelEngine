@@ -3,6 +3,8 @@
 
 #include <bgfx/bgfx.h>
 #include <entt/container/dense_map.hpp>
+#include <entt/entity/handle.hpp>
+#include <entt/entity/registry.hpp>
 #include <hpp/span.hpp>
 #include <math/math.h>
 
@@ -86,13 +88,15 @@ public:
     /**
      * @brief The rows of @p owner's palettes this frame, reserving them on the first call of the frame. The palettes
      * are read by the next pack_pending(), so they must stay unchanged until then.
-     * @param owner Identifies the model for the rest of the frame (its model_component).
+     * @param owner The model's entity. Not the component's address: the editor deletes and creates entities between
+     *        the runs of a frame, and a new component can take a deleted one's storage.
      * @param palettes The model's current palettes (model_component::get_skinning_transforms).
      * @param previous The previous-frame palettes for the velocity pass, or null. A palette whose previous pose is
      *        missing or has another bone count gets its current rows.
      */
-    auto acquire(const void* owner, const std::vector<pose_mat4>& palettes, const std::vector<pose_mat4>* previous)
-        -> model_rows;
+    auto acquire(entt::const_handle owner,
+                 const std::vector<pose_mat4>& palettes,
+                 const std::vector<pose_mat4>* previous) -> model_rows;
     /// Packs the palettes acquired since the last call into their rows. Call before the models can change: at the end
     /// of each pipeline run.
     void pack_pending();
@@ -109,6 +113,23 @@ public:
     auto get_rows() const -> hpp::span<const math::vec4>;
 
 private:
+    /// A model entity in one registry; the entity carries its version, so a recycled id is another owner.
+    struct owner_key
+    {
+        const entt::registry* registry = nullptr;
+        entt::entity entity = entt::null;
+
+        auto operator==(const owner_key& other) const -> bool
+        {
+            return registry == other.registry && entity == other.entity;
+        }
+    };
+
+    struct owner_key_hash
+    {
+        auto operator()(const owner_key& key) const noexcept -> std::size_t;
+    };
+
     struct owner_entry
     {
         uint32_t first_current = 0;
@@ -142,11 +163,13 @@ private:
     skinning_palette_rows rows_;
     /// The palettes' first rows, a run per owner (and a second run once its previous palettes were asked for).
     std::vector<uint32_t> first_rows_;
-    entt::dense_map<const void*, owner_entry> owners_;
+    entt::dense_map<owner_key, owner_entry, owner_key_hash> owners_;
     std::vector<pack_job> pending_;
     std::vector<std::unique_ptr<upload_storage>> uploads_;
     bgfx::VertexLayout layout_;
     bgfx::DynamicVertexBufferHandle buffer_ = BGFX_INVALID_HANDLE;
+    /// The rows the GPU buffer holds.
+    uint32_t capacity_rows_ = 0;
     uint32_t uploaded_row_count_ = 0;
     /// Set by flush(): rows acquired later in the same frame would never reach the GPU.
     bool flushed_ = false;

@@ -546,6 +546,11 @@ public:
      */
     auto collect_mesh_shadow_instances(std::vector<shadow_batch_collector>& collectors, uint8_t view_mask) const
         -> bool;
+    /**
+     * @brief What the particles' shadows draw, as a key: their matrices and opacities, the meshes and what the
+     * shadows read of the materials. Unchanged while the emitter is paused or frozen, so a cached shadow map keeps it.
+     */
+    auto get_mesh_shadow_key() const -> uint64_t;
     /// Builds the model the particles draw once the render mesh has loaded, and again when the mesh or the
     /// material changes. Main thread (it resolves the mesh's materials).
     void refresh_render_mesh();

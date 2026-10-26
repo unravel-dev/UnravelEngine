@@ -31,14 +31,15 @@ auto is_loaded(const material::sptr& mat) -> bool
 auto get_moved_aspects(const material& before, const material& after) -> render_change::mask
 {
     render_change::mask moved = render_change::none;
-    for(uint32_t i = 0; i < render_change::count; ++i)
-    {
-        const render_change::mask aspect = 1u << i;
-        if(before.get_revision(aspect) != after.get_revision(aspect))
-        {
-            moved |= aspect;
-        }
-    }
+    for_each_aspect(render_change::all,
+                    [&](uint32_t i)
+                    {
+                        const render_change::mask aspect = 1u << i;
+                        if(before.get_revision(aspect) != after.get_revision(aspect))
+                        {
+                            moved |= aspect;
+                        }
+                    });
     return moved;
 }
 
@@ -372,6 +373,17 @@ auto material_instance::get_resolved() const -> const material::sptr&
 auto material_instance::get_resolved_shares_draw() const -> bool
 {
     return resolved_shares_draw_;
+}
+
+void material_instance::adopt_resolved(material_instance& previous)
+{
+    if(resolved_ || !previous.resolved_ || previous.shared_ != shared_)
+    {
+        return;
+    }
+    resolved_ = std::move(previous.resolved_);
+    // Synced with nothing: the next update_resolved() rebuilds it in place from these overrides.
+    resolved_shared_ = nullptr;
 }
 
 void material_instance::set_legacy_copy(material::sptr copy)

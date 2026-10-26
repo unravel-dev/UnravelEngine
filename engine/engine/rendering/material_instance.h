@@ -165,6 +165,13 @@ public:
     auto get_resolved_shares_draw() const -> bool;
 
     /**
+     * @brief Takes the resolved material of @p previous, the instance this copy replaces, when both are over the same
+     * shared material. The next update_resolved() rewrites it in place, so caches of its look (the GI cards) keep
+     * their key across an edit that sets a whole copy of the model.
+     */
+    void adopt_resolved(material_instance& previous);
+
+    /**
      * @brief Takes a whole material saved by an older version, which kept a full copy instead of overrides.
      *
      * The properties where it differs from the shared material become overrides once the shared material is

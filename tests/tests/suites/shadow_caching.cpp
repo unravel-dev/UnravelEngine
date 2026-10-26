@@ -24,6 +24,7 @@
 #include <engine/rendering/material.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/shadow.h>
+#include <engine/threading/threader.h>
 
 #include <cstdio>
 #include <string>
@@ -60,20 +61,6 @@ auto get_pbr(const asset_handle<material>& handle) -> std::shared_ptr<pbr_materi
     return std::static_pointer_cast<pbr_material>(handle.get());
 }
 
-/// The aspects whose revisions differ between @p before and @p after.
-auto get_moved(const render_change_values& before, const render_change_values& after) -> render_change::mask
-{
-    render_change::mask moved = render_change::none;
-    for(uint32_t i = 0; i < render_change::count; ++i)
-    {
-        if(before[i] != after[i])
-        {
-            moved |= 1u << i;
-        }
-    }
-    return moved;
-}
-
 void test_materials_revisions()
 {
     std::printf("a model's materials revisions move per aspect\n");
@@ -87,10 +74,10 @@ void test_materials_revisions()
     get_pbr(shared)->set_roughness(0.6f);
     const auto after_shared_edit = mdl.get_materials_change_keys();
     check(after_shared_edit != initial, "editing the shared material moves them");
-    check(get_moved(initial, after_shared_edit) == render_change::specular, "a roughness edit moves only specular");
+    check(get_changed_aspects(initial, after_shared_edit) == render_change::specular, "a roughness edit moves only specular");
     mdl.get_material_instance(0).set_override("emissive_intensity"_hs, 4.0f);
     mdl.update_material_instances();
-    check(get_moved(after_shared_edit, mdl.get_materials_change_keys()) == render_change::emission,
+    check(get_changed_aspects(after_shared_edit, mdl.get_materials_change_keys()) == render_change::emission,
           "a first emissive override moves only emission");
 }
 
@@ -135,6 +122,37 @@ void test_change_stamps()
     check(stamps.has_changed_within(render_interest::shadow_caster, 4, 19), "a change 3 frames ago is still settling");
     check(!stamps.has_changed_within(render_interest::shadow_caster, 4, 20), "4 frames later it settled");
     check(!stamps.has_changed_since(render_interest::shadow_caster, 16), "nothing changed since frame 16");
+}
+
+void test_material_reload_stamps(tpp::thread_pool& pool)
+{
+    std::printf("a reloaded shared material stamps what shadows read\n");
+    const auto shared = make_shared_material("reload");
+    model mdl;
+    mdl.set_shared_material(shared, 0);
+    model_component comp;
+    comp.set_model(mdl);
+    const auto update = [&comp](uint64_t frame)
+    {
+        comp.update_material_instances();
+        comp.update_change_stamps(frame, render_change::none);
+    };
+    update(10);
+    update(11);
+    check(comp.get_change_stamps().get_last_change(render_interest::shadow_caster) == 10, "a steady model stamps nothing");
+    // A reload loads a new object straight into its members: it counts as many edits as the object it replaces.
+    const std::shared_ptr<material> reloaded = std::make_shared<pbr_material>();
+    auto handle = shared;
+    handle.set_internal_job(pool.schedule("shadow_caching_reload",
+                                          [reloaded]()
+                                          {
+                                              return reloaded;
+                                          })
+                                .share());
+    check(handle.get() == reloaded, "the handle holds the reloaded material");
+    update(12);
+    check(comp.get_change_stamps().get_last_change(render_interest::shadow_caster) == 12,
+          "a reloaded shared material stamps the shadow aspects");
 }
 
 void test_model_swap_stamps()
@@ -200,6 +218,7 @@ auto run_shadow_caching_suite(rtti::context& ctx) -> int
     test_materials_revisions();
     test_change_stamps();
     test_model_swap_stamps();
+    test_material_reload_stamps(*ctx.get_cached<threader>().pool);
     test_cached_maps_epoch();
     std::printf("\nshadow caching: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

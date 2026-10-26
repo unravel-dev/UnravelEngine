@@ -53,8 +53,54 @@ struct render_change
     static constexpr mask all = object_aspects | material_aspects;
 };
 
+static_assert(render_change::all == (1u << render_change::count) - 1u, "render_change::count misses an aspect");
+
 /// One value per render_change aspect, indexed by the aspect's bit.
 using render_change_values = std::array<std::uint64_t, render_change::count>;
+
+/// Calls @p visit with the bit index of each aspect in @p changes.
+template<typename Visit>
+constexpr void for_each_aspect(render_change::mask changes, Visit&& visit)
+{
+    for(std::uint32_t i = 0; i < render_change::count; ++i)
+    {
+        if((changes & (1u << i)) != 0u)
+        {
+            visit(i);
+        }
+    }
+}
+
+/// The aspects whose values differ between @p before and @p after.
+constexpr auto get_changed_aspects(const render_change_values& before, const render_change_values& after)
+    -> render_change::mask
+{
+    render_change::mask changed = render_change::none;
+    for_each_aspect(render_change::all,
+                    [&](std::uint32_t i)
+                    {
+                        if(before[i] != after[i])
+                        {
+                            changed |= 1u << i;
+                        }
+                    });
+    return changed;
+}
+
+/**
+ * @brief Adds @p identity (an object address or an asset version) to the keys of the aspects in @p changes. Spread
+ * over the 64 bits first: the keys also sum small edit counts.
+ */
+inline void add_identity_key(render_change_values& keys, render_change::mask changes, std::uint64_t identity)
+{
+    constexpr std::uint64_t IDENTITY_MULTIPLIER = 0x9E3779B97F4A7C15ull;
+    const std::uint64_t spread = identity * IDENTITY_MULTIPLIER;
+    for_each_aspect(changes,
+                    [&](std::uint32_t i)
+                    {
+                        keys[i] += spread;
+                    });
+}
 
 /**
  * @brief What each system reads, as render_change aspects: what it keeps from an earlier frame is valid while none
@@ -74,12 +120,6 @@ struct render_interest
     /// A GI card's direct lighting, which reads only the captured normal and depth.
     static constexpr render_change::mask gi_card_direct =
         render_change::geometry | render_change::coverage | render_change::sidedness | render_change::normal;
-    /// The GI distance field and its instance flags (two-sided, emissive light source).
-    static constexpr render_change::mask gi_field = render_change::placement | render_change::geometry |
-                                                    render_change::membership | render_change::sidedness |
-                                                    render_change::emission;
-    /// Motion vectors.
-    static constexpr render_change::mask velocity = render_change::placement | render_change::pose;
 };
 
 /**
@@ -92,13 +132,11 @@ public:
     /// Counts one edit of each aspect in @p changes.
     void bump(render_change::mask changes) noexcept
     {
-        for(std::uint32_t i = 0; i < render_change::count; ++i)
-        {
-            if((changes & (1u << i)) != 0u)
-            {
-                ++revisions_[i];
-            }
-        }
+        for_each_aspect(changes,
+                        [&](std::uint32_t i)
+                        {
+                            ++revisions_[i];
+                        });
     }
 
     /// The edits of each aspect, indexed by its bit.
@@ -111,13 +149,11 @@ public:
     auto get(render_change::mask changes) const noexcept -> std::uint64_t
     {
         std::uint64_t revision = 0;
-        for(std::uint32_t i = 0; i < render_change::count; ++i)
-        {
-            if((changes & (1u << i)) != 0u)
-            {
-                revision += revisions_[i];
-            }
-        }
+        for_each_aspect(changes,
+                        [&](std::uint32_t i)
+                        {
+                            revision += revisions_[i];
+                        });
         return revision;
     }
 
@@ -136,26 +172,22 @@ public:
     /// Records the aspects in @p changes as changed in render frame @p frame.
     void stamp(render_change::mask changes, std::uint64_t frame) noexcept
     {
-        for(std::uint32_t i = 0; i < render_change::count; ++i)
-        {
-            if((changes & (1u << i)) != 0u)
-            {
-                frames_[i] = frame;
-            }
-        }
+        for_each_aspect(changes,
+                        [&](std::uint32_t i)
+                        {
+                            frames_[i] = frame;
+                        });
     }
 
     /// The last frame an aspect in @p interest changed; 0 when none ever did.
     auto get_last_change(render_change::mask interest) const noexcept -> std::uint64_t
     {
         std::uint64_t last = 0;
-        for(std::uint32_t i = 0; i < render_change::count; ++i)
-        {
-            if((interest & (1u << i)) != 0u && frames_[i] > last)
-            {
-                last = frames_[i];
-            }
-        }
+        for_each_aspect(interest,
+                        [&](std::uint32_t i)
+                        {
+                            last = frames_[i] > last ? frames_[i] : last;
+                        });
         return last;
     }
 
