@@ -13,6 +13,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <graphics/graphics.h>
+#include <entt/entity/entity.hpp>
 
 #include <array>
 #include <memory>
