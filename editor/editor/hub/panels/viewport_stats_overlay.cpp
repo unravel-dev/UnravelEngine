@@ -668,6 +668,15 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
     draw_row({"Shadow Lights",
               fmt::format("{}", pstats.drawn_lights_casting_shadows),
               "Lights that cast shadows. Each one renders one or more shadow maps."});
+    draw_row({"Shadow Maps Reused",
+              fmt::format("{} / {}", pstats.shadow_maps_reused, pstats.shadow_maps_reused + pstats.shadow_maps_rendered),
+              "Shadow maps kept from an earlier frame, of all the shadow maps this frame needed. A spot or point\n"
+              "light's map counts once, each cascade of the sun once. A map is rendered again only when its light,\n"
+              "its casters or the camera's cascades changed."});
+    draw_row({"Shadow Maps Restored",
+              fmt::format("{}", pstats.shadow_maps_restored),
+              "Rendered spot and point light maps that started from their static copy: the casters that hold\n"
+              "still were copied, and only the ones that move were drawn."});
 }
 
 void draw_particles_section(const rendering::pipeline_stats& pstats)

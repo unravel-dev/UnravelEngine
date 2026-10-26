@@ -166,7 +166,7 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       // mode, which freezes the transforms and thus also skips this refresh.)
                       const bool pose_refreshed = model_comp.update_armature();
                       // Node/bone animation moves submeshes without touching the owner
-                      // transform; a pose refresh that actually ran is motion evidence.
+                      // transform; a refresh that changed the pose is motion evidence.
                       model_comp.mark_motion(pose_refreshed);
 
                       model_comp.update_world_bounds(transform_comp.get_transform_global());
@@ -179,6 +179,8 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                           model_comp.is_dirty(dirty_ids::shadow_caster);
                       transform_comp.set_dirty(dirty_ids::shadow_caster, false);
                       model_comp.set_dirty(dirty_ids::shadow_caster, false);
+                      // What a cached shadow map holding this model has to know (shadow map caching).
+                      model_comp.update_shadow_change(frame, caster_dirty || pose_refreshed);
 
                       // Dynamic casters are re-read every frame by the shadow pass, so only a
                       // static one can invalidate the cache. A model that STOPPED being a

@@ -862,6 +862,11 @@ public:
     /// An empty palette list: submit() draws only a model's non-skinned submeshes with it (the skinned ones are batched).
     static auto get_empty_skinning() -> const std::vector<pose_mat4>&;
 
+    /// Sum of the revisions of every material the slots draw with (shared materials and the materials their instances
+    /// resolve to): it changes with any edit of them. A material still loading counts 0. Never waits for a load, so it
+    /// can run on pool threads.
+    auto get_materials_revision() const -> uint64_t;
+
     /**
      * @brief Gets the default material.
      * @return A reference to the default material asset handle.

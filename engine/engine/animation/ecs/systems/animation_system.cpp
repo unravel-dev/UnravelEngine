@@ -464,8 +464,10 @@ void animation_system::on_update(scene& scn, delta_t dt)
                               });
 
                           // Once per frame, after the pose is written: the root node's parent frame
-                          // is the posed one.
-                          if(apply_root_motion && has_root_motion)
+                          // is the posed one. Time that did not advance (paused, speed 0, a seek)
+                          // moves nothing: its delta is identity only up to rounding, and applying it
+                          // would turn the character a little every frame.
+                          if(apply_root_motion && has_root_motion && adjusted_dt != delta_t::zero())
                           {
                               move_by_root_motion(root_motion, model_comp, entt::handle(*scn.registry, entity), transform_comp, character);
                           }

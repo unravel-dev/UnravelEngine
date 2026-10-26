@@ -5,6 +5,7 @@
 #include "spdlog/common.h"
 #include "gpu_pass_log.h"
 #include "gpu_program.h"
+#include "shadow.h"
 #include "skinning_palette_buffer.h"
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
@@ -132,6 +133,11 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
     ev.on_app_enter_background.connect(sentinel_, this, &renderer::on_app_enter_background);
     ev.on_frame_begin.connect(sentinel_, this, &renderer::frame_begin);
     ev.on_frame_end.connect(sentinel_, this, &renderer::frame_end);
+    // Cached shadow maps stay valid only while nothing they show changes; these changes no key sees.
+    ev.on_project_opened.connect(sentinel_, this, &renderer::invalidate_cached_shadow_maps);
+    ev.on_play_begin.connect(sentinel_, this, &renderer::invalidate_cached_shadow_maps);
+    ev.on_play_after_end.connect(sentinel_, this, &renderer::invalidate_cached_shadow_maps);
+    ev.on_app_enter_foreground.connect(sentinel_, this, &renderer::invalidate_cached_shadow_maps);
 
     parser.set_optional<std::string>("r", "renderer", "auto", "Select preferred renderer.");
     parser.set_optional<bool>("n", "novsync", false, "Disable vsync.");
@@ -432,6 +438,11 @@ auto renderer::start_backend(bgfx::Init& init_data) -> bool
         }
         APPLOG_INFO("The surface went away while the graphics backend started. Starting it again.");
     }
+}
+
+void renderer::invalidate_cached_shadow_maps(rtti::context& /*ctx*/)
+{
+    shadow::invalidate_cached_maps();
 }
 
 void renderer::on_app_enter_background(rtti::context& /*ctx*/)
@@ -759,6 +770,7 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
         update_eviction(graphics.eviction);
         batch_collector::set_static_mesh_batching_enabled(graphics.static_mesh_batching);
         batch_collector::set_skinned_mesh_batching_enabled(graphics.skinned_mesh_batching);
+        shadow::set_map_caching_enabled(graphics.shadow_map_caching);
         const auto& particles = graphics.particles;
         ps_soa::set_quality({particles.spawn_scale,
                              particles.sorting,

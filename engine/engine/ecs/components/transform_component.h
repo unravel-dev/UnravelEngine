@@ -602,6 +602,23 @@ private:
         }
 
         /**
+         * @brief Stores the value and marks the property dirty only when @p is_changed: an unchanged value leaves
+         *        every consumer clean.
+         * @param owner The owner component.
+         * @param val The value to set.
+         * @param is_changed The value differs from the stored one.
+         */
+        void set_value(Owner* owner, const T& val, bool is_changed) noexcept
+        {
+            local = val;
+
+            if(is_changed)
+            {
+                set_dirty(owner, true);
+            }
+        }
+
+        /**
          * @brief Gets the local value.
          * @param owner The owner component.
          * @return A constant reference to the local value.

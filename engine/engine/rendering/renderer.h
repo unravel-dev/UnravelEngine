@@ -115,6 +115,8 @@ protected:
     /// Sets the graphics backend's debug features: the statistics overlay and the per-pass GPU timers.
     void set_debug_flags(uint32_t flags);
     void on_app_enter_background(rtti::context& ctx);
+    /// Makes every cached shadow map stale (shadow::invalidate_cached_maps).
+    void invalidate_cached_shadow_maps(rtti::context& ctx);
     void frame_begin(rtti::context& ctx, delta_t dt);
     void frame_end(rtti::context& ctx, delta_t dt);
 

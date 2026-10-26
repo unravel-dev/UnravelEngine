@@ -591,9 +591,12 @@ struct Programs
 
         // Misc.
         m_black.reset();
+        m_restore.reset();
     }
 
     gpu_program::ptr m_black;
+    /// Copies a light's static copy back into its atlas tile (shadow map caching).
+    gpu_program::ptr m_restore;
     gpu_program::ptr m_vBlur[PackDepth::Count];
     gpu_program::ptr m_hBlur[PackDepth::Count];
     gpu_program::ptr m_drawDepth[PackDepth::Count];
@@ -713,6 +716,21 @@ struct shadow_visibility_data
     const particle_emitter_component* particles = nullptr;
 };
 using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
+
+/**
+ * @brief Shadow map caching (graphics.shadow_map_caching): a light's map, or a cascade of the sun, keeps its content
+ * across frames while nothing it shows changed, and is not rendered again. Off renders every map every frame.
+ * Changing it makes every cached map stale.
+ */
+void set_map_caching_enabled(bool enabled);
+auto is_map_caching_enabled() -> bool;
+
+/**
+ * @brief Makes every cached shadow map stale: the key a map is reused by includes this epoch. For changes no key
+ * sees: a project opened, play starting or ending, the application returning from the background.
+ */
+void invalidate_cached_maps();
+auto get_cached_maps_epoch() -> uint64_t;
 
 /**
  * @brief Shadow mapping generator with improved algorithms for high-altitude cameras
@@ -857,13 +875,168 @@ public:
     auto get_max_altitude_boost() const -> float { return adaptive_params_.max_altitude_boost; }
 
 private:
-    auto render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_id,
-                                     const shadow_map_models_t& models,
-                                     const math::frustum frustums[ShadowMapRenderTargets::Count],
-                                     ShadowMapSettings* currentSmSettings,
-                                     const camera* cam,
-                                     ::unravel::rendering::pipeline_stats* stats = nullptr) -> bool;
-    
+    /// What prepare_shadow_casters worked out for the views of this light (cascades, tetrahedron faces), and what
+    /// collect_shadow_casters gathered.
+    struct shadow_collection
+    {
+        bool anything_collected = false;
+        bool has_static_batches = false;
+        bool has_skinned_batches = false;
+        /// Nothing any view shows changed since every view was last rendered (casters_key_): nothing is collected,
+        /// every view keeps its content.
+        bool reuse_all = false;
+        /// Hash of every caster's facts this time (identity, LOD, change stamp, view mask) and of what decides them.
+        uint64_t casters_key = 0;
+        /// Per view: a hash of what its render would draw (shadow map caching).
+        uint64_t view_hashes[ShadowMapRenderTargets::Count] = {};
+        /// Hash of the casters that hold still (caster_facts::is_mover false) and of the views' settings: what the
+        /// light's static copy holds.
+        uint64_t static_key = 0;
+        /// A caster that moves is in reach of some view.
+        bool has_movers = false;
+        /// How many casters that hold still are in reach of some view.
+        uint32_t static_caster_count = 0;
+    };
+
+    /// What prepare_shadow_casters works out per caster before any of them is collected.
+    struct caster_facts
+    {
+        entt::entity entity = entt::null;
+        uint8_t view_mask = 0;
+        uint32_t lod_index = 0;
+        /// What the views holding it must know to keep their content: which model, its LOD and mesh, and when its
+        /// shadow last changed (moved, re-posed, a material edited).
+        uint64_t content_hash = 0;
+        /// Its shadow changed within the last frames, or it is a particle emitter: it stays out of the static copy.
+        bool is_mover = false;
+        /// The last collection that took it drew it: when it is not collected, it is marked rendered as before.
+        bool is_marked = false;
+    };
+
+    /// Which casters collect_shadow_casters takes.
+    enum class caster_filter : uint8_t
+    {
+        all,
+        /// The ones that hold still: the static copy's content.
+        static_only,
+        /// The ones that move: drawn over the restored static copy.
+        movers_only,
+    };
+
+    /// A caster on the individual path (no batching), recorded by collect_shadow_casters and drawn by
+    /// submit_shadow_casters into the views that render.
+    struct individual_caster
+    {
+        const shadow_visibility_data* element = nullptr;
+        uint32_t lod_index = 0;
+        uint8_t view_mask = 0;
+        /// Its skinned submeshes went to the skinned batches: only the others are drawn individually.
+        bool skinned_batched = false;
+    };
+
+    /// The views this light renders into: 1 for a spot light, 4 tetrahedron faces, or the cascades.
+    auto get_view_count() const -> uint8_t;
+
+    /// Directional lights: the camera's reach test (shadow_reach); an empty one for the others.
+    auto make_shadow_reach(const ShadowMapSettings* currentSmSettings, const camera* cam) const -> shadow_reach;
+
+    /// Skinned casters batch when the instanced skinned program of this map's depth and packing exists.
+    auto is_skinned_batching_enabled(const ShadowMapSettings* currentSmSettings) const -> bool;
+
+    /// Works out every caster's facts and the keys of what each view would draw, without collecting anything; sets
+    /// shadow_collection::reuse_all when every view keeps its content.
+    auto prepare_shadow_casters(const shadow_map_models_t& models,
+                                const math::frustum frustums[ShadowMapRenderTargets::Count],
+                                const ShadowMapSettings* currentSmSettings,
+                                const camera* cam) -> shadow_collection;
+
+    /// Works out every caster's facts into caster_facts_ and the collection's keys: the casters key with the settings
+    /// of every view, the views' content hashes and the static copy's key.
+    /// @param reach Directional lights: the camera's reach test; the camera then enters the casters key.
+    /// @param batching_bits Which batching paths are on: they change how the casters are drawn.
+    void compute_caster_facts(const shadow_map_models_t& models,
+                              const math::frustum frustums[ShadowMapRenderTargets::Count],
+                              const shadow_reach& reach,
+                              const camera* cam,
+                              uint64_t batching_bits,
+                              shadow_collection& collection);
+
+    /// Collects the casters of @p filter into the batches and individual_casters_, without drawing anything. A
+    /// directional light's view hashes take what was collected: its reach test keeps submeshes the facts do not see.
+    void collect_shadow_casters(const shadow_map_models_t& models,
+                                const math::frustum frustums[ShadowMapRenderTargets::Count],
+                                ShadowMapSettings* currentSmSettings,
+                                const camera* cam,
+                                caster_filter filter,
+                                shadow_collection& collection,
+                                ::unravel::rendering::pipeline_stats* stats);
+
+    /// Every view keeps its content when caching is on, every view has content and @p casters_key is the one that
+    /// content was rendered under.
+    auto can_reuse_all_views(uint64_t casters_key) const -> bool;
+
+    /// Marks the casters the last collection drew as rendered this frame, as collecting them would.
+    void mark_reused_casters(const shadow_map_models_t& models, uint64_t frame) const;
+
+    /// The views (bits) whose content must be rendered this time: all of them without caching; otherwise those whose
+    /// key changed (a local light's faces render together). Writes the keys to @p keys.
+    auto select_views_to_render(const shadow_collection& collection, uint64_t keys[ShadowMapRenderTargets::Count]) const
+        -> uint8_t;
+
+    /// What a view's content depends on besides its casters: the light's matrices and map settings, the atlas
+    /// placement and the cached maps epoch.
+    auto compute_view_settings_key(uint8_t view) const -> uint64_t;
+
+    /// The key a view's content is reused by: its settings key and what the view draws.
+    auto compute_view_key(uint8_t view, const shadow_collection& collection) const -> uint64_t;
+
+    /// A local light in the atlas with casters that move in reach renders them over its static copy, when enough
+    /// casters hold still to pay for the restore.
+    auto can_use_static_copy(const shadow_collection& collection) const -> bool;
+
+    /// Renders the casters that hold still into the light's square of the static copy (shadow_atlas), when what it
+    /// holds is not this collection's. Takes views of its own ahead of the map's.
+    void refresh_static_copy(const shadow_map_models_t& models,
+                             ShadowMapSettings* currentSmSettings,
+                             const camera& cam,
+                             shadow_collection& collection,
+                             ::unravel::rendering::pipeline_stats* stats);
+
+    /// Sets the rect, transform and frame buffer of a spot or point light's views: views[0] for the clear and the
+    /// stencil mask, views[1..4] for the faces, in the light's tile at @p map_x, @p map_y of @p target.
+    void set_local_light_views(const bgfx::ViewId views[5],
+                               bgfx::FrameBufferHandle target,
+                               uint16_t map_x,
+                               uint16_t map_y) const;
+
+    /// Draws the stencil mask that splits a stencil-packed point light's map between its faces.
+    void submit_stencil_mask(bgfx::ViewId view) const;
+
+    /// Writes the light's static copy into its tile: the depth, and the atlas colour rebuilt from it.
+    void submit_static_copy_restore(bgfx::ViewId view, bool origin_bottom_left) const;
+
+    /// The render state a face draws with; @p writes_color false for the static copy, which has no colour.
+    auto get_face_render_state(uint8_t face, bool writes_color) const -> RenderState;
+
+    /// Draws what collect_shadow_casters gathered into the views of @p view_mask.
+    /// @param writes_color False for the static copy, which has no colour.
+    void submit_shadow_casters(uint8_t view_mask,
+                               bgfx::ViewId shadowmap_1_id,
+                               const math::frustum frustums[ShadowMapRenderTargets::Count],
+                               ShadowMapSettings* currentSmSettings,
+                               const shadow_collection& collection,
+                               bool writes_color,
+                               ::unravel::rendering::pipeline_stats* stats);
+
+    /// Draws one recorded individual caster into the views of @p view_mask.
+    void submit_individual_caster(const individual_caster& caster,
+                                  uint8_t view_mask,
+                                  bgfx::ViewId shadowmap_1_id,
+                                  const math::frustum frustums[ShadowMapRenderTargets::Count],
+                                  ShadowMapSettings* currentSmSettings,
+                                  bool writes_color,
+                                  ::unravel::rendering::pipeline_stats* stats);
+
     /// @param skinned The collector holds skinned instances (cascade_skinned_batch_collectors_): drawn with the instanced
     ///        skinned programs, the bones from the skinning palette buffer.
     void submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
@@ -916,6 +1089,28 @@ private:
     hpp::optional<shadow_atlas_tile> atlas_tile_;
     /// The atlas generation the tile's content was rendered under: under another one it is stale.
     uint64_t atlas_generation_ = UINT64_MAX;
+    /// The tile's placement serial (shadow_atlas::find_placement): the map is only in the tile while it is current.
+    uint64_t atlas_placement_ = 0;
+
+    /// Per view: the key its content was last rendered under (compute_view_key), valid while view_key_valid_.
+    uint64_t view_keys_[ShadowMapRenderTargets::Count] = {};
+    bool view_key_valid_[ShadowMapRenderTargets::Count] = {};
+    /// The shadow_collection::casters_key every view's content matches, valid while casters_key_valid_.
+    uint64_t casters_key_ = 0;
+    bool casters_key_valid_ = false;
+    /// The shadow_collection::static_key the light's square of the static copy holds, rendered under
+    /// static_copy_generation_ (shadow_atlas::get_static_generation); valid while static_copy_valid_.
+    uint64_t static_copy_key_ = 0;
+    uint64_t static_copy_generation_ = 0;
+    bool static_copy_valid_ = false;
+    /// s_staticDepth and u_restoreParams of the restore (fs_shadowmaps_restore).
+    bgfx::UniformHandle static_depth_sampler_{bgfx::kInvalidHandle};
+    bgfx::UniformHandle restore_params_{bgfx::kInvalidHandle};
+    /// Scratch of collect_shadow_casters / submit_shadow_casters.
+    std::vector<individual_caster> individual_casters_;
+    std::vector<caster_facts> caster_facts_;
+    /// Forgets every view key (new or lost render targets).
+    void invalidate_view_keys();
     /// u_shadowAtlasRect: the tile in atlas uv (common_shadow.sh shadowMapFetchUV).
     bgfx::UniformHandle shadow_atlas_rect_{bgfx::kInvalidHandle};
     float atlas_rect_[4] = {0.0f, 0.0f, 1.0f, 1.0f};

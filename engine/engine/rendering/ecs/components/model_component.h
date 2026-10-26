@@ -244,7 +244,9 @@ public:
      *  - Change-driven: visible models early-out when no armature entity transform changed
      *    since the last refresh (dirty_ids::model_pose bit-scan).
      *
-     * @return True when a refresh actually ran, false when skipped or no mesh is loaded.
+     * @return True when the refresh changed the pose (a bone or submesh node moved, the submeshes were mapped
+     *         differently, or a refresh was forced); false when it was skipped, no mesh is loaded, or it rebuilt
+     *         the same pose (animation and an IK pass rewriting the same final pose every frame).
      */
     auto update_armature() -> bool;
 
@@ -325,6 +327,16 @@ public:
     /// True when this model moved since the last rendered frame (or is skinned) and should be
     /// drawn into the velocity buffer with per-object motion.
     auto has_motion() const -> bool;
+
+    /**
+     * @brief Stamps the render frame when this model's shadow changed: it moved or was re-posed (@p changed: the
+     * caster dirty bits or a pose refresh of this frame), or a material it draws with was edited. Called once per
+     * frame per model by model_system; a shadow map that holds this model is reused only while the stamp is older
+     * than the map.
+     */
+    void update_shadow_change(uint64_t frame, bool changed);
+    /// The render frame of the last change update_shadow_change saw.
+    auto get_shadow_change_frame() const noexcept -> uint64_t;
     auto get_prev_world_transform() const -> const math::mat4&;
     auto get_prev_submesh_transforms() const -> const submesh_pose_mat4&;
     auto get_prev_skinning_transforms() const -> const std::vector<pose_mat4>&;
@@ -529,6 +541,10 @@ private:
 
     /// This model moved since the last rendered frame (or is skinned).
     bool has_motion_{false};
+
+    /// See update_shadow_change. The revision starts at a value no material sum has, so the first update stamps.
+    uint64_t shadow_change_frame_{0};
+    uint64_t shadow_materials_revision_{UINT64_MAX};
 
     /// Last render frame (+1, 0 = never) any pipeline requested velocity recording for.
     static std::atomic<uint32_t> velocity_recording_request_frame_;

@@ -10,6 +10,15 @@ namespace unravel
 {
 namespace
 {
+/// Exact equality of what two transforms place. Exact, not within epsilon: a value moved by less than epsilon each
+/// frame still has to reach the consumers.
+auto is_same_placement(const math::transform& lhs, const math::transform& rhs) noexcept -> bool
+{
+    return lhs.get_position() == rhs.get_position() && lhs.get_rotation() == rhs.get_rotation() &&
+           lhs.get_scale() == rhs.get_scale() && lhs.get_skew() == rhs.get_skew() &&
+           lhs.get_perspective() == rhs.get_perspective();
+}
+
 auto is_ancestor_of(entt::handle potential_parent, entt::handle child) -> bool
 {
     if(!child)
@@ -246,7 +255,10 @@ auto transform_component::get_transform_local() const noexcept -> const math::tr
 
 void transform_component::set_transform_local(const math::transform& trans) noexcept
 {
-    transform_.set_value(this, trans);
+    // An unchanged transform is still stored (it may carry another rotation Euler hint) but leaves every consumer
+    // clean: animation and scripts write the same transform every frame, and a dirty transform reads as motion
+    // (pose refresh, velocity, cached shadow maps).
+    transform_.set_value(this, trans, !is_same_placement(transform_.get_value(this), trans));
 }
 
 void transform_component::resolve_transform_global() noexcept
@@ -336,11 +348,19 @@ auto transform_component::get_position_local() const noexcept -> const math::vec
 
 void transform_component::set_position_local(const math::vec3& position) noexcept
 {
+    if(get_position_local() == position)
+    {
+        return;
+    }
     transform_.value(this).set_position(position);
 }
 
 void transform_component::move_by_local(const math::vec3& amount) noexcept
 {
+    if(amount == math::vec3(0.0f))
+    {
+        return;
+    }
     transform_.value(this).translate_local(amount);
 }
 
@@ -419,6 +439,10 @@ auto transform_component::get_rotation_local() const noexcept -> const math::qua
 
 void transform_component::set_rotation_local(const math::quat& rotation) noexcept
 {
+    if(get_rotation_local() == rotation)
+    {
+        return;
+    }
     transform_.value(this).set_rotation(rotation);
 }
 
@@ -526,6 +550,10 @@ auto transform_component::get_scale_local() const noexcept -> const math::vec3&
 
 void transform_component::scale_by_local(const math::vec3& scale) noexcept
 {
+    if(scale == math::vec3(1.0f))
+    {
+        return;
+    }
     transform_.value(this).scale(scale);
 }
 
@@ -608,6 +636,10 @@ void transform_component::set_scale_global(const math::vec3& scale) noexcept
 
 void transform_component::set_scale_local(const math::vec3& scale) noexcept
 {
+    if(get_scale_local() == scale)
+    {
+        return;
+    }
     transform_.value(this).set_scale(scale);
 }
 
@@ -627,6 +659,10 @@ void transform_component::set_skew_global(const math::vec3& skew) noexcept
 
 void transform_component::set_skew_local(const math::vec3& skew) noexcept
 {
+    if(get_skew_local() == skew)
+    {
+        return;
+    }
     transform_.value(this).set_skew(skew);
 }
 
@@ -646,6 +682,10 @@ void transform_component::set_perspective_global(const math::vec4& perspective) 
 
 void transform_component::set_perspective_local(const math::vec4& perspective) noexcept
 {
+    if(get_perspective_local() == perspective)
+    {
+        return;
+    }
     transform_.value(this).set_perspective(perspective);
 }
 

@@ -1574,6 +1574,26 @@ auto model::get_empty_skinning() -> const std::vector<pose_mat4>&
     return empty;
 }
 
+auto model::get_materials_revision() const -> uint64_t
+{
+    uint64_t revision = 0;
+    for(const auto& shared : get_shared_materials())
+    {
+        if(const auto mat = shared.try_get())
+        {
+            revision += mat->get_revision();
+        }
+    }
+    for(const auto& instance : material_instances_)
+    {
+        if(const auto& resolved = instance.get_resolved())
+        {
+            revision += resolved->get_revision();
+        }
+    }
+    return revision;
+}
+
 auto model::resolve_skinned_submesh(const mesh& m,
                                     uint32_t lod,
                                     uint32_t submesh_index,

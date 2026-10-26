@@ -23,6 +23,9 @@
 #include <graphics/texture.h>
 #include <graphics/vertex_buffer.h>
 
+#include <atomic>
+#include <cstring>
+
 namespace unravel
 {
 namespace shadow
@@ -399,7 +402,60 @@ void calculateCascadeSplits(float* cascadeSplits, uint8_t numSplits, float nearC
     }
 }
 
+/// A stabilized cascade's depth centre snaps to this fraction of the shadow distance (1/16 of its 2 * far range).
+constexpr float CASCADE_DEPTH_SNAP_FRACTION = 1.0f / 8.0f;
+/// Render frames a caster's shadow must hold still before it joins a light's static copy: one that changed recently
+/// is expected to change again, and every caster joining or leaving renders the copy again.
+constexpr uint64_t MOVER_SETTLE_FRAMES = 30;
+/// Casters that hold still a light needs in reach before it draws over a static copy: below that, drawing them again
+/// costs less than restoring the whole tile.
+constexpr uint32_t STATIC_COPY_MIN_CASTERS = 4;
+
+/// Mixes @p value into a cached-map key (shadow map caching).
+auto mix_key(uint64_t key, uint64_t value) -> uint64_t
+{
+    return uint64_t(batch_collector_detail::mix_hash(size_t(key ^ (value + 0x9e3779b97f4a7c15ULL + (key << 6) + (key >> 2)))));
+}
+
+/// Mixes the exact bits of @p count floats into a cached-map key.
+auto mix_floats(uint64_t key, const float* values, size_t count) -> uint64_t
+{
+    for(size_t index = 0; index < count; ++index)
+    {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &values[index], sizeof(bits));
+        key = mix_key(key, bits);
+    }
+    return key;
+}
+
+std::atomic<bool> map_caching_enabled{true};
+std::atomic<uint64_t> cached_maps_epoch{1};
+
 } // namespace
+
+void set_map_caching_enabled(bool enabled)
+{
+    if(map_caching_enabled.exchange(enabled, std::memory_order_relaxed) != enabled)
+    {
+        invalidate_cached_maps();
+    }
+}
+
+auto is_map_caching_enabled() -> bool
+{
+    return map_caching_enabled.load(std::memory_order_relaxed);
+}
+
+void invalidate_cached_maps()
+{
+    cached_maps_epoch.fetch_add(1, std::memory_order_relaxed);
+}
+
+auto get_cached_maps_epoch() -> uint64_t
+{
+    return cached_maps_epoch.load(std::memory_order_relaxed);
+}
 
 auto make_light_projection(float fov_y_degrees,
                            float aspect,
@@ -456,17 +512,21 @@ void shadowmap_generator::deinit_textures()
     shadow_atlas::get().release(get_atlas_owner());
     atlas_tile_.reset();
     atlas_generation_ = UINT64_MAX;
+    atlas_placement_ = 0;
     destroy_own_maps();
+    invalidate_view_keys();
 }
 
 void shadowmap_generator::destroy_own_maps()
 {
+    bool destroyed = false;
     for(int i = 0; i < ShadowMapRenderTargets::Count; ++i)
     {
         if(bgfx::isValid(rt_shadow_map_[i]))
         {
             bgfx::destroy(rt_shadow_map_[i]);
             rt_shadow_map_[i] = {bgfx::kInvalidHandle};
+            destroyed = true;
         }
     }
 
@@ -475,6 +535,20 @@ void shadowmap_generator::destroy_own_maps()
         bgfx::destroy(rt_blur_);
         rt_blur_ = {bgfx::kInvalidHandle};
     }
+    if(destroyed)
+    {
+        invalidate_view_keys();
+    }
+}
+
+void shadowmap_generator::invalidate_view_keys()
+{
+    for(auto& is_valid : view_key_valid_)
+    {
+        is_valid = false;
+    }
+    casters_key_valid_ = false;
+    static_copy_valid_ = false;
 }
 
 void shadowmap_generator::deinit_uniforms()
@@ -487,6 +561,16 @@ void shadowmap_generator::deinit_uniforms()
     {
         bgfx::destroy(shadow_atlas_rect_);
         shadow_atlas_rect_ = {bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(static_depth_sampler_))
+    {
+        bgfx::destroy(static_depth_sampler_);
+        static_depth_sampler_ = {bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(restore_params_))
+    {
+        bgfx::destroy(restore_params_);
+        restore_params_ = {bgfx::kInvalidHandle};
     }
 
     for(int i = 0; i < ShadowMapRenderTargets::Count; ++i)
@@ -512,6 +596,8 @@ void shadowmap_generator::init(rtti::context& ctx)
     uniforms_.init();
     tex_color_ = bgfx::createUniform("s_texColor", bgfx::UniformType::Sampler);
     shadow_atlas_rect_ = bgfx::createUniform("u_shadowAtlasRect", bgfx::UniformType::Vec4);
+    static_depth_sampler_ = bgfx::createUniform("s_staticDepth", bgfx::UniformType::Sampler);
+    restore_params_ = bgfx::createUniform("u_restoreParams", bgfx::UniformType::Vec4);
     shadow_map_[0] = bgfx::createUniform("s_shadowMap0", bgfx::UniformType::Sampler);
     shadow_map_[1] = bgfx::createUniform("s_shadowMap1", bgfx::UniformType::Sampler);
     shadow_map_[2] = bgfx::createUniform("s_shadowMap2", bgfx::UniformType::Sampler);
@@ -1308,11 +1394,14 @@ void shadowmap_generator::update_atlas_tile()
 {
     const auto& atlas = shadow_atlas::get();
     const auto tile = atlas.find(get_atlas_owner());
-    if(tile != atlas_tile_)
+    const uint64_t placement = atlas.find_placement(get_atlas_owner());
+    // Placed again, even on the same square: another light may have rendered there in between.
+    if(tile != atlas_tile_ || placement != atlas_placement_)
     {
         needs_clear_ = true;
     }
     atlas_tile_ = tile;
+    atlas_placement_ = placement;
     if(!tile)
     {
         return;
@@ -1475,6 +1564,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     {
         current_shadow_map_size_ = shadowMapSize;
         needs_clear_ = true;
+        invalidate_view_keys();
 
         // Float depth (moments for VSM). The RGBA8 packing this replaced decoded with a
         // systematic error of up to 2e-3 of the depth range (the 1/255 steps of UNORM8 against
@@ -1826,7 +1916,16 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             mtxCrop[5] = scaley;   // y-scale
             mtxCrop[12] = offsetx; // x-offset
             mtxCrop[13] = offsety; // y-offset
-            mtxCrop[14] = -lightSpaceCenter.z; // z-offset: center depth range on cascade frustum
+            // z-offset: center depth range on cascade frustum. Stabilized cascades snap it too, so a cascade holds still
+            // (and its cached map stays valid) until the camera moves a step along the light; the 2 * far deep range
+            // gives up at most half a step of its margin for it.
+            float depthCenter = lightSpaceCenter.z;
+            if(settings_.m_stabilize)
+            {
+                const float depthStep = currentSmSettings->m_far * CASCADE_DEPTH_SNAP_FRACTION;
+                depthCenter = bx::round(depthCenter / depthStep) * depthStep;
+            }
+            mtxCrop[14] = -depthCenter;
 
             // Final projection = crop * base projection
             bx::mtxMul(lightProj[ii], mtxCrop, mtxProj);
@@ -2087,6 +2186,59 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     const uint16_t map_x = uses_atlas_ ? atlas_tile_->x : uint16_t(0);
     const uint16_t map_y = uses_atlas_ ? atlas_tile_->y : uint16_t(0);
 
+    ShadowMapSettings* currentSmSettings =
+        &sm_settings_[settings_.m_lightType][settings_.m_depthImpl][settings_.m_smImpl];
+
+    const bool is_directional = LightType::DirectionalLight == settings_.m_lightType;
+
+    // Work out what every view would draw, then render only the views whose content changed (shadow map caching): the
+    // others keep last frame's content, untouched (no clear, no draws). Decided before any view is set up: a light
+    // that renders nothing takes no views.
+    shadow_collection collection = prepare_shadow_casters(models, light_frustums_, currentSmSettings, &cam);
+    if(!collection.reuse_all && is_directional)
+    {
+        collect_shadow_casters(models, light_frustums_, currentSmSettings, &cam, caster_filter::all, collection, stats);
+    }
+    uint64_t view_keys[ShadowMapRenderTargets::Count] = {};
+    const uint8_t render_views = collection.reuse_all ? uint8_t(0) : select_views_to_render(collection, view_keys);
+    if(stats != nullptr)
+    {
+        // A local light's map counts once, a cascade once each.
+        const uint32_t view_count = get_view_count();
+        const uint32_t rendered = is_directional ? uint32_t(bx::countBits(uint32_t(render_views))) : (render_views != 0u ? 1u : 0u);
+        const uint32_t regions = is_directional ? view_count : 1u;
+        stats->shadow_maps_rendered += rendered;
+        stats->shadow_maps_reused += regions - rendered;
+    }
+    // Every view holds this collection's content once the views below render: the next time the casters key matches,
+    // nothing needs collecting.
+    if(!collection.reuse_all)
+    {
+        casters_key_ = collection.casters_key;
+        casters_key_valid_ = true;
+    }
+    if(render_views == 0u)
+    {
+        return;
+    }
+
+    // A local light with casters that move in reach draws only them, over its static copy. The copy renders first, in
+    // views of its own, when the casters that hold still changed.
+    const bool uses_static_copy = can_use_static_copy(collection);
+    if(uses_static_copy)
+    {
+        refresh_static_copy(models, currentSmSettings, cam, collection, stats);
+        collect_shadow_casters(models, light_frustums_, currentSmSettings, &cam, caster_filter::movers_only, collection, stats);
+        if(stats != nullptr)
+        {
+            stats->shadow_maps_restored++;
+        }
+    }
+    else if(!is_directional)
+    {
+        collect_shadow_casters(models, light_frustums_, currentSmSettings, &cam, caster_filter::all, collection, stats);
+    }
+
     auto& lightView = light_view_;
     auto& lightProj = light_proj_;
     auto& lightFrustums = light_frustums_;
@@ -2130,100 +2282,25 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     auto RENDERVIEW_VBLUR_3_ID = shadowmap_vblur_pass_3.id;
     auto RENDERVIEW_HBLUR_3_ID = shadowmap_hblur_pass_3.id;
 
-    if(LightType::SpotLight == settings_.m_lightType)
+    if(LightType::DirectionalLight != settings_.m_lightType)
     {
         /**
-         * RENDERVIEW_SHADOWMAP_0_ID - Clear shadow map. (used as convenience, otherwise render_pass_1 could be cleared)
-         * RENDERVIEW_SHADOWMAP_1_ID - Craft shadow map.
+         * RENDERVIEW_SHADOWMAP_0_ID - Clear (point light), stencil mask, restore from the static copy.
+         * RENDERVIEW_SHADOWMAP_1_ID..4 - The spot light's map, or the point light's tetrahedron faces.
          * RENDERVIEW_VBLUR_0_ID - Vertical blur.
          * RENDERVIEW_HBLUR_0_ID - Horizontal blur.
          */
+        const bgfx::ViewId local_views[5] = {RENDERVIEW_SHADOWMAP_0_ID,
+                                             RENDERVIEW_SHADOWMAP_1_ID,
+                                             RENDERVIEW_SHADOWMAP_2_ID,
+                                             RENDERVIEW_SHADOWMAP_3_ID,
+                                             RENDERVIEW_SHADOWMAP_4_ID};
+        set_local_light_views(local_views, map_target, map_x, map_y);
 
-        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_0_ID, map_x, map_y, current_shadow_map_size_, current_shadow_map_size_);
-        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, map_x, map_y, current_shadow_map_size_, current_shadow_map_size_);
         bgfx::setViewRect(RENDERVIEW_VBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
         bgfx::setViewRect(RENDERVIEW_HBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
-
-        bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_0_ID, screenView, screenProj);
-        bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_1_ID, lightView[0], lightProj[ProjType::Horizontal]);
         bgfx::setViewTransform(RENDERVIEW_VBLUR_0_ID, screenView, screenProj);
         bgfx::setViewTransform(RENDERVIEW_HBLUR_0_ID, screenView, screenProj);
-
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_0_ID, map_target);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_1_ID, map_target);
-        bgfx::setViewFrameBuffer(RENDERVIEW_VBLUR_0_ID, rt_blur_);
-        bgfx::setViewFrameBuffer(RENDERVIEW_HBLUR_0_ID, rt_shadow_map_[0]);
-    }
-    else if(LightType::PointLight == settings_.m_lightType)
-    {
-        /**
-         * RENDERVIEW_SHADOWMAP_0_ID - Clear entire shadow map.
-         * RENDERVIEW_SHADOWMAP_1_ID - Craft green tetrahedron shadow face.
-         * RENDERVIEW_SHADOWMAP_2_ID - Craft yellow tetrahedron shadow face.
-         * RENDERVIEW_SHADOWMAP_3_ID - Craft blue tetrahedron shadow face.
-         * RENDERVIEW_SHADOWMAP_4_ID - Craft red tetrahedron shadow face.
-         * RENDERVIEW_VBLUR_0_ID - Vertical blur.
-         * RENDERVIEW_HBLUR_0_ID - Horizontal blur.
-         */
-
-        bgfx::setViewRect(RENDERVIEW_SHADOWMAP_0_ID, map_x, map_y, current_shadow_map_size_, current_shadow_map_size_);
-        if(settings_.m_stencilPack)
-        {
-            const uint16_t f = current_shadow_map_size_;     // full size
-            const uint16_t h = current_shadow_map_size_ / 2; // half size
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, map_x, map_y, f, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_2_ID, map_x, uint16_t(map_y + h), f, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_3_ID, map_x, map_y, h, f);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_4_ID, uint16_t(map_x + h), map_y, h, f);
-        }
-        else
-        {
-            const uint16_t h = current_shadow_map_size_ / 2; // half size
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_1_ID, map_x, map_y, h, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_2_ID, uint16_t(map_x + h), map_y, h, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_3_ID, map_x, uint16_t(map_y + h), h, h);
-            bgfx::setViewRect(RENDERVIEW_SHADOWMAP_4_ID, uint16_t(map_x + h), uint16_t(map_y + h), h, h);
-        }
-        bgfx::setViewRect(RENDERVIEW_VBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
-        bgfx::setViewRect(RENDERVIEW_HBLUR_0_ID, 0, 0, current_shadow_map_size_, current_shadow_map_size_);
-
-        bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_0_ID, screenView, screenProj);
-        bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_1_ID,
-                               lightView[TetrahedronFaces::Green],
-                               lightProj[ProjType::Horizontal]);
-
-        bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_2_ID,
-                               lightView[TetrahedronFaces::Yellow],
-                               lightProj[ProjType::Horizontal]);
-
-        if(settings_.m_stencilPack)
-        {
-            bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_3_ID,
-                                   lightView[TetrahedronFaces::Blue],
-                                   lightProj[ProjType::Vertical]);
-
-            bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_4_ID,
-                                   lightView[TetrahedronFaces::Red],
-                                   lightProj[ProjType::Vertical]);
-        }
-        else
-        {
-            bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_3_ID,
-                                   lightView[TetrahedronFaces::Blue],
-                                   lightProj[ProjType::Horizontal]);
-
-            bgfx::setViewTransform(RENDERVIEW_SHADOWMAP_4_ID,
-                                   lightView[TetrahedronFaces::Red],
-                                   lightProj[ProjType::Horizontal]);
-        }
-        bgfx::setViewTransform(RENDERVIEW_VBLUR_0_ID, screenView, screenProj);
-        bgfx::setViewTransform(RENDERVIEW_HBLUR_0_ID, screenView, screenProj);
-
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_0_ID, map_target);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_1_ID, map_target);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_2_ID, map_target);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_3_ID, map_target);
-        bgfx::setViewFrameBuffer(RENDERVIEW_SHADOWMAP_4_ID, map_target);
         bgfx::setViewFrameBuffer(RENDERVIEW_VBLUR_0_ID, rt_blur_);
         bgfx::setViewFrameBuffer(RENDERVIEW_HBLUR_0_ID, rt_shadow_map_[0]);
     }
@@ -2287,14 +2364,22 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     }
 
     // Clear shadowmap rendertarget at beginning.
-    const uint8_t flags0 = (LightType::DirectionalLight == settings_.m_lightType)
-                               ? 0
-                               : BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+    const bool uses_stencil_mask = LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack;
+    uint8_t flags0 = (LightType::DirectionalLight == settings_.m_lightType)
+                         ? 0
+                         : BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL;
+    // The restore writes every texel of the tile: only the stencil the mask starts from is cleared.
+    if(uses_static_copy)
+    {
+        flags0 = uses_stencil_mask ? BGFX_CLEAR_STENCIL : 0;
+    }
 
     // A spot light's map clears in its one draw view, which has the same target and rect: a view of its own for the
-    // clear opens one more render pass per light. A point light clears in view 0, ahead of its stencil mask and faces.
-    const bgfx::ViewId clear_view =
-        (LightType::SpotLight == settings_.m_lightType) ? RENDERVIEW_SHADOWMAP_1_ID : RENDERVIEW_SHADOWMAP_0_ID;
+    // clear opens one more render pass per light. A point light clears in view 0, ahead of its stencil mask and faces,
+    // and so does a restored map, ahead of the casters that move.
+    const bgfx::ViewId clear_view = (LightType::SpotLight == settings_.m_lightType && !uses_static_copy)
+                                        ? RENDERVIEW_SHADOWMAP_1_ID
+                                        : RENDERVIEW_SHADOWMAP_0_ID;
     bgfx::setViewClear(clear_view,
                        flags0,
                        0xfefefefe // blur fails on completely white regions
@@ -2307,9 +2392,14 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         (LightType::DirectionalLight == settings_.m_lightType) ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH : 0;
 
     // Only the cascades clear here (the local lights cleared above): a view without a clear needs no touch, and an empty
-    // view left untouched costs nothing, where a touched one still opens a render pass.
+    // view left untouched costs nothing, where a touched one still opens a render pass. A reused cascade keeps its
+    // content: no clear.
     for(uint8_t ii = 0; ii < 4 && flags1 != 0; ++ii)
     {
+        if((render_views & (1u << ii)) == 0u)
+        {
+            continue;
+        }
         bgfx::setViewClear(RENDERVIEW_SHADOWMAP_1_ID + ii,
                            flags1,
                            0xfefefefe // blur fails on completely white regions
@@ -2321,68 +2411,33 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
 
     // Render.
 
-    ShadowMapSettings* currentSmSettings =
-        &sm_settings_[settings_.m_lightType][settings_.m_depthImpl][settings_.m_smImpl];
-
     // uniforms_.submitConstUniforms();
     // uniforms_.submitPerFrameUniforms();
 
-    bool anythingDrawn = false;
+    const bool anythingDrawn = collection.anything_collected;
     // Craft shadow map.
     {
-        // Craft stencil mask for point light shadow map packing.
-        if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
+        if(uses_static_copy)
         {
-            if(6 == bgfx::getAvailTransientVertexBuffer(6, PosVertex::get_layout()))
-            {
-                bgfx::TransientVertexBuffer vb;
-                bgfx::allocTransientVertexBuffer(&vb, 6, PosVertex::get_layout());
-                PosVertex* vertex = (PosVertex*)vb.data;
-
-                const float min = 0.0f;
-                const float max = 1.0f;
-                const float center = 0.5f;
-                const float zz = 0.0f;
-
-                vertex[0].m_x = min;
-                vertex[0].m_y = min;
-                vertex[0].m_z = zz;
-
-                vertex[1].m_x = max;
-                vertex[1].m_y = min;
-                vertex[1].m_z = zz;
-
-                vertex[2].m_x = center;
-                vertex[2].m_y = center;
-                vertex[2].m_z = zz;
-
-                vertex[3].m_x = center;
-                vertex[3].m_y = center;
-                vertex[3].m_z = zz;
-
-                vertex[4].m_x = max;
-                vertex[4].m_y = max;
-                vertex[4].m_z = zz;
-
-                vertex[5].m_x = min;
-                vertex[5].m_y = max;
-                vertex[5].m_z = zz;
-
-                bgfx::setState(0);
-                bgfx::setStencil(BGFX_STENCIL_TEST_ALWAYS | BGFX_STENCIL_FUNC_REF(1) | BGFX_STENCIL_FUNC_RMASK(0xff) |
-                                 BGFX_STENCIL_OP_FAIL_S_REPLACE | BGFX_STENCIL_OP_FAIL_Z_REPLACE |
-                                 BGFX_STENCIL_OP_PASS_Z_REPLACE);
-                bgfx::setVertexBuffer(0, &vb);
-
-                programs_.m_black->begin();
-                bgfx::submit(RENDERVIEW_SHADOWMAP_0_ID, programs_.m_black->native_handle());
-                programs_.m_black->end();
-            }
+            submit_static_copy_restore(RENDERVIEW_SHADOWMAP_0_ID, originBottomLeft);
+        }
+        // Craft stencil mask for point light shadow map packing.
+        if(uses_stencil_mask)
+        {
+            submit_stencil_mask(RENDERVIEW_SHADOWMAP_0_ID);
         }
 
-        anythingDrawn =
-            render_scene_into_shadowmap(RENDERVIEW_SHADOWMAP_1_ID, models, lightFrustums, currentSmSettings, &cam, stats);
-        needs_clear_ = anythingDrawn;
+        submit_shadow_casters(render_views, RENDERVIEW_SHADOWMAP_1_ID, lightFrustums, currentSmSettings, collection, true, stats);
+        // A restored map holds its static copy's casters.
+        needs_clear_ = anythingDrawn || uses_static_copy;
+        for(uint8_t ii = 0; ii < get_view_count(); ++ii)
+        {
+            if((render_views & (1u << ii)) != 0u)
+            {
+                view_keys_[ii] = view_keys[ii];
+                view_key_valid_[ii] = true;
+            }
+        }
     }
 
     if(anythingDrawn)
@@ -2390,8 +2445,8 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
         PackDepth::Enum depthType = (SmImpl::VSM == settings_.m_smImpl) ? PackDepth::VSM : PackDepth::RGBA;
         bool bVsmOrEsm = (SmImpl::VSM == settings_.m_smImpl) || (SmImpl::ESM == settings_.m_smImpl);
 
-        // Blur shadow map.
-        if(bVsmOrEsm && currentSmSettings->m_doBlur)
+        // Blur shadow map: the views rendered this time (a reused one is blurred already).
+        if(bVsmOrEsm && currentSmSettings->m_doBlur && (render_views & 1u) != 0u)
         {
             bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_shadow_map_[0]));
             bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
@@ -2406,50 +2461,208 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
             programs_.m_hBlur[depthType]->begin();
             bgfx::submit(RENDERVIEW_HBLUR_0_ID, programs_.m_hBlur[depthType]->native_handle());
             programs_.m_hBlur[depthType]->end();
-
+        }
+        if(bVsmOrEsm && currentSmSettings->m_doBlur)
+        {
             if(LightType::DirectionalLight == settings_.m_lightType)
             {
                 for(uint8_t ii = 1, jj = 2; ii < settings_.m_numSplits; ++ii, jj += 2)
                 {
+                    if((render_views & (1u << ii)) == 0u)
+                    {
+                        continue;
+                    }
                     const bgfx::ViewId viewId = RENDERVIEW_VBLUR_0_ID + jj;
 
+                    // Each blur begins its own program: the first cascade's blur may have been skipped.
                     bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_shadow_map_[ii]));
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
                     screenSpaceQuad(originBottomLeft);
+                    programs_.m_vBlur[depthType]->begin();
                     bgfx::submit(viewId, programs_.m_vBlur[depthType]->native_handle());
+                    programs_.m_vBlur[depthType]->end();
 
                     bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_blur_));
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
                     screenSpaceQuad(originBottomLeft);
+                    programs_.m_hBlur[depthType]->begin();
                     bgfx::submit(viewId + 1, programs_.m_hBlur[depthType]->native_handle());
+                    programs_.m_hBlur[depthType]->end();
                 }
             }
         }
     }
 }
 
-auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_id,
-                                                      const shadow_map_models_t& models,
-                                                      const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
-                                                      ShadowMapSettings* currentSmSettings,
-                                                      const camera* cam,
-                                                      ::unravel::rendering::pipeline_stats* stats) -> bool
+auto shadowmap_generator::get_view_count() const -> uint8_t
 {
-    bool any_rendered = false;
-    // Draw scene into shadowmap.
-    uint8_t drawNum;
     if(LightType::SpotLight == settings_.m_lightType)
     {
-        drawNum = 1;
+        return 1;
     }
-    else if(LightType::PointLight == settings_.m_lightType)
+    if(LightType::PointLight == settings_.m_lightType)
     {
-        drawNum = 4;
+        return 4;
     }
-    else // LightType::DirectionalLight == settings.m_lightType)
+    return uint8_t(settings_.m_numSplits);
+}
+
+auto shadowmap_generator::make_shadow_reach(const ShadowMapSettings* currentSmSettings, const camera* cam) const
+    -> shadow_reach
+{
+    // Directional lights only (see shadow_reach): a caster whose shadow cannot reach the view is dropped from every
+    // cascade. Resolved once per pass over the casters - get_frustum() resolves lazily and the caster loops must not be
+    // the one to trigger it.
+    shadow_reach reach;
+    if(LightType::DirectionalLight == settings_.m_lightType && cam != nullptr)
     {
-        drawNum = uint8_t(settings_.m_numSplits);
+        reach.view_frustum = &cam->get_frustum();
+        reach.light_direction = math::vec3(directional_light_.m_position.m_x,
+                                           directional_light_.m_position.m_y,
+                                           directional_light_.m_position.m_z);
+        reach.max_distance = currentSmSettings->m_far;
     }
+    return reach;
+}
+
+auto shadowmap_generator::is_skinned_batching_enabled(const ShadowMapSettings* currentSmSettings) const -> bool
+{
+    const gpu_program* skinned_instanced_prog =
+        resolve_skinned_instanced_pack_program(programs_, currentSmSettings->m_progPackSkinned);
+    return batch_collector::is_skinned_mesh_batching_enabled() && skinned_instanced_prog != nullptr &&
+           skinned_instanced_prog->is_valid();
+}
+
+auto shadowmap_generator::prepare_shadow_casters(const shadow_map_models_t& models,
+                                                 const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
+                                                 const ShadowMapSettings* currentSmSettings,
+                                                 const camera* cam) -> shadow_collection
+{
+    shadow_collection collection;
+    const uint64_t batching_bits = uint64_t(batch_collector::is_static_mesh_batching_enabled()) |
+                                   uint64_t(is_skinned_batching_enabled(currentSmSettings)) << 1u;
+    compute_caster_facts(models, lightFrustums, make_shadow_reach(currentSmSettings, cam), cam, batching_bits, collection);
+    if(can_reuse_all_views(collection.casters_key))
+    {
+        collection.reuse_all = true;
+        mark_reused_casters(models, gfx::get_render_frame());
+    }
+    return collection;
+}
+
+void shadowmap_generator::compute_caster_facts(const shadow_map_models_t& models,
+                                               const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
+                                               const shadow_reach& reach,
+                                               const camera* cam,
+                                               uint64_t batching_bits,
+                                               shadow_collection& collection)
+{
+    const uint8_t drawNum = get_view_count();
+    const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
+    const uint64_t frame = gfx::get_render_frame();
+    uint64_t key = mix_key(batching_bits, models.size());
+    uint64_t static_key = 0;
+    for(uint8_t ii = 0; ii < drawNum; ++ii)
+    {
+        const uint64_t settings_key = compute_view_settings_key(ii);
+        key = mix_key(key, settings_key);
+        static_key = mix_key(static_key, settings_key);
+    }
+    // The reach test follows the camera. Unjittered: the jitter moves the frustum every frame by less than a pixel.
+    if(reach.view_frustum != nullptr && cam != nullptr)
+    {
+        const math::mat4 view_projection = cam->get_view_projection_unjittered();
+        key = mix_floats(key, math::value_ptr(view_projection), 16);
+    }
+    // Mixes @p value into the content hash of every view of @p view_mask.
+    const auto mix_into_views = [&](uint8_t view_mask, uint64_t value)
+    {
+        for(uint8_t ii = 0; ii < drawNum; ++ii)
+        {
+            if((view_mask & (1u << ii)) != 0u)
+            {
+                collection.view_hashes[ii] = mix_key(collection.view_hashes[ii], value);
+            }
+        }
+    };
+    caster_facts_.resize(models.size());
+    for(size_t caster_index = 0; caster_index < models.size(); ++caster_index)
+    {
+        const auto& element = models[caster_index];
+        auto& facts = caster_facts_[caster_index];
+        const entt::entity entity = element.entity.entity();
+        // The list changed under this place: the mark of whatever held it does not apply. Marked rendered, as every
+        // caster in reach was before it was last collected.
+        if(facts.entity != entity)
+        {
+            facts.entity = entity;
+            facts.is_marked = true;
+        }
+        // Frustum culling against the pose-aware world AABB cached in the list, before any component is looked up.
+        // Bind-pose local bounds are never used - they don't track node/bone animation. This is the model-level reject
+        // in front of the per-submesh tests, which fall back to "visible" while a model's proxy bounds are stale
+        // (model_component::get_submit_extras); the world bounds are always valid. It also carries the nested-cascade
+        // rule: the mask ENDS at the first cascade that fully contains the model, so the loops that walk its bits
+        // need no break of their own.
+        facts.view_mask = compute_shadow_view_mask(lightFrustums, drawNum, element.world_bounds, nested_cascades, reach);
+        facts.lod_index = 0;
+        facts.content_hash = 0;
+        facts.is_mover = true;
+        key = mix_key(key, facts.view_mask);
+        if(facts.view_mask == 0u)
+        {
+            facts.is_marked = false;
+            continue;
+        }
+        if(element.particles != nullptr)
+        {
+            // Particles move without their instances changing: a light that reaches them renders every frame.
+            key = mix_key(key, frame);
+            mix_into_views(facts.view_mask, frame);
+            collection.has_movers = true;
+            continue;
+        }
+        const auto& model_comp = element.entity.get<model_component>();
+        const auto& model = model_comp.get_model();
+        const uint64_t change_frame = model_comp.get_shadow_change_frame();
+        facts.content_hash = mix_key(uint64_t(entt::to_integral(entity)), change_frame);
+        if(model.is_valid())
+        {
+            // LOD is resolved HERE rather than carried in the caster list: the list is cached across frames
+            // (deferred::refresh_shadow_casters) while the LOD follows the camera, and a caster the light rejected
+            // never needs one.
+            facts.lod_index =
+                cam != nullptr ? model.compute_lod_index(element.world_bounds, *cam, ::unravel::rendering::pipeline::get_shadow_lod_bias()) : 0;
+            // Never waits for a mesh still loading: the mesh arriving changes the hash.
+            const auto lod_mesh = model.get_lod(facts.lod_index).try_get();
+            facts.content_hash = mix_key(facts.content_hash, facts.lod_index);
+            facts.content_hash = mix_key(facts.content_hash, reinterpret_cast<std::uintptr_t>(lod_mesh.get()));
+        }
+        key = mix_key(key, facts.content_hash);
+        mix_into_views(facts.view_mask, facts.content_hash);
+        facts.is_mover = frame < change_frame + MOVER_SETTLE_FRAMES;
+        if(facts.is_mover)
+        {
+            collection.has_movers = true;
+            continue;
+        }
+        static_key = mix_key(static_key, facts.view_mask);
+        static_key = mix_key(static_key, facts.content_hash);
+        ++collection.static_caster_count;
+    }
+    collection.casters_key = key;
+    collection.static_key = static_key;
+}
+
+void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& models,
+                                                 const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
+                                                 ShadowMapSettings* currentSmSettings,
+                                                 const camera* cam,
+                                                 caster_filter filter,
+                                                 shadow_collection& collection,
+                                                 ::unravel::rendering::pipeline_stats* stats)
+{
+    const uint8_t drawNum = get_view_count();
 
     // Resize and clear batch collectors for each cascade/view
     cascade_batch_collectors_.resize(drawNum);
@@ -2462,15 +2675,14 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
     {
         collector.clear();
     }
+    individual_casters_.clear();
+    collection.anything_collected = false;
+    collection.has_static_batches = false;
+    collection.has_skinned_batches = false;
 
-    bool static_batching_enabled = batch_collector::is_static_mesh_batching_enabled();
-    // Skinned casters batch when the instanced skinned program of this map's depth and packing exists.
-    const gpu_program* skinned_instanced_prog =
-        resolve_skinned_instanced_pack_program(programs_, currentSmSettings->m_progPackSkinned);
-    const bool skinned_batching_enabled = batch_collector::is_skinned_mesh_batching_enabled() &&
-                                          skinned_instanced_prog != nullptr && skinned_instanced_prog->is_valid();
+    const bool static_batching_enabled = batch_collector::is_static_mesh_batching_enabled();
+    const bool skinned_batching_enabled = is_skinned_batching_enabled(currentSmSettings);
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
-    bool has_skinned_batches = false;
     // Mesh particles are instanced whatever the project's batching setting: they have no other path.
     bool has_particle_casters = false;
 
@@ -2483,39 +2695,30 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
     // every caster in every cascade it touches. For point/spot lights, faces cover
     // different directions, so an object must be rendered to ALL faces where it is visible.
     const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
+    const shadow_reach reach = make_shadow_reach(currentSmSettings, cam);
+    const uint64_t frame = gfx::get_render_frame();
 
-    // Directional lights only (see shadow_reach): a caster whose shadow cannot reach the view
-    // is dropped from every cascade. Resolved once per generate - get_frustum() resolves
-    // lazily and the loop below must not be the one to trigger it.
-    shadow_reach reach;
-    if(nested_cascades && cam != nullptr)
+    for(size_t caster_index = 0; caster_index < models.size(); ++caster_index)
     {
-        reach.view_frustum = &cam->get_frustum();
-        reach.light_direction = math::vec3(directional_light_.m_position.m_x,
-                                           directional_light_.m_position.m_y,
-                                           directional_light_.m_position.m_z);
-        reach.max_distance = currentSmSettings->m_far;
-    }
-
-    for(const auto& element : models)
-    {
-        // Culling runs on the bounds cached in the list, before any component is looked up:
-        // a rejected caster costs plane tests on contiguous memory and nothing else.
-        const auto& world_bounds = element.world_bounds;
-
-        // Frustum culling against the pose-aware world AABB. Bind-pose local bounds are
-        // never used for culling - they don't track node/bone animation. This is the
-        // model-level reject in front of the per-submesh tests, which fall back to "visible"
-        // while a model's proxy bounds are stale (model_component::get_submit_extras); the
-        // world bounds are always valid. It also carries the nested-cascade rule: the mask
-        // ENDS at the first cascade that fully contains the model, so the loops below that
-        // walk its bits need no break of their own.
-        const uint8_t view_mask =
-            compute_shadow_view_mask(lightFrustums, drawNum, world_bounds, nested_cascades, reach);
+        const auto& element = models[caster_index];
+        auto& facts = caster_facts_[caster_index];
+        // Culled by compute_caster_facts (the view mask) and given its LOD there.
+        const uint8_t view_mask = facts.view_mask;
         if(view_mask == 0u)
         {
             continue;
         }
+        const bool is_taken = filter == caster_filter::all || facts.is_mover == (filter == caster_filter::movers_only);
+        if(!is_taken)
+        {
+            // Drawn from the static copy: marked rendered as when it was collected into it.
+            if(filter == caster_filter::movers_only && facts.is_marked)
+            {
+                element.entity.get<model_component>().set_last_render_frame(frame);
+            }
+            continue;
+        }
+        facts.is_marked = false;
 
         if(element.particles != nullptr)
         {
@@ -2523,10 +2726,10 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
             if(collected)
             {
                 // A shadow in view keeps renderer-based culling running the emitter, as it does for models.
-                element.entity.get<particle_emitter_component>().set_last_render_frame(gfx::get_render_frame());
+                element.entity.get<particle_emitter_component>().set_last_render_frame(frame);
             }
             has_particle_casters = has_particle_casters || collected;
-            any_rendered = any_rendered || collected;
+            collection.anything_collected = collection.anything_collected || collected;
             continue;
         }
 
@@ -2535,22 +2738,15 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
         auto& model_comp = entity.get<model_component>();
         const auto& world_transform = transform_comp.get_transform_global();
         const auto& submesh_transforms = model_comp.get_submesh_transforms();
-        const auto& bone_transforms = model_comp.get_bone_transforms();
         const auto& skinning_matrices = model_comp.get_skinning_transforms();
 
         const bool is_skinned = !skinning_matrices.empty();
-        
-        
+
         const auto& model = model_comp.get_model();
         if(!model.is_valid())
             continue;
 
-        // LOD is resolved HERE, for the casters that are actually drawn, rather than carried
-        // in the caster list: the list is cached across frames (deferred::refresh_shadow_casters)
-        // while the LOD follows the camera, and a caster the light rejected never needs one.
-        const uint32_t lod_index =
-            cam != nullptr ? model.compute_lod_index(world_bounds, *cam, ::unravel::rendering::pipeline::get_shadow_lod_bias()) : 0;
-
+        const uint32_t lod_index = facts.lod_index;
 
         // Skinned batching takes a skinned model's skinned submeshes; its other submeshes then batch like a static
         // model's (or stay individual when static batching is off).
@@ -2576,9 +2772,10 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
                                                                                      extras);
             if(collected)
             {
-                model_comp.set_last_render_frame(gfx::get_render_frame());
-                any_rendered = true;
-                has_skinned_batches = true;
+                model_comp.set_last_render_frame(frame);
+                facts.is_marked = true;
+                collection.anything_collected = true;
+                collection.has_skinned_batches = true;
                 if(stats != nullptr)
                 {
                     stats->drawn_skinned_models_for_shadows++;
@@ -2607,8 +2804,9 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
                                                                       extras);
             if(collected)
             {
-                model_comp.set_last_render_frame(gfx::get_render_frame());
-                any_rendered = true;
+                model_comp.set_last_render_frame(frame);
+                facts.is_marked = true;
+                collection.anything_collected = true;
                 if(stats != nullptr)
                 {
                     stats->drawn_models_for_shadows++;
@@ -2618,152 +2816,441 @@ auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_i
             continue;
         }
 
-        // The individual path (skinned casters) keeps the MODEL-level reach test only: a
-        // skinned model is one character's worth of submeshes around one skeleton, so its
-        // bounds are already the granularity the sweep can work at.
-        bool counted_static_model_for_shadows = false;
-        bool counted_skinned_model_for_shadows = false;
+        // The individual path is drawn by submit_shadow_casters, into the views that render.
+        model_comp.set_last_render_frame(frame);
+        facts.is_marked = true;
+        individual_casters_.push_back({&element, lod_index, view_mask, batch_skinned});
+        collection.anything_collected = true;
+    }
+
+    collection.has_static_batches = static_batching_enabled || has_particle_casters;
+    // The reach test keeps submeshes by the camera, which the casters' facts do not see: a cascade's content is also
+    // what was collected into it.
+    if(nested_cascades)
+    {
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
-            if((view_mask & (1u << ii)) == 0u)
-            {
-                continue;
-            }
+            collection.view_hashes[ii] =
+                mix_key(collection.view_hashes[ii], cascade_batch_collectors_[ii].get_content_hash());
+            collection.view_hashes[ii] =
+                mix_key(collection.view_hashes[ii], cascade_skinned_batch_collectors_[ii].get_content_hash());
+        }
+    }
+}
 
-            const bgfx::ViewId viewId = shadowmap_1_id + ii;
+auto shadowmap_generator::can_reuse_all_views(uint64_t casters_key) const -> bool
+{
+    if(!is_map_caching_enabled() || !casters_key_valid_ || casters_key_ != casters_key)
+    {
+        return false;
+    }
+    const uint8_t view_count = get_view_count();
+    return std::all_of(view_key_valid_, view_key_valid_ + view_count, [](bool is_valid) { return is_valid; });
+}
 
-            uint8_t renderStateIndex = RenderState::ShadowMap_PackDepth;
-            if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
-            {
-                renderStateIndex =
-                    uint8_t((ii < 2) ? RenderState::ShadowMap_PackDepthHoriz : RenderState::ShadowMap_PackDepthVert);
-            }
+void shadowmap_generator::mark_reused_casters(const shadow_map_models_t& models, uint64_t frame) const
+{
+    // The casters are the ones the last collection saw (the key holds every one of them, in order).
+    for(size_t caster_index = 0; caster_index < models.size(); ++caster_index)
+    {
+        const auto& element = models[caster_index];
+        if(caster_facts_[caster_index].is_marked && element.particles == nullptr)
+        {
+            element.entity.get<model_component>().set_last_render_frame(frame);
+        }
+    }
+}
 
-            const auto& _renderState = render_states[renderStateIndex];
+auto shadowmap_generator::compute_view_key(uint8_t view, const shadow_collection& collection) const -> uint64_t
+{
+    return mix_key(compute_view_settings_key(view), collection.view_hashes[view]);
+}
 
-            // Always set the last render frame for tracking
-            model_comp.set_last_render_frame(gfx::get_render_frame());
+auto shadowmap_generator::compute_view_settings_key(uint8_t view) const -> uint64_t
+{
+    uint64_t key = mix_key(get_cached_maps_epoch(), current_shadow_map_size_);
+    key = mix_key(key,
+                  uint64_t(settings_.m_lightType) | uint64_t(settings_.m_depthImpl) << 8u |
+                      uint64_t(settings_.m_smImpl) << 16u | uint64_t(settings_.m_stencilPack) << 24u);
+    // The matrices the view renders with (generate_shadowmaps' setViewTransform).
+    const bool is_directional = LightType::DirectionalLight == settings_.m_lightType;
+    const bool is_vertical_face =
+        LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack && view >= TetrahedronFaces::Blue;
+    const float* view_matrix = light_view_[is_directional ? 0 : view];
+    const float* proj_matrix =
+        is_directional ? light_proj_[view] : light_proj_[is_vertical_face ? ProjType::Vertical : ProjType::Horizontal];
+    key = mix_floats(key, view_matrix, 16);
+    key = mix_floats(key, proj_matrix, 16);
+    if(uses_atlas_)
+    {
+        key = mix_key(key, atlas_placement_);
+    }
+    return key;
+}
 
-            // Render skinned models individually (original behavior)
-            model::submit_callbacks callbacks;
-            callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
-            {
-                if(stats != nullptr)
-                {
-                    if(submit_params.skinned)
-                    {
-                        if(!counted_skinned_model_for_shadows)
-                        {
-                            stats->drawn_skinned_models_for_shadows++;
-                            counted_skinned_model_for_shadows = true;
-                        }
-                    }
-                    else if(!counted_static_model_for_shadows)
-                    {
-                        stats->drawn_models_for_shadows++;
-                        counted_static_model_for_shadows = true;
-                    }
-                }
-            };
-            callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
-            {
-                uniforms_.submitPerDrawUniforms();
-            };
-            callbacks.setup_params_per_submesh =
-                [&](const model::submit_callbacks::params& submit_params, const material& mat)
-            {
-                if(mat.is<pbr_material>() && !static_cast<const pbr_material&>(mat).casts_shadow())
-                {
-                    return;
-                }
+auto shadowmap_generator::select_views_to_render(const shadow_collection& collection,
+                                                 uint64_t keys[ShadowMapRenderTargets::Count]) const -> uint8_t
+{
+    const uint8_t view_count = get_view_count();
+    const bool is_caching = is_map_caching_enabled();
+    uint8_t views = 0;
+    for(uint8_t ii = 0; ii < view_count; ++ii)
+    {
+        keys[ii] = compute_view_key(ii, collection);
+        if(!is_caching || !view_key_valid_[ii] || view_keys_[ii] != keys[ii])
+        {
+            views |= uint8_t(1u << ii);
+        }
+    }
+    // A local light's faces share one clear, and the stencil-packed faces overlap: they render together.
+    if(LightType::DirectionalLight != settings_.m_lightType && views != 0u)
+    {
+        views = uint8_t((1u << view_count) - 1u);
+    }
+    return views;
+}
 
-                if(stats != nullptr)
-                {
-                    if(submit_params.skinned)
-                    {
-                        stats->drawn_skinned_submeshes_for_shadows++;
-                    }
-                    else
-                    {
-                        stats->drawn_submeshes_for_shadows++;
-                    }
-                }
+auto shadowmap_generator::can_use_static_copy(const shadow_collection& collection) const -> bool
+{
+    // The restore rebuilds the atlas colour from the device depth, which only the projected depth (InvZ) stores as is.
+    return is_map_caching_enabled() && uses_atlas_ && settings_.m_depthImpl == DepthImpl::InvZ && collection.has_movers &&
+           collection.static_caster_count >= STATIC_COPY_MIN_CASTERS;
+}
 
-                const bool uses_cutout =
-                    mat.is<pbr_material>() && static_cast<const pbr_material&>(mat).uses_alpha_cutout();
-                gpu_program* opaque_prog =
-                    submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
-                gpu_program* prog =
-                    uses_cutout ? resolve_cutout_pack_program(programs_, opaque_prog) : opaque_prog;
-                if(!prog)
-                {
-                    return;
-                }
+void shadowmap_generator::refresh_static_copy(const shadow_map_models_t& models,
+                                              ShadowMapSettings* currentSmSettings,
+                                              const camera& cam,
+                                              shadow_collection& collection,
+                                              ::unravel::rendering::pipeline_stats* stats)
+{
+    auto& atlas = shadow_atlas::get();
+    const bgfx::FrameBufferHandle target = atlas.get_static_frame_buffer();
+    const uint64_t generation = atlas.get_static_generation();
+    if(static_copy_valid_ && static_copy_key_ == collection.static_key && static_copy_generation_ == generation)
+    {
+        return;
+    }
 
-                prog->begin();
+    gfx::render_pass static_pass_0("Shadowmap Static Copy 0");
+    gfx::render_pass static_pass_1("Shadowmap Static Copy 1");
+    gfx::render_pass static_pass_2("Shadowmap Static Copy 2");
+    gfx::render_pass static_pass_3("Shadowmap Static Copy 3");
+    gfx::render_pass static_pass_4("Shadowmap Static Copy 4");
+    const bgfx::ViewId views[5] = {static_pass_0.id, static_pass_1.id, static_pass_2.id, static_pass_3.id, static_pass_4.id};
+    set_local_light_views(views, target, atlas_tile_->x, atlas_tile_->y);
 
-                if(uses_cutout)
-                {
-                    uniforms_.submitShadowCutoutState(static_cast<const pbr_material&>(mat).make_shadow_cutout_state());
-                }
+    // Depth and stencil only. A spot light clears in its one draw view, a point light ahead of its mask and faces.
+    const bgfx::ViewId clear_view = (LightType::SpotLight == settings_.m_lightType) ? views[1] : views[0];
+    bgfx::setViewClear(clear_view, BGFX_CLEAR_DEPTH | BGFX_CLEAR_STENCIL, 0, clear_values_.clear_depth, clear_values_.clear_stencil);
+    bgfx::touch(clear_view);
+    if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
+    {
+        submit_stencil_mask(views[0]);
+    }
 
-                const uint64_t draw_state = apply_shadow_cull(_renderState.m_state, mat.get_cull_type());
-                bgfx::setStencil(_renderState.m_fstencil, _renderState.m_bstencil);
-                bgfx::setState(draw_state, _renderState.m_blendFactorRgba);
+    collect_shadow_casters(models, light_frustums_, currentSmSettings, &cam, caster_filter::static_only, collection, stats);
+    const uint8_t all_views = uint8_t((1u << get_view_count()) - 1u);
+    submit_shadow_casters(all_views, views[1], light_frustums_, currentSmSettings, collection, false, stats);
 
-                bgfx::submit(viewId,
-                             prog->native_handle(),
-                             0,
-                             submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
-                prog->end();
-            };
-            callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
-            {
-            };
+    static_copy_key_ = collection.static_key;
+    static_copy_generation_ = generation;
+    static_copy_valid_ = true;
+}
 
-            // With skinned batching on, only the model's other submeshes are left: no palettes = no skinned submeshes.
-            model.submit(world_transform,
-                         submesh_transforms,
-                         bone_transforms,
-                         batch_skinned ? model::get_empty_skinning() : skinning_matrices,
-                         lod_index,
-                         callbacks,
-                         &lightFrustums[ii],
-                         nullptr,
-                         extras);
+void shadowmap_generator::set_local_light_views(const bgfx::ViewId views[5],
+                                                bgfx::FrameBufferHandle target,
+                                                uint16_t map_x,
+                                                uint16_t map_y) const
+{
+    float screen_view[16];
+    float screen_proj[16];
+    bx::mtxIdentity(screen_view);
+    bx::mtxOrtho(screen_proj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
 
-            any_rendered = true;
+    const uint16_t f = current_shadow_map_size_;     // full size
+    const uint16_t h = current_shadow_map_size_ / 2; // half size
+    bgfx::setViewRect(views[0], map_x, map_y, f, f);
+    bgfx::setViewTransform(views[0], screen_view, screen_proj);
+    bgfx::setViewFrameBuffer(views[0], target);
+    if(LightType::SpotLight == settings_.m_lightType)
+    {
+        bgfx::setViewRect(views[1], map_x, map_y, f, f);
+        bgfx::setViewTransform(views[1], light_view_[0], light_proj_[ProjType::Horizontal]);
+        bgfx::setViewFrameBuffer(views[1], target);
+        return;
+    }
+    if(settings_.m_stencilPack)
+    {
+        bgfx::setViewRect(views[1], map_x, map_y, f, h);
+        bgfx::setViewRect(views[2], map_x, uint16_t(map_y + h), f, h);
+        bgfx::setViewRect(views[3], map_x, map_y, h, f);
+        bgfx::setViewRect(views[4], uint16_t(map_x + h), map_y, h, f);
+    }
+    else
+    {
+        bgfx::setViewRect(views[1], map_x, map_y, h, h);
+        bgfx::setViewRect(views[2], uint16_t(map_x + h), map_y, h, h);
+        bgfx::setViewRect(views[3], map_x, uint16_t(map_y + h), h, h);
+        bgfx::setViewRect(views[4], uint16_t(map_x + h), uint16_t(map_y + h), h, h);
+    }
+    // The stencil-packed vertical faces (blue, red) use their own projection.
+    const ProjType::Enum vertical = settings_.m_stencilPack ? ProjType::Vertical : ProjType::Horizontal;
+    bgfx::setViewTransform(views[1], light_view_[TetrahedronFaces::Green], light_proj_[ProjType::Horizontal]);
+    bgfx::setViewTransform(views[2], light_view_[TetrahedronFaces::Yellow], light_proj_[ProjType::Horizontal]);
+    bgfx::setViewTransform(views[3], light_view_[TetrahedronFaces::Blue], light_proj_[vertical]);
+    bgfx::setViewTransform(views[4], light_view_[TetrahedronFaces::Red], light_proj_[vertical]);
+    for(uint8_t ii = 1; ii < 5; ++ii)
+    {
+        bgfx::setViewFrameBuffer(views[ii], target);
+    }
+}
+
+void shadowmap_generator::submit_stencil_mask(bgfx::ViewId view) const
+{
+    if(6 != bgfx::getAvailTransientVertexBuffer(6, PosVertex::get_layout()))
+    {
+        return;
+    }
+    bgfx::TransientVertexBuffer vb;
+    bgfx::allocTransientVertexBuffer(&vb, 6, PosVertex::get_layout());
+    PosVertex* vertex = (PosVertex*)vb.data;
+
+    const float min = 0.0f;
+    const float max = 1.0f;
+    const float center = 0.5f;
+    const float zz = 0.0f;
+
+    vertex[0].m_x = min;
+    vertex[0].m_y = min;
+    vertex[0].m_z = zz;
+
+    vertex[1].m_x = max;
+    vertex[1].m_y = min;
+    vertex[1].m_z = zz;
+
+    vertex[2].m_x = center;
+    vertex[2].m_y = center;
+    vertex[2].m_z = zz;
+
+    vertex[3].m_x = center;
+    vertex[3].m_y = center;
+    vertex[3].m_z = zz;
+
+    vertex[4].m_x = max;
+    vertex[4].m_y = max;
+    vertex[4].m_z = zz;
+
+    vertex[5].m_x = min;
+    vertex[5].m_y = max;
+    vertex[5].m_z = zz;
+
+    bgfx::setState(0);
+    bgfx::setStencil(BGFX_STENCIL_TEST_ALWAYS | BGFX_STENCIL_FUNC_REF(1) | BGFX_STENCIL_FUNC_RMASK(0xff) |
+                     BGFX_STENCIL_OP_FAIL_S_REPLACE | BGFX_STENCIL_OP_FAIL_Z_REPLACE |
+                     BGFX_STENCIL_OP_PASS_Z_REPLACE);
+    bgfx::setVertexBuffer(0, &vb);
+
+    programs_.m_black->begin();
+    bgfx::submit(view, programs_.m_black->native_handle());
+    programs_.m_black->end();
+}
+
+void shadowmap_generator::submit_static_copy_restore(bgfx::ViewId view, bool origin_bottom_left) const
+{
+    // The atlas colour stores ndc z * 0.5 + 0.5; the device depth is ndc z where depth runs 0..1, and already
+    // ndc z * 0.5 + 0.5 where it runs -1..1.
+    const bool is_homogeneous = gfx::is_homogeneous_depth();
+    const float params[4] = {is_homogeneous ? 1.0f : 0.5f, is_homogeneous ? 0.0f : 0.5f, 0.0f, 0.0f};
+    bgfx::setUniform(restore_params_, params);
+    bgfx::setTexture(0,
+                     static_depth_sampler_,
+                     shadow_atlas::get().get_static_depth_texture(),
+                     BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_ALWAYS);
+    screenSpaceQuad(origin_bottom_left);
+    programs_.m_restore->begin();
+    bgfx::submit(view, programs_.m_restore->native_handle());
+    programs_.m_restore->end();
+}
+
+auto shadowmap_generator::get_face_render_state(uint8_t face, bool writes_color) const -> RenderState
+{
+    uint8_t index = RenderState::ShadowMap_PackDepth;
+    if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
+    {
+        index = uint8_t((face < 2) ? RenderState::ShadowMap_PackDepthHoriz : RenderState::ShadowMap_PackDepthVert);
+    }
+    RenderState state = render_states[index];
+    if(!writes_color)
+    {
+        state.m_state &= ~(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    }
+    return state;
+}
+
+void shadowmap_generator::submit_shadow_casters(uint8_t view_mask,
+                                                bgfx::ViewId shadowmap_1_id,
+                                                const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
+                                                ShadowMapSettings* currentSmSettings,
+                                                const shadow_collection& collection,
+                                                bool writes_color,
+                                                ::unravel::rendering::pipeline_stats* stats)
+{
+    for(const auto& caster : individual_casters_)
+    {
+        const uint8_t caster_views = caster.view_mask & view_mask;
+        if(caster_views != 0u)
+        {
+            submit_individual_caster(caster, caster_views, shadowmap_1_id, lightFrustums, currentSmSettings, writes_color, stats);
         }
     }
 
     // Submit batched geometry for each cascade
-    const bool has_static_batches = static_batching_enabled || has_particle_casters;
-    if(has_static_batches || has_skinned_batches)
+    if(!collection.has_static_batches && !collection.has_skinned_batches)
     {
-        for(uint8_t ii = 0; ii < drawNum; ++ii)
+        return;
+    }
+    const uint8_t drawNum = get_view_count();
+    for(uint8_t ii = 0; ii < drawNum; ++ii)
+    {
+        if((view_mask & (1u << ii)) == 0u)
         {
-            const bgfx::ViewId viewId = shadowmap_1_id + ii;
-
-            uint8_t renderStateIndex = RenderState::ShadowMap_PackDepth;
-            if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
-            {
-                renderStateIndex =
-                    uint8_t((ii < 2) ? RenderState::ShadowMap_PackDepthHoriz : RenderState::ShadowMap_PackDepthVert);
-            }
-
-            const auto& renderState = render_states[renderStateIndex];
-            if(has_static_batches)
-            {
-                submit_batched_shadow_geometry_cascade(cascade_batch_collectors_[ii], viewId, currentSmSettings, renderState, false, stats);
-            }
-            if(has_skinned_batches)
-            {
-                submit_batched_shadow_geometry_cascade(cascade_skinned_batch_collectors_[ii], viewId, currentSmSettings, renderState, true, stats);
-            }
+            continue;
+        }
+        const bgfx::ViewId viewId = shadowmap_1_id + ii;
+        const RenderState renderState = get_face_render_state(ii, writes_color);
+        if(collection.has_static_batches)
+        {
+            submit_batched_shadow_geometry_cascade(cascade_batch_collectors_[ii], viewId, currentSmSettings, renderState, false, stats);
+        }
+        if(collection.has_skinned_batches)
+        {
+            submit_batched_shadow_geometry_cascade(cascade_skinned_batch_collectors_[ii], viewId, currentSmSettings, renderState, true, stats);
         }
     }
+}
 
-    return any_rendered;
+void shadowmap_generator::submit_individual_caster(const individual_caster& caster,
+                                                   uint8_t view_mask,
+                                                   bgfx::ViewId shadowmap_1_id,
+                                                   const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
+                                                   ShadowMapSettings* currentSmSettings,
+                                                   bool writes_color,
+                                                   ::unravel::rendering::pipeline_stats* stats)
+{
+    const auto& entity = caster.element->entity;
+    const auto& transform_comp = entity.get<transform_component>();
+    const auto& model_comp = entity.get<model_component>();
+    const auto& world_transform = transform_comp.get_transform_global();
+    const auto& submesh_transforms = model_comp.get_submesh_transforms();
+    const auto& bone_transforms = model_comp.get_bone_transforms();
+    const auto& skinning_matrices = model_comp.get_skinning_transforms();
+    const auto& model = model_comp.get_model();
+    const auto extras = model_comp.get_submit_extras(true);
+
+    // The individual path (skinned casters) keeps the MODEL-level reach test only: a
+    // skinned model is one character's worth of submeshes around one skeleton, so its
+    // bounds are already the granularity the sweep can work at.
+    bool counted_static_model_for_shadows = false;
+    bool counted_skinned_model_for_shadows = false;
+    for(uint8_t ii = 0; ii < get_view_count(); ++ii)
+    {
+        if((view_mask & (1u << ii)) == 0u)
+        {
+            continue;
+        }
+
+        const bgfx::ViewId viewId = shadowmap_1_id + ii;
+        const RenderState _renderState = get_face_render_state(ii, writes_color);
+
+        // Render skinned models individually (original behavior)
+        model::submit_callbacks callbacks;
+        callbacks.setup_begin = [&](const model::submit_callbacks::params& submit_params)
+        {
+            if(stats != nullptr)
+            {
+                if(submit_params.skinned)
+                {
+                    if(!counted_skinned_model_for_shadows)
+                    {
+                        stats->drawn_skinned_models_for_shadows++;
+                        counted_skinned_model_for_shadows = true;
+                    }
+                }
+                else if(!counted_static_model_for_shadows)
+                {
+                    stats->drawn_models_for_shadows++;
+                    counted_static_model_for_shadows = true;
+                }
+            }
+        };
+        callbacks.setup_params_per_instance = [&](const model::submit_callbacks::params& submit_params)
+        {
+            uniforms_.submitPerDrawUniforms();
+        };
+        callbacks.setup_params_per_submesh =
+            [&](const model::submit_callbacks::params& submit_params, const material& mat)
+        {
+            if(mat.is<pbr_material>() && !static_cast<const pbr_material&>(mat).casts_shadow())
+            {
+                return;
+            }
+
+            if(stats != nullptr)
+            {
+                if(submit_params.skinned)
+                {
+                    stats->drawn_skinned_submeshes_for_shadows++;
+                }
+                else
+                {
+                    stats->drawn_submeshes_for_shadows++;
+                }
+            }
+
+            const bool uses_cutout =
+                mat.is<pbr_material>() && static_cast<const pbr_material&>(mat).uses_alpha_cutout();
+            gpu_program* opaque_prog =
+                submit_params.skinned ? currentSmSettings->m_progPackSkinned : currentSmSettings->m_progPack;
+            gpu_program* prog =
+                uses_cutout ? resolve_cutout_pack_program(programs_, opaque_prog) : opaque_prog;
+            if(!prog)
+            {
+                return;
+            }
+
+            prog->begin();
+
+            if(uses_cutout)
+            {
+                uniforms_.submitShadowCutoutState(static_cast<const pbr_material&>(mat).make_shadow_cutout_state());
+            }
+
+            const uint64_t draw_state = apply_shadow_cull(_renderState.m_state, mat.get_cull_type());
+            bgfx::setStencil(_renderState.m_fstencil, _renderState.m_bstencil);
+            bgfx::setState(draw_state, _renderState.m_blendFactorRgba);
+
+            bgfx::submit(viewId,
+                         prog->native_handle(),
+                         0,
+                         submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
+            prog->end();
+        };
+        callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
+        {
+        };
+
+        // With skinned batching on, only the model's other submeshes are left: no palettes = no skinned submeshes.
+        model.submit(world_transform,
+                     submesh_transforms,
+                     bone_transforms,
+                     caster.skinned_batched ? model::get_empty_skinning() : skinning_matrices,
+                     caster.lod_index,
+                     callbacks,
+                     &lightFrustums[ii],
+                     nullptr,
+                     extras);
+    }
 }
 
 void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
@@ -2906,6 +3393,7 @@ void Programs::init(rtti::context& ctx)
     // clang-format off
      // Misc.
     m_black        = loadProgram("vs_shadowmaps_color",         "fs_shadowmaps_color_black");
+    m_restore      = loadProgram("vs_shadowmaps_unpackdepth",   "fs_shadowmaps_restore");
 
     // Blur.
     m_vBlur[PackDepth::RGBA] = loadProgram("vs_shadowmaps_vblur", "fs_shadowmaps_vblur");

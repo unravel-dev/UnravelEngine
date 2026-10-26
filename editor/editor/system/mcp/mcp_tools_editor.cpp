@@ -138,7 +138,8 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
 {
     return fmt::format(
         R"({{"models":{},"submeshes":{},"skinned_models":{},"skinned_submeshes":{},"shadow_models":{},)"
-        R"("shadow_submeshes":{},"lights":{},"shadow_lights":{},"particle_emitters":{{"active":{},"simulated":{},)"
+        R"("shadow_submeshes":{},"lights":{},"shadow_lights":{},"shadow_maps":{{"rendered":{},"reused":{},"restored":{}}},)"
+        R"("particle_emitters":{{"active":{},"simulated":{},)"
         R"("drawn":{},"skipped":{}}},"particles":{{"active":{},"simulated":{},"drawn":{},"skipped":{}}},)"
         R"("particle_batches":{}}})",
         stats.drawn_models,
@@ -149,6 +150,9 @@ auto pipeline_stats_json(const rendering::pipeline_stats& stats) -> std::string
         stats.drawn_submeshes_for_shadows + stats.drawn_skinned_submeshes_for_shadows,
         stats.drawn_lights,
         stats.drawn_lights_casting_shadows,
+        stats.shadow_maps_rendered,
+        stats.shadow_maps_reused,
+        stats.shadow_maps_restored,
         stats.active_particle_emitters,
         stats.simulated_particle_emitters,
         stats.drawn_particle_emitters,

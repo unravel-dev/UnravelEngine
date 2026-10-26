@@ -43,6 +43,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"app", "version"},
         {"graphics", "static_mesh_batching"},
         {"graphics", "skinned_mesh_batching"},
+        {"graphics", "shadow_map_caching"},
         {"graphics", "render_scale"},
         {"graphics", "limits"},
         {"graphics", "particles"},

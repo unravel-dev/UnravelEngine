@@ -272,6 +272,29 @@ constexpr uint8_t pose_dirty_id = dirty_ids::model_pose;
 /// The owner's slot for the same refresh (submeshes the owner places directly).
 constexpr uint8_t owner_pose_dirty_id = dirty_ids::model_owner_pose;
 
+using submesh_mapping = decltype(submesh_pose_mat4::submesh_to_transform_indices);
+
+/// Exact equality of two submesh-to-transform maps: the same transform indices with the same flags.
+auto is_same_mapping(const submesh_mapping& lhs, const submesh_mapping& rhs) -> bool
+{
+    if(lhs.size() != rhs.size())
+    {
+        return false;
+    }
+    const auto is_same_entry = [](const submesh_pose_mat4::transform_index& a, const submesh_pose_mat4::transform_index& b)
+    {
+        return a.index == b.index && a.active == b.active && a.casts_shadow == b.casts_shadow;
+    };
+    for(size_t i = 0; i < lhs.size(); ++i)
+    {
+        if(!std::equal(lhs[i].begin(), lhs[i].end(), rhs[i].begin(), rhs[i].end(), is_same_entry))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 /**
  * Refreshes the pose outputs from the armature entities in a single change-driven walk.
  *
@@ -288,6 +311,9 @@ constexpr uint8_t owner_pose_dirty_id = dirty_ids::model_owner_pose;
  * back to "intersect".
  *
  * @param owner_transform The model entity's own transform, or null.
+ * @param is_pose_changed Set when the rebuild placed a bone or submesh node elsewhere, or mapped the submeshes
+ *        differently, than the outputs it replaced (or @p force). A rebuild of the same pose leaves it false:
+ *        animation writes its pose and an IK pass writes the same final one back every frame.
  * @return True when a rebuild ran, false when everything was clean and outputs were kept.
  */
 auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
@@ -296,7 +322,8 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
                                  submesh_pose_mat4& submesh_pose,
                                  pose_mat4& bone_pose,
                                  submesh_render_proxies& proxies,
-                                 bool force) -> bool
+                                 bool force,
+                                 bool& is_pose_changed) -> bool
 {
     // Reused per pool-thread; update_armature runs one task per model with no interleaving.
     thread_local std::vector<transform_component*> transform_scratch;
@@ -320,6 +347,14 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
     const size_t submesh_count = render_mesh.get_submeshes_count(0);
     const size_t bone_count = render_mesh.get_skin_bind_data().get_bones().size();
     const auto& submeshes = render_mesh.get_submeshes(0);
+
+    // The outputs being replaced, to compare the rebuild with. Swapped, not copied: the scratch and the pose trade
+    // their storage.
+    thread_local std::vector<math::mat4> previous_transforms;
+    thread_local submesh_mapping previous_mapping;
+    std::swap(previous_transforms, submesh_pose.transforms);
+    std::swap(previous_mapping, submesh_pose.submesh_to_transform_indices);
+    is_pose_changed = force || bone_pose.transforms.size() != bone_count;
 
     submesh_pose.clear();
     submesh_pose.reserve(submesh_count);
@@ -386,10 +421,13 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
             auto bone_index = bone_comp->bone_index;
             if(bone_index < bone_pose.transforms.size())
             {
+                is_pose_changed = is_pose_changed || bone_pose.transforms[bone_index] != transform_matrix;
                 bone_pose.transforms[bone_index] = transform_matrix;
             }
         }
     }
+    is_pose_changed = is_pose_changed || submesh_pose.transforms != previous_transforms ||
+                      !is_same_mapping(submesh_pose.submesh_to_transform_indices, previous_mapping);
 
     // Owner-placed submeshes: the box the submit paths' fallback instance actually covers.
     if(owner_transform != nullptr)
@@ -495,13 +533,15 @@ auto model_component::update_armature() -> bool
     // pass over the armature entities (the transform lookup is done once and reused).
     // When nothing changed and nothing forced a refresh, outputs are left untouched and
     // we early-out - visible idle models cost a single pointer+bit scan.
+    bool is_pose_changed = false;
     const bool refreshed = get_transforms_for_entities(armature_entities,
                                                        owner_transform,
                                                        *mesh,
                                                        submesh_pose_,
                                                        bone_pose_,
                                                        render_proxies_,
-                                                       pose_dirty_);
+                                                       pose_dirty_,
+                                                       is_pose_changed);
     if(!refreshed)
     {
         // Nothing changed since the last full refresh, so proxies flagged stale while
@@ -521,7 +561,7 @@ auto model_component::update_armature() -> bool
         // Early exit if no palettes
         if(palette_count == 0)
         {
-            return true;
+            return is_pose_changed;
         }
         
         skinning_pose_.resize(palette_count);
@@ -578,7 +618,7 @@ auto model_component::update_armature() -> bool
         }
     }
 
-    return true;
+    return is_pose_changed;
 }
 
 auto model_component::init_armature(bool force, std::vector<entt::handle>* created_roots) -> bool
@@ -1169,6 +1209,22 @@ void model_component::mark_motion(bool moved)
 auto model_component::has_motion() const -> bool
 {
     return has_motion_;
+}
+
+void model_component::update_shadow_change(uint64_t frame, bool changed)
+{
+    // A material edit (a cutout threshold, a cull mode, a texture) changes the shadow without moving the model.
+    const uint64_t materials_revision = model_.get_materials_revision();
+    if(changed || materials_revision != shadow_materials_revision_)
+    {
+        shadow_change_frame_ = frame;
+        shadow_materials_revision_ = materials_revision;
+    }
+}
+
+auto model_component::get_shadow_change_frame() const noexcept -> uint64_t
+{
+    return shadow_change_frame_;
 }
 
 auto model_component::get_prev_world_transform() const -> const math::mat4&

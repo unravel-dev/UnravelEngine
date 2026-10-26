@@ -83,6 +83,13 @@ struct pipeline_stats
 
     uint32_t drawn_lights = 0;
     uint32_t drawn_lights_casting_shadows = 0;
+    /// Shadow maps rendered and reused this frame (shadow map caching): a spot or point light's map counts once, each
+    /// cascade of the sun once.
+    uint32_t shadow_maps_rendered = 0;
+    uint32_t shadow_maps_reused = 0;
+    /// Of the rendered maps, the spot and point lights' that started from their static copy: only the casters that
+    /// move were drawn.
+    uint32_t shadow_maps_restored = 0;
     /// Particle emitters: enabled in the scene, simulated this frame (the others are frozen by
     /// renderer-based culling), and drawn by this camera.
     uint32_t active_particle_emitters = 0;

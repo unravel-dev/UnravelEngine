@@ -13,6 +13,8 @@ namespace
 {
 /// Atlas edges from the smallest up: every step quadruples the area.
 constexpr std::uint16_t ATLAS_SIZES[] = {512, 1024, 2048, 4096};
+/// Render frames without a light asking for the static copy before it is freed.
+constexpr std::uint64_t STATIC_COPY_IDLE_FRAMES = 300;
 
 auto get_area(std::uint16_t edge) -> std::uint64_t
 {
@@ -107,6 +109,12 @@ auto shadow_atlas_allocator::find(std::uintptr_t owner) const -> hpp::optional<s
         return {};
     }
     return it->second.tile;
+}
+
+auto shadow_atlas_allocator::find_placement(std::uintptr_t owner) const -> std::uint64_t
+{
+    const auto it = entries_.find(owner);
+    return it != entries_.end() && it->second.is_placed ? it->second.placement : 0;
 }
 
 void shadow_atlas_allocator::release(std::uintptr_t owner)
@@ -372,6 +380,7 @@ auto shadow_atlas_allocator::place(entry& e) -> bool
     }
     e.tile = *square;
     e.is_placed = true;
+    e.placement = ++placement_serial_;
     return true;
 }
 
@@ -466,8 +475,13 @@ auto shadow_atlas::get() -> shadow_atlas&
 
 auto shadow_atlas::reserve(const std::vector<shadow_atlas_request>& requests) -> bool
 {
-    const bool has_changed = allocator_.reserve(gfx::get_render_frame(), requests);
+    const std::uint64_t frame = gfx::get_render_frame();
+    const bool has_changed = allocator_.reserve(frame, requests);
     fit_textures();
+    if(bgfx::isValid(static_frame_buffer_) && static_used_frame_ + STATIC_COPY_IDLE_FRAMES < frame)
+    {
+        destroy_static_copy();
+    }
     return has_changed;
 }
 
@@ -478,6 +492,11 @@ auto shadow_atlas::find(std::uintptr_t owner) const -> hpp::optional<shadow_atla
         return {};
     }
     return allocator_.find(owner);
+}
+
+auto shadow_atlas::find_placement(std::uintptr_t owner) const -> std::uint64_t
+{
+    return bgfx::isValid(frame_buffer_) ? allocator_.find_placement(owner) : 0;
 }
 
 void shadow_atlas::release(std::uintptr_t owner)
@@ -493,6 +512,27 @@ auto shadow_atlas::get_color_texture() const -> bgfx::TextureHandle
 auto shadow_atlas::get_depth_texture() const -> bgfx::TextureHandle
 {
     return bgfx::isValid(frame_buffer_) ? bgfx::getTexture(frame_buffer_, 1) : bgfx::TextureHandle{bgfx::kInvalidHandle};
+}
+
+auto shadow_atlas::get_static_frame_buffer() -> bgfx::FrameBufferHandle
+{
+    static_used_frame_ = gfx::get_render_frame();
+    if(!bgfx::isValid(static_frame_buffer_) && texture_size_ != 0)
+    {
+        // Depth only: the restore rebuilds the atlas colour from it, so the copy costs one texture, not two.
+        const bgfx::TextureHandle depth =
+            bgfx::createTexture2D(texture_size_, texture_size_, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT);
+        bgfx::setName(depth, "Shadow Atlas Static Copy");
+        static_frame_buffer_ = bgfx::createFrameBuffer(1, &depth, true);
+        ++static_generation_;
+    }
+    return static_frame_buffer_;
+}
+
+auto shadow_atlas::get_static_depth_texture() const -> bgfx::TextureHandle
+{
+    return bgfx::isValid(static_frame_buffer_) ? bgfx::getTexture(static_frame_buffer_, 0)
+                                               : bgfx::TextureHandle{bgfx::kInvalidHandle};
 }
 
 void shadow_atlas::clear()
@@ -532,7 +572,17 @@ void shadow_atlas::destroy_textures()
         bgfx::destroy(frame_buffer_);
         frame_buffer_ = {bgfx::kInvalidHandle};
     }
+    destroy_static_copy();
     texture_size_ = 0;
+}
+
+void shadow_atlas::destroy_static_copy()
+{
+    if(bgfx::isValid(static_frame_buffer_))
+    {
+        bgfx::destroy(static_frame_buffer_);
+        static_frame_buffer_ = {bgfx::kInvalidHandle};
+    }
 }
 
 } // namespace shadow

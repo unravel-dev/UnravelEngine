@@ -305,6 +305,30 @@ void test_random_frames_keep_valid_layouts()
                                          std::to_string(invalid_frames) + " invalid)");
 }
 
+void test_placement_serials()
+{
+    std::printf("test_placement_serials\n");
+    shadow_atlas_allocator atlas;
+    std::uint64_t frame = 1;
+    const std::vector<shadow_atlas_request> both{{1, 512, 1.0f}, {2, 512, 0.5f}};
+    atlas.reserve(frame, both);
+    const std::uint64_t first = atlas.find_placement(1);
+    atlas_check(first != 0 && atlas.find_placement(2) != 0 && first != atlas.find_placement(2),
+                "every placed tile has a serial of its own");
+    atlas_check(atlas.find_placement(99) == 0, "an owner without a tile has none");
+    atlas.reserve(++frame, both);
+    atlas_check(atlas.find_placement(1) == first, "a tile that stays put keeps its serial");
+    // Light 1 leaves the view for two frames: its square is taken back, and a newcomer can render into it.
+    const std::vector<shadow_atlas_request> without_first{{2, 512, 0.5f}, {3, 512, 0.25f}};
+    atlas.reserve(++frame, without_first);
+    atlas.reserve(++frame, without_first);
+    atlas_check(atlas.find_placement(1) == 0, "a light no view asked for loses its tile");
+    const std::vector<shadow_atlas_request> all{{1, 512, 1.0f}, {2, 512, 0.5f}, {3, 512, 0.25f}};
+    atlas.reserve(++frame, all);
+    const std::uint64_t again = atlas.find_placement(1);
+    atlas_check(again != 0 && again != first, "a returning light gets a new serial, even on its old square");
+}
+
 auto run_shadow_atlas_suite(rtti::context& /*ctx*/) -> int
 {
     g_atlas_checks = 0;
@@ -317,6 +341,7 @@ auto run_shadow_atlas_suite(rtti::context& /*ctx*/) -> int
     test_eviction_and_shrink();
     test_edited_resolution();
     test_random_frames_keep_valid_layouts();
+    test_placement_serials();
     std::printf("shadow atlas: %d checks, %d failures\n", g_atlas_checks, g_atlas_failures);
     return g_atlas_failures;
 }

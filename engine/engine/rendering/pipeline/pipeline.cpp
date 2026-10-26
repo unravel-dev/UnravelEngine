@@ -1648,6 +1648,9 @@ void pipeline_stats::add_stats(const pipeline_stats& stats)
     drawn_skinned_submeshes_for_shadows += stats.drawn_skinned_submeshes_for_shadows;
     drawn_lights += stats.drawn_lights;
     drawn_lights_casting_shadows += stats.drawn_lights_casting_shadows;
+    shadow_maps_rendered += stats.shadow_maps_rendered;
+    shadow_maps_reused += stats.shadow_maps_reused;
+    shadow_maps_restored += stats.shadow_maps_restored;
     // Every camera of a scene counts the same emitters as active and simulated: kept, not summed.
     active_particle_emitters = (std::max)(active_particle_emitters, stats.active_particle_emitters);
     simulated_particle_emitters = (std::max)(simulated_particle_emitters, stats.simulated_particle_emitters);

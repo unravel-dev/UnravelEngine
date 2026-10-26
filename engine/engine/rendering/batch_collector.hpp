@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 
 namespace unravel
 {
@@ -180,6 +181,27 @@ auto batch_collector_t<Key>::get_instance_count() const -> size_t
         total += groups_[index].instances.size();
     }
     return total;
+}
+
+template<typename Key>
+auto batch_collector_t<Key>::get_content_hash() const -> size_t
+{
+    using batch_collector_detail::mix_hash;
+    size_t hash = group_count_;
+    for(size_t index = 0; index < group_count_; ++index)
+    {
+        const auto& group = groups_[index];
+        hash = mix_hash(hash ^ group.key_hash);
+        hash = mix_hash(hash ^ group.instances.size());
+        for(const auto& instance : group.instances)
+        {
+            uint32_t lod_bits = 0;
+            std::memcpy(&lod_bits, &instance.lod_params.x, sizeof(lod_bits));
+            hash = mix_hash(hash ^ reinterpret_cast<size_t>(instance.world_transform_ptr));
+            hash = mix_hash(hash ^ lod_bits);
+        }
+    }
+    return hash;
 }
 
 template<typename Key>

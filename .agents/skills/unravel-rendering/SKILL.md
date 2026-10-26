@@ -169,6 +169,28 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
   Editor picking / outline / wireframe keep the per-draw `u_world` palette path.
 - `layer_mask` - culling/filtering per pass
 
+## Shadow map caching
+
+`graphics.shadow_map_caching` (`shadowmap_generator`, `engine/engine/rendering/shadow.cpp`): a spot or point
+light's map, or a cascade of the sun, renders again only when its key changes. Plan and results:
+`tasks/shadow_caching_plan.md`.
+
+- Every input of a map must reach a key: `compute_view_settings_key` (epoch, map size, light type and
+  implementation, view / projection matrices, atlas placement serial) or `compute_caster_facts` (entity, LOD,
+  LOD mesh, `model_component::get_shadow_change_frame`). A new input that changes shadows (a material property,
+  a caster type) goes into one of them; a global change calls `shadow::invalidate_cached_maps()`.
+- The change stamp comes from `model_system` (shadow-caster dirty bits, pose refresh, material revision sum). A
+  change that bypasses those needs a stamp or the epoch.
+- An atlas tile placed again, even on the same square, has a new placement serial: another light may have drawn
+  there in between.
+- The sun's reach test follows the camera at submesh level, so its cascade keys also take the collected batches'
+  content hash; local lights key on caster facts alone.
+- Static copy: a local light in the atlas with moving casters in reach restores its casters that hold still from a
+  depth-only copy (`shadow_atlas::get_static_frame_buffer`, `fs_shadowmaps_restore.sc` rebuilds the R32F colour
+  from depth, InvZ only) and draws only the movers. A caster is a mover while its stamp is younger than
+  `MOVER_SETTLE_FRAMES`.
+- Verify a change with caching on vs off on a paused frame: the captures must match.
+
 ## Editor vs scene rendering
 
 - Scene panel renders through deferred pipeline into viewport FBO

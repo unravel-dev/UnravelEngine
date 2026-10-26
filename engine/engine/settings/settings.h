@@ -92,6 +92,9 @@ struct settings
         /// Draws the skinned meshes that share a mesh and a material with one instanced draw call, their
         /// bone palettes uploaded once per frame for every view. The renderer applies it every frame.
         bool skinned_mesh_batching{true};
+        /// Keeps a light's shadow map, or a cascade of the sun, across frames while nothing it shows changed,
+        /// instead of rendering it again every frame. The renderer applies it every frame.
+        bool shadow_map_caching{true};
         /// GPU resource eviction/paging policy. Persisted with the project so paging behaves the same
         /// in standalone builds; the renderer drives it every frame from this configuration.
         eviction_settings eviction;

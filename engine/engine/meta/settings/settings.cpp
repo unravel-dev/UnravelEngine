@@ -541,6 +541,16 @@ REFLECT_INLINE(settings::graphics_settings)
                             "Their bone palettes reach the GPU once per frame for every view, instead of once per "
                             "draw."},
         })
+        .data<&settings::graphics_settings::shadow_map_caching>("shadow_map_caching"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_map_caching"},
+            entt::attribute{"pretty_name", "Shadow Map Caching"},
+            entt::attribute{"tooltip",
+                            "Keep a light's shadow map, or a cascade of the sun, from one frame to the next while "
+                            "nothing it shows changed. A map is rendered again when its light, a caster in its reach "
+                            "or the camera's cascades change. A spot or point light with moving casters in reach "
+                            "keeps a copy of the casters that hold still and draws only the moving ones over it."},
+        })
         .data<&settings::graphics_settings::render_scale>("render_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "render_scale"},
@@ -586,6 +596,7 @@ SAVE_INLINE(settings::graphics_settings)
     try_save(ar, ser20::make_nvp("render_scale", obj.render_scale));
     try_save(ar, ser20::make_nvp("limits", obj.limits));
     try_save(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
+    try_save(ar, ser20::make_nvp("shadow_map_caching", obj.shadow_map_caching));
 }
 
 LOAD_INLINE(settings::graphics_settings)
@@ -597,6 +608,7 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("render_scale", obj.render_scale));
     try_load(ar, ser20::make_nvp("limits", obj.limits));
     try_load(ar, ser20::make_nvp("skinned_mesh_batching", obj.skinned_mesh_batching));
+    try_load(ar, ser20::make_nvp("shadow_map_caching", obj.shadow_map_caching));
 }
 
 REFLECT_INLINE(gi_project_settings::atlas_size)

@@ -78,6 +78,13 @@ public:
     /// The tile of @p owner; none when it has not asked, or when even the smallest tiles no longer fit.
     auto find(std::uintptr_t owner) const -> hpp::optional<shadow_atlas_tile>;
 
+    /**
+     * @brief The serial of @p owner's current placement, 0 without a tile. Every placement takes a new serial, also
+     * one that lands on the square the owner held before: in between another light may have rendered there, so a map
+     * is only still in its tile while the serial it was rendered under is current.
+     */
+    auto find_placement(std::uintptr_t owner) const -> std::uint64_t;
+
     /// Takes back the tile of @p owner (a light that stopped casting shadows or went away).
     void release(std::uintptr_t owner);
 
@@ -114,6 +121,8 @@ private:
         std::uint32_t regain_votes = 0;
         bool is_placed = false;
         shadow_atlas_tile tile{};
+        /// See find_placement.
+        std::uint64_t placement = 0;
 
         auto get_importance() const -> float
         {
@@ -145,6 +154,8 @@ private:
     std::uint64_t generation_ = 0;
     std::uint64_t frame_ = 0;
     std::uint32_t shrink_votes_ = 0;
+    /// The last placement serial handed out (find_placement); never reset, so serials stay unique.
+    std::uint64_t placement_serial_ = 0;
 };
 
 /**
@@ -164,6 +175,8 @@ public:
     /// @return True when the generation changed (see shadow_atlas_allocator::reserve).
     auto reserve(const std::vector<shadow_atlas_request>& requests) -> bool;
     auto find(std::uintptr_t owner) const -> hpp::optional<shadow_atlas_tile>;
+    /// See shadow_atlas_allocator::find_placement.
+    auto find_placement(std::uintptr_t owner) const -> std::uint64_t;
     void release(std::uintptr_t owner);
 
     auto get_frame_buffer() const -> bgfx::FrameBufferHandle
@@ -191,16 +204,34 @@ public:
         return allocator_.get_tile_count();
     }
 
+    /**
+     * @brief The static copy (shadow map caching): a depth texture laid out like the atlas, where a light keeps the
+     * depth of its casters that hold still while the ones that move are drawn over it every frame. Created on first
+     * use, at the atlas size; freed once no light used it for a while.
+     */
+    auto get_static_frame_buffer() -> bgfx::FrameBufferHandle;
+    auto get_static_depth_texture() const -> bgfx::TextureHandle;
+    /// Counts the creations of the static copy: content rendered under another count is gone.
+    auto get_static_generation() const -> std::uint64_t
+    {
+        return static_generation_;
+    }
+
     /// Frees the textures and forgets every tile (renderer shutdown).
     void clear();
 
 private:
     void fit_textures();
     void destroy_textures();
+    void destroy_static_copy();
 
     shadow_atlas_allocator allocator_;
     bgfx::FrameBufferHandle frame_buffer_{bgfx::kInvalidHandle};
     std::uint16_t texture_size_ = 0;
+    bgfx::FrameBufferHandle static_frame_buffer_{bgfx::kInvalidHandle};
+    std::uint64_t static_generation_ = 0;
+    /// The render frame a light last asked for the static copy.
+    std::uint64_t static_used_frame_ = 0;
 };
 
 } // namespace shadow

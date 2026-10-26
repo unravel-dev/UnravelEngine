@@ -154,6 +154,13 @@ public:
     auto get_stats() const -> const batch_stats&;
     auto get_batch_count() const -> size_t;
     auto get_instance_count() const -> size_t;
+    /**
+     * @brief A hash of what was collected since clear(): every group's key and its instances (world matrix pointer,
+     * LOD parameter), in collection order. Equal hashes on two frames mean the same draws from the same transforms;
+     * whether the transforms themselves changed is for the caller to know (shadow map caching mixes the models' change
+     * stamps). Skinned palette rows are left out: they follow the frame's acquisition order, not the content.
+     */
+    auto get_content_hash() const -> size_t;
     auto has_batches() const -> bool;
     void set_max_instances_per_batch(uint32_t max_instances);
     void set_profiling_enabled(bool enabled);
