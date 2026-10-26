@@ -94,9 +94,7 @@ struct asset_link
     /// Serializes writers: each copies the current state, changes it and publishes the copy.
     std::mutex write_mutex;
 
-    /// Last-access timestamp in nanoseconds-since-steady-epoch. Stored as
-    /// `std::atomic<int64_t>` so updates from the rendering hot path never
-    /// race with concurrent readers (and never block).
+    /// When a handle last read the asset, in steady-clock nanoseconds (update_last_access). Idle eviction reads it.
     mutable std::atomic<int64_t> last_access_ns{0};
 };
 
@@ -206,8 +204,8 @@ struct asset_handle
      * @param wait If true, waits for the task to complete if not ready.
      *
      * If the handle was registered with deferred loading, the first call to
-     * get() triggers the actual load on the thread pool. Subsequent calls
-     * behave as before (wait or poll).
+     * get() submits the load to the thread pool; every call then waits for it
+     * or polls it, as @p wait says.
      */
     auto get(bool wait = true) const -> std::shared_ptr<T>
     {
@@ -240,8 +238,9 @@ struct asset_handle
      *
      * The pointer is valid only inside the call. A reload or unload on another thread replaces the asset for later
      * calls, but the object `visitor` received stays alive until it returns. It is not guarded against edits of the
-     * asset object itself, as an asset from get() is not. Inside `visitor`, never wait (it holds back every free that
-     * is due) and never let the pointer out (keep get()'s shared_ptr instead); other handle calls are fine.
+     * asset object itself, as an asset from get() is not. Inside `visitor`, never let the pointer out (keep get()'s
+     * shared_ptr instead) and never wait: no get(), and no try_get() or visit() with `wait` - a wait inside the visit
+     * holds back every free that is due. The other handle calls are fine.
      */
     template<typename F>
     auto visit(F&& visitor, bool wait = false) const
@@ -460,17 +459,21 @@ struct asset_handle
         {
             return;
         }
+        // Copied out of the guard: the log can wait on its sink, and a guard must not wait.
+        std::string leaked_id;
+        long task_count = 0;
         {
             asset_detail::epoch_domain::guard guard;
             const auto* state = load_state();
-            if(state->task.valid())
+            task_count = state->task.valid() ? state->task.use_count() : 0;
+            if(task_count > 1)
             {
-                const auto task_count = state->task.use_count();
-                if(task_count > 1)
-                {
-                    APPLOG_TRACE("{} - task leak use_count {}", state->id, task_count);
-                }
+                leaked_id = state->id;
             }
+        }
+        if(task_count > 1)
+        {
+            APPLOG_TRACE("{} - task leak use_count {}", leaked_id, task_count);
         }
         publish(
             [](const state_t&)
@@ -584,6 +587,7 @@ private:
         const auto* state = load_state();
         if(state->task.valid() && state->task.is_ready() && &state->task.get() == &value)
         {
+            // Release: a reader that acquires the pointer sees the asset it points at.
             state->resolved.store(&value, std::memory_order_release);
         }
         return value;
@@ -617,6 +621,7 @@ private:
         {
             return &empty_asset();
         }
+        // Release: a reader that acquires the pointer sees the asset it points at.
         state.resolved.store(&value, std::memory_order_release);
         return &value;
     }
@@ -645,13 +650,17 @@ private:
         state_t* replaced = nullptr;
         {
             std::lock_guard<std::mutex> lock(link_->write_mutex);
+            // Relaxed: only writers store the state, and they hold the mutex.
             const state_t* current = link_->state.load(std::memory_order_relaxed);
             state_t* fresh = std::forward<F>(make)(*current);
             if(keeps_resolved)
             {
+                // Relaxed: the exchange below publishes the fresh state with everything written to it.
                 fresh->resolved.store(current->resolved.load(std::memory_order_acquire), std::memory_order_relaxed);
             }
             const bool has_task = fresh->task.valid();
+            // Sequentially consistent with the readers' epoch announcements and the writer's slot scan (retire): a
+            // reader that may still load the replaced state announced an epoch that keeps it alive.
             replaced = link_->state.exchange(fresh, std::memory_order_seq_cst);
             link_->has_task.store(has_task, std::memory_order_release);
         }
@@ -682,13 +691,16 @@ private:
         const auto now = std::chrono::steady_clock::now().time_since_epoch();
         const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
         // Read before writing: threads reading one asset together then keep the stamp's cache line
-        // shared instead of taking it from each other on every access. A time older than the stored
-        // stamp is never written, so the stamp never moves back.
-        if(ns - link_->last_access_ns.load(std::memory_order_relaxed) < asset_detail::LAST_ACCESS_RESOLUTION_NS)
+        // shared instead of taking it from each other on every access. The exchange only raises the
+        // stamp, so a thread holding an older time never moves it back.
+        auto stored = link_->last_access_ns.load(std::memory_order_relaxed);
+        while(ns - stored >= asset_detail::LAST_ACCESS_RESOLUTION_NS)
         {
-            return;
+            if(link_->last_access_ns.compare_exchange_weak(stored, ns, std::memory_order_relaxed))
+            {
+                return;
+            }
         }
-        link_->last_access_ns.store(ns, std::memory_order_relaxed);
     }
 
     /// Shared pointer to the asset link. Cheap to copy.

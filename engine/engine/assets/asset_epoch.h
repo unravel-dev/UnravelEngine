@@ -20,6 +20,8 @@ struct alignas(64) epoch_thread_slot
     std::atomic<bool> is_taken{true};
     /// Guards open on the owning thread.
     uint32_t depth{};
+    /// Taken by a read after its thread's end gave the thread's slot back: given back again when that read ends.
+    bool is_held_past_thread_end{};
     epoch_thread_slot* next{};
 };
 
@@ -67,7 +69,12 @@ public:
         {
             if(--slot_->depth == 0)
             {
+                // Release: the guard's reads happen before a writer that sees the slot quiescent frees what they read.
                 slot_->epoch.store(QUIESCENT, std::memory_order_release);
+                if(slot_->is_held_past_thread_end)
+                {
+                    release_thread_slot(slot_);
+                }
             }
         }
 
@@ -81,6 +88,8 @@ public:
     };
 
     epoch_domain() = default;
+    /// Objects still retired at process exit are not freed: their destructors can need systems (the renderer) that
+    /// are gone by then. The asset manager frees everything it retired with collect_all() at its deinit.
     ~epoch_domain() = default;
     epoch_domain(const epoch_domain&) = delete;
     auto operator=(const epoch_domain&) -> epoch_domain& = delete;
@@ -104,6 +113,10 @@ public:
 
     /// Thread slots ever created (threads reading at once, at most).
     auto get_thread_slot_count() const -> size_t;
+
+    /// Gives the calling thread's slot back for a later thread to take: at the thread's end, or when a read during
+    /// its teardown ends.
+    static void release_thread_slot(epoch_thread_slot* slot);
 
 private:
     /// A slot's epoch while its thread reads nothing; real epochs start at 1.

@@ -19,19 +19,27 @@ struct thread_slot_release
     {
     }
 
-    ~thread_slot_release()
-    {
-        if(local_epoch_slot != nullptr)
-        {
-            local_epoch_slot->is_taken.store(false, std::memory_order_release);
-            local_epoch_slot = nullptr;
-        }
-        is_thread_slot_released = true;
-    }
+    ~thread_slot_release();
 };
 
 thread_local thread_slot_release local_thread_slot_release;
 } // namespace
+
+thread_slot_release::~thread_slot_release()
+{
+    if(local_epoch_slot != nullptr)
+    {
+        epoch_domain::release_thread_slot(local_epoch_slot);
+    }
+    is_thread_slot_released = true;
+}
+
+void epoch_domain::release_thread_slot(epoch_thread_slot* slot)
+{
+    slot->is_held_past_thread_end = false;
+    local_epoch_slot = nullptr;
+    slot->is_taken.store(false, std::memory_order_release);
+}
 
 auto epoch_domain::acquire_thread_slot() -> epoch_thread_slot*
 {
@@ -48,15 +56,17 @@ auto epoch_domain::acquire_thread_slot() -> epoch_thread_slot*
     }
     if(slot == nullptr)
     {
-        // Slots are never freed: there are as many as threads ever read at once.
+        // Slots are never freed: there are as many as threads ever read at once. Sequentially consistent with the
+        // scan in take_freeable: a writer that scans after this thread announced its epoch sees the slot.
         slot = new epoch_thread_slot();
         slot->next = slots_.load(std::memory_order_relaxed);
-        while(!slots_.compare_exchange_weak(slot->next, slot, std::memory_order_release, std::memory_order_relaxed))
+        while(!slots_.compare_exchange_weak(slot->next, slot, std::memory_order_seq_cst, std::memory_order_relaxed))
         {
         }
         slot_count_.fetch_add(1, std::memory_order_relaxed);
     }
     local_epoch_slot = slot;
+    slot->is_held_past_thread_end = is_thread_slot_released;
     if(!is_thread_slot_released)
     {
         // The first use constructs the thread's releaser, which registers its end-of-thread run.
@@ -117,7 +127,7 @@ auto epoch_domain::get_thread_slot_count() const -> size_t
 void epoch_domain::take_freeable(std::vector<retired_object>& freeable)
 {
     uint64_t oldest = std::numeric_limits<uint64_t>::max();
-    for(auto* slot = slots_.load(std::memory_order_acquire); slot != nullptr; slot = slot->next)
+    for(auto* slot = slots_.load(std::memory_order_seq_cst); slot != nullptr; slot = slot->next)
     {
         const uint64_t epoch = slot->epoch.load(std::memory_order_seq_cst);
         if(epoch != QUIESCENT)
