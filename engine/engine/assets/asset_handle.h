@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/assets/asset_epoch.h>
 #include <engine/engine_export.h>
 #include <hpp/filesystem.hpp>
 #include <logging/logging.h>
@@ -9,8 +10,8 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
+#include <utility>
 #include <uuid/uuid.h>
 
 #include "../threading/threader.h"
@@ -28,134 +29,70 @@ namespace asset_detail
 /// measures idleness in seconds, so the stamp loses nothing it needs.
 inline constexpr int64_t LAST_ACCESS_RESOLUTION_NS = 1'000'000;
 
-/// Portable atomic-shared-ptr wrapper.
-///
-/// C++20 specifies a `std::atomic<std::shared_ptr<T>>` partial specialisation that works lock-
-/// free without requiring `T` to be trivially copyable. However, that specialisation only ships
-/// in libstdc++ >= 11 and libc++ >= 16 (older standard libraries fall back to the primary
-/// `std::atomic<T>` template, whose `static_assert(__is_trivially_copyable(T))` fires because
-/// `std::shared_ptr<X>` -- with its ref-count and non-trivial destructor -- is NOT trivially
-/// copyable). On those older stdlibs we fall back to a plain `std::shared_ptr<T>` plus the
-/// C++11-era free-function atomics, which compile everywhere shared_ptr does. The free
-/// functions were deprecated in C++20, but they only entered the deprecation path on stdlibs
-/// that *also* ship the new specialisation -- so the feature-test pivot below avoids the
-/// deprecation diagnostic in both branches.
-///
-/// API mirrors the subset of `std::atomic<std::shared_ptr<T>>` that `asset_handle` actually uses
-/// (.load() / .store() / .exchange() with explicit memory orders), so the rest of this header is unchanged.
-template<typename T>
-class atomic_shared_ptr
-{
-public:
-    atomic_shared_ptr() = default;
-    explicit atomic_shared_ptr(std::shared_ptr<T> initial) : ptr_(std::move(initial)) {}
-
-    auto load(std::memory_order order = std::memory_order_seq_cst) const -> std::shared_ptr<T>
-    {
-#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
-        return ptr_.load(order);
-#else
-        return std::atomic_load_explicit(&ptr_, order);
-#endif
-    }
-
-    void store(std::shared_ptr<T> desired, std::memory_order order = std::memory_order_seq_cst)
-    {
-#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
-        ptr_.store(std::move(desired), order);
-#else
-        std::atomic_store_explicit(&ptr_, std::move(desired), order);
-#endif
-    }
-
-    auto exchange(std::shared_ptr<T> desired, std::memory_order order = std::memory_order_seq_cst) -> std::shared_ptr<T>
-    {
-#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
-        return ptr_.exchange(std::move(desired), order);
-#else
-        return std::atomic_exchange_explicit(&ptr_, std::move(desired), order);
-#endif
-    }
-
-private:
-#if defined(__cpp_lib_atomic_shared_ptr) && (__cpp_lib_atomic_shared_ptr >= 201711L)
-    std::atomic<std::shared_ptr<T>> ptr_{};
-#else
-    std::shared_ptr<T> ptr_{};
-#endif
-};
-
 } // namespace asset_detail
 
 /**
  * @struct asset_link
- * @brief Thread-safe link to an asset.
+ * @brief Thread-safe link to an asset: what every copy of one asset handle shares.
  *
- * The link's "logical state" (uid, id, task) lives in an immutable `state_t`
- * snapshot held by `std::atomic<std::shared_ptr<state_t>>`. Readers do a
- * single `state.load()` to obtain a coherent snapshot - no torn reads are
- * possible even when another thread is concurrently invalidating or
- * reloading the link.
+ * The link's state (uid, id, load task) is an immutable `state_t` that writers replace whole. Readers
+ * load it with one atomic pointer read inside an epoch guard (asset_detail::epoch_domain) and write
+ * nothing the other readers read, so any number of threads read one link without contending. A
+ * replaced state is retired to the epoch domain, which frees it once no reader can still reach it.
  *
- * The weak-asset cache and the last-access timestamp are kept *outside* the
- * snapshot so they can be updated without allocating a new snapshot on every
- * cache hit / get() call. `weak_asset` is guarded by a small reader-writer
- * mutex (weak_ptr cannot be portably made atomic), `last_access_ns` is a
- * relaxed int64 atomic.
- *
- * A crowd of models drawing one mesh reads the same link from every pool
- * thread at once, so the read paths avoid writing to it: `has_task` answers
- * validity without loading the snapshot (the MS STL loads a
- * `std::atomic<std::shared_ptr>` under a lock bit), cache hits share the
- * weak-asset lock, and the access stamp is only rewritten once it is older
- * than its resolution.
+ * The asset a get() resolved under a state lives in that state (`resolved`), so it is dropped with
+ * the state and can never outlive a reload. The last-access stamp sits outside the state and is only
+ * rewritten once it is older than its resolution.
  */
 template<typename T>
 struct asset_link
 {
     using task_future_t = task_future<std::shared_ptr<T>>;
-    using weak_asset_t = std::weak_ptr<T>;
 
     /**
-     * @brief Immutable snapshot of the link's logical state.
-     *
-     * New snapshots are published via asset_handle::store_state. Once published,
-     * `state_t` instances are read-only and safe to share between threads
-     * without further synchronization.
+     * @brief One published state of the link. Immutable once published, except `resolved`, which the
+     * first get() or try_get() that finds the task's value sets.
      */
     struct state_t
     {
+        state_t() = default;
+        state_t(const hpp::uuid& state_uid, std::string state_id, task_future_t state_task)
+            : uid(state_uid)
+            , id(std::move(state_id))
+            , task(std::move(state_task))
+        {
+        }
+        state_t(const state_t&) = delete;
+        auto operator=(const state_t&) -> state_t& = delete;
+
         /// Unique identifier for the asset.
         hpp::uuid uid;
         /// String identifier for the asset.
         std::string id;
         /// Task future for the asset (valid for both scheduled and deferred jobs).
         task_future_t task;
+        /// The task's value once a get() or try_get() under this state found it: a pointer into the
+        /// task's shared state, which this state keeps alive, so it is valid as long as the state.
+        mutable std::atomic<const std::shared_ptr<T>*> resolved{nullptr};
     };
 
-    /// Current snapshot. Initialised to an empty state so readers never see null.
-    ///
-    /// Wrapped in `asset_detail::atomic_shared_ptr` rather than `std::atomic<std::shared_ptr<...>>`
-    /// directly because the C++20 specialisation isn't available on libstdc++ < 11 / libc++ < 16
-    /// and the primary `std::atomic<T>` template static_asserts on shared_ptr's non-trivial
-    /// copyability. The wrapper presents the same `.load()` / `.store()` / `.exchange()` member API.
-    /// Written only through asset_handle::store_state, together with `has_task`.
-    asset_detail::atomic_shared_ptr<state_t> state{std::make_shared<state_t>()};
+    asset_link() = default;
+    ~asset_link()
+    {
+        // No reader can be inside: every reader holds a handle, and so a reference to this link.
+        delete state.load(std::memory_order_relaxed);
+    }
+    asset_link(const asset_link&) = delete;
+    auto operator=(const asset_link&) -> asset_link& = delete;
 
-    /// Whether the current snapshot holds a task (`state.load()->task.valid()`), published with
-    /// it so asset_handle::is_valid() reads one flag instead of loading the snapshot.
+    /// The current state. Readers load it inside an epoch guard; only asset_handle::publish replaces it.
+    std::atomic<state_t*> state{new state_t()};
+
+    /// Whether the current state holds a task, so is_valid() needs no guard.
     std::atomic<bool> has_task{false};
 
-    /// Makes each snapshot store and its `has_task` store one step, so after concurrent writers
-    /// the flag describes the snapshot that was stored last.
-    std::mutex state_write_mtx;
-
-    /// Best-effort cache of the resolved asset. Updated on cache miss in get().
-    /// Guarded by `weak_asset_mtx` (weak_ptr can't be portably atomic): cache
-    /// reads take it shared, so threads reading one asset at once do not queue
-    /// behind each other; assignments and resets take it exclusively.
-    mutable std::shared_mutex weak_asset_mtx;
-    mutable weak_asset_t weak_asset;
+    /// Serializes writers: each copies the current state, changes it and publishes the copy.
+    std::mutex write_mutex;
 
     /// Last-access timestamp in nanoseconds-since-steady-epoch. Stored as
     /// `std::atomic<int64_t>` so updates from the rendering hot path never
@@ -176,7 +113,6 @@ struct asset_handle
 {
     using asset_link_t = asset_link<T>;
     using state_t = typename asset_link_t::state_t;
-    using state_ptr = std::shared_ptr<state_t>;
     using task_future_t = typename asset_link_t::task_future_t;
 
     /**
@@ -184,13 +120,29 @@ struct asset_handle
      */
     auto operator==(const asset_handle& rhs) const -> bool
     {
-        return uid() == rhs.uid() && id() == rhs.id() && is_valid() == rhs.is_valid();
+        if(is_valid() != rhs.is_valid())
+        {
+            return false;
+        }
+        asset_detail::epoch_domain::guard guard;
+        const state_t* lhs_state = link_ ? load_state() : nullptr;
+        const state_t* rhs_state = rhs.link_ ? rhs.load_state() : nullptr;
+        static const hpp::uuid no_uid{};
+        static const std::string no_id{};
+        return (lhs_state ? lhs_state->uid : no_uid) == (rhs_state ? rhs_state->uid : no_uid) &&
+               (lhs_state ? lhs_state->id : no_id) == (rhs_state ? rhs_state->id : no_id);
     }
 
     auto version() const -> uintptr_t
     {
         update_last_access();
-        return uintptr_t(peek().get());
+        if(!link_)
+        {
+            return 0;
+        }
+        asset_detail::epoch_domain::guard guard;
+        const auto* resolved = load_state()->resolved.load(std::memory_order_acquire);
+        return resolved != nullptr ? uintptr_t(resolved->get()) : 0;
     }
 
     /**
@@ -211,11 +163,12 @@ struct asset_handle
      */
     auto id() const -> std::string
     {
-        if(auto s = load_state())
+        if(!link_)
         {
-            return s->id;
+            return {};
         }
-        return {};
+        asset_detail::epoch_domain::guard guard;
+        return load_state()->id;
     }
 
     /**
@@ -227,11 +180,12 @@ struct asset_handle
      */
     auto uid() const -> hpp::uuid
     {
-        if(auto s = load_state())
+        if(!link_)
         {
-            return s->uid;
+            return {};
         }
-        return {};
+        asset_detail::epoch_domain::guard guard;
+        return load_state()->uid;
     }
 
     /**
@@ -247,7 +201,7 @@ struct asset_handle
         return fs::path(id()).extension().string();
     }
 
-        /**
+    /**
      * @brief Gets the shared pointer to the asset.
      * @param wait If true, waits for the task to complete if not ready.
      *
@@ -257,7 +211,7 @@ struct asset_handle
      */
     auto get(bool wait = true) const -> std::shared_ptr<T>
     {
-        return resolve(wait, empty_asset());
+        return resolve(wait, true);
     }
 
     /**
@@ -272,7 +226,40 @@ struct asset_handle
      */
     auto try_get(bool wait = false) const -> std::shared_ptr<T>
     {
-        return resolve(wait, nullptr);
+        return resolve(wait, false);
+    }
+
+    /**
+     * @brief Calls `visitor(T*)` with the asset try_get(wait) would return - null without a task (or, without
+     * waiting, while it loads), the empty asset when its load failed - without taking a reference to it, and returns
+     * what `visitor` returns (as a value). Like try_get(), it touches the access stamp and submits a deferred load;
+     * with `wait` it waits for a load still running, outside any guard, and then visits what it loaded.
+     *
+     * For per-frame paths that read one asset from many threads: a get() counts a reference on the asset's one
+     * control block, which every thread reading it contends on; a visit writes nothing other threads read.
+     *
+     * The pointer is valid only inside the call. A reload or unload on another thread replaces the asset for later
+     * calls, but the object `visitor` received stays alive until it returns. It is not guarded against edits of the
+     * asset object itself, as an asset from get() is not. Inside `visitor`, never wait (it holds back every free that
+     * is due) and never let the pointer out (keep get()'s shared_ptr instead); other handle calls are fine.
+     */
+    template<typename F>
+    auto visit(F&& visitor, bool wait = false) const
+    {
+        update_last_access();
+        task_future_t waited;
+        {
+            asset_detail::epoch_domain::guard guard;
+            const state_t* state = link_ ? load_state() : nullptr;
+            const std::shared_ptr<T>* found = state != nullptr ? find_loaded(*state) : nullptr;
+            if(found != nullptr || !wait || state == nullptr || !state->task.valid())
+            {
+                return std::forward<F>(visitor)(found != nullptr ? found->get() : nullptr);
+            }
+            waited = state->task;
+        }
+        // Still loading: waited for outside the guard; the task copy keeps what it loaded alive.
+        return std::forward<F>(visitor)(wait_for_load(waited).get());
     }
 
     /**
@@ -285,11 +272,19 @@ struct asset_handle
     }
 
     /**
+     * @brief True for the shared empty asset as visit() passes it.
+     */
+    static auto is_empty(const T* asset) -> bool
+    {
+        return asset != nullptr && asset == empty_asset().get();
+    }
+
+    /**
      * @brief Checks if the handle references a task.
      */
     auto is_valid() const -> bool
     {
-        // The flag published with the snapshot, see asset_link::has_task.
+        // The flag published with the state, see asset_link::has_task.
         return link_ && link_->has_task.load(std::memory_order_acquire);
     }
 
@@ -298,8 +293,13 @@ struct asset_handle
      */
     auto is_ready() const -> bool
     {
-        auto s = load_state();
-        return s && s->task.valid() && s->task.is_ready();
+        if(!link_)
+        {
+            return false;
+        }
+        asset_detail::epoch_domain::guard guard;
+        const auto& task = load_state()->task;
+        return task.valid() && task.is_ready();
     }
 
     /**
@@ -307,8 +307,13 @@ struct asset_handle
      */
     auto is_deferred() const -> bool
     {
-        auto s = load_state();
-        return s && s->task.valid() && !s->task.is_submitted();
+        if(!link_)
+        {
+            return false;
+        }
+        asset_detail::epoch_domain::guard guard;
+        const auto& task = load_state()->task;
+        return task.valid() && !task.is_submitted();
     }
 
     /**
@@ -316,8 +321,13 @@ struct asset_handle
      */
     auto is_loading() const -> bool
     {
-        auto s = load_state();
-        return s && s->task.valid() && s->task.is_submitted() && !s->task.is_ready();
+        if(!link_)
+        {
+            return false;
+        }
+        asset_detail::epoch_domain::guard guard;
+        const auto& task = load_state()->task;
+        return task.valid() && task.is_submitted() && !task.is_ready();
     }
 
     /**
@@ -326,19 +336,24 @@ struct asset_handle
      */
     void submit()
     {
-        auto s = load_state();
-        if(s && s->task.valid() && !s->task.is_submitted())
+        if(!link_)
         {
-            s->task.submit();
+            return;
+        }
+        asset_detail::epoch_domain::guard guard;
+        const auto& task = load_state()->task;
+        if(task.valid() && !task.is_submitted())
+        {
+            task.submit();
         }
     }
 
     /**
      * @brief Demotes a fully loaded asset back to deferred state.
      *
-     * Publishes a new snapshot that preserves uid / id but drops the task;
-     * also clears the weak-asset cache. Caller should follow with a
-     * load_from_file(deferred) to set up a new deferred task.
+     * Publishes a new state that preserves uid / id but drops the task and the
+     * resolved asset. Caller should follow with a load_from_file(deferred) to
+     * set up a new deferred task.
      */
     void demote_to_deferred()
     {
@@ -346,18 +361,12 @@ struct asset_handle
         {
             return;
         }
-
-        auto old = load_state();
-        auto fresh = std::make_shared<state_t>();
-        if(old)
-        {
-            fresh->uid = old->uid;
-            fresh->id = old->id;
-        }
-        store_state(std::move(fresh));
-
-        std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
-        link_->weak_asset.reset();
+        publish(
+            [](const state_t& current)
+            {
+                return new state_t(current.uid, current.id, {});
+            },
+            false);
     }
 
     /**
@@ -378,9 +387,13 @@ struct asset_handle
      */
     auto task_id() const
     {
-        if(auto s = load_state(); s && s->task.valid())
+        if(link_)
         {
-            return s->task.id;
+            asset_detail::epoch_domain::guard guard;
+            if(const auto& task = load_state()->task; task.valid())
+            {
+                return task.id;
+            }
         }
         return tpp::job_id{};
     }
@@ -388,78 +401,83 @@ struct asset_handle
     /**
      * @brief Sets the internal job future.
      *
-     * Publishes a new snapshot with the given task; preserves uid + id. Also
-     * clears the weak-asset cache so the next get() resolves the new task.
+     * Publishes a new state with the given task; preserves uid + id. The asset
+     * resolved under the old task goes with it, so the next get() resolves the
+     * new task.
      */
     void set_internal_job(const task_future_t& future)
     {
         ensure();
-        publish_state(
-            [&](state_t& fresh) -> void
+        publish(
+            [&](const state_t& current)
             {
-                fresh.task = future;
-            });
-
-        std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
-        link_->weak_asset.reset();
+                return new state_t(current.uid, current.id, future);
+            },
+            false);
     }
 
     /**
      * @brief Sets the internal IDs (uid + string identifier).
      *
-     * Publishes a new snapshot; preserves the current task.
+     * Publishes a new state; preserves the current task and the asset it resolved.
      */
     void set_internal_ids(const hpp::uuid& internal_uid, const std::string& internal_id = get_empty_id())
     {
         ensure();
-        publish_state(
-            [&](state_t& fresh) -> void
+        publish(
+            [&](const state_t& current)
             {
-                fresh.uid = internal_uid;
-                fresh.id = internal_id;
-            });
+                return new state_t(internal_uid, internal_id, current.task);
+            },
+            true);
     }
 
     /**
      * @brief Sets the internal string identifier.
      *
-     * Publishes a new snapshot; preserves uid and task.
+     * Publishes a new state; preserves uid, the task and the asset it resolved.
      */
     void set_internal_id(const std::string& internal_id = get_empty_id())
     {
         ensure();
-        publish_state(
-            [&](state_t& fresh) -> void
+        publish(
+            [&](const state_t& current)
             {
-                fresh.id = internal_id;
-            });
+                return new state_t(current.uid, internal_id, current.task);
+            },
+            true);
     }
 
     /**
      * @brief Invalidates the handle, resetting its state.
      *
-     * Publishes an empty snapshot so any concurrent reader observing the
+     * Publishes an empty state so any concurrent reader observing the
      * link after this call sees a fully-cleared state.
      */
     void invalidate()
     {
-        if(auto s = load_state(); s && s->task.valid())
-        {
-            const auto task_count = s->task.use_count();
-            if(task_count > 1)
-            {
-                APPLOG_TRACE("{} - task leak use_count {}", s->id, task_count);
-            }
-        }
-
         if(!link_)
         {
             return;
         }
-        store_state(std::make_shared<state_t>());
-
-        std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
-        link_->weak_asset.reset();
+        {
+            asset_detail::epoch_domain::guard guard;
+            const auto* state = load_state();
+            if(state->task.valid())
+            {
+                const auto task_count = state->task.use_count();
+                if(task_count > 1)
+                {
+                    APPLOG_TRACE("{} - task leak use_count {}", state->id, task_count);
+                }
+            }
+        }
+        publish(
+            [](const state_t&)
+            {
+                return new state_t();
+            },
+            false);
     }
 
     /**
@@ -501,8 +519,9 @@ struct asset_handle
         {
             return nullptr;
         }
-        std::shared_lock<std::shared_mutex> lock(link_->weak_asset_mtx);
-        return link_->weak_asset.lock();
+        asset_detail::epoch_domain::guard guard;
+        const auto* resolved = load_state()->resolved.load(std::memory_order_acquire);
+        return resolved != nullptr ? *resolved : nullptr;
     }
 
     /**
@@ -519,109 +538,136 @@ struct asset_handle
 
 private:
     /**
-     * @brief The body of get() and try_get(): the asset, waited for when @p wait (a deferred load is submitted first);
-     * @p unresolved when the handle has no task or, without waiting, while the asset still loads; the empty asset when
-     * its load failed.
+     * @brief The body of get() (`is_get`) and try_get(): the asset, waited for when @p wait (a deferred load is
+     * submitted first); without a task or, without waiting, while the asset still loads, the empty asset for get()
+     * and null for try_get(); the empty asset when its load failed.
      */
-    auto resolve(bool wait, const std::shared_ptr<T>& unresolved) const -> std::shared_ptr<T>
-    {
-        update_last_access();
-
-        if(auto cached_asset = peek())
-        {
-            return cached_asset;
-        }
-
-        // Take a stable snapshot. Even if another thread invalidates the link
-        // mid-call, our local `s` keeps the old state alive for the duration.
-        auto s = load_state();
-        if(!s || !s->task.valid())
-        {
-            return unresolved;
-        }
-
-        if(!s->task.is_submitted())
-        {
-            s->task.submit();
-        }
-
-        const bool ready = s->task.is_ready();
-        const bool should_get = ready || wait;
-        if(!should_get)
-        {
-            return unresolved;
-        }
-
-        // Copy the task locally; we may need to change priority. task.get()
-        // may block - we must hold no locks here.
-        auto task = s->task;
-        if(!ready)
-        {
-            task.change_priority(tpp::priority::high());
-        }
-
-        auto value = task.get();
-        if(value)
-        {
-            std::lock_guard<std::shared_mutex> lock(link_->weak_asset_mtx);
-            link_->weak_asset = value;
-            return value;
-        }
-        return empty_asset();
-    }
-    /**
-     * @brief Loads the current immutable snapshot of the link's state.
-     */
-    auto load_state() const -> state_ptr
+    auto resolve(bool wait, bool is_get) const -> std::shared_ptr<T>
     {
         if(!link_)
         {
+            return unresolved(is_get);
+        }
+        update_last_access();
+        task_future_t waited;
+        {
+            asset_detail::epoch_domain::guard guard;
+            const auto* state = load_state();
+            if(const auto* found = find_loaded(*state))
+            {
+                return *found;
+            }
+            if(!wait || !state->task.valid())
+            {
+                return unresolved(is_get);
+            }
+            waited = state->task;
+        }
+        return wait_for_load(waited);
+    }
+
+    /**
+     * @brief Waits for `task` - the load of a state, copied inside a guard - and records its value as that state's
+     * resolved asset if the state is still the current one. Holds no guard while it waits: a long load must not hold
+     * back the frees that are due. Returns the value, or the empty asset when the load failed; it lives as long as
+     * `task`.
+     */
+    auto wait_for_load(task_future_t& task) const -> const std::shared_ptr<T>&
+    {
+        task.change_priority(tpp::priority::high());
+        const auto& value = task.get();
+        if(!value)
+        {
+            return empty_asset();
+        }
+        asset_detail::epoch_domain::guard guard;
+        const auto* state = load_state();
+        if(state->task.valid() && state->task.is_ready() && &state->task.get() == &value)
+        {
+            state->resolved.store(&value, std::memory_order_release);
+        }
+        return value;
+    }
+
+    /**
+     * @brief The asset `state` has without waiting, inside the caller's epoch guard: the resolved one, else the
+     * value of its ready task (then recorded as resolved), the empty asset when that load failed; null without a
+     * task or while it loads. Submits a deferred load. The result lives as long as the guard.
+     */
+    static auto find_loaded(const state_t& state) -> const std::shared_ptr<T>*
+    {
+        if(const auto* resolved = state.resolved.load(std::memory_order_acquire))
+        {
+            return resolved;
+        }
+        if(!state.task.valid())
+        {
             return nullptr;
         }
-        return link_->state.load(std::memory_order_acquire);
+        if(!state.task.is_submitted())
+        {
+            state.task.submit();
+        }
+        if(!state.task.is_ready())
+        {
+            return nullptr;
+        }
+        const auto& value = state.task.get();
+        if(!value)
+        {
+            return &empty_asset();
+        }
+        state.resolved.store(&value, std::memory_order_release);
+        return &value;
+    }
+
+    static auto unresolved(bool is_get) -> std::shared_ptr<T>
+    {
+        return is_get ? empty_asset() : nullptr;
     }
 
     /**
-     * @brief Publishes a new snapshot built from the current one and a
-     * caller-supplied mutator. The mutator runs on a fresh copy; the old
-     * snapshot is left untouched (other readers that loaded it remain
-     * unaffected).
+     * @brief The current state; only inside an epoch guard, which keeps it alive.
+     */
+    auto load_state() const -> const state_t*
+    {
+        return link_->state.load(std::memory_order_seq_cst);
+    }
+
+    /**
+     * @brief Publishes the state `make(current)` returns in place of the current one, together with
+     * its `has_task` flag, and retires the current one. Writers are serialized, so none loses
+     * another's change. `keeps_resolved`: the new state holds the same task, and so the same asset.
      */
     template<typename F>
-    void publish_state(F&& mutator)
+    void publish(F&& make, bool keeps_resolved)
     {
-        auto old = load_state();
-        auto fresh = std::make_shared<state_t>();
-        if(old)
+        state_t* replaced = nullptr;
         {
-            *fresh = *old;
-        }
-        std::forward<F>(mutator)(*fresh);
-        store_state(std::move(fresh));
-    }
-
-    /**
-     * @brief Publishes @p fresh as the link's snapshot together with its `has_task` flag.
-     *
-     * The replaced snapshot is released after the lock: dropping it can destroy its task and,
-     * with that, the asset it loaded.
-     */
-    void store_state(state_ptr fresh)
-    {
-        const bool has_task = fresh->task.valid();
-        state_ptr replaced;
-        {
-            std::lock_guard<std::mutex> lock(link_->state_write_mtx);
-            replaced = link_->state.exchange(std::move(fresh), std::memory_order_acq_rel);
+            std::lock_guard<std::mutex> lock(link_->write_mutex);
+            const state_t* current = link_->state.load(std::memory_order_relaxed);
+            state_t* fresh = std::forward<F>(make)(*current);
+            if(keeps_resolved)
+            {
+                fresh->resolved.store(current->resolved.load(std::memory_order_acquire), std::memory_order_relaxed);
+            }
+            const bool has_task = fresh->task.valid();
+            replaced = link_->state.exchange(fresh, std::memory_order_seq_cst);
             link_->has_task.store(has_task, std::memory_order_release);
         }
+        // Retired after the lock: freeing it can destroy its task and, with that, the asset it loaded.
+        asset_detail::epoch_domain::instance().retire(replaced,
+                                                      [](void* object)
+                                                      {
+                                                          delete static_cast<state_t*>(object);
+                                                      });
     }
 
     /**
-     * @brief Returns the canonical "empty" asset shared by all handles
-     * whose load failed / has no task. Lifetime: process.
+     * @brief The canonical "empty" asset shared by all handles whose load failed / has no task.
+     * Lifetime: process. Returned by reference: a copy counts a reference every handle of T shares.
      */
-    static auto empty_asset() -> std::shared_ptr<T>
+    static auto empty_asset() -> const std::shared_ptr<T>&
     {
         static const std::shared_ptr<T> empty = std::make_shared<T>();
         return empty;

@@ -131,6 +131,9 @@ auto asset_manager::deinit(rtti::context& ctx) -> bool
     storages_.clear();
     databases_.clear();
     deinit_fonts();
+    // The states the storages replaced hold their assets until no reader can reach them; free
+    // them while the renderer and the pool they were loaded with are still up.
+    asset_detail::epoch_domain::instance().collect_all();
 
     return true;
 }
@@ -352,6 +355,11 @@ void asset_manager::preload_all_assets()
     {
         storage->preload_all();
     }
+}
+
+void asset_manager::free_retired_handle_states()
+{
+    asset_detail::epoch_domain::instance().collect();
 }
 
 } // namespace unravel

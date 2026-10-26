@@ -632,6 +632,8 @@ auto engine::process() -> int
             thr.process();
         }
 
+        ctx.get_cached<asset_manager>().free_retired_handle_states();
+
         sim.run_one_frame(true);
 
         auto dt = sim.get_delta_time();

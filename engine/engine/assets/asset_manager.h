@@ -502,6 +502,13 @@ public:
      */
     void evict_unused_assets(const std::string& group, std::chrono::steady_clock::duration max_idle);
 
+    /**
+     * @brief Frees the asset handle states that were replaced (loads, reloads, unloads) while
+     * another thread was reading them, now that no thread can. Called once per frame; cheap when
+     * nothing waits.
+     */
+    void free_retired_handle_states();
+
         /**
      * @brief Adds an asset with a specified key.
      * @param key The key of the asset.
