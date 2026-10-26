@@ -824,26 +824,38 @@ auto calc_hierarchy_table_pixels(float font_units) -> float
     return ImFloor(ImGui::GetFontSize() * font_units);
 }
 
-auto is_parent_of_focused(rtti::context& ctx, entt::handle entity) -> bool
+/// Where a row keeps whether it is open: a key per entity under the seed, so that a row out of
+/// view can be asked too. ImGui would key it by the tree pushed above the node, and the rows push
+/// none.
+auto get_row_storage_id(ImGuiID seed, entt::entity entity) -> ImGuiID
+{
+    return ImHashData(&entity, sizeof(entity), seed);
+}
+
+/// The focused entity is brought into view: the rows above it open.
+void open_focused_ancestors(rtti::context& ctx, const entt::registry& registry, ImGuiID storage_seed)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    auto focus = em.try_get_active_focus_as<entt::handle>();
-    if(focus)
+    const auto* focus = em.try_get_active_focus_as<entt::handle>();
+    if(focus == nullptr || !*focus || focus->registry() != &registry)
     {
-        if(transform_component::is_parent_of(entity, *focus))
-        {
-            return true;
-        }
+        return;
     }
-
-    return false;
+    entt::handle parent = focus->get<transform_component>().get_parent();
+    while(parent)
+    {
+        ImGui::TreeNodeSetOpen(get_row_storage_id(storage_seed, parent.entity()), true);
+        parent = parent.get<transform_component>().get_parent();
+    }
 }
 
 auto get_entity_tree_node_flags(bool is_selected, bool has_children) -> ImGuiTreeNodeFlags
 {
     // The node spans the row, so a click anywhere on it selects. The value cells are laid over it.
+    // It pushes no tree: the rows are drawn flat, and they draw the tree lines themselves.
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_AllowOverlap |
-                               ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_DrawLinesToNodes;
+                               ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                               ImGuiTreeNodeFlags_DrawLinesNone;
 
     if(is_selected)
     {
@@ -880,12 +892,6 @@ auto get_entity_display_text(entt::handle entity) -> std::string
     }
 
     return icon + name + badge;
-}
-
-/// The node draws no label: the row draws it, so that it can give way to the prefab button.
-auto make_entity_tree_node_id(entt::handle entity) -> std::string
-{
-    return "###" + std::to_string(entt::to_integral(entity.entity()));
 }
 
 void set_entity_tooltip(entt::handle entity)
@@ -1013,6 +1019,177 @@ auto has_shown_children(const hierarchy_search& search, const transform_componen
                        {
                            return child && search.is_shown(child.entity());
                        });
+}
+
+void collect_entity_rows(const hierarchy_search& search,
+                         ImGuiID storage_seed,
+                         entt::handle entity,
+                         int depth,
+                         int parent_index,
+                         std::vector<hierarchy_row>& rows);
+
+/// The rows of the shown entities among the siblings, each followed by the rows under it. The last
+/// one ends the tree line of their parent.
+void collect_sibling_rows(const hierarchy_search& search,
+                          ImGuiID storage_seed,
+                          const std::vector<entt::handle>& siblings,
+                          int depth,
+                          int parent_index,
+                          std::vector<hierarchy_row>& rows)
+{
+    int last_index = -1;
+    for(const entt::handle& sibling : siblings)
+    {
+        if(sibling && search.is_shown(sibling.entity()))
+        {
+            last_index = static_cast<int>(rows.size());
+            collect_entity_rows(search, storage_seed, sibling, depth, parent_index, rows);
+        }
+    }
+    if(last_index >= 0)
+    {
+        rows[last_index].is_last = true;
+    }
+}
+
+/// The row of the entity, then the rows under it when it is open. A search opens every row.
+void collect_entity_rows(const hierarchy_search& search,
+                         ImGuiID storage_seed,
+                         entt::handle entity,
+                         int depth,
+                         int parent_index,
+                         std::vector<hierarchy_row>& rows)
+{
+    const auto& transform = entity.get<transform_component>();
+    hierarchy_row row{};
+    row.entity = entity;
+    row.storage_id = get_row_storage_id(storage_seed, entity.entity());
+    row.parent_index = parent_index;
+    row.depth = depth;
+    row.has_children = has_shown_children(search, transform);
+    row.is_open = row.has_children && (search.is_active || ImGui::TreeNodeGetOpen(row.storage_id));
+    const int index = static_cast<int>(rows.size());
+    rows.push_back(row);
+    if(row.is_open)
+    {
+        collect_sibling_rows(search, storage_seed, transform.get_children(), depth + 1, index, rows);
+    }
+}
+
+/// The rows of the scene top to bottom, through the open rows only.
+void collect_scene_rows(entt::registry& registry,
+                        const hierarchy_search& search,
+                        ImGuiID storage_seed,
+                        std::vector<hierarchy_row>& rows)
+{
+    std::vector<entt::handle> roots;
+    // Led by root_component, so that the order is its order.
+    registry.view<root_component, transform_component>().each(
+        [&](auto entity, auto&& root, auto&& transform)
+        {
+            roots.push_back(transform.get_owner());
+        });
+    rows.clear();
+    collect_sibling_rows(search, storage_seed, roots, 0, -1, rows);
+}
+
+/// The rows drawn wherever they are: the focused one scrolls itself into view, and the selected
+/// ones take the keyboard shortcuts and the rename field.
+void include_pinned_rows(rtti::context& ctx,
+                         const entt::registry& registry,
+                         const std::vector<hierarchy_row>& rows,
+                         ImGuiListClipper& clipper)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    std::unordered_set<entt::entity> pinned;
+    for(const entt::handle* selected : em.try_get_selections_as<entt::handle>())
+    {
+        if(selected != nullptr && selected->registry() == &registry)
+        {
+            pinned.insert(selected->entity());
+        }
+    }
+    const auto* focus = em.try_get_active_focus_as<entt::handle>();
+    if(focus != nullptr && focus->registry() == &registry)
+    {
+        pinned.insert(focus->entity());
+    }
+    if(pinned.empty())
+    {
+        return;
+    }
+    for(int index = 0; index < static_cast<int>(rows.size()); ++index)
+    {
+        if(pinned.contains(rows[index].entity.entity()))
+        {
+            clipper.IncludeItemByIndex(index);
+        }
+    }
+}
+
+/// Where the tree line through the children of a node runs: under the middle of its arrow.
+auto calc_tree_line_x(float node_min_x) -> float
+{
+    return ImTrunc(node_min_x + ImGui::GetFontSize() * 0.5f + ImGui::GetStyle().FramePadding.x);
+}
+
+void add_tree_line(const ImVec2& from, const ImVec2& to)
+{
+    ImGui::GetWindowDrawList()->AddLine(from, to, ImGui::GetColorU32(ImGuiCol_TreeLines), ImGui::GetStyle().TreeLinesSize);
+}
+
+/// The line of an open node's children starts under its arrow.
+void draw_tree_line_to_children(float node_min_x, float node_max_y, float row_max_y)
+{
+    if(ImGui::GetStyle().TreeLinesSize > 0.0f)
+    {
+        const float x = calc_tree_line_x(node_min_x);
+        add_tree_line(ImVec2(x, node_max_y), ImVec2(x, row_max_y));
+    }
+}
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// The tree lines through a row, as ImGui draws them for the trees it pushes: from the line of the
+/// parent to the arrow, the line of the parent on down to its last child, the lines above that go
+/// on past the row, and the line of the row's own children. Each row draws its share, as only the
+/// rows in view are drawn.
+/// </summary>
+//-----------------------------------------------------------------------------
+void draw_entity_tree_lines(const std::vector<hierarchy_row>& rows, int index, const ImVec2& cell_min, float node_max_y)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    if(style.TreeLinesSize <= 0.0f)
+    {
+        return;
+    }
+    const hierarchy_row& row = rows[index];
+    const float row_max_y = cell_min.y + hierarchy_cells::get_row_height();
+    const float arrow_y = ImTrunc(cell_min.y + style.FramePadding.y + ImGui::GetFontSize() * 0.5f);
+    // The line through the children of the rows at the depth; -1 is the scene's.
+    const auto get_line_x = [&](int depth)
+    {
+        return calc_tree_line_x(cell_min.x - static_cast<float>(row.depth - depth) * style.IndentSpacing);
+    };
+    const float parent_line_x = get_line_x(row.depth - 1);
+    const float arrow_x = ImTrunc(cell_min.x + style.FramePadding.x - style.ItemInnerSpacing.x);
+    if(parent_line_x < arrow_x)
+    {
+        add_tree_line(ImVec2(parent_line_x, arrow_y), ImVec2(arrow_x, arrow_y));
+    }
+    add_tree_line(ImVec2(parent_line_x, cell_min.y), ImVec2(parent_line_x, row.is_last ? arrow_y : row_max_y));
+    for(int ancestor = row.parent_index; ancestor >= 0; ancestor = rows[ancestor].parent_index)
+    {
+        if(!rows[ancestor].is_last)
+        {
+            const float x = get_line_x(rows[ancestor].depth - 1);
+            add_tree_line(ImVec2(x, cell_min.y), ImVec2(x, row_max_y));
+        }
+    }
+    if(row.is_open)
+    {
+        draw_tree_line_to_children(cell_min.x, node_max_y, row_max_y);
+    }
 }
 
 /// Call after TableNextRow(). The cells ask before the name cell has told who is hovered, and
@@ -1174,12 +1351,13 @@ void handle_entity_row_input(const hierarchy_draw_context& draw_ctx, entt::handl
     }
 }
 
-/// The tree node, its label, the rename field and the prefab button. Returns whether the node is
-/// open; the caller pops the tree when it is.
-auto draw_entity_name_cell(const hierarchy_draw_context& draw_ctx, entt::handle entity, bool has_children) -> bool
+/// The tree node, the tree lines, its label, the rename field and the prefab button.
+void draw_entity_name_cell(const hierarchy_draw_context& draw_ctx, const std::vector<hierarchy_row>& rows, int index)
 {
     rtti::context& ctx = draw_ctx.ctx;
     auto& em = ctx.get_cached<editing_manager>();
+    const hierarchy_row& row = rows[index];
+    const entt::handle entity = row.entity;
     const ImVec2 cell_min = ImGui::GetCursorScreenPos();
     const float cell_max_x = cell_min.x + ImGui::GetContentRegionAvail().x;
     const bool is_selected = em.is_selected(entity);
@@ -1187,18 +1365,17 @@ auto draw_entity_name_cell(const hierarchy_draw_context& draw_ctx, entt::handle 
     {
         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     }
-    else if(is_parent_of_focused(ctx, entity))
-    {
-        ImGui::SetNextItemOpen(true, 0);
-    }
 
     push_entity_row_colors(is_selected, draw_ctx.is_focused);
     ImGui::AlignTextToFramePadding();
-    const bool is_open = ImGui::TreeNodeEx(make_entity_tree_node_id(entity).c_str(),
-                                           get_entity_tree_node_flags(is_selected, has_children));
+    // The node draws no label: the row draws it, so that it can give way to the prefab button.
+    ImGui::SetNextItemStorageID(row.storage_id);
+    ImGui::TreeNodeEx("##node", get_entity_tree_node_flags(is_selected, row.has_children));
+    const float node_max_y = ImGui::GetItemRectMax().y;
     ImGui::PopStyleColor(HIERARCHY_ROW_STYLE_COLORS);
     set_entity_tooltip(entity);
     handle_entity_row_input(draw_ctx, entity);
+    draw_entity_tree_lines(rows, index, cell_min, node_max_y);
 
     const bool has_open_prefab = is_prefab_instance_root(entity);
     const float label_max_x = cell_max_x - (has_open_prefab ? hierarchy_cells::get_open_prefab_button_width() : 0.0f);
@@ -1218,7 +1395,6 @@ auto draw_entity_name_cell(const hierarchy_draw_context& draw_ctx, entt::handle 
             open_prefab_of(ctx, entity);
         }
     }
-    return is_open;
 }
 
 /// The cells besides the name. They come after the node that spans the row: an item laid over
@@ -1243,41 +1419,54 @@ void draw_entity_value_cells(rtti::context& ctx, const hierarchy_cells::row_stat
     }
 }
 
-void draw_entity(const hierarchy_draw_context& draw_ctx, entt::handle entity)
+void draw_entity_row(const hierarchy_draw_context& draw_ctx, const std::vector<hierarchy_row>& rows, int index)
 {
-    if(!entity || !draw_ctx.search.is_shown(entity.entity()))
+    const hierarchy_row& row = rows[index];
+    // The row is indented to its depth while it is drawn: the rows push no tree.
+    const float indent = static_cast<float>(row.depth) * ImGui::GetStyle().IndentSpacing;
+    const bool is_indented = row.depth > 0;
+    if(is_indented)
     {
-        return;
+        ImGui::Indent(indent);
     }
-
-    ImGui::PushID(static_cast<int>(entity.entity()));
-    auto& trans_comp = entity.get<transform_component>();
-    const bool has_children = has_shown_children(draw_ctx.search, trans_comp);
+    ImGui::PushID(static_cast<int>(row.entity.entity()));
 
     ImGui::TableNextRow(ImGuiTableRowFlags_None, hierarchy_cells::get_row_height());
-    const hierarchy_cells::row_state row{entity, is_hierarchy_row_hovered()};
-    if(row.is_hovered)
+    const hierarchy_cells::row_state row_state{row.entity, is_hierarchy_row_hovered()};
+    if(row_state.is_hovered)
     {
         ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1, ImGui::GetColorU32(ImGuiCol_HeaderHovered, HIERARCHY_ROW_HOVERED_ALPHA));
     }
     ImGui::TableSetColumnIndex(static_cast<int>(hierarchy_column::name));
-    const bool is_open = draw_entity_name_cell(draw_ctx, entity, has_children);
-    draw_entity_value_cells(draw_ctx.ctx, row);
-
-    if(is_open)
-    {
-        for(const auto& child : trans_comp.get_children())
-        {
-            draw_entity(draw_ctx, child);
-        }
-        ImGui::TreePop();
-    }
+    draw_entity_name_cell(draw_ctx, rows, index);
+    draw_entity_value_cells(draw_ctx.ctx, row_state);
 
     ImGui::PopID();
+    if(is_indented)
+    {
+        ImGui::Unindent(indent);
+    }
+}
+
+/// Only the rows in view are drawn, and those the clipper keeps for keyboard navigation and
+/// include_pinned_rows() adds.
+void draw_entity_rows(const hierarchy_draw_context& draw_ctx, const entt::registry& registry, const std::vector<hierarchy_row>& rows)
+{
+    ImGuiListClipper clipper;
+    clipper.Begin(static_cast<int>(rows.size()), hierarchy_cells::get_row_height());
+    include_pinned_rows(draw_ctx.ctx, registry, rows, clipper);
+    while(clipper.Step())
+    {
+        for(int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index)
+        {
+            draw_entity_row(draw_ctx, rows, index);
+        }
+    }
 }
 
 /// The scene heads the tree: a drop on it moves entities to the top level, its menu creates there.
-auto draw_scene_row(const hierarchy_draw_context& draw_ctx, const std::string& scene_name, const char* icon) -> bool
+auto draw_scene_row(const hierarchy_draw_context& draw_ctx, const std::string& scene_name, const char* icon, bool has_children)
+    -> bool
 {
     ImGui::TableNextRow(ImGuiTableRowFlags_None, hierarchy_cells::get_row_height());
     ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, HIERARCHY_SCENE_ROW_COLOR);
@@ -1289,10 +1478,15 @@ auto draw_scene_row(const hierarchy_draw_context& draw_ctx, const std::string& s
         ImGui::SetNextItemOpen(true, ImGuiCond_Always);
     }
     ImGui::AlignTextToFramePadding();
+    // Its rows draw the tree lines; the scene draws only the start of the line to them.
     const bool is_open = ImGui::TreeNodeEx("###scene_root",
                                            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAllColumns |
                                                ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                                               ImGuiTreeNodeFlags_DrawLinesToNodes);
+                                               ImGuiTreeNodeFlags_DrawLinesNone);
+    if(is_open && has_children)
+    {
+        draw_tree_line_to_children(cell_min.x, ImGui::GetItemRectMax().y, cell_min.y + hierarchy_cells::get_row_height());
+    }
     process_drag_drop_target(draw_ctx.ctx, {});
     if(ImGui::BeginPopupContextItem("##scene_context_menu"))
     {
@@ -1747,27 +1941,30 @@ void hierarchy_panel::draw_scene_rows(rtti::context& ctx, scene& target_scene, b
     // A search unfolds its results on tree state of its own, so the folding of the plain tree is
     // as it was once the search is cleared.
     ImGui::PushID(search_.is_active ? "##search_tree" : "##tree");
-    const char* scene_icon = em.is_prefab_mode() ? ICON_MDI_CUBE : ICON_MDI_MOVIE_OPEN_OUTLINE;
-    if(draw_scene_row(draw_ctx, scene_name, scene_icon))
+    entt::registry& registry = *target_scene.registry;
+    if(is_roots_order_changed())
     {
-        if(is_roots_order_changed())
-        {
-            target_scene.registry->sort<root_component>(
-                [](auto const& lhs, auto const& rhs)
-                {
-                    // Return true if lhs should come before rhs
-                    return lhs.order < rhs.order;
-                });
-
-            reset_roots_order_changed();
-        }
-
-        // lead by root_component, so that the order is determined by it.
-        target_scene.registry->view<root_component, transform_component>().each(
-            [&](auto e, auto&& root, auto&& comp)
+        registry.sort<root_component>(
+            [](auto const& lhs, auto const& rhs)
             {
-                draw_entity(draw_ctx, comp.get_owner());
+                // Return true if lhs should come before rhs
+                return lhs.order < rhs.order;
             });
+
+        reset_roots_order_changed();
+    }
+    const ImGuiID storage_seed = ImGui::GetID("##rows");
+    // A search opens every row on its own.
+    if(!search_.is_active)
+    {
+        open_focused_ancestors(ctx, registry, storage_seed);
+    }
+    collect_scene_rows(registry, search_, storage_seed, rows_);
+
+    const char* scene_icon = em.is_prefab_mode() ? ICON_MDI_CUBE : ICON_MDI_MOVIE_OPEN_OUTLINE;
+    if(draw_scene_row(draw_ctx, scene_name, scene_icon, !rows_.empty()))
+    {
+        draw_entity_rows(draw_ctx, registry, rows_);
 
         if(search_.is_active && search_.is_empty())
         {

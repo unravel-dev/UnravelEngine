@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace unravel
 {
@@ -62,6 +63,23 @@ struct hierarchy_search
     }
 };
 
+/// One row of the tree. The rows are drawn flat, only those in view, so each carries its place in
+/// the tree: the depth for its indent, the parent row and whether it is the last child for the
+/// tree lines.
+struct hierarchy_row
+{
+    entt::handle entity;
+    /// Where the row keeps whether it is open, also while it is out of view.
+    ImGuiID storage_id{};
+    /// The row of the parent, or -1 for an entity at the top of the scene.
+    int parent_index{-1};
+    /// 0 for an entity at the top of the scene.
+    int depth{};
+    bool has_children{};
+    bool is_open{};
+    bool is_last{};
+};
+
 /// The entities of the active scene as a tree, one row each: the name, then a column per value
 /// that sets an entity apart (static, layer, tag), editable in place. A toolbar above it creates
 /// entities and searches them.
@@ -90,5 +108,7 @@ private:
 
     ImGuiTextFilter filter_;
     hierarchy_search search_;
+    /// The rows of this frame, kept to reuse their storage.
+    std::vector<hierarchy_row> rows_;
 };
 } // namespace unravel
