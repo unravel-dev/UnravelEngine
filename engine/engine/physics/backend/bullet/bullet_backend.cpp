@@ -1723,8 +1723,8 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
         {
             const auto& shape = hpp::get<physics_mesh_shape>(s.shape);
             
-            // Only create mesh shape if we have a valid mesh asset
-            if(shape.mesh_asset && shape.mesh_asset.is_ready())
+            // The build waits for a mesh still loading: a body without its collider lets whatever rests on it fall through.
+            if(shape.mesh_asset)
             {
                 // One collision shape per submesh, each carrying its own node transform.
                 auto mesh_shapes = create_bullet_mesh_shapes(shape);
@@ -1749,6 +1749,11 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
 void update_rigidbody_shape(bullet::rigidbody& body, physics_component& comp)
 {
     auto shape = make_rigidbody_shape(comp);
+    // A rebuilt shape keeps the scale applied to the old one: only a transform change applies it again.
+    if(body.internal_shape && comp.is_autoscaled())
+    {
+        shape->setLocalScaling(body.internal_shape->getLocalScaling());
+    }
 
     body.internal->setCollisionShape(shape.get());
     body.internal_shape = shape;

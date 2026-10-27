@@ -1713,7 +1713,8 @@ void create_concave_mesh_shapes(shape_build_context& ctx, const physics_mesh_sha
 
 void create_mesh_shapes(shape_build_context& ctx, const physics_mesh_shape& shape, rigidbody_type body_type)
 {
-    if(!shape.mesh_asset || !shape.mesh_asset.is_ready())
+    // The build waits for a mesh still loading: a body without its collider lets whatever rests on it fall through.
+    if(!shape.mesh_asset)
     {
         return;
     }
