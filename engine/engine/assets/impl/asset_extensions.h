@@ -284,11 +284,13 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     the GI cascade's coarse-first distance composed above the floor slab another submesh holds.
     // 25: mesh cards are built at compile time and stored in the mesh asset, one set per submesh for its imported
     //     material's sidedness, from LOD 1 by default, instead of on first use at runtime.
+    // 26: a skinned submesh reaching more bones than one draw takes is split into submeshes whose palettes fit. Its
+    //     bones past the palette size were encoded as an invalid palette index and skinned wrong on every draw path.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code. The same holds for the card builder.
-    return 25;
+    return 26;
 }
 
 template<>

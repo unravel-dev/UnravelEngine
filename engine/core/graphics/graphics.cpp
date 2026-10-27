@@ -927,14 +927,24 @@ uint32_t get_render_frame()
     return s_context.frame;
 }
 
+namespace
+{
+/// The matrices of a world transform upload that fit its uniform. bgfx copies every matrix it is given into the
+/// uniform's storage without checking the count it was created with.
+auto get_world_transform_count(uint16_t _num) -> uint16_t
+{
+    return uint16_t(std::min<uint32_t>(_num, get_max_blend_transforms()));
+}
+} // namespace
+
 void set_world_transform(const void* _mtx, uint16_t _num)
 {
-    bgfx::setUniform(s_context.u_world, _mtx, _num);
+    bgfx::setUniform(s_context.u_world, _mtx, get_world_transform_count(_num));
 }
 
 void set_prev_world_transform(const void* _mtx, uint16_t _num)
 {
-    bgfx::setUniform(s_context.u_prev_world, _mtx, _num);
+    bgfx::setUniform(s_context.u_prev_world, _mtx, get_world_transform_count(_num));
 }
 
 

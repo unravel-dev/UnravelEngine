@@ -234,7 +234,6 @@ public:
      * @param faces The faces influenced by these bones.
      */
     void assign_bones(bone_index_map_t& bones, std::vector<uint32_t>& faces);
-    void assign_bones(std::vector<bool>& bones, std::vector<uint32_t>& faces);
 
     /**
      * @brief Assigns the specified bones to this bone palette.
@@ -612,15 +611,6 @@ public:
      * @return false If adding the primitives failed.
      */
     auto set_primitives(triangle_array_t&& triangles) -> bool;
-
-    /**
-     * @brief Binds the mesh as a skin with the specified skin binding data.
-     *
-     * @param bind_data The skin binding data.
-     * @return true If the mesh was successfully bound as a skin.
-     * @return false If binding the mesh as a skin failed.
-     */
-    auto bind_skin(const skin_bind_data& bind_data) -> bool;
 
     /**
      * @brief Binds the armature tree.
@@ -1242,9 +1232,16 @@ public:
     static auto generate_default_lod_configs(const load_data& data, float target_error = 0.01f) -> std::vector<std::pair<size_t, float>>;
 
     /**
-     * @brief Applies skinning vertex duplication to load_data (for offline LOD generation).
+     * @brief Bakes the skin into load_data: a bone palette per submesh and each vertex's palette indices.
+     *
+     * A submesh whose faces reach more bones than one draw takes (gfx::get_max_blend_transforms) is split into
+     * several submeshes, each with a palette that fits; the pieces follow it in the submesh list, share its
+     * data group, flags and stable id, and the armature nodes that held it hold every piece. A vertex shared by
+     * submeshes with different palettes is duplicated. Run it before LODs and fields are generated: a split
+     * drops LODs built earlier, and arrays indexed by submesh get an empty entry for each new piece.
+     *
      * @param data The load_data to apply skinning to (will be modified)
-     * @return true if skinning was applied successfully
+     * @return false when a face range or a corner points past the data; @p data is left unchanged then.
      */
     static auto apply_skin_to_load_data(load_data& data) -> bool;
 

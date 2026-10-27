@@ -170,6 +170,10 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
   (one upload per frame, read by every view; shaders include `skinning_palette.sh`, buffer at stage 7).
   The G-buffer and velocity skinned shaders must call the same `skin_palette_matrix` (EQUAL depth test).
   Editor picking / outline / wireframe keep the per-draw `u_world` palette path.
+- Bone palettes: one per submesh, at most `gfx::get_max_blend_transforms()` (128) bones, the size of `u_world`
+  (with `u_prev_world` that is 16 KB of vertex uniforms, Vulkan's guaranteed range, copied whole per draw).
+  `mesh::apply_skin_to_load_data` splits a submesh reaching more bones into pieces whose palettes fit, so any
+  bone count works on both paths; `gfx::set_world_transform` clamps the count it uploads.
 - `layer_mask` - culling/filtering per pass
 
 ## GPU feature support
