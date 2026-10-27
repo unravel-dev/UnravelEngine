@@ -165,15 +165,32 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
     }
 }
 
-void process_faces(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& load_data)
+/// Whether every corner @p face keeps names one of @p mesh's vertices.
+auto has_valid_corners(const aiFace& face, const aiMesh* mesh) -> bool
 {
-    load_data.triangle_count += mesh->mNumFaces;
+    const auto num_indices = std::min<unsigned int>(face.mNumIndices, 3);
+    return std::all_of(face.mIndices,
+                       face.mIndices + num_indices,
+                       [mesh](unsigned int index)
+                       {
+                           return index < mesh->mNumVertices;
+                       });
+}
 
+/// Appends @p mesh's faces and returns how many it kept. A face with a corner past the mesh's vertices (a
+/// malformed file) is dropped, as no draw could read it.
+auto process_faces(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& load_data) -> std::uint32_t
+{
     load_data.triangle_data.reserve(load_data.triangle_data.size() + mesh->mNumFaces);
 
+    std::uint32_t kept_count = 0;
     for(size_t i = 0; i < mesh->mNumFaces; ++i)
     {
         aiFace face = mesh->mFaces[i];
+        if(!has_valid_corners(face, mesh))
+        {
+            continue;
+        }
 
         auto& triangle = load_data.triangle_data.emplace_back();
         triangle.data_group_id = mesh->mMaterialIndex;
@@ -183,14 +200,27 @@ void process_faces(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& 
         {
             triangle.indices[j] = face.mIndices[j] + submesh_offset;
         }
+        ++kept_count;
     }
+    if(kept_count < mesh->mNumFaces)
+    {
+        APPLOG_WARNING("Mesh Importer: Mesh '{}' has {} faces with corners past its {} vertices. They were dropped.",
+                       mesh->mName.C_Str(),
+                       mesh->mNumFaces - kept_count,
+                       mesh->mNumVertices);
+    }
+    load_data.triangle_count += kept_count;
+    return kept_count;
 }
 
+/// Records @p mesh's bones and the vertices they weight. A weight on a vertex the mesh does not have (a malformed
+/// file) is dropped.
 void process_bones(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& load_data)
 {
     if(mesh->HasBones())
     {
         auto& bone_influences = load_data.skin_data.get_bones();
+        size_t dropped_weight_count = 0;
 
         for(size_t i = 0; i < mesh->mNumBones; ++i)
         {
@@ -227,6 +257,11 @@ void process_bones(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& 
             for(size_t j = 0; j < assimp_bone->mNumWeights; ++j)
             {
                 aiVertexWeight assimp_influence = assimp_bone->mWeights[j];
+                if(assimp_influence.mVertexId >= mesh->mNumVertices)
+                {
+                    ++dropped_weight_count;
+                    continue;
+                }
 
                 skin_bind_data::vertex_influence influence;
                 influence.vertex_index = assimp_influence.mVertexId + submesh_offset;
@@ -238,7 +273,7 @@ void process_bones(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& 
                 // position pre-multiplied by the offset/bind-pose matrix). At runtime,
                 // bone_world_transform * bounds yields a conservative world-space bound of
                 // the skinned geometry for frustum culling of animated meshes.
-                if(assimp_influence.mVertexId < mesh->mNumVertices && assimp_influence.mWeight > 0.0f)
+                if(assimp_influence.mWeight > 0.0f)
                 {
                     const auto& vertex = mesh->mVertices[assimp_influence.mVertexId];
                     const math::vec3 mesh_space_position(vertex.x, vertex.y, vertex.z);
@@ -247,6 +282,13 @@ void process_bones(aiMesh* mesh, std::uint32_t submesh_offset, mesh::load_data& 
                     bone_ptr->bounds.add_point(bone_space_position);
                 }
             }
+        }
+        if(dropped_weight_count > 0)
+        {
+            APPLOG_WARNING("Mesh Importer: Mesh '{}' has {} bone weights on vertices past its {} vertices. They were dropped.",
+                           mesh->mName.C_Str(),
+                           dropped_weight_count,
+                           mesh->mNumVertices);
         }
     }
 }
@@ -301,13 +343,12 @@ void process_mesh(aiMesh* mesh, mesh::load_data& load_data)
     submesh.vertex_start = load_data.vertex_count;
     submesh.vertex_count = mesh->mNumVertices;
     submesh.face_start = load_data.triangle_count;
-    submesh.face_count = mesh->mNumFaces;
     submesh.data_group_id = mesh->mMaterialIndex;
     submesh.skinned = mesh->HasBones();
     submesh.stable_id = make_stable_submesh_id(mesh->mName.C_Str(), load_data);
     load_data.material_count = std::max(load_data.material_count, submesh.data_group_id + 1);
 
-    process_faces(mesh, submesh.vertex_start, load_data);
+    submesh.face_count = process_faces(mesh, submesh.vertex_start, load_data);
     process_bones(mesh, submesh.vertex_start, load_data);
     process_vertices(mesh, load_data);
 }
@@ -329,6 +370,11 @@ void process_node(const aiScene* scene,
     for(uint32_t i = 0; i < node->mNumMeshes; ++i)
     {
         uint32_t submesh_index = node->mMeshes[i];
+        // Meshes removed on import (Import Meshes off) leave their indices on the nodes.
+        if(submesh_index >= load_data.submeshes.size())
+        {
+            continue;
+        }
         armature_node->submeshes.emplace_back(submesh_index);
 
         auto& submesh = load_data.submeshes[submesh_index];

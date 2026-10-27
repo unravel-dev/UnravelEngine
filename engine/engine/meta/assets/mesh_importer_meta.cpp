@@ -35,6 +35,9 @@ REFLECT(mesh_importer_meta)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "import_meshes"},
             entt::attribute{"pretty_name", "Import Meshes"},
+            entt::attribute{"tooltip",
+                            "Imports the meshes of the file.\n"
+                            "Turn it off to import only its animation clips and materials."},
         })
         .data<&mesh_importer_meta::model_meta::weld_vertices>("weld_vertices"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -373,6 +376,8 @@ SAVE(mesh_importer_meta::model_meta)
     try_save(ar, ser20::make_nvp("find_invalid_data", obj.find_invalid_data));
     try_save(ar, ser20::make_nvp("generate_lods", obj.generate_lods));
     try_save(ar, ser20::make_nvp("lod_target_error", obj.lod_target_error));
+    // Fields added later go last: binary archives read by position.
+    try_save(ar, ser20::make_nvp("import_meshes", obj.import_meshes));
 }
 SAVE_INSTANTIATE(mesh_importer_meta::model_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(mesh_importer_meta::model_meta, ser20::oarchive_binary_t);
@@ -386,6 +391,7 @@ LOAD(mesh_importer_meta::model_meta)
     try_load(ar, ser20::make_nvp("find_invalid_data", obj.find_invalid_data));
     try_load(ar, ser20::make_nvp("generate_lods", obj.generate_lods));
     try_load(ar, ser20::make_nvp("lod_target_error", obj.lod_target_error));
+    try_load(ar, ser20::make_nvp("import_meshes", obj.import_meshes));
 }
 LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_binary_t);

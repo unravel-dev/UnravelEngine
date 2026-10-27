@@ -46,7 +46,8 @@ description: >-
   skeleton nodes. A file without meshes (animation-only export) takes every
   animated node and its ancestors as its skeleton, and a mesh-less FBX root gets
   the axis correction Assimp only gives files with meshes
-  (`correct_meshless_fbx_root`).
+  (`correct_meshless_fbx_root`). Such a file, or one imported with Import Meshes
+  off, compiles to its clips, its materials and a model without geometry.
 - Keys live in the root node's parent frame, which need not be upright (FBX
   armatures stand Z-up or -Z-up below a rotated, x100-scaled node). The
   pose/entity split is made with the keys turned upright by the parent's rest

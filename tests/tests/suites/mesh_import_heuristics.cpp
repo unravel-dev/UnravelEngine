@@ -17,6 +17,8 @@
  *   - animation channels kept for a node that moves a mesh through a parent, and root motion
  *     taken only from the skeleton;
  *   - skinned meshes under different transforms sharing one bind pose per bone;
+ *   - faces and bone weights naming vertices a mesh does not have dropped, nodes listing no mesh that was not
+ *     imported, and the Import Meshes setting saved with the import settings;
  *   - embedded texture extraction names, the glossiness conversion, spec-gloss bakes of shared
  *     textures, DDS alpha-mode headers and compiled-path to source-path mapping.
  */
@@ -24,6 +26,7 @@
 #include "../tests.h"
 
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/meta/assets/asset_importer_meta.hpp>
 #include <asset_compiler/importers/mesh/mesh_import_animation.h>
 #include <asset_compiler/importers/mesh/mesh_import_geometry.h>
 #include <asset_compiler/importers/mesh/mesh_import_image.h>
@@ -32,6 +35,7 @@
 #include <asset_compiler/importers/mesh/mesh_import_texture_jobs.h>
 
 #include <graphics/vertex_decl.h>
+#include <serialization/associative_archive.h>
 
 #include <assimp/GltfMaterial.h>
 #include <assimp/scene.h>
@@ -44,6 +48,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -473,6 +478,83 @@ void test_shared_bind_space()
     check(math::length(bound) < 1e-4f, "the raised mesh's vertex lands on the bone through the shared bind pose");
 }
 
+/**
+ * @brief Three vertices, a second face naming vertex 7 and a bone weighting vertices 1 and 9: what a malformed file
+ * gives, as Assimp does not validate the scene.
+ */
+auto make_malformed_mesh() -> aiMesh*
+{
+    auto* mesh = new aiMesh();
+    mesh->mName = aiString("Broken");
+    mesh->mNumVertices = 3;
+    mesh->mVertices = new aiVector3D[3]{aiVector3D(0.0f, 0.0f, 0.0f), aiVector3D(1.0f, 0.0f, 0.0f),
+                                        aiVector3D(0.0f, 1.0f, 0.0f)};
+    mesh->mNumFaces = 2;
+    mesh->mFaces = new aiFace[2];
+    mesh->mFaces[0].mNumIndices = 3;
+    mesh->mFaces[0].mIndices = new unsigned int[3]{0, 1, 2};
+    mesh->mFaces[1].mNumIndices = 3;
+    mesh->mFaces[1].mIndices = new unsigned int[3]{0, 1, 7};
+    auto* bone = new aiBone();
+    bone->mName = aiString("Arm");
+    bone->mNumWeights = 2;
+    bone->mWeights = new aiVertexWeight[2]{aiVertexWeight(1, 1.0f), aiVertexWeight(9, 1.0f)};
+    mesh->mNumBones = 1;
+    mesh->mBones = new aiBone*[1]{bone};
+    return mesh;
+}
+
+void test_malformed_indices_are_dropped()
+{
+    auto scene = std::make_unique<aiScene>();
+    scene->mRootNode = new aiNode("Root");
+    scene->mNumMeshes = 1;
+    scene->mMeshes = new aiMesh*[1]{make_malformed_mesh()};
+    mesh::load_data data;
+    data.vertex_format = gfx::mesh_vertex::get_layout();
+    process_meshes(scene.get(), data);
+    check(data.triangle_count == 1 && data.triangle_data.size() == 1 && data.submeshes.size() == 1 &&
+              data.submeshes[0].face_count == 1,
+          "a face with a corner past the vertices is dropped");
+    check(data.skin_data.get_bones().size() == 1 && data.skin_data.get_bones()[0].influences.size() == 1,
+          "a weight on a vertex past the vertices is dropped");
+}
+
+/// What Import Meshes off leaves: Assimp deletes the meshes, and the node still lists mesh 0.
+void test_removed_meshes_leave_nodes_empty()
+{
+    auto scene = std::make_unique<aiScene>();
+    auto* root = new aiNode("Root");
+    auto* body = new aiNode("Body");
+    body->mNumMeshes = 1;
+    body->mMeshes = new unsigned int[1]{0};
+    root->addChildren(1, &body);
+    scene->mRootNode = root;
+    mesh::load_data data;
+    data.vertex_format = gfx::mesh_vertex::get_layout();
+    const auto placements = process_meshes(scene.get(), data);
+    auto node_indices = assign_node_indices(scene.get());
+    process_nodes(scene.get(), data, placements, node_indices);
+    check(data.root_node != nullptr && data.root_node->children.size() == 1 &&
+              data.root_node->children[0]->submeshes.empty(),
+          "a node lists no mesh that was not imported");
+}
+
+void test_import_meshes_setting_is_saved()
+{
+    mesh_importer_meta meta;
+    meta.model.import_meshes = false;
+    std::stringstream stream;
+    {
+        auto archive = ser20::create_oarchive_associative(stream);
+        try_save(archive, ser20::make_nvp("meta", meta));
+    }
+    mesh_importer_meta restored;
+    auto archive = ser20::create_iarchive_associative(stream);
+    try_load(archive, ser20::make_nvp("meta", restored));
+    check(!restored.model.import_meshes, "Import Meshes off survives a save and a load");
+}
+
 void test_texture_files()
 {
     aiTexture jpg;
@@ -553,6 +635,9 @@ auto run_mesh_import_heuristics(rtti::context&) -> int
     test_animation_relevance();
     test_meshless_animation();
     test_shared_bind_space();
+    test_malformed_indices_are_dropped();
+    test_removed_meshes_leave_nodes_empty();
+    test_import_meshes_setting_is_saved();
     test_texture_files();
     std::printf("  %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
