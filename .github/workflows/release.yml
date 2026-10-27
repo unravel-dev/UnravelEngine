@@ -257,8 +257,10 @@ jobs:
           apt-get update -o Acquire::Retries=5
           apt-get install -y --no-install-recommends ca-certificates curl git gnupg pkg-config python3 sudo tzdata unzip
           # The release's own clang when it carries that version (20.04 has 18 in its updates, 26.04 has
-          # 21), apt.llvm.org otherwise.
-          if ! apt-cache show "clang-${CLANG_VERSION}" > /dev/null 2>&1; then
+          # 21), apt.llvm.org otherwise. The install candidate decides: apt-cache show also succeeds for a
+          # name that other packages only refer to, as 24.04 does with clang-21.
+          candidate="$(apt-cache policy "clang-${CLANG_VERSION}" 2> /dev/null | sed -n 's/^ *Candidate: //p' || true)"
+          if [ -z "$candidate" ] || [ "$candidate" = "(none)" ]; then
             codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
             curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/apt-llvm.gpg
             echo "deb [signed-by=/usr/share/keyrings/apt-llvm.gpg] https://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${CLANG_VERSION} main" > /etc/apt/sources.list.d/apt-llvm.list
