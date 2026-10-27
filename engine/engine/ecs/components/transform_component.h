@@ -55,7 +55,7 @@ struct root_component : public component_crtp<root_component>
  */
 auto find_scene_group(entt::handle entity) -> scene_group_id;
 
-struct active_component : public component_crtp<root_component>
+struct active_component : public component_crtp<active_component>
 {
 };
 
