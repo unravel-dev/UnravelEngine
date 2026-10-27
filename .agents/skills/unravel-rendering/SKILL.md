@@ -174,6 +174,9 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
   (with `u_prev_world` that is 16 KB of vertex uniforms, Vulkan's guaranteed range, copied whole per draw).
   `mesh::apply_skin_to_load_data` splits a submesh reaching more bones into pieces whose palettes fit, so any
   bone count works on both paths; `gfx::set_world_transform` clamps the count it uploads.
+- Skin weights: the skinned shaders take the blended bone matrix as affine (`v_wpos = wpos.xyz`, no divide by w),
+  so `apply_skin_to_load_data` keeps each vertex's four strongest weights scaled to sum to one. A sum off one
+  scales `v_wpos` about the world origin, which breaks the double-sided normal flip far from it.
 - `layer_mask` - culling/filtering per pass
 
 ## GPU feature support

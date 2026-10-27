@@ -286,11 +286,13 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     material's sidedness, from LOD 1 by default, instead of on first use at runtime.
     // 26: a skinned submesh reaching more bones than one draw takes is split into submeshes whose palettes fit. Its
     //     bones past the palette size were encoded as an invalid palette index and skinned wrong on every draw path.
+    // 27: each skinned vertex keeps its four strongest bone weights, scaled to sum to one. A sum off one moved the
+    //     position the shaders shade away from where the vertex is drawn (double-sided normals flipped).
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code. The same holds for the card builder.
-    return 26;
+    return 27;
 }
 
 template<>

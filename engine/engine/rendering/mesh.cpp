@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <numeric>
 #include <unordered_map>
 
 namespace unravel
@@ -2098,6 +2099,55 @@ auto has_valid_topology(const mesh::load_data& data) -> bool
     return are_ranges_valid && are_corners_valid && is_vertex_data_complete && data.triangle_count <= face_count;
 }
 
+/// Drops all but the MAX_VERTEX_INFLUENCES strongest influences of @p vertex.
+void keep_strongest_influences(skin_bind_data::vertex_data& vertex)
+{
+    std::vector<size_t> order(vertex.influences.size());
+    std::iota(order.begin(), order.end(), size_t{0});
+    std::stable_sort(order.begin(),
+                     order.end(),
+                     [&](size_t left, size_t right)
+                     {
+                         return vertex.weights[left] > vertex.weights[right];
+                     });
+    order.resize(MAX_VERTEX_INFLUENCES);
+    std::vector<int32_t> influences;
+    std::vector<float> weights;
+    for(size_t index : order)
+    {
+        influences.push_back(vertex.influences[index]);
+        weights.push_back(vertex.weights[index]);
+    }
+    vertex.influences = std::move(influences);
+    vertex.weights = std::move(weights);
+}
+
+/// Keeps the influences each vertex can hold and scales their weights to sum to one. The skinning shaders take the
+/// weighted bone matrices as an affine transform, so a sum off one (byte-quantized source weights, dropped
+/// influences) scales the vertex's world position about the origin: shading then sees it far from where it is drawn.
+void normalize_vertex_influences(skin_bind_data::vertex_data_array_t& vertex_table)
+{
+    for(auto& vertex : vertex_table)
+    {
+        if(vertex.influences.size() > MAX_VERTEX_INFLUENCES)
+        {
+            keep_strongest_influences(vertex);
+        }
+        const float weight_sum = std::accumulate(vertex.weights.begin(), vertex.weights.end(), 0.0f);
+        if(weight_sum <= 0.0f)
+        {
+            continue;
+        }
+        std::transform(vertex.weights.begin(),
+                       vertex.weights.end(),
+                       vertex.weights.begin(),
+                       [weight_sum](float weight)
+                       {
+                           return weight / weight_sum;
+                       });
+    }
+}
+
 /// The distinct bones the corners of @p face are skinned by, as far as the vertices keep them.
 void collect_face_bones(const mesh::triangle& face,
                         const skin_bind_data::vertex_data_array_t& vertex_table,
@@ -2443,6 +2493,7 @@ auto mesh::apply_skin_to_load_data(load_data& data) -> bool
     }
     skin_bind_data::vertex_data_array_t vertex_table;
     data.skin_data.build_vertex_table(data.vertex_count, {}, vertex_table);
+    normalize_vertex_influences(vertex_table);
     // Each submesh's palette is uploaded whole for its draw, so a submesh reaching more bones than one draw takes is
     // drawn in pieces whose bones fit.
     const uint32_t palette_size = gfx::get_max_blend_transforms();

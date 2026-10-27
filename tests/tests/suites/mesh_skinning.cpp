@@ -12,7 +12,8 @@
  *     and stable id, a seam vertex is copied once per piece, and the armature nodes and the submeshes after it follow;
  *   - arrays indexed by submesh stay in step with a split, and LODs built before it are dropped;
  *   - a triangle corner past the vertices is refused and leaves the data as it was;
- *   - a bone weight on a vertex past the vertices is skipped.
+ *   - a bone weight on a vertex past the vertices is skipped;
+ *   - each vertex keeps its four strongest weights, scaled to sum to one.
  *
  * Headless safe: only load data is built, nothing reaches the GPU.
  */
@@ -285,6 +286,54 @@ void test_corner_past_the_vertices_is_refused()
           "and the data is left as it was");
 }
 
+/// The blend weights a vertex holds.
+auto get_vertex_weights(const mesh::load_data& data, uint32_t vertex) -> math::vec4
+{
+    float weights[4] = {};
+    bgfx::vertexUnpack(weights, bgfx::Attrib::Weight, data.vertex_format, data.vertex_data.data(), vertex);
+    return math::vec4(weights[0], weights[1], weights[2], weights[3]);
+}
+
+auto is_near(const math::vec4& actual, const math::vec4& expected) -> bool
+{
+    constexpr float tolerance = 1e-5f;
+    for(math::vec4::length_type i = 0; i < 4; ++i)
+    {
+        if(std::fabs(actual[i] - expected[i]) > tolerance)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void test_weights_are_normalized()
+{
+    std::printf("test_weights_are_normalized\n");
+    auto data = make_strip(10);
+    auto& bones = data.skin_data.get_bones();
+    // Row 0 sums to 0.8, as byte-quantized or trimmed source weights leave it.
+    bones[0].influences = {{0, 0.5f}, {1, 0.5f}};
+    bones[1].influences.push_back({0, 0.3f});
+    bones[1].influences.push_back({1, 0.3f});
+    // Row 2's first vertex has six influences: it keeps its four strongest.
+    constexpr uint32_t crowded_vertex = 4;
+    const float extra_weights[] = {0.05f, 0.4f, 0.02f, 0.3f, 0.01f};
+    for(uint32_t i = 0; i < 5; ++i)
+    {
+        bones[3 + i].influences.push_back({crowded_vertex, extra_weights[i]});
+    }
+    check(mesh::apply_skin_to_load_data(data), "the skin bakes");
+    check(is_near(get_vertex_weights(data, 0), math::vec4(0.625f, 0.375f, 0.0f, 0.0f)),
+          "a vertex whose weights sum to 0.8 is scaled to one");
+    constexpr float crowded_sum = 1.0f + 0.4f + 0.3f + 0.05f;
+    check(is_near(get_vertex_weights(data, crowded_vertex),
+                  math::vec4(1.0f, 0.4f, 0.3f, 0.05f) / crowded_sum),
+          "a vertex with six influences keeps its four strongest, scaled to one");
+    check(are_corners_skinned_to_their_rows(data), "the strongest influence comes first");
+    check(is_near(get_vertex_weights(data, 2), math::vec4(1.0f, 0.0f, 0.0f, 0.0f)), "a full weight stays one");
+}
+
 void test_weight_past_the_vertices_is_skipped()
 {
     std::printf("test_weight_past_the_vertices_is_skipped\n");
@@ -303,6 +352,7 @@ auto run_mesh_skinning_suite(rtti::context& /*ctx*/) -> int
     test_split_keeps_per_submesh_arrays_in_step();
     test_corner_past_the_vertices_is_refused();
     test_weight_past_the_vertices_is_skipped();
+    test_weights_are_normalized();
     std::printf("  %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }
