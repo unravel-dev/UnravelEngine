@@ -7,6 +7,7 @@
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/material.h>
 #include <base/basetypes.hpp>
+#include <graphics/eviction.h>
 #include <graphics/graphics.h>
 #include <hpp/span.hpp>
 #include <hpp/uuid.hpp>
@@ -433,6 +434,8 @@ public:
      */
     struct lod_level
     {
+        ///< Owns system_ib_; the hardware index buffer shares it while bgfx uploads it
+        gfx::eviction::backing_buffer system_ib_backing_;
         ///< System memory index buffer for this LOD
         uint32_t* system_ib_{nullptr};
         ///< Hardware index buffer for this LOD
@@ -1440,10 +1443,15 @@ protected:
     ///< Whether to disable the automatic re-sort operation.
     bool disable_final_sort_ = false;
 
+    ///< Owns system_vb_; the hardware vertex buffer shares it while bgfx uploads it (and for eviction restores),
+    ///< so a mesh disposed before the upload frame does not free it under bgfx's render thread.
+    gfx::eviction::backing_buffer system_vb_backing_;
     ///< The vertex data during data insertion and system memory copy.
     uint8_t* system_vb_ = nullptr;
     ///< The vertex format used for the mesh internal vertex data.
     bgfx::VertexLayout vertex_format_;
+    ///< Owns system_ib_, shared with the hardware index buffer as system_vb_backing_ is.
+    gfx::eviction::backing_buffer system_ib_backing_;
     ///< The final system memory copy of the index buffer (LOD 0 - base mesh).
     uint32_t* system_ib_ = nullptr;
     ///< Material and data group information for each triangle.

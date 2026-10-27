@@ -207,9 +207,9 @@ void mesh::dispose()
     preparation_data_.vertex_records.clear();
     preparation_data_.triangle_data.clear();
 
-    // Release mesh data memory
-    checked_array_delete(system_vb_);
-    checked_array_delete(system_ib_);
+    // Release mesh data memory. A hardware buffer bgfx has not created yet keeps its own reference.
+    system_vb_backing_.reset();
+    system_ib_backing_.reset();
     gi_source_geometry_.reset();
 
     // Clean up LOD data
@@ -222,7 +222,8 @@ void mesh::dispose()
         }
         lod.submeshes_.clear();
         // Clean up index buffer
-        checked_array_delete(lod.system_ib_);
+        lod.system_ib_backing_.reset();
+        lod.system_ib_ = nullptr;
         lod.hardware_ib_.reset();
     }
     lods_.clear();
@@ -259,6 +260,13 @@ void mesh::dispose()
 
 namespace
 {
+/// Zeroed storage for @p count indices, and the indices in it.
+auto allocate_indices(size_t count, gfx::eviction::backing_buffer& backing) -> uint32_t*
+{
+    backing = std::make_shared<std::vector<uint8_t>>(count * sizeof(uint32_t));
+    return reinterpret_cast<uint32_t*>(backing->data());
+}
+
 /// A byte count as text in binary units (KiB, MiB, ...), as the texture info reports memory.
 auto format_memory(uint64_t bytes) -> std::string
 {
@@ -1081,12 +1089,11 @@ auto mesh::end_prepare(bool hardware_copy, bool build_buffers, bool weld, bool o
         return false;
     }
 
-    // Allocate the system memory vertex buffer ready for population.
+    // Copy the vertex data into the system memory vertex buffer and dispose of the temporary data.
     vertex_count_ = preparation_data_.vertex_count;
-    system_vb_ = new uint8_t[vertex_count_ * vertex_format_.getStride()];
-
-    // Copy vertex data into the new buffer and dispose of the temporary data.
-    std::memcpy(system_vb_, preparation_data_.vertex_data.data(), vertex_count_ * vertex_format_.getStride());
+    system_vb_backing_ =
+        gfx::eviction::make_backing(preparation_data_.vertex_data.data(), vertex_count_ * vertex_format_.getStride());
+    system_vb_ = system_vb_backing_->data();
     preparation_data_.vertex_data.clear();
     preparation_data_.vertex_flags.clear();
     preparation_data_.vertex_count = 0;
@@ -1099,7 +1106,7 @@ auto mesh::end_prepare(bool hardware_copy, bool build_buffers, bool weld, bool o
 
     // Allocate the memory for our system memory index buffer
     face_count_ = preparation_data_.triangle_count;
-    system_ib_ = new uint32_t[face_count_ * 3];
+    system_ib_ = allocate_indices(size_t(face_count_) * 3, system_ib_backing_);
 
     // Finally perform the final sort of the mesh data in order
     // to build the index buffer and submesh tables
@@ -1134,15 +1141,12 @@ void mesh::build_vb(bool hardware_copy)
     // A video memory copy of the mesh was requested?
     if(hardware_copy)
     {
-        // Calculate the required size of the vertex buffer
-        auto buffer_size = vertex_count_ * vertex_format_.getStride();
-
         // Compute-read flag so the vertex buffer can be bound as a raw read-only
         // buffer (BUFFER_RAW_RO) inside shaders (e.g. vertex pulling).
         const uint16_t vb_flags = BGFX_BUFFER_COMPUTE_READ;
 
-        const bgfx::Memory* mem = bgfx::makeRef(system_vb_, buffer_size);
-        hardware_vb_ = std::make_shared<gfx::vertex_buffer>(mem, vertex_format_, vb_flags);
+        // No copy: the buffer shares the mesh's vertices until bgfx's render thread has read them.
+        hardware_vb_ = std::make_shared<gfx::vertex_buffer>(system_vb_backing_, vertex_format_, vb_flags);
 
     } // End if video memory vertex buffer required
 }
@@ -1152,26 +1156,22 @@ void mesh::build_ib(bool hardware_copy)
     // Hardware versions of the final buffer were required?
     if(hardware_copy)
     {
-        // Calculate the required size of the index buffer
-        auto buffer_size = static_cast<uint32_t>(size_t(face_count_ * 3) * sizeof(uint32_t));
-
         // Compute-read flag so the (32-bit) index buffer can be bound as a raw
         // read-only buffer (BUFFER_RAW_RO) inside shaders (e.g. vertex pulling).
         const uint16_t ib_flags = BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ;
 
-        // Allocate hardware buffer if required (i.e. it does not already exist).
+        // Allocate hardware buffer if required (i.e. it does not already exist). It shares the mesh's indices, as
+        // the vertex buffer shares its vertices.
         if(!hardware_ib_)
         {
-            const bgfx::Memory* mem = bgfx::makeRef(system_ib_, buffer_size);
-            hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
+            hardware_ib_ = std::make_shared<gfx::index_buffer>(system_ib_backing_, ib_flags);
         } // End if not allocated
         else
         {
             auto ib = std::static_pointer_cast<gfx::index_buffer>(hardware_ib_);
             if(!ib->is_valid())
             {
-                const bgfx::Memory* mem = bgfx::makeRef(system_ib_, buffer_size);
-                hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
+                hardware_ib_ = std::make_shared<gfx::index_buffer>(system_ib_backing_, ib_flags);
             }
         }
 
@@ -2888,7 +2888,8 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
             checked_delete(submesh);
         }
         lod.submeshes_.clear();
-        checked_array_delete(lod.system_ib_);
+        lod.system_ib_backing_.reset();
+        lod.system_ib_ = nullptr;
         lod.hardware_ib_.reset();
     }
     lods_.clear();
@@ -2901,11 +2902,14 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
         lod.face_count_ = lod_data.face_count;
         lod.simplification_error_ = lod_data.simplification_error;
 
-        // Copy index buffer
+        // Copy index buffer, sized by the face count every reader of it uses.
         if(!lod_data.index_data.empty())
         {
-            lod.system_ib_ = new uint32_t[lod_data.index_data.size()];
-            std::memcpy(lod.system_ib_, lod_data.index_data.data(), lod_data.index_data.size() * sizeof(uint32_t));
+            const size_t index_count = size_t(lod.face_count_) * 3;
+            lod.system_ib_ = allocate_indices(index_count, lod.system_ib_backing_);
+            std::memcpy(lod.system_ib_,
+                        lod_data.index_data.data(),
+                        std::min(index_count, lod_data.index_data.size()) * sizeof(uint32_t));
         }
 
         // Copy submeshes and build cached indices maps
@@ -2929,12 +2933,10 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
         // Build hardware buffer for this LOD if needed
         if(hardware_mesh_ && lod.system_ib_ && lod.face_count_ > 0)
         {
-            auto buffer_size = static_cast<uint32_t>(lod.face_count_ * 3 * sizeof(uint32_t));
-            const bgfx::Memory* mem = bgfx::makeRef(lod.system_ib_, buffer_size);
             // Same compute-read flag as base LOD so any LOD can be used as a
-            // read-only buffer inside shaders (e.g. vertex pulling).
+            // read-only buffer inside shaders (e.g. vertex pulling). It shares the LOD's indices, as build_ib does.
             const uint16_t ib_flags = BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ;
-            lod.hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
+            lod.hardware_ib_ = std::make_shared<gfx::index_buffer>(lod.system_ib_backing_, ib_flags);
         }
 
         lods_.push_back(std::move(lod));

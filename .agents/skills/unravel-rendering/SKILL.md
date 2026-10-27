@@ -177,6 +177,9 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
 - Skin weights: the skinned shaders take the blended bone matrix as affine (`v_wpos = wpos.xyz`, no divide by w),
   so `apply_skin_to_load_data` keeps each vertex's four strongest weights scaled to sum to one. A sum off one
   scales `v_wpos` about the world origin, which breaks the double-sided normal flip far from it.
+- `bgfx::makeRef` without a release callback needs the memory to outlive the frame bgfx's render thread reads it
+  in (a frame or two). Data an owner may free sooner goes through `gfx::eviction::backing_buffer` and the
+  `vertex_buffer` / `index_buffer` backing constructors (no copy; bgfx and eviction restores keep a reference).
 - `layer_mask` - culling/filtering per pass
 
 ## GPU feature support
