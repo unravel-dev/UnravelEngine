@@ -9,6 +9,7 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
+#include <filesystem/filesystem.h>
 #include <seq/seq.h>
 #include <simulation/simulation.h>
 #include <uuid/uuid.h>
@@ -52,6 +53,33 @@ void internal_m2n_application_quit()
         });
 
     seq::queue(delay, "script");
+}
+
+/// A protocol's folder as C# paths are written: created when missing, forward slashes, no trailing separator.
+auto get_script_folder(const std::string& protocol_root) -> std::string
+{
+    fs::path folder = fs::resolve_protocol(protocol_root).lexically_normal();
+    if(!folder.has_filename())
+    {
+        folder = folder.parent_path();
+    }
+    fs::error_code err;
+    fs::create_directories(folder, err);
+    if(err)
+    {
+        APPLOG_ERROR("Cannot create {}: {}", folder.generic_string(), err.message());
+    }
+    return folder.generic_string();
+}
+
+auto internal_m2n_application_get_persistent_data_path() -> std::string
+{
+    return get_script_folder("user:/");
+}
+
+auto internal_m2n_application_get_temporary_cache_path() -> std::string
+{
+    return get_script_folder("cache:/");
 }
 
 auto internal_m2n_screen_get_size() -> math::vec2
@@ -188,6 +216,10 @@ void register_core_runtime_script_bindings()
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Application");
         reg.add_internal_call("internal_m2n_application_quit", dotnet_internal_call(internal_m2n_application_quit));
+        reg.add_internal_call("internal_m2n_application_get_persistent_data_path",
+                              dotnet_internal_call(internal_m2n_application_get_persistent_data_path));
+        reg.add_internal_call("internal_m2n_application_get_temporary_cache_path",
+                              dotnet_internal_call(internal_m2n_application_get_temporary_cache_path));
 
     }
     {
