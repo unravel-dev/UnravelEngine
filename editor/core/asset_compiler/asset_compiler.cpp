@@ -1127,7 +1127,52 @@ auto compile_texture_with_importer(const fs::path& key,
     return true;
 }
 
+/// The import settings in @p key's .meta. A meta without them (written before they existed) is given the defaults,
+/// and the compile goes on with those: the rewritten .meta may or may not start another compile, so none waits on it.
+auto read_or_create_importer(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
+{
+    const auto absolute = fs::resolve_protocol(key).string();
+    asset_meta meta;
+    if(!load_from_file(absolute, meta) || meta.importer)
+    {
+        return meta.importer;
+    }
+    const fs::path input_path = resolve_input_file(key);
+    meta.importer = create_default_importer(input_path);
+    meta.uid = am.add_asset_info_for_path(input_path, meta, true);
+    fs::error_code err;
+    asset_writer::atomic_write_file(absolute,
+                                    [&](const fs::path& temp) -> void
+                                    {
+                                        save_to_file(temp.string(), meta);
+                                    },
+                                    err);
+    return meta.importer;
+}
+
 } // namespace
+
+auto create_default_importer(const fs::path& source_path) -> std::shared_ptr<asset_importer_meta>
+{
+    const auto extension = source_path.extension().string();
+    if(ex::is_format<gfx::texture>(extension))
+    {
+        return create_default_texture_importer_meta(source_path);
+    }
+    if(ex::is_format<mesh>(extension))
+    {
+        return std::make_shared<mesh_importer_meta>();
+    }
+    if(ex::is_format<animation_clip>(extension))
+    {
+        return std::make_shared<animation_importer_meta>();
+    }
+    if(ex::is_format<audio_clip>(extension))
+    {
+        return std::make_shared<audio_importer_meta>();
+    }
+    return nullptr;
+}
 
 template<>
 auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
@@ -1168,28 +1213,7 @@ auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path
 template<>
 auto read_importer<gfx::texture>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
-    auto absolute = fs::resolve_protocol(key).string();
-    asset_meta meta;
-    if(load_from_file(absolute, meta))
-    {
-        if(!meta.importer)
-        {
-            const fs::path input_path = resolve_input_file(key);
-            meta.importer = create_default_texture_importer_meta(input_path);
-
-            meta.uid = am.add_asset_info_for_path(input_path, meta, true);
-
-            fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
-            {
-                save_to_file(temp.string(), meta);
-            }, err);
-
-            return nullptr;
-        }
-    }
-
-    return meta.importer;
+    return read_or_create_importer(am, key);
 }
 
 template<>
@@ -1297,27 +1321,7 @@ template<>
 auto read_importer<mesh>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
     APP_SCOPE_PERF("Read Mesh Importer");
-    auto absolute = fs::resolve_protocol(key).string();
-    asset_meta meta;
-    if(load_from_file(absolute, meta))
-    {
-        if(!meta.importer)
-        {
-            meta.importer = std::make_shared<mesh_importer_meta>();
-
-            meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
-
-            fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
-            {
-                save_to_file(temp.string(), meta);
-            }, err);
-
-            return nullptr;
-        }
-    }
-
-    return meta.importer;
+    return read_or_create_importer(am, key);
 }
 
 template<>
@@ -2025,27 +2029,7 @@ template<>
 auto read_importer<animation_clip>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
     APP_SCOPE_PERF("Read Animation Clip Importer");
-    auto absolute = fs::resolve_protocol(key).string();
-    asset_meta meta;
-    if(load_from_file(absolute, meta))
-    {
-        if(!meta.importer)
-        {
-            meta.importer = std::make_shared<animation_importer_meta>();
-
-            meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
-
-            fs::error_code err;
-            asset_writer::atomic_write_file(absolute,   [&](const fs::path& temp) -> void
-            {
-                save_to_file(temp.string(), meta);
-            }, err);
-
-            return nullptr;
-        }
-    }
-
-    return meta.importer;
+    return read_or_create_importer(am, key);
 }
 
 template<>
@@ -2325,27 +2309,7 @@ template<>
 auto read_importer<audio_clip>(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>
 {
     APP_SCOPE_PERF("Read Audio Clip Importer");
-    auto absolute = fs::resolve_protocol(key).string();
-    asset_meta meta;
-    if(load_from_file(absolute, meta))
-    {
-        if(!meta.importer)
-        {
-            meta.importer = std::make_shared<audio_importer_meta>();
-
-            meta.uid = am.add_asset_info_for_path(resolve_input_file(key), meta, true);
-
-            fs::error_code err;
-            asset_writer::atomic_write_file(absolute, [&](const fs::path& temp) -> void
-            {
-                save_to_file(temp.string(), meta);
-            }, err);
-
-            return nullptr;
-        }
-    }
-
-    return meta.importer;
+    return read_or_create_importer(am, key);
 }
 
 template<>

@@ -726,6 +726,8 @@ void asset_watcher::setup_meta_syncer(rtti::context& ctx,
                 {
                     const auto protocol_path = fs::convert_to_protocol(ref_path);
                     new_meta = am.generate_metadata(protocol_path);
+                    // The first compile reads the import settings from this .meta.
+                    new_meta.importer = asset_compiler::create_default_importer(ref_path);
                     am.remove_asset_info_for_path(ref_path);
                 }
                 

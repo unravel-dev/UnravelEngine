@@ -16,6 +16,12 @@ auto compile(asset_manager& am, const fs::path& key, const fs::path& output_key,
 template<typename T>
 auto read_importer(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>;
 
+/**
+ * @brief The import settings a source starts with, by the type its extension names; null for a type without any.
+ *        A new source's .meta is written with them, so its first compile already has them.
+ */
+auto create_default_importer(const fs::path& source_path) -> std::shared_ptr<asset_importer_meta>;
+
 /// One compiler diagnostic, as parsed from the C# compiler output.
 struct script_compilation_entry
 {
