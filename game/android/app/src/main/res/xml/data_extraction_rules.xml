@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and higher. Only the game's user:/ folder is backed up and moved to a new device: the
+     internal storage also holds the extracted game files and the log, which the game writes again. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="user" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="user" />
+    </device-transfer>
+</data-extraction-rules>

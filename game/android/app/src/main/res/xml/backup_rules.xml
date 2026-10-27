@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and lower. Only the game's user:/ folder is backed up: the internal storage also holds the
+     extracted game files and the log, which would push the backup past its 25 MB limit. -->
+<full-backup-content>
+    <include domain="file" path="user" />
+</full-backup-content>
