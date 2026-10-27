@@ -1,0 +1,355 @@
+# Builds the editor packages (the CPack zips) on Windows and Linux and attaches them to a GitHub release.
+#
+# Push a tag to release it: `git tag v1.3.0` and `git push origin v1.3.0` build that tag and create its
+# release as a draft to review and publish.
+#
+# Run the workflow by hand (Actions > release > Run workflow) to build any commit into an existing
+# release. The version input takes what `git describe --tags` prints: v1.2.1-153-g1a2b3c4d builds commit
+# 1a2b3c4d and uploads UnravelEngine-1.2.1-153-<platform>.zip to release v1.2.1, the nearest tag before
+# that commit, replacing the older build of each platform there.
+#
+# Windows builds with clang in GNU-driver mode (preset windows-x64-clang-msvc-gnu). Linux builds inside
+# an Ubuntu container, so the binaries need no newer glibc than that release has: the 20.04 package runs
+# on 20.04 and later. Both build the Android player template that the editor packages carry.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Commit to build: a version as git describe prints it (v1.2.1-153-g1a2b3c4d), a commit, a branch or a tag. Empty builds the head of the branch chosen above.'
+        required: false
+        default: ''
+      replace_previous_builds:
+        description: 'Remove the older builds of the same platforms from the release after the upload.'
+        type: boolean
+        default: true
+      publish:
+        description: 'Upload to the release. Unchecked, the packages stay workflow artifacts only.'
+        type: boolean
+        default: true
+      build_ubuntu_22_04:
+        description: 'Also build the Ubuntu 22.04 package.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # CMake 3.x: CMake 4 refuses dependencies that still declare a minimum below 3.5.
+  CMAKE_VERSION: '3.31.12'
+  NINJA_VERSION: '1.13.2'
+  # Windows clang (official LLVM build); each Linux target names its clang in the targets below.
+  LLVM_VERSION: '21.1.8'
+  # Windows .NET; on Linux install_dotnet.sh picks the SDK.
+  DOTNET_VERSION: '10.0.x'
+  # Unity builds at -O2 take about 3 GB per compiler; more parallel jobs run the runners out of memory.
+  BUILD_JOBS: '3'
+  BUILD_DIR: build/Release
+
+jobs:
+  resolve:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.version.outputs.sha }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      package_version: ${{ steps.version.outputs.package_version }}
+      linux_matrix: ${{ steps.targets.outputs.linux_matrix }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Resolve the commit, release and package version
+        id: version
+        env:
+          REQUESTED: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: |
+          set -euo pipefail
+          requested="${REQUESTED:-$GITHUB_SHA}"
+          sha="$(git rev-parse --verify --quiet "${requested}^{commit}" || git rev-parse --verify --quiet "origin/${requested}^{commit}" || true)"
+          if [ -z "$sha" ]; then
+            echo "::error::'${requested}' is not a commit, branch, tag or version of this repository."
+            exit 1
+          fi
+          # The same describe as CMakeLists.txt, which names the packages.
+          if ! describe="$(git describe --tags --abbrev=8 "$sha")"; then
+            echo "::error::No tag precedes ${sha}, so it has no version."
+            exit 1
+          fi
+          # git finds a typed version's commit by its hash alone: the tag and the count must match too.
+          if [[ "$requested" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+-[0-9]+)-g[0-9a-f]+$ ]]; then
+            actual="${describe#v}"
+            actual="${actual%-g*}"
+            if [ "${BASH_REMATCH[1]}" != "$actual" ]; then
+              echo "::error::${requested} names commit ${sha}, whose version is ${describe}."
+              exit 1
+            fi
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            release_tag="$GITHUB_REF_NAME"
+          else
+            release_tag="$(git describe --tags --abbrev=0 "$sha")"
+          fi
+          package_version="$(sed -E -e 's/-g[0-9a-f]+$//' -e 's/^v//' <<< "$describe")"
+          {
+            echo "sha=${sha}"
+            echo "release_tag=${release_tag}"
+            echo "package_version=${package_version}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building ${describe} (${sha}) as UnravelEngine-${package_version} for release ${release_tag}." >> "$GITHUB_STEP_SUMMARY"
+      # Each Linux target builds in its image's container with its clang. packages: the GCC whose C++
+      # library clang compiles against (clang takes the newest GCC installed), no newer than the libstdc++
+      # the release ships, and the release's pipewire. 26.04 ships the libstdc++ of a GCC 16 snapshot, so
+      # it builds against its default GCC 15. on_request targets build only when a manual run asks for them.
+      - name: Choose the Linux targets
+        id: targets
+        env:
+          BUILD_ON_REQUEST: ${{ inputs.build_ubuntu_22_04 == true }}
+        run: |
+          set -euo pipefail
+          matrix="$(jq -c --argjson with_on_request "$BUILD_ON_REQUEST" '{include: [.[] | select((.on_request // false | not) or $with_on_request)]}' <<'EOF'
+          [
+            {"name": "ubuntu-20.04", "image": "ubuntu:20.04", "clang": "18", "packages": "g++-10 libpipewire-0.2-dev"},
+            {"name": "ubuntu-22.04", "image": "ubuntu:22.04", "clang": "18", "packages": "g++-12 libpipewire-0.3-dev", "on_request": true},
+            {"name": "ubuntu-24.04", "image": "ubuntu:24.04", "clang": "21", "packages": "g++-14 libpipewire-0.3-dev"},
+            {"name": "ubuntu-26.04", "image": "ubuntu:26.04", "clang": "21", "packages": "g++-15 libpipewire-0.3-dev"}
+          ]
+          EOF
+          )"
+          echo "linux_matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  windows:
+    name: windows
+    needs: resolve
+    runs-on: windows-2025-vs2026
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Allow long paths in git
+        run: git config --system core.longpaths true
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0 # the package version comes from git describe
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Install LLVM, CMake, Ninja and the Android NDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tools = Join-Path $env:RUNNER_TEMP 'tools'
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          function Save-Download([string] $url, [string] $file) {
+              curl.exe --fail --silent --show-error --location --retry 3 --output $file $url
+              if ($LASTEXITCODE -ne 0) { throw "Downloading $url failed." }
+          }
+          # LLVM in a folder of its own: the runner's preinstalled LLVM is another version.
+          $llvm = Join-Path $tools 'llvm'
+          Save-Download "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe" "$tools\llvm-setup.exe"
+          Start-Process -FilePath "$tools\llvm-setup.exe" -ArgumentList '/S', "/D=$llvm" -Wait
+          $clang_version = & "$llvm\bin\clang++.exe" --version | Select-Object -First 1
+          if ($clang_version -notmatch [regex]::Escape($env:LLVM_VERSION)) { throw "Expected clang $env:LLVM_VERSION, found: $clang_version" }
+          Save-Download "https://github.com/Kitware/CMake/releases/download/v$env:CMAKE_VERSION/cmake-$env:CMAKE_VERSION-windows-x86_64.zip" "$tools\cmake.zip"
+          Expand-Archive -Path "$tools\cmake.zip" -DestinationPath $tools
+          $cmake = Join-Path $tools "cmake-$env:CMAKE_VERSION-windows-x86_64\bin"
+          $ninja = Join-Path $tools 'ninja'
+          Save-Download "https://github.com/ninja-build/ninja/releases/download/v$env:NINJA_VERSION/ninja-win.zip" "$tools\ninja.zip"
+          Expand-Archive -Path "$tools\ninja.zip" -DestinationPath $ninja
+          # The NDK of the Android player template, into the runner's Android SDK.
+          if (-not $env:ANDROID_HOME) { throw 'ANDROID_HOME is not set on this runner.' }
+          $ndk = (Select-String -Path cmake/android_player.cmake -Pattern 'set\(UNRAVEL_ANDROID_NDK_VERSION "([^"]+)"\)').Matches[0].Groups[1].Value
+          & (Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat') --install "ndk;$ndk"
+          if ($LASTEXITCODE -ne 0) { throw "Installing NDK $ndk failed." }
+          # Every build step starts from this: the MSVC headers and libraries (vcvars64) for clang, with
+          # the pinned tools ahead of the CMake and Ninja that vcvars puts on the PATH.
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools on this runner.' }
+          @(
+              "@call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul || exit /b 1"
+              "@set `"PATH=$llvm\bin;$cmake;$ninja;%PATH%`""
+          ) | Set-Content -Encoding ascii -Path (Join-Path $env:RUNNER_TEMP 'build_env.cmd')
+      # The presets use single-configuration Ninja without a build type, so Release is set here.
+      # UNRAVEL_ANDROID_PLAYER=ON fails the configure rather than package an editor that cannot deploy
+      # to Android.
+      - name: Configure
+        run: |
+          call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
+          clang++ --version || exit /b 1
+          cmake --preset windows-x64-clang-msvc-gnu -B %BUILD_DIR% -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER=ON || exit /b 1
+      - name: Build
+        run: |
+          call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
+          cmake --build %BUILD_DIR% --parallel %BUILD_JOBS% || exit /b 1
+      - name: Package
+        run: |
+          call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
+          cmake --build %BUILD_DIR% --target package || exit /b 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-windows
+          path: ${{ env.BUILD_DIR }}/UnravelEngine-*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  linux:
+    name: ${{ matrix.name }}
+    needs: resolve
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.linux_matrix) }}
+    container:
+      image: ${{ matrix.image }}
+      # Preinstalled host tools this job never uses, mounted so the first step can delete them: the
+      # sources, the build with its Android sub-build, the NDK and .NET need the disk space.
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      CLANG_VERSION: ${{ matrix.clang }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          rm -rf /host/android/* /host/dotnet/*
+          df -h /
+      - name: Install the build packages
+        run: |
+          apt-get update -o Acquire::Retries=5
+          apt-get install -y --no-install-recommends ca-certificates curl git gnupg pkg-config python3 sudo tzdata unzip
+          # The release's own clang when it carries that version (20.04 has 18 in its updates, 26.04 has
+          # 21), apt.llvm.org otherwise.
+          if ! apt-cache show "clang-${CLANG_VERSION}" > /dev/null 2>&1; then
+            codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+            curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/apt-llvm.gpg
+            echo "deb [signed-by=/usr/share/keyrings/apt-llvm.gpg] https://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${CLANG_VERSION} main" > /etc/apt/sources.list.d/apt-llvm.list
+            apt-get update -o Acquire::Retries=5
+          fi
+          apt-get install -y --no-install-recommends \
+            "clang-${CLANG_VERSION}" "clang-tools-${CLANG_VERSION}" ${{ matrix.packages }} \
+            libglew-dev libgtk-3-dev libasound2-dev alsa-tools libjack-dev libudev-dev \
+            libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxcursor-dev \
+            libxinerama-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dev libglu1-mesa-dev libdbus-1-dev zlib1g-dev
+      # The release's own CMake can be older than the presets need (3.21; Ubuntu 20.04 has 3.16).
+      - name: Install CMake and Ninja
+        run: |
+          curl -fsSL --retry 3 "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+            | tar -xz --strip-components=1 -C /usr/local
+          curl -fsSL --retry 3 -o /tmp/ninja.zip "https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/ninja-linux.zip"
+          unzip -o /tmp/ninja.zip -d /usr/local/bin
+          cmake --version
+          ninja --version
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0 # the package version comes from git describe
+          submodules: recursive
+          persist-credentials: false
+      # The checkout belongs to the runner's user and the container runs as root: without this, git
+      # refuses the repository and CMake's git describe fails.
+      - name: Trust the checkout for git
+        run: git config --global --add safe.directory '*'
+      # The repository's install scripts install into a user's home and refuse root, so they run as a
+      # user made for them; the build takes the locations they set up from that user's profile.
+      - name: Install .NET and the Android SDK
+        run: |
+          useradd --create-home --shell /bin/bash builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\nDefaults env_keep += "DEBIAN_FRONTEND"\n' > /etc/sudoers.d/builder
+          chmod 0440 /etc/sudoers.d/builder
+          sudo -u builder -H bash ./install_dotnet.sh
+          sudo -u builder -H bash ./install_android_studio.sh
+          sudo -u builder -H bash -lc 'printf "DOTNET_ROOT=%s\nANDROID_HOME=%s\nJAVA_HOME=%s\n" "$DOTNET_ROOT" "$ANDROID_HOME" "$JAVA_HOME"' >> "$GITHUB_ENV"
+          sudo -u builder -H bash -lc 'echo "$DOTNET_ROOT"' >> "$GITHUB_PATH"
+      # The presets use single-configuration Ninja without a build type, so Release is set here.
+      # UNRAVEL_ANDROID_PLAYER=ON fails the configure rather than package an editor that cannot deploy
+      # to Android. clang -v names the GCC installation it compiles against.
+      - name: Configure
+        run: |
+          "clang++-${CLANG_VERSION}" -v
+          cmake --preset "linux-clang-${CLANG_VERSION}" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER=ON
+      - name: Build
+        run: cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
+      - name: Package
+        run: cmake --build "$BUILD_DIR" --target package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package-${{ matrix.name }}
+          path: ${{ env.BUILD_DIR }}/UnravelEngine-*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    name: Publish
+    needs: [resolve, windows, linux]
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ needs.resolve.outputs.release_tag }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: packages
+          merge-multiple: true
+      - name: Upload the packages to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          PACKAGE_VERSION: ${{ needs.resolve.outputs.package_version }}
+          REPLACE_PREVIOUS_BUILDS: ${{ github.event_name == 'push' || inputs.replace_previous_builds }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(packages/*.zip)
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::error::The build jobs produced no packages."
+            exit 1
+          fi
+          prefix="UnravelEngine-${PACKAGE_VERSION}-"
+          for package in "${packages[@]}"; do
+            if [[ "$(basename "$package")" != "$prefix"* ]]; then
+              echo "::error::$(basename "$package") is not a package of version ${PACKAGE_VERSION}."
+              exit 1
+            fi
+          done
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
+            echo "Created release ${RELEASE_TAG} as a draft." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          gh release upload "$RELEASE_TAG" "${packages[@]}" --clobber
+          # An older build of a platform has the same name after its version, e.g. -Windows-AMD64.zip.
+          if [ "$REPLACE_PREVIOUS_BUILDS" = "true" ]; then
+            assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+            for package in "${packages[@]}"; do
+              name="$(basename "$package")"
+              platform="${name#"$prefix"}"
+              while IFS= read -r asset; do
+                if [[ -n "$asset" && "$asset" != "$name" && "$asset" == UnravelEngine-[0-9]*"-${platform}" ]]; then
+                  gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+                  echo "Removed ${asset}." >> "$GITHUB_STEP_SUMMARY"
+                fi
+              done <<< "$assets"
+            done
+          fi
+          for package in "${packages[@]}"; do
+            echo "Uploaded $(basename "$package") to ${RELEASE_TAG}." >> "$GITHUB_STEP_SUMMARY"
+          done

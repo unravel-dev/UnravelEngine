@@ -100,6 +100,14 @@
                 "CMAKE_CXX_COMPILER": "clang++-20"
             }
         },
+		{
+            "name": "linux-clang-21",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang-21",
+                "CMAKE_CXX_COMPILER": "clang++-21"
+            }
+        },
         {
             "name": "linux-gcc-10",
             "inherits": "linux-base",
@@ -422,6 +430,16 @@
             "configuration": "Release",
             "configurePreset": "linux-clang-20"
         },
+		{
+            "name": "linux-clang-21-debug",
+            "configuration": "Debug",
+            "configurePreset": "linux-clang-21"
+        },
+        {
+            "name": "linux-clang-21-release",
+            "configuration": "Release",
+            "configurePreset": "linux-clang-21"
+        },
         {
             "name": "linux-gcc-10-debug",
             "configuration": "Debug",
@@ -637,6 +655,11 @@
             "name": "linux-clang-20-release",
             "inherits": "test-base",
             "configurePreset": "linux-clang-20"
+        },
+		{
+            "name": "linux-clang-21-release",
+            "inherits": "test-base",
+            "configurePreset": "linux-clang-21"
         },
         {
             "name": "linux-gcc-10-release",
