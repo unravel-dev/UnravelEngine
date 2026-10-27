@@ -16,6 +16,7 @@
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
+#include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/engine.h>
 #include <engine/rendering/gi/surface_cache_system.h>
@@ -2417,10 +2418,13 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         };
         skylight_params dominant;
         const float sun_intensity = find_sun_luminous_intensity(scn);
+        const auto sky = find_skylight_in_effect(*scn.registry);
 
         scn.registry->view<transform_component, skylight_component, active_component>().each(
             [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
             {
+                if(e != sky.entity())
+                    return;
                 const auto& skylight = skylight_comp_ref;
                 float irradiance_intensity = skylight.get_irradiance_intensity();
                 if(irradiance_intensity <= 0.0f)
@@ -2594,11 +2598,13 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         // Fallback when irradiance compute is unavailable: still create/bind texture (zeros)
         const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
         result.irradiance_tex = irradiance_tex;
+        const auto sky = find_skylight_in_effect(*scn.registry);
         scn.registry->view<transform_component, skylight_component, active_component>().each(
             [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
             {
                 const auto& skylight = skylight_comp_ref;
-                if(skylight.get_irradiance_quality() != skylight_component::irradiance_quality::flat)
+                if(e != sky.entity() ||
+                   skylight.get_irradiance_quality() != skylight_component::irradiance_quality::flat)
                     return;
                 float irradiance_intensity = skylight.get_irradiance_intensity();
                 if(irradiance_intensity <= 0.0f)
@@ -3260,16 +3266,16 @@ auto gather_skylight_params(scene& scn,
                             skylight_component::sky_mode& mode) -> bool
 {
     bool found_sun = false;
+    const auto sky = find_skylight_in_effect(*scn.registry);
     scn.registry->view<transform_component, skylight_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
-            auto entity = scn.create_handle(e);
-
-            if(found_sun)
+            if(e != sky.entity())
             {
-                APPLOG_WARNING("[{}] More than one entity with this component. Others are ignored.", "Skylight");
                 return;
             }
+            auto entity = scn.create_handle(e);
+
             const auto& cubemap = light_comp_ref.get_cubemap();
             auto cubemap_texture = cubemap.get();
             if(cubemap_texture)

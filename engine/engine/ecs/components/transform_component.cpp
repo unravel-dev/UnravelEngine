@@ -49,6 +49,13 @@ auto get_next_order() -> uint64_t
     return order++;
 }
 
+/// The group a root created in `registry` now joins.
+auto get_new_root_group(const entt::registry& registry) -> scene_group_id
+{
+    const auto* groups = registry.ctx().find<scene_group_context>();
+    return groups != nullptr ? groups->new_root_group : MAIN_SCENE_GROUP;
+}
+
 } // namespace
 
 auto is_roots_order_changed() -> bool
@@ -58,6 +65,20 @@ auto is_roots_order_changed() -> bool
 void reset_roots_order_changed()
 {
     order_changed = false;
+}
+
+auto find_scene_group(entt::handle entity) -> scene_group_id
+{
+    while(entity)
+    {
+        if(const auto* root = entity.try_get<root_component>())
+        {
+            return root->group;
+        }
+        const auto* transform = entity.try_get<transform_component>();
+        entity = transform != nullptr ? transform->get_parent() : entt::handle{};
+    }
+    return MAIN_SCENE_GROUP;
 }
 
 void root_component::on_create_component(entt::registry& r, entt::entity e)
@@ -235,6 +256,7 @@ void transform_component::set_owner(entt::handle owner)
     {
         auto& root = get_owner().emplace_or_replace<root_component>();
         root.order = get_next_order();
+        root.group = get_new_root_group(*owner.registry());
     }
 
     transform_dirty_.set();
@@ -758,8 +780,11 @@ auto transform_component::set_parent(const entt::handle& p, bool global_stays) -
     }
     else
     {
+        // A subtree taken out from under its root stays in the scene it was part of.
+        const scene_group_id group = find_scene_group(old_parent);
         auto& root = get_owner().emplace_or_replace<root_component>();
         root.order = get_next_order();
+        root.group = group;
     }
 
     if(old_parent)

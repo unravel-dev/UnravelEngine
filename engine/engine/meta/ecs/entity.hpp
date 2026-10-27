@@ -456,6 +456,8 @@ void load_from_stream_bin(std::istream& stream, scene& scn);
 void load_from_file_bin(const std::string& absolute_path, scene& scn);
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool;
+/// Loads a scene into a registry next to the entities already in it, as an additive load does.
+auto load_from_prefab(const asset_handle<scene_prefab>& pfb, entt::registry& registry) -> bool;
 auto load_from_prefab_bin(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool;
 
 void clone_scene_from_stream(const scene& src_scene, scene& dst_scene);

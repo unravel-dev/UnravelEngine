@@ -12,8 +12,10 @@
 #include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
 
+#include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/audio/ecs/components/audio_listener_component.h>
 
 #include <engine/animation/ecs/components/animation_component.h>
 #include <engine/animation/ecs/systems/animation_system.h>
@@ -31,6 +33,10 @@
 #include <engine/profiler/profiler.h>
 
 #include <hpp/small_vector.hpp>
+#include <hpp/string_view.hpp>
+
+#include <utility>
+#include <vector>
 
 #include <logging/logging.h>
 
@@ -231,6 +237,158 @@ auto on_load_callback(hpp::span<const entt::handle> entities) -> void
     }
 }
 
+/// An additive load is an instance of its scene, as a prefab instance is: its entities get
+/// fresh ids before anything starts, so a second copy of the same scene shares none.
+void regenerate_ids(hpp::span<const entt::handle> entities)
+{
+    for(const auto& entity : entities)
+    {
+        if(auto* id = entity.try_get<id_component>())
+        {
+            id->regenerate_id();
+        }
+    }
+}
+
+/**
+ * @brief Makes every root created while it lives join a group.
+ */
+class scoped_new_root_group
+{
+public:
+    scoped_new_root_group(entt::registry& registry, scene_group_id group)
+        : groups_(registry.ctx().emplace<scene_group_context>())
+        , previous_(std::exchange(groups_.new_root_group, group))
+    {
+    }
+
+    ~scoped_new_root_group()
+    {
+        groups_.new_root_group = previous_;
+    }
+
+    scoped_new_root_group(const scoped_new_root_group&) = delete;
+    auto operator=(const scoped_new_root_group&) -> scoped_new_root_group& = delete;
+
+private:
+    /// Registry context entries are heap allocated, so the reference outlives entries added during the load.
+    scene_group_context& groups_;
+    scene_group_id previous_{};
+};
+
+/// Bounds a partial teardown: each pass takes what scripts created while the previous one was destroyed.
+constexpr int MAX_TEARDOWN_PASSES = 16;
+
+/// The roots of a group, collected first so destroying them can not disturb the walk.
+auto collect_group_roots(entt::registry& registry, scene_group_id group) -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> roots;
+    auto view = registry.view<root_component>();
+    for(auto e : view)
+    {
+        if(view.get<root_component>(e).group == group)
+        {
+            roots.emplace_back(registry, e);
+        }
+    }
+    return roots;
+}
+
+/**
+ * @struct switch_teardown
+ * @brief What a scene switch removes when persistent roots stay.
+ */
+struct switch_teardown
+{
+    /// Every root outside the persistent group, and every entity outside any hierarchy (no transform, so no
+    /// root and no group) that holds a component. The bare entity unload() reserves holds none and stays.
+    std::vector<entt::handle> doomed;
+    bool has_persistent_roots{};
+};
+
+auto collect_switch_teardown(entt::registry& registry) -> switch_teardown
+{
+    switch_teardown teardown;
+    auto roots = registry.view<root_component>();
+    for(auto e : roots)
+    {
+        if(roots.get<root_component>(e).group == PERSISTENT_SCENE_GROUP)
+        {
+            teardown.has_persistent_roots = true;
+            continue;
+        }
+        teardown.doomed.emplace_back(registry, e);
+    }
+    for(auto [e] : registry.storage<entt::entity>().each())
+    {
+        if(!registry.all_of<transform_component>(e) && !registry.orphan(e))
+        {
+            teardown.doomed.emplace_back(registry, e);
+        }
+    }
+    return teardown;
+}
+
+/// Destroys entities one by one through the announced path, so entities that stay get the exits of their
+/// contacts with what goes, which a bulk unload mutes. Scripts torn down here may create entities (OnDestroy
+/// spawning loot); `collect_more` finds those, and they go in the next pass.
+template<typename Collect>
+void destroy_announced(std::vector<entt::handle> doomed, Collect collect_more)
+{
+    for(int pass = 0; !doomed.empty(); ++pass)
+    {
+        if(pass == MAX_TEARDOWN_PASSES)
+        {
+            APPLOG_WARNING("Scripts kept creating entities while a scene was unloaded. The last ones stay.");
+            return;
+        }
+        for(const auto& entity : doomed)
+        {
+            scene::destroy_entity(entity);
+        }
+        doomed = collect_more();
+    }
+}
+
+/// Warns when `group` brings an active Component while another loaded scene has one active too.
+template<typename Component>
+void warn_if_active_in_other_groups(entt::registry& registry,
+                                    scene_group_id group,
+                                    hpp::string_view scene_name,
+                                    hpp::string_view what)
+{
+    // Read through the const registry: a storage nobody made stays unmade. With fewer than two there is no clash.
+    auto view = std::as_const(registry).view<Component, active_component>();
+    if(!view || view.size_hint() < 2)
+    {
+        return;
+    }
+    bool is_in_group = false;
+    bool is_elsewhere = false;
+    for(auto e : view)
+    {
+        const bool is_member = find_scene_group(entt::handle(registry, e)) == group;
+        is_in_group = is_in_group || is_member;
+        is_elsewhere = is_elsewhere || !is_member;
+    }
+    if(is_in_group && is_elsewhere)
+    {
+        APPLOG_WARNING("Scene {} brings an active {} while another loaded scene has one active too. Only one of "
+                       "them should stay active.",
+                       scene_name,
+                       what);
+    }
+}
+
+/// Scenes loaded side by side each tend to carry their own camera and listener. Every active
+/// camera renders the whole scene, so a second one doubles the cost. Skylights need no warning:
+/// the main scene's wins (find_skylight_in_effect).
+void warn_about_duplicate_singletons(entt::registry& registry, scene_group_id group, hpp::string_view scene_name)
+{
+    warn_if_active_in_other_groups<camera_component>(registry, group, scene_name, "camera");
+    warn_if_active_in_other_groups<audio_listener_component>(registry, group, scene_name, "audio listener");
+}
+
 } // namespace
 
 auto scene::get_all_scenes() -> const std::vector<scene*>&
@@ -246,6 +404,7 @@ scene::scene(const std::string& tag_name)
     registry = std::make_unique<entt::registry>();
     unload();
 
+    registry->ctx().emplace<scene_group_context>();
     on_construct<root_component>(*registry).connect<&root_component::on_create_component>();
     on_update<root_component>(*registry).connect<&root_component::on_update_component>();
     on_destroy<root_component>(*registry).connect<&root_component::on_destroy_component>();
@@ -351,7 +510,7 @@ void scene::reload(bool call_callbacks)
     {
         return;
     }
-    unload();   
+    // load_from tears the scene down itself, keeping the persistent roots.
     load_from(src, call_callbacks);
 }
 
@@ -368,12 +527,82 @@ auto scene::load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks
     if(result)
     {
         source = pfb;
+        warn_about_duplicate_singletons(*registry, MAIN_SCENE_GROUP, pfb.id());
     }
     if(call_callbacks)
     {
         pop_on_load_callbacks();
     }
     return result;
+}
+
+void scene::unload_except_persistent()
+{
+    auto teardown = collect_switch_teardown(*registry);
+    if(!teardown.has_persistent_roots)
+    {
+        unload();
+        return;
+    }
+    destroy_announced(std::move(teardown.doomed),
+                      [this]()
+                      {
+                          return collect_switch_teardown(*registry).doomed;
+                      });
+    source = {};
+}
+
+auto scene::reserve_scene_group() -> scene_group_id
+{
+    return registry->ctx().emplace<scene_group_context>().next_additive_group++;
+}
+
+auto scene::load_additive(const asset_handle<scene_prefab>& pfb, scene_group_id group, bool call_callbacks) -> bool
+{
+    APP_SCOPE_PERF("Scene/Load Additive");
+    push_on_load_callbacks({[call_callbacks](hpp::span<const entt::handle> entities)
+                            {
+                                regenerate_ids(entities);
+                                if(call_callbacks)
+                                {
+                                    on_load_callback(entities);
+                                }
+                            }});
+    bool result{};
+    {
+        scoped_new_root_group joins_group(*registry, group);
+        result = load_from_prefab(pfb, *registry);
+    }
+    pop_on_load_callbacks();
+    if(result)
+    {
+        warn_about_duplicate_singletons(*registry, group, pfb.id());
+    }
+    return result;
+}
+
+void scene::unload_group(scene_group_id group)
+{
+    APP_SCOPE_PERF("Scene/Unload Group");
+    // Roots the departing scripts create meanwhile join the group, so they go with it.
+    scoped_new_root_group joins_group(*registry, group);
+    destroy_announced(collect_group_roots(*registry, group),
+                      [this, group]()
+                      {
+                          return collect_group_roots(*registry, group);
+                      });
+}
+
+auto scene::make_persistent(entt::handle entity) -> bool
+{
+    auto* root = entity ? entity.try_get<root_component>() : nullptr;
+    if(root == nullptr)
+    {
+        APPLOG_WARNING("Only a root entity can survive a scene load: a child goes with its root.");
+        return false;
+    }
+    root->group = PERSISTENT_SCENE_GROUP;
+    return true;
 }
 auto scene::instantiate_out(const asset_handle<prefab>& pfb, entt::handle& e, bool call_callbacks) -> bool
 {

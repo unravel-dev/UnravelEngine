@@ -1,6 +1,7 @@
 #pragma once
 
 #include "basic_component.h"
+#include "../scene_group.h"
 #include <bitset>
 #include <math/math.h>
 
@@ -42,7 +43,17 @@ struct root_component : public component_crtp<root_component>
 
 
     uint64_t order{};
+
+    /// The loaded scene this root and its subtree belong to. A child follows its root.
+    scene_group_id group{MAIN_SCENE_GROUP};
 };
+
+/**
+ * @brief Gets the group of the root above an entity, the entity itself included.
+ * @param entity The entity to look up.
+ * @return The root's group, or MAIN_SCENE_GROUP for an invalid entity.
+ */
+auto find_scene_group(entt::handle entity) -> scene_group_id;
 
 struct active_component : public component_crtp<root_component>
 {

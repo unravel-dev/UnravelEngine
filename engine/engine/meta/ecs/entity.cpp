@@ -3476,34 +3476,52 @@ void load_from_file_bin(const std::string& absolute_path, scene& scn)
     load_from_stream_bin(input, scn);
 }
 
+namespace
+{
+/// Waits for a scene file. The returned copy keeps it alive while it is read.
+auto wait_for_scene_file(const asset_handle<scene_prefab>& pfb) -> std::shared_ptr<scene_prefab>
+{
+    APP_SCOPE_PERF("Scene/Load/Wait File");
+    return pfb.get();
+}
+
+/// Reads a scene document into a registry, next to whatever is already in it.
+void read_scene_into(const std::vector<uint8_t>& buffer, entt::registry& registry)
+{
+    try
+    {
+        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
+        load_from_archive(ar, registry);
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
+    }
+}
+} // namespace
+
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
 {
-    // copy here to keep it alive
-    std::shared_ptr<scene_prefab> prefab;
+    // The file is in hand before the current scene goes.
+    const auto prefab = wait_for_scene_file(pfb);
+    if(!prefab->buffer.data.empty())
     {
-        APP_SCOPE_PERF("Scene/Load/Wait File");
-        prefab = pfb.get();
+        {
+            APP_SCOPE_PERF("Scene/Load/Unload");
+            scn.unload_except_persistent();
+        }
+        read_scene_into(prefab->buffer.data, *scn.registry);
     }
-    const auto& buffer = prefab->buffer.data;
+    return true;
+}
 
-    if(!buffer.empty())
+auto load_from_prefab(const asset_handle<scene_prefab>& pfb, entt::registry& registry) -> bool
+{
+    const auto prefab = wait_for_scene_file(pfb);
+    if(!prefab->buffer.data.empty())
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-        try
-        {
-            {
-                APP_SCOPE_PERF("Scene/Load/Unload");
-                scn.unload();
-            }
-            auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-            load_from_archive(ar, *scn.registry);
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
-        }
+        read_scene_into(prefab->buffer.data, registry);
     }
-
     return true;
 }
 auto load_from_prefab_bin(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool

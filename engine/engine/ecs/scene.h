@@ -4,6 +4,7 @@
 #include <uuid/uuid.h>
 
 #include "prefab.h"
+#include "scene_group.h"
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/assets/asset_handle.h>
@@ -132,6 +133,53 @@ struct scene
      * @brief Unloads the scene, removing all entities.
      */
     void unload();
+
+    /**
+     * @brief Removes every entity except the persistent roots and their subtrees.
+     *
+     * With persistent roots present the rest goes root by root through destroy_entity, so
+     * the survivors get the exits of their contacts with what goes, and so does every entity
+     * outside any hierarchy that holds a component. What the departing scripts create while
+     * they go is removed too. Without persistent roots it is unload().
+     */
+    void unload_except_persistent();
+
+    /**
+     * @brief Reserves the group an additive load tags its roots with. Ids are never reused.
+     * @return The reserved group.
+     */
+    auto reserve_scene_group() -> scene_group_id;
+
+    /**
+     * @brief Loads a scene next to the entities already here.
+     *
+     * Every root created during the load joins `group`, including the roots the loaded
+     * scene's own scripts create while it starts. The loaded entities get fresh ids, as a
+     * prefab instance does, so the same scene can be loaded twice.
+     * @param pfb The scene to load.
+     * @param group A group from reserve_scene_group.
+     * @param call_callbacks Whether to call the load callbacks.
+     * @return True if the scene was loaded.
+     */
+    auto load_additive(const asset_handle<scene_prefab>& pfb, scene_group_id group, bool call_callbacks = true)
+        -> bool;
+
+    /**
+     * @brief Destroys the roots of a group with their subtrees.
+     *
+     * Root by root through destroy_entity, so entities of other groups get the exits of their
+     * contacts with what goes. Roots the departing scripts create meanwhile join the group and
+     * go with it.
+     * @param group The group to unload.
+     */
+    void unload_group(scene_group_id group);
+
+    /**
+     * @brief Makes a root entity and its subtree survive load_from and reload.
+     * @param entity The entity. It must be a root: a child follows its root.
+     * @return False if the entity is invalid or has a parent.
+     */
+    static auto make_persistent(entt::handle entity) -> bool;
 
     /**
      * @brief Instantiates a prefab in the scene.

@@ -35,6 +35,52 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Loads a scene next to the current one, at the same point <see cref="LoadScene(string)"/> would,
+        /// so calls apply in the order they were made. Its entities stay until
+        /// <see cref="UnloadScene(SceneInstance)"/>, <see cref="LoadScene(string)"/> or <see cref="ReloadScene"/>
+        /// removes them. Entities its scripts create while it starts belong to it; entities created later
+        /// belong to it only when they are parented under one of its entities.
+        /// </summary>
+        /// <param name="key">The key identifying the scene to load.</param>
+        /// <returns>The loaded scene, for <see cref="UnloadScene(SceneInstance)"/>.</returns>
+        public static SceneInstance LoadSceneAdditive(string key)
+        {
+            return new SceneInstance(internal_m2n_load_scene_additive(key));
+        }
+
+        /// <summary>
+        /// Loads a Scene asset next to the current one. See <see cref="LoadSceneAdditive(string)"/>.
+        /// </summary>
+        /// <param name="scene">The Scene asset to load.</param>
+        /// <returns>The loaded scene, for <see cref="UnloadScene(SceneInstance)"/>.</returns>
+        public static SceneInstance LoadSceneAdditive(Scene scene)
+        {
+            return new SceneInstance(internal_m2n_load_scene_additive_uid(scene.uid));
+        }
+
+        /// <summary>
+        /// Removes the entities of a scene loaded with <see cref="LoadSceneAdditive(string)"/>, with
+        /// everything parented under them, at the same point <see cref="DestroyEntity"/> would.
+        /// Entities made persistent with <see cref="DontDestroyOnLoad"/> stay.
+        /// </summary>
+        /// <param name="instance">The scene to unload.</param>
+        public static void UnloadScene(SceneInstance instance)
+        {
+            internal_m2n_unload_scene(instance.Group);
+        }
+
+        /// <summary>
+        /// Keeps a root entity, with everything parented under it, through <see cref="LoadScene(string)"/>,
+        /// <see cref="ReloadScene"/> and <see cref="UnloadScene(SceneInstance)"/>.
+        /// </summary>
+        /// <param name="entity">The entity to keep. It must have no parent.</param>
+        /// <returns><c>true</c> if the entity is kept; <c>false</c> if it has a parent.</returns>
+        public static bool DontDestroyOnLoad(Entity entity)
+        {
+            return internal_m2n_dont_destroy_on_load(entity);
+        }
+
+        /// <summary>
         /// Instantiates an entity from a specified prefab.
         /// </summary>
         /// <param name="prefab">The prefab to instantiate.</param>
@@ -270,6 +316,18 @@ namespace Unravel.Core
         private static extern void internal_m2n_reload_scene();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_load_scene_additive(string key);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern uint internal_m2n_load_scene_additive_uid(Guid uid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_unload_scene(uint group);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_dont_destroy_on_load(Entity entity);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
         private extern void internal_m2n_create_scene();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -337,5 +395,23 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern byte[] internal_m2n_find_entities_with_components(Type[] componentTypes);
+    }
+
+    /// <summary>
+    /// A scene loaded next to the current one with <see cref="Scene.LoadSceneAdditive(string)"/>.
+    /// </summary>
+    public readonly struct SceneInstance
+    {
+        internal SceneInstance(uint group)
+        {
+            Group = group;
+        }
+
+        internal uint Group { get; }
+
+        /// <summary>
+        /// Whether this came from <see cref="Scene.LoadSceneAdditive(string)"/>. A default value is not valid.
+        /// </summary>
+        public bool IsValid => Group != 0;
     }
 }

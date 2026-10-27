@@ -12,6 +12,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
+#include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/render_feature_support.h>
@@ -988,8 +989,10 @@ void surface_cache_system::update_global_lighting_state(scene& scn)
             }
         });
     float sky = 0.0f;
-    scn.registry->view<skylight_component, active_component>().each(
-        [&](auto /*entity*/, auto&& skylight, auto&& /*active*/) { sky += math::max(skylight.get_irradiance_intensity(), 0.0f); });
+    if(const auto skylight = find_skylight_in_effect(*scn.registry))
+    {
+        sky = math::max(skylight.get<skylight_component>().get_irradiance_intensity(), 0.0f);
+    }
     const auto is_global_change = [](float before, float now)
     {
         const float ratio = math::max(before, global_lighting_epsilon) / math::max(now, global_lighting_epsilon);

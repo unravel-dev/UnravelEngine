@@ -7,6 +7,18 @@
 
 namespace unravel
 {
+/**
+ * @brief Finds the one skylight that lights a scene.
+ *
+ * With several scenes loaded the main scene's sky wins, as the active scene's does in other engines: a skylight
+ * from a scene loaded next to it, or from a persistent root, counts only while the main scene has no active
+ * skylight. Among those that count the strongest irradiance wins. Every consumer reads this one skylight, so the
+ * drawn sky, the ambient light and the GI agree.
+ * @param registry The scene's registry.
+ * @return The skylight's entity, or an invalid handle when no skylight is active.
+ */
+auto find_skylight_in_effect(entt::registry& registry) -> entt::handle;
+
 class skylight_system
 {
 public:

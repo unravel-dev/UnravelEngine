@@ -61,6 +61,63 @@ void internal_m2n_reload_scene()
     seq::queue(delay, "script");
 }
 
+/// Reserves the group now and loads into it on the script queue, behind any LoadScene called
+/// before it: loads and unloads apply in the order scripts call them.
+auto queue_load_scene_additive(const asset_handle<scene_prefab>& pfb) -> scene_group_id
+{
+    auto& ec = engine::context().get_cached<ecs>();
+    const scene_group_id group = ec.get_scene().reserve_scene_group();
+    auto delay = seq::delay(0ms);
+    delay.on_end.connect(
+        [pfb, group]()
+        {
+            auto& ec = engine::context().get_cached<ecs>();
+            ec.get_scene().load_additive(pfb, group);
+        });
+    seq::queue(delay, "script");
+    return group;
+}
+
+auto internal_m2n_load_scene_additive(const std::string& key) -> scene_group_id
+{
+    auto& am = engine::context().get_cached<asset_manager>();
+    return queue_load_scene_additive(am.get_asset<scene_prefab>(key));
+}
+
+auto internal_m2n_load_scene_additive_uid(const hpp::uuid& uid) -> scene_group_id
+{
+    auto& am = engine::context().get_cached<asset_manager>();
+    return queue_load_scene_additive(am.get_asset<scene_prefab>(uid));
+}
+
+void internal_m2n_unload_scene(scene_group_id group)
+{
+    if(group < FIRST_ADDITIVE_SCENE_GROUP)
+    {
+        APPLOG_WARNING("Only a scene loaded with Scene.LoadSceneAdditive can be unloaded.");
+        return;
+    }
+    auto delay = seq::delay(0ms);
+    delay.on_end.connect(
+        [group]()
+        {
+            auto& ec = engine::context().get_cached<ecs>();
+            ec.get_scene().unload_group(group);
+        });
+    seq::queue(delay, "script");
+}
+
+auto internal_m2n_dont_destroy_on_load(entt::entity id) -> bool
+{
+    auto e = get_entity_from_id(id);
+    if(!e)
+    {
+        raise_invalid_entity_exception();
+        return false;
+    }
+    return scene::make_persistent(e);
+}
+
 void internal_m2n_create_scene(const dotnet::object& this_ptr)
 {
     dotnet::ignore(this_ptr);
@@ -992,6 +1049,11 @@ void register_scene_script_bindings()
     reg.add_internal_call("internal_m2n_load_scene", dotnet_internal_call(internal_m2n_load_scene));
     reg.add_internal_call("internal_m2n_load_scene_uid", dotnet_internal_call(internal_m2n_load_scene_uid));
     reg.add_internal_call("internal_m2n_reload_scene", dotnet_internal_call(internal_m2n_reload_scene));
+    reg.add_internal_call("internal_m2n_load_scene_additive", dotnet_internal_call(internal_m2n_load_scene_additive));
+    reg.add_internal_call("internal_m2n_load_scene_additive_uid",
+                            dotnet_internal_call(internal_m2n_load_scene_additive_uid));
+    reg.add_internal_call("internal_m2n_unload_scene", dotnet_internal_call(internal_m2n_unload_scene));
+    reg.add_internal_call("internal_m2n_dont_destroy_on_load", dotnet_internal_call(internal_m2n_dont_destroy_on_load));
     reg.add_internal_call("internal_m2n_create_scene", dotnet_internal_call(internal_m2n_create_scene));
     reg.add_internal_call("internal_m2n_destroy_scene", dotnet_internal_call(internal_m2n_destroy_scene));
     reg.add_internal_call("internal_m2n_create_entity", dotnet_internal_call(internal_m2n_create_entity));
