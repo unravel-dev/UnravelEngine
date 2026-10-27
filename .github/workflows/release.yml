@@ -34,7 +34,7 @@ on:
       build_ubuntu_22_04:
         description: 'Build the Ubuntu 22.04 package.'
         type: boolean
-        default: false
+        default: true
       build_ubuntu_24_04:
         description: 'Build the Ubuntu 24.04 package.'
         type: boolean
