@@ -50,6 +50,11 @@ namespace
 // Written into the binary folder, never into the launching shell's current directory.
 constexpr const char* LOG_FILE_NAME = "Log.txt";
 constexpr const char* CRASH_LOG_FILE_NAME = "CrashLog.txt";
+/// The folder of user:/ inside binary:/ until a game names its own, and inside the internal storage
+/// on Android, where the backup rules (res/xml of the Android player) name it too.
+constexpr const char* USER_FOLDER_NAME = "user";
+/// The folder of cache:/ inside binary:/ until a game names its own.
+constexpr const char* CACHE_FOLDER_NAME = ".cache";
 
 /// The binary folder (binary:/): the application's own files, and where the engine writes its log,
 /// crash log and caches. On desktop it is the executable's folder. An Android application runs in
@@ -227,7 +232,8 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
     fs::path engine_data = binary_path / "data" / "engine";
     fs::add_path_protocol("engine", engine_data);
-
+    fs::add_path_protocol("user", binary_path / USER_FOLDER_NAME);
+    fs::add_path_protocol("cache", binary_path / CACHE_FOLDER_NAME);
 
     serialization::init_data data{
         .warning_logger = [](const std::string& log, const hpp::source_location& loc)
@@ -308,6 +314,33 @@ void engine::select_raytracing_backend(const cmd_line::parser& parser)
         }
     }
     APPLOG_INFO("Ray tracer for bakes: {}", raytracing::to_string(raytracing::get_default_backend()));
+}
+
+void engine::set_user_protocols(const std::string& company, const std::string& product)
+{
+    const fs::path previous_user = fs::resolve_protocol("user:/");
+    const fs::path previous_cache = fs::resolve_protocol("cache:/");
+    const std::string preferences_folder = os::paths::get_preferences_path(company, product);
+    if(!preferences_folder.empty())
+    {
+#if UNRAVEL_PLATFORM_ANDROID
+        // The internal storage also holds the extracted game files and the log.
+        fs::add_path_protocol("user", fs::path(preferences_folder) / USER_FOLDER_NAME);
+#else
+        fs::add_path_protocol("user", preferences_folder);
+#endif
+    }
+    const std::string cache_folder = os::paths::get_cache_path(company, product);
+    if(!cache_folder.empty())
+    {
+        fs::add_path_protocol("cache", cache_folder);
+    }
+    const fs::path user = fs::resolve_protocol("user:/");
+    const fs::path cache = fs::resolve_protocol("cache:/");
+    if(user != previous_user || cache != previous_cache)
+    {
+        APPLOG_INFO("User data in {}, cache in {}", user.generic_string(), cache.generic_string());
+    }
 }
 
 auto engine::init_core(const cmd_line::parser& parser, const std::function<bool()>& create_main_window) -> bool

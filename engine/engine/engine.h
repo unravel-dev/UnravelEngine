@@ -6,6 +6,7 @@
 #include <context/context.hpp>
 
 #include <functional>
+#include <string>
 
 namespace unravel
 {
@@ -28,6 +29,18 @@ struct engine
      * init_core does this. A headless host that skips init_core, such as the test runner, calls it itself.
      */
     static void select_raytracing_backend(const cmd_line::parser& parser);
+    /**
+     * @brief Points user:/ and cache:/ at the per-user folders of a game.
+     *
+     * user:/ holds what the game saves and must keep; cache:/ holds files it can rebuild, which the
+     * user or the system may delete. On desktop both are named after `company` and `product`. On
+     * Android user:/ is the "user" folder of the application's internal storage, the only folder
+     * its backup rules keep, and cache:/ is the application's cache folder. Without such folders
+     * they stay in binary:/, where create() points them.
+     * @param company The company that makes the game; may be empty.
+     * @param product The game's name; the caller substitutes one when the settings leave it empty.
+     */
+    static void set_user_protocols(const std::string& company, const std::string& product);
 
     static auto interrupt() -> bool;
 

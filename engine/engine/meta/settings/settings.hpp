@@ -35,4 +35,13 @@ auto load_boot_sections_from_file(const std::string& absolute_path, settings& ob
  */
 auto load_asset_sections_from_file(const std::string& absolute_path, settings::asset_settings& obj) -> bool;
 
+/**
+ * @brief Loads only the application section (company, product, version) of a settings document over `obj`.
+ *
+ * Like @ref load_boot_sections_from_file it never reaches an asset handle: the player names its user
+ * folders after the application before any system is initialized. A document without the section
+ * leaves `obj` as it is.
+ */
+auto load_app_section_from_file(const std::string& absolute_path, settings::app_settings& obj) -> bool;
+
 } // namespace unravel

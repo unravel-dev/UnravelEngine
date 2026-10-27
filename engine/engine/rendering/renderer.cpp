@@ -593,7 +593,9 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // two backends keep overwriting each other's entry - and a per-backend split also makes
     // invalidation after a driver update a matter of deleting one folder. Set AFTER init, so
     // the auto-detected backend names the folder; no backend touches the cache before its
-    // first pipeline/program creation, which happens well after this point.
+    // first pipeline/program creation, which happens well after this point. Resolved once: the
+    // player names cache:/ before this; the editor points it at each project it opens later,
+    // while its own pipelines stay in the folder it started with.
     const auto renderer_slug = [](bgfx::RendererType::Enum type) -> const char*
     {
         switch(type)
@@ -615,7 +617,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         }
     };
     const auto cache_dir =
-        fs::resolve_protocol("binary:/.cache/gfx") / renderer_slug(bgfx::getRendererType());
+        fs::resolve_protocol("cache:/gfx") / renderer_slug(bgfx::getRendererType());
     gfx::set_cache_directory(cache_dir.string());
 
     APPLOG_TRACE("DebugDraw Init.");

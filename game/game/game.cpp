@@ -21,6 +21,8 @@ namespace unravel
 {
 namespace
 {
+constexpr const char* SETTINGS_PATH = "app:/settings/settings.cfg";
+
 auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
 {
     std::string error;
@@ -129,6 +131,7 @@ auto game::init(const cmd_line::parser& parser) -> bool
     {
         return false;
     }
+    init_user_protocols(parser);
 
     auto& ctx = engine::context();
 
@@ -211,6 +214,15 @@ auto game::init_protocols(const cmd_line::parser& parser) -> bool
     return true;
 }
 
+void game::init_user_protocols(const cmd_line::parser& parser)
+{
+    settings::app_settings app{};
+    load_app_section_from_file(fs::resolve_protocol(SETTINGS_PATH).string(), app);
+    const std::string product =
+        app.product.empty() ? fs::executable_path(parser.app_name().c_str()).stem().string() : app.product;
+    engine::set_user_protocols(app.company, product);
+}
+
 auto game::prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     const fs::path app_root = fs::resolve_protocol("app:/");
@@ -252,7 +264,7 @@ auto load_asset_index(asset_manager& am, const std::string& protocol) -> bool
 auto game::init_settings(rtti::context& ctx) -> bool
 {
     auto& s = ctx.add<settings>();
-    const auto settings_path = fs::resolve_protocol("app:/settings/settings.cfg");
+    const auto settings_path = fs::resolve_protocol(SETTINGS_PATH);
     if(!load_from_file(settings_path.string(), s))
     {
         APPLOG_CRITICAL("Failed to load project settings {}", settings_path.string());

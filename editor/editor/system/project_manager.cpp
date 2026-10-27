@@ -297,15 +297,15 @@ void project_manager::save_project_settings(rtti::context& ctx)
 void project_manager::publish_settings(rtti::context& ctx)
 {
     const auto& preview = project_editor_settings_.profiles.preview_profile;
+    hpp::optional<settings> resolved;
     if(!preview.empty())
     {
-        if(auto resolved = profiles_.resolve_settings(preview, project_settings_))
-        {
-            ctx.add<settings>(*resolved);
-            return;
-        }
+        resolved = profiles_.resolve_settings(preview, project_settings_);
     }
-    ctx.add<settings>(project_settings_);
+    ctx.add<settings>(resolved ? *resolved : project_settings_);
+    // Play mode saves where the deployed player does, which is named after the project.
+    const auto& app = ctx.get<settings>().app;
+    engine::set_user_protocols(app.company, app.product.empty() ? get_name() : app.product);
 }
 
 void project_manager::apply_texture_defaults(const settings::asset_settings::texture_importer_settings& defaults, bool is_open)

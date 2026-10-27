@@ -14,7 +14,8 @@
  *
  * These pin the contract that keeps that from coming back:
  *   - the peek reports the persisted renderer and physics backend;
- *   - the peek leaves the asset-bearing sections untouched, so it cannot reach a storage.
+ *   - the peek leaves the asset-bearing sections untouched, so it cannot reach a storage;
+ *   - the app section loads on its own, for the user folders the player names before init.
  */
 
 #include "../tests.h"
@@ -109,6 +110,17 @@ void test_peek_leaves_asset_sections_untouched(const fs::path& root, const setti
     check(complete.app.product == WARM_SECTION_MARKER, "full settings load does read the warm sections");
 }
 
+void test_app_section_loads(const fs::path& root, const settings& authored)
+{
+    // The player names its user folders after the app before the asset manager exists.
+    const fs::path settings_path = root / "settings" / "settings.cfg";
+    settings::app_settings app{};
+    check(load_app_section_from_file(settings_path.string(), app), "the app section loads from a settings document");
+    check(app.product == authored.app.product, "the app section carries the product");
+    check(!load_app_section_from_file((root / "absent.cfg").string(), app), "a missing document does not load");
+    check(app.product == authored.app.product, "a failed load leaves the app section as it was");
+}
+
 void test_missing_settings_peeks_defaults(const fs::path& root)
 {
     const boot_config peeked = peek_project_boot_config(root / "absent_project");
@@ -137,6 +149,7 @@ auto run_boot_config_peek_suite(rtti::context& ctx) -> int
 
     test_peek_reports_cold_fields(root, authored);
     test_peek_leaves_asset_sections_untouched(root, authored);
+    test_app_section_loads(root, authored);
     test_missing_settings_peeks_defaults(root);
 
     fs::remove_all(root, err);

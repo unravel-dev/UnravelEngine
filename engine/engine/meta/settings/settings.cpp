@@ -40,13 +40,18 @@ REFLECT_INLINE(settings::app_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "company"},
             entt::attribute{"pretty_name", "Company"},
-            entt::attribute{"tooltip", "Missing..."},
+            entt::attribute{"tooltip",
+                            "The company that makes the game. With Product it names the folder the game saves in "
+                            "(Application.persistentDataPath) and the generated Android application id."},
         })
         .data<&settings::app_settings::product>("product"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "product"},
             entt::attribute{"pretty_name", "Product"},
-            entt::attribute{"tooltip", "Missing..."},
+            entt::attribute{"tooltip",
+                            "The game's name. With Company it names the folder the game saves in "
+                            "(Application.persistentDataPath) and the generated Android application id. The "
+                            "project name stands in when it is empty."},
         })
         .data<&settings::app_settings::version>("version"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -1604,6 +1609,38 @@ auto load_asset_sections_from_file(const std::string& absolute_path, settings::a
         return false;
     }
     obj = sections.assets;
+    return true;
+}
+
+/**
+ * @brief Load-only view of the application section of a settings document; it never reaches an
+ * asset handle, for the same reason as settings_boot_sections.
+ */
+struct settings_app_section
+{
+    settings::app_settings app{};
+};
+
+LOAD_INLINE(settings_app_section)
+{
+    try_load(ar, ser20::make_nvp("app", obj.app));
+}
+
+auto load_app_section_from_file(const std::string& absolute_path, settings::app_settings& obj) -> bool
+{
+    std::ifstream stream(absolute_path);
+    if(!stream.good())
+    {
+        return false;
+    }
+    settings_app_section section{};
+    section.app = obj;
+    auto ar = ser20::create_iarchive_associative(stream);
+    if(!try_load(ar, ser20::make_nvp("settings", section)))
+    {
+        return false;
+    }
+    obj = section.app;
     return true;
 }
 
