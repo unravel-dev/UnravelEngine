@@ -2,6 +2,8 @@
 #include <engine/engine_export.h>
 
 #include <chrono>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
