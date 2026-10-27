@@ -5,6 +5,9 @@
 # uploads UnravelEngine-1.2.1-153-<platform>.zip to release v1.2.1, the nearest tag before that commit,
 # replacing the older build of each platform there.
 #
+# Each platform has a checkbox, all but Ubuntu 22.04 ticked by default. Only the ticked platforms build,
+# and the release gets their packages only when every one of them builds.
+#
 # To release a new version, push its tag (`git tag v1.3.0`, `git push origin v1.3.0`) and run the
 # workflow on that tag: a tag without a release gets one, as a draft to review and publish.
 #
@@ -20,6 +23,26 @@ on:
         description: 'Commit to build: a version as git describe prints it (v1.2.1-153-g1a2b3c4d), a commit, a branch or a tag. Empty builds the head of the branch chosen above.'
         required: false
         default: ''
+      build_windows:
+        description: 'Build the Windows package.'
+        type: boolean
+        default: true
+      build_ubuntu_20_04:
+        description: 'Build the Ubuntu 20.04 package.'
+        type: boolean
+        default: true
+      build_ubuntu_22_04:
+        description: 'Build the Ubuntu 22.04 package.'
+        type: boolean
+        default: false
+      build_ubuntu_24_04:
+        description: 'Build the Ubuntu 24.04 package.'
+        type: boolean
+        default: true
+      build_ubuntu_26_04:
+        description: 'Build the Ubuntu 26.04 package.'
+        type: boolean
+        default: true
       replace_previous_builds:
         description: 'Remove the older builds of the same platforms from the release after the upload.'
         type: boolean
@@ -28,10 +51,6 @@ on:
         description: 'Upload to the release. Unchecked, the packages stay workflow artifacts only.'
         type: boolean
         default: true
-      build_ubuntu_22_04:
-        description: 'Also build the Ubuntu 22.04 package.'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -57,6 +76,7 @@ jobs:
       release_tag: ${{ steps.version.outputs.release_tag }}
       package_version: ${{ steps.version.outputs.package_version }}
       linux_matrix: ${{ steps.targets.outputs.linux_matrix }}
+      has_linux: ${{ steps.targets.outputs.has_linux }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -96,30 +116,40 @@ jobs:
             echo "package_version=${package_version}"
           } >> "$GITHUB_OUTPUT"
           echo "Building ${describe} (${sha}) as UnravelEngine-${package_version} for release ${release_tag}." >> "$GITHUB_STEP_SUMMARY"
-      # Each Linux target builds in its image's container with its clang. packages: the GCC whose C++
+      # Each Linux target builds in its image's container with its clang when its checkbox is ticked: build_
+      # and its name with _ for - and . (ubuntu-20.04 -> build_ubuntu_20_04). packages: the GCC whose C++
       # library clang compiles against (clang takes the newest GCC installed), no newer than the libstdc++
       # the release ships, and the release's pipewire. 26.04 ships the libstdc++ of a GCC 16 snapshot, so
-      # it builds against its default GCC 15. on_request targets build only when a manual run asks for them.
+      # it builds against its default GCC 15.
       - name: Choose the Linux targets
         id: targets
         env:
-          BUILD_ON_REQUEST: ${{ inputs.build_ubuntu_22_04 == true }}
+          INPUTS: ${{ toJSON(inputs) }}
         run: |
           set -euo pipefail
-          matrix="$(jq -c --argjson with_on_request "$BUILD_ON_REQUEST" '{include: [.[] | select((.on_request // false | not) or $with_on_request)]}' <<'EOF'
+          targets="$(jq -c --argjson inputs "$INPUTS" '[.[] | select($inputs["build_" + (.name | gsub("[-.]"; "_"))] | tostring == "true")]' <<'EOF'
           [
             {"name": "ubuntu-20.04", "image": "ubuntu:20.04", "clang": "18", "packages": "g++-10 libpipewire-0.2-dev"},
-            {"name": "ubuntu-22.04", "image": "ubuntu:22.04", "clang": "18", "packages": "g++-12 libpipewire-0.3-dev", "on_request": true},
+            {"name": "ubuntu-22.04", "image": "ubuntu:22.04", "clang": "18", "packages": "g++-12 libpipewire-0.3-dev"},
             {"name": "ubuntu-24.04", "image": "ubuntu:24.04", "clang": "21", "packages": "g++-14 libpipewire-0.3-dev"},
             {"name": "ubuntu-26.04", "image": "ubuntu:26.04", "clang": "21", "packages": "g++-15 libpipewire-0.3-dev"}
           ]
           EOF
           )"
-          echo "linux_matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          if [ "$targets" = "[]" ] && [ "$(jq -r '.build_windows | tostring' <<< "$INPUTS")" != "true" ]; then
+            echo "::error::No platform is ticked."
+            exit 1
+          fi
+          # A matrix with no targets is an error, so the Linux job is skipped instead.
+          {
+            echo "linux_matrix={\"include\":${targets}}"
+            echo "has_linux=$([ "$targets" != "[]" ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
 
   windows:
     name: windows
     needs: resolve
+    if: inputs.build_windows
     runs-on: windows-2025-vs2026
     defaults:
       run:
@@ -198,6 +228,7 @@ jobs:
   linux:
     name: ${{ matrix.name }}
     needs: resolve
+    if: needs.resolve.outputs.has_linux == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -290,7 +321,8 @@ jobs:
   publish:
     name: Publish
     needs: [resolve, windows, linux]
-    if: inputs.publish
+    # A platform left unticked is skipped and does not stop the upload; a failed build does.
+    if: ${{ !cancelled() && inputs.publish && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
