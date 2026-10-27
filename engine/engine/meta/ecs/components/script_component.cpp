@@ -9,6 +9,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/profiler/profiler.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/scripting/script_asset_reference.h>
 #include <dotnetpp/dotnetpp.h>
@@ -1539,6 +1540,7 @@ void LOAD_FUNCTION_NAME(Archive& ar, script_list& list)
 
 LOAD(script_component)
 {
+    APP_SCOPE_PERF("Script/Load Component");
     const bool is_update = get_load_context().is_updating_prefab();
 
     script_list_load_context list_ctx;

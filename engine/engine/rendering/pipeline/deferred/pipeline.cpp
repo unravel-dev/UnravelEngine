@@ -4403,6 +4403,7 @@ auto deferred::run_hiz_pass(const camera& camera,
 
 deferred::deferred()
 {
+    APP_SCOPE_PERF("Rendering/Pipeline Init");
     init(engine::context());
 }
 

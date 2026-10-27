@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_epoch.h>
 #include <engine/engine_export.h>
+#include <engine/profiler/profiler.h>
 #include <hpp/filesystem.hpp>
 #include <logging/logging.h>
 
@@ -577,6 +578,7 @@ private:
      */
     auto wait_for_load(task_future_t& task) const -> const std::shared_ptr<T>&
     {
+        APP_SCOPE_PERF("Asset/Wait");
         task.change_priority(tpp::priority::high());
         const auto& value = task.get();
         if(!value)

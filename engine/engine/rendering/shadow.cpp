@@ -7,6 +7,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/profiler/profiler.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
@@ -483,6 +484,7 @@ auto make_light_projection(float fov_y_degrees,
 
 shadowmap_generator::shadowmap_generator()
 {
+    APP_SCOPE_PERF("Rendering/Shadowmap Generator Init");
     init(engine::context());
 }
 

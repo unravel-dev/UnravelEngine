@@ -357,6 +357,7 @@ void scene::reload(bool call_callbacks)
 
 auto scene::load_from(const asset_handle<scene_prefab>& pfb, bool call_callbacks) -> bool
 {
+    APP_SCOPE_PERF("Scene/Load");
     if(call_callbacks)
     {   
         push_on_load_callbacks({on_load_callback});

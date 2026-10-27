@@ -12,6 +12,7 @@
 #include <engine/ecs/scene.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/ui/ecs/systems/ui_system.h>
@@ -2017,13 +2018,16 @@ void load_from_archive(Archive& ar, entt::registry& reg)
 
     std::vector<entt::handle> roots;
     roots.reserve(count);
-    for(size_t i = 0; i < count; ++i)
     {
-        // No scratch entity. load_from_archive_impl creates the entities it needs and
-        // returns the root; the loaders reassign the handle they are given rather than
-        // filling it in, so one handed in here is simply abandoned - a componentless
-        // entity per root, on every scene load.
-        roots.push_back(load_from_archive_impl(ar, reg));
+        APP_SCOPE_PERF("Scene/Load/Read Entities");
+        for(size_t i = 0; i < count; ++i)
+        {
+            // No scratch entity. load_from_archive_impl creates the entities it needs and
+            // returns the root; the loaders reassign the handle they are given rather than
+            // filling it in, so one handed in here is simply abandoned - a componentless
+            // entity per root, on every scene load.
+            roots.push_back(load_from_archive_impl(ar, reg));
+        }
     }
 
     // A scene from before ids named their document: attributed here, before any instance in
@@ -3475,7 +3479,11 @@ void load_from_file_bin(const std::string& absolute_path, scene& scn)
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
 {
     // copy here to keep it alive
-    auto prefab = pfb.get();
+    std::shared_ptr<scene_prefab> prefab;
+    {
+        APP_SCOPE_PERF("Scene/Load/Wait File");
+        prefab = pfb.get();
+    }
     const auto& buffer = prefab->buffer.data;
 
     if(!buffer.empty())
@@ -3483,7 +3491,10 @@ auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
         // APPLOG_INFO_PERF(std::chrono::microseconds);
         try
         {
-            scn.unload();
+            {
+                APP_SCOPE_PERF("Scene/Load/Unload");
+                scn.unload();
+            }
             auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
             load_from_archive(ar, *scn.registry);
         }

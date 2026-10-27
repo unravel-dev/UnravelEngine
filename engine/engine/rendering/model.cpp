@@ -10,6 +10,7 @@
 #include "skinning_palette_buffer.h"
 
 #include <engine/assets/asset_manager.h>
+#include <engine/profiler/profiler.h>
 
 #include <algorithm>
 #include <cmath>
@@ -293,6 +294,8 @@ auto model::get_lods_count() const -> uint32_t
 
 void model::set_lods(const std::vector<asset_handle<mesh>>& lods)
 {
+    // Waits for the first mesh: the lod count and the material slots are read from it.
+    APP_SCOPE_PERF("Model/Set Lods");
     mesh_lods_ = lods;
 
     recalulate_lod_screen_size_limits(get_lods_count());
