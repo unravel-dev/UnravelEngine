@@ -1,12 +1,12 @@
 # Builds the editor packages (the CPack zips) on Windows and Linux and attaches them to a GitHub release.
 #
-# Push a tag to release it: `git tag v1.3.0` and `git push origin v1.3.0` build that tag and create its
-# release as a draft to review and publish.
+# It runs only by hand (Actions > release > Run workflow) and builds one commit into a release. The
+# version input takes what `git describe --tags` prints: v1.2.1-153-g1a2b3c4d builds commit 1a2b3c4d and
+# uploads UnravelEngine-1.2.1-153-<platform>.zip to release v1.2.1, the nearest tag before that commit,
+# replacing the older build of each platform there.
 #
-# Run the workflow by hand (Actions > release > Run workflow) to build any commit into an existing
-# release. The version input takes what `git describe --tags` prints: v1.2.1-153-g1a2b3c4d builds commit
-# 1a2b3c4d and uploads UnravelEngine-1.2.1-153-<platform>.zip to release v1.2.1, the nearest tag before
-# that commit, replacing the older build of each platform there.
+# To release a new version, push its tag (`git tag v1.3.0`, `git push origin v1.3.0`) and run the
+# workflow on that tag: a tag without a release gets one, as a draft to review and publish.
 #
 # Windows builds with clang in GNU-driver mode (preset windows-x64-clang-msvc-gnu). Linux builds inside
 # an Ubuntu container, so the binaries need no newer glibc than that release has: the 20.04 package runs
@@ -14,9 +14,6 @@
 name: release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -68,7 +65,7 @@ jobs:
       - name: Resolve the commit, release and package version
         id: version
         env:
-          REQUESTED: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          REQUESTED: ${{ inputs.version }}
         run: |
           set -euo pipefail
           requested="${REQUESTED:-$GITHUB_SHA}"
@@ -91,11 +88,7 @@ jobs:
               exit 1
             fi
           fi
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            release_tag="$GITHUB_REF_NAME"
-          else
-            release_tag="$(git describe --tags --abbrev=0 "$sha")"
-          fi
+          release_tag="$(git describe --tags --abbrev=0 "$sha")"
           package_version="$(sed -E -e 's/-g[0-9a-f]+$//' -e 's/^v//' <<< "$describe")"
           {
             echo "sha=${sha}"
@@ -297,7 +290,7 @@ jobs:
   publish:
     name: Publish
     needs: [resolve, windows, linux]
-    if: github.event_name == 'push' || inputs.publish
+    if: inputs.publish
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -315,7 +308,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
           PACKAGE_VERSION: ${{ needs.resolve.outputs.package_version }}
-          REPLACE_PREVIOUS_BUILDS: ${{ github.event_name == 'push' || inputs.replace_previous_builds }}
+          REPLACE_PREVIOUS_BUILDS: ${{ inputs.replace_previous_builds }}
         run: |
           set -euo pipefail
           shopt -s nullglob
