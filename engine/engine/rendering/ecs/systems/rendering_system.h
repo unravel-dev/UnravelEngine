@@ -4,6 +4,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <engine/rendering/camera.h>
+#include <engine/rendering/instanced_draw_list.h>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
 #include <graphics/debugdraw.h>
@@ -161,6 +162,12 @@ public:
      */
     auto get_game_view_size() const -> const usize32_t&;
 
+    /**
+     * @brief The meshes scripts draw as instances this frame (Graphics.DrawMeshInstanced); emptied when the
+     * frame ends.
+     */
+    auto get_instanced_draws() -> instanced_draw_list&;
+
 private:
     /**
      * @brief Renders particles to the specified framebuffer.
@@ -172,6 +179,7 @@ private:
     void render_debug(entt::handle camera_entity);
 
     std::vector<std::function<void(gfx::dd_raii& dd)>> debug_draw_callbacks_;
+    instanced_draw_list instanced_draws_;
     /// Size of the view the game is shown in; zero until a host sets it.
     usize32_t game_view_size_{};
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);

@@ -2620,12 +2620,12 @@ void shadowmap_generator::compute_caster_facts(const shadow_map_models_t& models
             facts.is_marked = false;
             continue;
         }
-        if(element.particles != nullptr)
+        if(element.instances != nullptr)
         {
-            // A playing emitter's particles move every frame; a paused or frozen one keeps its shadow.
-            const uint64_t particles_key = element.particles->get_mesh_shadow_key();
-            key = mix_key(key, particles_key);
-            mix_into_views(facts.view_mask, particles_key);
+            // Playing particles and scripted instances move every frame; a paused or frozen emitter keeps its shadow.
+            const uint64_t instances_key = element.instances->get_mesh_shadow_key();
+            key = mix_key(key, instances_key);
+            mix_into_views(facts.view_mask, instances_key);
             collection.has_movers = true;
             continue;
         }
@@ -2693,7 +2693,7 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
     const bool skinned_batching_enabled = is_skinned_batching_enabled(currentSmSettings);
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
     // Mesh particles are instanced whatever the project's batching setting: they have no other path.
-    bool has_particle_casters = false;
+    bool has_instanced_casters = false;
 
     // For CSM (directional lights) a caster fully inside a nearer cascade's light frustum
     // is not drawn into the farther (larger) cascades. This is exact ONLY because the
@@ -2729,15 +2729,17 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
         }
         facts.is_marked = false;
 
-        if(element.particles != nullptr)
+        if(element.instances != nullptr)
         {
-            const bool collected = element.particles->collect_mesh_shadow_instances(cascade_batch_collectors_, view_mask);
-            if(collected)
+            const bool collected = element.instances->collect_mesh_shadow_instances(cascade_batch_collectors_, view_mask);
+            // Scripted instance draws belong to no entity.
+            auto* emitter = element.entity ? element.entity.try_get<particle_emitter_component>() : nullptr;
+            if(collected && emitter != nullptr && emitter == element.instances)
             {
                 // A shadow in view keeps renderer-based culling running the emitter, as it does for models.
-                element.entity.get<particle_emitter_component>().set_last_render_frame(frame);
+                emitter->set_last_render_frame(frame);
             }
-            has_particle_casters = has_particle_casters || collected;
+            has_instanced_casters = has_instanced_casters || collected;
             collection.anything_collected = collection.anything_collected || collected;
             continue;
         }
@@ -2832,7 +2834,7 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
         collection.anything_collected = true;
     }
 
-    collection.has_static_batches = static_batching_enabled || has_particle_casters;
+    collection.has_static_batches = static_batching_enabled || has_instanced_casters;
     // The reach test keeps submeshes by the camera, which the casters' facts do not see: a cascade's content is also
     // what was collected into it.
     if(nested_cascades)
@@ -2863,7 +2865,7 @@ void shadowmap_generator::mark_reused_casters(const shadow_map_models_t& models,
     for(size_t caster_index = 0; caster_index < models.size(); ++caster_index)
     {
         const auto& element = models[caster_index];
-        if(caster_facts_[caster_index].is_marked && element.particles == nullptr)
+        if(caster_facts_[caster_index].is_marked && element.instances == nullptr)
         {
             element.entity.get<model_component>().set_last_render_frame(frame);
         }

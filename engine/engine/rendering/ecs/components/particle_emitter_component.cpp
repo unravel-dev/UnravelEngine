@@ -8,6 +8,7 @@
 #include <engine/ecs/ecs_utils.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
+#include <engine/rendering/instanced_mesh_utils.h>
 #include <engine/ecs/components/transform_component.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
@@ -1628,30 +1629,6 @@ auto get_mesh_fade(float opacity) -> float
     return opacity >= 1.0f ? 0.0f : opacity;
 }
 
-/// Calls @p visit(mesh, material, submesh index) for every non-skinned submesh of the model's mesh that has a
-/// material.
-template<typename Visitor>
-void for_each_mesh_submesh(const model& mesh_model, Visitor&& visit)
-{
-    const auto mesh_asset = mesh_model.get_lod(0);
-    const auto mesh_ptr = mesh_asset ? mesh_asset.get(false) : nullptr;
-    if(!mesh_ptr)
-    {
-        return;
-    }
-    for(uint32_t group = 0; group < mesh_ptr->get_data_groups_count(); ++group)
-    {
-        const auto material_ptr = mesh_model.get_render_material(group);
-        if(!material_ptr)
-        {
-            continue;
-        }
-        for(const size_t submesh : mesh_ptr->get_non_skinned_submeshes_indices(group, 0))
-        {
-            visit(mesh_ptr, material_ptr, uint32_t(submesh));
-        }
-    }
-}
 } // namespace
 
 void particle_emitter_component::collect_mesh_instances(batch_collector& collector, bool with_previous) const
@@ -1662,7 +1639,7 @@ void particle_emitter_component::collect_mesh_instances(batch_collector& collect
     }
     const uint32_t stride = get_mesh_instance_stride();
     const size_t particle_count = mesh_transforms_.size() / stride;
-    for_each_mesh_submesh(mesh_model_,
+    for_each_instanced_submesh(mesh_model_,
                           [&](const std::shared_ptr<mesh>& mesh_ptr, const material::sptr& material_ptr, uint32_t submesh)
                           {
                               const batch_key key(mesh_ptr, material_ptr, 0, submesh);
@@ -1700,7 +1677,7 @@ auto particle_emitter_component::collect_mesh_shadow_instances(std::vector<shado
     const uint32_t stride = get_mesh_instance_stride();
     const size_t particle_count = mesh_transforms_.size() / stride;
     bool is_collected = false;
-    for_each_mesh_submesh(mesh_model_,
+    for_each_instanced_submesh(mesh_model_,
                           [&](const std::shared_ptr<mesh>& mesh_ptr, const material::sptr& material_ptr, uint32_t submesh)
                           {
                               const shadow_batch_key key = make_shadow_batch_key(mesh_ptr, 0, submesh, material_ptr);

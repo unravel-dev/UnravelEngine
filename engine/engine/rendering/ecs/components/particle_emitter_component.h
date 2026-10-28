@@ -5,6 +5,7 @@
 #include <graphics/texture.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/instanced_mesh_source.h>
 #include <engine/rendering/model.h>
 #include <bx/easing.h>
 #include <bx/rng.h>
@@ -40,7 +41,8 @@ struct particle_sub_emitter
  * @class particle_emitter_component
  * @brief Component that wraps the soa particle system emitter.
  */
-class particle_emitter_component : public component_crtp<particle_emitter_component, owned_component>
+class particle_emitter_component : public component_crtp<particle_emitter_component, owned_component>,
+                                   public instanced_mesh_source
 {
 public:
     enum class culling_mode : uint8_t
@@ -533,24 +535,24 @@ public:
      */
     auto get_mesh_transforms() const -> const std::vector<math::mat4>&;
     /// The world box the particles' meshes fill this frame (empty without particles).
-    auto get_mesh_bounds() const -> const math::bbox&;
+    auto get_mesh_bounds() const -> const math::bbox& override;
     /// True in mesh render mode once the mesh has loaded.
     auto is_mesh_render() const -> bool;
     /// Mesh render mode: adds an instance per particle and submesh to @p collector (the scene's instanced
     /// geometry), with last frame's matrices when @p with_previous (the velocity pass draws those).
-    void collect_mesh_instances(batch_collector& collector, bool with_previous) const;
+    void collect_mesh_instances(batch_collector& collector, bool with_previous) const override;
     /**
      * @brief Mesh render mode: adds the particles' shadow casting submeshes to the shadow views in @p view_mask
      * (bit i = collectors[i]).
      * @return True when anything was collected.
      */
     auto collect_mesh_shadow_instances(std::vector<shadow_batch_collector>& collectors, uint8_t view_mask) const
-        -> bool;
+        -> bool override;
     /**
      * @brief What the particles' shadows draw, as a key: their matrices and opacities, the meshes and what the
      * shadows read of the materials. Unchanged while the emitter is paused or frozen, so a cached shadow map keeps it.
      */
-    auto get_mesh_shadow_key() const -> uint64_t;
+    auto get_mesh_shadow_key() const -> uint64_t override;
     /// Builds the model the particles draw once the render mesh has loaded, and again when the mesh or the
     /// material changes. Main thread (it resolves the mesh's materials).
     void refresh_render_mesh();

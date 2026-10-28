@@ -21,6 +21,7 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     register_camera_component_script_bindings();
     register_model_component_script_bindings();
     register_particle_emitter_component_script_bindings();
+    register_graphics_script_bindings();
     register_text_component_script_bindings();
     register_light_component_script_bindings();
     register_skylight_component_script_bindings();

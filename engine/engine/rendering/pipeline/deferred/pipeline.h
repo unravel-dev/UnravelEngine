@@ -9,6 +9,7 @@
 #include <engine/rendering/light.h>
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/instanced_mesh_source.h>
 
 #include <graphics/utils/font/font_manager.h>
 #include <graphics/utils/font/text_buffer_manager.h>
@@ -360,10 +361,10 @@ public:
                        const feature_limits& limits,
                        layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
-    /// Lists this run's mesh particle emitters (camera runs only: a probe capture would keep one moment of
-    /// their motion): the ones the G-buffer draws and the ones casting shadows. Keeps the ones in view simulating
-    /// (renderer-based culling).
-    void gather_mesh_particles(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask);
+    /// Lists this run's instanced sources, mesh particle emitters and scripted instance draws (camera runs only: a probe capture
+    /// would keep one moment of their motion): the ones the G-buffer draws and the ones casting shadows. Keeps the
+    /// emitters in view simulating (renderer-based culling).
+    void gather_instance_sources(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask);
 
     /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
     auto run_hiz_pass(const camera& camera,
@@ -872,11 +873,11 @@ private:
     uint64_t shadow_casters_frame_{~0ULL};
     /// The subset of the two lists reaching into the range of the local light being generated.
     shadow::shadow_map_models_t shadow_light_casters_;
-    /// This run's mesh particle emitters the camera sees, and the ones casting shadows (gather_mesh_particles).
-    std::vector<const particle_emitter_component*> mesh_particle_emitters_;
-    shadow::shadow_map_models_t mesh_particle_casters_;
-    /// The G-buffer collected mesh particles this run: the instanced submits run whatever the batching setting.
-    bool has_mesh_particle_instances_{false};
+    /// This run's instanced sources the camera sees, and the ones casting shadows (gather_instance_sources).
+    std::vector<const instanced_mesh_source*> instance_sources_;
+    shadow::shadow_map_models_t instance_source_casters_;
+    /// The G-buffer collected source instances this run: the instanced submits run whatever the batching setting.
+    bool has_source_instances_{false};
 
     /// Brings the cached caster lists up to date for this frame: a wholesale rebuild when the
     /// revision or the layer mask changed, then a per-frame refresh of the movers' bounds and

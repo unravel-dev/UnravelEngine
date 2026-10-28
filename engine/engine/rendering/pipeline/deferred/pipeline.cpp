@@ -16,6 +16,7 @@
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
+#include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/engine.h>
@@ -553,7 +554,7 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
 /// once warmed up this allocates nothing, and it reads nothing but the contiguous list.
 void cull_shadow_casters(const shadow::shadow_map_models_t& static_casters,
                          const shadow::shadow_map_models_t& dynamic_casters,
-                         const shadow::shadow_map_models_t& particle_casters,
+                         const shadow::shadow_map_models_t& instanced_casters,
                          const math::bsphere& light_sphere,
                          shadow::shadow_map_models_t& light_casters)
 {
@@ -574,7 +575,7 @@ void cull_shadow_casters(const shadow::shadow_map_models_t& static_casters,
     };
     keep_casters_in_range(static_casters);
     keep_casters_in_range(dynamic_casters);
-    keep_casters_in_range(particle_casters);
+    keep_casters_in_range(instanced_casters);
 }
 
 auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
@@ -941,15 +942,15 @@ void deferred::build_shadows(scene& scn,
                                              shadow_dynamic_casters_.begin(),
                                              shadow_dynamic_casters_.end());
                 shadow_light_casters_.insert(shadow_light_casters_.end(),
-                                             mesh_particle_casters_.begin(),
-                                             mesh_particle_casters_.end());
+                                             instance_source_casters_.begin(),
+                                             instance_source_casters_.end());
                 light_casters = &shadow_light_casters_;
             }
             else
             {
                 cull_shadow_casters(shadow_static_casters_,
                                     shadow_dynamic_casters_,
-                                    mesh_particle_casters_,
+                                    instance_source_casters_,
                                     light_sphere,
                                     shadow_light_casters_);
                 light_casters = &shadow_light_casters_;
@@ -968,15 +969,15 @@ void deferred::build_shadows(scene& scn,
         });
 }
 
-void deferred::gather_mesh_particles(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask)
+void deferred::gather_instance_sources(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask)
 {
-    mesh_particle_emitters_.clear();
-    mesh_particle_casters_.clear();
+    instance_sources_.clear();
+    instance_source_casters_.clear();
     if(!is_camera_run)
     {
         return;
     }
-    APP_SCOPE_PERF("Rendering/Gather Mesh Particles");
+    APP_SCOPE_PERF("Rendering/Gather Instance Sources");
     const math::vec3 eye = camera.get_position();
     const ps_soa::particle_quality& quality = ps_soa::get_quality();
     scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
@@ -1008,14 +1009,32 @@ void deferred::gather_mesh_particles(scene& scn, const camera& camera, bool is_c
             }
             if(is_visible)
             {
-                mesh_particle_emitters_.push_back(&emitter);
+                instance_sources_.push_back(&emitter);
             }
             if(has_particles && emitter.get_mesh_cast_shadows())
             {
-                mesh_particle_casters_.push_back(
+                instance_source_casters_.push_back(
                     shadow::shadow_visibility_data{entt::handle(*scn.registry, entity), bounds, &emitter});
             }
         });
+    // Scripted instance draws are culled tile by tile: each cluster is a source of its own for the camera and the
+    // shadow cascades. They belong to no entity.
+    for(const auto& cluster : engine::context().get_cached<rendering_system>().get_instanced_draws().get_clusters())
+    {
+        if((cluster.get_layer_mask() & render_mask.mask) == 0)
+        {
+            continue;
+        }
+        const math::bbox& bounds = cluster.get_mesh_bounds();
+        if(camera.test_aabb(bounds))
+        {
+            instance_sources_.push_back(&cluster);
+        }
+        if(cluster.casts_shadow())
+        {
+            instance_source_casters_.push_back(shadow::shadow_visibility_data{entt::handle{}, bounds, &cluster});
+        }
+    }
 }
 
 auto deferred::run_pipeline(scene& scn,
@@ -1112,7 +1131,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     is_camera_run_ = is_camera_run;
     render_mask_ = render_mask;
-    gather_mesh_particles(scn, camera, is_camera_run, render_mask);
+    gather_instance_sources(scn, camera, is_camera_run, render_mask);
 
     if(build_shadowmaps)
     {
@@ -1690,16 +1709,16 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         }
     }
 
-    // Mesh particles: an instance per particle and submesh, drawn with the batches whatever the batching setting.
-    has_mesh_particle_instances_ = false;
-    for(const auto* emitter : mesh_particle_emitters_)
+    // Instanced sources (mesh particles, scripted instance draws): drawn with the batches whatever the batching setting.
+    has_source_instances_ = false;
+    for(const auto* source : instance_sources_)
     {
-        emitter->collect_mesh_instances(batch_collector_, velocity_run_active_);
-        has_mesh_particle_instances_ = true;
+        source->collect_mesh_instances(batch_collector_, velocity_run_active_);
+        has_source_instances_ = true;
     }
 
     // Submit all collected batches
-    if (batch_collector::is_static_mesh_batching_enabled() || has_mesh_particle_instances_)
+    if (batch_collector::is_static_mesh_batching_enabled() || has_source_instances_)
     {
         submit_batched_geometry(pass, camera);
     }
@@ -2082,12 +2101,12 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         }
 
         // Batched movers: instanced over the SAME prepared batches the G-buffer drew,
-        // with the doubled per-instance stream (current + previous world matrix). Mesh particles are movers too.
-        if(has_mesh_particle_instances_)
+        // with the doubled per-instance stream (current + previous world matrix). Instanced sources are movers too.
+        if(has_source_instances_)
         {
             velocity_movers_frame_ = gfx::get_render_frame();
         }
-        if(batch_collector::is_static_mesh_batching_enabled() || has_mesh_particle_instances_)
+        if(batch_collector::is_static_mesh_batching_enabled() || has_source_instances_)
         {
             submit_batched_velocity(pass, prev_vp);
         }

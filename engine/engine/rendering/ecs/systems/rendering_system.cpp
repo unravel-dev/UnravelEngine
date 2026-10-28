@@ -81,6 +81,12 @@ void rendering_system::on_frame_end(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/On Frame End");
     debug_draw_callbacks_.clear();
+    instanced_draws_.clear();
+}
+
+auto rendering_system::get_instanced_draws() -> instanced_draw_list&
+{
+    return instanced_draws_;
 }
 
 void rendering_system::on_frame_update(scene& scn, delta_t dt)

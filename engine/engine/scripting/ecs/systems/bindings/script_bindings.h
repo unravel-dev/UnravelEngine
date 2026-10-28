@@ -13,6 +13,7 @@ void register_animation_component_script_bindings();
 void register_camera_component_script_bindings();
 void register_model_component_script_bindings();
 void register_particle_emitter_component_script_bindings();
+void register_graphics_script_bindings();
 void register_text_component_script_bindings();
 void register_light_component_script_bindings();
 void register_skylight_component_script_bindings();
