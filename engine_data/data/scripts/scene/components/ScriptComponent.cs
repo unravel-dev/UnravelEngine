@@ -37,11 +37,19 @@ namespace Unravel.Core
 
         private bool m_started = false;
 
+        [ThreadStatic]
+        private static ScriptComponent t_running;
+
         /// <summary>
-        /// The script whose code runs now (a lifecycle call, an update, a coroutine step, a UI
-        /// callback), or null. What it subscribes to is released when it is destroyed.
+        /// The script whose code runs now on this thread (a lifecycle call, an update, a coroutine
+        /// step, a UI callback), or null; worker threads a script starts have none. What it subscribes
+        /// to is released when it is destroyed.
         /// </summary>
-        internal static ScriptComponent running { get; private set; }
+        internal static ScriptComponent running
+        {
+            get => t_running;
+            private set => t_running = value;
+        }
 
         /// <summary>
         /// Makes @p script the running script until the returned scope is disposed.

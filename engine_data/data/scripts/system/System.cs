@@ -724,6 +724,44 @@ namespace Unravel.Core
         {
             ScriptManager = new ScriptComponentManager();
             gcMonitor = new GCMonitor();
+            // The handlers are this assembly's code: left installed, they would keep an unloading domain alive.
+            // The next update installs them again when the domain stays.
+            RemoveExceptionHandlers();
+        }
+
+        private static bool areExceptionHandlersInstalled;
+
+        /// <summary>
+        /// Logs exceptions no script code caught: on a thread or task a script started, where nothing else
+        /// would report them (an exception on a raw thread still ends the process, after this log).
+        /// </summary>
+        private static void InstallExceptionHandlers()
+        {
+            if (areExceptionHandlersInstalled)
+            {
+                return;
+            }
+            AppDomain.CurrentDomain.UnhandledException += LogUnhandledException;
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += LogUnobservedTaskException;
+            areExceptionHandlersInstalled = true;
+        }
+
+        private static void RemoveExceptionHandlers()
+        {
+            AppDomain.CurrentDomain.UnhandledException -= LogUnhandledException;
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException -= LogUnobservedTaskException;
+            areExceptionHandlersInstalled = false;
+        }
+
+        private static void LogUnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            Log.Error($"Unhandled exception on a script thread: {e.ExceptionObject}");
+        }
+
+        private static void LogUnobservedTaskException(object sender, System.Threading.Tasks.UnobservedTaskExceptionEventArgs e)
+        {
+            Log.Error($"A script task failed and nothing awaited it: {e.Exception}");
+            e.SetObserved();
         }
         /// <summary>
         /// Native-to-managed frame update entry point. Updates <see cref="Time"/> and dispatches OnUpdate.
@@ -731,6 +769,7 @@ namespace Unravel.Core
         /// <param name="info">Per-frame timing values from the engine.</param>
         public static void internal_n2m_update(UpdateInfo info)
         {
+            InstallExceptionHandlers();
             SetTime(info);
             Screen.Poll();
             UIEventManager.ProcessDestroyedElements();

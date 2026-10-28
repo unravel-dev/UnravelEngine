@@ -15,6 +15,7 @@
 
 #include "script_value_encoding.h"
 #include "bindings/material_script_helpers.h"
+#include "bindings/script_glue_common.h"
 
 
 #include <dotnetpp/dotnetpp.h>
@@ -430,6 +431,7 @@ auto validate_paths(const dotnet::compiler_paths& paths, bool is_deploy_mode) ->
 auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
+    get_script_thread_id() = std::this_thread::get_id();
 
     auto& ev = ctx.get_cached<events>();
     // Scripts run after the scene-system band on purpose: animation_system
