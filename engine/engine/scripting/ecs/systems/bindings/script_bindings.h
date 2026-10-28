@@ -32,6 +32,5 @@ void register_physics_script_bindings();
 void register_ik_script_bindings();
 void register_ik_component_script_bindings();
 void register_gizmos_script_bindings();
-void register_math_script_bindings();
 
 } // namespace unravel

@@ -637,6 +637,125 @@ public struct Mathf
         return to * t + from * (1f - t);
     }
 
+    /// <summary>
+    /// Two-dimensional Perlin noise, mostly in the range [0, 1]: smooth pseudo-random values that repeat every
+    /// 256 units. Thread safe.
+    /// </summary>
+    /// <param name="x">X coordinate of the sample point.</param>
+    /// <param name="y">Y coordinate of the sample point.</param>
+    /// <returns>The noise at the point, 0.5 at whole coordinates.</returns>
+    public static float PerlinNoise(float x, float y)
+    {
+        int xi = (int)MathF.Floor(x) & 255;
+        int yi = (int)MathF.Floor(y) & 255;
+        float xf = x - MathF.Floor(x);
+        float yf = y - MathF.Floor(y);
+        float u = PerlinFade(xf);
+        float v = PerlinFade(yf);
+        int aa = s_PerlinPermutation[s_PerlinPermutation[xi] + yi];
+        int ab = s_PerlinPermutation[s_PerlinPermutation[xi] + yi + 1];
+        int ba = s_PerlinPermutation[s_PerlinPermutation[xi + 1] + yi];
+        int bb = s_PerlinPermutation[s_PerlinPermutation[xi + 1] + yi + 1];
+        float bottom = Lerp(PerlinGradient(aa, xf, yf), PerlinGradient(ba, xf - 1f, yf), u);
+        float top = Lerp(PerlinGradient(ab, xf, yf - 1f), PerlinGradient(bb, xf - 1f, yf - 1f), u);
+        return (Lerp(bottom, top, v) + 1f) * 0.5f;
+    }
+
+    /// <summary>
+    /// Converts a color channel from linear to gamma (sRGB) space.
+    /// </summary>
+    /// <param name="value">The linear value.</param>
+    /// <returns>The sRGB value.</returns>
+    public static float LinearToGammaSpace(float value)
+    {
+        if (value <= 0.0031308f)
+        {
+            return value * 12.92f;
+        }
+        return 1.055f * MathF.Pow(value, 1f / 2.4f) - 0.055f;
+    }
+
+    /// <summary>
+    /// Converts a color channel from gamma (sRGB) to linear space.
+    /// </summary>
+    /// <param name="value">The sRGB value.</param>
+    /// <returns>The linear value.</returns>
+    public static float GammaToLinearSpace(float value)
+    {
+        if (value <= 0.04045f)
+        {
+            return value / 12.92f;
+        }
+        return MathF.Pow((value + 0.055f) / 1.055f, 2.4f);
+    }
+
+    /// <summary>
+    /// Converts a float to the bits of a 16-bit half float.
+    /// </summary>
+    /// <param name="value">The value.</param>
+    /// <returns>The half float's bits.</returns>
+    public static ushort FloatToHalf(float value)
+    {
+        return BitConverter.HalfToUInt16Bits((Half)value);
+    }
+
+    /// <summary>
+    /// Converts the bits of a 16-bit half float to a float.
+    /// </summary>
+    /// <param name="value">The half float's bits.</param>
+    /// <returns>The value.</returns>
+    public static float HalfToFloat(ushort value)
+    {
+        return (float)BitConverter.UInt16BitsToHalf(value);
+    }
+
+    private static float PerlinFade(float t)
+    {
+        return t * t * t * (t * (t * 6f - 15f) + 10f);
+    }
+
+    private static float PerlinGradient(int hash, float x, float y)
+    {
+        switch (hash & 7)
+        {
+            case 0: return x + y;
+            case 1: return x - y;
+            case 2: return -x + y;
+            case 3: return -x - y;
+            case 4: return x;
+            case 5: return -x;
+            case 6: return y;
+            default: return -y;
+        }
+    }
+
+    /// The reference permutation of improved Perlin noise, repeated once so lookups need no wrap.
+    private static readonly int[] s_PerlinPermutation = CreatePerlinPermutation();
+
+    private static int[] CreatePerlinPermutation()
+    {
+        int[] source =
+        {
+            151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30, 69, 142, 8, 99,
+            37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252, 219, 203, 117, 35, 11, 32,
+            57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68, 175, 74, 165, 71, 134, 139, 48, 27, 166,
+            77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230, 220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54,
+            65, 25, 63, 161, 1, 216, 80, 73, 209, 76, 132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86,
+            164, 100, 109, 198, 173, 186, 3, 64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212,
+            207, 206, 59, 227, 47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70,
+            221, 153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185, 112, 104,
+            218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145, 235, 249, 14, 239, 107,
+            49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45, 127, 4, 150, 254, 138, 236, 205, 93,
+            222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61, 156, 180,
+        };
+        int[] permutation = new int[512];
+        for (int i = 0; i < 512; i++)
+        {
+            permutation[i] = source[i & 255];
+        }
+        return permutation;
+    }
+
 
     /// <summary>
     /// Compares two floating point values and returns true if they are similar.

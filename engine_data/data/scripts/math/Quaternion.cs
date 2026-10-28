@@ -31,6 +31,13 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
 
     private static readonly Quaternion identityQuaternion = new Quaternion(0f, 0f, 0f, 1f);
 
+    /// Below this squared length a direction counts as zero.
+    private const float DEGENERATE_LENGTH_SQUARED = 1e-12f;
+    /// Directions this close to opposite take the half-turn path of FromToRotation.
+    private const float OPPOSITE_TOLERANCE = 1e-6f;
+    /// The C float epsilon (FLT_EPSILON); float.Epsilon is the smallest denormal instead.
+    private const float SINGLE_PRECISION_EPSILON = 1.1920929e-7f;
+
     /// <summary>
     /// The identity rotation (Read Only).
     /// </summary>
@@ -80,7 +87,24 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     /// <returns>A quaternion representing the rotation from fromDirection to toDirection.</returns>
     public static Quaternion FromToRotation(Vector3 fromDirection, Vector3 toDirection)
     {
-        return internal_m2n_from_to_rotation(fromDirection, toDirection);
+        float fromLengthSquared = Vector3.Dot(fromDirection, fromDirection);
+        float toLengthSquared = Vector3.Dot(toDirection, toDirection);
+        if (fromLengthSquared < DEGENERATE_LENGTH_SQUARED || toLengthSquared < DEGENERATE_LENGTH_SQUARED)
+        {
+            return identity;
+        }
+        Vector3 from = fromDirection / MathF.Sqrt(fromLengthSquared);
+        Vector3 to = toDirection / MathF.Sqrt(toLengthSquared);
+        float dot = Vector3.Dot(from, to);
+        // Nearly opposite: half a turn about any axis orthogonal to from; the half-vector form degenerates there.
+        if (dot <= -1.0f + OPPOSITE_TOLERANCE)
+        {
+            Vector3 axis = GetOrthogonal(from).normalized;
+            return new Quaternion(axis.x, axis.y, axis.z, 0.0f);
+        }
+        // Half-vector form: normalize(w = 1 + dot, xyz = cross(from, to)) turns from onto to without trigonometry.
+        Vector3 cross = Vector3.Cross(from, to);
+        return Normalize(new Quaternion(cross.x, cross.y, cross.z, 1.0f + dot));
     }
 
     /// <summary>
@@ -190,7 +214,16 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     /// <returns>A quaternion representing the rotation.</returns>
     private static Quaternion Internal_FromEulerRad(Vector3 euler)
     {
-        return internal_m2n_from_euler_rad(euler);
+        float cx = MathF.Cos(euler.x * 0.5f);
+        float cy = MathF.Cos(euler.y * 0.5f);
+        float cz = MathF.Cos(euler.z * 0.5f);
+        float sx = MathF.Sin(euler.x * 0.5f);
+        float sy = MathF.Sin(euler.y * 0.5f);
+        float sz = MathF.Sin(euler.z * 0.5f);
+        return new Quaternion(sx * cy * cz - cx * sy * sz,
+                              cx * sy * cz + sx * cy * sz,
+                              cx * cy * sz - sx * sy * cz,
+                              cx * cy * cz + sx * sy * sz);
     }
 
     /// <summary>
@@ -200,7 +233,19 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     /// <returns>The Euler angles in radians.</returns>
     private static Vector3 Internal_ToEulerRad(Quaternion rotation)
     {
-        return internal_m2n_to_euler_rad(rotation);
+        float x = rotation.x;
+        float y = rotation.y;
+        float z = rotation.z;
+        float w = rotation.w;
+        float pitchSin = 2.0f * (y * z + w * x);
+        float pitchCos = w * w - x * x - y * y + z * z;
+        // Straight up or down: the pitch comes from x and w alone, as atan2(0, 0) has no answer.
+        float pitch = MathF.Abs(pitchSin) <= SINGLE_PRECISION_EPSILON && MathF.Abs(pitchCos) <= SINGLE_PRECISION_EPSILON
+                          ? 2.0f * MathF.Atan2(x, w)
+                          : MathF.Atan2(pitchSin, pitchCos);
+        float yaw = MathF.Asin(Math.Clamp(-2.0f * (x * z - w * y), -1.0f, 1.0f));
+        float roll = MathF.Atan2(2.0f * (x * y + w * z), w * w + x * x - y * y - z * z);
+        return new Vector3(pitch, yaw, roll);
     }
 
 
@@ -212,8 +257,9 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     /// <returns>A quaternion representing the rotation.</returns>
     public static Quaternion AngleAxis(float angle, Vector3 axis)
     {
-        float rad = angle * (MathF.PI / 180f);
-        return internal_m2n_angle_axis(rad, axis);
+        float halfRad = angle * (MathF.PI / 180f) * 0.5f;
+        float sin = MathF.Sin(halfRad);
+        return new Quaternion(axis.x * sin, axis.y * sin, axis.z * sin, MathF.Cos(halfRad));
     }
 
     /// <summary>
@@ -224,7 +270,72 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
     /// <returns>A quaternion representing the rotation.</returns>
     public static Quaternion LookRotation(Vector3 forward, Vector3 upwards)
     {
-        return internal_m2n_look_rotation(forward, upwards);
+        // The basis is built directly: +Z = forward, safe for a zero forward and for upwards along forward.
+        float forwardLengthSquared = Vector3.Dot(forward, forward);
+        if (forwardLengthSquared < DEGENERATE_LENGTH_SQUARED)
+        {
+            return identity;
+        }
+        Vector3 f = forward / MathF.Sqrt(forwardLengthSquared);
+        Vector3 right = Vector3.Cross(upwards, f);
+        float rightLengthSquared = Vector3.Dot(right, right);
+        if (rightLengthSquared < DEGENERATE_LENGTH_SQUARED)
+        {
+            right = Vector3.Cross(GetOrthogonal(f), f);
+            rightLengthSquared = Vector3.Dot(right, right);
+        }
+        right /= MathF.Sqrt(rightLengthSquared);
+        Vector3 up = Vector3.Cross(f, right);
+        return FromBasis(right, up, f);
+    }
+
+    /// <summary>
+    /// The rotation whose columns are the given orthonormal axes (the same conversion as glm::quat_cast).
+    /// </summary>
+    private static Quaternion FromBasis(Vector3 right, Vector3 up, Vector3 forward)
+    {
+        float fourXSquaredMinus1 = right.x - up.y - forward.z;
+        float fourYSquaredMinus1 = up.y - right.x - forward.z;
+        float fourZSquaredMinus1 = forward.z - right.x - up.y;
+        float fourWSquaredMinus1 = right.x + up.y + forward.z;
+        int biggestIndex = 0;
+        float fourBiggestSquaredMinus1 = fourWSquaredMinus1;
+        if (fourXSquaredMinus1 > fourBiggestSquaredMinus1)
+        {
+            fourBiggestSquaredMinus1 = fourXSquaredMinus1;
+            biggestIndex = 1;
+        }
+        if (fourYSquaredMinus1 > fourBiggestSquaredMinus1)
+        {
+            fourBiggestSquaredMinus1 = fourYSquaredMinus1;
+            biggestIndex = 2;
+        }
+        if (fourZSquaredMinus1 > fourBiggestSquaredMinus1)
+        {
+            fourBiggestSquaredMinus1 = fourZSquaredMinus1;
+            biggestIndex = 3;
+        }
+        float biggest = MathF.Sqrt(fourBiggestSquaredMinus1 + 1.0f) * 0.5f;
+        float mult = 0.25f / biggest;
+        switch (biggestIndex)
+        {
+            case 0:
+                return new Quaternion((up.z - forward.y) * mult, (forward.x - right.z) * mult, (right.y - up.x) * mult, biggest);
+            case 1:
+                return new Quaternion(biggest, (right.y + up.x) * mult, (forward.x + right.z) * mult, (up.z - forward.y) * mult);
+            case 2:
+                return new Quaternion((right.y + up.x) * mult, biggest, (up.z + forward.y) * mult, (forward.x - right.z) * mult);
+            default:
+                return new Quaternion((forward.x + right.z) * mult, (up.z + forward.y) * mult, biggest, (right.y - up.x) * mult);
+        }
+    }
+
+    /// <summary>
+    /// A vector orthogonal to a unit vector, picked so it never degenerates.
+    /// </summary>
+    private static Vector3 GetOrthogonal(Vector3 v)
+    {
+        return MathF.Abs(v.x) > MathF.Abs(v.z) ? new Vector3(-v.y, v.x, 0.0f) : new Vector3(0.0f, -v.z, v.y);
     }
 
     /// <summary>
@@ -639,19 +750,5 @@ public struct Quaternion : IEquatable<Quaternion>, IFormattable
         return string.Format("({0}, {1}, {2}, {3})", x.ToString(format, formatProvider), y.ToString(format, formatProvider), z.ToString(format, formatProvider), w.ToString(format, formatProvider));
     }
 
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern Quaternion internal_m2n_from_to_rotation(Vector3 fromDirection, Vector3 toDirection);
-
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern Quaternion internal_m2n_from_euler_rad(Vector3 euler);
-
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern Vector3 internal_m2n_to_euler_rad(Quaternion rotation);
-
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern Quaternion internal_m2n_angle_axis(float angle, Vector3 axis);
-
-    [MethodImpl(MethodImplOptions.InternalCall)]
-    private static extern Quaternion internal_m2n_look_rotation(Vector3 forward, Vector3 upwards);
 }
 
