@@ -213,16 +213,16 @@ public:
                                 const run_params& rparams,
                                 delta_t dt);
 
+    /// Builds the bloom pyramid from @p input; the tonemapper adds it (no pyramid when the bloom is off).
     auto run_bloom_pass(gfx::render_view& rview,
                         const gfx::frame_buffer::ptr& input,
-                        const run_params& rparams) -> gfx::frame_buffer::ptr;
+                        const run_params& rparams) -> bloom_pass::composite;
 
-    /// @p scene_before_bloom is the scene @p input was composited from by the bloom (the input
-    /// itself without bloom): local exposure measures and scales it, bloom rides on top.
+    /// Local exposure measures and scales @p input, and @p bloom rides on top.
     /// @param is_upscaled The output is upscaled afterwards, which adds the film grain and dither instead.
     auto run_tonemapping_pass(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& input,
-                              const gfx::frame_buffer::ptr& scene_before_bloom,
+                              const bloom_pass::composite& bloom,
                               const gfx::frame_buffer::ptr& output,
                               const run_params& rparams,
                               bool is_upscaled) -> gfx::frame_buffer::ptr;

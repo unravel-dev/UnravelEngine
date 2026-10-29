@@ -172,6 +172,13 @@ void RmlUi_RenderLayerStack::begin_frame(int new_width, int new_height, bool own
     push_layer(true);
 }
 
+void RmlUi_RenderLayerStack::continue_frame()
+{
+    RMLUI_ASSERT(layers_size_ == 1);
+    // The next document draws in views after the ones that drew the documents before it.
+    get_top_layer().needs_rebind = true;
+}
+
 void RmlUi_RenderLayerStack::end_frame()
 {
     RMLUI_ASSERT(layers_size_ == 1);

@@ -87,7 +87,11 @@ void runner::on_frame_render(rtti::context& ctx, delta_t dt)
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
 
-    path.render_scene(window->get_surface(), scene, dt);
+    // A camera's last pass clears the window and writes all of it; only a frame without one clears it here.
+    if(!path.render_scene(window->get_surface(), scene, dt))
+    {
+        window->begin_present_pass().clear();
+    }
 }
 
 void runner::on_play_begin(rtti::context& ctx)

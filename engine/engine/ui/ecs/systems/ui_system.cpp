@@ -544,6 +544,14 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
     (void)camera_entity;
     (void)dt;
     get_documents_by_sort_order(*scn.registry, rendered_documents_);
+    // The documents draw in sort order into one base layer, composited over the output once: a layer and a
+    // full-size composite per document cost a full-screen pass each.
+    if(!screen_render_layer_stack_)
+    {
+        screen_render_layer_stack_ = std::make_shared<RmlUi_RenderLayerStack>();
+    }
+    const auto sz = output->get_size();
+    bool has_open_layers = false;
     for(const entt::entity entity : rendered_documents_)
     {
         // Updating a document may run script handlers that destroy the documents after it or remove them.
@@ -565,25 +573,29 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
             continue;
         }
 
-        if(!ui_comp.render_layer_stack)
-        {
-            ui_comp.render_layer_stack = std::make_shared<RmlUi_RenderLayerStack>();
-        }
-        auto sz = output->get_size();
         RmlUi_FrameState frame_state;
         frame_state.viewport_width = static_cast<int>(sz.width);
         frame_state.viewport_height = static_cast<int>(sz.height);
         frame_state.framebuffer = output;
         frame_state.clear_to_transparent = false;
-        frame_state.render_layers = ui_comp.render_layer_stack;
+        frame_state.render_layers = screen_render_layer_stack_;
+        frame_state.continues_layers = has_open_layers;
+        frame_state.keeps_layers_open = true;
         RmlUi_Backend_Engine::begin_frame(frame_state);
         ui_comp.context->Update();
         ui_comp.context->Render();
         RmlUi_Backend_Engine::end_frame();
+        has_open_layers = true;
+    }
+    if(has_open_layers)
+    {
+        RmlUi_FrameState frame_state;
+        frame_state.framebuffer = output;
+        frame_state.render_layers = screen_render_layer_stack_;
+        RmlUi_Backend_Engine::finish_frame(frame_state);
     }
     if(debug_context_)
     {
-        auto sz = output->get_size();
         RmlUi_FrameState frame_state;
         frame_state.viewport_width = static_cast<int>(sz.width);
         frame_state.viewport_height = static_cast<int>(sz.height);

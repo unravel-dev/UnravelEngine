@@ -372,6 +372,11 @@ void RmlUi_RenderInterface::begin_frame(RmlUi_FrameState& state)
 
     pending_world_draws_.clear();
     begin_world_mesh_frame();
+    if(state.continues_layers)
+    {
+        render_layers_->continue_frame();
+        return;
+    }
     render_layers_->begin_frame(viewport_w, viewport_h, !state.document_to_clip.has_value());
 }
 
@@ -395,6 +400,7 @@ void RmlUi_RenderInterface::end_frame()
 
     const auto& framebuffer = frame_state_->framebuffer;
     const bool clear_to_transparent = frame_state_->clear_to_transparent;
+    const bool keeps_layers_open = frame_state_->keeps_layers_open;
     auto* layers = render_layers_;
     frame_state_ = nullptr;
     render_layers_ = nullptr;
@@ -405,13 +411,33 @@ void RmlUi_RenderInterface::end_frame()
             layers->end_frame();
         return;
     }
+    // A later document draws on into this base layer; finish_frame composites them together.
+    if(keeps_layers_open)
+    {
+        return;
+    }
+    composite_base_layer(framebuffer, *layers, clear_to_transparent);
+}
 
+void RmlUi_RenderInterface::finish_frame(RmlUi_FrameState& state)
+{
+    if(!is_initialized_ || !state.framebuffer || !state.render_layers)
+    {
+        return;
+    }
+    composite_base_layer(state.framebuffer, *state.render_layers, state.clear_to_transparent);
+}
+
+void RmlUi_RenderInterface::composite_base_layer(const gfx::frame_buffer::ptr& framebuffer,
+                                                 RmlUi_RenderLayerStack& layers,
+                                                 bool clear_to_transparent)
+{
     // Follow GL implementation pattern:
     // 1. Blit top layer to postprocess primary
     // 2. Fullscreen passthrough to main surface
     // 3. End the frame (which pops the layer)
 
-    const auto& top_layer = layers->get_top_layer();
+    const auto& top_layer = layers.get_top_layer();
     auto source_texture = top_layer.get_color_texture();
 
     gfx::render_pass main_pass("Main Surface Pass");
@@ -448,7 +474,7 @@ void RmlUi_RenderInterface::end_frame()
         bgfx::discard();
     }
 
-    layers->end_frame();
+    layers.end_frame();
 }
 
 void RmlUi_RenderInterface::clear()
@@ -2340,12 +2366,13 @@ void RmlUi_RenderInterface::set_view_scissor(bgfx::ViewId pass_id, const Rml::Re
     const int y = Rml::Math::Clamp(region.Top(), 0, vp.y);
     const int width = Rml::Math::Clamp(region.Width(), 0, vp.x - x);
     const int height = Rml::Math::Clamp(region.Height(), 0, vp.y - y);
-
-    (void)pass_id;
-    (void)x;
-    (void)y;
-    (void)width;
-    (void)height;
+    // Every draw of the pass stays inside the region: a blur of a small element costs its own size, not the
+    // layer's (the passes after it read only the region, through the texture coordinate limits).
+    bgfx::setViewScissor(pass_id,
+                         static_cast<uint16_t>(x),
+                         static_cast<uint16_t>(y),
+                         static_cast<uint16_t>(width),
+                         static_cast<uint16_t>(height));
 }
 
 void RmlUi_RenderInterface::submit_transform_uniform(Rml::Vector2f translation)
@@ -2742,11 +2769,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
             const RmlUi_LayerFramebuffer& destination_fb = from_source ? temp : source_destination;
 
-            // Create render pass for downscaling
-            gfx::render_pass clear_pass("Downscale Clear Pass");
-            clear_pass.bind(destination_fb.framebuffer.get());
-            clear_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
-            
+            // Cleared in its own pass: a separate clear pass is one more load and store of the whole layer.
             gfx::render_pass downscale_pass("Downscale Pass");
             downscale_pass.bind(destination_fb.framebuffer.get());
 
@@ -2757,6 +2780,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             downscale_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
             // Set correct view rectangle for this downscale level
             downscale_pass.set_view_rect(uint16_t(0), uint16_t(0), uint16_t(current_width), uint16_t(current_height));
+            downscale_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
             // Bind source texture
             const RmlUi_LayerFramebuffer& source_fb = from_source ? source_destination : temp;
             auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
@@ -2790,6 +2814,8 @@ void RmlUi_RenderInterface::render_blur(float sigma,
         auto view = Rml::Matrix4f::Identity();
         auto proj = Rml::Matrix4f::Identity();
         transfer_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
+        // The blur reads the region alone.
+        set_view_scissor(transfer_pass.id, scissor);
 
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
         auto source_texture = source_destination.get_color_texture();

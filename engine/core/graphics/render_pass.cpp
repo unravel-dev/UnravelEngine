@@ -94,6 +94,8 @@ void render_pass::bind(const frame_buffer* fb) const
     {
         bgfx::setViewFrameBuffer(id, frame_buffer::invalid_handle());
         bgfx::setViewRect(id, uint16_t(0), uint16_t(0), bgfx::BackbufferRatio::Equal);
+        // View state outlives the frame: a scissor an earlier user of this view id set must not clip it.
+        bgfx::setViewScissor(id);
     }
     touch();
 }

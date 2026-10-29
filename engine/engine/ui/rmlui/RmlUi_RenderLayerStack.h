@@ -76,6 +76,8 @@ public:
     /// Starts a frame with its base layer. @p owns_base_layer false gives the base layer no frame buffer:
     /// the renderer draws it straight into the frame's target.
     void begin_frame(int new_width, int new_height, bool owns_base_layer = true);
+    /// Continues the frame whose base layer is still open, for the next document drawing into it.
+    void continue_frame();
     void end_frame();
 
 private:

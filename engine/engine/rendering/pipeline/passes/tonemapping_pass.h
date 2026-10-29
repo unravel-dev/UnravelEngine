@@ -2,6 +2,7 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/bloom_pass.h>
 #include <engine/rendering/pipeline/passes/local_exposure_binding.h>
 #include <engine/rendering/pipeline/pre_exposure.h>
 #include <graphics/render_view.h>
@@ -92,9 +93,9 @@ public:
         gfx::frame_buffer::ptr output;
         gfx::texture::ptr exposure_texture;
         local_exposure_params local_exposure{};
-        /// The scene before bloom, when bloom composited into @c input: local exposure measures and
-        /// scales it, and the bloom part (input - scene) is added on top. Null without bloom.
-        gfx::texture::ptr scene_without_bloom;
+        /// The bloom added on top of @c input, after local exposure measured and scaled the scene; no
+        /// pyramid without bloom.
+        bloom_pass::composite bloom{};
         /// The view's scene-color pre-exposure (it already includes settings::exposure): the
         /// input carries it and the exposure removes it.
         pre_exposure_state pre_exposure{};
@@ -127,7 +128,10 @@ private:
             cache_uniform(program.get(), u_gain, "u_gain", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_scene, "s_scene", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_bloom, "u_bloom", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_bloom_tint, "u_bloom_tint", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_bloom, "s_bloom", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_dirt, "s_dirt", bgfx::UniformType::Sampler);
             local_exposure.cache_uniforms();
         }
 
@@ -140,7 +144,10 @@ private:
         gfx::program::uniform_ptr u_gain;
         gfx::program::uniform_ptr s_input;
         gfx::program::uniform_ptr s_exposure;
-        gfx::program::uniform_ptr s_scene;
+        gfx::program::uniform_ptr u_bloom;
+        gfx::program::uniform_ptr u_bloom_tint;
+        gfx::program::uniform_ptr s_bloom;
+        gfx::program::uniform_ptr s_dirt;
         local_exposure_uniforms local_exposure;
 
         std::unique_ptr<gpu_program> program;

@@ -4,6 +4,7 @@ $input v_texcoord0
 #include "tonemapping.sh"
 #include "output_noise.sh"
 #include "../exposure/local_exposure.sh"
+#include "../bloom/bloom_common.sh"
 
 uniform vec4 u_tonemapping;
 uniform vec4 u_grading;
@@ -12,12 +13,16 @@ uniform vec4 u_vignette;
 uniform vec4 u_lift;
 uniform vec4 u_gamma_inv;
 uniform vec4 u_gain;
+// x = bloom intensity, y = lens dirt intensity, z = 1 when the bloom ran (bloom_pass::composite).
+uniform vec4 u_bloom;
+// The assembled pyramid's tint * weight.
+uniform vec4 u_bloom_tint;
 
 SAMPLER2D(s_input, 0);
 SAMPLER2D(s_exposure, 1);
-/// The scene before bloom (the bloom pass composites into a new target): local exposure measures
-/// and scales it, the bloom part rides on top. Bound to s_input itself when bloom did not run.
-SAMPLER2D(s_scene, 4);
+/// The bloom pyramid's half-resolution level and the lens dirt mask (stages 2, 3 are local exposure's).
+SAMPLER2D(s_bloom, 4);
+SAMPLER2D(s_dirt, 5);
 
 #define u_tonemappingExposure u_tonemapping.x
 #define u_tonemappingMode     int(u_tonemapping.y)
@@ -29,6 +34,25 @@ SAMPLER2D(s_scene, 4);
 #define u_grain_seed          u_grading.w
 #define u_vignette_intensity  u_vignette.x
 #define u_vignette_smoothness u_vignette.y
+// 1 when the grading before / after the tone curve changes anything: neutral settings skip its math.
+#define u_has_linear_grading  u_vignette.z
+#define u_has_display_grading u_vignette.w
+#define u_bloom_intensity     u_bloom.x
+#define u_bloom_dirt          u_bloom.y
+#define u_has_bloom           u_bloom.z
+
+/// What the bloom adds to the scene: the pyramid read bilinearly at this pixel, tinted, times the intensity and the
+/// lens dirt mask. Finite and in half-float range, so a NaN in the pyramid cannot reach the image.
+vec3 sample_bloom(vec2 texcoord)
+{
+    if(u_has_bloom < 0.5)
+    {
+        return vec3_splat(0.0);
+    }
+    vec3 bloom = texture2D(s_bloom, texcoord).rgb * u_bloom_tint.rgb;
+    vec3 dirt = texture2D(s_dirt, texcoord).rgb;
+    return bloom_safe_hdr(bloom * (vec3_splat(u_bloom_intensity) + dirt * u_bloom_dirt));
+}
 
 // Color grading in LINEAR space, on post-exposure values (the contrast pivot
 // only means "18% mid-gray" after exposure has normalized the scene).
@@ -66,8 +90,7 @@ vec3 apply_color_grading(vec3 color)
 
 void main()
 {
-    vec3 color = texture2D(s_input, v_texcoord0).rgb;
-    vec3 scene_color = texture2D(s_scene, v_texcoord0).rgb;
+    vec3 scene_color = texture2D(s_input, v_texcoord0).rgb;
 
     // u_tonemappingExposure divides out the CPU's share of the pre-exposure; the GPU's share goes here.
     float exposure = u_tonemappingExposure / u_pre_exposure_gpu_scale;
@@ -84,14 +107,16 @@ void main()
     // exposure in the bloom pass, and its glow is no luminance the grid ever saw.
     float display_exposure_log = log2(max(exposure, 1e-10)) + u_log2_pre_exposure;
     float local_exposure = compute_local_exposure(scene_color, v_texcoord0, display_exposure_log, exposure_texel.b);
-    vec3 bloom_color = max(color - scene_color, vec3_splat(0.0));
-    color = scene_color * local_exposure + bloom_color;
+    vec3 color = scene_color * local_exposure + sample_bloom(v_texcoord0);
 
     // Exposure first so grading operates in post-AE space, then the tone curve.
     // u_midgray_match stays 1: operators keep their native response. Display-white
     // comes from Auto Exposure Compensation, not from remapping curves onto AgX.
     color *= exposure;
-    color = apply_color_grading(color);
+    if (u_has_linear_grading > 0.5)
+    {
+        color = apply_color_grading(color);
+    }
 
     // Vignette in linear: behaves like lens light falloff, so darkened
     // highlights still roll through the tone curve instead of graying out.
@@ -107,9 +132,12 @@ void main()
 
     // Lift/gamma/gain on the display-referred image (classic video grading):
     // lift offsets the toe and fades toward white, gain scales the top end,
-    // gamma bends the mids. Neutral uniforms make this an exact identity.
-    color = max(color * u_gain.xyz + u_lift.xyz * (1.0 - color), vec3_splat(0.0));
-    color = pow(color, u_gamma_inv.xyz);
+    // gamma bends the mids. Neutral uniforms make this an identity, skipped.
+    if (u_has_display_grading > 0.5)
+    {
+        color = max(color * u_gain.xyz + u_lift.xyz * (1.0 - color), vec3_splat(0.0));
+        color = pow(color, u_gamma_inv.xyz);
+    }
 
     // Grain and TPDF dither: skipped (uniforms zeroed) when FXAA follows so
     // the AA filter does not smear them; FXAA applies the same helper after.

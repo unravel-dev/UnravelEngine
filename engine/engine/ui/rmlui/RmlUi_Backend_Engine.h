@@ -44,6 +44,12 @@ struct RmlUi_FrameState
     /// Set by the renderer when a frame drawn straight into a 3D view met something only a base layer
     /// of its own can draw: a clip mask or a backdrop filter.
     bool needs_render_target = false;
+    /// Set when documents drawn earlier this frame left @c render_layers open: the document draws on into
+    /// their base layer instead of starting one of its own.
+    bool continues_layers = false;
+    /// Set to leave the base layer open after the document for the ones after it; finish_frame composites
+    /// it into @c framebuffer once, instead of a full-size composite per document.
+    bool keeps_layers_open = false;
 };
 
 /**
@@ -114,6 +120,12 @@ void begin_frame(RmlUi_FrameState& state);
  * Call this after rendering RmlUi context
  */
 void end_frame();
+
+/**
+ * @brief Composites the base layer documents left open (RmlUi_FrameState::keeps_layers_open) into
+ * @p state's framebuffer and ends the layer stack's frame.
+ */
+void finish_frame(RmlUi_FrameState& state);
 
 } // namespace RmlUi_Backend_Engine
 

@@ -296,6 +296,9 @@ constexpr const char* cloud_shadow_fbo_key = "CLOUD_SHADOW_FBO";
 // texels is ~600 units per texel at the default size; the sun's penumbra over the layer
 // altitude is wider than that, so the shadows are soft at any resolution.
 constexpr uint16_t cloud_shadow_resolution = 512;
+// With cloud shadows off the lights do not read the map: the irradiance bake reads only its lowest mip, the mean
+// transmittance, which a texel every quarter cloud size averages the same. 1/64 of the raymarch.
+constexpr uint16_t cloud_coverage_resolution = 64;
 constexpr float cloud_shadow_extent_sizes = 16.0f;
 // Below this sun elevation the shadow map is not rendered (the sun ray through the layer
 // is too long to be meaningful and the lighting shader ignores it as well).
@@ -372,8 +375,10 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     origin.y = std::floor(origin.y / texel) * texel;
     result.origin = origin;
 
+    // The origin keeps the full map's grid either way, so the coverage moves as smoothly as the shadows would.
+    const uint16_t resolution = params.cloud_shadows ? cloud_shadow_resolution : cloud_coverage_resolution;
     constexpr uint64_t flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    const usize32_t size{cloud_shadow_resolution, cloud_shadow_resolution};
+    const usize32_t size{resolution, resolution};
     // Mips: the lowest level is the mean transmittance the irradiance bake reads.
     const auto& tex = rview.tex_acquire(
         cloud_shadow_tex_key,
@@ -415,7 +420,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
         gfx::set_texture(cloud_shadow_program_.s_cloudNoise2D, 1, cloud_noise.flat_noise.get());
     }
 
-    bgfx::setScissor(0, 0, cloud_shadow_resolution, cloud_shadow_resolution);
+    bgfx::setScissor(0, 0, resolution, resolution);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setIndexBuffer(ib_->native_handle());
     bgfx::setVertexBuffer(0, vb_->native_handle());
@@ -442,7 +447,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
                                 result.base_world_y,
                                 result.opacity,
                                 result.apply_to_lights ? 1.0f : 0.0f,
-                                float(cloud_shadow_resolution)};
+                                float(resolution)};
     uint64_t signature = hash_floats(0xcbf29ce484222325ull, placement, std::size(placement));
     signature = hash_floats(signature, &perez.sun_direction.x, 3);
     signature = hash_floats(signature, &uniforms.exposition[0], sizeof(uniforms) / sizeof(float));
@@ -628,7 +633,8 @@ void atmospheric_pass_perez::run_cloud_composite(gfx::frame_buffer* surface,
                                                  const camera& camera,
                                                  const usize32_t& output_size,
                                                  const gfx::texture::ptr& depth,
-                                                 const cloud_prepass_result& prepass)
+                                                 const cloud_prepass_result& prepass,
+                                                 bool is_layer_beyond_geometry)
 {
     if(!prepass.cloud || !prepass.aux || !cloud_composite_program_.program || !cloud_composite_program_.program->is_valid())
     {
@@ -644,6 +650,8 @@ void atmospheric_pass_perez::run_cloud_composite(gfx::frame_buffer* surface,
                                 float(prepass.size.width),
                                 float(prepass.size.height)};
     gfx::set_uniform(cloud_composite_program_.u_cloudComposite, composite);
+    const float composite_params[4] = {is_layer_beyond_geometry ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(cloud_composite_program_.u_cloudCompositeParams, composite_params);
     gfx::set_texture(cloud_composite_program_.s_cloudTex, 0, prepass.cloud);
     gfx::set_texture(cloud_composite_program_.s_cloudAux, 1, prepass.aux);
     if(depth)
@@ -743,7 +751,10 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     // === Pass 3: volumetric composite over the whole frame (sky and geometry) ===
     if(volumetric)
     {
-        run_cloud_composite(composite_target.get(), camera, output_size, depth, prepass);
+        // Below the layer by more than the far clip, no pixel of geometry has a cloud in front of it.
+        const bool is_layer_beyond_geometry =
+            layer_base_world_y(params, camera) - camera.get_position().y > camera.get_far_clip();
+        run_cloud_composite(composite_target.get(), camera, output_size, depth, prepass, is_layer_beyond_geometry);
     }
 
     bgfx::discard();

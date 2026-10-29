@@ -133,6 +133,8 @@ void imgui_interface::on_frame_ui_render(rtti::context& ctx, delta_t dt)
 
     gfx::render_pass pass("ImGui/Pass");
     pass.bind(main_surface.get());
+    // The first pass on the main window this frame (the renderer leaves the clear to it).
+    pass.clear();
     imguiEndFrame(pass.id);
 }
 

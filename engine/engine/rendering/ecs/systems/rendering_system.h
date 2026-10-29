@@ -107,8 +107,9 @@ public:
      * @param output The output frame buffer.
      * @param scn The scene to render.
      * @param dt The delta time.
+     * @return Whether a camera rendered: each active camera writes the whole output.
      */
-    void render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt);
+    auto render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt) -> bool;
 
     /**
      * @brief Renders the scene and returns the frame buffer.

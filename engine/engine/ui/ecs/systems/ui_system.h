@@ -234,6 +234,8 @@ struct ui_system
     std::vector<entt::entity> rendered_documents_;
     Rml::Context* debug_target_context_ = nullptr;
     std::shared_ptr<RmlUi_RenderLayerStack> debug_render_layer_stack_ = nullptr;
+    /// The one layer stack the screen-space documents of a view draw into each frame (render_screen_space).
+    std::shared_ptr<RmlUi_RenderLayerStack> screen_render_layer_stack_ = nullptr;
 
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>();

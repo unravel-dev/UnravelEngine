@@ -1284,12 +1284,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_auto_exposure_pass(rview, camera, target, params, dt);
 
-    // The scene the exposure pass metered: local exposure measures it, not the bloom composite.
-    const auto scene_before_bloom = target;
-    target = run_bloom_pass(rview, target, params);
+    // The tonemapper adds the bloom on top of the scene the exposure pass metered, which local exposure measures.
+    const bloom_pass::composite bloom = run_bloom_pass(rview, target, params);
 
     const bool is_upscaled = scene.color != output;
-    target = run_tonemapping_pass(rview, target, scene_before_bloom, scene.color, params, is_upscaled);
+    target = run_tonemapping_pass(rview, target, bloom, scene.color, params, is_upscaled);
 
     run_fxaa_pass(rview, target, scene.color, params, is_upscaled);
 
@@ -4030,12 +4029,12 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
 
 auto deferred::run_bloom_pass(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& input,
-                              const run_params& rparams) -> gfx::frame_buffer::ptr
+                              const run_params& rparams) -> bloom_pass::composite
 {
     if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_bloom_params || !rparams.fill_hdr_params)
     {
         bloom_pass_.release_resources(rview);
-        return input;
+        return {};
     }
     bloom_pass::run_params params;
     params.input = input;
@@ -4056,7 +4055,7 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
 
 auto deferred::run_tonemapping_pass(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& input,
-                                    const gfx::frame_buffer::ptr& scene_before_bloom,
+                                    const bloom_pass::composite& bloom,
                                     const gfx::frame_buffer::ptr& output,
                                     const run_params& rparams,
                                     bool is_upscaled) -> gfx::frame_buffer::ptr
@@ -4070,10 +4069,7 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
 
     tonemapping_pass::run_params params;
     params.input = input;
-    if(scene_before_bloom && scene_before_bloom != input)
-    {
-        params.scene_without_bloom = scene_before_bloom->get_texture();
-    }
+    params.bloom = bloom;
 
     const bool fxaa_follows = static_cast<bool>(rparams.fill_fxaa_params) && !rparams.fill_taa_params;
     if(!fxaa_follows)

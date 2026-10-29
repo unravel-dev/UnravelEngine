@@ -2413,7 +2413,12 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
                        ,
                        clear_values_.clear_depth,
                        clear_values_.clear_stencil);
-    bgfx::touch(clear_view);
+    // A directional light clears per cascade below: its view 0 has no clear, no draws and no target of its own, and
+    // touched it would still open a render pass on whatever that view id targeted last.
+    if(flags0 != 0)
+    {
+        bgfx::touch(clear_view);
+    }
 
     const uint8_t flags1 =
         (LightType::DirectionalLight == settings_.m_lightType) ? BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH : 0;

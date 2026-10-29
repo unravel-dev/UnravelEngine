@@ -20,6 +20,9 @@ SAMPLER2D(s_depth, 3);
 // Largest view-depth difference, relative to the pixel's depth, at which a low-resolution texel still
 // counts as the pixel's surface.
 #define PARTICLE_UPSAMPLE_DEPTH_TOLERANCE 0.05
+// Transmittance from which four low-resolution texels without particle light count as empty: the scene they leave
+// is darkened by less than 0.1%.
+#define PARTICLE_EMPTY_TRANSMITTANCE 0.999
 
 float particle_view_depth(float device_depth)
 {
@@ -32,9 +35,17 @@ void main()
 	ivec2 half_size = textureSize(s_half_depth, 0);
 	ivec2 half_last = half_size - ivec2(1, 1);
 	ivec2 pixel = ivec2(gl_FragCoord.xy);
-	float depth = particle_view_depth(texelFetch(s_depth, min(pixel, full_last), 0).x);
 	// The pixel centre in low-resolution texel units, and the 2x2 texels a bilinear fetch blends there.
 	vec2 half_position = (vec2(pixel) + vec2_splat(0.5)) * vec2(half_size) / vec2(full_last + ivec2(1, 1));
+	vec2 uv = half_position / vec2(half_size);
+	vec4 filtered_color = texture2DLod(s_half_color, uv, 0.0);
+	// No particle in the four texels: the blend would leave the scene and the coverage as they are. Most of the
+	// screen, so the depth-aware upsample below runs only where particles are.
+	if(filtered_color.a >= PARTICLE_EMPTY_TRANSMITTANCE && all(equal(filtered_color.rgb, vec3_splat(0.0))))
+	{
+		discard;
+	}
+	float depth = particle_view_depth(texelFetch(s_depth, min(pixel, full_last), 0).x);
 	ivec2 base = ivec2(floor(half_position - vec2_splat(0.5)));
 	float largest_difference = 0.0;
 	float nearest_difference = 1e30;
@@ -53,8 +64,6 @@ void main()
 			}
 		}
 	}
-	vec2 uv = half_position / vec2(half_size);
-	vec4 filtered_color = texture2DLod(s_half_color, uv, 0.0);
 	float filtered_reactive = texture2DLod(s_half_reactive, uv, 0.0).x;
 	vec4 nearest_color = texelFetch(s_half_color, nearest, 0);
 	float nearest_reactive = texelFetch(s_half_reactive, nearest, 0).x;

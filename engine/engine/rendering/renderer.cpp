@@ -870,12 +870,8 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
 
     sync_main_surface();
     skinning_palettes_->begin_frame();
-    auto window = get_main_window();
-    if(window)
-    {
-        auto& pass = window->begin_present_pass();
-        pass.clear();
-    }
+    // No clear of the window here: the pass that first writes it this frame clears it (the player's camera, the
+    // editor's UI). A clear of its own is one more render pass storing the whole window on a tile-based GPU.
 }
 
 void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)

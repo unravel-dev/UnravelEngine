@@ -10,6 +10,9 @@ $input v_skyColor, v_clipPos, v_viewDir
 
 // xy = 1 / half-res size, zw = half-res size.
 uniform vec4 u_cloudComposite;
+// x = 1 when no geometry the camera sees reaches the layer: geometry pixels keep the frame (the pre-pass found no
+// cloud in front of them, and its sky texels weigh next to nothing across the depth edge).
+uniform vec4 u_cloudCompositeParams;
 
 SAMPLER2D(s_cloudTex, 0);
 SAMPLER2D(s_cloudAux, 1);
@@ -26,6 +29,10 @@ void main()
 {
     vec2 uv = clipToUv(v_clipPos * 0.5 + 0.5);
     float depth = texture2D(s_depth, uv).r;
+    if(u_cloudCompositeParams.x > 0.5 && depth < CLOUD_COMPOSITE_SKY_DEPTH)
+    {
+        discard;
+    }
     float pixel_distance = depth >= CLOUD_COMPOSITE_SKY_DEPTH ? CLOUD_COMPOSITE_SKY_DISTANCE : length(computeViewSpacePosition(uv, depth));
     float pixel_km = pixel_distance * CLOUD_COMPOSITE_DISTANCE_SCALE;
 

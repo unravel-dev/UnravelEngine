@@ -284,6 +284,12 @@ public:
     void end_frame();
 
     /**
+     * @brief Composites a base layer left open by end_frame (RmlUi_FrameState::keeps_layers_open) into
+     * @p state's framebuffer and ends the layer stack's frame.
+     */
+    void finish_frame(RmlUi_FrameState& state);
+
+    /**
      * @brief Clear the current render target
      */
     void clear();
@@ -582,6 +588,11 @@ private:
     
     // Layer composition
     void blit_layer_to_postprocess_primary(Rml::LayerHandle layer_handle);
+    /// Blends the base layer of @p layers over @p framebuffer (cleared first when @p clear_to_transparent) and
+    /// ends the stack's frame.
+    void composite_base_layer(const gfx::frame_buffer::ptr& framebuffer,
+                              RmlUi_RenderLayerStack& layers,
+                              bool clear_to_transparent);
     void composite_to_destination_layer(Rml::LayerHandle destination, Rml::BlendMode blend_mode);
     
     // Layer binding management

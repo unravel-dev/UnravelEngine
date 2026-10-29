@@ -215,5 +215,13 @@ void end_frame()
     }
 }
 
+void finish_frame(RmlUi_FrameState& state)
+{
+    if (data && data->initialized)
+    {
+        data->render_interface.finish_frame(state);
+    }
+}
+
 } // namespace RmlUi_Backend_Engine
 } // namespace unravel

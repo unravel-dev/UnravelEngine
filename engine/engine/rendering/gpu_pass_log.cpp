@@ -5,6 +5,8 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <cctype>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -17,6 +19,39 @@ constexpr double LOG_INTERVAL_SECONDS = 3.0;
 /// Passes below this average are left out of the log.
 constexpr double MIN_LOGGED_PASS_MS = 0.05;
 constexpr double MS_PER_SECOND = 1000.0;
+/// The scope the UI's layer stacks name their views with, followed by a layer id that grows every frame.
+constexpr std::string_view LAYER_SCOPE = "Layer ";
+
+/// A view's name with every UI layer id replaced by N: the ids differ from frame to frame, so without this one UI
+/// pass would spread over a new name each frame and fall under MIN_LOGGED_PASS_MS.
+auto collapse_layer_ids(std::string_view name) -> std::string
+{
+    std::string collapsed;
+    collapsed.reserve(name.size());
+    size_t position = 0;
+    while(position < name.size())
+    {
+        const size_t scope = name.find(LAYER_SCOPE, position);
+        if(scope == std::string_view::npos)
+        {
+            collapsed.append(name.substr(position));
+            break;
+        }
+        const size_t id_begin = scope + LAYER_SCOPE.size();
+        size_t id_end = id_begin;
+        while(id_end < name.size() && std::isdigit(static_cast<unsigned char>(name[id_end])) != 0)
+        {
+            ++id_end;
+        }
+        collapsed.append(name.substr(position, id_begin - position));
+        if(id_end > id_begin)
+        {
+            collapsed.push_back('N');
+        }
+        position = id_end;
+    }
+    return collapsed;
+}
 } // namespace
 
 void gpu_pass_log::collect()
@@ -35,7 +70,7 @@ void gpu_pass_log::collect()
     for(uint16_t i = 0; i < stats->numViews; ++i)
     {
         const bgfx::ViewStats& view = stats->viewStats[i];
-        pass_gpu_ms_[view.name] += static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * gpu_to_ms;
+        pass_gpu_ms_[collapse_layer_ids(view.name)] += static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * gpu_to_ms;
     }
     frame_gpu_ms_ += static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * gpu_to_ms;
     collect_pacing(*stats, gpu_to_ms);

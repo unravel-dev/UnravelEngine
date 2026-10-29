@@ -41,9 +41,9 @@ public:
         // upsample cascade (indexed by SOURCE mip). Legacy mode: alpha is that band's
         // additive weight (0 = band disabled). Scatter mode: alpha scales the hop's
         // lerp factor; 0 makes the hop an identity, truncating the WIDER bands above it.
-        // mip0_tint is applied in the combine pass to the assembled pyramid (the
+        // mip0_tint is applied where the tonemapper adds the assembled pyramid (the
         // half-res band never has a hop of its own): overall bloom tint and weight.
-        math::color mip0_tint{1.0f, 1.0f, 1.0f, 1.0f};  // assembled pyramid (combine)
+        math::color mip0_tint{1.0f, 1.0f, 1.0f, 1.0f};  // assembled pyramid
         math::color mip1_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/4 res
         math::color mip2_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/8 res
         math::color mip3_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/16 res
@@ -79,7 +79,6 @@ public:
     struct run_params
     {
         gfx::frame_buffer::ptr input;
-        gfx::frame_buffer::ptr output;
         settings config{};
         gfx::texture::ptr exposure_texture;
         /// The view's scene-color pre-exposure: the input carries it.
@@ -93,8 +92,25 @@ public:
         float manual_exposure = 1.0f;
     };
 
+    /**
+     * @brief What the tonemapper adds to the scene: the assembled pyramid at half the input's size, read
+     * bilinearly, times its tint and (intensity + dirt mask x dirt intensity). The tonemapper composites it in
+     * the same pass, so the bloom writes no full-size target of its own.
+     */
+    struct composite
+    {
+        /// The pyramid's half-resolution level; null when the bloom did not run.
+        gfx::texture::ptr pyramid;
+        /// mip0_tint.rgb x mip0_tint.a.
+        math::vec3 tint{1.0f, 1.0f, 1.0f};
+        float intensity = 0.0f;
+        /// The lens dirt mask, black when none is assigned.
+        gfx::texture::ptr dirt;
+        float dirt_intensity = 0.0f;
+    };
+
     auto init(rtti::context& ctx) -> bool;
-    auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
+    auto run(gfx::render_view& rview, const run_params& params) -> composite;
     void release_resources(gfx::render_view& rview);
 
 private:
@@ -104,9 +120,6 @@ private:
                                     const usize32_t& viewport_size,
                                     int mip_count) -> void;
     auto get_mip_fbo(gfx::render_view& rview, int mip_index) -> const gfx::frame_buffer::ptr&;
-    auto create_or_update_output_fb(gfx::render_view& rview,
-                                    const gfx::frame_buffer::ptr& input,
-                                    const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
 
     struct downsample_program : uniforms_cache
     {
@@ -143,24 +156,6 @@ private:
         gfx::program::uniform_ptr s_tex;
         std::unique_ptr<gpu_program> program;
     } upsample_program_;
-
-    struct combine_program : uniforms_cache
-    {
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_combine_params, "u_combineParams", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_combine_tint0, "u_combineTint0", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), s_scene, "s_scene", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_bloom, "s_bloom", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_dirt, "s_dirt", bgfx::UniformType::Sampler);
-        }
-        gfx::program::uniform_ptr u_combine_params;
-        gfx::program::uniform_ptr u_combine_tint0;
-        gfx::program::uniform_ptr s_scene;
-        gfx::program::uniform_ptr s_bloom;
-        gfx::program::uniform_ptr s_dirt;
-        std::unique_ptr<gpu_program> program;
-    } combine_program_;
 };
 
 } // namespace unravel

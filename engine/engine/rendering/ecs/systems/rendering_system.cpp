@@ -281,16 +281,18 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
     }
 }
 
-void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt)
+auto rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt) -> bool
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
-    auto& ctx = engine::context();
+    bool has_rendered = false;
     scn.registry->view<camera_component, active_component>().each(
         [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
             render_scene(output, handle, camera_comp, scn, dt);
+            has_rendered = true;
         });
+    return has_rendered;
 }
 
 void rendering_system::render_debug(entt::handle camera_entity)

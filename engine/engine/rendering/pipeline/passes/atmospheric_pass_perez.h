@@ -311,12 +311,14 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_cloudComposite, "u_cloudComposite", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudCompositeParams, "u_cloudCompositeParams", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_cloudTex, "s_cloudTex", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_cloudAux, "s_cloudAux", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr u_cloudComposite;
+        gfx::program::uniform_ptr u_cloudCompositeParams;
         gfx::program::uniform_ptr s_cloudTex;
         gfx::program::uniform_ptr s_cloudAux;
         gfx::program::uniform_ptr s_depth;
@@ -388,11 +390,13 @@ private:
                            const run_params& params) -> cloud_prepass_result;
 
     /// Blends the pre-pass result over the whole frame with a depth-aware upsample.
+    /// @param is_layer_beyond_geometry No geometry the camera sees reaches the layer: only the sky gets clouds.
     void run_cloud_composite(gfx::frame_buffer* surface,
                              const camera& camera,
                              const usize32_t& output_size,
                              const gfx::texture::ptr& depth,
-                             const cloud_prepass_result& prepass);
+                             const cloud_prepass_result& prepass,
+                             bool is_layer_beyond_geometry);
 
     /// World y of the layer base for the altitude mode of `params`.
     static auto layer_base_world_y(const run_params& params, const camera& camera) -> float;

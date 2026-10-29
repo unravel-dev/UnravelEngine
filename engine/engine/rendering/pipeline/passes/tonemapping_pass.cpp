@@ -112,9 +112,6 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     float wb[4] = {wb_lms.x, wb_lms.y, wb_lms.z, 0.0f};
     gfx::set_uniform(tonemapping_program_.u_wb_lms, wb);
 
-    float vignette[4] = {params.config.vignette_intensity, params.config.vignette_smoothness, 0.0f, 0.0f};
-    gfx::set_uniform(tonemapping_program_.u_vignette, vignette);
-
     // Lift/gamma/gain map from their neutral-gray (0.5) authoring space:
     // lift: +-0.15 additive at black; gain: 0..2x at white; gamma: per-channel
     // exponent uploaded pre-inverted so the shader does a single pow.
@@ -131,14 +128,34 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     gfx::set_uniform(tonemapping_program_.u_gamma_inv, gamma_inv);
     gfx::set_uniform(tonemapping_program_.u_gain, gain);
 
+    // z, w: whether the grading before and after the tone curve changes anything; neutral settings skip it.
+    const auto& config = params.config;
+    const bool has_linear_grading =
+        config.temperature != 0.0f || config.tint != 0.0f || config.contrast != 1.0f || config.saturation != 1.0f;
+    bool has_display_grading = false;
+    for(int i = 0; i < 3; ++i)
+    {
+        has_display_grading |= lift[i] != 0.0f || gamma_inv[i] != 1.0f || gain[i] != 1.0f;
+    }
+    float vignette[4] = {config.vignette_intensity,
+                         config.vignette_smoothness,
+                         has_linear_grading ? 1.0f : 0.0f,
+                         has_display_grading ? 1.0f : 0.0f};
+    gfx::set_uniform(tonemapping_program_.u_vignette, vignette);
+
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
     gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
 
-    // LOCAL EXPOSURE, measured on the scene before bloom (the input itself when bloom did not
-    // run, which makes the bloom part zero).
-    gfx::set_texture(tonemapping_program_.s_scene,
-                     4,
-                     params.scene_without_bloom ? params.scene_without_bloom : input->get_texture());
+    // The bloom pyramid, added after local exposure scaled the scene; z = 0 skips it when the bloom did not run.
+    const auto& bloom = params.bloom;
+    const bool has_bloom = static_cast<bool>(bloom.pyramid);
+    const auto& black = default_textures::get().black_texture();
+    float bloom_params[4] = {bloom.intensity, bloom.dirt_intensity, has_bloom ? 1.0f : 0.0f, 0.0f};
+    float bloom_tint[4] = {bloom.tint.x, bloom.tint.y, bloom.tint.z, 0.0f};
+    gfx::set_uniform(tonemapping_program_.u_bloom, bloom_params);
+    gfx::set_uniform(tonemapping_program_.u_bloom_tint, bloom_tint);
+    gfx::set_texture(tonemapping_program_.s_bloom, 4, has_bloom ? bloom.pyramid : black);
+    gfx::set_texture(tonemapping_program_.s_dirt, 5, has_bloom && bloom.dirt ? bloom.dirt : black);
     tonemapping_program_.local_exposure.submit(params.local_exposure, params.pre_exposure.value);
     params.pre_exposure.bind();
 
