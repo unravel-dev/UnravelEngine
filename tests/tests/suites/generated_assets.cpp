@@ -13,7 +13,9 @@
  *   - a file without a record is adopted when it holds the import and kept otherwise;
  *   - a file under the name an earlier import gave it moves to the new name with its .meta, keeping its id;
  *   - two models in one folder with a same-named material at the same index write two materials with two ids,
- *     also when both used to share one file under the earlier name.
+ *     also when both used to share one file under the earlier name;
+ *   - a texture a model embeds, extracted by the model's first import, gets an id there, and the default material
+ *     binds it by that id, as every reimport does.
  *
  * Every run writes into a fresh folder under app:/generated_assets and nothing is deleted.
  */
@@ -42,6 +44,9 @@ namespace
 /// One triangle, (0,0,0) (1,0,0) (0,1,0), as nine little-endian floats.
 constexpr const char* k_triangle_buffer = "data:application/octet-stream;base64,"
                                           "AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA";
+/// A 1x1 RGB PNG.
+constexpr const char* k_pixel_image = "data:image/png;base64,"
+                                      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mM4UaEBAAN0AWn1BwN7AAAAAElFTkSuQmCC";
 constexpr const char* k_material_name = "Brass";
 /// The name the default material of slot 0 had before it was named after its model.
 constexpr const char* k_former_material_file = "[0] Brass.mat";
@@ -195,7 +200,11 @@ void test_adopt_former_file(asset_manager& am, const fs::path& run_root)
     check(read_text(first) == "former\n" && is_on_disk(former), "both files stay as they were");
 }
 
-void write_model(const fs::path& path, float red, float green, float blue)
+/**
+ * @brief A one-triangle glTF model at @p path whose one material, named k_material_name, has @p pbr_properties.
+ * @param texture_arrays The "textures" and "images" members the properties reference, each followed by a comma.
+ */
+void write_gltf_model(const fs::path& path, const std::string& pbr_properties, const std::string& texture_arrays)
 {
     const auto gltf = fmt::format(R"({{
   "asset": {{"version": "2.0"}},
@@ -203,7 +212,7 @@ void write_model(const fs::path& path, float red, float green, float blue)
   "scenes": [{{"nodes": [0]}}],
   "nodes": [{{"mesh": 0}}],
   "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "material": 0}}]}}],
-  "materials": [{{"name": "{}", "pbrMetallicRoughness": {{"baseColorFactor": [{}, {}, {}, 1.0]}}}}],
+  "materials": [{{"name": "{}", "pbrMetallicRoughness": {{{}}}}}],{}
   "buffers": [{{"byteLength": 36, "uri": "{}"}}],
   "bufferViews": [{{"buffer": 0, "byteOffset": 0, "byteLength": 36}}],
   "accessors": [{{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
@@ -211,11 +220,26 @@ void write_model(const fs::path& path, float red, float green, float blue)
 }}
 )",
                                  k_material_name,
-                                 red,
-                                 green,
-                                 blue,
+                                 pbr_properties,
+                                 texture_arrays,
                                  k_triangle_buffer);
     write_text(path, gltf);
+}
+
+void write_model(const fs::path& path, float red, float green, float blue)
+{
+    write_gltf_model(path, fmt::format(R"("baseColorFactor": [{}, {}, {}, 1.0])", red, green, blue), "");
+}
+
+/// A model whose base color map is an image embedded in the file, as a .glb packs it.
+void write_embedded_texture_model(const fs::path& path)
+{
+    write_gltf_model(path,
+                     R"("baseColorTexture": {"index": 0})",
+                     fmt::format(R"(
+  "textures": [{{"source": 0}}],
+  "images": [{{"uri": "{}"}}],)",
+                                 k_pixel_image));
 }
 
 /// A .meta for the model at @p path that skips the costly bakes, which these checks do not need.
@@ -307,6 +331,27 @@ void test_models_in_one_folder(asset_manager& am, const fs::path& run_root)
           "the new material is the import's");
 }
 
+void test_embedded_texture_binding(asset_manager& am, const fs::path& run_root)
+{
+    const fs::path model = run_root / "embedded" / "Crate.gltf";
+    write_embedded_texture_model(model);
+    write_model_meta(am, model);
+    check(compile_model(am, model), "the model with an embedded texture compiles");
+    // The first import writes the texture, so neither a .meta nor a database entry existed for it before.
+    const fs::path texture = model.parent_path() / "[0] BaseColor Crate.png";
+    check(is_on_disk(texture), "the embedded texture is extracted next to the model");
+    const auto texture_uid = load_meta(texture).uid;
+    check(!texture_uid.is_nil(), "the extracted texture's .meta has an id");
+    check(get_registered_uid(am, texture) == texture_uid, "the database has the texture under its .meta id");
+    const auto material = get_material_path(model);
+    const auto material_text = read_text(material);
+    check(material_text.find(hpp::to_string(texture_uid)) != std::string::npos,
+          "the default material binds the extracted texture by its id");
+    check(compile_model(am, model), "the model compiles again");
+    check(load_meta(texture).uid == texture_uid, "a reimport keeps the texture's id");
+    check(read_text(material) == material_text, "a reimport binds the texture as the first import did");
+}
+
 auto run_generated_assets_suite(rtti::context& ctx) -> int
 {
     g_checks = 0;
@@ -318,6 +363,7 @@ auto run_generated_assets_suite(rtti::context& ctx) -> int
     test_files_without_record(am, run_root);
     test_adopt_former_file(am, run_root);
     test_models_in_one_folder(am, run_root);
+    test_embedded_texture_binding(am, run_root);
     std::printf("generated assets: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

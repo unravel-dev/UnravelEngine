@@ -95,6 +95,12 @@ void tag_texture_colorspace(asset_manager& am,
     }
     if(meta.uid.is_nil())
     {
+        // A texture this import just wrote has no .meta yet. It takes the id the database holds for its path, else a
+        // new one: registered under the nil id, every material bound to it would save a nil map, and the watcher
+        // would then give the file another id and the default import settings.
+        const asset_meta generated = am.generate_metadata(fs::convert_to_protocol(*absolute));
+        meta.uid = generated.uid;
+        meta.type = generated.type;
         meta.uid = am.add_asset_info_for_path(*absolute, meta, true);
         changed = true;
     }
