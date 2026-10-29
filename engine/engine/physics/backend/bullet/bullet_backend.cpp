@@ -2711,6 +2711,12 @@ void bullet_backend::warp_character(character_controller_component& comp, const 
     {
         return;
     }
+    // The transform moves too: a script that also turns the character this frame dirties the transform, and the
+    // next sync then places the controller where the transform is, which must already be the warp target.
+    if(auto* transform = owner.try_get<transform_component>())
+    {
+        transform->set_position_global(position);
+    }
     cc->controller->warp(bullet::to_bullet(position + comp.get_center()));
 }
 

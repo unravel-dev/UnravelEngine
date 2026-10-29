@@ -523,6 +523,15 @@ void test_character_controller(rtti::context& ctx)
     check_near(fx.position_of(hero).x, 0.0f, 1e-3f, "warp moves the character instantly");
     check_near(fx.position_of(hero).z, 5.0f, 1e-3f, "warp moves the character instantly (z)");
 
+    // A character that turns in the same frame as it warps (a walking hero that teleports) dirties its transform;
+    // the warp must survive the transform-to-physics sync of the next step.
+    fx.backend->warp_character(cc, {3.0f, 1.0f, 5.0f});
+    hero.get<transform_component>().set_rotation_global(math::angleAxis(math::radians(90.0f), math::vec3{0.0f, 1.0f, 0.0f}));
+    fx.step(1);
+    check_near(fx.position_of(hero).x, 3.0f, 1e-3f, "a warp survives a rotation set in the same frame");
+    fx.backend->warp_character(cc, {0.0f, 1.0f, 5.0f});
+    fx.step(1);
+
     // A 0.2 m ledge is under the default 0.3 m step height: walk onto it, then off it.
     fx.step(30);
     for(int i = 0; i < 66; ++i)

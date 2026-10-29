@@ -3078,6 +3078,12 @@ void box3d_backend::warp_character(character_controller_component& comp, const m
     {
         return;
     }
+    // The transform moves too: a script that also turns the character this frame dirties the transform, and the
+    // next sync then places the controller where the transform is, which must already be the warp target.
+    if(auto* transform = owner.try_get<transform_component>())
+    {
+        transform->set_position_global(position);
+    }
     box3d::set_character_pose(*cc, position + comp.get_center(), cc->rotation);
 }
 
