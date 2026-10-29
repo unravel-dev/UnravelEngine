@@ -172,7 +172,7 @@ struct ui_system
         Rml::Context* target_context = nullptr;
     };
 
-    auto find_keyboard_context(scene& scn) const -> Rml::Context*;
+    auto find_keyboard_context(scene& scn) -> Rml::Context*;
     auto try_consume_keyboard_event(scene& scn, os::event& event) -> bool;
     auto dispatch_pointer_event(rtti::context& ctx, scene& scn, os::event& event) -> ui_pointer_dispatch_result;
     void apply_mouse_press_focus(scene& scn, os::event& event, Rml::Context* target_context, bool input_allowed);
@@ -183,9 +183,9 @@ struct ui_system
     /// document the pointer misses.
     using pointer_visitor = std::function<void(Rml::Context* context, bool is_over, Rml::Vector2f position)>;
     /**
-     * @brief Visits the debugger and each enabled document with a pointer position in work zone pixels
-     * mapped to the document: a screen-space overlay takes it as it is, a world-space document through
-     * the scene camera onto its quad.
+     * @brief Visits the debugger and each enabled document, the highest sort order first, with a pointer
+     * position in work zone pixels mapped to the document: a screen-space overlay takes it as it is, a
+     * world-space document through the scene camera onto its quad.
      */
     void visit_pointer_documents(scene& scn, input::coord position, const pointer_visitor& visit);
     /**
@@ -227,6 +227,11 @@ struct ui_system
 
     /// Debug/legacy context (empty, used for RmlUi debugger host - menu, info, log)
     Rml::Context* debug_context_ = nullptr;
+    /// The documents by sort order, kept to reuse their storage: for the keyboard or pointer event being dispatched,
+    /// for visit_pointer_documents, and for render_screen_space.
+    std::vector<entt::entity> event_documents_;
+    std::vector<entt::entity> visited_documents_;
+    std::vector<entt::entity> rendered_documents_;
     Rml::Context* debug_target_context_ = nullptr;
     std::shared_ptr<RmlUi_RenderLayerStack> debug_render_layer_stack_ = nullptr;
 

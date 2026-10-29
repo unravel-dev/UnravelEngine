@@ -8,6 +8,7 @@
 #include <math/math.h>
 #include <string>
 #include <memory>
+#include <vector>
 
 #include "../../rmlui/RmlUi_RenderLayerStack.h"
 
@@ -59,6 +60,10 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
 
     /// Rendering mode: screen or world
     ui_render_mode render_mode = ui_render_mode::screen_space_overlay;
+
+    /// Screen-space overlays draw from the lowest order up, so a higher one covers a lower one, and the highest
+    /// takes pointer and keyboard input first. Equal orders keep no particular order among themselves.
+    int sort_order = 0;
 
     /// Document resolution (pixels). For screen-space: viewport size. For world-space: configurable (e.g. 512×512)
     usize32_t size = {512, 512};
@@ -129,5 +134,12 @@ private:
     bool enabled_ = true;
 
 };
+
+/**
+ * @brief Lists the UI documents of @p registry ordered by ui_document_component::sort_order, lowest first; documents
+ * of equal order keep the registry's order.
+ * @param documents Receives the list. Its storage is reused: a caller that keeps it allocates only as documents grow.
+ */
+void get_documents_by_sort_order(entt::registry& registry, std::vector<entt::entity>& documents);
 
 } // namespace unravel

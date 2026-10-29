@@ -70,6 +70,17 @@ REFLECT(ui_document_component)
                 return {};
             })},
         })
+        .data<&ui_document_component::sort_order>("sort_order"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sort_order"},
+            entt::attribute{"pretty_name", "Sort Order"},
+            entt::attribute{"tooltip", "Screen-space overlays draw from the lowest order up, and the highest takes input first."},
+            entt::attribute{"predicate", entt::property_predicate<bool>([](const entt::meta_any& obj) -> bool
+            {
+                auto* data = obj.try_cast<ui_document_component>();
+                return data && data->render_mode == ui_render_mode::screen_space_overlay;
+            })},
+        })
         .data<&ui_document_component::size>("size"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "size"},
@@ -93,6 +104,7 @@ SAVE(ui_document_component)
     try_save(ar, ser20::make_nvp("enabled", obj.is_enabled()));
     try_save(ar, ser20::make_nvp("asset", obj.asset));
     try_save(ar, ser20::make_nvp("render_mode", obj.render_mode));
+    try_save(ar, ser20::make_nvp("sort_order", obj.sort_order));
     try_save(ar, ser20::make_nvp("size", obj.size));
     try_save(ar, ser20::make_nvp("pixels_per_world_unit", obj.pixels_per_world_unit));
 }
@@ -108,6 +120,7 @@ LOAD(ui_document_component)
     }
     try_load(ar, ser20::make_nvp("asset", obj.asset));
     try_load(ar, ser20::make_nvp("render_mode", obj.render_mode));
+    try_load(ar, ser20::make_nvp("sort_order", obj.sort_order));
     try_load(ar, ser20::make_nvp("size", obj.size));
     try_load(ar, ser20::make_nvp("pixels_per_world_unit", obj.pixels_per_world_unit));
 }

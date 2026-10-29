@@ -122,6 +122,18 @@ namespace
                 }
             });
     }
+
+    /// The document of @p entity when it takes input: active and enabled, with a context. Null too when script
+    /// handlers run for another document destroyed @p entity or removed its document.
+    auto find_input_document(entt::registry& registry, entt::entity entity) -> ui_document_component*
+    {
+        if(!registry.valid(entity) || !registry.all_of<active_component>(entity))
+        {
+            return nullptr;
+        }
+        auto* ui_comp = registry.try_get<ui_document_component>(entity);
+        return ui_comp && ui_comp->context && ui_comp->is_enabled() ? ui_comp : nullptr;
+    }
 } // namespace
 
 void ui_system::on_os_event(rtti::context& ctx, os::event& event)
@@ -152,22 +164,24 @@ void ui_system::on_os_event(rtti::context& ctx, os::event& event)
     }
 }
 
-auto ui_system::find_keyboard_context(scene& scn) const -> Rml::Context*
+auto ui_system::find_keyboard_context(scene& scn) -> Rml::Context*
 {
     if(Rml::Debugger::IsVisible() && debug_context_ && context_wants_keyboard_input(debug_context_))
     {
         return debug_context_;
     }
 
+    // The highest sort order that wants the keyboard takes it.
     Rml::Context* keyboard_context = nullptr;
-    scn.registry->view<ui_document_component, active_component>().each(
-        [&](entt::entity, ui_document_component& ui_comp, active_component&)
+    get_documents_by_sort_order(*scn.registry, event_documents_);
+    for(const entt::entity entity : event_documents_)
+    {
+        const ui_document_component* ui_comp = find_input_document(*scn.registry, entity);
+        if(ui_comp && context_wants_keyboard_input(ui_comp->context))
         {
-            if(ui_comp.context && ui_comp.is_enabled() && context_wants_keyboard_input(ui_comp.context))
-            {
-                keyboard_context = ui_comp.context;
-            }
-        });
+            keyboard_context = ui_comp->context;
+        }
+    }
     return keyboard_context;
 }
 
@@ -208,17 +222,26 @@ auto ui_system::dispatch_pointer_event(rtti::context& ctx, scene& scn, os::event
         }
     }
 
-    scn.registry->view<ui_document_component, active_component>().each(
-        [&](entt::entity, ui_document_component& ui_comp, active_component&)
+    // The topmost document first: it is the one under the pointer when documents overlap. A press on its content
+    // goes no further down, so the documents it covers do not click too.
+    const bool is_press = event.type == os::events::mouse_button && event.button.state_id == os::state::pressed;
+    get_documents_by_sort_order(*scn.registry, event_documents_);
+    for(auto it = event_documents_.rbegin(); it != event_documents_.rend(); ++it)
+    {
+        if(is_press && result.target_context)
         {
-            if(ui_comp.context && ui_comp.is_enabled())
-            {
-                if(process_event(ui_comp.context, event, is_on_content(ui_comp.context)))
-                {
-                    result.target_context = ui_comp.context;
-                }
-            }
-        });
+            break;
+        }
+        ui_document_component* ui_comp = find_input_document(*scn.registry, *it);
+        if(!ui_comp)
+        {
+            continue;
+        }
+        if(process_event(ui_comp->context, event, is_on_content(ui_comp->context)) && !result.target_context)
+        {
+            result.target_context = ui_comp->context;
+        }
+    }
 
     return result;
 }
@@ -374,37 +397,38 @@ void ui_system::visit_pointer_documents(scene& scn, input::coord position, const
         visit(debug_context_, true, screen_position);
     }
 
-    scn.registry->view<ui_document_component, active_component>().each(
-        [&](entt::entity entity, ui_document_component& ui_comp, active_component&)
+    // The topmost document first: it is the one under the pointer when documents overlap.
+    get_documents_by_sort_order(*scn.registry, visited_documents_);
+    for(auto it = visited_documents_.rbegin(); it != visited_documents_.rend(); ++it)
+    {
+        const ui_document_component* ui_comp = find_input_document(*scn.registry, *it);
+        if(!ui_comp)
         {
-            if(!ui_comp.context || !ui_comp.is_enabled())
-            {
-                return;
-            }
+            continue;
+        }
 
-            if(ui_comp.render_mode == ui_render_mode::screen_space_overlay)
-            {
-                visit(ui_comp.context, true, screen_position);
-                return;
-            }
+        if(ui_comp->render_mode == ui_render_mode::screen_space_overlay)
+        {
+            visit(ui_comp->context, true, screen_position);
+            continue;
+        }
 
-            if(!scene_camera)
-            {
-                visit(ui_comp.context, false, {});
-                return;
-            }
+        if(!scene_camera)
+        {
+            visit(ui_comp->context, false, {});
+            continue;
+        }
 
-            auto handle = scn.create_handle(entity);
-            auto& transform = handle.get<transform_component>();
-            const auto quad_transform = ui_comp.get_world_space_quad(transform.get_transform_global());
-            math::vec2 pixel;
-            const bool is_over = scene_camera->project_to_quad(math::vec2(screen_position.x, screen_position.y),
-                                                               quad_transform,
-                                                               ui_comp.size.width,
-                                                               ui_comp.size.height,
-                                                               pixel);
-            visit(ui_comp.context, is_over, Rml::Vector2f(pixel.x, pixel.y));
-        });
+        const auto& transform = scn.registry->get<transform_component>(*it);
+        const auto quad_transform = ui_comp->get_world_space_quad(transform.get_transform_global());
+        math::vec2 pixel;
+        const bool is_over = scene_camera->project_to_quad(math::vec2(screen_position.x, screen_position.y),
+                                                           quad_transform,
+                                                           ui_comp->size.width,
+                                                           ui_comp->size.height,
+                                                           pixel);
+        visit(ui_comp->context, is_over, Rml::Vector2f(pixel.x, pixel.y));
+    }
 }
 
 void ui_system::dispatch_touch_event(rtti::context& ctx, scene& scn, os::event& event)
@@ -424,7 +448,9 @@ void ui_system::dispatch_touch_event(rtti::context& ctx, scene& scn, os::event& 
                                 switch(event.type)
                                 {
                                     case os::events::finger_down:
-                                        if(is_over)
+                                        // Documents come topmost first: a finger on one's content goes no
+                                        // further down.
+                                        if(is_over && target_context == nullptr)
                                         {
                                             context->ProcessTouchStart(touches, key_modifiers);
                                             if(is_ui_content_at(context->GetHoverElement(), document_position))

@@ -19,6 +19,7 @@
 #include <engine/rendering/renderer.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/ecs/components/transform_component.h>
 
 #include <logging/logging.h>
@@ -51,6 +52,10 @@ namespace unravel
 {
 namespace
 {
+/// Size of a screen-space context created before any host has sized the game view.
+constexpr int SCREEN_SPACE_PLACEHOLDER_WIDTH = 1024;
+constexpr int SCREEN_SPACE_PLACEHOLDER_HEIGHT = 768;
+
     uint64_t next_context_id = 0;
 
     constexpr hpp::string_view DATA_MODEL_ATTRIBUTE = "data-model";
@@ -538,20 +543,26 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
     (void)ctx;
     (void)camera_entity;
     (void)dt;
-    scn.registry->view<ui_document_component, active_component>().each(
-        [&](entt::entity entity, ui_document_component& ui_comp, active_component& active)
+    get_documents_by_sort_order(*scn.registry, rendered_documents_);
+    for(const entt::entity entity : rendered_documents_)
     {
+        // Updating a document may run script handlers that destroy the documents after it or remove them.
+        if(!scn.registry->valid(entity) || !scn.registry->all_of<active_component, ui_document_component>(entity))
+        {
+            continue;
+        }
+        auto& ui_comp = scn.registry->get<ui_document_component>(entity);
         if(ui_comp.render_mode != ui_render_mode::screen_space_overlay)
         {
-            return;
+            continue;
         }
         if(!ui_comp.context || !ui_comp.document || !ui_comp.is_enabled())
         {
-            return;
+            continue;
         }
         if(!ui_comp.document->IsVisible())
         {
-            return;
+            continue;
         }
 
         if(!ui_comp.render_layer_stack)
@@ -569,7 +580,7 @@ void ui_system::render_screen_space(rtti::context& ctx, const gfx::frame_buffer:
         ui_comp.context->Update();
         ui_comp.context->Render();
         RmlUi_Backend_Engine::end_frame();
-    });
+    }
     if(debug_context_)
     {
         auto sz = output->get_size();
@@ -794,8 +805,17 @@ auto ui_system::load_ui_document(entt::handle handle, ui_document_component& com
     {
         component.context_generation = ++next_context_id;
         Rml::String context_name = "doc_" + std::to_string(component.context_generation);
-        int w = (component.render_mode == ui_render_mode::screen_space_overlay) ? 1024 : static_cast<int>(component.size.width);
-        int h = (component.render_mode == ui_render_mode::screen_space_overlay) ? 768 : static_cast<int>(component.size.height);
+        // A screen-space document starts at the size of the view the game is shown in, so scripts that measure
+        // it as it loads see the size it renders at; the placeholder is only for a view no host has sized yet.
+        int w = static_cast<int>(component.size.width);
+        int h = static_cast<int>(component.size.height);
+        if(component.render_mode == ui_render_mode::screen_space_overlay)
+        {
+            const auto& view_size = engine::context().get_cached<rendering_system>().get_game_view_size();
+            const bool has_view = view_size.width > 0 && view_size.height > 0;
+            w = has_view ? static_cast<int>(view_size.width) : SCREEN_SPACE_PLACEHOLDER_WIDTH;
+            h = has_view ? static_cast<int>(view_size.height) : SCREEN_SPACE_PLACEHOLDER_HEIGHT;
+        }
         component.context = Rml::CreateContext(context_name, Rml::Vector2i(w, h));
         if(!component.context)
         {

@@ -2,6 +2,8 @@
 
 #include <RmlUi/Core/ElementDocument.h>
 
+#include <algorithm>
+
 namespace unravel
 {
 
@@ -58,6 +60,26 @@ auto ui_document_component::is_enabled() const -> bool
 void ui_document_component::set_enabled(bool enabled)
 {
     enabled_ = enabled;
+}
+
+void get_documents_by_sort_order(entt::registry& registry, std::vector<entt::entity>& documents)
+{
+    documents.clear();
+    const auto view = registry.view<ui_document_component>();
+    view.each(
+        [&](entt::entity entity, const ui_document_component& document)
+        {
+            // After the listed documents of the same order, which keeps the registry's order; unlike
+            // std::stable_sort, inserting in place needs no buffer.
+            const auto place = std::upper_bound(documents.begin(),
+                                                documents.end(),
+                                                document.sort_order,
+                                                [&](int order, entt::entity listed)
+                                                {
+                                                    return order < view.get<ui_document_component>(listed).sort_order;
+                                                });
+            documents.insert(place, entity);
+        });
 }
 
 } // namespace unravel
