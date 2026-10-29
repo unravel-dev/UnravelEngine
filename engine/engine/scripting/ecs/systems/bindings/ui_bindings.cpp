@@ -1632,16 +1632,16 @@ void register_ui_document_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIDocumentComponent");
-        reg.add_internal_call("internal_m2n_ui_document_get_asset", dotnet_internal_call(internal_m2n_ui_document_get_asset));
-        reg.add_internal_call("internal_m2n_ui_document_set_asset", dotnet_internal_call(internal_m2n_ui_document_set_asset));
-        reg.add_internal_call("internal_m2n_ui_document_is_loaded", dotnet_internal_call(internal_m2n_ui_document_is_loaded));
-        reg.add_internal_call("internal_m2n_ui_document_is_enabled", dotnet_internal_call(internal_m2n_ui_document_is_enabled));
-        reg.add_internal_call("internal_m2n_ui_document_set_enabled", dotnet_internal_call(internal_m2n_ui_document_set_enabled));
-        reg.add_internal_call("internal_m2n_ui_document_close", dotnet_internal_call(internal_m2n_ui_document_close));
-        reg.add_internal_call("internal_m2n_ui_document_reload", dotnet_internal_call(internal_m2n_ui_document_reload));
-        reg.add_internal_call("internal_m2n_ui_document_get_title", dotnet_internal_call(internal_m2n_ui_document_get_title));
-        reg.add_internal_call("internal_m2n_ui_document_set_title", dotnet_internal_call(internal_m2n_ui_document_set_title));
-        reg.add_internal_call("internal_m2n_ui_document_get_wrapper", dotnet_internal_call(internal_m2n_ui_document_get_wrapper));
+        reg.add_internal_call("internal_m2n_ui_document_get_asset", script_internal_call(internal_m2n_ui_document_get_asset));
+        reg.add_internal_call("internal_m2n_ui_document_set_asset", script_internal_call(internal_m2n_ui_document_set_asset));
+        reg.add_internal_call("internal_m2n_ui_document_is_loaded", script_internal_call(internal_m2n_ui_document_is_loaded));
+        reg.add_internal_call("internal_m2n_ui_document_is_enabled", script_internal_call(internal_m2n_ui_document_is_enabled));
+        reg.add_internal_call("internal_m2n_ui_document_set_enabled", script_internal_call(internal_m2n_ui_document_set_enabled));
+        reg.add_internal_call("internal_m2n_ui_document_close", script_internal_call(internal_m2n_ui_document_close));
+        reg.add_internal_call("internal_m2n_ui_document_reload", script_internal_call(internal_m2n_ui_document_reload));
+        reg.add_internal_call("internal_m2n_ui_document_get_title", script_internal_call(internal_m2n_ui_document_get_title));
+        reg.add_internal_call("internal_m2n_ui_document_set_title", script_internal_call(internal_m2n_ui_document_set_title));
+        reg.add_internal_call("internal_m2n_ui_document_get_wrapper", script_internal_call(internal_m2n_ui_document_get_wrapper));
     }
 }
 
@@ -1650,20 +1650,20 @@ void register_ui_document_script_bindings()
     APPLOG_TRACE("{}", __func__);
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIDocument");
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_valid", dotnet_internal_call(internal_m2n_ui_document_wrapper_is_valid));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_title", dotnet_internal_call(internal_m2n_ui_document_wrapper_get_title));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_set_title", dotnet_internal_call(internal_m2n_ui_document_wrapper_set_title));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_visible", dotnet_internal_call(internal_m2n_ui_document_wrapper_is_visible));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_show", dotnet_internal_call(internal_m2n_ui_document_wrapper_show));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_hide", dotnet_internal_call(internal_m2n_ui_document_wrapper_hide));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_close", dotnet_internal_call(internal_m2n_ui_document_wrapper_close));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_element_by_id", dotnet_internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector", dotnet_internal_call(internal_m2n_ui_document_query_selector_wrapper));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector_all", dotnet_internal_call(internal_m2n_ui_document_wrapper_query_selector_all));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_create_element", dotnet_internal_call(internal_m2n_ui_document_wrapper_create_element));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_element_at", dotnet_internal_call(internal_m2n_ui_document_wrapper_element_at));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_update_layout", dotnet_internal_call(internal_m2n_ui_document_wrapper_update_layout));
-        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_dp_ratio", dotnet_internal_call(internal_m2n_ui_document_wrapper_get_dp_ratio));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_valid", script_internal_call(internal_m2n_ui_document_wrapper_is_valid));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_title", script_internal_call(internal_m2n_ui_document_wrapper_get_title));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_set_title", script_internal_call(internal_m2n_ui_document_wrapper_set_title));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_is_visible", script_internal_call(internal_m2n_ui_document_wrapper_is_visible));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_show", script_internal_call(internal_m2n_ui_document_wrapper_show));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_hide", script_internal_call(internal_m2n_ui_document_wrapper_hide));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_close", script_internal_call(internal_m2n_ui_document_wrapper_close));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_element_by_id", script_internal_call(internal_m2n_ui_document_get_element_wrapper_by_id));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector", script_internal_call(internal_m2n_ui_document_query_selector_wrapper));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_query_selector_all", script_internal_call(internal_m2n_ui_document_wrapper_query_selector_all));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_create_element", script_internal_call(internal_m2n_ui_document_wrapper_create_element));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_element_at", script_internal_call(internal_m2n_ui_document_wrapper_element_at));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_update_layout", script_internal_call(internal_m2n_ui_document_wrapper_update_layout));
+        reg.add_internal_call("internal_m2n_ui_document_wrapper_get_dp_ratio", script_internal_call(internal_m2n_ui_document_wrapper_get_dp_ratio));
     }
 }
 
@@ -1672,68 +1672,68 @@ void register_ui_element_script_bindings()
     APPLOG_TRACE("{}", __func__);
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIElement");
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_valid", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_valid));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_id", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_id));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_tag_name", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_tag_name));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inner_rml", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_inner_rml));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inner_rml", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_inner_rml));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_text", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_text));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_text", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_text));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_visible", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_visible));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_visible", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_visible));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_remove_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_has_attribute", dotnet_internal_call(internal_m2n_ui_element_wrapper_has_attribute));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_class", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_class));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_class_set", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_class_set));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_pseudo_class", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_pseudo_class));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_pseudo_class_set", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_pseudo_class_set));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_sync_transform_to_entity", dotnet_internal_call(internal_m2n_ui_element_wrapper_sync_transform_to_entity));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_focus", dotnet_internal_call(internal_m2n_ui_element_wrapper_focus));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_blur", dotnet_internal_call(internal_m2n_ui_element_wrapper_blur));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_click", dotnet_internal_call(internal_m2n_ui_element_wrapper_click));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_into_view", dotnet_internal_call(internal_m2n_ui_element_wrapper_scroll_into_view));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_parent", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_parent));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_children", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_children));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_query_selector", dotnet_internal_call(internal_m2n_ui_element_wrapper_query_selector));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_query_selector_all", dotnet_internal_call(internal_m2n_ui_element_wrapper_query_selector_all));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_closest", dotnet_internal_call(internal_m2n_ui_element_wrapper_closest));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_append_child", dotnet_internal_call(internal_m2n_ui_element_wrapper_append_child));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_insert_before", dotnet_internal_call(internal_m2n_ui_element_wrapper_insert_before));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove", dotnet_internal_call(internal_m2n_ui_element_wrapper_remove));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_clone", dotnet_internal_call(internal_m2n_ui_element_wrapper_clone));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inline_style", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_inline_style));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inline_style", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_inline_style));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_inline_style", dotnet_internal_call(internal_m2n_ui_element_wrapper_remove_inline_style));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_computed_style", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_computed_style));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_style_number", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_style_number));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_style_number", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_style_number));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_rect", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_rect));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_scroll", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_scroll));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_to", dotnet_internal_call(internal_m2n_ui_element_wrapper_scroll_to));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_animate", dotnet_internal_call(internal_m2n_ui_element_wrapper_animate));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_stop_animation", dotnet_internal_call(internal_m2n_ui_element_wrapper_stop_animation));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_restart_animation", dotnet_internal_call(internal_m2n_ui_element_wrapper_restart_animation));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_control_kind", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_control_kind));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_value", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_value));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_value", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_value));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_disabled", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_disabled));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_disabled", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_disabled));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_checked", dotnet_internal_call(internal_m2n_ui_element_wrapper_is_checked));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_checked", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_checked));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_select_text", dotnet_internal_call(internal_m2n_ui_element_wrapper_select_text));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_selected_index", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_selected_index));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_selected_index", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_selected_index));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_options", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_options));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_add_option", dotnet_internal_call(internal_m2n_ui_element_wrapper_add_option));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_option", dotnet_internal_call(internal_m2n_ui_element_wrapper_remove_option));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_progress", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_progress));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_progress", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_progress));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_tabs", dotnet_internal_call(internal_m2n_ui_element_wrapper_get_tabs));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_active_tab", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_active_tab));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_tab", dotnet_internal_call(internal_m2n_ui_element_wrapper_set_tab));
-        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_tab", dotnet_internal_call(internal_m2n_ui_element_wrapper_remove_tab));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_valid", script_internal_call(internal_m2n_ui_element_wrapper_is_valid));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_id", script_internal_call(internal_m2n_ui_element_wrapper_get_id));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_tag_name", script_internal_call(internal_m2n_ui_element_wrapper_get_tag_name));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inner_rml", script_internal_call(internal_m2n_ui_element_wrapper_get_inner_rml));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inner_rml", script_internal_call(internal_m2n_ui_element_wrapper_set_inner_rml));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_text", script_internal_call(internal_m2n_ui_element_wrapper_set_text));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_text", script_internal_call(internal_m2n_ui_element_wrapper_get_text));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_visible", script_internal_call(internal_m2n_ui_element_wrapper_is_visible));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_visible", script_internal_call(internal_m2n_ui_element_wrapper_set_visible));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_attribute", script_internal_call(internal_m2n_ui_element_wrapper_get_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_attribute", script_internal_call(internal_m2n_ui_element_wrapper_set_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_attribute", script_internal_call(internal_m2n_ui_element_wrapper_remove_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_has_attribute", script_internal_call(internal_m2n_ui_element_wrapper_has_attribute));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_class", script_internal_call(internal_m2n_ui_element_wrapper_set_class));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_class_set", script_internal_call(internal_m2n_ui_element_wrapper_is_class_set));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_pseudo_class", script_internal_call(internal_m2n_ui_element_wrapper_set_pseudo_class));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_pseudo_class_set", script_internal_call(internal_m2n_ui_element_wrapper_is_pseudo_class_set));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_sync_transform_to_entity", script_internal_call(internal_m2n_ui_element_wrapper_sync_transform_to_entity));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_focus", script_internal_call(internal_m2n_ui_element_wrapper_focus));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_blur", script_internal_call(internal_m2n_ui_element_wrapper_blur));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_click", script_internal_call(internal_m2n_ui_element_wrapper_click));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_into_view", script_internal_call(internal_m2n_ui_element_wrapper_scroll_into_view));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_parent", script_internal_call(internal_m2n_ui_element_wrapper_get_parent));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_children", script_internal_call(internal_m2n_ui_element_wrapper_get_children));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_query_selector", script_internal_call(internal_m2n_ui_element_wrapper_query_selector));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_query_selector_all", script_internal_call(internal_m2n_ui_element_wrapper_query_selector_all));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_closest", script_internal_call(internal_m2n_ui_element_wrapper_closest));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_append_child", script_internal_call(internal_m2n_ui_element_wrapper_append_child));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_insert_before", script_internal_call(internal_m2n_ui_element_wrapper_insert_before));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove", script_internal_call(internal_m2n_ui_element_wrapper_remove));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_clone", script_internal_call(internal_m2n_ui_element_wrapper_clone));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_inline_style", script_internal_call(internal_m2n_ui_element_wrapper_get_inline_style));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_inline_style", script_internal_call(internal_m2n_ui_element_wrapper_set_inline_style));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_inline_style", script_internal_call(internal_m2n_ui_element_wrapper_remove_inline_style));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_computed_style", script_internal_call(internal_m2n_ui_element_wrapper_get_computed_style));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_style_number", script_internal_call(internal_m2n_ui_element_wrapper_set_style_number));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_style_number", script_internal_call(internal_m2n_ui_element_wrapper_get_style_number));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_rect", script_internal_call(internal_m2n_ui_element_wrapper_get_rect));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_scroll", script_internal_call(internal_m2n_ui_element_wrapper_get_scroll));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_scroll_to", script_internal_call(internal_m2n_ui_element_wrapper_scroll_to));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_animate", script_internal_call(internal_m2n_ui_element_wrapper_animate));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_stop_animation", script_internal_call(internal_m2n_ui_element_wrapper_stop_animation));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_restart_animation", script_internal_call(internal_m2n_ui_element_wrapper_restart_animation));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_control_kind", script_internal_call(internal_m2n_ui_element_wrapper_get_control_kind));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_value", script_internal_call(internal_m2n_ui_element_wrapper_get_value));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_value", script_internal_call(internal_m2n_ui_element_wrapper_set_value));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_disabled", script_internal_call(internal_m2n_ui_element_wrapper_is_disabled));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_disabled", script_internal_call(internal_m2n_ui_element_wrapper_set_disabled));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_is_checked", script_internal_call(internal_m2n_ui_element_wrapper_is_checked));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_checked", script_internal_call(internal_m2n_ui_element_wrapper_set_checked));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_select_text", script_internal_call(internal_m2n_ui_element_wrapper_select_text));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_selected_index", script_internal_call(internal_m2n_ui_element_wrapper_get_selected_index));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_selected_index", script_internal_call(internal_m2n_ui_element_wrapper_set_selected_index));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_options", script_internal_call(internal_m2n_ui_element_wrapper_get_options));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_add_option", script_internal_call(internal_m2n_ui_element_wrapper_add_option));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_option", script_internal_call(internal_m2n_ui_element_wrapper_remove_option));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_progress", script_internal_call(internal_m2n_ui_element_wrapper_get_progress));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_progress", script_internal_call(internal_m2n_ui_element_wrapper_set_progress));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_get_tabs", script_internal_call(internal_m2n_ui_element_wrapper_get_tabs));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_active_tab", script_internal_call(internal_m2n_ui_element_wrapper_set_active_tab));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_set_tab", script_internal_call(internal_m2n_ui_element_wrapper_set_tab));
+        reg.add_internal_call("internal_m2n_ui_element_wrapper_remove_tab", script_internal_call(internal_m2n_ui_element_wrapper_remove_tab));
     }
 }
 
@@ -1743,17 +1743,17 @@ void register_ui_event_script_bindings()
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIEventManager");
         reg.add_internal_call("internal_m2n_ui_ensure_native_event_listener",
-                              dotnet_internal_call(internal_m2n_ui_ensure_native_event_listener));
+                              script_internal_call(internal_m2n_ui_ensure_native_event_listener));
         reg.add_internal_call("internal_m2n_ui_remove_native_event_listener",
-                              dotnet_internal_call(internal_m2n_ui_remove_native_event_listener));
+                              script_internal_call(internal_m2n_ui_remove_native_event_listener));
         reg.add_internal_call("internal_m2n_ui_take_destroyed_handle",
-                              dotnet_internal_call(internal_m2n_ui_take_destroyed_handle));
+                              script_internal_call(internal_m2n_ui_take_destroyed_handle));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.UIEventBase");
-        reg.add_internal_call("internal_m2n_ui_stop_propagation", dotnet_internal_call(internal_m2n_ui_stop_propagation));
+        reg.add_internal_call("internal_m2n_ui_stop_propagation", script_internal_call(internal_m2n_ui_stop_propagation));
         reg.add_internal_call("internal_m2n_ui_stop_immediate_propagation",
-                              dotnet_internal_call(internal_m2n_ui_stop_immediate_propagation));
+                              script_internal_call(internal_m2n_ui_stop_immediate_propagation));
     }
 }
 

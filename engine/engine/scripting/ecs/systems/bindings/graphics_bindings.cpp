@@ -23,7 +23,7 @@ void internal_m2n_graphics_draw_mesh_instanced(const hpp::uuid& mesh_uid,
                                                bool casts_shadow,
                                                int layer_mask)
 {
-    if(!require_script_thread("Graphics.DrawMeshInstanced") || count <= 0 || transforms == 0)
+    if(count <= 0 || transforms == 0)
     {
         return;
     }
@@ -50,7 +50,7 @@ void register_graphics_script_bindings()
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.Graphics");
     reg.add_internal_call("internal_m2n_graphics_draw_mesh_instanced",
-                          dotnet_internal_call(internal_m2n_graphics_draw_mesh_instanced));
+                          script_internal_call(internal_m2n_graphics_draw_mesh_instanced));
 }
 
 } // namespace unravel

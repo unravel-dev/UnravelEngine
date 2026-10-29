@@ -33,8 +33,8 @@ void register_bone_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.BoneComponent");
-    reg.add_internal_call("internal_m2n_bone_get_index", dotnet_internal_call(internal_m2n_bone_get_index));
-    reg.add_internal_call("internal_m2n_bone_set_index", dotnet_internal_call(internal_m2n_bone_set_index));
+    reg.add_internal_call("internal_m2n_bone_get_index", script_internal_call(internal_m2n_bone_get_index));
+    reg.add_internal_call("internal_m2n_bone_set_index", script_internal_call(internal_m2n_bone_set_index));
 }
 
 } // namespace unravel

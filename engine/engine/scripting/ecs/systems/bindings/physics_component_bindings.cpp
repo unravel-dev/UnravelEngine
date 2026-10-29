@@ -220,47 +220,47 @@ void register_physics_component_script_bindings()
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.PhysicsComponent");
     reg.add_internal_call("internal_m2n_physics_apply_explosion_force",
-                            dotnet_internal_call(internal_m2n_physics_apply_explosion_force));
-    reg.add_internal_call("internal_m2n_physics_apply_force", dotnet_internal_call(internal_m2n_physics_apply_force));
-    reg.add_internal_call("internal_m2n_physics_apply_torque", dotnet_internal_call(internal_m2n_physics_apply_torque));
-    reg.add_internal_call("internal_m2n_physics_get_velocity", dotnet_internal_call(internal_m2n_physics_get_velocity));
-    reg.add_internal_call("internal_m2n_physics_set_velocity", dotnet_internal_call(internal_m2n_physics_set_velocity));
+                            script_internal_call(internal_m2n_physics_apply_explosion_force));
+    reg.add_internal_call("internal_m2n_physics_apply_force", script_internal_call(internal_m2n_physics_apply_force));
+    reg.add_internal_call("internal_m2n_physics_apply_torque", script_internal_call(internal_m2n_physics_apply_torque));
+    reg.add_internal_call("internal_m2n_physics_get_velocity", script_internal_call(internal_m2n_physics_get_velocity));
+    reg.add_internal_call("internal_m2n_physics_set_velocity", script_internal_call(internal_m2n_physics_set_velocity));
     reg.add_internal_call("internal_m2n_physics_get_angular_velocity",
-                            dotnet_internal_call(internal_m2n_physics_get_angular_velocity));
+                            script_internal_call(internal_m2n_physics_get_angular_velocity));
     reg.add_internal_call("internal_m2n_physics_set_angular_velocity",
-                            dotnet_internal_call(internal_m2n_physics_set_angular_velocity));
+                            script_internal_call(internal_m2n_physics_set_angular_velocity));
 
     reg.add_internal_call("internal_m2n_physics_get_include_layers",
-                            dotnet_internal_call(internal_m2n_physics_get_include_layers));
+                            script_internal_call(internal_m2n_physics_get_include_layers));
     reg.add_internal_call("internal_m2n_physics_set_include_layers",
-                            dotnet_internal_call(internal_m2n_physics_set_include_layers));
+                            script_internal_call(internal_m2n_physics_set_include_layers));
     reg.add_internal_call("internal_m2n_physics_get_exclude_layers",
-                            dotnet_internal_call(internal_m2n_physics_get_exclude_layers));
+                            script_internal_call(internal_m2n_physics_get_exclude_layers));
     reg.add_internal_call("internal_m2n_physics_set_exclude_layers",
-                            dotnet_internal_call(internal_m2n_physics_set_exclude_layers));
+                            script_internal_call(internal_m2n_physics_set_exclude_layers));
     reg.add_internal_call("internal_m2n_physics_get_collision_layers",
-                            dotnet_internal_call(internal_m2n_physics_get_collision_layers));
+                            script_internal_call(internal_m2n_physics_get_collision_layers));
 
     reg.add_internal_call("internal_m2n_physics_get_is_sensor",
-                            dotnet_internal_call(internal_m2n_physics_get_is_sensor));
+                            script_internal_call(internal_m2n_physics_get_is_sensor));
     reg.add_internal_call("internal_m2n_physics_set_is_sensor",
-                            dotnet_internal_call(internal_m2n_physics_set_is_sensor));
+                            script_internal_call(internal_m2n_physics_set_is_sensor));
     reg.add_internal_call("internal_m2n_physics_get_contact_event_flags",
-                            dotnet_internal_call(internal_m2n_physics_get_contact_event_flags));
+                            script_internal_call(internal_m2n_physics_get_contact_event_flags));
     reg.add_internal_call("internal_m2n_physics_set_contact_event_flags",
-                            dotnet_internal_call(internal_m2n_physics_set_contact_event_flags));
+                            script_internal_call(internal_m2n_physics_set_contact_event_flags));
     reg.add_internal_call("internal_m2n_physics_get_mass",
-                            dotnet_internal_call(internal_m2n_physics_get_mass));
+                            script_internal_call(internal_m2n_physics_get_mass));
     reg.add_internal_call("internal_m2n_physics_set_mass",
-                            dotnet_internal_call(internal_m2n_physics_set_mass));
+                            script_internal_call(internal_m2n_physics_set_mass));
     reg.add_internal_call("internal_m2n_physics_get_body_type",
-                            dotnet_internal_call(internal_m2n_physics_get_body_type));
+                            script_internal_call(internal_m2n_physics_get_body_type));
     reg.add_internal_call("internal_m2n_physics_set_body_type",
-                            dotnet_internal_call(internal_m2n_physics_set_body_type));
+                            script_internal_call(internal_m2n_physics_set_body_type));
     reg.add_internal_call("internal_m2n_physics_get_use_gravity",
-                            dotnet_internal_call(internal_m2n_physics_get_use_gravity));
+                            script_internal_call(internal_m2n_physics_get_use_gravity));
     reg.add_internal_call("internal_m2n_physics_set_use_gravity",
-                            dotnet_internal_call(internal_m2n_physics_set_use_gravity));
+                            script_internal_call(internal_m2n_physics_set_use_gravity));
 }
 
 } // namespace unravel

@@ -87,19 +87,19 @@ void register_submesh_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.SubmeshComponent");
     reg.add_internal_call("internal_m2n_submesh_get_entry_count",
-                          dotnet_internal_call(internal_m2n_submesh_get_entry_count));
+                          script_internal_call(internal_m2n_submesh_get_entry_count));
     reg.add_internal_call("internal_m2n_submesh_get_submesh_index",
-                          dotnet_internal_call(internal_m2n_submesh_get_submesh_index));
+                          script_internal_call(internal_m2n_submesh_get_submesh_index));
     reg.add_internal_call("internal_m2n_submesh_get_stable_id",
-                          dotnet_internal_call(internal_m2n_submesh_get_stable_id));
+                          script_internal_call(internal_m2n_submesh_get_stable_id));
     reg.add_internal_call("internal_m2n_submesh_get_enabled",
-                          dotnet_internal_call(internal_m2n_submesh_get_enabled));
+                          script_internal_call(internal_m2n_submesh_get_enabled));
     reg.add_internal_call("internal_m2n_submesh_set_enabled",
-                          dotnet_internal_call(internal_m2n_submesh_set_enabled));
+                          script_internal_call(internal_m2n_submesh_set_enabled));
     reg.add_internal_call("internal_m2n_submesh_get_casts_shadow",
-                          dotnet_internal_call(internal_m2n_submesh_get_casts_shadow));
+                          script_internal_call(internal_m2n_submesh_get_casts_shadow));
     reg.add_internal_call("internal_m2n_submesh_set_casts_shadow",
-                          dotnet_internal_call(internal_m2n_submesh_set_casts_shadow));
+                          script_internal_call(internal_m2n_submesh_set_casts_shadow));
 }
 
 } // namespace unravel

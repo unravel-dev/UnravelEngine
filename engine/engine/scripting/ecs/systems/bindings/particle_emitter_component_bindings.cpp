@@ -2451,501 +2451,501 @@ void register_particle_emitter_component_script_bindings()
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.ParticleEmitterComponent");
     reg.add_internal_call("internal_m2n_particle_emitter_get_enabled", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_enabled));
+                            script_internal_call(internal_m2n_particle_emitter_get_enabled));
     reg.add_internal_call("internal_m2n_particle_emitter_set_enabled", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_enabled));
+                            script_internal_call(internal_m2n_particle_emitter_set_enabled));
     reg.add_internal_call("internal_m2n_particle_emitter_get_max_particles", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_particles));
+                            script_internal_call(internal_m2n_particle_emitter_get_max_particles));
     reg.add_internal_call("internal_m2n_particle_emitter_set_max_particles", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_particles));
+                            script_internal_call(internal_m2n_particle_emitter_set_max_particles));
     reg.add_internal_call("internal_m2n_particle_emitter_get_shape", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape));
+                            script_internal_call(internal_m2n_particle_emitter_get_shape));
     reg.add_internal_call("internal_m2n_particle_emitter_set_shape", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape));
+                            script_internal_call(internal_m2n_particle_emitter_set_shape));
     reg.add_internal_call("internal_m2n_particle_emitter_get_direction", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_direction));
+                            script_internal_call(internal_m2n_particle_emitter_get_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_set_direction", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_direction));
+                            script_internal_call(internal_m2n_particle_emitter_set_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_get_gravity_scale", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_gravity_scale));
+                            script_internal_call(internal_m2n_particle_emitter_get_gravity_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_set_gravity_scale", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_gravity_scale));
+                            script_internal_call(internal_m2n_particle_emitter_set_gravity_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_get_emission_rate", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_emission_rate));
+                            script_internal_call(internal_m2n_particle_emitter_get_emission_rate));
     reg.add_internal_call("internal_m2n_particle_emitter_set_emission_rate", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_emission_rate));
+                            script_internal_call(internal_m2n_particle_emitter_set_emission_rate));
     reg.add_internal_call("internal_m2n_particle_emitter_get_spawn_along_path", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_spawn_along_path));
+                            script_internal_call(internal_m2n_particle_emitter_get_spawn_along_path));
     reg.add_internal_call("internal_m2n_particle_emitter_set_spawn_along_path", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_spawn_along_path));
+                            script_internal_call(internal_m2n_particle_emitter_set_spawn_along_path));
     reg.add_internal_call("internal_m2n_particle_emitter_get_drag",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_drag));
+                            script_internal_call(internal_m2n_particle_emitter_get_drag));
     reg.add_internal_call("internal_m2n_particle_emitter_set_drag",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_drag));
+                            script_internal_call(internal_m2n_particle_emitter_set_drag));
     reg.add_internal_call("internal_m2n_particle_emitter_get_inherit_velocity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_inherit_velocity));
+                            script_internal_call(internal_m2n_particle_emitter_get_inherit_velocity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_inherit_velocity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_inherit_velocity));
+                            script_internal_call(internal_m2n_particle_emitter_set_inherit_velocity));
     reg.add_internal_call("internal_m2n_particle_emitter_get_direction_spread",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_direction_spread));
+                            script_internal_call(internal_m2n_particle_emitter_get_direction_spread));
     reg.add_internal_call("internal_m2n_particle_emitter_set_direction_spread",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_direction_spread));
+                            script_internal_call(internal_m2n_particle_emitter_set_direction_spread));
     reg.add_internal_call("internal_m2n_particle_emitter_get_use_fixed_seed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_use_fixed_seed));
+                            script_internal_call(internal_m2n_particle_emitter_get_use_fixed_seed));
     reg.add_internal_call("internal_m2n_particle_emitter_set_use_fixed_seed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_use_fixed_seed));
+                            script_internal_call(internal_m2n_particle_emitter_set_use_fixed_seed));
     reg.add_internal_call("internal_m2n_particle_emitter_get_random_seed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_seed));
+                            script_internal_call(internal_m2n_particle_emitter_get_random_seed));
     reg.add_internal_call("internal_m2n_particle_emitter_set_random_seed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_seed));
+                            script_internal_call(internal_m2n_particle_emitter_set_random_seed));
     reg.add_internal_call("internal_m2n_particle_emitter_get_sort_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_sort_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_sort_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_sort_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_sort_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_sort_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_primitive",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_primitive));
+                            script_internal_call(internal_m2n_particle_emitter_get_primitive));
     reg.add_internal_call("internal_m2n_particle_emitter_set_primitive",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_primitive));
+                            script_internal_call(internal_m2n_particle_emitter_set_primitive));
     reg.add_internal_call("internal_m2n_particle_emitter_get_half_resolution",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_half_resolution));
+                            script_internal_call(internal_m2n_particle_emitter_get_half_resolution));
     reg.add_internal_call("internal_m2n_particle_emitter_set_half_resolution",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_half_resolution));
+                            script_internal_call(internal_m2n_particle_emitter_set_half_resolution));
     reg.add_internal_call("internal_m2n_particle_emitter_get_write_velocity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_write_velocity));
+                            script_internal_call(internal_m2n_particle_emitter_get_write_velocity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_write_velocity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_write_velocity));
+                            script_internal_call(internal_m2n_particle_emitter_set_write_velocity));
     reg.add_internal_call("internal_m2n_particle_emitter_get_velocity_alpha_threshold",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_velocity_alpha_threshold));
+                            script_internal_call(internal_m2n_particle_emitter_get_velocity_alpha_threshold));
     reg.add_internal_call("internal_m2n_particle_emitter_set_velocity_alpha_threshold",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_velocity_alpha_threshold));
+                            script_internal_call(internal_m2n_particle_emitter_set_velocity_alpha_threshold));
     reg.add_internal_call("internal_m2n_particle_emitter_get_size_axes_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_axes_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_size_axes_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_size_axes_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_axes_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_size_axes_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_random_between_gradients",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_between_gradients));
+                            script_internal_call(internal_m2n_particle_emitter_get_random_between_gradients));
     reg.add_internal_call("internal_m2n_particle_emitter_set_random_between_gradients",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_between_gradients));
+                            script_internal_call(internal_m2n_particle_emitter_set_random_between_gradients));
     reg.add_internal_call("internal_m2n_particle_emitter_get_color_gradient_b",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_gradient_b));
+                            script_internal_call(internal_m2n_particle_emitter_get_color_gradient_b));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_gradient_b",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_gradient_b));
+                            script_internal_call(internal_m2n_particle_emitter_set_color_gradient_b));
     reg.add_internal_call("internal_m2n_particle_emitter_get_intensity_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_intensity_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_intensity_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_intensity_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_intensity_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_intensity_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_spin_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_spin_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_spin_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_spin_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_spin_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_spin_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_sheet_use_frame_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_sheet_use_frame_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_frame_curve",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_frame_curve));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_sheet_frame_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_frame_curve",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_frame_curve));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_sheet_frame_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_random_row",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_random_row));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_sheet_random_row));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_random_row",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_random_row));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_sheet_random_row));
     reg.add_internal_call("internal_m2n_particle_emitter_get_rate_over_distance",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_rate_over_distance));
+                            script_internal_call(internal_m2n_particle_emitter_get_rate_over_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_set_rate_over_distance",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_rate_over_distance));
+                            script_internal_call(internal_m2n_particle_emitter_set_rate_over_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_get_bursts",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_bursts));
+                            script_internal_call(internal_m2n_particle_emitter_get_bursts));
     reg.add_internal_call("internal_m2n_particle_emitter_set_bursts",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_bursts));
+                            script_internal_call(internal_m2n_particle_emitter_set_bursts));
     reg.add_internal_call("internal_m2n_particle_emitter_get_cone_angle",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_cone_angle));
+                            script_internal_call(internal_m2n_particle_emitter_get_cone_angle));
     reg.add_internal_call("internal_m2n_particle_emitter_set_cone_angle",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_cone_angle));
+                            script_internal_call(internal_m2n_particle_emitter_set_cone_angle));
     reg.add_internal_call("internal_m2n_particle_emitter_get_torus_thickness",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_torus_thickness));
+                            script_internal_call(internal_m2n_particle_emitter_get_torus_thickness));
     reg.add_internal_call("internal_m2n_particle_emitter_set_torus_thickness",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_torus_thickness));
+                            script_internal_call(internal_m2n_particle_emitter_set_torus_thickness));
     reg.add_internal_call("internal_m2n_particle_emitter_get_shape_mesh",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape_mesh));
+                            script_internal_call(internal_m2n_particle_emitter_get_shape_mesh));
     reg.add_internal_call("internal_m2n_particle_emitter_set_shape_mesh",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape_mesh));
+                            script_internal_call(internal_m2n_particle_emitter_set_shape_mesh));
     reg.add_internal_call("internal_m2n_particle_emitter_get_render_mesh",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_render_mesh));
+                            script_internal_call(internal_m2n_particle_emitter_get_render_mesh));
     reg.add_internal_call("internal_m2n_particle_emitter_set_render_mesh",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_render_mesh));
+                            script_internal_call(internal_m2n_particle_emitter_set_render_mesh));
     reg.add_internal_call("internal_m2n_particle_emitter_get_render_material",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_render_material));
+                            script_internal_call(internal_m2n_particle_emitter_get_render_material));
     reg.add_internal_call("internal_m2n_particle_emitter_set_render_material",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_render_material));
+                            script_internal_call(internal_m2n_particle_emitter_set_render_material));
     reg.add_internal_call("internal_m2n_particle_emitter_get_mesh_cast_shadows",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_mesh_cast_shadows));
+                            script_internal_call(internal_m2n_particle_emitter_get_mesh_cast_shadows));
     reg.add_internal_call("internal_m2n_particle_emitter_set_mesh_cast_shadows",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_mesh_cast_shadows));
+                            script_internal_call(internal_m2n_particle_emitter_set_mesh_cast_shadows));
     reg.add_internal_call("internal_m2n_particle_emitter_get_mesh_spawn_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_mesh_spawn_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_mesh_spawn_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_mesh_spawn_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_mesh_spawn_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_mesh_spawn_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_strength",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_strength));
+                            script_internal_call(internal_m2n_particle_emitter_get_turbulence_strength));
     reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_strength",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_strength));
+                            script_internal_call(internal_m2n_particle_emitter_set_turbulence_strength));
     reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_frequency",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_frequency));
+                            script_internal_call(internal_m2n_particle_emitter_get_turbulence_frequency));
     reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_frequency",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_frequency));
+                            script_internal_call(internal_m2n_particle_emitter_set_turbulence_frequency));
     reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_speed));
+                            script_internal_call(internal_m2n_particle_emitter_get_turbulence_speed));
     reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_speed));
+                            script_internal_call(internal_m2n_particle_emitter_set_turbulence_speed));
     reg.add_internal_call("internal_m2n_particle_emitter_get_turbulence_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_turbulence_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_turbulence_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_turbulence_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_turbulence_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_turbulence_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_max_draw_distance",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_draw_distance));
+                            script_internal_call(internal_m2n_particle_emitter_get_max_draw_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_set_max_draw_distance",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_draw_distance));
+                            script_internal_call(internal_m2n_particle_emitter_set_max_draw_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_get_draw_distance_fade",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_draw_distance_fade));
+                            script_internal_call(internal_m2n_particle_emitter_get_draw_distance_fade));
     reg.add_internal_call("internal_m2n_particle_emitter_set_draw_distance_fade",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_draw_distance_fade));
+                            script_internal_call(internal_m2n_particle_emitter_set_draw_distance_fade));
     reg.add_internal_call("internal_m2n_particle_emitter_get_normal_texture",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_normal_texture));
+                            script_internal_call(internal_m2n_particle_emitter_get_normal_texture));
     reg.add_internal_call("internal_m2n_particle_emitter_set_normal_texture",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_normal_texture));
+                            script_internal_call(internal_m2n_particle_emitter_set_normal_texture));
     reg.add_internal_call("internal_m2n_particle_emitter_get_cutout_alpha_threshold",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_cutout_alpha_threshold));
+                            script_internal_call(internal_m2n_particle_emitter_get_cutout_alpha_threshold));
     reg.add_internal_call("internal_m2n_particle_emitter_set_cutout_alpha_threshold",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_cutout_alpha_threshold));
+                            script_internal_call(internal_m2n_particle_emitter_set_cutout_alpha_threshold));
     reg.add_internal_call("internal_m2n_particle_emitter_get_lighting_wrap",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lighting_wrap));
+                            script_internal_call(internal_m2n_particle_emitter_get_lighting_wrap));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lighting_wrap",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lighting_wrap));
+                            script_internal_call(internal_m2n_particle_emitter_set_lighting_wrap));
     reg.add_internal_call("internal_m2n_particle_emitter_get_receive_shadows",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_receive_shadows));
+                            script_internal_call(internal_m2n_particle_emitter_get_receive_shadows));
     reg.add_internal_call("internal_m2n_particle_emitter_set_receive_shadows",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_receive_shadows));
+                            script_internal_call(internal_m2n_particle_emitter_set_receive_shadows));
     reg.add_internal_call("internal_m2n_particle_emitter_get_lighting",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lighting));
+                            script_internal_call(internal_m2n_particle_emitter_get_lighting));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lighting",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lighting));
+                            script_internal_call(internal_m2n_particle_emitter_set_lighting));
     reg.add_internal_call("internal_m2n_particle_emitter_get_light_count",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_count));
+                            script_internal_call(internal_m2n_particle_emitter_get_light_count));
     reg.add_internal_call("internal_m2n_particle_emitter_set_light_count",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_count));
+                            script_internal_call(internal_m2n_particle_emitter_set_light_count));
     reg.add_internal_call("internal_m2n_particle_emitter_get_light_intensity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_intensity));
+                            script_internal_call(internal_m2n_particle_emitter_get_light_intensity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_light_intensity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_intensity));
+                            script_internal_call(internal_m2n_particle_emitter_set_light_intensity));
     reg.add_internal_call("internal_m2n_particle_emitter_get_light_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_range));
+                            script_internal_call(internal_m2n_particle_emitter_get_light_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_light_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_range));
+                            script_internal_call(internal_m2n_particle_emitter_set_light_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_light_color_from_particle",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_light_color_from_particle));
+                            script_internal_call(internal_m2n_particle_emitter_get_light_color_from_particle));
     reg.add_internal_call("internal_m2n_particle_emitter_set_light_color_from_particle",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_light_color_from_particle));
+                            script_internal_call(internal_m2n_particle_emitter_set_light_color_from_particle));
     reg.add_internal_call("internal_m2n_particle_emitter_get_restitution",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_restitution));
+                            script_internal_call(internal_m2n_particle_emitter_get_restitution));
     reg.add_internal_call("internal_m2n_particle_emitter_set_restitution",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_restitution));
+                            script_internal_call(internal_m2n_particle_emitter_set_restitution));
     reg.add_internal_call("internal_m2n_particle_emitter_get_friction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_friction));
+                            script_internal_call(internal_m2n_particle_emitter_get_friction));
     reg.add_internal_call("internal_m2n_particle_emitter_set_friction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_friction));
+                            script_internal_call(internal_m2n_particle_emitter_set_friction));
     reg.add_internal_call("internal_m2n_particle_emitter_get_collision_radius_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_collision_radius_scale));
+                            script_internal_call(internal_m2n_particle_emitter_get_collision_radius_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_set_collision_radius_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_collision_radius_scale));
+                            script_internal_call(internal_m2n_particle_emitter_set_collision_radius_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_get_max_bounces",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_bounces));
+                            script_internal_call(internal_m2n_particle_emitter_get_max_bounces));
     reg.add_internal_call("internal_m2n_particle_emitter_set_max_bounces",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_bounces));
+                            script_internal_call(internal_m2n_particle_emitter_set_max_bounces));
     reg.add_internal_call("internal_m2n_particle_emitter_get_collision",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_collision));
+                            script_internal_call(internal_m2n_particle_emitter_get_collision));
     reg.add_internal_call("internal_m2n_particle_emitter_set_collision",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_collision));
+                            script_internal_call(internal_m2n_particle_emitter_set_collision));
     reg.add_internal_call("internal_m2n_particle_emitter_get_collision_planes",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_collision_planes));
+                            script_internal_call(internal_m2n_particle_emitter_get_collision_planes));
     reg.add_internal_call("internal_m2n_particle_emitter_set_collision_planes",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_collision_planes));
+                            script_internal_call(internal_m2n_particle_emitter_set_collision_planes));
     reg.add_internal_call("internal_m2n_particle_emitter_get_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_sub_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_get_sub_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_set_sub_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_sub_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_set_sub_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_get_trail_length",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_trail_length));
+                            script_internal_call(internal_m2n_particle_emitter_get_trail_length));
     reg.add_internal_call("internal_m2n_particle_emitter_set_trail_length",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_trail_length));
+                            script_internal_call(internal_m2n_particle_emitter_set_trail_length));
     reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_texture_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_texture_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_ribbon_texture_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_texture_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_texture_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_ribbon_texture_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_tile_time",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_tile_time));
+                            script_internal_call(internal_m2n_particle_emitter_get_ribbon_tile_time));
     reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_tile_time",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_tile_time));
+                            script_internal_call(internal_m2n_particle_emitter_set_ribbon_tile_time));
     reg.add_internal_call("internal_m2n_particle_emitter_get_ribbon_facing",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_ribbon_facing));
+                            script_internal_call(internal_m2n_particle_emitter_get_ribbon_facing));
     reg.add_internal_call("internal_m2n_particle_emitter_set_ribbon_facing",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_ribbon_facing));
+                            script_internal_call(internal_m2n_particle_emitter_set_ribbon_facing));
     reg.add_internal_call("internal_m2n_particle_emitter_get_trail_width_end",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_trail_width_end));
+                            script_internal_call(internal_m2n_particle_emitter_get_trail_width_end));
     reg.add_internal_call("internal_m2n_particle_emitter_set_trail_width_end",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_trail_width_end));
+                            script_internal_call(internal_m2n_particle_emitter_set_trail_width_end));
     reg.add_internal_call("internal_m2n_particle_emitter_get_bounds_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_bounds_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_bounds_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_bounds_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_bounds_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_bounds_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_fixed_bounds",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_fixed_bounds));
+                            script_internal_call(internal_m2n_particle_emitter_get_fixed_bounds));
     reg.add_internal_call("internal_m2n_particle_emitter_set_fixed_bounds",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_fixed_bounds));
+                            script_internal_call(internal_m2n_particle_emitter_set_fixed_bounds));
     reg.add_internal_call("internal_m2n_particle_emitter_get_opacity", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_opacity));
+                            script_internal_call(internal_m2n_particle_emitter_get_opacity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_opacity", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_opacity));
+                            script_internal_call(internal_m2n_particle_emitter_set_opacity));
     reg.add_internal_call("internal_m2n_particle_emitter_get_acceleration", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_acceleration));
+                            script_internal_call(internal_m2n_particle_emitter_get_acceleration));
     reg.add_internal_call("internal_m2n_particle_emitter_set_acceleration", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_acceleration));
+                            script_internal_call(internal_m2n_particle_emitter_set_acceleration));
     reg.add_internal_call("internal_m2n_particle_emitter_get_shape_scale", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape_scale));
+                            script_internal_call(internal_m2n_particle_emitter_get_shape_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_set_shape_scale", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape_scale));
+                            script_internal_call(internal_m2n_particle_emitter_set_shape_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_get_duration",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_duration));
+                            script_internal_call(internal_m2n_particle_emitter_get_duration));
     reg.add_internal_call("internal_m2n_particle_emitter_set_duration",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_duration));
+                            script_internal_call(internal_m2n_particle_emitter_set_duration));
     reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_range));
+                            script_internal_call(internal_m2n_particle_emitter_get_lifetime_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime_range));
+                            script_internal_call(internal_m2n_particle_emitter_set_lifetime_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_start_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_start_speed));
+                            script_internal_call(internal_m2n_particle_emitter_get_start_speed));
     reg.add_internal_call("internal_m2n_particle_emitter_set_start_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_start_speed));
+                            script_internal_call(internal_m2n_particle_emitter_set_start_speed));
     reg.add_internal_call("internal_m2n_particle_emitter_get_motion_easing", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_motion_easing));
+                            script_internal_call(internal_m2n_particle_emitter_get_motion_easing));
     reg.add_internal_call("internal_m2n_particle_emitter_set_motion_easing", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_motion_easing));
+                            script_internal_call(internal_m2n_particle_emitter_set_motion_easing));
     reg.add_internal_call("internal_m2n_particle_emitter_get_num_particles", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_num_particles));
+                            script_internal_call(internal_m2n_particle_emitter_get_num_particles));
     reg.add_internal_call("internal_m2n_particle_emitter_is_playing", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_is_playing));
+                            script_internal_call(internal_m2n_particle_emitter_is_playing));
     reg.add_internal_call("internal_m2n_particle_emitter_is_paused", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_is_paused));
+                            script_internal_call(internal_m2n_particle_emitter_is_paused));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture));
     reg.add_internal_call("internal_m2n_particle_emitter_play", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_play));
+                            script_internal_call(internal_m2n_particle_emitter_play));
     reg.add_internal_call("internal_m2n_particle_emitter_stop", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_stop));
+                            script_internal_call(internal_m2n_particle_emitter_stop));
     reg.add_internal_call("internal_m2n_particle_emitter_stop_and_reset", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_stop_and_reset));
+                            script_internal_call(internal_m2n_particle_emitter_stop_and_reset));
     reg.add_internal_call("internal_m2n_particle_emitter_pause", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_pause));
+                            script_internal_call(internal_m2n_particle_emitter_pause));
     reg.add_internal_call("internal_m2n_particle_emitter_resume", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_resume));
+                            script_internal_call(internal_m2n_particle_emitter_resume));
     reg.add_internal_call("internal_m2n_particle_emitter_reset_emitter", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_reset_emitter));
+                            script_internal_call(internal_m2n_particle_emitter_reset_emitter));
     reg.add_internal_call("internal_m2n_particle_emitter_get_loop", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_loop));
+                            script_internal_call(internal_m2n_particle_emitter_get_loop));
     reg.add_internal_call("internal_m2n_particle_emitter_set_loop", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_loop));
+                            script_internal_call(internal_m2n_particle_emitter_set_loop));
     reg.add_internal_call("internal_m2n_particle_emitter_get_blend_mode", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_blend_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_blend_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_blend_mode", 
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_blend_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_blend_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_sort_backend",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_sort_backend));
+                            script_internal_call(internal_m2n_particle_emitter_get_sort_backend));
     reg.add_internal_call("internal_m2n_particle_emitter_set_sort_backend",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_sort_backend));
+                            script_internal_call(internal_m2n_particle_emitter_set_sort_backend));
     reg.add_internal_call("internal_m2n_particle_emitter_get_culling_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_culling_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_culling_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_culling_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_culling_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_culling_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_simulation_space",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_simulation_space));
+                            script_internal_call(internal_m2n_particle_emitter_get_simulation_space));
     reg.add_internal_call("internal_m2n_particle_emitter_set_simulation_space",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_simulation_space));
+                            script_internal_call(internal_m2n_particle_emitter_set_simulation_space));
     reg.add_internal_call("internal_m2n_particle_emitter_get_start_delay",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_start_delay));
+                            script_internal_call(internal_m2n_particle_emitter_get_start_delay));
     reg.add_internal_call("internal_m2n_particle_emitter_set_start_delay",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_start_delay));
+                            script_internal_call(internal_m2n_particle_emitter_set_start_delay));
     reg.add_internal_call("internal_m2n_particle_emitter_get_spawn_location",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_spawn_location));
+                            script_internal_call(internal_m2n_particle_emitter_get_spawn_location));
     reg.add_internal_call("internal_m2n_particle_emitter_set_spawn_location",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_spawn_location));
+                            script_internal_call(internal_m2n_particle_emitter_set_spawn_location));
     reg.add_internal_call("internal_m2n_particle_emitter_get_shape_position",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_shape_position));
+                            script_internal_call(internal_m2n_particle_emitter_get_shape_position));
     reg.add_internal_call("internal_m2n_particle_emitter_set_shape_position",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_shape_position));
+                            script_internal_call(internal_m2n_particle_emitter_set_shape_position));
     reg.add_internal_call("internal_m2n_particle_emitter_get_size_axes",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_axes));
+                            script_internal_call(internal_m2n_particle_emitter_get_size_axes));
     reg.add_internal_call("internal_m2n_particle_emitter_set_size_axes",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_axes));
+                            script_internal_call(internal_m2n_particle_emitter_set_size_axes));
     reg.add_internal_call("internal_m2n_particle_emitter_get_rotation",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_rotation));
+                            script_internal_call(internal_m2n_particle_emitter_get_rotation));
     reg.add_internal_call("internal_m2n_particle_emitter_set_rotation",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_rotation));
+                            script_internal_call(internal_m2n_particle_emitter_set_rotation));
     reg.add_internal_call("internal_m2n_particle_emitter_get_spin_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_spin_speed));
+                            script_internal_call(internal_m2n_particle_emitter_get_spin_speed));
     reg.add_internal_call("internal_m2n_particle_emitter_set_spin_speed",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_spin_speed));
+                            script_internal_call(internal_m2n_particle_emitter_set_spin_speed));
     reg.add_internal_call("internal_m2n_particle_emitter_get_random_spin_direction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_random_spin_direction));
+                            script_internal_call(internal_m2n_particle_emitter_get_random_spin_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_set_random_spin_direction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_random_spin_direction));
+                            script_internal_call(internal_m2n_particle_emitter_set_random_spin_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_get_soft_fade_distance",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_soft_fade_distance));
+                            script_internal_call(internal_m2n_particle_emitter_get_soft_fade_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_set_soft_fade_distance",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_soft_fade_distance));
+                            script_internal_call(internal_m2n_particle_emitter_set_soft_fade_distance));
     reg.add_internal_call("internal_m2n_particle_emitter_get_prewarm",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_prewarm));
+                            script_internal_call(internal_m2n_particle_emitter_get_prewarm));
     reg.add_internal_call("internal_m2n_particle_emitter_set_prewarm",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_prewarm));
+                            script_internal_call(internal_m2n_particle_emitter_set_prewarm));
     reg.add_internal_call("internal_m2n_particle_emitter_get_auto_play",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_auto_play));
+                            script_internal_call(internal_m2n_particle_emitter_get_auto_play));
     reg.add_internal_call("internal_m2n_particle_emitter_set_auto_play",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_auto_play));
+                            script_internal_call(internal_m2n_particle_emitter_set_auto_play));
     reg.add_internal_call("internal_m2n_particle_emitter_get_sort_priority",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_sort_priority));
+                            script_internal_call(internal_m2n_particle_emitter_get_sort_priority));
     reg.add_internal_call("internal_m2n_particle_emitter_set_sort_priority",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_sort_priority));
+                            script_internal_call(internal_m2n_particle_emitter_set_sort_priority));
     reg.add_internal_call("internal_m2n_particle_emitter_get_frame_blending",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_frame_blending));
+                            script_internal_call(internal_m2n_particle_emitter_get_frame_blending));
     reg.add_internal_call("internal_m2n_particle_emitter_set_frame_blending",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_frame_blending));
+                            script_internal_call(internal_m2n_particle_emitter_set_frame_blending));
     reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_multiplier",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_multiplier));
+                            script_internal_call(internal_m2n_particle_emitter_get_size_by_speed_multiplier));
     reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_multiplier",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_by_speed_multiplier));
+                            script_internal_call(internal_m2n_particle_emitter_set_size_by_speed_multiplier));
     reg.add_internal_call("internal_m2n_particle_emitter_get_size_by_speed_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_by_speed_speed_range));
+                            script_internal_call(internal_m2n_particle_emitter_get_size_by_speed_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_size_by_speed_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_by_speed_speed_range));
+                            script_internal_call(internal_m2n_particle_emitter_set_size_by_speed_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_color_intensity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_intensity));
+                            script_internal_call(internal_m2n_particle_emitter_get_color_intensity));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_intensity",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_intensity));
+                            script_internal_call(internal_m2n_particle_emitter_set_color_intensity));
     reg.add_internal_call("internal_m2n_particle_emitter_get_color_by_speed_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_by_speed_speed_range));
+                            script_internal_call(internal_m2n_particle_emitter_get_color_by_speed_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_by_speed_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_by_speed_speed_range));
+                            script_internal_call(internal_m2n_particle_emitter_set_color_by_speed_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_range));
+                            script_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_range));
+                            script_internal_call(internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_render_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_render_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_render_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_render_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_render_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_render_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_align_to_direction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_align_to_direction));
+                            script_internal_call(internal_m2n_particle_emitter_get_align_to_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_set_align_to_direction",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_align_to_direction));
+                            script_internal_call(internal_m2n_particle_emitter_set_align_to_direction));
     reg.add_internal_call("internal_m2n_particle_emitter_get_pivot",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_pivot));
+                            script_internal_call(internal_m2n_particle_emitter_get_pivot));
     reg.add_internal_call("internal_m2n_particle_emitter_set_pivot",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_pivot));
+                            script_internal_call(internal_m2n_particle_emitter_set_pivot));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_mode));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_mode",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_mode));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_mode));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_tiles",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_tiles));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_sheet_tiles));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_tiles",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_tiles));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_sheet_tiles));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_cycles",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_cycles));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_sheet_cycles));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_cycles",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_cycles));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_sheet_cycles));
     reg.add_internal_call("internal_m2n_particle_emitter_get_texture_sheet_randomize",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_texture_sheet_randomize));
+                            script_internal_call(internal_m2n_particle_emitter_get_texture_sheet_randomize));
     reg.add_internal_call("internal_m2n_particle_emitter_set_texture_sheet_randomize",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_texture_sheet_randomize));
+                            script_internal_call(internal_m2n_particle_emitter_set_texture_sheet_randomize));
     reg.add_internal_call("internal_m2n_particle_emitter_get_color_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_gradient));
+                            script_internal_call(internal_m2n_particle_emitter_get_color_gradient));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_gradient));
+                            script_internal_call(internal_m2n_particle_emitter_set_color_gradient));
     reg.add_internal_call("internal_m2n_particle_emitter_get_color_by_speed_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_color_by_speed_gradient));
+                            script_internal_call(internal_m2n_particle_emitter_get_color_by_speed_gradient));
     reg.add_internal_call("internal_m2n_particle_emitter_set_color_by_speed_gradient",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_color_by_speed_gradient));
+                            script_internal_call(internal_m2n_particle_emitter_set_color_by_speed_gradient));
     reg.add_internal_call("internal_m2n_particle_emitter_get_stretch_length_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_stretch_length_scale));
+                            script_internal_call(internal_m2n_particle_emitter_get_stretch_length_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_set_stretch_length_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_stretch_length_scale));
+                            script_internal_call(internal_m2n_particle_emitter_set_stretch_length_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_get_stretch_camera_velocity_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_stretch_camera_velocity_scale));
+                            script_internal_call(internal_m2n_particle_emitter_get_stretch_camera_velocity_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_set_stretch_camera_velocity_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_stretch_camera_velocity_scale));
+                            script_internal_call(internal_m2n_particle_emitter_set_stretch_camera_velocity_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_get_facing_axis",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_facing_axis));
+                            script_internal_call(internal_m2n_particle_emitter_get_facing_axis));
     reg.add_internal_call("internal_m2n_particle_emitter_set_facing_axis",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_facing_axis));
+                            script_internal_call(internal_m2n_particle_emitter_set_facing_axis));
     reg.add_internal_call("internal_m2n_particle_emitter_get_stretch_speed_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_stretch_speed_scale));
+                            script_internal_call(internal_m2n_particle_emitter_get_stretch_speed_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_set_stretch_speed_scale",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_stretch_speed_scale));
+                            script_internal_call(internal_m2n_particle_emitter_set_stretch_speed_scale));
     reg.add_internal_call("internal_m2n_particle_emitter_get_camera_offset",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_camera_offset));
+                            script_internal_call(internal_m2n_particle_emitter_get_camera_offset));
     reg.add_internal_call("internal_m2n_particle_emitter_set_camera_offset",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_camera_offset));
+                            script_internal_call(internal_m2n_particle_emitter_set_camera_offset));
     reg.add_internal_call("internal_m2n_particle_emitter_get_max_screen_size",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_max_screen_size));
+                            script_internal_call(internal_m2n_particle_emitter_get_max_screen_size));
     reg.add_internal_call("internal_m2n_particle_emitter_set_max_screen_size",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_max_screen_size));
+                            script_internal_call(internal_m2n_particle_emitter_set_max_screen_size));
     reg.add_internal_call("internal_m2n_particle_emitter_get_taa_response",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_taa_response));
+                            script_internal_call(internal_m2n_particle_emitter_get_taa_response));
     reg.add_internal_call("internal_m2n_particle_emitter_set_taa_response",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_taa_response));
+                            script_internal_call(internal_m2n_particle_emitter_set_taa_response));
     reg.add_internal_call("internal_m2n_particle_emitter_get_camera_fade_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_camera_fade_range));
+                            script_internal_call(internal_m2n_particle_emitter_get_camera_fade_range));
     reg.add_internal_call("internal_m2n_particle_emitter_set_camera_fade_range",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_camera_fade_range));
+                            script_internal_call(internal_m2n_particle_emitter_set_camera_fade_range));
     reg.add_internal_call("internal_m2n_particle_emitter_get_subpixel_fade",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_subpixel_fade));
+                            script_internal_call(internal_m2n_particle_emitter_get_subpixel_fade));
     reg.add_internal_call("internal_m2n_particle_emitter_set_subpixel_fade",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_subpixel_fade));
+                            script_internal_call(internal_m2n_particle_emitter_set_subpixel_fade));
     reg.add_internal_call("internal_m2n_particle_emitter_get_erosion_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_erosion_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_erosion_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_erosion_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_erosion_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_erosion_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_speed_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_speed_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_speed_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_speed_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_speed_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_speed_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_size_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_size_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_get_size_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_set_size_over_life",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_size_over_life));
+                            script_internal_call(internal_m2n_particle_emitter_set_size_over_life));
     reg.add_internal_call("internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve));
+                            script_internal_call(internal_m2n_particle_emitter_get_lifetime_by_emitter_speed_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve",
-                            dotnet_internal_call(internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve));
+                            script_internal_call(internal_m2n_particle_emitter_set_lifetime_by_emitter_speed_curve));
     reg.add_internal_call("internal_m2n_particle_emitter_get_world_bounds",
-                            dotnet_internal_call(internal_m2n_particle_emitter_get_world_bounds));
+                            script_internal_call(internal_m2n_particle_emitter_get_world_bounds));
     reg.add_internal_call("internal_m2n_particle_emitter_is_stopped",
-                            dotnet_internal_call(internal_m2n_particle_emitter_is_stopped));
+                            script_internal_call(internal_m2n_particle_emitter_is_stopped));
     reg.add_internal_call("internal_m2n_particle_emitter_is_simulated",
-                            dotnet_internal_call(internal_m2n_particle_emitter_is_simulated));
+                            script_internal_call(internal_m2n_particle_emitter_is_simulated));
     reg.add_internal_call("internal_m2n_particle_emitter_play_child_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_play_child_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_play_child_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_stop_child_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_stop_child_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_stop_child_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_stop_and_reset_child_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_stop_and_reset_child_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_stop_and_reset_child_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_pause_child_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_pause_child_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_pause_child_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_resume_child_emitters",
-                            dotnet_internal_call(internal_m2n_particle_emitter_resume_child_emitters));
+                            script_internal_call(internal_m2n_particle_emitter_resume_child_emitters));
     reg.add_internal_call("internal_m2n_particle_emitter_emit",
-                            dotnet_internal_call(internal_m2n_particle_emitter_emit));
+                            script_internal_call(internal_m2n_particle_emitter_emit));
 }
 
 } // namespace unravel

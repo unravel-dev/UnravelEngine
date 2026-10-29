@@ -133,13 +133,13 @@ void register_physics_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.Physics");
-    reg.add_internal_call("internal_m2n_physics_ray_cast", dotnet_internal_call(internal_m2n_physics_ray_cast));
-    reg.add_internal_call("internal_m2n_physics_ray_cast_all", dotnet_internal_call(internal_m2n_physics_ray_cast_all));
-    reg.add_internal_call("internal_m2n_physics_sphere_cast", dotnet_internal_call(internal_m2n_physics_sphere_cast));
+    reg.add_internal_call("internal_m2n_physics_ray_cast", script_internal_call(internal_m2n_physics_ray_cast));
+    reg.add_internal_call("internal_m2n_physics_ray_cast_all", script_internal_call(internal_m2n_physics_ray_cast_all));
+    reg.add_internal_call("internal_m2n_physics_sphere_cast", script_internal_call(internal_m2n_physics_sphere_cast));
     reg.add_internal_call("internal_m2n_physics_sphere_cast_all",
-                            dotnet_internal_call(internal_m2n_physics_sphere_cast_all));
+                            script_internal_call(internal_m2n_physics_sphere_cast_all));
     reg.add_internal_call("internal_m2n_physics_sphere_overlap",
-                            dotnet_internal_call(internal_m2n_physics_sphere_overlap));
+                            script_internal_call(internal_m2n_physics_sphere_overlap));
 }
 
 } // namespace unravel

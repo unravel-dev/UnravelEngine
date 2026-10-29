@@ -101,24 +101,24 @@ void register_volume_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.VolumeComponent");
-    reg.add_internal_call("internal_m2n_volume_get_mode", dotnet_internal_call(internal_m2n_volume_get_mode));
-    reg.add_internal_call("internal_m2n_volume_set_mode", dotnet_internal_call(internal_m2n_volume_set_mode));
+    reg.add_internal_call("internal_m2n_volume_get_mode", script_internal_call(internal_m2n_volume_get_mode));
+    reg.add_internal_call("internal_m2n_volume_set_mode", script_internal_call(internal_m2n_volume_set_mode));
     reg.add_internal_call("internal_m2n_volume_get_priority",
-                          dotnet_internal_call(internal_m2n_volume_get_priority));
+                          script_internal_call(internal_m2n_volume_get_priority));
     reg.add_internal_call("internal_m2n_volume_set_priority",
-                          dotnet_internal_call(internal_m2n_volume_set_priority));
+                          script_internal_call(internal_m2n_volume_set_priority));
     reg.add_internal_call("internal_m2n_volume_get_weight",
-                          dotnet_internal_call(internal_m2n_volume_get_weight));
+                          script_internal_call(internal_m2n_volume_get_weight));
     reg.add_internal_call("internal_m2n_volume_set_weight",
-                          dotnet_internal_call(internal_m2n_volume_set_weight));
+                          script_internal_call(internal_m2n_volume_set_weight));
     reg.add_internal_call("internal_m2n_volume_get_blend_distance",
-                          dotnet_internal_call(internal_m2n_volume_get_blend_distance));
+                          script_internal_call(internal_m2n_volume_get_blend_distance));
     reg.add_internal_call("internal_m2n_volume_set_blend_distance",
-                          dotnet_internal_call(internal_m2n_volume_set_blend_distance));
+                          script_internal_call(internal_m2n_volume_set_blend_distance));
     reg.add_internal_call("internal_m2n_volume_get_extents",
-                          dotnet_internal_call(internal_m2n_volume_get_extents));
+                          script_internal_call(internal_m2n_volume_get_extents));
     reg.add_internal_call("internal_m2n_volume_set_extents",
-                          dotnet_internal_call(internal_m2n_volume_set_extents));
+                          script_internal_call(internal_m2n_volume_set_extents));
 }
 
 } // namespace unravel

@@ -445,88 +445,88 @@ void register_audio_source_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.AudioSourceComponent");
-    reg.add_internal_call("internal_m2n_audio_source_get_loop", dotnet_internal_call(internal_m2n_audio_source_get_loop));
-    reg.add_internal_call("internal_m2n_audio_source_set_loop", dotnet_internal_call(internal_m2n_audio_source_set_loop));
+    reg.add_internal_call("internal_m2n_audio_source_get_loop", script_internal_call(internal_m2n_audio_source_get_loop));
+    reg.add_internal_call("internal_m2n_audio_source_set_loop", script_internal_call(internal_m2n_audio_source_set_loop));
     reg.add_internal_call("internal_m2n_audio_source_get_volume",
-                            dotnet_internal_call(internal_m2n_audio_source_get_volume));
+                            script_internal_call(internal_m2n_audio_source_get_volume));
     reg.add_internal_call("internal_m2n_audio_source_set_volume",
-                            dotnet_internal_call(internal_m2n_audio_source_set_volume));
+                            script_internal_call(internal_m2n_audio_source_set_volume));
     reg.add_internal_call("internal_m2n_audio_source_get_pitch",
-                            dotnet_internal_call(internal_m2n_audio_source_get_pitch));
+                            script_internal_call(internal_m2n_audio_source_get_pitch));
     reg.add_internal_call("internal_m2n_audio_source_set_pitch",
-                            dotnet_internal_call(internal_m2n_audio_source_set_pitch));
+                            script_internal_call(internal_m2n_audio_source_set_pitch));
     reg.add_internal_call("internal_m2n_audio_source_get_volume_rolloff",
-                            dotnet_internal_call(internal_m2n_audio_source_get_volume_rolloff));
+                            script_internal_call(internal_m2n_audio_source_get_volume_rolloff));
     reg.add_internal_call("internal_m2n_audio_source_set_volume_rolloff",
-                            dotnet_internal_call(internal_m2n_audio_source_set_volume_rolloff));
+                            script_internal_call(internal_m2n_audio_source_set_volume_rolloff));
     reg.add_internal_call("internal_m2n_audio_source_get_min_distance",
-                            dotnet_internal_call(internal_m2n_audio_source_get_min_distance));
+                            script_internal_call(internal_m2n_audio_source_get_min_distance));
     reg.add_internal_call("internal_m2n_audio_source_set_min_distance",
-                            dotnet_internal_call(internal_m2n_audio_source_set_min_distance));
+                            script_internal_call(internal_m2n_audio_source_set_min_distance));
     reg.add_internal_call("internal_m2n_audio_source_get_max_distance",
-                            dotnet_internal_call(internal_m2n_audio_source_get_max_distance));
+                            script_internal_call(internal_m2n_audio_source_get_max_distance));
     reg.add_internal_call("internal_m2n_audio_source_set_max_distance",
-                            dotnet_internal_call(internal_m2n_audio_source_set_max_distance));
-    reg.add_internal_call("internal_m2n_audio_source_get_mute", dotnet_internal_call(internal_m2n_audio_source_get_mute));
+                            script_internal_call(internal_m2n_audio_source_set_max_distance));
+    reg.add_internal_call("internal_m2n_audio_source_get_mute", script_internal_call(internal_m2n_audio_source_get_mute));
 
-    reg.add_internal_call("internal_m2n_audio_source_set_mute", dotnet_internal_call(internal_m2n_audio_source_set_mute));
+    reg.add_internal_call("internal_m2n_audio_source_set_mute", script_internal_call(internal_m2n_audio_source_set_mute));
 
     reg.add_internal_call("internal_m2n_audio_source_is_playing",
-                            dotnet_internal_call(internal_m2n_audio_source_is_playing));
+                            script_internal_call(internal_m2n_audio_source_is_playing));
     reg.add_internal_call("internal_m2n_audio_source_is_paused",
-                            dotnet_internal_call(internal_m2n_audio_source_is_paused));
-    reg.add_internal_call("internal_m2n_audio_source_play", dotnet_internal_call(internal_m2n_audio_source_play));
-    reg.add_internal_call("internal_m2n_audio_source_stop", dotnet_internal_call(internal_m2n_audio_source_stop));
+                            script_internal_call(internal_m2n_audio_source_is_paused));
+    reg.add_internal_call("internal_m2n_audio_source_play", script_internal_call(internal_m2n_audio_source_play));
+    reg.add_internal_call("internal_m2n_audio_source_stop", script_internal_call(internal_m2n_audio_source_stop));
 
-    reg.add_internal_call("internal_m2n_audio_source_pause", dotnet_internal_call(internal_m2n_audio_source_pause));
-    reg.add_internal_call("internal_m2n_audio_source_resume", dotnet_internal_call(internal_m2n_audio_source_resume));
+    reg.add_internal_call("internal_m2n_audio_source_pause", script_internal_call(internal_m2n_audio_source_pause));
+    reg.add_internal_call("internal_m2n_audio_source_resume", script_internal_call(internal_m2n_audio_source_resume));
     reg.add_internal_call("internal_m2n_audio_source_get_audio_clip",
-                            dotnet_internal_call(internal_m2n_audio_source_get_audio_clip));
+                            script_internal_call(internal_m2n_audio_source_get_audio_clip));
     reg.add_internal_call("internal_m2n_audio_source_set_audio_clip",
-                            dotnet_internal_call(internal_m2n_audio_source_set_audio_clip));
+                            script_internal_call(internal_m2n_audio_source_set_audio_clip));
     reg.add_internal_call("internal_m2n_audio_source_get_spatial",
-                            dotnet_internal_call(internal_m2n_audio_source_get_spatial));
+                            script_internal_call(internal_m2n_audio_source_get_spatial));
     reg.add_internal_call("internal_m2n_audio_source_set_spatial",
-                            dotnet_internal_call(internal_m2n_audio_source_set_spatial));
+                            script_internal_call(internal_m2n_audio_source_set_spatial));
     reg.add_internal_call("internal_m2n_audio_source_get_bus",
-                            dotnet_internal_call(internal_m2n_audio_source_get_bus));
+                            script_internal_call(internal_m2n_audio_source_get_bus));
     reg.add_internal_call("internal_m2n_audio_source_set_bus",
-                            dotnet_internal_call(internal_m2n_audio_source_set_bus));
+                            script_internal_call(internal_m2n_audio_source_set_bus));
     reg.add_internal_call("internal_m2n_audio_source_get_priority",
-                            dotnet_internal_call(internal_m2n_audio_source_get_priority));
+                            script_internal_call(internal_m2n_audio_source_get_priority));
     reg.add_internal_call("internal_m2n_audio_source_set_priority",
-                            dotnet_internal_call(internal_m2n_audio_source_set_priority));
+                            script_internal_call(internal_m2n_audio_source_set_priority));
     reg.add_internal_call("internal_m2n_audio_source_fade_to",
-                            dotnet_internal_call(internal_m2n_audio_source_fade_to));
+                            script_internal_call(internal_m2n_audio_source_fade_to));
 
     auto audio_reg = dotnet::internal_call_registry("Unravel.Core.Audio");
     audio_reg.add_internal_call("internal_m2n_audio_get_master_volume",
-                                dotnet_internal_call(internal_m2n_audio_get_master_volume));
+                                script_internal_call(internal_m2n_audio_get_master_volume));
     audio_reg.add_internal_call("internal_m2n_audio_set_master_volume",
-                                dotnet_internal_call(internal_m2n_audio_set_master_volume));
+                                script_internal_call(internal_m2n_audio_set_master_volume));
     audio_reg.add_internal_call("internal_m2n_audio_get_bus_volume",
-                                dotnet_internal_call(internal_m2n_audio_get_bus_volume));
+                                script_internal_call(internal_m2n_audio_get_bus_volume));
     audio_reg.add_internal_call("internal_m2n_audio_set_bus_volume",
-                                dotnet_internal_call(internal_m2n_audio_set_bus_volume));
+                                script_internal_call(internal_m2n_audio_set_bus_volume));
     audio_reg.add_internal_call("internal_m2n_audio_get_max_voices",
-                                dotnet_internal_call(internal_m2n_audio_get_max_voices));
+                                script_internal_call(internal_m2n_audio_get_max_voices));
     audio_reg.add_internal_call("internal_m2n_audio_play_one_shot",
-                                dotnet_internal_call(internal_m2n_audio_play_one_shot));
-    audio_reg.add_internal_call("internal_m2n_audio_voice_stop", dotnet_internal_call(internal_m2n_audio_voice_stop));
+                                script_internal_call(internal_m2n_audio_play_one_shot));
+    audio_reg.add_internal_call("internal_m2n_audio_voice_stop", script_internal_call(internal_m2n_audio_voice_stop));
     audio_reg.add_internal_call("internal_m2n_audio_voice_is_playing",
-                                dotnet_internal_call(internal_m2n_audio_voice_is_playing));
+                                script_internal_call(internal_m2n_audio_voice_is_playing));
     audio_reg.add_internal_call("internal_m2n_audio_voice_set_volume",
-                                dotnet_internal_call(internal_m2n_audio_voice_set_volume));
+                                script_internal_call(internal_m2n_audio_voice_set_volume));
     audio_reg.add_internal_call("internal_m2n_audio_voice_set_pitch",
-                                dotnet_internal_call(internal_m2n_audio_voice_set_pitch));
+                                script_internal_call(internal_m2n_audio_voice_set_pitch));
     audio_reg.add_internal_call("internal_m2n_audio_voice_set_distance",
-                                dotnet_internal_call(internal_m2n_audio_voice_set_distance));
+                                script_internal_call(internal_m2n_audio_voice_set_distance));
     audio_reg.add_internal_call("internal_m2n_audio_voice_fade_to",
-                                dotnet_internal_call(internal_m2n_audio_voice_fade_to));
+                                script_internal_call(internal_m2n_audio_voice_fade_to));
     audio_reg.add_internal_call("internal_m2n_audio_set_clip_limit",
-                                dotnet_internal_call(internal_m2n_audio_set_clip_limit));
+                                script_internal_call(internal_m2n_audio_set_clip_limit));
     audio_reg.add_internal_call("internal_m2n_audio_fade_bus_volume",
-                                dotnet_internal_call(internal_m2n_audio_fade_bus_volume));
+                                script_internal_call(internal_m2n_audio_fade_bus_volume));
 }
 
 } // namespace unravel

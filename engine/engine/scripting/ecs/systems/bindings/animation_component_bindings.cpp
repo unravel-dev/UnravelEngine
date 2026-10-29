@@ -404,68 +404,68 @@ void register_animation_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.AnimationComponent");
-    reg.add_internal_call("internal_m2n_animation_blend", dotnet_internal_call(internal_m2n_animation_blend));
-    reg.add_internal_call("internal_m2n_animation_play", dotnet_internal_call(internal_m2n_animation_play));
-    reg.add_internal_call("internal_m2n_animation_pause", dotnet_internal_call(internal_m2n_animation_pause));
-    reg.add_internal_call("internal_m2n_animation_resume", dotnet_internal_call(internal_m2n_animation_resume));
-    reg.add_internal_call("internal_m2n_animation_stop", dotnet_internal_call(internal_m2n_animation_stop));
-    reg.add_internal_call("internal_m2n_animation_set_speed", dotnet_internal_call(internal_m2n_animation_set_speed));
-    reg.add_internal_call("internal_m2n_animation_get_speed", dotnet_internal_call(internal_m2n_animation_get_speed));
+    reg.add_internal_call("internal_m2n_animation_blend", script_internal_call(internal_m2n_animation_blend));
+    reg.add_internal_call("internal_m2n_animation_play", script_internal_call(internal_m2n_animation_play));
+    reg.add_internal_call("internal_m2n_animation_pause", script_internal_call(internal_m2n_animation_pause));
+    reg.add_internal_call("internal_m2n_animation_resume", script_internal_call(internal_m2n_animation_resume));
+    reg.add_internal_call("internal_m2n_animation_stop", script_internal_call(internal_m2n_animation_stop));
+    reg.add_internal_call("internal_m2n_animation_set_speed", script_internal_call(internal_m2n_animation_set_speed));
+    reg.add_internal_call("internal_m2n_animation_get_speed", script_internal_call(internal_m2n_animation_get_speed));
     reg.add_internal_call("internal_m2n_animation_get_autoplay",
-                          dotnet_internal_call(internal_m2n_animation_get_autoplay));
+                          script_internal_call(internal_m2n_animation_get_autoplay));
     reg.add_internal_call("internal_m2n_animation_set_autoplay",
-                          dotnet_internal_call(internal_m2n_animation_set_autoplay));
+                          script_internal_call(internal_m2n_animation_set_autoplay));
     reg.add_internal_call("internal_m2n_animation_get_apply_root_motion",
-                          dotnet_internal_call(internal_m2n_animation_get_apply_root_motion));
+                          script_internal_call(internal_m2n_animation_get_apply_root_motion));
     reg.add_internal_call("internal_m2n_animation_set_apply_root_motion",
-                          dotnet_internal_call(internal_m2n_animation_set_apply_root_motion));
-    reg.add_internal_call("internal_m2n_animation_get_clip", dotnet_internal_call(internal_m2n_animation_get_clip));
-    reg.add_internal_call("internal_m2n_animation_set_clip", dotnet_internal_call(internal_m2n_animation_set_clip));
+                          script_internal_call(internal_m2n_animation_set_apply_root_motion));
+    reg.add_internal_call("internal_m2n_animation_get_clip", script_internal_call(internal_m2n_animation_get_clip));
+    reg.add_internal_call("internal_m2n_animation_set_clip", script_internal_call(internal_m2n_animation_set_clip));
     reg.add_internal_call("internal_m2n_animation_is_playing",
-                          dotnet_internal_call(internal_m2n_animation_is_playing));
+                          script_internal_call(internal_m2n_animation_is_playing));
     reg.add_internal_call("internal_m2n_animation_is_paused",
-                          dotnet_internal_call(internal_m2n_animation_is_paused));
-    reg.add_internal_call("internal_m2n_animation_get_curve", dotnet_internal_call(internal_m2n_animation_get_curve));
+                          script_internal_call(internal_m2n_animation_is_paused));
+    reg.add_internal_call("internal_m2n_animation_get_curve", script_internal_call(internal_m2n_animation_get_curve));
     reg.add_internal_call("internal_m2n_animation_get_controller",
-                          dotnet_internal_call(internal_m2n_animation_get_controller));
+                          script_internal_call(internal_m2n_animation_get_controller));
     reg.add_internal_call("internal_m2n_animation_set_controller",
-                          dotnet_internal_call(internal_m2n_animation_set_controller));
-    reg.add_internal_call("internal_m2n_animation_set_float", dotnet_internal_call(internal_m2n_animation_set_float));
-    reg.add_internal_call("internal_m2n_animation_get_float", dotnet_internal_call(internal_m2n_animation_get_float));
-    reg.add_internal_call("internal_m2n_animation_set_int", dotnet_internal_call(internal_m2n_animation_set_int));
-    reg.add_internal_call("internal_m2n_animation_get_int", dotnet_internal_call(internal_m2n_animation_get_int));
-    reg.add_internal_call("internal_m2n_animation_set_bool", dotnet_internal_call(internal_m2n_animation_set_bool));
-    reg.add_internal_call("internal_m2n_animation_get_bool", dotnet_internal_call(internal_m2n_animation_get_bool));
+                          script_internal_call(internal_m2n_animation_set_controller));
+    reg.add_internal_call("internal_m2n_animation_set_float", script_internal_call(internal_m2n_animation_set_float));
+    reg.add_internal_call("internal_m2n_animation_get_float", script_internal_call(internal_m2n_animation_get_float));
+    reg.add_internal_call("internal_m2n_animation_set_int", script_internal_call(internal_m2n_animation_set_int));
+    reg.add_internal_call("internal_m2n_animation_get_int", script_internal_call(internal_m2n_animation_get_int));
+    reg.add_internal_call("internal_m2n_animation_set_bool", script_internal_call(internal_m2n_animation_set_bool));
+    reg.add_internal_call("internal_m2n_animation_get_bool", script_internal_call(internal_m2n_animation_get_bool));
     reg.add_internal_call("internal_m2n_animation_set_trigger",
-                          dotnet_internal_call(internal_m2n_animation_set_trigger));
+                          script_internal_call(internal_m2n_animation_set_trigger));
     reg.add_internal_call("internal_m2n_animation_reset_trigger",
-                          dotnet_internal_call(internal_m2n_animation_reset_trigger));
+                          script_internal_call(internal_m2n_animation_reset_trigger));
     reg.add_internal_call("internal_m2n_animation_get_state_name",
-                          dotnet_internal_call(internal_m2n_animation_get_state_name));
+                          script_internal_call(internal_m2n_animation_get_state_name));
     reg.add_internal_call("internal_m2n_animation_is_in_state",
-                          dotnet_internal_call(internal_m2n_animation_is_in_state));
-    reg.add_internal_call("internal_m2n_animation_is_in_tag", dotnet_internal_call(internal_m2n_animation_is_in_tag));
+                          script_internal_call(internal_m2n_animation_is_in_state));
+    reg.add_internal_call("internal_m2n_animation_is_in_tag", script_internal_call(internal_m2n_animation_is_in_tag));
     reg.add_internal_call("internal_m2n_animation_is_in_transition",
-                          dotnet_internal_call(internal_m2n_animation_is_in_transition));
+                          script_internal_call(internal_m2n_animation_is_in_transition));
     reg.add_internal_call("internal_m2n_animation_get_state_time",
-                          dotnet_internal_call(internal_m2n_animation_get_state_time));
+                          script_internal_call(internal_m2n_animation_get_state_time));
     reg.add_internal_call("internal_m2n_animation_get_transition_progress",
-                          dotnet_internal_call(internal_m2n_animation_get_transition_progress));
+                          script_internal_call(internal_m2n_animation_get_transition_progress));
     reg.add_internal_call("internal_m2n_animation_cross_fade",
-                          dotnet_internal_call(internal_m2n_animation_cross_fade));
+                          script_internal_call(internal_m2n_animation_cross_fade));
     reg.add_internal_call("internal_m2n_animation_get_layer_index",
-                          dotnet_internal_call(internal_m2n_animation_get_layer_index));
+                          script_internal_call(internal_m2n_animation_get_layer_index));
     reg.add_internal_call("internal_m2n_animation_get_layer_count",
-                          dotnet_internal_call(internal_m2n_animation_get_layer_count));
-    reg.add_internal_call("internal_m2n_animation_has_curve", dotnet_internal_call(internal_m2n_animation_has_curve));
+                          script_internal_call(internal_m2n_animation_get_layer_count));
+    reg.add_internal_call("internal_m2n_animation_has_curve", script_internal_call(internal_m2n_animation_has_curve));
     reg.add_internal_call("internal_m2n_animation_set_layer_weight",
-                          dotnet_internal_call(internal_m2n_animation_set_layer_weight));
+                          script_internal_call(internal_m2n_animation_set_layer_weight));
     reg.add_internal_call("internal_m2n_animation_get_layer_weight",
-                          dotnet_internal_call(internal_m2n_animation_get_layer_weight));
+                          script_internal_call(internal_m2n_animation_get_layer_weight));
     reg.add_internal_call("internal_m2n_animation_set_layer_additive",
-                          dotnet_internal_call(internal_m2n_animation_set_layer_additive));
+                          script_internal_call(internal_m2n_animation_set_layer_additive));
     reg.add_internal_call("internal_m2n_animation_get_layer_additive",
-                          dotnet_internal_call(internal_m2n_animation_get_layer_additive));
+                          script_internal_call(internal_m2n_animation_get_layer_additive));
 }
 
 } // namespace unravel

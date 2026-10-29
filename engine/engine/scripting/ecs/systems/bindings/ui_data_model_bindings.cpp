@@ -520,12 +520,12 @@ void register_ui_data_model_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.UIDataModel");
-    reg.add_internal_call("internal_m2n_ui_model_get_generation", dotnet_internal_call(internal_m2n_ui_model_get_generation));
-    reg.add_internal_call("internal_m2n_ui_model_exists", dotnet_internal_call(internal_m2n_ui_model_exists));
-    reg.add_internal_call("internal_m2n_ui_model_bind_variable", dotnet_internal_call(internal_m2n_ui_model_bind_variable));
-    reg.add_internal_call("internal_m2n_ui_model_bind_event", dotnet_internal_call(internal_m2n_ui_model_bind_event));
-    reg.add_internal_call("internal_m2n_ui_model_add_transform", dotnet_internal_call(internal_m2n_ui_model_add_transform));
-    reg.add_internal_call("internal_m2n_ui_model_dirty", dotnet_internal_call(internal_m2n_ui_model_dirty));
+    reg.add_internal_call("internal_m2n_ui_model_get_generation", script_internal_call(internal_m2n_ui_model_get_generation));
+    reg.add_internal_call("internal_m2n_ui_model_exists", script_internal_call(internal_m2n_ui_model_exists));
+    reg.add_internal_call("internal_m2n_ui_model_bind_variable", script_internal_call(internal_m2n_ui_model_bind_variable));
+    reg.add_internal_call("internal_m2n_ui_model_bind_event", script_internal_call(internal_m2n_ui_model_bind_event));
+    reg.add_internal_call("internal_m2n_ui_model_add_transform", script_internal_call(internal_m2n_ui_model_add_transform));
+    reg.add_internal_call("internal_m2n_ui_model_dirty", script_internal_call(internal_m2n_ui_model_dirty));
     Rml::Factory::RegisterEventListenerInstancer(&g_inline_listener_instancer);
     set_ui_transform_handler(call_model_transform);
 }

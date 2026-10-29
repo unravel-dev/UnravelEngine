@@ -195,6 +195,7 @@ void register_core_runtime_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     {
+        // Safe on any thread: scripts log from their worker threads too.
         auto reg = dotnet::internal_call_registry("Unravel.Core.Log");
         reg.add_internal_call("internal_m2n_log_trace", dotnet_internal_call(internal_m2n_log_trace));
         reg.add_internal_call("internal_m2n_log_info", dotnet_internal_call(internal_m2n_log_info));
@@ -203,43 +204,45 @@ void register_core_runtime_script_bindings()
 
     }
     {
+        // Safe on any thread: it only logs.
         auto reg = dotnet::internal_call_registry("Unravel.Core.Tests");
         reg.add_internal_call("m2n_test_uuid", dotnet_internal_call(m2n_test_uuid));
 
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.LayerMask");
-        reg.add_internal_call("internal_m2n_layers_layer_to_name", dotnet_internal_call(internal_m2n_layers_layer_to_name));
-        reg.add_internal_call("internal_m2n_layers_name_to_layer", dotnet_internal_call(internal_m2n_layers_name_to_layer));
+        reg.add_internal_call("internal_m2n_layers_layer_to_name", script_internal_call(internal_m2n_layers_layer_to_name));
+        reg.add_internal_call("internal_m2n_layers_name_to_layer", script_internal_call(internal_m2n_layers_name_to_layer));
 
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Application");
-        reg.add_internal_call("internal_m2n_application_quit", dotnet_internal_call(internal_m2n_application_quit));
+        reg.add_internal_call("internal_m2n_application_quit", script_internal_call(internal_m2n_application_quit));
         reg.add_internal_call("internal_m2n_application_get_persistent_data_path",
-                              dotnet_internal_call(internal_m2n_application_get_persistent_data_path));
+                              script_internal_call(internal_m2n_application_get_persistent_data_path));
         reg.add_internal_call("internal_m2n_application_get_temporary_cache_path",
-                              dotnet_internal_call(internal_m2n_application_get_temporary_cache_path));
+                              script_internal_call(internal_m2n_application_get_temporary_cache_path));
 
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Screen");
-        reg.add_internal_call("internal_m2n_screen_get_size", dotnet_internal_call(internal_m2n_screen_get_size));
-        reg.add_internal_call("internal_m2n_screen_get_dpi", dotnet_internal_call(internal_m2n_screen_get_dpi));
-        reg.add_internal_call("internal_m2n_screen_get_safe_area", dotnet_internal_call(internal_m2n_screen_get_safe_area));
+        reg.add_internal_call("internal_m2n_screen_get_size", script_internal_call(internal_m2n_screen_get_size));
+        reg.add_internal_call("internal_m2n_screen_get_dpi", script_internal_call(internal_m2n_screen_get_dpi));
+        reg.add_internal_call("internal_m2n_screen_get_safe_area", script_internal_call(internal_m2n_screen_get_safe_area));
 
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Time");
-        reg.add_internal_call("internal_m2n_set_time_scale", dotnet_internal_call(internal_m2n_set_time_scale));
+        reg.add_internal_call("internal_m2n_set_time_scale", script_internal_call(internal_m2n_set_time_scale));
 
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Profiler");
-        reg.add_internal_call("internal_m2n_profiler_add_record", dotnet_internal_call(internal_m2n_profiler_add_record));
+        reg.add_internal_call("internal_m2n_profiler_add_record", script_internal_call(internal_m2n_profiler_add_record));
 
     }
     {
+        // Safe on any thread: the runtime's own counters.
         auto reg = dotnet::internal_call_registry("Unravel.Core.GCMonitor");
         reg.add_internal_call("internal_m2n_get_dotnet_heap_size", dotnet_internal_call(dotnet::gc_get_heap_size));
         reg.add_internal_call("internal_m2n_get_dotnet_used_size", dotnet_internal_call(dotnet::gc_get_used_size));

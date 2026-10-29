@@ -7,6 +7,8 @@
 #include <hpp/type_name.hpp>
 
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace unravel
 {
@@ -19,8 +21,8 @@ inline auto get_script_thread_id() -> std::thread::id&
     return id;
 }
 
-/// True on the script thread; otherwise raises a C# InvalidOperationException naming @p api and returns false.
-inline auto require_script_thread(const char* api) -> bool
+/// True on the script thread; otherwise raises a C# InvalidOperationException and returns false.
+inline auto require_script_thread() -> bool
 {
     if(std::this_thread::get_id() == get_script_thread_id())
     {
@@ -28,16 +30,72 @@ inline auto require_script_thread(const char* api) -> bool
     }
     dotnet::raise_exception("System",
                             "InvalidOperationException",
-                            fmt::format("{} must be called from the main thread; worker threads may only run pure C# code.", api));
+                            "Engine calls must be made from the main thread; worker threads may only run pure C# code.");
     return false;
 }
 
+namespace detail
+{
+/// What a call refused by require_script_thread() returns; C# throws the raised exception instead of reading it.
+template<typename R>
+auto make_refused_result() -> R
+{
+    if constexpr(std::is_void_v<R>)
+    {
+        return;
+    }
+    else if constexpr(std::is_reference_v<R>)
+    {
+        static const std::decay_t<R> refused{};
+        return refused;
+    }
+    else if constexpr(std::is_default_constructible_v<R>)
+    {
+        return R();
+    }
+    else
+    {
+        // A managed array: a null one.
+        return R(dotnet::object{});
+    }
+}
+
+template<typename Signature, Signature& func>
+struct script_thread_call;
+
+/// @p func behind require_script_thread(): on another thread it raises in C# and returns a default value.
+template<typename R, typename... Args, R (&func)(Args...)>
+struct script_thread_call<R(Args...), func>
+{
+    static auto call(Args... args) -> R
+    {
+        if(!require_script_thread())
+        {
+            return make_refused_result<R>();
+        }
+        return func(std::forward<Args>(args)...);
+    }
+};
+} // namespace detail
+
+/**
+ * @brief dotnet_internal_call for a call that reaches engine state (every binding but logging): from a thread other
+ * than the script thread it raises InvalidOperationException in C# instead. Calls safe on any thread register with
+ * dotnet_internal_call itself.
+ */
+#if DOTNETPP_BACKEND_MONO
+#define script_internal_call(func)                                                                                     \
+    &mono::mono_jit_internal_call_wrapper<decltype(func),                                                              \
+                                          ::unravel::detail::script_thread_call<decltype(func), func>::call>::wrapper
+#elif DOTNETPP_BACKEND_CORECLR
+#define script_internal_call(func)                                                                                     \
+    reinterpret_cast<void*>(                                                                                           \
+        &clr::detail::clr_internal_call_wrapper<decltype(func),                                                        \
+                                                ::unravel::detail::script_thread_call<decltype(func), func>::call>::wrapper)
+#endif
+
 inline auto get_entity_from_id(entt::entity id) -> entt::handle
 {
-    if(!require_script_thread("Entity access"))
-    {
-        return {};
-    }
     if(id == entt::entity(0))
     {
         return {};
@@ -63,10 +121,6 @@ inline void raise_missing_component_exception()
 template<typename T>
 inline auto safe_get_component(entt::entity id) -> T*
 {
-    if(!require_script_thread("Component access"))
-    {
-        return nullptr;
-    }
     auto e = get_entity_from_id(id);
     if(!e)
     {

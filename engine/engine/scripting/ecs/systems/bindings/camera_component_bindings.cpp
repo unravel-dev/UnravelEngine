@@ -269,45 +269,45 @@ void register_camera_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.CameraComponent");
-    reg.add_internal_call("internal_m2n_camera_get_fov", dotnet_internal_call(internal_m2n_camera_get_fov));
-    reg.add_internal_call("internal_m2n_camera_set_fov", dotnet_internal_call(internal_m2n_camera_set_fov));
-    reg.add_internal_call("internal_m2n_camera_get_near_clip", dotnet_internal_call(internal_m2n_camera_get_near_clip));
-    reg.add_internal_call("internal_m2n_camera_set_near_clip", dotnet_internal_call(internal_m2n_camera_set_near_clip));
-    reg.add_internal_call("internal_m2n_camera_get_far_clip", dotnet_internal_call(internal_m2n_camera_get_far_clip));
-    reg.add_internal_call("internal_m2n_camera_set_far_clip", dotnet_internal_call(internal_m2n_camera_set_far_clip));
+    reg.add_internal_call("internal_m2n_camera_get_fov", script_internal_call(internal_m2n_camera_get_fov));
+    reg.add_internal_call("internal_m2n_camera_set_fov", script_internal_call(internal_m2n_camera_set_fov));
+    reg.add_internal_call("internal_m2n_camera_get_near_clip", script_internal_call(internal_m2n_camera_get_near_clip));
+    reg.add_internal_call("internal_m2n_camera_set_near_clip", script_internal_call(internal_m2n_camera_set_near_clip));
+    reg.add_internal_call("internal_m2n_camera_get_far_clip", script_internal_call(internal_m2n_camera_get_far_clip));
+    reg.add_internal_call("internal_m2n_camera_set_far_clip", script_internal_call(internal_m2n_camera_set_far_clip));
     reg.add_internal_call("internal_m2n_camera_get_projection_mode",
-                          dotnet_internal_call(internal_m2n_camera_get_projection_mode));
+                          script_internal_call(internal_m2n_camera_get_projection_mode));
     reg.add_internal_call("internal_m2n_camera_set_projection_mode",
-                          dotnet_internal_call(internal_m2n_camera_set_projection_mode));
+                          script_internal_call(internal_m2n_camera_set_projection_mode));
     reg.add_internal_call("internal_m2n_camera_get_ortho_size",
-                          dotnet_internal_call(internal_m2n_camera_get_ortho_size));
+                          script_internal_call(internal_m2n_camera_get_ortho_size));
     reg.add_internal_call("internal_m2n_camera_set_ortho_size",
-                          dotnet_internal_call(internal_m2n_camera_set_ortho_size));
+                          script_internal_call(internal_m2n_camera_set_ortho_size));
     reg.add_internal_call("internal_m2n_camera_get_include_mask",
-                          dotnet_internal_call(internal_m2n_camera_get_include_mask));
+                          script_internal_call(internal_m2n_camera_get_include_mask));
     reg.add_internal_call("internal_m2n_camera_set_include_mask",
-                          dotnet_internal_call(internal_m2n_camera_set_include_mask));
+                          script_internal_call(internal_m2n_camera_set_include_mask));
     reg.add_internal_call("internal_m2n_camera_get_exclude_mask",
-                          dotnet_internal_call(internal_m2n_camera_get_exclude_mask));
+                          script_internal_call(internal_m2n_camera_get_exclude_mask));
     reg.add_internal_call("internal_m2n_camera_set_exclude_mask",
-                          dotnet_internal_call(internal_m2n_camera_set_exclude_mask));
+                          script_internal_call(internal_m2n_camera_set_exclude_mask));
     reg.add_internal_call("internal_m2n_camera_get_viewport_size",
-                          dotnet_internal_call(internal_m2n_camera_get_viewport_size));
-    reg.add_internal_call("internal_m2n_camera_get_aspect", dotnet_internal_call(internal_m2n_camera_get_aspect));
+                          script_internal_call(internal_m2n_camera_get_viewport_size));
+    reg.add_internal_call("internal_m2n_camera_get_aspect", script_internal_call(internal_m2n_camera_get_aspect));
     reg.add_internal_call("internal_m2n_camera_screen_point_to_ray",
-                          dotnet_internal_call(internal_m2n_camera_screen_point_to_ray));
+                          script_internal_call(internal_m2n_camera_screen_point_to_ray));
     reg.add_internal_call("internal_m2n_camera_screen_point_to_world_2d",
-                          dotnet_internal_call(internal_m2n_camera_screen_point_to_world_2d));
+                          script_internal_call(internal_m2n_camera_screen_point_to_world_2d));
     reg.add_internal_call("internal_m2n_camera_screen_point_to_world",
-                          dotnet_internal_call(internal_m2n_camera_screen_point_to_world));
+                          script_internal_call(internal_m2n_camera_screen_point_to_world));
     reg.add_internal_call("internal_m2n_camera_viewport_point_to_ray",
-                          dotnet_internal_call(internal_m2n_camera_viewport_point_to_ray));
+                          script_internal_call(internal_m2n_camera_viewport_point_to_ray));
     reg.add_internal_call("internal_m2n_camera_world_to_screen_point",
-                          dotnet_internal_call(internal_m2n_camera_world_to_screen_point));
+                          script_internal_call(internal_m2n_camera_world_to_screen_point));
     reg.add_internal_call("internal_m2n_camera_world_to_viewport_point",
-                          dotnet_internal_call(internal_m2n_camera_world_to_viewport_point));
+                          script_internal_call(internal_m2n_camera_world_to_viewport_point));
     reg.add_internal_call("internal_m2n_camera_viewport_to_world_point",
-                          dotnet_internal_call(internal_m2n_camera_viewport_to_world_point));
+                          script_internal_call(internal_m2n_camera_viewport_to_world_point));
 }
 
 } // namespace unravel

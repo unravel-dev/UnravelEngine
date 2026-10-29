@@ -251,58 +251,58 @@ void register_model_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.ModelComponent");
-    reg.add_internal_call("internal_m2n_model_get_enabled", dotnet_internal_call(internal_m2n_model_get_enabled));
-    reg.add_internal_call("internal_m2n_model_set_enabled", dotnet_internal_call(internal_m2n_model_set_enabled));
+    reg.add_internal_call("internal_m2n_model_get_enabled", script_internal_call(internal_m2n_model_get_enabled));
+    reg.add_internal_call("internal_m2n_model_set_enabled", script_internal_call(internal_m2n_model_set_enabled));
     reg.add_internal_call("internal_m2n_model_get_casts_shadow",
-                          dotnet_internal_call(internal_m2n_model_get_casts_shadow));
+                          script_internal_call(internal_m2n_model_get_casts_shadow));
     reg.add_internal_call("internal_m2n_model_set_casts_shadow",
-                          dotnet_internal_call(internal_m2n_model_set_casts_shadow));
-    reg.add_internal_call("internal_m2n_model_get_static", dotnet_internal_call(internal_m2n_model_get_static));
-    reg.add_internal_call("internal_m2n_model_set_static", dotnet_internal_call(internal_m2n_model_set_static));
-    reg.add_internal_call("internal_m2n_model_get_mesh", dotnet_internal_call(internal_m2n_model_get_mesh));
-    reg.add_internal_call("internal_m2n_model_set_mesh", dotnet_internal_call(internal_m2n_model_set_mesh));
+                          script_internal_call(internal_m2n_model_set_casts_shadow));
+    reg.add_internal_call("internal_m2n_model_get_static", script_internal_call(internal_m2n_model_get_static));
+    reg.add_internal_call("internal_m2n_model_set_static", script_internal_call(internal_m2n_model_set_static));
+    reg.add_internal_call("internal_m2n_model_get_mesh", script_internal_call(internal_m2n_model_get_mesh));
+    reg.add_internal_call("internal_m2n_model_set_mesh", script_internal_call(internal_m2n_model_set_mesh));
     reg.add_internal_call("internal_m2n_model_get_lod_selection_bias",
-                          dotnet_internal_call(internal_m2n_model_get_lod_selection_bias));
+                          script_internal_call(internal_m2n_model_get_lod_selection_bias));
     reg.add_internal_call("internal_m2n_model_set_lod_selection_bias",
-                          dotnet_internal_call(internal_m2n_model_set_lod_selection_bias));
+                          script_internal_call(internal_m2n_model_set_lod_selection_bias));
     reg.add_internal_call("internal_m2n_model_get_shared_material",
-                            dotnet_internal_call(internal_m2n_model_get_shared_material));
+                            script_internal_call(internal_m2n_model_get_shared_material));
     reg.add_internal_call("internal_m2n_model_get_shared_material_count",
-                            dotnet_internal_call(internal_m2n_model_get_shared_material_count));
+                            script_internal_call(internal_m2n_model_get_shared_material_count));
     reg.add_internal_call("internal_m2n_model_set_shared_material",
-                            dotnet_internal_call(internal_m2n_model_set_shared_material));
+                            script_internal_call(internal_m2n_model_set_shared_material));
 
     auto instance_reg = dotnet::internal_call_registry("Unravel.Core.MaterialInstance");
     instance_reg.add_internal_call("internal_m2n_material_instance_set_color",
-                                   dotnet_internal_call(internal_m2n_material_instance_set_color));
+                                   script_internal_call(internal_m2n_material_instance_set_color));
     instance_reg.add_internal_call("internal_m2n_material_instance_get_color",
-                                   dotnet_internal_call(internal_m2n_material_instance_get_color));
+                                   script_internal_call(internal_m2n_material_instance_get_color));
     instance_reg.add_internal_call("internal_m2n_material_instance_set_float",
-                                   dotnet_internal_call(internal_m2n_material_instance_set_float));
+                                   script_internal_call(internal_m2n_material_instance_set_float));
     instance_reg.add_internal_call("internal_m2n_material_instance_get_float",
-                                   dotnet_internal_call(internal_m2n_material_instance_get_float));
+                                   script_internal_call(internal_m2n_material_instance_get_float));
     instance_reg.add_internal_call("internal_m2n_material_instance_set_vector",
-                                   dotnet_internal_call(internal_m2n_material_instance_set_vector));
+                                   script_internal_call(internal_m2n_material_instance_set_vector));
     instance_reg.add_internal_call("internal_m2n_material_instance_get_vector",
-                                   dotnet_internal_call(internal_m2n_material_instance_get_vector));
+                                   script_internal_call(internal_m2n_material_instance_get_vector));
     instance_reg.add_internal_call("internal_m2n_material_instance_set_texture",
-                                   dotnet_internal_call(internal_m2n_material_instance_set_texture));
+                                   script_internal_call(internal_m2n_material_instance_set_texture));
     instance_reg.add_internal_call("internal_m2n_material_instance_get_texture",
-                                   dotnet_internal_call(internal_m2n_material_instance_get_texture));
+                                   script_internal_call(internal_m2n_material_instance_get_texture));
     instance_reg.add_internal_call("internal_m2n_material_instance_set_mode",
-                                   dotnet_internal_call(internal_m2n_material_instance_set_mode));
+                                   script_internal_call(internal_m2n_material_instance_set_mode));
     instance_reg.add_internal_call("internal_m2n_material_instance_get_mode",
-                                   dotnet_internal_call(internal_m2n_material_instance_get_mode));
+                                   script_internal_call(internal_m2n_material_instance_get_mode));
     instance_reg.add_internal_call("internal_m2n_material_instance_is_overridden",
-                                   dotnet_internal_call(internal_m2n_material_instance_is_overridden));
+                                   script_internal_call(internal_m2n_material_instance_is_overridden));
     instance_reg.add_internal_call("internal_m2n_material_instance_revert",
-                                   dotnet_internal_call(internal_m2n_material_instance_revert));
+                                   script_internal_call(internal_m2n_material_instance_revert));
     instance_reg.add_internal_call("internal_m2n_material_instance_revert_all",
-                                   dotnet_internal_call(internal_m2n_material_instance_revert_all));
+                                   script_internal_call(internal_m2n_material_instance_revert_all));
     instance_reg.add_internal_call("internal_m2n_material_instance_has_overrides",
-                                   dotnet_internal_call(internal_m2n_material_instance_has_overrides));
+                                   script_internal_call(internal_m2n_material_instance_has_overrides));
     instance_reg.add_internal_call("internal_m2n_material_instance_shares_draw",
-                                   dotnet_internal_call(internal_m2n_material_instance_shares_draw));
+                                   script_internal_call(internal_m2n_material_instance_shares_draw));
 }
 
 } // namespace unravel

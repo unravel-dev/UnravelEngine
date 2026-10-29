@@ -288,33 +288,33 @@ void register_assets_script_bindings()
     APPLOG_TRACE("{}", __func__);
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Assets");
-        reg.add_internal_call("internal_m2n_get_asset_by_uuid", dotnet_internal_call(internal_m2n_get_asset_by_uuid));
-        reg.add_internal_call("internal_m2n_get_asset_by_key", dotnet_internal_call(internal_m2n_get_asset_by_key));
+        reg.add_internal_call("internal_m2n_get_asset_by_uuid", script_internal_call(internal_m2n_get_asset_by_uuid));
+        reg.add_internal_call("internal_m2n_get_asset_by_key", script_internal_call(internal_m2n_get_asset_by_key));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.Material");
-        reg.add_internal_call("internal_m2n_material_set_color", dotnet_internal_call(internal_m2n_material_set_color));
-        reg.add_internal_call("internal_m2n_material_get_color", dotnet_internal_call(internal_m2n_material_get_color));
-        reg.add_internal_call("internal_m2n_material_set_float", dotnet_internal_call(internal_m2n_material_set_float));
-        reg.add_internal_call("internal_m2n_material_get_float", dotnet_internal_call(internal_m2n_material_get_float));
-        reg.add_internal_call("internal_m2n_material_set_vector", dotnet_internal_call(internal_m2n_material_set_vector));
-        reg.add_internal_call("internal_m2n_material_get_vector", dotnet_internal_call(internal_m2n_material_get_vector));
+        reg.add_internal_call("internal_m2n_material_set_color", script_internal_call(internal_m2n_material_set_color));
+        reg.add_internal_call("internal_m2n_material_get_color", script_internal_call(internal_m2n_material_get_color));
+        reg.add_internal_call("internal_m2n_material_set_float", script_internal_call(internal_m2n_material_set_float));
+        reg.add_internal_call("internal_m2n_material_get_float", script_internal_call(internal_m2n_material_get_float));
+        reg.add_internal_call("internal_m2n_material_set_vector", script_internal_call(internal_m2n_material_set_vector));
+        reg.add_internal_call("internal_m2n_material_get_vector", script_internal_call(internal_m2n_material_get_vector));
         reg.add_internal_call("internal_m2n_material_set_texture",
-                              dotnet_internal_call(internal_m2n_material_set_texture));
+                              script_internal_call(internal_m2n_material_set_texture));
         reg.add_internal_call("internal_m2n_material_get_texture",
-                              dotnet_internal_call(internal_m2n_material_get_texture));
-        reg.add_internal_call("internal_m2n_material_set_mode", dotnet_internal_call(internal_m2n_material_set_mode));
-        reg.add_internal_call("internal_m2n_material_get_mode", dotnet_internal_call(internal_m2n_material_get_mode));
+                              script_internal_call(internal_m2n_material_get_texture));
+        reg.add_internal_call("internal_m2n_material_set_mode", script_internal_call(internal_m2n_material_set_mode));
+        reg.add_internal_call("internal_m2n_material_get_mode", script_internal_call(internal_m2n_material_get_mode));
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.AudioClip");
-        reg.add_internal_call("internal_m2n_audio_clip_get_length", dotnet_internal_call(internal_m2n_audio_clip_get_length));
+        reg.add_internal_call("internal_m2n_audio_clip_get_length", script_internal_call(internal_m2n_audio_clip_get_length));
 
     }
     {
         auto reg = dotnet::internal_call_registry("Unravel.Core.AnimationClip");
-        reg.add_internal_call("internal_m2n_animation_clip_get_length", dotnet_internal_call(internal_m2n_animation_clip_get_length));
-        reg.add_internal_call("internal_m2n_animation_clip_get_name", dotnet_internal_call(internal_m2n_animation_clip_get_name));
+        reg.add_internal_call("internal_m2n_animation_clip_get_length", script_internal_call(internal_m2n_animation_clip_get_length));
+        reg.add_internal_call("internal_m2n_animation_clip_get_name", script_internal_call(internal_m2n_animation_clip_get_name));
     }
 }
 

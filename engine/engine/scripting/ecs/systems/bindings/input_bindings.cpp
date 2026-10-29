@@ -249,50 +249,50 @@ void register_input_script_bindings()
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.Input");
     reg.add_internal_call("internal_m2n_input_get_analog_value",
-                            dotnet_internal_call(internal_m2n_input_get_analog_value));
+                            script_internal_call(internal_m2n_input_get_analog_value));
     reg.add_internal_call("internal_m2n_input_get_digital_value",
-                            dotnet_internal_call(internal_m2n_input_get_digital_value));
-    reg.add_internal_call("internal_m2n_input_is_pressed", dotnet_internal_call(internal_m2n_input_is_pressed));
-    reg.add_internal_call("internal_m2n_input_is_released", dotnet_internal_call(internal_m2n_input_is_released));
-    reg.add_internal_call("internal_m2n_input_is_down", dotnet_internal_call(internal_m2n_input_is_down));
-    reg.add_internal_call("internal_m2n_input_is_key_pressed", dotnet_internal_call(internal_m2n_input_is_key_pressed));
-    reg.add_internal_call("internal_m2n_input_is_key_released", dotnet_internal_call(internal_m2n_input_is_key_released));
-    reg.add_internal_call("internal_m2n_input_is_key_down", dotnet_internal_call(internal_m2n_input_is_key_down));
+                            script_internal_call(internal_m2n_input_get_digital_value));
+    reg.add_internal_call("internal_m2n_input_is_pressed", script_internal_call(internal_m2n_input_is_pressed));
+    reg.add_internal_call("internal_m2n_input_is_released", script_internal_call(internal_m2n_input_is_released));
+    reg.add_internal_call("internal_m2n_input_is_down", script_internal_call(internal_m2n_input_is_down));
+    reg.add_internal_call("internal_m2n_input_is_key_pressed", script_internal_call(internal_m2n_input_is_key_pressed));
+    reg.add_internal_call("internal_m2n_input_is_key_released", script_internal_call(internal_m2n_input_is_key_released));
+    reg.add_internal_call("internal_m2n_input_is_key_down", script_internal_call(internal_m2n_input_is_key_down));
     reg.add_internal_call("internal_m2n_input_is_mouse_button_pressed",
-                            dotnet_internal_call(internal_m2n_input_is_mouse_button_pressed));
+                            script_internal_call(internal_m2n_input_is_mouse_button_pressed));
     reg.add_internal_call("internal_m2n_input_is_mouse_button_released",
-                            dotnet_internal_call(internal_m2n_input_is_mouse_button_released));
+                            script_internal_call(internal_m2n_input_is_mouse_button_released));
     reg.add_internal_call("internal_m2n_input_is_mouse_button_down",
-                            dotnet_internal_call(internal_m2n_input_is_mouse_button_down));
+                            script_internal_call(internal_m2n_input_is_mouse_button_down));
     reg.add_internal_call("internal_m2n_input_get_mouse_position",
-                            dotnet_internal_call(internal_m2n_input_get_mouse_position));
-    reg.add_internal_call("internal_m2n_input_get_touch_count", dotnet_internal_call(internal_m2n_input_get_touch_count));
-    reg.add_internal_call("internal_m2n_input_get_touch", dotnet_internal_call(internal_m2n_input_get_touch));
-    reg.add_internal_call("internal_m2n_input_is_touch_supported", dotnet_internal_call(internal_m2n_input_is_touch_supported));
+                            script_internal_call(internal_m2n_input_get_mouse_position));
+    reg.add_internal_call("internal_m2n_input_get_touch_count", script_internal_call(internal_m2n_input_get_touch_count));
+    reg.add_internal_call("internal_m2n_input_get_touch", script_internal_call(internal_m2n_input_get_touch));
+    reg.add_internal_call("internal_m2n_input_is_touch_supported", script_internal_call(internal_m2n_input_is_touch_supported));
     reg.add_internal_call("internal_m2n_input_get_simulate_mouse_with_touches",
-                          dotnet_internal_call(internal_m2n_input_get_simulate_mouse_with_touches));
+                          script_internal_call(internal_m2n_input_get_simulate_mouse_with_touches));
     reg.add_internal_call("internal_m2n_input_set_simulate_mouse_with_touches",
-                          dotnet_internal_call(internal_m2n_input_set_simulate_mouse_with_touches));
+                          script_internal_call(internal_m2n_input_set_simulate_mouse_with_touches));
 
     auto gamepad = dotnet::internal_call_registry("Unravel.Core.VirtualGamepad");
-    gamepad.add_internal_call("internal_m2n_virtual_gamepad_set_axis", dotnet_internal_call(internal_m2n_virtual_gamepad_set_axis));
+    gamepad.add_internal_call("internal_m2n_virtual_gamepad_set_axis", script_internal_call(internal_m2n_virtual_gamepad_set_axis));
     gamepad.add_internal_call("internal_m2n_virtual_gamepad_set_button",
-                              dotnet_internal_call(internal_m2n_virtual_gamepad_set_button));
+                              script_internal_call(internal_m2n_virtual_gamepad_set_button));
     gamepad.add_internal_call("internal_m2n_virtual_gamepad_release_all",
-                              dotnet_internal_call(internal_m2n_virtual_gamepad_release_all));
+                              script_internal_call(internal_m2n_virtual_gamepad_release_all));
 
     auto zone = dotnet::internal_call_registry("Unravel.Core.PointerZone");
-    zone.add_internal_call("internal_m2n_pointer_zone_create", dotnet_internal_call(internal_m2n_pointer_zone_create));
-    zone.add_internal_call("internal_m2n_pointer_zone_destroy", dotnet_internal_call(internal_m2n_pointer_zone_destroy));
-    zone.add_internal_call("internal_m2n_pointer_zone_set_area", dotnet_internal_call(internal_m2n_pointer_zone_set_area));
-    zone.add_internal_call("internal_m2n_pointer_zone_has_pointer", dotnet_internal_call(internal_m2n_pointer_zone_has_pointer));
-    zone.add_internal_call("internal_m2n_pointer_zone_get_pointer", dotnet_internal_call(internal_m2n_pointer_zone_get_pointer));
+    zone.add_internal_call("internal_m2n_pointer_zone_create", script_internal_call(internal_m2n_pointer_zone_create));
+    zone.add_internal_call("internal_m2n_pointer_zone_destroy", script_internal_call(internal_m2n_pointer_zone_destroy));
+    zone.add_internal_call("internal_m2n_pointer_zone_set_area", script_internal_call(internal_m2n_pointer_zone_set_area));
+    zone.add_internal_call("internal_m2n_pointer_zone_has_pointer", script_internal_call(internal_m2n_pointer_zone_has_pointer));
+    zone.add_internal_call("internal_m2n_pointer_zone_get_pointer", script_internal_call(internal_m2n_pointer_zone_get_pointer));
 
     auto cursor = dotnet::internal_call_registry("Unravel.Core.Cursor");
-    cursor.add_internal_call("internal_m2n_cursor_get_lock_state", dotnet_internal_call(internal_m2n_cursor_get_lock_state));
-    cursor.add_internal_call("internal_m2n_cursor_set_lock_state", dotnet_internal_call(internal_m2n_cursor_set_lock_state));
-    cursor.add_internal_call("internal_m2n_cursor_get_visible", dotnet_internal_call(internal_m2n_cursor_get_visible));
-    cursor.add_internal_call("internal_m2n_cursor_set_visible", dotnet_internal_call(internal_m2n_cursor_set_visible));
+    cursor.add_internal_call("internal_m2n_cursor_get_lock_state", script_internal_call(internal_m2n_cursor_get_lock_state));
+    cursor.add_internal_call("internal_m2n_cursor_set_lock_state", script_internal_call(internal_m2n_cursor_set_lock_state));
+    cursor.add_internal_call("internal_m2n_cursor_get_visible", script_internal_call(internal_m2n_cursor_get_visible));
+    cursor.add_internal_call("internal_m2n_cursor_set_visible", script_internal_call(internal_m2n_cursor_set_visible));
 }
 
 } // namespace unravel

@@ -293,42 +293,42 @@ void register_character_controller_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.CharacterControllerComponent");
-    reg.add_internal_call("internal_m2n_cc_move", dotnet_internal_call(internal_m2n_cc_move));
-    reg.add_internal_call("internal_m2n_cc_jump", dotnet_internal_call(internal_m2n_cc_jump));
-    reg.add_internal_call("internal_m2n_cc_apply_impulse", dotnet_internal_call(internal_m2n_cc_apply_impulse));
-    reg.add_internal_call("internal_m2n_cc_warp", dotnet_internal_call(internal_m2n_cc_warp));
+    reg.add_internal_call("internal_m2n_cc_move", script_internal_call(internal_m2n_cc_move));
+    reg.add_internal_call("internal_m2n_cc_jump", script_internal_call(internal_m2n_cc_jump));
+    reg.add_internal_call("internal_m2n_cc_apply_impulse", script_internal_call(internal_m2n_cc_apply_impulse));
+    reg.add_internal_call("internal_m2n_cc_warp", script_internal_call(internal_m2n_cc_warp));
 
-    reg.add_internal_call("internal_m2n_cc_get_is_grounded", dotnet_internal_call(internal_m2n_cc_get_is_grounded));
-    reg.add_internal_call("internal_m2n_cc_get_can_jump", dotnet_internal_call(internal_m2n_cc_get_can_jump));
-    reg.add_internal_call("internal_m2n_cc_get_velocity", dotnet_internal_call(internal_m2n_cc_get_velocity));
+    reg.add_internal_call("internal_m2n_cc_get_is_grounded", script_internal_call(internal_m2n_cc_get_is_grounded));
+    reg.add_internal_call("internal_m2n_cc_get_can_jump", script_internal_call(internal_m2n_cc_get_can_jump));
+    reg.add_internal_call("internal_m2n_cc_get_velocity", script_internal_call(internal_m2n_cc_get_velocity));
 
-    reg.add_internal_call("internal_m2n_cc_get_linear_velocity", dotnet_internal_call(internal_m2n_cc_get_linear_velocity));
-    reg.add_internal_call("internal_m2n_cc_set_linear_velocity", dotnet_internal_call(internal_m2n_cc_set_linear_velocity));
+    reg.add_internal_call("internal_m2n_cc_get_linear_velocity", script_internal_call(internal_m2n_cc_get_linear_velocity));
+    reg.add_internal_call("internal_m2n_cc_set_linear_velocity", script_internal_call(internal_m2n_cc_set_linear_velocity));
 
-    reg.add_internal_call("internal_m2n_cc_get_radius", dotnet_internal_call(internal_m2n_cc_get_radius));
-    reg.add_internal_call("internal_m2n_cc_set_radius", dotnet_internal_call(internal_m2n_cc_set_radius));
-    reg.add_internal_call("internal_m2n_cc_get_height", dotnet_internal_call(internal_m2n_cc_get_height));
-    reg.add_internal_call("internal_m2n_cc_set_height", dotnet_internal_call(internal_m2n_cc_set_height));
-    reg.add_internal_call("internal_m2n_cc_get_center", dotnet_internal_call(internal_m2n_cc_get_center));
-    reg.add_internal_call("internal_m2n_cc_set_center", dotnet_internal_call(internal_m2n_cc_set_center));
-    reg.add_internal_call("internal_m2n_cc_get_step_height", dotnet_internal_call(internal_m2n_cc_get_step_height));
-    reg.add_internal_call("internal_m2n_cc_set_step_height", dotnet_internal_call(internal_m2n_cc_set_step_height));
-    reg.add_internal_call("internal_m2n_cc_get_slope_limit", dotnet_internal_call(internal_m2n_cc_get_slope_limit));
-    reg.add_internal_call("internal_m2n_cc_set_slope_limit", dotnet_internal_call(internal_m2n_cc_set_slope_limit));
-    reg.add_internal_call("internal_m2n_cc_get_skin_width", dotnet_internal_call(internal_m2n_cc_get_skin_width));
-    reg.add_internal_call("internal_m2n_cc_set_skin_width", dotnet_internal_call(internal_m2n_cc_set_skin_width));
-    reg.add_internal_call("internal_m2n_cc_get_gravity_scale", dotnet_internal_call(internal_m2n_cc_get_gravity_scale));
-    reg.add_internal_call("internal_m2n_cc_set_gravity_scale", dotnet_internal_call(internal_m2n_cc_set_gravity_scale));
-    reg.add_internal_call("internal_m2n_cc_get_terminal_velocity", dotnet_internal_call(internal_m2n_cc_get_terminal_velocity));
-    reg.add_internal_call("internal_m2n_cc_set_terminal_velocity", dotnet_internal_call(internal_m2n_cc_set_terminal_velocity));
-    reg.add_internal_call("internal_m2n_cc_get_linear_damping", dotnet_internal_call(internal_m2n_cc_get_linear_damping));
-    reg.add_internal_call("internal_m2n_cc_set_linear_damping", dotnet_internal_call(internal_m2n_cc_set_linear_damping));
+    reg.add_internal_call("internal_m2n_cc_get_radius", script_internal_call(internal_m2n_cc_get_radius));
+    reg.add_internal_call("internal_m2n_cc_set_radius", script_internal_call(internal_m2n_cc_set_radius));
+    reg.add_internal_call("internal_m2n_cc_get_height", script_internal_call(internal_m2n_cc_get_height));
+    reg.add_internal_call("internal_m2n_cc_set_height", script_internal_call(internal_m2n_cc_set_height));
+    reg.add_internal_call("internal_m2n_cc_get_center", script_internal_call(internal_m2n_cc_get_center));
+    reg.add_internal_call("internal_m2n_cc_set_center", script_internal_call(internal_m2n_cc_set_center));
+    reg.add_internal_call("internal_m2n_cc_get_step_height", script_internal_call(internal_m2n_cc_get_step_height));
+    reg.add_internal_call("internal_m2n_cc_set_step_height", script_internal_call(internal_m2n_cc_set_step_height));
+    reg.add_internal_call("internal_m2n_cc_get_slope_limit", script_internal_call(internal_m2n_cc_get_slope_limit));
+    reg.add_internal_call("internal_m2n_cc_set_slope_limit", script_internal_call(internal_m2n_cc_set_slope_limit));
+    reg.add_internal_call("internal_m2n_cc_get_skin_width", script_internal_call(internal_m2n_cc_get_skin_width));
+    reg.add_internal_call("internal_m2n_cc_set_skin_width", script_internal_call(internal_m2n_cc_set_skin_width));
+    reg.add_internal_call("internal_m2n_cc_get_gravity_scale", script_internal_call(internal_m2n_cc_get_gravity_scale));
+    reg.add_internal_call("internal_m2n_cc_set_gravity_scale", script_internal_call(internal_m2n_cc_set_gravity_scale));
+    reg.add_internal_call("internal_m2n_cc_get_terminal_velocity", script_internal_call(internal_m2n_cc_get_terminal_velocity));
+    reg.add_internal_call("internal_m2n_cc_set_terminal_velocity", script_internal_call(internal_m2n_cc_set_terminal_velocity));
+    reg.add_internal_call("internal_m2n_cc_get_linear_damping", script_internal_call(internal_m2n_cc_get_linear_damping));
+    reg.add_internal_call("internal_m2n_cc_set_linear_damping", script_internal_call(internal_m2n_cc_set_linear_damping));
 
-    reg.add_internal_call("internal_m2n_cc_get_include_layers", dotnet_internal_call(internal_m2n_cc_get_include_layers));
-    reg.add_internal_call("internal_m2n_cc_set_include_layers", dotnet_internal_call(internal_m2n_cc_set_include_layers));
-    reg.add_internal_call("internal_m2n_cc_get_exclude_layers", dotnet_internal_call(internal_m2n_cc_get_exclude_layers));
-    reg.add_internal_call("internal_m2n_cc_set_exclude_layers", dotnet_internal_call(internal_m2n_cc_set_exclude_layers));
-    reg.add_internal_call("internal_m2n_cc_get_collision_layers", dotnet_internal_call(internal_m2n_cc_get_collision_layers));
+    reg.add_internal_call("internal_m2n_cc_get_include_layers", script_internal_call(internal_m2n_cc_get_include_layers));
+    reg.add_internal_call("internal_m2n_cc_set_include_layers", script_internal_call(internal_m2n_cc_set_include_layers));
+    reg.add_internal_call("internal_m2n_cc_get_exclude_layers", script_internal_call(internal_m2n_cc_get_exclude_layers));
+    reg.add_internal_call("internal_m2n_cc_set_exclude_layers", script_internal_call(internal_m2n_cc_set_exclude_layers));
+    reg.add_internal_call("internal_m2n_cc_get_collision_layers", script_internal_call(internal_m2n_cc_get_collision_layers));
 }
 
 } // namespace unravel

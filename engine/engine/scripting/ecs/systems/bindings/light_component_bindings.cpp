@@ -249,44 +249,44 @@ void register_light_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.LightComponent");
-    reg.add_internal_call("internal_m2n_light_get_color", dotnet_internal_call(internal_m2n_light_get_color));
-    reg.add_internal_call("internal_m2n_light_set_color", dotnet_internal_call(internal_m2n_light_set_color));
-    reg.add_internal_call("internal_m2n_light_get_type", dotnet_internal_call(internal_m2n_light_get_type));
-    reg.add_internal_call("internal_m2n_light_set_type", dotnet_internal_call(internal_m2n_light_set_type));
-    reg.add_internal_call("internal_m2n_light_get_intensity", dotnet_internal_call(internal_m2n_light_get_intensity));
-    reg.add_internal_call("internal_m2n_light_set_intensity", dotnet_internal_call(internal_m2n_light_set_intensity));
+    reg.add_internal_call("internal_m2n_light_get_color", script_internal_call(internal_m2n_light_get_color));
+    reg.add_internal_call("internal_m2n_light_set_color", script_internal_call(internal_m2n_light_set_color));
+    reg.add_internal_call("internal_m2n_light_get_type", script_internal_call(internal_m2n_light_get_type));
+    reg.add_internal_call("internal_m2n_light_set_type", script_internal_call(internal_m2n_light_set_type));
+    reg.add_internal_call("internal_m2n_light_get_intensity", script_internal_call(internal_m2n_light_get_intensity));
+    reg.add_internal_call("internal_m2n_light_set_intensity", script_internal_call(internal_m2n_light_set_intensity));
     reg.add_internal_call("internal_m2n_light_get_indirect_intensity",
-                          dotnet_internal_call(internal_m2n_light_get_indirect_intensity));
+                          script_internal_call(internal_m2n_light_get_indirect_intensity));
     reg.add_internal_call("internal_m2n_light_set_indirect_intensity",
-                          dotnet_internal_call(internal_m2n_light_set_indirect_intensity));
+                          script_internal_call(internal_m2n_light_set_indirect_intensity));
     reg.add_internal_call("internal_m2n_light_get_volumetric_intensity",
-                          dotnet_internal_call(internal_m2n_light_get_volumetric_intensity));
+                          script_internal_call(internal_m2n_light_get_volumetric_intensity));
     reg.add_internal_call("internal_m2n_light_set_volumetric_intensity",
-                          dotnet_internal_call(internal_m2n_light_set_volumetric_intensity));
-    reg.add_internal_call("internal_m2n_light_get_enabled", dotnet_internal_call(internal_m2n_light_get_enabled));
-    reg.add_internal_call("internal_m2n_light_set_enabled", dotnet_internal_call(internal_m2n_light_set_enabled));
+                          script_internal_call(internal_m2n_light_set_volumetric_intensity));
+    reg.add_internal_call("internal_m2n_light_get_enabled", script_internal_call(internal_m2n_light_get_enabled));
+    reg.add_internal_call("internal_m2n_light_set_enabled", script_internal_call(internal_m2n_light_set_enabled));
     reg.add_internal_call("internal_m2n_light_get_casts_shadows",
-                          dotnet_internal_call(internal_m2n_light_get_casts_shadows));
+                          script_internal_call(internal_m2n_light_get_casts_shadows));
     reg.add_internal_call("internal_m2n_light_set_casts_shadows",
-                          dotnet_internal_call(internal_m2n_light_set_casts_shadows));
-    reg.add_internal_call("internal_m2n_light_get_range", dotnet_internal_call(internal_m2n_light_get_range));
-    reg.add_internal_call("internal_m2n_light_set_range", dotnet_internal_call(internal_m2n_light_set_range));
+                          script_internal_call(internal_m2n_light_set_casts_shadows));
+    reg.add_internal_call("internal_m2n_light_get_range", script_internal_call(internal_m2n_light_get_range));
+    reg.add_internal_call("internal_m2n_light_set_range", script_internal_call(internal_m2n_light_set_range));
     reg.add_internal_call("internal_m2n_light_get_spot_outer_angle",
-                          dotnet_internal_call(internal_m2n_light_get_spot_outer_angle));
+                          script_internal_call(internal_m2n_light_get_spot_outer_angle));
     reg.add_internal_call("internal_m2n_light_set_spot_outer_angle",
-                          dotnet_internal_call(internal_m2n_light_set_spot_outer_angle));
+                          script_internal_call(internal_m2n_light_set_spot_outer_angle));
     reg.add_internal_call("internal_m2n_light_get_spot_inner_angle",
-                          dotnet_internal_call(internal_m2n_light_get_spot_inner_angle));
+                          script_internal_call(internal_m2n_light_get_spot_inner_angle));
     reg.add_internal_call("internal_m2n_light_set_spot_inner_angle",
-                          dotnet_internal_call(internal_m2n_light_set_spot_inner_angle));
+                          script_internal_call(internal_m2n_light_set_spot_inner_angle));
     reg.add_internal_call("internal_m2n_light_get_source_radius",
-                          dotnet_internal_call(internal_m2n_light_get_source_radius));
+                          script_internal_call(internal_m2n_light_get_source_radius));
     reg.add_internal_call("internal_m2n_light_set_source_radius",
-                          dotnet_internal_call(internal_m2n_light_set_source_radius));
+                          script_internal_call(internal_m2n_light_set_source_radius));
     reg.add_internal_call("internal_m2n_light_get_source_length",
-                          dotnet_internal_call(internal_m2n_light_get_source_length));
+                          script_internal_call(internal_m2n_light_get_source_length));
     reg.add_internal_call("internal_m2n_light_set_source_length",
-                          dotnet_internal_call(internal_m2n_light_set_source_length));
+                          script_internal_call(internal_m2n_light_set_source_length));
 }
 
 } // namespace unravel

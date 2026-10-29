@@ -411,96 +411,96 @@ void register_skylight_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.SkylightComponent");
-    reg.add_internal_call("internal_m2n_skylight_get_mode", dotnet_internal_call(internal_m2n_skylight_get_mode));
-    reg.add_internal_call("internal_m2n_skylight_set_mode", dotnet_internal_call(internal_m2n_skylight_set_mode));
+    reg.add_internal_call("internal_m2n_skylight_get_mode", script_internal_call(internal_m2n_skylight_get_mode));
+    reg.add_internal_call("internal_m2n_skylight_set_mode", script_internal_call(internal_m2n_skylight_set_mode));
     reg.add_internal_call("internal_m2n_skylight_get_turbidity",
-                          dotnet_internal_call(internal_m2n_skylight_get_turbidity));
+                          script_internal_call(internal_m2n_skylight_get_turbidity));
     reg.add_internal_call("internal_m2n_skylight_set_turbidity",
-                          dotnet_internal_call(internal_m2n_skylight_set_turbidity));
+                          script_internal_call(internal_m2n_skylight_set_turbidity));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_mode",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_mode));
+                          script_internal_call(internal_m2n_skylight_get_cloud_mode));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_mode",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_mode));
+                          script_internal_call(internal_m2n_skylight_set_cloud_mode));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_coverage",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_coverage));
+                          script_internal_call(internal_m2n_skylight_get_cloud_coverage));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_coverage",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_coverage));
+                          script_internal_call(internal_m2n_skylight_set_cloud_coverage));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_macro_variation",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_macro_variation));
+                          script_internal_call(internal_m2n_skylight_get_cloud_macro_variation));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_macro_variation",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_macro_variation));
+                          script_internal_call(internal_m2n_skylight_set_cloud_macro_variation));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_base_altitude",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_base_altitude));
+                          script_internal_call(internal_m2n_skylight_get_cloud_base_altitude));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_base_altitude",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_base_altitude));
+                          script_internal_call(internal_m2n_skylight_set_cloud_base_altitude));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_thickness",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_thickness));
+                          script_internal_call(internal_m2n_skylight_get_cloud_thickness));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_thickness",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_thickness));
+                          script_internal_call(internal_m2n_skylight_set_cloud_thickness));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_size",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_size));
+                          script_internal_call(internal_m2n_skylight_get_cloud_size));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_size",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_size));
+                          script_internal_call(internal_m2n_skylight_set_cloud_size));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_density",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_density));
+                          script_internal_call(internal_m2n_skylight_get_cloud_density));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_density",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_density));
+                          script_internal_call(internal_m2n_skylight_set_cloud_density));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_shadow_strength",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_shadow_strength));
+                          script_internal_call(internal_m2n_skylight_get_cloud_shadow_strength));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_shadow_strength",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_shadow_strength));
+                          script_internal_call(internal_m2n_skylight_set_cloud_shadow_strength));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_brightness",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_brightness));
+                          script_internal_call(internal_m2n_skylight_get_cloud_brightness));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_brightness",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_brightness));
+                          script_internal_call(internal_m2n_skylight_set_cloud_brightness));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_world_space_altitude",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_world_space_altitude));
+                          script_internal_call(internal_m2n_skylight_get_cloud_world_space_altitude));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_world_space_altitude",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_world_space_altitude));
+                          script_internal_call(internal_m2n_skylight_set_cloud_world_space_altitude));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_shadows",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_shadows));
+                          script_internal_call(internal_m2n_skylight_get_cloud_shadows));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_shadows",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_shadows));
+                          script_internal_call(internal_m2n_skylight_set_cloud_shadows));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_shadow_opacity",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_shadow_opacity));
+                          script_internal_call(internal_m2n_skylight_get_cloud_shadow_opacity));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_shadow_opacity",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_shadow_opacity));
+                          script_internal_call(internal_m2n_skylight_set_cloud_shadow_opacity));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_softness",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_softness));
+                          script_internal_call(internal_m2n_skylight_get_cloud_softness));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_softness",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_softness));
+                          script_internal_call(internal_m2n_skylight_set_cloud_softness));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_detail_erode",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_detail_erode));
+                          script_internal_call(internal_m2n_skylight_get_cloud_detail_erode));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_detail_erode",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_detail_erode));
+                          script_internal_call(internal_m2n_skylight_set_cloud_detail_erode));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_speed",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_speed));
+                          script_internal_call(internal_m2n_skylight_get_cloud_speed));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_speed",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_speed));
+                          script_internal_call(internal_m2n_skylight_set_cloud_speed));
     reg.add_internal_call("internal_m2n_skylight_get_cloud_wind_direction",
-                          dotnet_internal_call(internal_m2n_skylight_get_cloud_wind_direction));
+                          script_internal_call(internal_m2n_skylight_get_cloud_wind_direction));
     reg.add_internal_call("internal_m2n_skylight_set_cloud_wind_direction",
-                          dotnet_internal_call(internal_m2n_skylight_set_cloud_wind_direction));
+                          script_internal_call(internal_m2n_skylight_set_cloud_wind_direction));
     reg.add_internal_call("internal_m2n_skylight_get_irradiance_intensity",
-                          dotnet_internal_call(internal_m2n_skylight_get_irradiance_intensity));
+                          script_internal_call(internal_m2n_skylight_get_irradiance_intensity));
     reg.add_internal_call("internal_m2n_skylight_set_irradiance_intensity",
-                          dotnet_internal_call(internal_m2n_skylight_set_irradiance_intensity));
+                          script_internal_call(internal_m2n_skylight_set_irradiance_intensity));
     reg.add_internal_call("internal_m2n_skylight_get_irradiance_quality",
-                          dotnet_internal_call(internal_m2n_skylight_get_irradiance_quality));
+                          script_internal_call(internal_m2n_skylight_get_irradiance_quality));
     reg.add_internal_call("internal_m2n_skylight_set_irradiance_quality",
-                          dotnet_internal_call(internal_m2n_skylight_set_irradiance_quality));
+                          script_internal_call(internal_m2n_skylight_set_irradiance_quality));
     reg.add_internal_call("internal_m2n_skylight_get_irradiance_use_sky",
-                          dotnet_internal_call(internal_m2n_skylight_get_irradiance_use_sky));
+                          script_internal_call(internal_m2n_skylight_get_irradiance_use_sky));
     reg.add_internal_call("internal_m2n_skylight_set_irradiance_use_sky",
-                          dotnet_internal_call(internal_m2n_skylight_set_irradiance_use_sky));
+                          script_internal_call(internal_m2n_skylight_set_irradiance_use_sky));
     reg.add_internal_call("internal_m2n_skylight_get_sky_brightness",
-                          dotnet_internal_call(internal_m2n_skylight_get_sky_brightness));
+                          script_internal_call(internal_m2n_skylight_get_sky_brightness));
     reg.add_internal_call("internal_m2n_skylight_set_sky_brightness",
-                          dotnet_internal_call(internal_m2n_skylight_set_sky_brightness));
+                          script_internal_call(internal_m2n_skylight_set_sky_brightness));
     reg.add_internal_call("internal_m2n_skylight_get_cubemap",
-                          dotnet_internal_call(internal_m2n_skylight_get_cubemap));
+                          script_internal_call(internal_m2n_skylight_get_cubemap));
     reg.add_internal_call("internal_m2n_skylight_set_cubemap",
-                          dotnet_internal_call(internal_m2n_skylight_set_cubemap));
+                          script_internal_call(internal_m2n_skylight_set_cubemap));
 }
 
 } // namespace unravel

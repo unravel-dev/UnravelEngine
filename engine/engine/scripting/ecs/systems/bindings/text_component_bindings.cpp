@@ -495,70 +495,70 @@ void register_text_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.TextComponent");
-    reg.add_internal_call("internal_m2n_text_get_text", dotnet_internal_call(internal_m2n_text_get_text));
-    reg.add_internal_call("internal_m2n_text_set_text", dotnet_internal_call(internal_m2n_text_set_text));
-    reg.add_internal_call("internal_m2n_text_get_buffer_type", dotnet_internal_call(internal_m2n_text_get_buffer_type));
-    reg.add_internal_call("internal_m2n_text_set_buffer_type", dotnet_internal_call(internal_m2n_text_set_buffer_type));
+    reg.add_internal_call("internal_m2n_text_get_text", script_internal_call(internal_m2n_text_get_text));
+    reg.add_internal_call("internal_m2n_text_set_text", script_internal_call(internal_m2n_text_set_text));
+    reg.add_internal_call("internal_m2n_text_get_buffer_type", script_internal_call(internal_m2n_text_get_buffer_type));
+    reg.add_internal_call("internal_m2n_text_set_buffer_type", script_internal_call(internal_m2n_text_set_buffer_type));
     reg.add_internal_call("internal_m2n_text_get_overflow_type",
-                            dotnet_internal_call(internal_m2n_text_get_overflow_type));
+                            script_internal_call(internal_m2n_text_get_overflow_type));
     reg.add_internal_call("internal_m2n_text_set_overflow_type",
-                            dotnet_internal_call(internal_m2n_text_set_overflow_type));
-    reg.add_internal_call("internal_m2n_text_get_font", dotnet_internal_call(internal_m2n_text_get_font));
-    reg.add_internal_call("internal_m2n_text_set_font", dotnet_internal_call(internal_m2n_text_set_font));
+                            script_internal_call(internal_m2n_text_set_overflow_type));
+    reg.add_internal_call("internal_m2n_text_get_font", script_internal_call(internal_m2n_text_get_font));
+    reg.add_internal_call("internal_m2n_text_set_font", script_internal_call(internal_m2n_text_set_font));
 
-    reg.add_internal_call("internal_m2n_text_get_font_size", dotnet_internal_call(internal_m2n_text_get_font_size));
-    reg.add_internal_call("internal_m2n_text_set_font_size", dotnet_internal_call(internal_m2n_text_set_font_size));
+    reg.add_internal_call("internal_m2n_text_get_font_size", script_internal_call(internal_m2n_text_get_font_size));
+    reg.add_internal_call("internal_m2n_text_set_font_size", script_internal_call(internal_m2n_text_set_font_size));
     reg.add_internal_call("internal_m2n_text_get_render_font_size",
-                            dotnet_internal_call(internal_m2n_text_get_render_font_size));
+                            script_internal_call(internal_m2n_text_get_render_font_size));
 
-    reg.add_internal_call("internal_m2n_text_get_auto_size", dotnet_internal_call(internal_m2n_text_get_auto_size));
-    reg.add_internal_call("internal_m2n_text_set_auto_size", dotnet_internal_call(internal_m2n_text_set_auto_size));
+    reg.add_internal_call("internal_m2n_text_get_auto_size", script_internal_call(internal_m2n_text_get_auto_size));
+    reg.add_internal_call("internal_m2n_text_set_auto_size", script_internal_call(internal_m2n_text_set_auto_size));
 
     reg.add_internal_call("internal_m2n_text_get_auto_size_range",
-                            dotnet_internal_call(internal_m2n_text_get_auto_size_range));
+                            script_internal_call(internal_m2n_text_get_auto_size_range));
     reg.add_internal_call("internal_m2n_text_set_auto_size_range",
-                            dotnet_internal_call(internal_m2n_text_set_auto_size_range));
+                            script_internal_call(internal_m2n_text_set_auto_size_range));
 
-    reg.add_internal_call("internal_m2n_text_get_area", dotnet_internal_call(internal_m2n_text_get_area));
-    reg.add_internal_call("internal_m2n_text_set_area", dotnet_internal_call(internal_m2n_text_set_area));
-    reg.add_internal_call("internal_m2n_text_get_render_area", dotnet_internal_call(internal_m2n_text_get_render_area));
+    reg.add_internal_call("internal_m2n_text_get_area", script_internal_call(internal_m2n_text_get_area));
+    reg.add_internal_call("internal_m2n_text_set_area", script_internal_call(internal_m2n_text_set_area));
+    reg.add_internal_call("internal_m2n_text_get_render_area", script_internal_call(internal_m2n_text_get_render_area));
 
-    reg.add_internal_call("internal_m2n_text_get_is_rich_text", dotnet_internal_call(internal_m2n_text_get_is_rich_text));
-    reg.add_internal_call("internal_m2n_text_set_is_rich_text", dotnet_internal_call(internal_m2n_text_set_is_rich_text));
+    reg.add_internal_call("internal_m2n_text_get_is_rich_text", script_internal_call(internal_m2n_text_get_is_rich_text));
+    reg.add_internal_call("internal_m2n_text_set_is_rich_text", script_internal_call(internal_m2n_text_set_is_rich_text));
 
-    reg.add_internal_call("internal_m2n_text_get_alignment", dotnet_internal_call(internal_m2n_text_get_alignment));
-    reg.add_internal_call("internal_m2n_text_set_alignment", dotnet_internal_call(internal_m2n_text_set_alignment));
+    reg.add_internal_call("internal_m2n_text_get_alignment", script_internal_call(internal_m2n_text_get_alignment));
+    reg.add_internal_call("internal_m2n_text_set_alignment", script_internal_call(internal_m2n_text_set_alignment));
 
-    reg.add_internal_call("internal_m2n_text_get_bounds", dotnet_internal_call(internal_m2n_text_get_bounds));
-    reg.add_internal_call("internal_m2n_text_get_render_bounds", dotnet_internal_call(internal_m2n_text_get_render_bounds));
+    reg.add_internal_call("internal_m2n_text_get_bounds", script_internal_call(internal_m2n_text_get_bounds));
+    reg.add_internal_call("internal_m2n_text_get_render_bounds", script_internal_call(internal_m2n_text_get_render_bounds));
 
     // Text Style Functions
-    reg.add_internal_call("internal_m2n_text_set_opacity", dotnet_internal_call(internal_m2n_text_set_opacity));
-    reg.add_internal_call("internal_m2n_text_get_opacity", dotnet_internal_call(internal_m2n_text_get_opacity));
-    reg.add_internal_call("internal_m2n_text_set_text_color", dotnet_internal_call(internal_m2n_text_set_text_color));
-    reg.add_internal_call("internal_m2n_text_get_text_color", dotnet_internal_call(internal_m2n_text_get_text_color));
-    reg.add_internal_call("internal_m2n_text_set_background_color", dotnet_internal_call(internal_m2n_text_set_background_color));
-    reg.add_internal_call("internal_m2n_text_get_background_color", dotnet_internal_call(internal_m2n_text_get_background_color));
-    reg.add_internal_call("internal_m2n_text_set_foreground_color", dotnet_internal_call(internal_m2n_text_set_foreground_color));
-    reg.add_internal_call("internal_m2n_text_get_foreground_color", dotnet_internal_call(internal_m2n_text_get_foreground_color));
-    reg.add_internal_call("internal_m2n_text_set_overline_color", dotnet_internal_call(internal_m2n_text_set_overline_color));
-    reg.add_internal_call("internal_m2n_text_get_overline_color", dotnet_internal_call(internal_m2n_text_get_overline_color));
-    reg.add_internal_call("internal_m2n_text_set_underline_color", dotnet_internal_call(internal_m2n_text_set_underline_color));
-    reg.add_internal_call("internal_m2n_text_get_underline_color", dotnet_internal_call(internal_m2n_text_get_underline_color));
-    reg.add_internal_call("internal_m2n_text_set_strike_color", dotnet_internal_call(internal_m2n_text_set_strike_color));
-    reg.add_internal_call("internal_m2n_text_get_strike_color", dotnet_internal_call(internal_m2n_text_get_strike_color));
-    reg.add_internal_call("internal_m2n_text_set_outline_color", dotnet_internal_call(internal_m2n_text_set_outline_color));
-    reg.add_internal_call("internal_m2n_text_get_outline_color", dotnet_internal_call(internal_m2n_text_get_outline_color));
-    reg.add_internal_call("internal_m2n_text_set_outline_width", dotnet_internal_call(internal_m2n_text_set_outline_width));
-    reg.add_internal_call("internal_m2n_text_get_outline_width", dotnet_internal_call(internal_m2n_text_get_outline_width));
-    reg.add_internal_call("internal_m2n_text_set_shadow_offsets", dotnet_internal_call(internal_m2n_text_set_shadow_offsets));
-    reg.add_internal_call("internal_m2n_text_get_shadow_offsets", dotnet_internal_call(internal_m2n_text_get_shadow_offsets));
-    reg.add_internal_call("internal_m2n_text_set_shadow_color", dotnet_internal_call(internal_m2n_text_set_shadow_color));
-    reg.add_internal_call("internal_m2n_text_get_shadow_color", dotnet_internal_call(internal_m2n_text_get_shadow_color));
-    reg.add_internal_call("internal_m2n_text_set_shadow_softener", dotnet_internal_call(internal_m2n_text_set_shadow_softener));
-    reg.add_internal_call("internal_m2n_text_get_shadow_softener", dotnet_internal_call(internal_m2n_text_get_shadow_softener));
-    reg.add_internal_call("internal_m2n_text_set_style_flags", dotnet_internal_call(internal_m2n_text_set_style_flags));
-    reg.add_internal_call("internal_m2n_text_get_style_flags", dotnet_internal_call(internal_m2n_text_get_style_flags));
+    reg.add_internal_call("internal_m2n_text_set_opacity", script_internal_call(internal_m2n_text_set_opacity));
+    reg.add_internal_call("internal_m2n_text_get_opacity", script_internal_call(internal_m2n_text_get_opacity));
+    reg.add_internal_call("internal_m2n_text_set_text_color", script_internal_call(internal_m2n_text_set_text_color));
+    reg.add_internal_call("internal_m2n_text_get_text_color", script_internal_call(internal_m2n_text_get_text_color));
+    reg.add_internal_call("internal_m2n_text_set_background_color", script_internal_call(internal_m2n_text_set_background_color));
+    reg.add_internal_call("internal_m2n_text_get_background_color", script_internal_call(internal_m2n_text_get_background_color));
+    reg.add_internal_call("internal_m2n_text_set_foreground_color", script_internal_call(internal_m2n_text_set_foreground_color));
+    reg.add_internal_call("internal_m2n_text_get_foreground_color", script_internal_call(internal_m2n_text_get_foreground_color));
+    reg.add_internal_call("internal_m2n_text_set_overline_color", script_internal_call(internal_m2n_text_set_overline_color));
+    reg.add_internal_call("internal_m2n_text_get_overline_color", script_internal_call(internal_m2n_text_get_overline_color));
+    reg.add_internal_call("internal_m2n_text_set_underline_color", script_internal_call(internal_m2n_text_set_underline_color));
+    reg.add_internal_call("internal_m2n_text_get_underline_color", script_internal_call(internal_m2n_text_get_underline_color));
+    reg.add_internal_call("internal_m2n_text_set_strike_color", script_internal_call(internal_m2n_text_set_strike_color));
+    reg.add_internal_call("internal_m2n_text_get_strike_color", script_internal_call(internal_m2n_text_get_strike_color));
+    reg.add_internal_call("internal_m2n_text_set_outline_color", script_internal_call(internal_m2n_text_set_outline_color));
+    reg.add_internal_call("internal_m2n_text_get_outline_color", script_internal_call(internal_m2n_text_get_outline_color));
+    reg.add_internal_call("internal_m2n_text_set_outline_width", script_internal_call(internal_m2n_text_set_outline_width));
+    reg.add_internal_call("internal_m2n_text_get_outline_width", script_internal_call(internal_m2n_text_get_outline_width));
+    reg.add_internal_call("internal_m2n_text_set_shadow_offsets", script_internal_call(internal_m2n_text_set_shadow_offsets));
+    reg.add_internal_call("internal_m2n_text_get_shadow_offsets", script_internal_call(internal_m2n_text_get_shadow_offsets));
+    reg.add_internal_call("internal_m2n_text_set_shadow_color", script_internal_call(internal_m2n_text_set_shadow_color));
+    reg.add_internal_call("internal_m2n_text_get_shadow_color", script_internal_call(internal_m2n_text_get_shadow_color));
+    reg.add_internal_call("internal_m2n_text_set_shadow_softener", script_internal_call(internal_m2n_text_set_shadow_softener));
+    reg.add_internal_call("internal_m2n_text_get_shadow_softener", script_internal_call(internal_m2n_text_get_shadow_softener));
+    reg.add_internal_call("internal_m2n_text_set_style_flags", script_internal_call(internal_m2n_text_set_style_flags));
+    reg.add_internal_call("internal_m2n_text_get_style_flags", script_internal_call(internal_m2n_text_get_style_flags));
 }
 
 } // namespace unravel

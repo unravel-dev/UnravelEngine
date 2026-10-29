@@ -1046,49 +1046,49 @@ void register_scene_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.Scene");
-    reg.add_internal_call("internal_m2n_load_scene", dotnet_internal_call(internal_m2n_load_scene));
-    reg.add_internal_call("internal_m2n_load_scene_uid", dotnet_internal_call(internal_m2n_load_scene_uid));
-    reg.add_internal_call("internal_m2n_reload_scene", dotnet_internal_call(internal_m2n_reload_scene));
-    reg.add_internal_call("internal_m2n_load_scene_additive", dotnet_internal_call(internal_m2n_load_scene_additive));
+    reg.add_internal_call("internal_m2n_load_scene", script_internal_call(internal_m2n_load_scene));
+    reg.add_internal_call("internal_m2n_load_scene_uid", script_internal_call(internal_m2n_load_scene_uid));
+    reg.add_internal_call("internal_m2n_reload_scene", script_internal_call(internal_m2n_reload_scene));
+    reg.add_internal_call("internal_m2n_load_scene_additive", script_internal_call(internal_m2n_load_scene_additive));
     reg.add_internal_call("internal_m2n_load_scene_additive_uid",
-                            dotnet_internal_call(internal_m2n_load_scene_additive_uid));
-    reg.add_internal_call("internal_m2n_unload_scene", dotnet_internal_call(internal_m2n_unload_scene));
-    reg.add_internal_call("internal_m2n_dont_destroy_on_load", dotnet_internal_call(internal_m2n_dont_destroy_on_load));
-    reg.add_internal_call("internal_m2n_create_scene", dotnet_internal_call(internal_m2n_create_scene));
-    reg.add_internal_call("internal_m2n_destroy_scene", dotnet_internal_call(internal_m2n_destroy_scene));
-    reg.add_internal_call("internal_m2n_create_entity", dotnet_internal_call(internal_m2n_create_entity));
+                            script_internal_call(internal_m2n_load_scene_additive_uid));
+    reg.add_internal_call("internal_m2n_unload_scene", script_internal_call(internal_m2n_unload_scene));
+    reg.add_internal_call("internal_m2n_dont_destroy_on_load", script_internal_call(internal_m2n_dont_destroy_on_load));
+    reg.add_internal_call("internal_m2n_create_scene", script_internal_call(internal_m2n_create_scene));
+    reg.add_internal_call("internal_m2n_destroy_scene", script_internal_call(internal_m2n_destroy_scene));
+    reg.add_internal_call("internal_m2n_create_entity", script_internal_call(internal_m2n_create_entity));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_uid));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_key",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_key));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_key));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_parent",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_parent));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_uid_with_parent));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_parent",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_parent));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_key_with_parent));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_position));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_key_with_position));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position_parent",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_parent));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_parent));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position_parent",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_position_parent));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_key_with_position_parent));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_uid_with_position_rotation_parent));
     reg.add_internal_call("internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent",
-                            dotnet_internal_call(internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent));
-    reg.add_internal_call("internal_m2n_clone_entity", dotnet_internal_call(internal_m2n_clone_entity));
-    reg.add_internal_call("internal_m2n_destroy_entity", dotnet_internal_call(internal_m2n_destroy_entity));
+                            script_internal_call(internal_m2n_create_entity_from_prefab_key_with_position_rotation_parent));
+    reg.add_internal_call("internal_m2n_clone_entity", script_internal_call(internal_m2n_clone_entity));
+    reg.add_internal_call("internal_m2n_destroy_entity", script_internal_call(internal_m2n_destroy_entity));
     reg.add_internal_call("internal_m2n_destroy_entity_immediate",
-                            dotnet_internal_call(internal_m2n_destroy_entity_immediate));
+                            script_internal_call(internal_m2n_destroy_entity_immediate));
 
-    reg.add_internal_call("internal_m2n_is_entity_valid", dotnet_internal_call(internal_m2n_is_entity_valid));
-    reg.add_internal_call("internal_m2n_find_entity_by_name", dotnet_internal_call(internal_m2n_find_entity_by_name));
-    reg.add_internal_call("internal_m2n_find_entities_by_name", dotnet_internal_call(internal_m2n_find_entities_by_name));
-    reg.add_internal_call("internal_m2n_find_entity_by_tag", dotnet_internal_call(internal_m2n_find_entity_by_tag));
-    reg.add_internal_call("internal_m2n_find_entities_by_tag", dotnet_internal_call(internal_m2n_find_entities_by_tag));
-    reg.add_internal_call("internal_m2n_find_entities_with_component", dotnet_internal_call(internal_m2n_find_entities_with_component));
-    reg.add_internal_call("internal_m2n_find_entities_with_components", dotnet_internal_call(internal_m2n_find_entities_with_components));
+    reg.add_internal_call("internal_m2n_is_entity_valid", script_internal_call(internal_m2n_is_entity_valid));
+    reg.add_internal_call("internal_m2n_find_entity_by_name", script_internal_call(internal_m2n_find_entity_by_name));
+    reg.add_internal_call("internal_m2n_find_entities_by_name", script_internal_call(internal_m2n_find_entities_by_name));
+    reg.add_internal_call("internal_m2n_find_entity_by_tag", script_internal_call(internal_m2n_find_entity_by_tag));
+    reg.add_internal_call("internal_m2n_find_entities_by_tag", script_internal_call(internal_m2n_find_entities_by_tag));
+    reg.add_internal_call("internal_m2n_find_entities_with_component", script_internal_call(internal_m2n_find_entities_with_component));
+    reg.add_internal_call("internal_m2n_find_entities_with_components", script_internal_call(internal_m2n_find_entities_with_components));
 }
 
 void register_entity_script_bindings()
@@ -1096,36 +1096,36 @@ void register_entity_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.Entity");
-    reg.add_internal_call("internal_m2n_add_component", dotnet_internal_call(internal_m2n_add_component));
-    reg.add_internal_call("internal_m2n_get_component", dotnet_internal_call(internal_m2n_get_component));
+    reg.add_internal_call("internal_m2n_add_component", script_internal_call(internal_m2n_add_component));
+    reg.add_internal_call("internal_m2n_get_component", script_internal_call(internal_m2n_get_component));
     reg.add_internal_call("internal_m2n_get_component_in_children",
-                            dotnet_internal_call(internal_m2n_get_component_in_children));
-    reg.add_internal_call("internal_m2n_has_component", dotnet_internal_call(internal_m2n_has_component));
-    reg.add_internal_call("internal_m2n_get_components", dotnet_internal_call(internal_m2n_get_components));
+                            script_internal_call(internal_m2n_get_component_in_children));
+    reg.add_internal_call("internal_m2n_has_component", script_internal_call(internal_m2n_has_component));
+    reg.add_internal_call("internal_m2n_get_components", script_internal_call(internal_m2n_get_components));
     reg.add_internal_call("internal_m2n_get_components_in_children",
-                            dotnet_internal_call(internal_m2n_get_components_in_children));
+                            script_internal_call(internal_m2n_get_components_in_children));
 
     reg.add_internal_call("internal_m2n_remove_component_instance",
-                            dotnet_internal_call(internal_m2n_remove_component_instance));
+                            script_internal_call(internal_m2n_remove_component_instance));
     reg.add_internal_call("internal_m2n_remove_component_instance_delay",
-                            dotnet_internal_call(internal_m2n_remove_component_instance_delay));
+                            script_internal_call(internal_m2n_remove_component_instance_delay));
 
-    reg.add_internal_call("internal_m2n_remove_component", dotnet_internal_call(internal_m2n_remove_component));
+    reg.add_internal_call("internal_m2n_remove_component", script_internal_call(internal_m2n_remove_component));
     reg.add_internal_call("internal_m2n_remove_component_delay",
-                            dotnet_internal_call(internal_m2n_remove_component_delay));
+                            script_internal_call(internal_m2n_remove_component_delay));
 
     reg.add_internal_call("internal_m2n_get_transform_component",
-                            dotnet_internal_call(internal_m2n_get_transform_component));
-    reg.add_internal_call("internal_m2n_get_name", dotnet_internal_call(internal_m2n_get_name));
-    reg.add_internal_call("internal_m2n_set_name", dotnet_internal_call(internal_m2n_set_name));
-    reg.add_internal_call("internal_m2n_get_tag", dotnet_internal_call(internal_m2n_get_tag));
-    reg.add_internal_call("internal_m2n_set_tag", dotnet_internal_call(internal_m2n_set_tag));
-    reg.add_internal_call("internal_m2n_get_layers", dotnet_internal_call(internal_m2n_get_layers));
-    reg.add_internal_call("internal_m2n_set_layers", dotnet_internal_call(internal_m2n_set_layers));
+                            script_internal_call(internal_m2n_get_transform_component));
+    reg.add_internal_call("internal_m2n_get_name", script_internal_call(internal_m2n_get_name));
+    reg.add_internal_call("internal_m2n_set_name", script_internal_call(internal_m2n_set_name));
+    reg.add_internal_call("internal_m2n_get_tag", script_internal_call(internal_m2n_get_tag));
+    reg.add_internal_call("internal_m2n_set_tag", script_internal_call(internal_m2n_set_tag));
+    reg.add_internal_call("internal_m2n_get_layers", script_internal_call(internal_m2n_get_layers));
+    reg.add_internal_call("internal_m2n_set_layers", script_internal_call(internal_m2n_set_layers));
 
-    reg.add_internal_call("internal_m2n_get_active_global", dotnet_internal_call(internal_m2n_get_active_global));
-    reg.add_internal_call("internal_m2n_get_active_local", dotnet_internal_call(internal_m2n_get_active_local));
-    reg.add_internal_call("internal_m2n_set_active_local", dotnet_internal_call(internal_m2n_set_active_local));
+    reg.add_internal_call("internal_m2n_get_active_global", script_internal_call(internal_m2n_get_active_global));
+    reg.add_internal_call("internal_m2n_get_active_local", script_internal_call(internal_m2n_get_active_local));
+    reg.add_internal_call("internal_m2n_set_active_local", script_internal_call(internal_m2n_set_active_local));
 }
 
 } // namespace unravel

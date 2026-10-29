@@ -442,69 +442,69 @@ void register_transform_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.TransformComponent");
-    reg.add_internal_call("internal_m2n_get_children", dotnet_internal_call(internal_m2n_get_children));
-    reg.add_internal_call("internal_m2n_get_child", dotnet_internal_call(internal_m2n_get_child));
-    reg.add_internal_call("internal_m2n_get_parent", dotnet_internal_call(internal_m2n_get_parent));
-    reg.add_internal_call("internal_m2n_set_parent", dotnet_internal_call(internal_m2n_set_parent));
+    reg.add_internal_call("internal_m2n_get_children", script_internal_call(internal_m2n_get_children));
+    reg.add_internal_call("internal_m2n_get_child", script_internal_call(internal_m2n_get_child));
+    reg.add_internal_call("internal_m2n_get_parent", script_internal_call(internal_m2n_get_parent));
+    reg.add_internal_call("internal_m2n_set_parent", script_internal_call(internal_m2n_set_parent));
 
-    reg.add_internal_call("internal_m2n_get_position_global", dotnet_internal_call(internal_m2n_get_position_global));
-    reg.add_internal_call("internal_m2n_set_position_global", dotnet_internal_call(internal_m2n_set_position_global));
-    reg.add_internal_call("internal_m2n_move_by_global", dotnet_internal_call(internal_m2n_move_by_global));
+    reg.add_internal_call("internal_m2n_get_position_global", script_internal_call(internal_m2n_get_position_global));
+    reg.add_internal_call("internal_m2n_set_position_global", script_internal_call(internal_m2n_set_position_global));
+    reg.add_internal_call("internal_m2n_move_by_global", script_internal_call(internal_m2n_move_by_global));
 
-    reg.add_internal_call("internal_m2n_get_position_local", dotnet_internal_call(internal_m2n_get_position_local));
-    reg.add_internal_call("internal_m2n_set_position_local", dotnet_internal_call(internal_m2n_set_position_local));
-    reg.add_internal_call("internal_m2n_move_by_local", dotnet_internal_call(internal_m2n_move_by_local));
+    reg.add_internal_call("internal_m2n_get_position_local", script_internal_call(internal_m2n_get_position_local));
+    reg.add_internal_call("internal_m2n_set_position_local", script_internal_call(internal_m2n_set_position_local));
+    reg.add_internal_call("internal_m2n_move_by_local", script_internal_call(internal_m2n_move_by_local));
 
     // Euler
     reg.add_internal_call("internal_m2n_get_rotation_euler_global",
-                            dotnet_internal_call(internal_m2n_get_rotation_euler_global));
+                            script_internal_call(internal_m2n_get_rotation_euler_global));
     reg.add_internal_call("internal_m2n_set_rotation_euler_global",
-                            dotnet_internal_call(internal_m2n_set_rotation_euler_global));
+                            script_internal_call(internal_m2n_set_rotation_euler_global));
     reg.add_internal_call("internal_m2n_rotate_by_euler_global",
-                            dotnet_internal_call(internal_m2n_rotate_by_euler_global));
+                            script_internal_call(internal_m2n_rotate_by_euler_global));
 
     reg.add_internal_call("internal_m2n_get_rotation_euler_local",
-                            dotnet_internal_call(internal_m2n_get_rotation_euler_local));
+                            script_internal_call(internal_m2n_get_rotation_euler_local));
     reg.add_internal_call("internal_m2n_set_rotation_euler_local",
-                            dotnet_internal_call(internal_m2n_set_rotation_euler_local));
-    reg.add_internal_call("internal_m2n_rotate_by_euler_local", dotnet_internal_call(internal_m2n_rotate_by_euler_local));
+                            script_internal_call(internal_m2n_set_rotation_euler_local));
+    reg.add_internal_call("internal_m2n_rotate_by_euler_local", script_internal_call(internal_m2n_rotate_by_euler_local));
 
     // Quat
-    reg.add_internal_call("internal_m2n_get_rotation_global", dotnet_internal_call(internal_m2n_get_rotation_global));
-    reg.add_internal_call("internal_m2n_set_rotation_global", dotnet_internal_call(internal_m2n_set_rotation_global));
-    reg.add_internal_call("internal_m2n_rotate_by_global", dotnet_internal_call(internal_m2n_rotate_by_global));
+    reg.add_internal_call("internal_m2n_get_rotation_global", script_internal_call(internal_m2n_get_rotation_global));
+    reg.add_internal_call("internal_m2n_set_rotation_global", script_internal_call(internal_m2n_set_rotation_global));
+    reg.add_internal_call("internal_m2n_rotate_by_global", script_internal_call(internal_m2n_rotate_by_global));
 
-    reg.add_internal_call("internal_m2n_get_rotation_local", dotnet_internal_call(internal_m2n_get_rotation_local));
-    reg.add_internal_call("internal_m2n_set_rotation_local", dotnet_internal_call(internal_m2n_set_rotation_local));
-    reg.add_internal_call("internal_m2n_rotate_by_local", dotnet_internal_call(internal_m2n_rotate_by_local));
+    reg.add_internal_call("internal_m2n_get_rotation_local", script_internal_call(internal_m2n_get_rotation_local));
+    reg.add_internal_call("internal_m2n_set_rotation_local", script_internal_call(internal_m2n_set_rotation_local));
+    reg.add_internal_call("internal_m2n_rotate_by_local", script_internal_call(internal_m2n_rotate_by_local));
 
     // Other
-    reg.add_internal_call("internal_m2n_rotate_axis_global", dotnet_internal_call(internal_m2n_rotate_axis_global));
-    reg.add_internal_call("internal_m2n_look_at", dotnet_internal_call(internal_m2n_look_at));
+    reg.add_internal_call("internal_m2n_rotate_axis_global", script_internal_call(internal_m2n_rotate_axis_global));
+    reg.add_internal_call("internal_m2n_look_at", script_internal_call(internal_m2n_look_at));
     reg.add_internal_call("internal_m2n_transform_vector_global",
-                            dotnet_internal_call(internal_m2n_transform_vector_global));
+                            script_internal_call(internal_m2n_transform_vector_global));
     reg.add_internal_call("internal_m2n_inverse_transform_vector_global",
-                            dotnet_internal_call(internal_m2n_inverse_transform_vector_global));
+                            script_internal_call(internal_m2n_inverse_transform_vector_global));
 
     reg.add_internal_call("internal_m2n_transform_direction_global",
-                            dotnet_internal_call(internal_m2n_transform_direction_global));
+                            script_internal_call(internal_m2n_transform_direction_global));
     reg.add_internal_call("internal_m2n_inverse_transform_direction_global",
-                            dotnet_internal_call(internal_m2n_inverse_transform_direction_global));
+                            script_internal_call(internal_m2n_inverse_transform_direction_global));
 
     // Scale
-    reg.add_internal_call("internal_m2n_get_scale_global", dotnet_internal_call(internal_m2n_get_scale_global));
-    reg.add_internal_call("internal_m2n_set_scale_global", dotnet_internal_call(internal_m2n_set_scale_global));
-    reg.add_internal_call("internal_m2n_scale_by_global", dotnet_internal_call(internal_m2n_scale_by_global));
+    reg.add_internal_call("internal_m2n_get_scale_global", script_internal_call(internal_m2n_get_scale_global));
+    reg.add_internal_call("internal_m2n_set_scale_global", script_internal_call(internal_m2n_set_scale_global));
+    reg.add_internal_call("internal_m2n_scale_by_global", script_internal_call(internal_m2n_scale_by_global));
 
-    reg.add_internal_call("internal_m2n_get_scale_local", dotnet_internal_call(internal_m2n_get_scale_local));
-    reg.add_internal_call("internal_m2n_set_scale_local", dotnet_internal_call(internal_m2n_set_scale_local));
-    reg.add_internal_call("internal_m2n_scale_by_local", dotnet_internal_call(internal_m2n_scale_by_local));
+    reg.add_internal_call("internal_m2n_get_scale_local", script_internal_call(internal_m2n_get_scale_local));
+    reg.add_internal_call("internal_m2n_set_scale_local", script_internal_call(internal_m2n_set_scale_local));
+    reg.add_internal_call("internal_m2n_scale_by_local", script_internal_call(internal_m2n_scale_by_local));
 
     // Skew
-    reg.add_internal_call("internal_m2n_get_skew_global", dotnet_internal_call(internal_m2n_get_skew_global));
-    reg.add_internal_call("internal_m2n_set_skew_globa", dotnet_internal_call(internal_m2n_setl_skew_globa));
-    reg.add_internal_call("internal_m2n_get_skew_local", dotnet_internal_call(internal_m2n_get_skew_local));
-    reg.add_internal_call("internal_m2n_set_skew_local", dotnet_internal_call(internal_m2n_set_skew_local));
+    reg.add_internal_call("internal_m2n_get_skew_global", script_internal_call(internal_m2n_get_skew_global));
+    reg.add_internal_call("internal_m2n_set_skew_globa", script_internal_call(internal_m2n_setl_skew_globa));
+    reg.add_internal_call("internal_m2n_get_skew_local", script_internal_call(internal_m2n_get_skew_local));
+    reg.add_internal_call("internal_m2n_set_skew_local", script_internal_call(internal_m2n_set_skew_local));
 }
 
 } // namespace unravel

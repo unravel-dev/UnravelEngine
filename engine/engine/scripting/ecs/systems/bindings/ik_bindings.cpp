@@ -167,22 +167,22 @@ void register_ik_script_bindings()
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.IK");
     reg.add_internal_call("internal_m2n_utils_set_ik_position_ccd",
-                          dotnet_internal_call(internal_m2n_utils_set_ik_position_ccd));
+                          script_internal_call(internal_m2n_utils_set_ik_position_ccd));
     reg.add_internal_call("internal_m2n_utils_set_ik_position_fabrik",
-                          dotnet_internal_call(internal_m2n_utils_set_ik_position_fabrik));
+                          script_internal_call(internal_m2n_utils_set_ik_position_fabrik));
     reg.add_internal_call("internal_m2n_utils_set_ik_position_two_bone",
-                          dotnet_internal_call(internal_m2n_utils_set_ik_position_two_bone));
+                          script_internal_call(internal_m2n_utils_set_ik_position_two_bone));
 
     reg.add_internal_call("internal_m2n_utils_set_ik_rotation",
-                          dotnet_internal_call(internal_m2n_utils_set_ik_rotation));
+                          script_internal_call(internal_m2n_utils_set_ik_rotation));
     reg.add_internal_call("internal_m2n_utils_set_ik_aim_position",
-                          dotnet_internal_call(internal_m2n_utils_set_ik_aim_position));
+                          script_internal_call(internal_m2n_utils_set_ik_aim_position));
     reg.add_internal_call("internal_m2n_utils_set_ik_look_at_position",
-                          dotnet_internal_call(internal_m2n_utils_set_ik_look_at_position));
+                          script_internal_call(internal_m2n_utils_set_ik_look_at_position));
     reg.add_internal_call("internal_m2n_utils_get_ik_bone_axis",
-                          dotnet_internal_call(internal_m2n_utils_get_ik_bone_axis));
+                          script_internal_call(internal_m2n_utils_get_ik_bone_axis));
     reg.add_internal_call("internal_m2n_utils_get_ik_facing_axis",
-                          dotnet_internal_call(internal_m2n_utils_get_ik_facing_axis));
+                          script_internal_call(internal_m2n_utils_get_ik_facing_axis));
 }
 
 } // namespace unravel

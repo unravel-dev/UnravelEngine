@@ -214,44 +214,44 @@ void register_reflection_probe_component_script_bindings()
 {
     APPLOG_TRACE("{}", __func__);
     auto reg = dotnet::internal_call_registry("Unravel.Core.ReflectionProbeComponent");
-    reg.add_internal_call("internal_m2n_probe_get_type", dotnet_internal_call(internal_m2n_probe_get_type));
-    reg.add_internal_call("internal_m2n_probe_set_type", dotnet_internal_call(internal_m2n_probe_set_type));
-    reg.add_internal_call("internal_m2n_probe_get_method", dotnet_internal_call(internal_m2n_probe_get_method));
-    reg.add_internal_call("internal_m2n_probe_set_method", dotnet_internal_call(internal_m2n_probe_set_method));
+    reg.add_internal_call("internal_m2n_probe_get_type", script_internal_call(internal_m2n_probe_get_type));
+    reg.add_internal_call("internal_m2n_probe_set_type", script_internal_call(internal_m2n_probe_set_type));
+    reg.add_internal_call("internal_m2n_probe_get_method", script_internal_call(internal_m2n_probe_get_method));
+    reg.add_internal_call("internal_m2n_probe_set_method", script_internal_call(internal_m2n_probe_set_method));
     reg.add_internal_call("internal_m2n_probe_get_intensity",
-                          dotnet_internal_call(internal_m2n_probe_get_intensity));
+                          script_internal_call(internal_m2n_probe_get_intensity));
     reg.add_internal_call("internal_m2n_probe_set_intensity",
-                          dotnet_internal_call(internal_m2n_probe_set_intensity));
+                          script_internal_call(internal_m2n_probe_set_intensity));
     reg.add_internal_call("internal_m2n_probe_get_update_mode",
-                          dotnet_internal_call(internal_m2n_probe_get_update_mode));
+                          script_internal_call(internal_m2n_probe_get_update_mode));
     reg.add_internal_call("internal_m2n_probe_set_update_mode",
-                          dotnet_internal_call(internal_m2n_probe_set_update_mode));
+                          script_internal_call(internal_m2n_probe_set_update_mode));
     reg.add_internal_call("internal_m2n_probe_get_update_interval",
-                          dotnet_internal_call(internal_m2n_probe_get_update_interval));
+                          script_internal_call(internal_m2n_probe_get_update_interval));
     reg.add_internal_call("internal_m2n_probe_set_update_interval",
-                          dotnet_internal_call(internal_m2n_probe_set_update_interval));
+                          script_internal_call(internal_m2n_probe_set_update_interval));
     reg.add_internal_call("internal_m2n_probe_get_resolution",
-                          dotnet_internal_call(internal_m2n_probe_get_resolution));
+                          script_internal_call(internal_m2n_probe_get_resolution));
     reg.add_internal_call("internal_m2n_probe_set_resolution",
-                          dotnet_internal_call(internal_m2n_probe_set_resolution));
+                          script_internal_call(internal_m2n_probe_set_resolution));
     reg.add_internal_call("internal_m2n_probe_get_box_extents",
-                          dotnet_internal_call(internal_m2n_probe_get_box_extents));
+                          script_internal_call(internal_m2n_probe_get_box_extents));
     reg.add_internal_call("internal_m2n_probe_set_box_extents",
-                          dotnet_internal_call(internal_m2n_probe_set_box_extents));
+                          script_internal_call(internal_m2n_probe_set_box_extents));
     reg.add_internal_call("internal_m2n_probe_get_sphere_range",
-                          dotnet_internal_call(internal_m2n_probe_get_sphere_range));
+                          script_internal_call(internal_m2n_probe_get_sphere_range));
     reg.add_internal_call("internal_m2n_probe_set_sphere_range",
-                          dotnet_internal_call(internal_m2n_probe_set_sphere_range));
+                          script_internal_call(internal_m2n_probe_set_sphere_range));
     reg.add_internal_call("internal_m2n_probe_get_capture_sky",
-                          dotnet_internal_call(internal_m2n_probe_get_capture_sky));
+                          script_internal_call(internal_m2n_probe_get_capture_sky));
     reg.add_internal_call("internal_m2n_probe_set_capture_sky",
-                          dotnet_internal_call(internal_m2n_probe_set_capture_sky));
+                          script_internal_call(internal_m2n_probe_set_capture_sky));
     reg.add_internal_call("internal_m2n_probe_get_capture_shadows",
-                          dotnet_internal_call(internal_m2n_probe_get_capture_shadows));
+                          script_internal_call(internal_m2n_probe_get_capture_shadows));
     reg.add_internal_call("internal_m2n_probe_set_capture_shadows",
-                          dotnet_internal_call(internal_m2n_probe_set_capture_shadows));
-    reg.add_internal_call("internal_m2n_probe_is_dirty", dotnet_internal_call(internal_m2n_probe_is_dirty));
-    reg.add_internal_call("internal_m2n_probe_mark_dirty", dotnet_internal_call(internal_m2n_probe_mark_dirty));
+                          script_internal_call(internal_m2n_probe_set_capture_shadows));
+    reg.add_internal_call("internal_m2n_probe_is_dirty", script_internal_call(internal_m2n_probe_is_dirty));
+    reg.add_internal_call("internal_m2n_probe_mark_dirty", script_internal_call(internal_m2n_probe_mark_dirty));
 }
 
 } // namespace unravel

@@ -67,8 +67,8 @@ void register_gizmos_script_bindings()
     APPLOG_TRACE("{}", __func__);
 
     auto reg = dotnet::internal_call_registry("Unravel.Core.Gizmos");
-    reg.add_internal_call("internal_m2n_gizmos_add_sphere", dotnet_internal_call(internal_m2n_gizmos_add_sphere));
-    reg.add_internal_call("internal_m2n_gizmos_add_ray", dotnet_internal_call(internal_m2n_gizmos_add_ray));
+    reg.add_internal_call("internal_m2n_gizmos_add_sphere", script_internal_call(internal_m2n_gizmos_add_sphere));
+    reg.add_internal_call("internal_m2n_gizmos_add_ray", script_internal_call(internal_m2n_gizmos_add_ray));
 }
 
 } // namespace unravel
