@@ -101,8 +101,17 @@ struct script_rect
 auto internal_m2n_screen_get_safe_area() -> script_rect
 {
     auto& ctx = engine::context();
-    const auto& size = ctx.get_cached<rendering_system>().get_game_view_size();
+    const auto& rendering = ctx.get_cached<rendering_system>();
+    const auto& size = rendering.get_game_view_size();
     script_rect area{0.0f, 0.0f, float(size.width), float(size.height)};
+    if(const auto& device = rendering.get_game_view_device())
+    {
+        area.x = device->inset_left;
+        area.y = device->inset_top;
+        area.width = float(size.width) - device->inset_left - device->inset_right;
+        area.height = float(size.height) - device->inset_top - device->inset_bottom;
+        return area;
+    }
     auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
     if(window == nullptr)
     {
@@ -123,12 +132,23 @@ auto internal_m2n_screen_get_safe_area() -> script_rect
     return area;
 }
 
-/// The logical DPI Windows reports at 100 % display scaling; the content scale multiplies it.
+/// The density a content scale of 1 stands for on the platform: Android's mdpi and the iOS point are 160 and 163
+/// pixels per inch, desktops report 96 at 100 % display scaling.
+#if UNRAVEL_PLATFORM_ANDROID
+constexpr float BASE_SCREEN_DPI = 160.0f;
+#elif UNRAVEL_PLATFORM_IOS
+constexpr float BASE_SCREEN_DPI = 163.0f;
+#else
 constexpr float BASE_SCREEN_DPI = 96.0f;
+#endif
 
 auto internal_m2n_screen_get_dpi() -> float
 {
     auto& ctx = engine::context();
+    if(const auto& device = ctx.get_cached<rendering_system>().get_game_view_device())
+    {
+        return device->dpi;
+    }
     auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
     return window ? window->get_window().get_content_scale() * BASE_SCREEN_DPI : BASE_SCREEN_DPI;
 }

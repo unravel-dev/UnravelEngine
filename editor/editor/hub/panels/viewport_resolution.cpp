@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,6 +30,10 @@ using screen_orientation = settings::resolution_settings::screen_orientation;
 
 /// The popover's width, in units of the font size.
 constexpr float POPOVER_WIDTH = 18.0f;
+/// Short sides the handheld presets stand for, in the inches the platform's density reports (Android gives a
+/// 1080-pixel-wide phone about 450 dpi): a common phone and a common tablet.
+constexpr float PHONE_SHORT_SIDE_INCHES = 2.4f;
+constexpr float TABLET_SHORT_SIDE_INCHES = 5.6f;
 constexpr std::array<const char*, 2> ORIENTATION_LABELS{ICON_MDI_CROP_PORTRAIT " Portrait",
                                                         ICON_MDI_CROP_LANDSCAPE " Landscape"};
 
@@ -262,6 +267,20 @@ auto has_device_frame(const settings::resolution_settings::resolution& res) -> b
     return is_handheld(res) && !is_free(res);
 }
 
+auto get_device_dpi(const settings::resolution_settings::resolution& res) -> float
+{
+    if(!has_device_frame(res) || !has_pixels(res))
+    {
+        return 0.0f;
+    }
+    if(res.dpi > 0.0f)
+    {
+        return res.dpi;
+    }
+    const float short_side_inches = res.device == device_type::tablet ? TABLET_SHORT_SIDE_INCHES : PHONE_SHORT_SIDE_INCHES;
+    return float(std::min(res.width, res.height)) / short_side_inches;
+}
+
 auto get_oriented(const settings::resolution_settings::resolution& res,
                   settings::resolution_settings::screen_orientation orientation)
     -> settings::resolution_settings::resolution
@@ -274,6 +293,21 @@ auto get_oriented(const settings::resolution_settings::resolution& res,
     resolution turned = res;
     std::swap(turned.width, turned.height);
     turned.aspect = 1.0f / res.aspect;
+    if(is_landscape)
+    {
+        // Turned a quarter counter-clockwise: the top of the device (its cutout) goes to the left.
+        turned.safe_left = res.safe_top;
+        turned.safe_top = res.safe_right;
+        turned.safe_right = res.safe_bottom;
+        turned.safe_bottom = res.safe_left;
+    }
+    else
+    {
+        turned.safe_top = res.safe_left;
+        turned.safe_right = res.safe_top;
+        turned.safe_bottom = res.safe_right;
+        turned.safe_left = res.safe_bottom;
+    }
     return turned;
 }
 

@@ -1132,6 +1132,11 @@ SAVE_INLINE(settings::resolution_settings::resolution)
     try_save(ar, ser20::make_nvp("height", obj.height));
     try_save(ar, ser20::make_nvp("aspect", obj.aspect));
     try_save(ar, ser20::make_nvp("device", obj.device));
+    try_save(ar, ser20::make_nvp("dpi", obj.dpi));
+    try_save(ar, ser20::make_nvp("safe_left", obj.safe_left));
+    try_save(ar, ser20::make_nvp("safe_top", obj.safe_top));
+    try_save(ar, ser20::make_nvp("safe_right", obj.safe_right));
+    try_save(ar, ser20::make_nvp("safe_bottom", obj.safe_bottom));
 }
 
 LOAD_INLINE(settings::resolution_settings::resolution)
@@ -1141,6 +1146,11 @@ LOAD_INLINE(settings::resolution_settings::resolution)
     try_load(ar, ser20::make_nvp("height", obj.height));
     try_load(ar, ser20::make_nvp("aspect", obj.aspect));
     try_load(ar, ser20::make_nvp("device", obj.device));
+    try_load(ar, ser20::make_nvp("dpi", obj.dpi));
+    try_load(ar, ser20::make_nvp("safe_left", obj.safe_left));
+    try_load(ar, ser20::make_nvp("safe_top", obj.safe_top));
+    try_load(ar, ser20::make_nvp("safe_right", obj.safe_right));
+    try_load(ar, ser20::make_nvp("safe_bottom", obj.safe_bottom));
 }
 
 namespace

@@ -295,5 +295,15 @@ auto rendering_system::get_game_view_size() const -> const usize32_t&
     return game_view_size_;
 }
 
+void rendering_system::set_game_view_device(const hpp::optional<game_view_device>& device)
+{
+    game_view_device_ = device;
+}
+
+auto rendering_system::get_game_view_device() const -> const hpp::optional<game_view_device>&
+{
+    return game_view_device_;
+}
+
 
 } // namespace unravel

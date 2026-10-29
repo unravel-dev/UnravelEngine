@@ -63,6 +63,49 @@ auto make_device_frame(rtti::context& ctx, const ImVec2& image_size, const ImVec
                                                  panel_toolbar::get_rows_extent(1) + panel_toolbar::get_bar_margin());
 }
 
+/// Shares of a phone's long side its camera cutout covers (on the edge the top of the phone turns to) and its rounded
+/// corners cover (on the opposite edge).
+constexpr float PHONE_CUTOUT_SHARE = 0.045f;
+constexpr float PHONE_CORNER_SHARE = 0.03f;
+
+/// The phone or the tablet a preset stands for, in the pixels of a view of @p view_size; nothing for a desktop or
+/// free preset. Scripts then see its touch screen, its density and its cutout instead of the editor's desktop.
+auto make_game_view_device(rtti::context& ctx, const usize32_t& view_size) -> hpp::optional<rendering_system::game_view_device>
+{
+    const auto resolution = get_current_resolution(ctx);
+    const float device_dpi = resolution ? viewport_resolution::get_device_dpi(*resolution) : 0.0f;
+    if(device_dpi <= 0.0f || view_size.width == 0 || view_size.height == 0)
+    {
+        return hpp::nullopt;
+    }
+    rendering_system::game_view_device device;
+    const float view_scale = float(view_size.width) / float(resolution->width);
+    device.dpi = device_dpi * view_scale;
+    const bool has_safe_area =
+        resolution->safe_left > 0 || resolution->safe_top > 0 || resolution->safe_right > 0 || resolution->safe_bottom > 0;
+    if(has_safe_area)
+    {
+        device.inset_left = float(resolution->safe_left) * view_scale;
+        device.inset_top = float(resolution->safe_top) * view_scale;
+        device.inset_right = float(resolution->safe_right) * view_scale;
+        device.inset_bottom = float(resolution->safe_bottom) * view_scale;
+    }
+    else if(resolution->device == settings::resolution_settings::device_type::phone)
+    {
+        if(resolution->width > resolution->height)
+        {
+            device.inset_left = float(view_size.width) * PHONE_CUTOUT_SHARE;
+            device.inset_right = float(view_size.width) * PHONE_CORNER_SHARE;
+        }
+        else
+        {
+            device.inset_top = float(view_size.height) * PHONE_CUTOUT_SHARE;
+            device.inset_bottom = float(view_size.height) * PHONE_CORNER_SHARE;
+        }
+    }
+    return device;
+}
+
 /// Whether the camera rendered an output image the panel can show.
 auto has_output_image(const camera_component& camera_comp) -> bool
 {
@@ -122,22 +165,29 @@ auto game_panel::get_forced_render_size() const -> std::pair<uint32_t, uint32_t>
 
 void game_panel::apply_view_size(rtti::context& ctx, scene& scn) const
 {
+    auto& rendering = ctx.get_cached<rendering_system>();
     if(forced_render_width_ > 0 && forced_render_height_ > 0)
     {
-        ctx.get_cached<rendering_system>().apply_game_view_size(scn, {forced_render_width_, forced_render_height_});
+        const usize32_t forced{forced_render_width_, forced_render_height_};
+        rendering.apply_game_view_size(scn, forced);
+        rendering.set_game_view_device(make_game_view_device(ctx, forced));
         return;
     }
+    // A device stands for the view only while the panel shows it; otherwise scripts see the editor's own screen.
     const auto resolution = get_current_resolution(ctx);
-    if(!resolution)
+    if(!resolution || (!is_visible() && !is_visible_force_))
     {
+        rendering.set_game_view_device(hpp::nullopt);
         return;
     }
     const usize32_t view_size = viewport_resolution::compute_viewport_pixels(*resolution, view_area_size_);
     if(view_size.width == 0 || view_size.height == 0)
     {
+        rendering.set_game_view_device(hpp::nullopt);
         return;
     }
-    ctx.get_cached<rendering_system>().apply_game_view_size(scn, view_size);
+    rendering.apply_game_view_size(scn, view_size);
+    rendering.set_game_view_device(make_game_view_device(ctx, view_size));
 }
 
 auto game_panel::get_output(rtti::context& ctx) const -> gfx::frame_buffer::ptr

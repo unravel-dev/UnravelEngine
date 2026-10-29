@@ -4,6 +4,7 @@
 #include "../script_interop.h"
 
 #include <engine/input/input.h>
+#include <engine/rendering/ecs/systems/rendering_system.h>
 
 namespace unravel
 {
@@ -135,8 +136,13 @@ auto internal_m2n_input_get_touch(int32_t index) -> script_touch
 
 auto internal_m2n_input_is_touch_supported() -> bool
 {
-    auto& input = engine::context().get_cached<input_system>();
-    return input.manager.is_touch_supported();
+    auto& ctx = engine::context();
+    // A view standing for a phone or a tablet has a touch screen: its touch controls show and take the mouse.
+    if(ctx.get_cached<rendering_system>().get_game_view_device())
+    {
+        return true;
+    }
+    return ctx.get_cached<input_system>().manager.is_touch_supported();
 }
 
 auto internal_m2n_input_get_simulate_mouse_with_touches() -> bool

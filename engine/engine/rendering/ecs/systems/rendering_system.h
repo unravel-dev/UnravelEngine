@@ -163,6 +163,36 @@ public:
     auto get_game_view_size() const -> const usize32_t&;
 
     /**
+     * @brief The handheld device a view stands for: the editor's Game panel showing a phone or a tablet preset.
+     *
+     * Scripts then see that device instead of the desktop the editor runs on: a touch screen, its pixel density
+     * and the edges its cutout covers, all in the pixels of the game view. Unset in the player, where the window
+     * and the platform answer.
+     */
+    struct game_view_device
+    {
+        /// Pixels of the game view per inch of the device's screen.
+        float dpi{};
+        /// Game view pixels covered on each edge (camera cutout, rounded corners).
+        float inset_left{};
+        float inset_top{};
+        float inset_right{};
+        float inset_bottom{};
+    };
+
+    /**
+     * @brief Sets the device the game view stands for, or clears it with nothing.
+     * @param device The device the scripts see, in the game view's pixels.
+     */
+    void set_game_view_device(const hpp::optional<game_view_device>& device);
+
+    /**
+     * @brief Gets the device the game view stands for.
+     * @return The device, or nothing when the game view is the real screen.
+     */
+    auto get_game_view_device() const -> const hpp::optional<game_view_device>&;
+
+    /**
      * @brief The meshes scripts draw as instances this frame (Graphics.DrawMeshInstanced); emptied when the
      * frame ends.
      */
@@ -182,6 +212,8 @@ private:
     instanced_draw_list instanced_draws_;
     /// Size of the view the game is shown in; zero until a host sets it.
     usize32_t game_view_size_{};
+    /// The handheld device the game view stands for, set by the editor for phone and tablet presets.
+    hpp::optional<game_view_device> game_view_device_;
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
 

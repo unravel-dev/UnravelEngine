@@ -80,6 +80,10 @@ auto is_handheld(const settings::resolution_settings::resolution& res) -> bool;
 /// Whether a view shows the preset inside a frame of its device: a phone or a tablet with a shape.
 auto has_device_frame(const settings::resolution_settings::resolution& res) -> bool;
 
+/// Pixels per inch of the screen a phone or a tablet preset stands for: its own dpi, or what the platform would
+/// report for a typical device of that kind; 0 for any other preset.
+auto get_device_dpi(const settings::resolution_settings::resolution& res) -> float;
+
 //-----------------------------------------------------------------------------
 /// <summary>
 /// The preset as a view uses it: a phone or a tablet turned to the orientation, its pixels and its aspect with it.

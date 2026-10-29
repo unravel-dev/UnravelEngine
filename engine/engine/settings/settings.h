@@ -183,6 +183,15 @@ struct settings
             float aspect; // 0 means free aspect
             /// Phones and tablets are listed held upright; the view's orientation turns them.
             device_type device{device_type::desktop};
+            /// Pixels per inch the device reports (Android's density, 450 on many phones); 0 lets the editor assume a
+            /// typical density for a phone or a tablet of this size.
+            float dpi{0.0f};
+            /// Pixels the device's cutout, rounded corners and system bars cover on each edge, held upright; all zero
+            /// lets the editor assume a typical cutout.
+            int safe_left{0};
+            int safe_top{0};
+            int safe_right{0};
+            int safe_bottom{0};
 
             friend auto operator==(const resolution& lhs, const resolution& rhs) -> bool = default;
         };

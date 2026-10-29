@@ -57,8 +57,10 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Dots per inch the system reports for the display showing the game: 96 at 100 % display
-        /// scaling, 144 at 150 %. Scale UI or touch targets by <c>dpi / 96</c>.
+        /// Pixels per inch of the display showing the game, as the system reports it: 96 at 100 % display scaling
+        /// on desktops (144 at 150 %), the screen's density on phones (Android's density dpi, 450 on many). In the
+        /// editor a phone or a tablet resolution preset reports that device's density in the Game view's pixels, so
+        /// <c>width / dpi</c> is the screen's size in inches everywhere.
         /// </summary>
         public static float dpi
         {

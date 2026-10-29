@@ -24,6 +24,10 @@ constexpr float RESOLUTION_NAME_WEIGHT = 1.4f;
 constexpr float RESOLUTION_DEVICE_WEIGHT = 0.9f;
 constexpr float RESOLUTION_TYPE_WEIGHT = 1.0f;
 constexpr float RESOLUTION_SIZE_WEIGHT = 1.4f;
+constexpr float RESOLUTION_SCREEN_WEIGHT = 1.2f;
+constexpr float RESOLUTION_MAX_DPI = 1000.0f;
+constexpr float RESOLUTION_DPI_SPEED = 1.0f;
+constexpr int RESOLUTION_MAX_INSET = 1024;
 constexpr float RESOLUTION_MUTED_ALPHA = 0.55f;
 constexpr int RESOLUTION_MIN_SIZE = 1;
 constexpr int RESOLUTION_MAX_SIZE = 16384;
@@ -228,7 +232,52 @@ auto draw_size_fields(resolution& preset) -> inspect_result
     return result;
 }
 
-/// One preset on one row: name, device, type, size, and a remove button.
+/// What a phone or a tablet preset tells the game it runs on: the density its platform reports and the edges its
+/// cutout and corners cover (held upright). Nothing for a desktop preset.
+auto draw_screen_fields(resolution& preset) -> inspect_result
+{
+    inspect_result result{};
+    if(preset.device == device_type::desktop)
+    {
+        ImGui::AlignTextToFramePadding();
+        draw_muted_text("-");
+        return result;
+    }
+    const char* safe_label = ICON_MDI_CELLPHONE_SCREENSHOT;
+    const float button_width = ImGui::GetFrameHeight();
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - button_width - ImGui::GetStyle().ItemSpacing.x));
+    add_edit(result,
+             ImGui::DragFloat("##dpi",
+                              &preset.dpi,
+                              RESOLUTION_DPI_SPEED,
+                              0.0f,
+                              RESOLUTION_MAX_DPI,
+                              preset.dpi > 0.0f ? "%.0f dpi" : "typical dpi",
+                              ImGuiSliderFlags_AlwaysClamp));
+    ImGui::SetItemTooltipEx("%s",
+                            "Pixels per inch the device reports (Android's density). Scripts read it as Screen.dpi "
+                            "while the Game view shows this preset. 0 assumes a typical device of its kind.");
+    ImGui::SameLine();
+    if(ImGui::Button(safe_label, ImVec2(button_width, 0.0f)))
+    {
+        ImGui::OpenPopup("##safe_area");
+    }
+    ImGui::SetItemTooltipEx("%s",
+                            "Safe area: the pixels the cutout, rounded corners and system bars cover on each edge, "
+                            "held upright. Scripts read it as Screen.safeArea. All zero assumes a typical cutout.");
+    if(ImGui::BeginPopup("##safe_area"))
+    {
+        const ImGuiSliderFlags clamp = ImGuiSliderFlags_AlwaysClamp;
+        add_edit(result, ImGui::DragInt("Top", &preset.safe_top, 1.0f, 0, RESOLUTION_MAX_INSET, "%d px", clamp));
+        add_edit(result, ImGui::DragInt("Bottom", &preset.safe_bottom, 1.0f, 0, RESOLUTION_MAX_INSET, "%d px", clamp));
+        add_edit(result, ImGui::DragInt("Left", &preset.safe_left, 1.0f, 0, RESOLUTION_MAX_INSET, "%d px", clamp));
+        add_edit(result, ImGui::DragInt("Right", &preset.safe_right, 1.0f, 0, RESOLUTION_MAX_INSET, "%d px", clamp));
+        ImGui::EndPopup();
+    }
+    return result;
+}
+
+/// One preset on one row: name, device, type, size, screen, and a remove button.
 auto draw_preset_row(resolution& preset, bool is_built_in, bool is_editable, bool& is_remove_pressed) -> inspect_result
 {
     inspect_result result{};
@@ -246,6 +295,9 @@ auto draw_preset_row(resolution& preset, bool is_built_in, bool is_editable, boo
 
     ImGui::TableNextColumn();
     result |= draw_size_fields(preset);
+
+    ImGui::TableNextColumn();
+    result |= draw_screen_fields(preset);
 
     ImGui::PopReadonly();
 
@@ -301,12 +353,13 @@ auto inspector_resolution_settings::inspect(rtti::context& ctx,
     int index_to_remove = -1;
     const ImGuiTableFlags table_flags =
         ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_SizingStretchProp;
-    if(ImGui::BeginTable("##resolution_presets", 5, table_flags))
+    if(ImGui::BeginTable("##resolution_presets", 6, table_flags))
     {
         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_NAME_WEIGHT);
         ImGui::TableSetupColumn("Device", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_DEVICE_WEIGHT);
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_TYPE_WEIGHT);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_SIZE_WEIGHT);
+        ImGui::TableSetupColumn("Screen", ImGuiTableColumnFlags_WidthStretch, RESOLUTION_SCREEN_WEIGHT);
         ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFrameHeight());
         ImGui::TableHeadersRow();
         for(std::size_t i = 0; i < presets.size(); ++i)

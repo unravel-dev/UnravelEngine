@@ -10,7 +10,8 @@
  *   - the old default list becomes today's defaults, and the pick keeps its shape under its new name;
  *   - a list of the project's own keeps its presets and gains the default phones and tablets;
  *   - settings saved with an orientation load as they are, so a preset the user removed stays removed;
- *   - the device and the orientation survive the binary archive a deploy ships.
+ *   - the device and the orientation survive the binary archive a deploy ships;
+ *   - a handheld preset's density and safe area (the device the Game view stands for) survive both archives.
  */
 
 #include "../tests.h"
@@ -183,6 +184,29 @@ void test_binary_round_trip(const fs::path& root)
     check(loaded.resolution == authored.resolution, "the binary archive keeps every device and the orientation");
 }
 
+void test_device_screen_round_trip(const fs::path& root)
+{
+    settings authored{};
+    preset device{"Phone 19.5:9 measured", 1080, 2340, 1080.0f / 2340.0f, device_type::phone};
+    device.dpi = 450.0f;
+    device.safe_top = 104;
+    device.safe_right = 84;
+    device.safe_bottom = 135;
+    authored.resolution.resolutions.push_back(device);
+    authored.resolution.set_current_resolution_index(authored.resolution.resolutions.size() - 1);
+    authored.resolution.orientation = screen_orientation::landscape;
+    const fs::path text_path = root / "device_screen.cfg";
+    save_to_file(text_path.string(), authored);
+    settings loaded{};
+    check(load_from_file(text_path.string(), loaded), "settings with a device screen load");
+    check(loaded.resolution.current_resolution == device, "the preset keeps its density and safe area");
+    const fs::path binary_path = root / "device_screen.bin";
+    save_to_file_bin(binary_path.string(), authored);
+    settings loaded_binary{};
+    check(load_from_file_bin(binary_path.string(), loaded_binary), "binary settings with a device screen load");
+    check(loaded_binary.resolution == authored.resolution, "the binary archive keeps the density and safe area");
+}
+
 } // namespace
 
 auto run_resolution_presets_suite(rtti::context& ctx) -> int
@@ -198,6 +222,7 @@ auto run_resolution_presets_suite(rtti::context& ctx) -> int
     test_own_presets_gain_devices(root);
     test_saved_presets_load_as_they_are(root);
     test_binary_round_trip(root);
+    test_device_screen_round_trip(root);
     fs::remove_all(root, err);
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
