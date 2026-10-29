@@ -260,9 +260,17 @@ endif()
 
 if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
     # Beside the binaries, where the desktop deploy's dependency scan finds them and ships them with
-    # the player. copy_if_different leaves alone the copies a running editor has loaded.
+    # the player. copy_if_different leaves alone the copies a running editor has loaded. Multi-config
+    # generators put the binaries in a folder per configuration, which may not exist yet: a copy of
+    # several files needs its destination folder.
+    get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    set(system_runtime_libs_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    if(is_multi_config)
+        set(system_runtime_libs_dir "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+    endif()
     add_custom_target(copy_system_runtime_libs ALL
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${system_runtime_libs_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} "${system_runtime_libs_dir}"
         COMMENT "Copying system runtime libs..."
         VERBATIM
     )
