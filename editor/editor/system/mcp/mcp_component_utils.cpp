@@ -62,13 +62,49 @@ auto resolve_script_type(rtti::context& ctx, const std::string& script_type, std
     return {};
 }
 
-/// How one C# field type is read and written as JSON.
+/// How one C# field type is read and written as JSON: as a field, and as an element of an array or List.
 struct script_field_codec
 {
     std::function<hpp::optional<std::string>(rtti::context&, const dotnet::object&, const dotnet::field&)> to_json;
     std::function<bool(rtti::context&, dotnet::object&, const dotnet::field&, const simdjson::dom::element&, std::string&)>
         from_json;
+    /// One element of an array or List of the given element type, as the collection holds it: boxed for a value
+    /// type, a reference or null otherwise. Empty for a type whose collections MCP does not express.
+    std::function<hpp::optional<std::string>(rtti::context&, const dotnet::type&, const dotnet::object&)>
+        element_to_json;
+    /// A new element of the given element type from the JSON, for a collection about to be written.
+    std::function<
+        bool(rtti::context&, const dotnet::type&, const simdjson::dom::element&, dotnet::object&, std::string&)>
+        element_from_json;
 };
+
+/// The value a collection element of a value type holds (boxed), or the text of a string element.
+template<typename T>
+auto read_script_element(const dotnet::object& element) -> T
+{
+    if constexpr(std::is_same_v<T, std::string>)
+    {
+        return dotnet_converter<std::string>::from_managed(dotnet::get_managed_ptr(element));
+    }
+    else
+    {
+        return dotnet::unbox_value<T>(element);
+    }
+}
+
+/// A collection element holding @p value: a managed string, or @p value boxed as @p element_type.
+template<typename T>
+auto make_script_element(const T& value, const dotnet::type& element_type) -> dotnet::object
+{
+    if constexpr(std::is_same_v<T, std::string>)
+    {
+        return dotnet::object(dotnet_converter<std::string>::to_managed(value));
+    }
+    else
+    {
+        return dotnet::box_value(dotnet_converter<T>::to_managed(value), element_type);
+    }
+}
 
 /// A field accessed as exactly the C++ type @p T the inspector edits it as (the managed bridge copies the field's
 /// own width, so a narrower or wider type misreads it), and spelled in JSON as the reflection bridge spells T.
@@ -95,7 +131,72 @@ auto make_script_field_codec() -> script_field_codec
                 }
                 invoker.set_value(obj, value.cast<T>());
                 return true;
+            },
+            .element_to_json = [](rtti::context& ctx, const dotnet::type&, const dotnet::object& element)
+                -> hpp::optional<std::string>
+            {
+                entt::meta_any value{read_script_element<T>(element)};
+                return meta_value_to_json(ctx, value);
+            },
+            .element_from_json = [](rtti::context& ctx,
+                                    const dotnet::type& element_type,
+                                    const simdjson::dom::element& json,
+                                    dotnet::object& element,
+                                    std::string& error) -> bool
+            {
+                entt::meta_any value{T{}};
+                if(!meta_value_from_json(ctx, json, value, error))
+                {
+                    return false;
+                }
+                element = make_script_element(value.cast<T>(), element_type);
+                return true;
             }};
+}
+
+/// @p value spelled by the name enum @p type gives it, or as its number when no name declares it (a combination of
+/// flags).
+template<typename T>
+auto script_enum_to_json(const dotnet::type& type, T value) -> std::string
+{
+    for(const auto& [candidate, name] : type.get_enum_values<T>())
+    {
+        if(candidate == value)
+        {
+            return make_json_string(name);
+        }
+    }
+    return fmt::format("{}", value);
+}
+
+/// The value of enum @p type that @p element names; false with @p error listing the names when none matches.
+template<typename T>
+auto script_enum_from_json(const dotnet::type& type, const simdjson::dom::element& element, T& value, std::string& error)
+    -> bool
+{
+    const auto values = type.get_enum_values<T>();
+    hpp::string_view name;
+    if(element.get_string().get(name) == simdjson::SUCCESS)
+    {
+        for(const auto& [candidate, candidate_name] : values)
+        {
+            if(candidate_name == name)
+            {
+                value = candidate;
+                return true;
+            }
+        }
+    }
+    std::vector<std::string> names;
+    std::transform(values.begin(),
+                   values.end(),
+                   std::back_inserter(names),
+                   [](const auto& entry)
+                   {
+                       return entry.second;
+                   });
+    error = "expected one of " + fmt::format("{}", fmt::join(names, ", "));
+    return false;
 }
 
 /// A C# enum field, accessed as its underlying type @p T and spelled by its value names.
@@ -104,16 +205,7 @@ auto make_script_enum_codec() -> script_field_codec
 {
     return {.to_json = [](rtti::context&, const dotnet::object& obj, const dotnet::field& field) -> hpp::optional<std::string>
             {
-                const auto value = dotnet::make_field_invoker<T>(field).get_value(obj);
-                for(const auto& [candidate, name] : field.get_type().get_enum_values<T>())
-                {
-                    if(candidate == value)
-                    {
-                        return make_json_string(name);
-                    }
-                }
-                // A value no name declares (a combination of flags): its number.
-                return fmt::format("{}", value);
+                return script_enum_to_json<T>(field.get_type(), dotnet::make_field_invoker<T>(field).get_value(obj));
             },
             .from_json = [](rtti::context&,
                             dotnet::object& obj,
@@ -121,29 +213,32 @@ auto make_script_enum_codec() -> script_field_codec
                             const simdjson::dom::element& element,
                             std::string& error) -> bool
             {
-                const auto values = field.get_type().get_enum_values<T>();
-                hpp::string_view name;
-                if(element.get_string().get(name) == simdjson::SUCCESS)
+                T value{};
+                if(!script_enum_from_json<T>(field.get_type(), element, value, error))
                 {
-                    for(const auto& [candidate, candidate_name] : values)
-                    {
-                        if(candidate_name == name)
-                        {
-                            dotnet::make_field_invoker<T>(field).set_value(obj, candidate);
-                            return true;
-                        }
-                    }
+                    return false;
                 }
-                std::vector<std::string> names;
-                std::transform(values.begin(),
-                               values.end(),
-                               std::back_inserter(names),
-                               [](const auto& entry)
-                               {
-                                   return entry.second;
-                               });
-                error = "expected one of " + fmt::format("{}", fmt::join(names, ", "));
-                return false;
+                dotnet::make_field_invoker<T>(field).set_value(obj, value);
+                return true;
+            },
+            .element_to_json = [](rtti::context&, const dotnet::type& element_type, const dotnet::object& element)
+                -> hpp::optional<std::string>
+            {
+                return script_enum_to_json<T>(element_type, dotnet::unbox_value<T>(element));
+            },
+            .element_from_json = [](rtti::context&,
+                                    const dotnet::type& element_type,
+                                    const simdjson::dom::element& json,
+                                    dotnet::object& element,
+                                    std::string& error) -> bool
+            {
+                T value{};
+                if(!script_enum_from_json<T>(element_type, json, value, error))
+                {
+                    return false;
+                }
+                element = dotnet::box_value(value, element_type);
+                return true;
             }};
 }
 
@@ -177,7 +272,42 @@ auto make_script_entity_codec() -> script_field_codec
                 const auto handle = value.cast<entt::handle>();
                 invoker.set_value(obj, handle ? handle.entity() : entt::entity{entt::null});
                 return true;
+            },
+            .element_to_json = [handle_of](rtti::context& ctx, const dotnet::type&, const dotnet::object& element)
+                -> hpp::optional<std::string>
+            {
+                entt::meta_any value{handle_of(ctx, read_script_element<entt::entity>(element))};
+                return meta_value_to_json(ctx, value);
+            },
+            .element_from_json = [](rtti::context& ctx,
+                                    const dotnet::type& element_type,
+                                    const simdjson::dom::element& json,
+                                    dotnet::object& element,
+                                    std::string& error) -> bool
+            {
+                entt::meta_any value{entt::handle{}};
+                if(!meta_value_from_json(ctx, json, value, error))
+                {
+                    return false;
+                }
+                const auto handle = value.cast<entt::handle>();
+                element = make_script_element(handle ? handle.entity() : entt::entity{entt::null}, element_type);
+                return true;
             }};
+}
+
+/// A new reference of @p reference_type to @p asset, as an asset element of an array or List holds it; null for an
+/// empty handle.
+template<typename T>
+auto make_script_asset_reference(const dotnet::type& reference_type, const asset_handle<T>& asset) -> dotnet::object
+{
+    if(!asset)
+    {
+        return {};
+    }
+    auto reference = reference_type.new_instance();
+    dotnet::make_property_invoker<hpp::uuid>(reference_type.get_property("uid")).set_value(reference, asset.uid());
+    return reference;
 }
 
 /// An asset field (Prefab, Texture, ...): the managed reference read and written as the inspector does, spelled as
@@ -205,6 +335,26 @@ auto make_script_asset_codec() -> script_field_codec
                     return false;
                 }
                 set_script_asset(obj, invoker, value.cast<asset_handle<T>>());
+                return true;
+            },
+            .element_to_json = [](rtti::context& ctx, const dotnet::type&, const dotnet::object& element)
+                -> hpp::optional<std::string>
+            {
+                entt::meta_any value{get_script_asset<T>(ctx.get_cached<asset_manager>(), element)};
+                return meta_value_to_json(ctx, value);
+            },
+            .element_from_json = [](rtti::context& ctx,
+                                    const dotnet::type& element_type,
+                                    const simdjson::dom::element& json,
+                                    dotnet::object& element,
+                                    std::string& error) -> bool
+            {
+                entt::meta_any value{asset_handle<T>{}};
+                if(!meta_value_from_json(ctx, json, value, error))
+                {
+                    return false;
+                }
+                element = make_script_asset_reference(element_type, value.cast<asset_handle<T>>());
                 return true;
             }};
 }
@@ -261,9 +411,149 @@ auto script_enum_codecs() -> const std::map<std::string, script_field_codec>&
     return table;
 }
 
-/// The codec for a field of @p type, or none when MCP cannot express it (lists, nested objects).
+auto find_script_field_codec(const dotnet::type& type) -> const script_field_codec*;
+
+/// Whether @p type is a collection a Script field holds and MCP writes whole: a one-dimensional array or a List.
+auto is_script_collection(const dotnet::type& type) -> bool
+{
+    return (type.is_array() && type.get_rank() == 1) || type.is_list();
+}
+
+/// The codec of the elements of collection type @p type, or none when MCP cannot express them (collections of
+/// collections, of objects, of dictionaries).
+auto find_script_element_codec(const dotnet::type& type) -> const script_field_codec*
+{
+    const auto* codec = is_script_collection(type) ? find_script_field_codec(type.get_element_type()) : nullptr;
+    return codec != nullptr && codec->element_to_json ? codec : nullptr;
+}
+
+/// The elements an array or a List of @p collection_type holds.
+auto read_script_collection(const dotnet::type& collection_type, const dotnet::object& collection)
+    -> std::vector<dotnet::object>
+{
+    if(collection_type.is_array())
+    {
+        return dotnet::array<dotnet::object>(collection).to_vector();
+    }
+    return dotnet::list<dotnet::object>(collection).to_vector();
+}
+
+/// Points collection field @p field of @p obj at @p elements: a new array of them, or the List it holds cleared and
+/// refilled (a new List when it holds none).
+void write_script_collection(dotnet::object& obj, const dotnet::field& field, const std::vector<dotnet::object>& elements)
+{
+    const auto& collection_type = field.get_type();
+    const auto element_type = collection_type.get_element_type();
+    auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
+    if(collection_type.is_array())
+    {
+        invoker.set_value(obj, dotnet::array<dotnet::object>(elements, element_type));
+        return;
+    }
+    const auto current = invoker.get_value(obj);
+    if(!current.valid())
+    {
+        invoker.set_value(obj, dotnet::list<dotnet::object>(elements, element_type));
+        return;
+    }
+    dotnet::list<dotnet::object> list(current);
+    list.set(elements, element_type);
+}
+
+/// An array or a List field whose element type has a codec: read as a JSON array of the elements' JSON, written whole
+/// from one, every element checked before the field changes. null stands for a null field both ways.
+auto make_script_collection_codec() -> script_field_codec
+{
+    return {.to_json = [](rtti::context& ctx, const dotnet::object& obj, const dotnet::field& field)
+                -> hpp::optional<std::string>
+            {
+                const auto& collection_type = field.get_type();
+                const auto* element_codec = find_script_element_codec(collection_type);
+                if(element_codec == nullptr)
+                {
+                    return std::nullopt;
+                }
+                const auto collection = dotnet::make_field_invoker<dotnet::object>(field).get_value(obj);
+                if(!collection.valid())
+                {
+                    return std::string("null");
+                }
+                const auto element_type = collection_type.get_element_type();
+                const auto elements = read_script_collection(collection_type, collection);
+                const auto pins = dotnet::pin_vector_elements(elements);
+                std::string json = "[";
+                for(const auto& element : elements)
+                {
+                    const auto element_json = element_codec->element_to_json(ctx, element_type, element);
+                    if(!element_json)
+                    {
+                        return std::nullopt;
+                    }
+                    json += (json.size() > 1 ? "," : "") + *element_json;
+                }
+                return json + "]";
+            },
+            .from_json = [](rtti::context& ctx,
+                            dotnet::object& obj,
+                            const dotnet::field& field,
+                            const simdjson::dom::element& value,
+                            std::string& error) -> bool
+            {
+                const auto& collection_type = field.get_type();
+                const auto* element_codec = find_script_element_codec(collection_type);
+                if(element_codec == nullptr)
+                {
+                    error = "field type " + collection_type.get_name() + " cannot be set through MCP";
+                    return false;
+                }
+                if(value.is_null())
+                {
+                    dotnet::make_field_invoker<dotnet::object>(field).set_value(obj, dotnet::object{});
+                    return true;
+                }
+                const auto element_type = collection_type.get_element_type();
+                simdjson::dom::array items;
+                if(value.get_array().get(items) != simdjson::SUCCESS)
+                {
+                    error = "expected an array of " + element_type.get_name() + ", or null";
+                    return false;
+                }
+                std::vector<dotnet::object> elements;
+                std::vector<dotnet::object_pinned_ptr> pins;
+                elements.reserve(items.size());
+                pins.reserve(items.size());
+                for(auto item : items)
+                {
+                    dotnet::object element;
+                    std::string element_error;
+                    if(!element_codec->element_from_json(ctx, element_type, item, element, element_error))
+                    {
+                        error = fmt::format("element {}: {}", elements.size(), element_error);
+                        return false;
+                    }
+                    pins.push_back(dotnet::make_object_pinned(element));
+                    elements.push_back(element);
+                }
+                write_script_collection(obj, field, elements);
+                return true;
+            }};
+}
+
+/// The one codec of every array and List field MCP expresses; each call finds its element codec by the field's type.
+auto script_collection_codec() -> const script_field_codec&
+{
+    static const script_field_codec codec = make_script_collection_codec();
+    return codec;
+}
+
+/// The codec for a field of @p type, or none when MCP cannot express it (nested objects, dictionaries, collections of
+/// those).
 auto find_script_field_codec(const dotnet::type& type) -> const script_field_codec*
 {
+    if(is_script_collection(type))
+    {
+        return find_script_element_codec(type) != nullptr ? &script_collection_codec() : nullptr;
+    }
     const auto& table = type.is_enum() ? script_enum_codecs() : script_field_codecs();
     const auto found = table.find(type.is_enum() ? type.get_enum_base_type().get_name() : type.get_name());
     return found != table.end() ? &found->second : nullptr;
@@ -532,7 +822,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
         json += first ? "" : ",";
         json += R"({"component":"Script","name":"type_name","type":"string","description":"Required C# type full name or short name"},)";
         json += R"({"component":"Script","name":"script_index","type":"integer","description":"Which script of that type, counting from 0; default 0"},)";
-        json += R"({"component":"Script","name":"*","type":"any","description":"Public instance fields: numbers at their C# width, bool, string, Vector2/3/4, Color, LayerMask, enums by value name"})";
+        json += R"({"component":"Script","name":"*","type":"any","description":"Public instance fields: numbers at their C# width, bool, string, Vector2/3/4, Color, LayerMask, enums by value name, Entity by id, assets by key or null; a T[] or List<T> of those as a JSON array of the element form, set whole, or null for a null field"})";
     }
     return json + "]";
 }
