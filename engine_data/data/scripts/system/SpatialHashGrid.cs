@@ -70,6 +70,10 @@ namespace Unravel.Core
         /// <param name="include">Which items to hold; empty holds them all.</param>
         public void Build(ReadOnlySpan<Vector3> positions, ReadOnlySpan<bool> include = default)
         {
+            if (!include.IsEmpty && include.Length != positions.Length)
+            {
+                throw new ArgumentException("include must be empty or as long as positions.", nameof(include));
+            }
             int count = 0;
             for (int i = 0; i < positions.Length; i++)
             {
@@ -136,37 +140,53 @@ namespace Unravel.Core
         /// <param name="visitor">The visitor; a struct is passed by reference and keeps what it gathers.</param>
         public void Visit<TVisitor>(Vector3 center, float radius, ref TVisitor visitor) where TVisitor : struct, ISpatialHashVisitor
         {
-            if (count == 0 || radius < 0f)
+            if (count == 0 || !(radius >= 0f))
             {
                 return;
             }
-            int minX = GetCell(center.x - radius);
-            int maxX = GetCell(center.x + radius);
-            int minZ = GetCell(center.z - radius);
-            int maxZ = GetCell(center.z + radius);
+            // Cells saturate at the int range for huge coordinates, so the loops count in long and never wrap.
+            long minX = GetCell(center.x - radius);
+            long maxX = GetCell(center.x + radius);
+            long minZ = GetCell(center.z - radius);
+            long maxZ = GetCell(center.z + radius);
             float radiusSquared = radius * radius;
-            for (int z = minZ; z <= maxZ; z++)
+            // A radius spanning more cells than there are items is cheaper to answer by testing every item.
+            long width = maxX - minX + 1;
+            long depth = maxZ - minZ + 1;
+            if (width > count || depth > count || width * depth > count)
             {
-                for (int x = minX; x <= maxX; x++)
+                for (int slot = 0; slot < count; slot++)
                 {
-                    int bucket = Hash(x, z);
+                    VisitIfWithin(slot, center, radiusSquared, ref visitor);
+                }
+                return;
+            }
+            for (long z = minZ; z <= maxZ; z++)
+            {
+                for (long x = minX; x <= maxX; x++)
+                {
+                    int bucket = Hash((int)x, (int)z);
                     int end = bucketStarts[bucket + 1];
                     for (int slot = bucketStarts[bucket]; slot < end; slot++)
                     {
                         // Other cells share the bucket: only this cell's items count, and each item once.
-                        if (itemCellX[slot] != x || itemCellZ[slot] != z)
+                        if (itemCellX[slot] == x && itemCellZ[slot] == z)
                         {
-                            continue;
-                        }
-                        float dx = itemX[slot] - center.x;
-                        float dz = itemZ[slot] - center.z;
-                        float distanceSquared = dx * dx + dz * dz;
-                        if (distanceSquared <= radiusSquared)
-                        {
-                            visitor.Visit(items[slot], MathF.Sqrt(distanceSquared));
+                            VisitIfWithin(slot, center, radiusSquared, ref visitor);
                         }
                     }
                 }
+            }
+        }
+
+        private void VisitIfWithin<TVisitor>(int slot, Vector3 center, float radiusSquared, ref TVisitor visitor) where TVisitor : struct, ISpatialHashVisitor
+        {
+            float dx = itemX[slot] - center.x;
+            float dz = itemZ[slot] - center.z;
+            float distanceSquared = dx * dx + dz * dz;
+            if (distanceSquared <= radiusSquared)
+            {
+                visitor.Visit(items[slot], MathF.Sqrt(distanceSquared));
             }
         }
 

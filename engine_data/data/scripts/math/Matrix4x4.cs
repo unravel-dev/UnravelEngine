@@ -10,6 +10,10 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)]
 public struct Matrix4x4 : IEquatable<Matrix4x4>, IFormattable
 {
+    // The determinant over its largest possible value for rows of these lengths (Hadamard's bound) under which
+    // the inverse counts as singular. Being relative, uniformly tiny or huge scales still invert.
+    private const float SINGULAR_RELATIVE_DETERMINANT = 1.1920929e-7f;
+
     /// <summary>Row 0, column 0.</summary>
     public float m00;
     /// <summary>Row 1, column 0.</summary>
@@ -304,7 +308,7 @@ public struct Matrix4x4 : IEquatable<Matrix4x4>, IFormattable
         }
     }
 
-    /// <summary>The inverse; the zero matrix when the matrix cannot be inverted.</summary>
+    /// <summary>The inverse; the zero matrix when the matrix is singular or nearly so.</summary>
     public Matrix4x4 inverse
     {
         get
@@ -322,7 +326,8 @@ public struct Matrix4x4 : IEquatable<Matrix4x4>, IFormattable
             float c1 = m20 * m32 - m30 * m22;
             float c0 = m20 * m31 - m30 * m21;
             float det = s0 * c5 - s1 * c4 + s2 * c3 + s3 * c2 - s4 * c1 + s5 * c0;
-            if (MathF.Abs(det) < float.Epsilon)
+            float rowLengths = GetRow(0).magnitude * GetRow(1).magnitude * GetRow(2).magnitude * GetRow(3).magnitude;
+            if (!(MathF.Abs(det) > SINGULAR_RELATIVE_DETERMINANT * rowLengths))
             {
                 return zero;
             }

@@ -1,7 +1,7 @@
 using System;
 
 /// <summary>
-/// A seedable pseudo-random number generator (xoshiro256+). It is a value type with no shared state: give each
+/// A seedable pseudo-random number generator (xoshiro256**). It is a value type with no shared state: give each
 /// thread or job its own instance, seeded from a base seed and the job's index, for sequences that repeat run
 /// after run. The static <see cref="Random"/> uses one per thread.
 /// </summary>
@@ -114,7 +114,10 @@ public struct RandomGenerator
         {
             return minValue;
         }
-        return (int)((NextUInt64() >> 33) % (ulong)((long)maxValue - minValue)) + minValue;
+        ulong span = (ulong)((long)maxValue - minValue);
+        // The high half of the 128-bit product spreads all 64 random bits over the span (Lemire's method).
+        ulong offset = Math.BigMul(NextUInt64(), span, out _);
+        return (int)(minValue + (long)offset);
     }
 
     /// <summary>
