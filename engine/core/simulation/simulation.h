@@ -95,7 +95,8 @@ struct simulation
     //-----------------------------------------------------------------------------
     //  Name : get_fps ()
     /// <summary>
-    /// Returns frames per second.
+    /// Returns frames per second of the last frame, from its real duration
+    /// (see get_frame_duration), so the time scale does not change it.
     /// </summary>
     //-----------------------------------------------------------------------------
     auto get_fps() const -> float;
@@ -129,6 +130,17 @@ struct simulation
     auto get_max_fps() const -> uint32_t;
 
     //-----------------------------------------------------------------------------
+    //  Name : get_frame_duration ()
+    /// <summary>
+    /// Returns the real time between the ends of the last two run_one_frame
+    /// calls: not scaled, smoothed or clamped to the minimum fps, and not
+    /// restarted by reset_delta_clock, so statistics and the editor UI see
+    /// every frame as it happened, hitches and paused play included.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto get_frame_duration() const -> duration_t;
+
+    //-----------------------------------------------------------------------------
     //  Name : get_last_sleep_duration ()
     /// <summary>
     /// Returns how long run_one_frame spent sleeping during the last call.
@@ -152,12 +164,16 @@ protected:
     duration_t timestep_ = duration_t::zero();
     /// time spent sleeping inside the last run_one_frame call
     duration_t last_sleep_duration_ = duration_t::zero();
+    /// real time between the ends of the last two run_one_frame calls
+    duration_t frame_duration_ = duration_t::zero();
     /// current frame
     uint64_t frame_ = 0;
     /// how many frames to average for the smoothed time step
     uint32_t smoothing_step_ = 11;
     /// frame update timer
     timepoint_t last_frame_timepoint_ = clock_t::now();
+    /// end of the last run_one_frame call; reset_delta_clock leaves it alone
+    timepoint_t last_frame_end_timepoint_ = clock_t::now();
     /// time point when we launched
     timepoint_t launch_timepoint_ = clock_t::now();
 };

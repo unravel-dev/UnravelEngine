@@ -4,6 +4,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -119,7 +120,7 @@ struct editing_manager
     void on_play_before_begin(rtti::context& ctx);
     void on_play_begin(rtti::context& ctx);
     void on_play_after_end(rtti::context& ctx);
-    void on_frame_update(rtti::context& ctx, delta_t);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
     void on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version);
     void on_prefab_updated(const asset_handle<prefab>& pfb);
 

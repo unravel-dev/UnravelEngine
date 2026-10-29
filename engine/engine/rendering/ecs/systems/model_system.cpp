@@ -84,7 +84,7 @@ void model_system::on_play_begin(rtti::context& ctx)
     process_armatures<model_component>(scn, recreate_armature);
 }
 
-void model_system::on_frame_update(scene& scn, delta_t dt)
+void model_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Model/System Update");
 
@@ -99,7 +99,7 @@ void model_system::on_frame_update(scene& scn, delta_t dt)
     }
 }
 
-void model_system::on_frame_before_render(scene& scn, delta_t dt)
+void model_system::on_frame_before_render(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Model/System Before Render");
     static const std::string thread_name = "Model/Pool Thread";

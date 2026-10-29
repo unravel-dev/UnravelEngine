@@ -23,13 +23,13 @@ auto camera_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void camera_system::on_frame_update(scene& scn, delta_t dt)
+void camera_system::on_frame_update(scene& scn, const frame_times& times)
 {
 
 }
 
 
-void camera_system::on_frame_before_render(scene& scn, delta_t dt)
+void camera_system::on_frame_before_render(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Camera/System Before Render");
     scn.registry->view<transform_component, camera_component>().each(

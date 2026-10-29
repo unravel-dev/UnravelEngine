@@ -218,7 +218,7 @@ void project_thumbnail::on_project_opened(rtti::context& ctx)
     }
 }
 
-void project_thumbnail::on_frame_update(rtti::context& ctx, delta_t /*dt*/)
+void project_thumbnail::on_frame_update(rtti::context& ctx, const frame_times& /*times*/)
 {
     if(state_ == capture_state::waiting && clock::now() >= capture_time_)
     {
@@ -232,7 +232,7 @@ void project_thumbnail::on_frame_update(rtti::context& ctx, delta_t /*dt*/)
     }
 }
 
-void project_thumbnail::on_frame_end(rtti::context& ctx, delta_t /*dt*/)
+void project_thumbnail::on_frame_end(rtti::context& ctx, const frame_times& /*times*/)
 {
     if(state_ != capture_state::warming || --warm_frames_left_ > 0)
     {

@@ -421,9 +421,9 @@ auto resolve_area_selection_candidates(entt::registry& registry, std::vector<ent
 } // namespace
 
 constexpr int picking_manager::tex_id_dim;
-void picking_manager::on_frame_render(rtti::context& ctx, delta_t dt)
+void picking_manager::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
-    on_frame_pick(ctx, dt);
+    on_frame_pick(ctx, times.scaled);
 }
 
 void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)

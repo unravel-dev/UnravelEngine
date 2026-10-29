@@ -4,6 +4,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 
 #include "splash_scene.h"
 
@@ -52,7 +53,7 @@ struct play_mode
      */
     void end_frame_step();
 
-    void on_frame_update(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
 
     [[nodiscard]] auto is_active() const -> bool
     {

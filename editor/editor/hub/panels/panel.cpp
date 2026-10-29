@@ -71,22 +71,22 @@ void imgui_panels::deinit(rtti::context& ctx)
     mcp_panel_->deinit(ctx);
 }
 
-void imgui_panels::on_frame_update(rtti::context& ctx, delta_t dt)
+void imgui_panels::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
-    scene_panel_->on_frame_update(ctx, dt);
-    game_panel_->on_frame_update(ctx, dt);
+    scene_panel_->on_frame_update(ctx, times);
+    game_panel_->on_frame_update(ctx, times);
 }
 
-void imgui_panels::on_frame_before_render(rtti::context& ctx, delta_t dt)
+void imgui_panels::on_frame_before_render(rtti::context& ctx, const frame_times& times)
 {
-    scene_panel_->on_frame_before_render(ctx, dt);
-    game_panel_->on_frame_before_render(ctx, dt);
+    scene_panel_->on_frame_before_render(ctx, times);
+    game_panel_->on_frame_before_render(ctx, times);
 }
 
-void imgui_panels::on_frame_render(rtti::context& ctx, delta_t dt)
+void imgui_panels::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
-    scene_panel_->on_frame_render(ctx, dt);
-    game_panel_->on_frame_render(ctx, dt);
+    scene_panel_->on_frame_render(ctx, times);
+    game_panel_->on_frame_render(ctx, times);
 }
 
 void imgui_panels::on_frame_ui_render(rtti::context& ctx)

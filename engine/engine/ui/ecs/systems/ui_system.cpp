@@ -688,7 +688,7 @@ void ui_system::release_resources()
     Rml::ReleaseRenderManagers();
 }
 
-void ui_system::on_frame_begin(rtti::context& ctx, delta_t dt)
+void ui_system::on_frame_begin(rtti::context& ctx, const frame_times& times)
 {
     refresh_changed_textures();
     // Documents change outside scripts too (the image refresh above, resizes): the first layout

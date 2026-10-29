@@ -221,17 +221,15 @@ auto print_assembly_info(const dotnet::assembly& assembly)
 }
 
 /// The timing values the managed Time class reads for a frame that advances the play clock from
-/// @p elapsed by @p dt (already scaled by the time scale).
-auto make_frame_update_data(const simulation& sim, delta_t elapsed, delta_t dt) -> script_system::frame_update_data
+/// @p elapsed by @p times.
+auto make_frame_update_data(const simulation& sim, delta_t elapsed, const frame_times& times) -> script_system::frame_update_data
 {
-    const float time_scale = sim.get_time_scale();
     script_system::frame_update_data data;
     data.time = elapsed.count();
-    data.delta_time = dt.count();
-    data.time_scale = time_scale;
+    data.delta_time = times.scaled.count();
+    data.time_scale = sim.get_time_scale();
     data.frame_count = sim.get_frame();
-    // From dt rather than the simulation, so a zeroed first frame and a paused frame step agree.
-    data.unscaled_delta_time = time_scale > 0.0f ? dt.count() / time_scale : sim.get_unscaled_delta_time().count();
+    data.unscaled_delta_time = times.unscaled.count();
     data.realtime_since_startup = std::chrono::duration_cast<delta_t>(sim.get_time_since_launch()).count();
     return data;
 }
@@ -1012,14 +1010,15 @@ void script_system::on_resume(rtti::context& ctx)
 {
 }
 
-void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
+void script_system::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Script/System Update");
 
     auto& play = ctx.get_cached<play_mode>();
     if(!play.is_active())
     {
-        check_for_recompile(ctx, dt, true);
+        // Polls on real time, so a time scale of 0 set while editing does not stop it.
+        check_for_recompile(ctx, times.real, true);
     }
 
     is_updating_ = true;
@@ -1035,13 +1034,15 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
         auto& scn = ec.get_scene();
         auto& registry = *scn.registry;
 
-        // Mid-frame enter_running: process() could not zero dt. Start() below still runs; skip
-        // integrating motion on this first frame.
+        // Mid-frame enter_running: process() could not zero the game time. Start() below still runs;
+        // skip integrating motion on this first frame.
+        frame_times script_times = times;
         if(play.frames_running() == 0)
         {
-            dt = {};
+            script_times.scaled = {};
+            script_times.unscaled = {};
         }
-        const auto data = make_frame_update_data(ctx.get_cached<simulation>(), elapsed_time_, dt);
+        const auto data = make_frame_update_data(ctx.get_cached<simulation>(), elapsed_time_, script_times);
 
         // Time first, so the scripts created or started below read this frame's values.
         if(play.is_simulation_running() && cache_.begin_frame_invoker.valid())
@@ -1072,7 +1073,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
                 cache_.update_invoker(data);
             }
 
-            elapsed_time_ += dt;
+            elapsed_time_ += script_times.scaled;
         }
     }
     catch(const dotnet::exception& e)
@@ -1178,7 +1179,7 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
     }
 }
 
-void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
+void script_system::on_frame_late_update(rtti::context& ctx, const frame_times& times)
 {
     {
         APP_SCOPE_PERF("Script/System Late Update");
@@ -1196,7 +1197,7 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
             auto& scn = ec.get_scene();
             auto& registry = *scn.registry;
     
-            if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero() &&
+            if(play.is_simulation_running() && play.frames_running() > 0 && times.scaled > delta_t::zero() &&
                cache_.late_update_invoker.valid())
             {
                 APP_SCOPE_PERF("Script/System Late Update Managed");

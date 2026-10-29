@@ -26,10 +26,10 @@ auto reflection_probe_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void reflection_probe_system::on_frame_update(scene& scn, delta_t dt)
+void reflection_probe_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Reflection Probe/System Update");
-    const float seconds = dt.count();
+    const float seconds = times.scaled.count();
     scn.registry->view<transform_component, reflection_probe_component>().each(
         [&](auto e, auto&& transform, auto&& probe)
         {

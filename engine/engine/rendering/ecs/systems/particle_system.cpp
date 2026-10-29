@@ -41,7 +41,7 @@ auto particle_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void particle_system::on_frame_before_render(scene& scn, delta_t dt)
+void particle_system::on_frame_before_render(scene& scn, const frame_times& times)
 {
     if(!initialized_)
     {
@@ -79,7 +79,7 @@ void particle_system::on_frame_before_render(scene& scn, delta_t dt)
             emitter_comp.set_last_render_frame(uint64_t(gfx::get_render_frame()));
         }
         const auto& world_transform = transform_comp.get_transform_global();
-        emitter_comp.update_emitter(world_transform, dt);
+        emitter_comp.update_emitter(world_transform, times.scaled);
     });
 
     // Sub-emitters queue bursts on other emitters, and mesh emitters resolve their mesh's materials: one

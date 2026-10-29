@@ -9,7 +9,6 @@
 #include <engine/profiler/profiler.h>
 #include <audiopp/logger.h>
 #include <logging/logging.h>
-#include <simulation/simulation.h>
 
 
 namespace unravel
@@ -46,19 +45,6 @@ void on_destroy_active_component(entt::registry& r, entt::entity e)
     {
         comp->on_play_end();
     }
-}
-
-/// This frame's time without the time scale: fades keep running while the game is slowed or
-/// stopped by Time.timeScale, and hold while the simulation is paused.
-auto get_unscaled_seconds(rtti::context& ctx, delta_t dt) -> float
-{
-    if(!ctx.has<simulation>())
-    {
-        return dt.count();
-    }
-    const auto& sim = ctx.get_cached<simulation>();
-    const float time_scale = sim.get_time_scale();
-    return time_scale > 0.0f ? dt.count() / time_scale : sim.get_unscaled_delta_time().count();
 }
 
 } // namespace
@@ -284,7 +270,7 @@ void audio_system::update_fades(rtti::context& ctx, float seconds)
     voices_.update(seconds);
 }
 
-void audio_system::on_frame_update(rtti::context& ctx, delta_t dt)
+void audio_system::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Audio/System Update");
     auto& ev = ctx.get_cached<events>();
@@ -297,7 +283,7 @@ void audio_system::on_frame_update(rtti::context& ctx, delta_t dt)
     registry.view<transform_component, audio_listener_component, active_component>().each(
         [&](auto e, auto&& transform, auto&& comp, auto&& active)
         {
-            comp.update(transform.get_transform_global(), dt);
+            comp.update(transform.get_transform_global(), times.scaled);
         });
 
     registry.view<transform_component, audio_source_component, active_component>().each(
@@ -306,7 +292,9 @@ void audio_system::on_frame_update(rtti::context& ctx, delta_t dt)
             comp.update(transform.get_transform_global());
         });
 
-    update_fades(ctx, get_unscaled_seconds(ctx, dt));
+    // Fades keep running while the game is slowed or stopped by Time.timeScale, and hold while
+    // the simulation is paused.
+    update_fades(ctx, times.unscaled.count());
 }
 
 } // namespace unravel

@@ -494,9 +494,9 @@ void animation_system::on_update(scene& scn, delta_t dt)
                   });
 }
 
-void animation_system::on_frame_update(scene& scn, delta_t dt)
+void animation_system::on_frame_update(scene& scn, const frame_times& times)
 {
-    on_update(scn, dt);
+    on_update(scn, times.scaled);
 }
 
 } // namespace unravel

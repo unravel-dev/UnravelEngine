@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <ospp/event.h>
 
 #include "panels/panel.h"
@@ -25,10 +26,10 @@ public:
 private:
 
     void on_project_opened(rtti::context& ctx);
-    void on_frame_update(rtti::context& ctx, delta_t dt);
-    void on_frame_before_render(rtti::context& ctx, delta_t dt);
-    void on_frame_render(rtti::context& ctx, delta_t dt);
-    void on_frame_ui_render(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
+    void on_frame_before_render(rtti::context& ctx, const frame_times& times);
+    void on_frame_render(rtti::context& ctx, const frame_times& times);
+    void on_frame_ui_render(rtti::context& ctx, const frame_times& times);
     void on_play_before_begin(rtti::context& ctx);
     void on_play_begin(rtti::context& ctx);
     void on_play_after_end(rtti::context& ctx);

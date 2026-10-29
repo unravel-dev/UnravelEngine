@@ -842,7 +842,7 @@ void renderer::sync_main_surface()
     backbuffer_window_ = native_window;
 }
 
-void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
+void renderer::frame_begin(rtti::context& ctx, const frame_times& /*times*/)
 {
     // Drive GPU eviction at the start of the frame, before this frame's resource creates are
     // submitted, so freed memory precedes new allocations in bgfx's command stream (lowers peak
@@ -874,7 +874,7 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
     // editor's UI). A clear of its own is one more render pass storing the whole window on a tile-based GPU.
 }
 
-void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
+void renderer::frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
 {
     APP_SCOPE_PERF("Graphics Frame Submit");
 

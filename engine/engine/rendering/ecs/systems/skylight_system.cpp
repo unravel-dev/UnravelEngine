@@ -49,13 +49,13 @@ auto skylight_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void skylight_system::on_frame_update(scene& scn, delta_t dt)
+void skylight_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Skylight/System Update");
     scn.registry->view<skylight_component, active_component>().each(
         [&](auto e, auto&& skylight, auto&& active)
         {
-            skylight.update(dt);
+            skylight.update(times.scaled);
         });
     update_atmosphere_sun_transmittance(scn);
 }

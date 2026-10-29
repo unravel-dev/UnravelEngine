@@ -142,14 +142,14 @@ void game_panel::deinit(rtti::context& ctx)
 {
 }
 
-void game_panel::on_frame_update(rtti::context& ctx, delta_t dt)
+void game_panel::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
 
     apply_view_size(ctx, scene);
-    path.on_frame_update(scene, dt);
+    path.on_frame_update(scene, times);
 }
 
 void game_panel::set_forced_render_size(uint32_t width, uint32_t height)
@@ -215,16 +215,16 @@ auto game_panel::get_displayed_camera(rtti::context& ctx) const -> entt::handle
     return displayed;
 }
 
-void game_panel::on_frame_before_render(rtti::context& ctx, delta_t dt)
+void game_panel::on_frame_before_render(rtti::context& ctx, const frame_times& times)
 {
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
 
-    path.on_frame_before_render(scene, dt);
+    path.on_frame_before_render(scene, times);
 }
 
-void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
+void game_panel::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
@@ -242,7 +242,7 @@ void game_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         return;
     }
 
-    path.render_scene(scene, dt, {.render_scale = view_render_scale::get_render_scale(render_scale_)});
+    path.render_scene(scene, times, {.render_scale = view_render_scale::get_render_scale(render_scale_)});
 
     end_forced_frame();
 }

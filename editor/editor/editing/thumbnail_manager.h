@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <graphics/shader.h>
 #include <graphics/texture.h>
 
@@ -79,8 +80,8 @@ struct thumbnail_manager
 
     auto init(rtti::context& ctx) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
-    void on_frame_update(rtti::context& ctx, delta_t);
-    void on_frame_end(rtti::context& ctx, delta_t);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
+    void on_frame_end(rtti::context& ctx, const frame_times& times);
 
     template<typename T>
     auto get_thumbnail(const asset_handle<T>& asset) -> gfx::texture::ptr

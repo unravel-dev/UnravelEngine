@@ -4,6 +4,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <engine/ecs/ecs.h>
 #include <graphics/frame_buffer.h>
 #include "../viewport_stats_overlay.h"
@@ -23,9 +24,9 @@ public:
     void init(rtti::context& ctx);
     void deinit(rtti::context& ctx);
 
-    void on_frame_update(rtti::context& ctx, delta_t dt);
-    void on_frame_before_render(rtti::context& ctx, delta_t dt);
-    void on_frame_render(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
+    void on_frame_before_render(rtti::context& ctx, const frame_times& times);
+    void on_frame_render(rtti::context& ctx, const frame_times& times);
     void on_project_opened();
 
     void draw_ui(rtti::context& ctx) override;

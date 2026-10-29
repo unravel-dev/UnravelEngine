@@ -73,6 +73,8 @@ void simulation::run_one_frame(bool is_active)
     }
 
     last_frame_timepoint_ = wait_end;
+    frame_duration_ = wait_end - last_frame_end_timepoint_;
+    last_frame_end_timepoint_ = wait_end;
 
     // if fps lower than minimum, clamp eplased time
     if(min_fps_ > 0)
@@ -153,7 +155,7 @@ auto simulation::get_time_since_launch() const -> duration_t
 
 auto simulation::get_fps() const -> float
 {
-    auto dt = std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(get_delta_time()).count();
+    auto dt = std::chrono::duration_cast<std::chrono::duration<float, std::milli>>(get_frame_duration()).count();
     return (std::abs(dt) < std::numeric_limits<float>::epsilon()) ? 0 : 1000.0f / dt;
 }
 
@@ -181,6 +183,11 @@ auto simulation::get_time_scale() const -> float
 auto simulation::get_max_fps() const -> uint32_t
 {
     return max_fps_;
+}
+
+auto simulation::get_frame_duration() const -> duration_t
+{
+    return frame_duration_;
 }
 
 auto simulation::get_last_sleep_duration() const -> duration_t

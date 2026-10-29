@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <hpp/event.hpp>
 
 namespace unravel
@@ -9,7 +10,7 @@ namespace unravel
 
 struct ui_events
 {
-    hpp::event<void(rtti::context&, delta_t)> on_frame_ui_render;
+    hpp::event<void(rtti::context&, const frame_times&)> on_frame_ui_render;
 
     hpp::event<void()> on_selection_changed;
 

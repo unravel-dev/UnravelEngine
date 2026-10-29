@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/basetypes.hpp>
+#include <engine/frame_times.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
@@ -43,7 +44,7 @@ public:
     
     constexpr static int tex_id_dim = 1;
 
-    void on_frame_render(rtti::context& ctx, delta_t dt);
+    void on_frame_render(rtti::context& ctx, const frame_times& times);
 
     void on_frame_pick(rtti::context& ctx, delta_t dt);
 

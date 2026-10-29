@@ -100,7 +100,7 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
 auto render_thumbnail_preview_scene(rendering_system& rpath,
                                     scene& scn,
                                     entt::handle camera_entity,
-                                    delta_t dt,
+                                    const frame_times& times,
                                     int frames) -> gfx::frame_buffer::ptr
 {
     if(!camera_entity)
@@ -117,11 +117,11 @@ auto render_thumbnail_preview_scene(rendering_system& rpath,
     gfx::frame_buffer::ptr captured;
     for(int i = 0; i < frames; ++i)
     {
-        rpath.on_frame_before_render(scn, dt);
+        rpath.on_frame_before_render(scn, times);
         auto new_fbo = rpath.render_scene(camera_entity,
                                           *camera_comp,
                                           scn,
-                                          dt,
+                                          times,
                                           {.render_screen_space = false, .settings_use = graphics_settings_use::none});
         if(new_fbo)
         {
@@ -150,15 +150,16 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
             scn.unload();
             auto result = defaults::create_default_3d_scene_for_asset_preview(ctx, scn, asset, k_thumbnail_size, false);
 
+            const auto times = frame_times::make_uniform(dt);
             for(int i = 0; i < frames; i++)
             {
-                rpath.on_frame_update(scn, dt);
-                rpath.on_frame_before_render(scn, dt);
+                rpath.on_frame_update(scn, times);
+                rpath.on_frame_before_render(scn, times);
             }
 
             defaults::focus_camera_on_3d_scene_for_asset_preview<T>(ctx, result);
 
-            auto captured = render_thumbnail_preview_scene(rpath, scn, result.camera, dt, frames);
+            auto captured = render_thumbnail_preview_scene(rpath, scn, result.camera, times, frames);
             if(!captured)
             {
                 APPLOG_WARNING("Thumbnail for {} produced no output (camera valid: {}, object valid: {}).",
@@ -585,14 +586,14 @@ auto thumbnail_manager::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void thumbnail_manager::on_frame_update(rtti::context& ctx, delta_t)
+void thumbnail_manager::on_frame_update(rtti::context& ctx, const frame_times& /*times*/)
 {
     auto& rpath = ctx.get_cached<rendering_system>();
     gen_.reset(rpath);
     evict_unused_thumbnails(std::chrono::seconds(30), std::chrono::seconds(60));
 }
 
-void thumbnail_manager::on_frame_end(rtti::context& /*ctx*/, delta_t)
+void thumbnail_manager::on_frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
 {
     commit_pending_snapshots();
 }

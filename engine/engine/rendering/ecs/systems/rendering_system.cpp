@@ -93,7 +93,7 @@ void rendering_system::on_play_end(rtti::context& ctx)
     material_instances_.clear();
 }
 
-void rendering_system::reset_script_draws(rtti::context& ctx, delta_t dt)
+void rendering_system::reset_script_draws(rtti::context& ctx, const frame_times& times)
 {
     // Scripts draw their instances again in every frame they update. While the game is paused they draw nothing
     // new, so the last draws stay on screen.
@@ -105,7 +105,7 @@ void rendering_system::reset_script_draws(rtti::context& ctx, delta_t dt)
     baked_animations_.reclaim_released();
 }
 
-void rendering_system::on_frame_end(rtti::context& ctx, delta_t dt)
+void rendering_system::on_frame_end(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Rendering/On Frame End");
     debug_draw_callbacks_.clear();
@@ -146,31 +146,31 @@ void rendering_system::release_material_instance(uint32_t id)
     material_instances_.erase(id);
 }
 
-void rendering_system::on_frame_update(scene& scn, delta_t dt)
+void rendering_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Rendering/On Frame Update");
     auto& ctx = engine::context();
     // Rigs drawn from their transforms get their input pose back before anything animates them.
     ctx.get_cached<rig_system>().restore_deferred(*scn.registry);
-    ctx.get_cached<transform_system>().on_frame_update(scn, dt);
-    ctx.get_cached<camera_system>().on_frame_update(scn, dt);
-    ctx.get_cached<model_system>().on_frame_update(scn, dt);
-    ctx.get_cached<animation_system>().on_frame_update(scn, dt);
-    ctx.get_cached<reflection_probe_system>().on_frame_update(scn, dt);
-    ctx.get_cached<skylight_system>().on_frame_update(scn, dt);
+    ctx.get_cached<transform_system>().on_frame_update(scn, times);
+    ctx.get_cached<camera_system>().on_frame_update(scn, times);
+    ctx.get_cached<model_system>().on_frame_update(scn, times);
+    ctx.get_cached<animation_system>().on_frame_update(scn, times);
+    ctx.get_cached<reflection_probe_system>().on_frame_update(scn, times);
+    ctx.get_cached<skylight_system>().on_frame_update(scn, times);
 }
 
-void rendering_system::on_frame_before_render(scene& scn, delta_t dt)
+void rendering_system::on_frame_before_render(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Rendering/On Frame Before Render");
     auto& ctx = engine::context();
     // Rig modifiers (IK, spring bones) pose the bones for skinning, then hand back the input pose.
     auto& rig = ctx.get_cached<rig_system>();
-    rig.before_skinning(*scn.registry, dt);
-    ctx.get_cached<model_system>().on_frame_before_render(scn, dt);
+    rig.before_skinning(*scn.registry, times.scaled);
+    ctx.get_cached<model_system>().on_frame_before_render(scn, times);
     rig.after_skinning(*scn.registry);
-    ctx.get_cached<camera_system>().on_frame_before_render(scn, dt);
-    ctx.get_cached<particle_system>().on_frame_before_render(scn, dt);
+    ctx.get_cached<camera_system>().on_frame_before_render(scn, times);
+    ctx.get_cached<particle_system>().on_frame_before_render(scn, times);
 
 
 }
@@ -206,7 +206,7 @@ auto rendering_system::release_pipeline_resources(scene& scn) -> bool
 auto rendering_system::render_scene(entt::handle camera_ent,
                                     camera_component& camera_comp,
                                     scene& scn,
-                                    delta_t dt,
+                                    const frame_times& times,
                                     const view_render_params& view) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Render Scene Camera");
@@ -221,20 +221,20 @@ auto rendering_system::render_scene(entt::handle camera_ent,
     ui.update_screen_space(ctx, camera_ent, scn, process_input);
     ui.update_world_space(ctx, camera_ent, scn, process_input);
 
-    ui.render_world_space(ctx, camera_ent, scn, dt);
+    ui.render_world_space(ctx, camera_ent, scn, times.scaled);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
     apply_view_params(ctx, params, view);
-    auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
+    auto result = pipeline->run_pipeline(scn, camera, rview, times.scaled, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
     if(view.render_screen_space)
     {
-        ui.render_screen_space(ctx, result, camera_ent, scn, dt);
+        ui.render_screen_space(ctx, result, camera_ent, scn, times.scaled);
     }
     return result;
 }
 
-auto rendering_system::render_scene(scene& scn, delta_t dt, const view_render_params& view) -> gfx::frame_buffer::ptr
+auto rendering_system::render_scene(scene& scn, const frame_times& times, const view_render_params& view) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
@@ -244,7 +244,7 @@ auto rendering_system::render_scene(scene& scn, delta_t dt, const view_render_pa
         [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
-            output = render_scene(handle, camera_comp, scn, dt, view);
+            output = render_scene(handle, camera_comp, scn, times, view);
             return;
         });
     return output;
@@ -254,7 +254,7 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
                                     entt::handle camera_ent,
                                     camera_component& camera_comp,
                                     scene& scn,
-                                    delta_t dt,
+                                    const frame_times& times,
                                     const view_render_params& view)
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
@@ -269,19 +269,19 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output,
     ui.update_screen_space(ctx, camera_ent, scn, process_input);
     ui.update_world_space(ctx, camera_ent, scn, process_input);
 
-    ui.render_world_space(ctx, camera_ent, scn, dt);
+    ui.render_world_space(ctx, camera_ent, scn, times.scaled);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
     apply_view_params(ctx, params, view);
-    pipeline->run_pipeline(output, scn, camera, rview, dt, params, camera_comp.get_render_mask());
+    pipeline->run_pipeline(output, scn, camera, rview, times.scaled, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
     if(view.render_screen_space)
     {
-        ui.render_screen_space(ctx, output, camera_ent, scn, dt);
+        ui.render_screen_space(ctx, output, camera_ent, scn, times.scaled);
     }
 }
 
-auto rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt) -> bool
+auto rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene& scn, const frame_times& times) -> bool
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
     bool has_rendered = false;
@@ -289,7 +289,7 @@ auto rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene&
         [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
-            render_scene(output, handle, camera_comp, scn, dt);
+            render_scene(output, handle, camera_comp, scn, times);
             has_rendered = true;
         });
     return has_rendered;

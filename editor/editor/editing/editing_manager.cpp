@@ -47,6 +47,9 @@ namespace
     /// scene is loaded in on_play_begin, and the systems must set up that scene, as they do without the splash.
     constexpr int PLAY_BEGIN_PRIORITY = 2000;
 
+    /// What a forced update outside the engine loop advances: one 60 Hz frame on every clock.
+    constexpr frame_times FORCED_UPDATE_TIMES = frame_times::make_uniform(delta_t(0.016667f));
+
     /// Reload script domains after scenes have been unloaded via unload_scenes_scripting.
     /// App domain always reloads; engine domain follows editor scripting settings.
     void reload_script_domains(rtti::context& ctx, script_system& scripting, bool recompile)
@@ -141,7 +144,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 
     {
         scripting.wait_for_jobs_to_finish(ctx);
-        on_frame_update(ctx, delta_t(0.016667f));
+        on_frame_update(ctx, FORCED_UPDATE_TIMES);
     }
 
 
@@ -175,7 +178,7 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
 
     {
         scripting.wait_for_jobs_to_finish(ctx);
-        on_frame_update(ctx, delta_t(0.016667f));
+        on_frame_update(ctx, FORCED_UPDATE_TIMES);
     }
 
     reload_script_domains(ctx, scripting, true);
@@ -243,7 +246,7 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
     auto& scripting = ctx.get_cached<script_system>();
     {
         scripting.wait_for_jobs_to_finish(ctx);
-        on_frame_update(ctx, delta_t(0.016667f));
+        on_frame_update(ctx, FORCED_UPDATE_TIMES);
     }
     
     undo_stack.clear();
@@ -274,7 +277,7 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
     {
         scripting.wait_for_jobs_to_finish(ctx);
-        on_frame_update(ctx, delta_t(0.016667f));
+        on_frame_update(ctx, FORCED_UPDATE_TIMES);
     }
 
     reload_script_domains(ctx, scripting, false);
@@ -429,11 +432,9 @@ void editing_manager::load_checkpoint(rtti::context& ctx, scene_cache& cache, bo
 
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_checkpoint_update");
-        delta_t dt(0.016667f);
-
         auto& rpath = ctx.get_cached<rendering_system>();
-        rpath.on_frame_update(*cache.scn, dt);
-        rpath.on_frame_before_render(*cache.scn, dt);
+        rpath.on_frame_update(*cache.scn, FORCED_UPDATE_TIMES);
+        rpath.on_frame_before_render(*cache.scn, FORCED_UPDATE_TIMES);
     }
 
 
@@ -735,18 +736,19 @@ auto editing_manager::get_select_mode() const -> select_mode
     return mode;
 }
 
-void editing_manager::on_frame_update(rtti::context& ctx, delta_t dt)
+void editing_manager::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     session.tick();
 
     execute_actions();
 
+    // Editor timers run on real time: game time is scaled, and stands still while play is paused.
     if(focused_data.remaining_time > delta_t::zero())
     {
-        focused_data.remaining_time -= dt;
+        focused_data.remaining_time -= times.real;
     }
 
-    undo_stack.last_action_elapsed_time += dt;
+    undo_stack.last_action_elapsed_time += times.real;
 
     if(focused_data.remaining_time <= delta_t::zero())
     {

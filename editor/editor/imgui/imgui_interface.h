@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <ospp/event.h>
 
 #include "integration/imgui.h"
@@ -30,7 +31,7 @@ public:
     void render_loading_frame(rtti::context& ctx, const loading_screen& screen);
 
 private:
-    void on_frame_ui_render(rtti::context& ctx, delta_t dt);
+    void on_frame_ui_render(rtti::context& ctx, const frame_times& times);
     void on_os_event(rtti::context& ctx, os::event& e);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);

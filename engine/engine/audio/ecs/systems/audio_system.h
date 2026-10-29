@@ -8,6 +8,7 @@
 #include <audiopp/device.h>
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <cstddef>
 #include <memory>
 
@@ -103,9 +104,9 @@ private:
     /**
      * @brief Updates the audio system for each frame.
      * @param ctx The context for the update.
-     * @param dt The delta time for the frame.
+     * @param times The frame's times: listeners follow the scaled time, fades the unscaled one.
      */
-    void on_frame_update(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
 
     /**
      * @brief Called when playback begins.

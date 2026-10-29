@@ -1,6 +1,7 @@
 #pragma once
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 
 #include <engine/physics/backend/physics_backend.h>
 #include <engine/physics/ecs/components/character_controller_component.h>
@@ -94,7 +95,7 @@ public:
     auto get_backend() const -> const physics_backend*;
 
 private:
-    void on_frame_update(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
     void on_play_begin(rtti::context& ctx);
     void on_play_end(rtti::context& ctx);
     void on_pause(rtti::context& ctx);

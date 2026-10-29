@@ -3,6 +3,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/ecs/scene.h>
+#include <engine/frame_times.h>
 #include <hpp/span.hpp>
 
 #include <memory>
@@ -44,11 +45,11 @@ public:
     auto deinit(rtti::context& ctx) -> bool;
 
     /**
-     * @brief Updates the physics system for each frame.
-     * @param ctx The context for the update.
-     * @param dt The delta time for the frame.
+     * @brief Advances the scene's animations by one frame.
+     * @param scn The scene to update.
+     * @param times The frame's times; animations advance by the scaled time.
      */
-    void on_frame_update(scene& scn, delta_t dt);
+    void on_frame_update(scene& scn, const frame_times& times);
 
     void on_play_begin(hpp::span<const entt::handle> entities, delta_t dt);
 

@@ -4,6 +4,7 @@
 #include <engine/engine_export.h>
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <ospp/event.h>
 #include <hpp/utility.hpp>
 #include <engine/ecs/scene.h>
@@ -99,7 +100,7 @@ struct ui_system
      */
     void on_os_event(rtti::context& ctx, os::event& event);
 
-    void on_frame_begin(rtti::context& ctx, delta_t dt);
+    void on_frame_begin(rtti::context& ctx, const frame_times& times);
 
     /**
      * @brief Load fonts

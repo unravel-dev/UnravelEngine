@@ -7,6 +7,7 @@
 #include <base/basetypes.hpp>
 #include <cmd_line/parser.h>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 
 #include <cstdint>
 #include <functional>
@@ -117,8 +118,8 @@ protected:
     void on_app_enter_background(rtti::context& ctx);
     /// Makes every cached shadow map stale (shadow::invalidate_cached_maps).
     void invalidate_cached_shadow_maps(rtti::context& ctx);
-    void frame_begin(rtti::context& ctx, delta_t dt);
-    void frame_end(rtti::context& ctx, delta_t dt);
+    void frame_begin(rtti::context& ctx, const frame_times& times);
+    void frame_end(rtti::context& ctx, const frame_times& times);
 
     auto get_renderer_type(const cmd_line::parser& parser) const -> bgfx::RendererType::Enum;
     auto get_reset_flags(const cmd_line::parser& parser) const -> uint32_t;

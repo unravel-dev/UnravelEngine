@@ -166,7 +166,7 @@ void animation_entity_preview::connect(rtti::context& ctx)
     connected_ = true;
 }
 
-void animation_entity_preview::on_frame_end(rtti::context& ctx, delta_t dt)
+void animation_entity_preview::on_frame_end(rtti::context& ctx, const frame_times& times)
 {
     ++frame_;
     if(entity_ && frame_ - alive_frame_ > PREVIEW_GRACE_FRAMES)

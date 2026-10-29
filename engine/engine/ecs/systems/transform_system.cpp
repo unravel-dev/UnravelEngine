@@ -25,7 +25,7 @@ auto transform_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void transform_system::on_frame_update(scene& scn, delta_t dt)
+void transform_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Transform/System Update");
 

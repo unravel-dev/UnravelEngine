@@ -111,9 +111,9 @@ void play_mode::end_frame_step()
     is_stepping_ = false;
 }
 
-void play_mode::on_frame_update(rtti::context& ctx, delta_t dt)
+void play_mode::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
-    (void)dt;
+    (void)times;
     if(current_phase_ != phase::splash)
     {
         return;

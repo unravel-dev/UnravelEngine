@@ -12,6 +12,7 @@
 #include "../viewport_device_frame.h"
 #include "../visualization_menu.h"
 
+#include <engine/frame_times.h>
 #include <engine/settings/settings.h>
 #include <hpp/optional.hpp>
 
@@ -28,9 +29,9 @@ public:
     auto get_window_name() const -> const char* override;
     void deinit(rtti::context& ctx);
 
-    void on_frame_update(rtti::context& ctx, delta_t dt);
-    void on_frame_render(rtti::context& ctx, delta_t dt);
-    void on_frame_before_render(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
+    void on_frame_render(rtti::context& ctx, const frame_times& times);
+    void on_frame_before_render(rtti::context& ctx, const frame_times& times);
     auto get_window_flags() const -> ImGuiWindowFlags override;
 
     auto get_camera() -> entt::handle;
@@ -88,7 +89,7 @@ public:
     }
 
 private:
-    void draw_scene(rtti::context& ctx, delta_t dt);
+    void draw_scene(rtti::context& ctx, const frame_times& times);
 
     void draw_ui(rtti::context& ctx) override;
     /// Preview card of the selected camera at the bottom right corner of view_rect.

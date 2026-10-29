@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <graphics/texture.h>
 
 #include "panel_base.h"
@@ -37,9 +38,9 @@ public:
     void init(rtti::context& ctx);
     void deinit(rtti::context& ctx);
 
-    void on_frame_update(rtti::context& ctx, delta_t dt);
-    void on_frame_before_render(rtti::context& ctx, delta_t dt);
-    void on_frame_render(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
+    void on_frame_before_render(rtti::context& ctx, const frame_times& times);
+    void on_frame_render(rtti::context& ctx, const frame_times& times);
     void on_frame_ui_render(rtti::context& ctx);
 
     auto get_deploy_panel() -> deploy_panel&;

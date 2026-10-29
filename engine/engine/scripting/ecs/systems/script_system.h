@@ -8,6 +8,7 @@
 #include <base/basetypes.hpp>
 #include <cmd_line/parser.h>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <filesystem/filesystem.h>
 #include <hpp/span.hpp>
 
@@ -296,11 +297,11 @@ private:
     /**
      * @brief Updates the physics system for each frame.
      * @param ctx The context for the update.
-     * @param dt The delta time for the frame.
+     * @param times The frame's times.
      */
-    void on_frame_update(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
     void on_frame_fixed_update(rtti::context& ctx, delta_t dt);
-    void on_frame_late_update(rtti::context& ctx, delta_t dt);
+    void on_frame_late_update(rtti::context& ctx, const frame_times& times);
 
     /**
      * @brief Called when playback ends.

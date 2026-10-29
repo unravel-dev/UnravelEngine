@@ -10,6 +10,7 @@
 #include <graphics/debugdraw.h>
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <hpp/optional.hpp>
 #include <hpp/span.hpp>
 
@@ -75,18 +76,18 @@ public:
     auto deinit(rtti::context& ctx) -> bool;
 
 
-    void on_frame_end(rtti::context& ctx, delta_t);
+    void on_frame_end(rtti::context& ctx, const frame_times& times);
     void on_play_end(rtti::context& ctx);
     /// Drops the instanced draws scripts made before a frame in which they update again.
-    void reset_script_draws(rtti::context& ctx, delta_t dt);
+    void reset_script_draws(rtti::context& ctx, const frame_times& times);
 
     /**
      * @brief Prepares the scene for rendering.
      * @param scn The scene to prepare.
-     * @param dt The delta time.
+     * @param times The frame's times; each system picks the clock it follows.
      */
-    void on_frame_update(scene& scn, delta_t dt);
-    void on_frame_before_render(scene& scn, delta_t dt);
+    void on_frame_update(scene& scn, const frame_times& times);
+    void on_frame_before_render(scene& scn, const frame_times& times);
 
 
     void on_play_begin(hpp::span<const entt::handle> entities, delta_t dt);
@@ -96,31 +97,31 @@ public:
     /**
      * @brief Renders every active camera of the scene and returns the last one's frame buffer.
      * @param scn The scene to render.
-     * @param dt The delta time.
+     * @param times The frame's times; the pipeline and the UI advance by the scaled time.
      * @param view How the host shows the cameras.
      * @return A shared pointer to the frame buffer containing the rendered scene.
      */
-    auto render_scene(scene& scn, delta_t dt, const view_render_params& view = {}) -> gfx::frame_buffer::ptr;
+    auto render_scene(scene& scn, const frame_times& times, const view_render_params& view = {}) -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the scene to the specified output.
      * @param output The output frame buffer.
      * @param scn The scene to render.
-     * @param dt The delta time.
+     * @param times The frame's times; the pipeline and the UI advance by the scaled time.
      * @return Whether a camera rendered: each active camera writes the whole output.
      */
-    auto render_scene(const gfx::frame_buffer::ptr& output, scene& scn, delta_t dt) -> bool;
+    void render_scene(const gfx::frame_buffer::ptr& output, scene& scn, const frame_times& times);
 
     /**
      * @brief Renders the scene and returns the frame buffer.
      * @param camera_ent Camera entity
      * @param comp Camera component
      * @param scn The scene to render.
-     * @param dt The delta time.
+     * @param times The frame's times; the pipeline and the UI advance by the scaled time.
      * @param view How the host shows the camera.
      * @return A shared pointer to the frame buffer containing the rendered scene.
      */
-    auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt, const view_render_params& view = {})
+    auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, const frame_times& times, const view_render_params& view = {})
         -> gfx::frame_buffer::ptr;
 
     /**
@@ -129,14 +130,14 @@ public:
      * @param camera_ent Camera entity
      * @param comp Camera component
      * @param scn The scene to render.
-     * @param dt The delta time.
+     * @param times The frame's times; the pipeline and the UI advance by the scaled time.
      * @param view How the host shows the camera.
      */
     void render_scene(const gfx::frame_buffer::ptr& output,
                       entt::handle camera_ent,
                       camera_component& comp,
                       scene& scn,
-                      delta_t dt,
+                      const frame_times& times,
                       const view_render_params& view = {});
 
     void add_debugdraw_call(const std::function<void(gfx::dd_raii& dd)>& callback);

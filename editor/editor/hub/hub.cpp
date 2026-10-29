@@ -84,7 +84,7 @@ void hub::on_project_opened(rtti::context& ctx)
     panels_.get_game_panel().on_project_opened();
 }
 
-void hub::on_frame_update(rtti::context& ctx, delta_t dt)
+void hub::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     auto& pm = ctx.get_cached<project_manager>();
 
@@ -92,10 +92,10 @@ void hub::on_frame_update(rtti::context& ctx, delta_t dt)
     {
         return;
     }
-    panels_.on_frame_update(ctx, dt);
+    panels_.on_frame_update(ctx, times);
 }
 
-void hub::on_frame_before_render(rtti::context& ctx, delta_t dt)
+void hub::on_frame_before_render(rtti::context& ctx, const frame_times& times)
 {
     auto& pm = ctx.get_cached<project_manager>();
 
@@ -103,10 +103,10 @@ void hub::on_frame_before_render(rtti::context& ctx, delta_t dt)
     {
         return;
     }
-    panels_.on_frame_before_render(ctx, dt);
+    panels_.on_frame_before_render(ctx, times);
 }
 
-void hub::on_frame_render(rtti::context& ctx, delta_t dt)
+void hub::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Hub Frame Render");
     auto& pm = ctx.get_cached<project_manager>();
@@ -115,10 +115,10 @@ void hub::on_frame_render(rtti::context& ctx, delta_t dt)
     {
         return;
     }
-    panels_.on_frame_render(ctx, dt);
+    panels_.on_frame_render(ctx, times);
 }
 
-void hub::on_frame_ui_render(rtti::context& ctx, delta_t dt)
+void hub::on_frame_ui_render(rtti::context& ctx, const frame_times& times)
 {
     auto& pm = ctx.get_cached<project_manager>();
 

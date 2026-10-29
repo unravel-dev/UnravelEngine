@@ -124,7 +124,7 @@ void physics_system::on_resume(rtti::context& ctx)
     backend_->on_resume(ctx);
 }
 
-void physics_system::on_frame_update(rtti::context& ctx, delta_t dt)
+void physics_system::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Physics/System Update");
 
@@ -135,6 +135,7 @@ void physics_system::on_frame_update(rtti::context& ctx, delta_t dt)
         return;
     }
 
+    delta_t dt = times.scaled;
     // First sim frame (incl. mid-frame enter_running): do not accumulate a hitch into fixed steps.
     if(play.frames_running() == 0)
     {

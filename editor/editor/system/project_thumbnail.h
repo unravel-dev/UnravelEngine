@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <filesystem/filesystem.h>
 
 #include <chrono>
@@ -50,8 +51,8 @@ private:
     };
 
     void on_project_opened(rtti::context& ctx);
-    void on_frame_update(rtti::context& ctx, delta_t dt);
-    void on_frame_end(rtti::context& ctx, delta_t dt);
+    void on_frame_update(rtti::context& ctx, const frame_times& times);
+    void on_frame_end(rtti::context& ctx, const frame_times& times);
     /// Issues the readback of the view; false while there is no image to read.
     auto capture(rtti::context& ctx) -> bool;
 

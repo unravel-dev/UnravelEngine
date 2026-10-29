@@ -669,23 +669,26 @@ auto engine::process() -> int
 
         sim.run_one_frame(true);
 
-        auto dt = sim.get_delta_time();
         auto& play = ctx.get_cached<play_mode>();
+        frame_times times{};
+        times.unscaled = sim.get_unscaled_delta_time();
+        times.real = sim.get_frame_duration();
 
-        // First simulation frame: zero dt so Start/init work cannot integrate
+        // First simulation frame: zero game time so Start/init work cannot integrate
         // a hitch. Increment frames_running at frame end so consumers can also
         // detect this via frames_running() == 0 (e.g. mid-frame enter_running).
         if(play.is_simulation_running() && play.frames_running() == 0)
         {
-            dt = {};
+            times.unscaled = {};
         }
 
         if(play.is_paused())
         {
             // A requested frame step runs this paused frame like a running one, so every system
             // (scripts, late update, physics, animation, seq) advances once in its usual order.
-            dt = play.begin_frame_step() ? delta_t(play_mode::FRAME_STEP_SECONDS) * sim.get_time_scale() : delta_t{};
+            times.unscaled = play.begin_frame_step() ? delta_t(play_mode::FRAME_STEP_SECONDS) : delta_t{};
         }
+        times.scaled = times.unscaled * sim.get_time_scale();
 
         update_input_zone(rend, input);
 
@@ -727,18 +730,18 @@ auto engine::process() -> int
 
         {   
             APP_SCOPE_PERF("Frame Begin");
-            ev.on_frame_begin(ctx, dt);
+            ev.on_frame_begin(ctx, times);
         }
 
         {
             APP_SCOPE_PERF("Seq Update");
-            seq::update(dt);
+            seq::update(times.scaled);
         }
 
 
         {
             APP_SCOPE_PERF("Frame Update");
-            ev.on_frame_update(ctx, dt);
+            ev.on_frame_update(ctx, times);
         }
 
         {
@@ -748,17 +751,17 @@ auto engine::process() -> int
 
         {
             APP_SCOPE_PERF("Frame Before Render");
-            ev.on_frame_before_render(ctx, dt);
+            ev.on_frame_before_render(ctx, times);
         }
 
         {
             APP_SCOPE_PERF("Frame Render");
-            ev.on_frame_render(ctx, dt);
+            ev.on_frame_render(ctx, times);
         }
 
         {
             APP_SCOPE_PERF("Frame End");
-            ev.on_frame_end(ctx, dt);
+            ev.on_frame_end(ctx, times);
         }
 
         // Before the step ends, so a stepped frame counts as simulated.

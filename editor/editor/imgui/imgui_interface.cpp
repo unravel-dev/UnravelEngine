@@ -118,7 +118,7 @@ void imgui_interface::on_os_event(rtti::context& ctx, os::event& e)
     imguiProcessEvent(e);
 }
 
-void imgui_interface::on_frame_ui_render(rtti::context& ctx, delta_t dt)
+void imgui_interface::on_frame_ui_render(rtti::context& ctx, const frame_times& times)
 {
     const auto& ev = ctx.get_cached<ui_events>();
 
@@ -127,9 +127,11 @@ void imgui_interface::on_frame_ui_render(rtti::context& ctx, delta_t dt)
     const auto& main_surface = main_window->get_surface();
 
     APP_SCOPE_PERF("ImGui Frame");
-    imguiBeginFrame(dt.count());
+    // The editor UI and its frame statistics run on real time, not on the game's scaled and
+    // pausable clock.
+    imguiBeginFrame(times.real.count());
 
-    ev.on_frame_ui_render(ctx, dt);
+    ev.on_frame_ui_render(ctx, times);
 
     gfx::render_pass pass("ImGui/Pass");
     pass.bind(main_surface.get());

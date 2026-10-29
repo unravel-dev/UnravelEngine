@@ -1423,7 +1423,7 @@ void scene_panel::handle_prefab_mode_changes(rtti::context& ctx)
     was_prefab_mode_ = is_prefab_mode;
 }
 
-void scene_panel::on_frame_update(rtti::context& ctx, delta_t dt)
+void scene_panel::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     handle_prefab_mode_changes(ctx);
 
@@ -1433,24 +1433,24 @@ void scene_panel::on_frame_update(rtti::context& ctx, delta_t dt)
     }
 
     auto& path = ctx.get_cached<rendering_system>();
-    path.on_frame_update(panel_scene_, dt);
+    path.on_frame_update(panel_scene_, times);
 
     auto& em = ctx.get_cached<editing_manager>();
     if(em.is_prefab_mode())
     {
-        path.on_frame_update(em.prefab_scene, dt);
+        path.on_frame_update(em.prefab_scene, times);
     }
 }
 
-void scene_panel::on_frame_before_render(rtti::context& ctx, delta_t dt)
+void scene_panel::on_frame_before_render(rtti::context& ctx, const frame_times& times)
 {
     auto& path = ctx.get_cached<rendering_system>();
-    path.on_frame_before_render(panel_scene_, dt);
+    path.on_frame_before_render(panel_scene_, times);
 
     auto& em = ctx.get_cached<editing_manager>();
     if(em.is_prefab_mode())
     {
-        path.on_frame_before_render(em.prefab_scene, dt);
+        path.on_frame_before_render(em.prefab_scene, times);
     }
 }
 
@@ -1462,7 +1462,7 @@ auto scene_panel::begin_panel(const char* name, ImGuiWindowFlags flags) -> bool
     return open;
 }
 
-void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
+void scene_panel::draw_scene(rtti::context& ctx, const frame_times& times)
 {
     auto& em = ctx.get_cached<editing_manager>();
     auto& path = ctx.get_cached<rendering_system>();
@@ -1488,7 +1488,7 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
         view.render_resolution = get_render_resolution(ctx);
         // The gizmos, the grid and the selection outline draw over the image with the scene's depth.
         view.needs_output_depth = true;
-        path.render_scene(handle, camera_comp, *target_scene, dt, view);
+        path.render_scene(handle, camera_comp, *target_scene, times, view);
         gizmos_.on_frame_render(ctx, *target_scene, handle, dd_2d_);
     }
 }
@@ -1504,7 +1504,7 @@ auto scene_panel::get_render_resolution(rtti::context& ctx) const -> usize32_t
     return preset ? viewport_resolution::get_render_resolution(*preset) : usize32_t{};
 }
 
-void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
+void scene_panel::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
     if(m_skip_frames_ > 0)
     {
@@ -1522,7 +1522,7 @@ void scene_panel::on_frame_render(rtti::context& ctx, delta_t dt)
         }
         return;
     }
-    draw_scene(ctx, dt);
+    draw_scene(ctx, times);
     end_forced_frame();
 }
 

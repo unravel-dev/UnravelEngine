@@ -3,6 +3,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <hpp/event.hpp>
 #include <ospp/event.h>
 
@@ -50,12 +51,13 @@ struct frame_update_priority
 struct events
 {
     /// engine loop events
-    hpp::event<void(rtti::context&, delta_t)> on_frame_begin;
-    hpp::event<void(rtti::context&, delta_t)> on_frame_update;
+    hpp::event<void(rtti::context&, const frame_times&)> on_frame_begin;
+    hpp::event<void(rtti::context&, const frame_times&)> on_frame_update;
+    /// One fixed physics step, in game time.
     hpp::event<void(rtti::context&, delta_t)> on_frame_fixed_update;
-    hpp::event<void(rtti::context&, delta_t)> on_frame_before_render;
-    hpp::event<void(rtti::context&, delta_t)> on_frame_render;
-    hpp::event<void(rtti::context&, delta_t)> on_frame_end;
+    hpp::event<void(rtti::context&, const frame_times&)> on_frame_before_render;
+    hpp::event<void(rtti::context&, const frame_times&)> on_frame_render;
+    hpp::event<void(rtti::context&, const frame_times&)> on_frame_end;
 
     /// engine play events
     hpp::event<void(rtti::context&)> on_play_before_begin;

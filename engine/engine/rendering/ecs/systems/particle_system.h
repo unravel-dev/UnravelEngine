@@ -6,6 +6,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include <engine/rendering/camera.h>
+#include <engine/frame_times.h>
 
 namespace unravel
 {
@@ -43,9 +44,9 @@ public:
     /**
      * @brief Updates all particle emitters in the scene.
      * @param scn The scene containing particle emitters.
-     * @param dt The delta time for this frame.
+     * @param times The frame's times; emitters advance by the scaled time.
      */
-    void on_frame_before_render(scene& scn, delta_t dt);
+    void on_frame_before_render(scene& scn, const frame_times& times);
 
 
 private:

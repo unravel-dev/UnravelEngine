@@ -61,25 +61,25 @@ auto runner::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-void runner::on_frame_update(rtti::context& ctx, delta_t dt)
+void runner::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
     path.apply_game_view_size(scene, get_window_view_size(ctx));
-    path.on_frame_update(scene, dt);
+    path.on_frame_update(scene, times);
 }
 
-void runner::on_frame_before_render(rtti::context& ctx, delta_t dt)
+void runner::on_frame_before_render(rtti::context& ctx, const frame_times& times)
 {
     auto& path = ctx.get_cached<rendering_system>();
     auto& ec = ctx.get_cached<ecs>();
     auto& scene = ec.get_scene();
 
-    path.on_frame_before_render(scene, dt);
+    path.on_frame_before_render(scene, times);
 }
 
-void runner::on_frame_render(rtti::context& ctx, delta_t dt)
+void runner::on_frame_render(rtti::context& ctx, const frame_times& times)
 {
     auto& rend = ctx.get_cached<renderer>();
     auto window = rend.get_main_window();
@@ -88,7 +88,7 @@ void runner::on_frame_render(rtti::context& ctx, delta_t dt)
     auto& scene = ec.get_scene();
 
     // A camera's last pass clears the window and writes all of it; only a frame without one clears it here.
-    if(!path.render_scene(window->get_surface(), scene, dt))
+    if(!path.render_scene(window->get_surface(), scene, times))
     {
         window->begin_present_pass().clear();
     }

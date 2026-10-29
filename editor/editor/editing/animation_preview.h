@@ -2,6 +2,7 @@
 
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
+#include <engine/frame_times.h>
 #include <engine/animation/animation.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/ecs/scene.h>
@@ -72,7 +73,7 @@ public:
 
 private:
     void connect(rtti::context& ctx);
-    void on_frame_end(rtti::context& ctx, delta_t dt);
+    void on_frame_end(rtti::context& ctx, const frame_times& times);
     void on_close_project(rtti::context& ctx);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);

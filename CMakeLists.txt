@@ -171,6 +171,11 @@ endif()
 
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
 include(InstallRequiredSystemLibraries)
+# The module finds the VC++ runtime for cl.exe only, not for clang targeting the MSVC ABI.
+if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS AND WIN32 AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    include(msvc_runtime_libraries)
+    unravel_find_msvc_runtime_libraries(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+endif()
 
 if(MINGW)
     get_filename_component( Mingw_Path ${CMAKE_CXX_COMPILER} PATH )
@@ -204,6 +209,12 @@ endif()
 
 add_subdirectory(deps)
 #add_subdirectory(version)
+# The Windows API level of the engine's own targets (engine, editor, game, tests): Windows 10, which the
+# code is written against. Left undefined, base/platform/config.hpp and bx/platform.h default to Windows 7
+# when either comes before <windows.h>, so the API a source file saw depended on its include order.
+if(WIN32)
+    add_compile_definitions(WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+endif()
 add_subdirectory(engine)
 if(UNRAVEL_BUILD_ASSET_TOOLS)
     add_subdirectory(editor)
@@ -248,11 +259,14 @@ endif()
 
 
 if(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+    # Beside the binaries, where the desktop deploy's dependency scan finds them and ships them with
+    # the player. copy_if_different leaves alone the copies a running editor has loaded.
     add_custom_target(copy_system_runtime_libs ALL
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
         COMMENT "Copying system runtime libs..."
         VERBATIM
     )
+    add_dependencies(game copy_system_runtime_libs)
 endif()
 
 
