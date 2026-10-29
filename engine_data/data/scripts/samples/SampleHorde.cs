@@ -7,9 +7,12 @@ using Unravel.Core;
 /// A horde of enemies written entirely in script, as a starting point for games with crowds. Members are rows
 /// of arrays, not entities: each frame they walk toward <see cref="target"/>, brake at its edge, push each other
 /// apart through a <see cref="SpatialHashGrid"/> and turn toward where they walk, stepped on worker threads with
-/// Parallel.For; then they draw with one <see cref="Graphics.DrawMeshInstanced"/> call. Other scripts spawn,
-/// find, damage and remove members through its methods; none of them allocates. Main thread only, except the
-/// step it runs on worker threads itself.
+/// Parallel.For; then they draw with one Graphics.DrawMeshInstanced call. With <see cref="walkClip"/> set the mesh
+/// is baked once (<see cref="BakedAnimation"/>) and every member plays its own walk, or its attack while it touches
+/// the target. A hurt member flashes <see cref="hurtFlashColor"/>: a material instance of <see cref="material"/>
+/// draws the flashing members in a call of their own. Other scripts
+/// spawn, find, damage and remove members through its methods; none of them allocates.
+/// Main thread only, except the step it runs on worker threads itself.
 /// </summary>
 public class SampleHorde : ScriptComponent
 {
@@ -112,12 +115,35 @@ public class SampleHorde : ScriptComponent
     [Tooltip("Steps the members on worker threads.")]
     public bool stepInParallel = true;
 
+    [Tooltip("The clip the members walk with. Set, the mesh (it needs bones) is baked and every member animates.")]
+    public AnimationClip walkClip;
+
+    [Tooltip("The clip the members play while they touch the target; empty keeps them walking.")]
+    public AnimationClip attackClip;
+
+    [Tooltip("Samples per second of the baked clips: more plays smoother and takes more memory.")]
+    public float bakeFramesPerSecond = 30.0f;
+
+    [Tooltip("Retargets the clips rest aligned: clips from another export or of other proportions.")]
+    public bool retargetClips = false;
+
+    [Tooltip("Turn (degrees) added to the members' heading, for meshes that do not face +Z.")]
+    public float meshYawOffset = 0.0f;
+
+    [Tooltip("Emissive color hurt members flash with, on a material instance of the material; needs a material.")]
+    public Color hurtFlashColor = new Color(1.0f, 1.0f, 1.0f, 1.0f);
+
+    [Tooltip("Seconds a hurt member's flash lasts.")]
+    public float hurtFlashSeconds = 0.15f;
+
     private const int STEP_ROWS_PER_TASK = 256;
     private const float OVERLAP_CORRECTION = 0.25f;
     private const float MIN_TURNING_SPEED = 0.05f;
     private const float MIN_SEPARATION_DISTANCE = 1e-4f;
     private const float MIN_RADIUS = 0.01f;
     private const float DEGREES_TO_RADIANS = MathF.PI / 180.0f;
+    /// <summary>Fastest the walk clip plays, as a share of its own speed, when a member is pushed faster than it walks.</summary>
+    private const float MAX_WALK_RATE = 1.5f;
 
     private Vector3[] positions;
     private Vector3[] nextPositions;
@@ -136,6 +162,17 @@ public class SampleHorde : ScriptComponent
     private Matrix4x4[] rowTransforms;
     private Matrix4x4[] drawTransforms;
     private Matrix4x4[] drawPrevious;
+    private int[] animationClips;
+    private float[] animationTimes;
+    private BakedAnimationState[] rowStates;
+    private BakedAnimationState[] drawStates;
+    private BakedAnimationState[] drawPreviousStates;
+    private float[] flashTimes;
+    private MaterialInstance hurtFlash;
+    private BakedAnimation baked;
+    private bool isBakeFailed;
+    private int walkClipIndex = -1;
+    private int attackClipIndex = -1;
     private readonly SpatialHashGrid grid = new SpatialHashGrid(1.0f);
     private bool isGridDirty = true;
     private readonly List<Event> pendingDeaths = new List<Event>();
@@ -153,12 +190,21 @@ public class SampleHorde : ScriptComponent
 
     public override void OnUpdate()
     {
+        EnsureAnimation();
         Step(Time.deltaTime);
     }
 
     public override void OnLateUpdate()
     {
         Draw();
+    }
+
+    public override void OnDestroy()
+    {
+        baked?.Dispose();
+        baked = null;
+        hurtFlash?.Dispose();
+        hurtFlash = null;
     }
 
     /// <summary>Adds a member.</summary>
@@ -189,6 +235,10 @@ public class SampleHorde : ScriptComponent
         userValues[row] = userValue;
         alive[row] = true;
         jumped[row] = true;
+        flashTimes[row] = 0.0f;
+        // A random phase, so members spawned together do not walk in step.
+        animationClips[row] = walkClipIndex;
+        animationTimes[row] = baked != null ? Random.Range(0.0f, baked.GetLength(walkClipIndex)) : 0.0f;
         memberCount++;
         isGridDirty = true;
         return MakeId(row);
@@ -260,6 +310,7 @@ public class SampleHorde : ScriptComponent
         healths[row] -= amount;
         if (healths[row] > 0.0f)
         {
+            Flash(row);
             return DamageResult.Hurt;
         }
         RecordDeath(row);
@@ -281,11 +332,13 @@ public class SampleHorde : ScriptComponent
                 hits[i] = MakeHit(row, center);
             }
             healths[row] -= amount;
-            if (healths[row] <= 0.0f)
+            if (healths[row] > 0.0f)
             {
-                RecordDeath(row);
-                Release(row);
+                Flash(row);
+                continue;
             }
+            RecordDeath(row);
+            Release(row);
         }
         return found;
     }
@@ -381,11 +434,13 @@ public class SampleHorde : ScriptComponent
             }
             Vector3 position = positions[row];
             Vector3 desired = Vector3.zero;
+            bool isAtTarget = false;
             if (hasTarget)
             {
                 var toTarget = new Vector3(targetPosition.x - position.x, 0.0f, targetPosition.z - position.z);
                 float distance = toTarget.magnitude;
                 float gap = distance - stopDistance;
+                isAtTarget = gap <= 0.0f;
                 if (gap > 0.0f)
                 {
                     // Brakes in time to stop at the target's edge instead of running into it.
@@ -406,12 +461,61 @@ public class SampleHorde : ScriptComponent
             next.y = position.y;
             nextPositions[row] = next;
             Vector3 velocity = velocities[row];
-            if (velocity.magnitude > MIN_TURNING_SPEED)
+            float walkSpeed = velocity.magnitude;
+            if (walkSpeed > MIN_TURNING_SPEED)
             {
                 // The shortest turn toward the direction of travel, in [-pi, pi].
                 float turn = MathF.IEEERemainder(MathF.Atan2(velocity.x, velocity.z) - yaws[row], 2.0f * MathF.PI);
                 yaws[row] += Math.Clamp(turn, -maxTurn, maxTurn);
             }
+            if (baked != null)
+            {
+                AdvanceAnimation(row, isAtTarget, walkSpeed, dt);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Plays the attack clip while the member touches the target, else the walk clip at the pace it walks.
+    /// Runs on worker threads: it writes only the member's own row.
+    /// </summary>
+    private void AdvanceAnimation(int row, bool isAtTarget, float walkSpeed, float dt)
+    {
+        int clip = isAtTarget && attackClipIndex >= 0 ? attackClipIndex : walkClipIndex;
+        if (clip != animationClips[row])
+        {
+            animationClips[row] = clip;
+            animationTimes[row] = 0.0f;
+        }
+        float rate = clip == walkClipIndex ? MathF.Min(walkSpeed / MathF.Max(maxSpeed, MIN_TURNING_SPEED), MAX_WALK_RATE) : 1.0f;
+        float length = baked.GetLength(clip);
+        animationTimes[row] = length > 0.0f ? (animationTimes[row] + dt * rate) % length : 0.0f;
+    }
+
+    /// <summary>Bakes the clips the first time a frame needs them; a mesh without bones keeps drawing without them.</summary>
+    private void EnsureAnimation()
+    {
+        if (baked != null || isBakeFailed || walkClip == null || mesh == null)
+        {
+            return;
+        }
+        try
+        {
+            AnimationClip[] clips = attackClip != null ? new[] { walkClip, attackClip } : new[] { walkClip };
+            var retarget = retargetClips ? BakedAnimationRetarget.RestAligned : BakedAnimationRetarget.Copy;
+            baked = BakedAnimation.Bake(mesh, clips, bakeFramesPerSecond, retarget);
+            walkClipIndex = 0;
+            attackClipIndex = attackClip != null ? 1 : -1;
+            for (int row = 0; row < rowCount; row++)
+            {
+                animationClips[row] = walkClipIndex;
+                animationTimes[row] = Random.Range(0.0f, baked.GetLength(walkClipIndex));
+            }
+        }
+        catch (ArgumentException e)
+        {
+            isBakeFailed = true;
+            Log.Warning($"SampleHorde draws its members without animation: {e.Message}");
         }
     }
 
@@ -425,27 +529,97 @@ public class SampleHorde : ScriptComponent
         }
     }
 
+    private void Flash(int row)
+    {
+        flashTimes[row] = hurtFlashSeconds;
+    }
+
     private void Draw()
     {
         if (mesh == null || memberCount == 0)
         {
             return;
         }
-        int drawn = 0;
+        bool canFlash = EnsureHurtFlash();
+        // Members that do not flash fill the draw arrays from the front, flashing ones from the back: the flashing
+        // ones draw with the flash material instance, the others with the material.
+        int plainCount = 0;
+        int flashingCount = 0;
+        int end = drawTransforms.Length;
+        float yawOffset = meshYawOffset * DEGREES_TO_RADIANS;
+        float dt = Time.deltaTime;
         for (int row = 0; row < rowCount; row++)
         {
             if (!alive[row])
             {
                 continue;
             }
-            Matrix4x4 world = MakeTransform(positions[row], yaws[row], scale);
-            drawPrevious[drawn] = jumped[row] ? world : rowTransforms[row];
-            drawTransforms[drawn] = world;
+            bool isFlashing = canFlash && flashTimes[row] > 0.0f;
+            int slot = isFlashing ? end - 1 - flashingCount++ : plainCount++;
+            flashTimes[row] = MathF.Max(flashTimes[row] - dt, 0.0f);
+            Matrix4x4 world = MakeTransform(positions[row], yaws[row] + yawOffset, scale);
+            var state = new BakedAnimationState(animationClips[row], animationTimes[row]);
+            drawPrevious[slot] = jumped[row] ? world : rowTransforms[row];
+            drawTransforms[slot] = world;
+            drawPreviousStates[slot] = jumped[row] ? state : rowStates[row];
+            drawStates[slot] = state;
             rowTransforms[row] = world;
+            rowStates[row] = state;
             jumped[row] = false;
-            drawn++;
         }
-        Graphics.DrawMeshInstanced(mesh, material, drawTransforms.AsSpan(0, drawn), drawPrevious.AsSpan(0, drawn), castShadows);
+        DrawMembers(0, plainCount, null);
+        DrawMembers(end - flashingCount, flashingCount, hurtFlash);
+    }
+
+    /// <summary>
+    /// Creates the flash material instance once there is a material, recreates it when the material changes, and
+    /// keeps its color current.
+    /// </summary>
+    /// <returns>False without a material: members do not flash.</returns>
+    private bool EnsureHurtFlash()
+    {
+        if (material == null)
+        {
+            return false;
+        }
+        if (hurtFlash != null && hurtFlash.sharedMaterial != material)
+        {
+            hurtFlash.Dispose();
+            hurtFlash = null;
+        }
+        if (hurtFlash == null)
+        {
+            hurtFlash = new MaterialInstance(material);
+        }
+        hurtFlash.emissiveColor = hurtFlashColor;
+        return true;
+    }
+
+    /// <summary>Draws the members in draw slots [first, first + count) with <paramref name="materialInstance"/>.</summary>
+    private void DrawMembers(int first, int count, MaterialInstance materialInstance)
+    {
+        if (count == 0)
+        {
+            return;
+        }
+        if (baked != null && baked.isValid)
+        {
+            Graphics.DrawMeshInstanced(baked,
+                                       material,
+                                       drawTransforms.AsSpan(first, count),
+                                       drawStates.AsSpan(first, count),
+                                       drawPrevious.AsSpan(first, count),
+                                       drawPreviousStates.AsSpan(first, count),
+                                       castShadows,
+                                       materialInstance: materialInstance);
+            return;
+        }
+        Graphics.DrawMeshInstanced(mesh,
+                                   material,
+                                   drawTransforms.AsSpan(first, count),
+                                   drawPrevious.AsSpan(first, count),
+                                   castShadows,
+                                   materialInstance: materialInstance);
     }
 
     private static Matrix4x4 MakeTransform(Vector3 position, float yaw, float scale)
@@ -479,6 +653,12 @@ public class SampleHorde : ScriptComponent
         rowTransforms = new Matrix4x4[size];
         drawTransforms = new Matrix4x4[size];
         drawPrevious = new Matrix4x4[size];
+        animationClips = new int[size];
+        animationTimes = new float[size];
+        rowStates = new BakedAnimationState[size];
+        drawStates = new BakedAnimationState[size];
+        drawPreviousStates = new BakedAnimationState[size];
+        flashTimes = new float[size];
         freeCount = 0;
         rowCount = 0;
         memberCount = 0;

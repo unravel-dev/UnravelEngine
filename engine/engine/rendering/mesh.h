@@ -624,7 +624,12 @@ public:
      */
     auto bind_armature(std::unique_ptr<armature_node>& root) -> bool;
 
-    auto load_mesh(load_data&& data) -> bool;
+    /**
+     * @brief Builds the mesh from compiled load data.
+     *
+     * @param hardware_copy False keeps the vertices in system memory only, without GPU buffers (headless tools).
+     */
+    auto load_mesh(load_data&& data, bool hardware_copy = true) -> bool;
 
     /**
      * @brief Creates a plane geometry.

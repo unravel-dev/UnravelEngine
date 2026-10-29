@@ -486,6 +486,9 @@ private:
     /// skinned_instance_material_vertex_data); the bones come from the skinning palette buffer.
     geom_program geom_program_skinned_instanced_;
     geom_program geom_program_skinned_instanced_material_;
+    /// The baked animation program (vs_deferred_geom_skinned_baked_instanced.sc, baked_instance_vertex_data); the bones
+    /// come from the baked animation store.
+    geom_program geom_program_skinned_baked_instanced_;
     card_capture_program card_capture_program_;
     /// This frame's prepared batches split by layout (submit_batched_geometry, submit_batched_skinned_geometry);
     /// kept for their capacity.
@@ -508,6 +511,7 @@ private:
     velocity_geom_program velocity_program_skinned_;
     velocity_geom_program velocity_program_instanced_;
     velocity_geom_program velocity_program_skinned_instanced_;
+    velocity_geom_program velocity_program_skinned_baked_instanced_;
 
     struct velocity_camera_program : uniforms_cache
     {
@@ -840,6 +844,14 @@ private:
     /// Velocity for the skinned batches the G-buffer drew: every skinned instance is a mover, drawn with its current
     /// and previous palette, depth-tested EQUAL.
     void submit_batched_skinned_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
+    /// The device reads vertex storage buffers and the baked G-buffer and velocity programs are usable; otherwise
+    /// baked animation draws are not drawn.
+    auto is_baked_animation_active() const -> bool;
+    /// Draws the runs the camera's instanced sources packed (source_runs_) into the G-buffer: static parts with the
+    /// instanced program, baked parts with the baked program and the baked animation store.
+    void submit_source_runs(gfx::render_pass& pass, const camera& camera);
+    /// Velocity for the runs of the camera's instanced sources that have last frame's matrices, depth-tested EQUAL.
+    void submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp);
 
     color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
     /// PCF programs with the 3x3 and the 7x7 tent (common_shadow.sh PCF_TENT_SIZE); the PCF programs of
@@ -854,6 +866,8 @@ private:
     /// The skinned submeshes of this run's G-buffer, instanced by (mesh, material, LOD, submesh); cleared with
     /// batch_collector_, reused by the velocity pass.
     batch_collector skinned_batch_collector_;
+    /// The runs of packed instances the G-buffer draws, then the velocity pass; cleared with batch_collector_.
+    instanced_run_list source_runs_;
 
     /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
     /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity

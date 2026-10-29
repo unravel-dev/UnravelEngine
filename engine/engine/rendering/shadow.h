@@ -6,6 +6,7 @@
 #include <engine/rendering/camera.h>
 #include <engine/rendering/light.h>
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/instanced_mesh_source.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <engine/rendering/shadow_atlas.h>
@@ -568,6 +569,8 @@ struct Programs
                 m_packDepthSkinnedCutout[ii][jj].reset();
                 m_packDepthSkinnedInstanced[ii][jj].reset();
                 m_packDepthSkinnedInstancedCutout[ii][jj].reset();
+                m_packDepthSkinnedBakedInstanced[ii][jj].reset();
+                m_packDepthSkinnedBakedInstancedCutout[ii][jj].reset();
             }
         }
 
@@ -610,6 +613,10 @@ struct Programs
     /// the settings table's skinned program through resolve_skinned_instanced_pack_program.
     gpu_program::ptr m_packDepthSkinnedInstanced[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinnedInstancedCutout[DepthImpl::Count][PackDepth::Count];
+    /// Baked animation casters, the bones from the baked animation store (vs_*_skinned_baked_instanced*.sc). Reached
+    /// from the settings table's skinned program like the instanced skinned ones.
+    gpu_program::ptr m_packDepthSkinnedBakedInstanced[DepthImpl::Count][PackDepth::Count];
+    gpu_program::ptr m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Count][PackDepth::Count];
 };
 
 struct ShadowMapSettings
@@ -882,6 +889,8 @@ private:
         bool anything_collected = false;
         bool has_static_batches = false;
         bool has_skinned_batches = false;
+        /// Instanced sources added runs of packed instances (cascade_runs_).
+        bool has_runs = false;
         /// Nothing any view shows changed since every view was last rendered (casters_key_): nothing is collected,
         /// every view keeps its content.
         bool reuse_all = false;
@@ -1037,6 +1046,9 @@ private:
                                   bool writes_color,
                                   ::unravel::rendering::pipeline_stats* stats);
 
+    /// The baked animation programs of this light's settings are usable on the device.
+    auto is_baked_animation_enabled(const ShadowMapSettings* currentSmSettings) const -> bool;
+
     /// @param skinned The collector holds skinned instances (cascade_skinned_batch_collectors_): drawn with the instanced
     ///        skinned programs, the bones from the skinning palette buffer.
     void submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
@@ -1045,6 +1057,21 @@ private:
                                                const RenderState& renderState,
                                                bool skinned,
                                                ::unravel::rendering::pipeline_stats* stats = nullptr);
+
+    /// Draws a view's runs of packed instances (cascade_runs_) and empties the list: static parts with the instanced
+    /// program, baked parts with the baked program when the device draws baked animation.
+    void submit_shadow_runs(instanced_run_list& runs,
+                            bgfx::ViewId viewId,
+                            ShadowMapSettings* currentSmSettings,
+                            const RenderState& renderState,
+                            ::unravel::rendering::pipeline_stats* stats);
+
+    /// Submits one instanced shadow draw of @p key whose submesh and instances are bound: per-draw uniforms, cutout,
+    /// cull and state.
+    void submit_shadow_instances(gpu_program& prog,
+                                 const shadow_batch_key& key,
+                                 bgfx::ViewId viewId,
+                                 const RenderState& renderState);
 
     /// Fills the geometric bias conversions (depth scale, map axes, perspective texel size)
     /// from the final light view / projection matrices of this update.
@@ -1132,6 +1159,8 @@ private:
     std::vector<shadow_batch_collector> cascade_batch_collectors_;
     /// The skinned casters' submeshes, one collector per cascade/view (skinned mesh batching).
     std::vector<shadow_batch_collector> cascade_skinned_batch_collectors_;
+    /// The runs of packed instances the instanced sources add, one list per cascade/view.
+    std::vector<instanced_run_list> cascade_runs_;
     
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 

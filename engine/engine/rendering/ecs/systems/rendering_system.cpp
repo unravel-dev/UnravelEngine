@@ -14,6 +14,7 @@
 #include <engine/ecs/systems/transform_system.h>
 #include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
@@ -64,7 +65,12 @@ auto rendering_system::init(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     auto& ev = ctx.get_cached<events>();
 
+    ev.on_frame_update.connect(sentinel_,
+                               frame_update_priority::script_draws_reset,
+                               this,
+                               &rendering_system::reset_script_draws);
     ev.on_frame_end.connect(sentinel_, 1000, this, &rendering_system::on_frame_end);
+    ev.on_play_end.connect(sentinel_, -10, this, &rendering_system::on_play_end);
 
     debug_draw_callbacks_.reserve(128);
     return true;
@@ -73,20 +79,71 @@ auto rendering_system::init(rtti::context& ctx) -> bool
 auto rendering_system::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
-
+    baked_animations_.clear();
+    baked_animations_.destroy();
+    material_instances_.clear();
     return true;
+}
+
+void rendering_system::on_play_end(rtti::context& ctx)
+{
+    // Scripts make draws, bakes and material instances in play mode; their scripts are gone now.
+    instanced_draws_.clear();
+    baked_animations_.clear();
+    material_instances_.clear();
+}
+
+void rendering_system::reset_script_draws(rtti::context& ctx, delta_t dt)
+{
+    // Scripts draw their instances again in every frame they update. While the game is paused they draw nothing
+    // new, so the last draws stay on screen.
+    const auto& play = ctx.get_cached<play_mode>();
+    if(!play.is_simulation_running() || !play.is_simulation_paused())
+    {
+        instanced_draws_.clear();
+    }
+    baked_animations_.reclaim_released();
 }
 
 void rendering_system::on_frame_end(rtti::context& ctx, delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/On Frame End");
     debug_draw_callbacks_.clear();
-    instanced_draws_.clear();
+    instanced_draws_.end_frame();
 }
 
 auto rendering_system::get_instanced_draws() -> instanced_draw_list&
 {
     return instanced_draws_;
+}
+
+auto rendering_system::get_baked_animations() -> baked_animation_store&
+{
+    return baked_animations_;
+}
+
+auto rendering_system::create_material_instance(const asset_handle<material>& shared) -> uint32_t
+{
+    if(!shared.is_valid())
+    {
+        return 0;
+    }
+    auto instance = std::make_shared<material_instance>();
+    instance->set_shared_material(shared);
+    const uint32_t id = next_material_instance_id_++;
+    material_instances_.emplace(id, std::move(instance));
+    return id;
+}
+
+auto rendering_system::find_material_instance(uint32_t id) const -> std::shared_ptr<material_instance>
+{
+    const auto found = material_instances_.find(id);
+    return found != material_instances_.end() ? found->second : nullptr;
+}
+
+void rendering_system::release_material_instance(uint32_t id)
+{
+    material_instances_.erase(id);
 }
 
 void rendering_system::on_frame_update(scene& scn, delta_t dt)

@@ -97,7 +97,10 @@ struct instance_vertex_data
      * @param instance The batch instance to convert
      */
     explicit instance_vertex_data(const batch_instance& instance);
-    
+
+    /// The data of an instance at @p world with LOD parameter @p lod_param.
+    instance_vertex_data(const math::mat4& world, float lod_param);
+
     /**
      * @brief Set the LOD parameter (stored in matrix[3][3])
      * @param lod_param LOD parameter value
@@ -153,6 +156,14 @@ struct velocity_instance_vertex_data
         // Same packing as instance_vertex_data so the raster position bit-matches the
         // G-buffer batched draw.
         world_matrix[3][3] = instance.lod_params.x;
+    }
+
+    /// The data of an instance at @p world that was at @p previous last frame, with LOD parameter @p lod_param.
+    velocity_instance_vertex_data(const math::mat4& world, const math::mat4& previous, float lod_param)
+        : world_matrix(world)
+        , prev_world_matrix(previous)
+    {
+        world_matrix[3][3] = lod_param;
     }
 };
 
@@ -216,6 +227,53 @@ struct skinned_instance_material_vertex_data
 
     skinned_instance_material_vertex_data() = default;
     skinned_instance_material_vertex_data(const batch_instance& instance, const material& batch_material);
+};
+
+/**
+ * @brief GPU instance data of a baked animation draw (baked_animation_store): the world matrix as its top three rows
+ * (i_data0..2, row i = (m[0][i], m[1][i], m[2][i], m[3][i])) and the instance's frame rows (i_data3). Every submesh
+ * of the draw reads it: the shaders add the submesh's palette to the frame row (baked_animation_store::bind) and put
+ * the model-space palette under the world matrix. 64-byte stride; the G-buffer and shadow passes read this layout.
+ */
+struct baked_instance_vertex_data
+{
+    static auto packed_size() -> size_t
+    {
+        return 64;
+    }
+
+    math::vec4 world[3];
+    /// x = first row of the instance's frame, y = of its previous frame, z = LOD parameter, w unused.
+    math::vec4 palette;
+
+    baked_instance_vertex_data() = default;
+    /// The data of an instance at @p world whose frame starts at @p row (@p previous_row last frame).
+    baked_instance_vertex_data(const math::mat4& world, uint32_t row, uint32_t previous_row);
+};
+
+/**
+ * @brief baked_instance_vertex_data followed by the previous-frame world matrix rows (i_data4..6), for the velocity
+ * pass. 112-byte stride.
+ */
+struct baked_velocity_instance_vertex_data
+{
+    static auto packed_size() -> size_t
+    {
+        return 112;
+    }
+
+    /// Identical to baked_instance_vertex_data, so the raster position matches the G-buffer's.
+    math::vec4 world[3];
+    /// As baked_instance_vertex_data::palette.
+    math::vec4 palette;
+    math::vec4 prev_world[3];
+
+    baked_velocity_instance_vertex_data() = default;
+    /// baked_instance_vertex_data() with the instance's matrix of last frame, @p previous.
+    baked_velocity_instance_vertex_data(const math::mat4& world,
+                                        const math::mat4& previous,
+                                        uint32_t row,
+                                        uint32_t previous_row);
 };
 
 /**

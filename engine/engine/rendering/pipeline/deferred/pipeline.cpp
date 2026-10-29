@@ -2,6 +2,7 @@
 #include "glm/ext/scalar_integer.hpp"
 #include <engine/assets/asset_manager.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/ecs/ecs.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/assao_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -1018,8 +1019,19 @@ void deferred::gather_instance_sources(scene& scn, const camera& camera, bool is
             }
         });
     // Scripted instance draws are culled tile by tile: each cluster is a source of its own for the camera and the
-    // shadow cascades. They belong to no entity.
-    for(const auto& cluster : engine::context().get_cached<rendering_system>().get_instanced_draws().get_clusters())
+    // shadow cascades. They belong to no entity, but to the scene scripts run in: other scenes (thumbnails, prefab
+    // editing) do not draw them. Their instances are packed once for every pass of the frame.
+    if(&scn != &engine::context().get_cached<ecs>().get_scene())
+    {
+        return;
+    }
+    auto& instanced_draws = engine::context().get_cached<rendering_system>().get_instanced_draws();
+    const auto& clusters = instanced_draws.get_clusters();
+    if(!clusters.empty())
+    {
+        instanced_draws.prepare(instanced_layout::base, is_baked_animation_active());
+    }
+    for(const auto& cluster : clusters)
     {
         if((cluster.get_layer_mask() & render_mask.mask) == 0)
         {
@@ -1324,6 +1336,7 @@ void deferred::finish_run_batches()
 {
     batch_collector_.clear();
     skinned_batch_collector_.clear();
+    source_runs_.clear();
     // The palettes this run acquired are packed now, while their models certainly hold them: the editor may change or
     // delete entities between this run and the frame's upload.
     engine::context().get_cached<renderer>().get_skinning_palettes().pack_pending();
@@ -1503,6 +1516,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     // Clear batch collector for this frame
     batch_collector_.clear();
     skinned_batch_collector_.clear();
+    source_runs_.clear();
     skinned_batching_run_ = is_skinned_batching_active();
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
 
@@ -1714,6 +1728,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     for(const auto* source : instance_sources_)
     {
         source->collect_mesh_instances(batch_collector_, velocity_run_active_);
+        source->collect_mesh_runs(source_runs_, instanced_layout::base);
         has_source_instances_ = true;
     }
 
@@ -1726,6 +1741,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     {
         submit_batched_skinned_geometry(pass, camera);
     }
+    submit_source_runs(pass, camera);
     bgfx::discard();
 }
 
@@ -1934,6 +1950,91 @@ void deferred::submit_batched_skinned_geometry(gfx::render_pass& pass, const cam
     // NOT cleared here: the velocity pass draws these batches again (submit_batched_skinned_velocity).
 }
 
+auto deferred::is_baked_animation_active() const -> bool
+{
+    const auto is_usable = [](const auto& program) { return program.program && program.program->is_valid(); };
+    return get_render_feature_support().is_available(render_feature::skinned_mesh_batching) &&
+           is_usable(geom_program_skinned_baked_instanced_) && is_usable(velocity_program_skinned_baked_instanced_);
+}
+
+namespace
+{
+/// Binds @p run's submesh and instances. Returns how many instances it draws: none past the end of the frame's
+/// instance memory.
+auto bind_instanced_run(const instanced_run& run) -> uint32_t
+{
+    if(run.first >= run.buffer->num)
+    {
+        return 0;
+    }
+    const auto& part = *run.part;
+    const auto submesh = part.mesh_ptr->get_submesh(part.submesh, 0);
+    if(!submesh)
+    {
+        return 0;
+    }
+    part.mesh_ptr->bind_render_buffers_for_submesh(submesh, 0);
+    bgfx::setInstanceDataBuffer(run.buffer, run.first, run.count);
+    return std::min(run.count, run.buffer->num - run.first);
+}
+} // namespace
+
+void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
+{
+    if(source_runs_.empty())
+    {
+        return;
+    }
+    APP_SCOPE_PERF("Rendering/Submit Instanced Runs");
+    source_runs_.merge();
+    auto& baked_animations = engine::context().get_cached<rendering_system>().get_baked_animations();
+    const auto camera_pos = camera.get_position();
+    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
+    // No LOD transition: packed instances draw their LOD fully.
+    const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f};
+    const auto draw_runs = [&](geom_program& program, bool is_baked)
+    {
+        program.program->begin();
+        gfx::set_uniform(program.u_camera_wpos, camera_pos);
+        gfx::set_uniform(program.u_camera_clip_planes, clip_planes);
+        for(const auto& run : source_runs_.get_runs())
+        {
+            if(run.part->is_baked != is_baked)
+            {
+                continue;
+            }
+            const uint32_t instance_count = bind_instanced_run(run);
+            if(instance_count == 0)
+            {
+                continue;
+            }
+            const auto& mat = *run.part->material_ptr;
+            const bool material_submitted = mat.submit(program.program.get());
+            if(!material_submitted && mat.is<pbr_material>())
+            {
+                submit_pbr_material(program, static_cast<const pbr_material&>(mat));
+            }
+            if(is_baked)
+            {
+                stats_.drawn_skinned_submeshes += instance_count;
+                baked_animations.bind(run.part->palette_offset, run.part->is_rigid);
+            }
+            else
+            {
+                stats_.drawn_static_submeshes += instance_count;
+                gfx::set_uniform(program.u_lod_params, lod_params);
+            }
+            bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+        }
+        program.program->end();
+    };
+    draw_runs(geom_program_instanced_, false);
+    if(is_baked_animation_active())
+    {
+        draw_runs(geom_program_skinned_baked_instanced_, true);
+    }
+}
+
 auto deferred::is_velocity_wanted(const run_params& params) const -> bool
 {
     const bool has_temporal_effect = params.fill_taa_params || params.fill_gtao_params || params.fill_ssr_params ||
@@ -2111,6 +2212,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             submit_batched_velocity(pass, prev_vp);
         }
         submit_batched_skinned_velocity(pass, prev_vp);
+        submit_source_velocity_runs(pass, prev_vp);
         bgfx::discard();
     }
 }
@@ -2184,6 +2286,57 @@ void deferred::submit_batched_skinned_velocity(gfx::render_pass& pass, const mat
             bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
         });
     program.program->end();
+}
+
+void deferred::submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp)
+{
+    source_runs_.clear();
+    for(const auto* source : instance_sources_)
+    {
+        source->collect_mesh_runs(source_runs_, instanced_layout::velocity);
+    }
+    if(source_runs_.empty())
+    {
+        return;
+    }
+    APP_SCOPE_PERF("Rendering/Velocity Instanced Runs");
+    const bool is_baked_run = is_baked_animation_active();
+    engine::context().get_cached<rendering_system>().get_instanced_draws().prepare(instanced_layout::velocity,
+                                                                                    is_baked_run);
+    source_runs_.merge();
+    auto& baked_animations = engine::context().get_cached<rendering_system>().get_baked_animations();
+    const auto draw_runs = [&](velocity_geom_program& program, bool is_baked)
+    {
+        if(!program.program || !program.program->is_valid())
+        {
+            return;
+        }
+        program.program->begin();
+        gfx::set_uniform(program.u_prev_view_proj, prev_vp.get_matrix());
+        for(const auto& run : source_runs_.get_runs())
+        {
+            if(run.part->is_baked != is_baked || bind_instanced_run(run) == 0)
+            {
+                continue;
+            }
+            // Match the material's cull (two-sided coverage), own the depth/write bits: EQUAL test against the
+            // G-buffer depth, no depth write, color only.
+            const auto& mat = *run.part->material_ptr;
+            const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+            if(is_baked)
+            {
+                baked_animations.bind(run.part->palette_offset, run.part->is_rigid);
+            }
+            bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
+        }
+        program.program->end();
+    };
+    draw_runs(velocity_program_instanced_, false);
+    if(is_baked_run)
+    {
+        draw_runs(velocity_program_skinned_baked_instanced_, true);
+    }
 }
 
 void deferred::run_velocity_debug_pass(const camera& camera,
@@ -4474,6 +4627,11 @@ auto deferred::init(rtti::context& ctx) -> bool
         load_program("deferred_geom/vs_deferred_geom_skinned_instanced_material",
                      "deferred_geom/fs_deferred_geom_instance_material");
 
+    geom_program_skinned_baked_instanced_.cache_uniforms();
+    geom_program_skinned_baked_instanced_.program =
+        load_program("deferred_geom/vs_deferred_geom_skinned_baked_instanced", "deferred_geom/fs_deferred_geom");
+
+
     card_capture_program_.cache_uniforms();
     card_capture_program_.program =
         load_program("deferred_geom/vs_deferred_geom_card_capture", "deferred_geom/fs_deferred_geom_card_capture");
@@ -4490,6 +4648,10 @@ auto deferred::init(rtti::context& ctx) -> bool
     velocity_program_skinned_instanced_.cache_uniforms();
     velocity_program_skinned_instanced_.program =
         load_program("velocity/vs_velocity_skinned_instanced", "velocity/fs_velocity");
+
+    velocity_program_skinned_baked_instanced_.cache_uniforms();
+    velocity_program_skinned_baked_instanced_.program =
+        load_program("velocity/vs_velocity_skinned_baked_instanced", "velocity/fs_velocity");
 
     velocity_camera_program_.cache_uniforms();
     velocity_camera_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_camera");

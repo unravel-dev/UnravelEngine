@@ -624,7 +624,7 @@ auto mesh::bind_armature(std::unique_ptr<armature_node>& root) -> bool
     return true;
 }
 
-auto mesh::load_mesh(load_data&& data) -> bool
+auto mesh::load_mesh(load_data&& data, bool hardware_copy) -> bool
 {
     if(data.vertex_data.empty())
     {
@@ -672,7 +672,7 @@ auto mesh::load_mesh(load_data&& data) -> bool
         skin_bind_data_ = data.skin_data;
     }
     result &= bind_armature(data.root_node);
-    result &= end_prepare();
+    result &= end_prepare(hardware_copy);
 
     // The palettes were baked with the skin: one per submesh.
     if(result && has_skin_data)

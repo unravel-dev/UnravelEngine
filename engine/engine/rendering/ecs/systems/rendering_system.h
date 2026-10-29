@@ -15,6 +15,7 @@
 
 #include <map>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace unravel
@@ -75,6 +76,9 @@ public:
 
 
     void on_frame_end(rtti::context& ctx, delta_t);
+    void on_play_end(rtti::context& ctx);
+    /// Drops the instanced draws scripts made before a frame in which they update again.
+    void reset_script_draws(rtti::context& ctx, delta_t dt);
 
     /**
      * @brief Prepares the scene for rendering.
@@ -193,10 +197,23 @@ public:
     auto get_game_view_device() const -> const hpp::optional<game_view_device>&;
 
     /**
-     * @brief The meshes scripts draw as instances this frame (Graphics.DrawMeshInstanced); emptied when the
-     * frame ends.
+     * @brief The meshes scripts draw as instances (Graphics.DrawMeshInstanced); emptied before each frame in which
+     * scripts update, so a paused game keeps drawing them.
      */
     auto get_instanced_draws() -> instanced_draw_list&;
+
+    /// The animations scripts baked (BakedAnimation.Bake); released when play mode ends.
+    auto get_baked_animations() -> baked_animation_store&;
+
+    /**
+     * @brief Creates a material instance of @p shared that belongs to no renderer (new MaterialInstance(material) in
+     * scripts), for instanced draws to draw in place of @p shared. Released by its script, or when play mode ends.
+     * @return Its id; 0 when @p shared is not set.
+     */
+    auto create_material_instance(const asset_handle<material>& shared) -> uint32_t;
+    /// The material instance @p id of create_material_instance(), or null.
+    auto find_material_instance(uint32_t id) const -> std::shared_ptr<material_instance>;
+    void release_material_instance(uint32_t id);
 
 private:
     /**
@@ -210,6 +227,10 @@ private:
 
     std::vector<std::function<void(gfx::dd_raii& dd)>> debug_draw_callbacks_;
     instanced_draw_list instanced_draws_;
+    baked_animation_store baked_animations_;
+    /// The material instances of create_material_instance(), by id.
+    std::unordered_map<uint32_t, std::shared_ptr<material_instance>> material_instances_;
+    uint32_t next_material_instance_id_ = 1;
     /// Size of the view the game is shown in; zero until a host sets it.
     usize32_t game_view_size_{};
     /// The handheld device the game view stands for, set by the editor for phone and tablet presets.

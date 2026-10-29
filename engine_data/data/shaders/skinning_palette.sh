@@ -41,4 +41,20 @@ mat4 skin_palette_matrix(float _first_row, vec4 _indices, vec4 _weights)
 	return mtxFromRows(row0, row1, row2, vec4(0.0, 0.0, 0.0, weight_sum));
 }
 
+/// The part of a baked animation draw (baked_animation_store::bind): x = rows from an instance's frame row to the
+/// submesh's palette, y = 1 for a rigid submesh, whose vertices follow the palette's one bone (its node) with weight 1.
+uniform vec4 u_baked_part;
+
+/// The skinning matrix of a vertex of a baked animation draw (baked_animation.h): the baked palettes are in the mesh's
+/// model space, and the instance carries its world matrix as its top three rows and its frame's first row. Every baked
+/// shader calls this one function, so the G-buffer and the velocity pass compute the same position bit for bit.
+mat4 baked_skin_matrix(vec4 _world0, vec4 _world1, vec4 _world2, float _frame_row, vec4 _indices, vec4 _weights)
+{
+	float rigid = u_baked_part.y;
+	vec4 indices = _indices * (1.0 - rigid);
+	vec4 weights = mix(_weights, vec4(1.0, 0.0, 0.0, 0.0), rigid);
+	mat4 world = mtxFromRows(_world0, _world1, _world2, vec4(0.0, 0.0, 0.0, 1.0));
+	return mul(world, skin_palette_matrix(_frame_row + u_baked_part.x, indices, weights));
+}
+
 #endif // SKINNING_PALETTE_SH_HEADER_GUARD

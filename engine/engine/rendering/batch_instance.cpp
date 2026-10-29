@@ -1,5 +1,6 @@
 #include "batch_instance.h"
 #include "material.h"
+#include "skinning_palette_buffer.h"
 
 #include <sstream>
 #include <iomanip>
@@ -58,6 +59,12 @@ instance_vertex_data::instance_vertex_data(const batch_instance& instance)
     world_matrix[3][3] = instance.lod_params.x;
 }
 
+instance_vertex_data::instance_vertex_data(const math::mat4& world, float lod_param)
+    : world_matrix(world)
+{
+    world_matrix[3][3] = lod_param;
+}
+
 static_assert(instance_material_vertex_data::CONSTANT_COUNT == material::MAX_INSTANCE_CONSTANTS,
               "the instance layout holds every instance constant a material writes");
 static_assert(sizeof(instance_material_vertex_data) == 128, "i_data0..7");
@@ -96,6 +103,27 @@ skinned_instance_material_vertex_data::skinned_instance_material_vertex_data(con
 {
     const auto& source = instance.material_override != nullptr ? *instance.material_override : batch_material;
     source.write_instance_constants(constants);
+}
+
+static_assert(sizeof(baked_instance_vertex_data) == 64, "i_data0..3");
+static_assert(sizeof(baked_velocity_instance_vertex_data) == 112, "i_data0..6");
+
+baked_instance_vertex_data::baked_instance_vertex_data(const math::mat4& world_matrix,
+                                                       uint32_t row,
+                                                       uint32_t previous_row)
+    : palette(static_cast<float>(row), static_cast<float>(previous_row), 0.0f, 0.0f)
+{
+    skinning_palette_rows::pack_bone(world_matrix, world);
+}
+
+baked_velocity_instance_vertex_data::baked_velocity_instance_vertex_data(const math::mat4& world_matrix,
+                                                                         const math::mat4& previous,
+                                                                         uint32_t row,
+                                                                         uint32_t previous_row)
+    : palette(static_cast<float>(row), static_cast<float>(previous_row), 0.0f, 0.0f)
+{
+    skinning_palette_rows::pack_bone(world_matrix, world);
+    skinning_palette_rows::pack_bone(previous, prev_world);
 }
 
 void instance_vertex_data::set_lod_param(float lod_param)

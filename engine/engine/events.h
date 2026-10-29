@@ -23,6 +23,10 @@ struct frame_update_priority
     /// Play-mode state transitions. Must observe the frame before anyone else.
     static constexpr int64_t play_mode = 10000;
 
+    /// What scripts draw for the frames until they update again (instanced draws) is dropped. After the play-mode
+    /// transitions, which settle whether scripts update this frame; before every system that may run scripts.
+    static constexpr int64_t script_draws_reset = 5000;
+
     /// Editor selection / gizmo bookkeeping.
     static constexpr int64_t editing = 1000;
 

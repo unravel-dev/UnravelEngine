@@ -12,9 +12,11 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
+#include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/rendering/renderer.h>
 #include <engine/rendering/skinning_palette_buffer.h>
 
@@ -24,6 +26,7 @@
 #include <graphics/texture.h>
 #include <graphics/vertex_buffer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 
@@ -160,14 +163,20 @@ auto resolve_cutout_pack_program(const Programs& programs, gpu_program* opaque_p
             {
                 return programs.m_packDepthSkinnedInstancedCutout[depth][pack].get();
             }
+            if(programs.m_packDepthSkinnedBakedInstanced[depth][pack].get() == opaque_prog)
+            {
+                return programs.m_packDepthSkinnedBakedInstancedCutout[depth][pack].get();
+            }
         }
     }
 
     return opaque_prog;
 }
 
-/// The instanced skinned program with the depth and packing of @p skinned_prog (a settings table m_progPackSkinned).
-auto resolve_skinned_instanced_pack_program(const Programs& programs, gpu_program* skinned_prog) -> gpu_program*
+/// The program of @p table with the depth and packing of @p skinned_prog (a settings table m_progPackSkinned).
+auto resolve_skinned_pack_program(const Programs& programs,
+                                  gpu_program* skinned_prog,
+                                  const gpu_program::ptr (&table)[DepthImpl::Count][PackDepth::Count]) -> gpu_program*
 {
     for(uint32_t depth = 0; depth < DepthImpl::Count; ++depth)
     {
@@ -175,11 +184,23 @@ auto resolve_skinned_instanced_pack_program(const Programs& programs, gpu_progra
         {
             if(skinned_prog != nullptr && programs.m_packDepthSkinned[depth][pack].get() == skinned_prog)
             {
-                return programs.m_packDepthSkinnedInstanced[depth][pack].get();
+                return table[depth][pack].get();
             }
         }
     }
     return nullptr;
+}
+
+/// The instanced skinned program with the depth and packing of @p skinned_prog (a settings table m_progPackSkinned).
+auto resolve_skinned_instanced_pack_program(const Programs& programs, gpu_program* skinned_prog) -> gpu_program*
+{
+    return resolve_skinned_pack_program(programs, skinned_prog, programs.m_packDepthSkinnedInstanced);
+}
+
+/// The baked animation program with the depth and packing of @p skinned_prog (a settings table m_progPackSkinned).
+auto resolve_skinned_baked_instanced_pack_program(const Programs& programs, gpu_program* skinned_prog) -> gpu_program*
+{
+    return resolve_skinned_pack_program(programs, skinned_prog, programs.m_packDepthSkinnedBakedInstanced);
 }
 
 auto convert(light_type t) -> LightType::Enum
@@ -2539,6 +2560,14 @@ auto shadowmap_generator::is_skinned_batching_enabled(const ShadowMapSettings* c
            skinned_instanced_prog->is_valid();
 }
 
+auto shadowmap_generator::is_baked_animation_enabled(const ShadowMapSettings* currentSmSettings) const -> bool
+{
+    const gpu_program* baked_prog =
+        resolve_skinned_baked_instanced_pack_program(programs_, currentSmSettings->m_progPackSkinned);
+    return get_render_feature_support().is_available(render_feature::skinned_mesh_batching) && baked_prog != nullptr &&
+           baked_prog->is_valid();
+}
+
 auto shadowmap_generator::prepare_shadow_casters(const shadow_map_models_t& models,
                                                  const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
                                                  const ShadowMapSettings* currentSmSettings,
@@ -2546,7 +2575,8 @@ auto shadowmap_generator::prepare_shadow_casters(const shadow_map_models_t& mode
 {
     shadow_collection collection;
     const uint64_t batching_bits = uint64_t(batch_collector::is_static_mesh_batching_enabled()) |
-                                   uint64_t(is_skinned_batching_enabled(currentSmSettings)) << 1u;
+                                   uint64_t(is_skinned_batching_enabled(currentSmSettings)) << 1u |
+                                   uint64_t(is_baked_animation_enabled(currentSmSettings)) << 2u;
     compute_caster_facts(models, lightFrustums, make_shadow_reach(currentSmSettings, cam), cam, batching_bits, collection);
     if(can_reuse_all_views(collection.casters_key))
     {
@@ -2684,10 +2714,16 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
     {
         collector.clear();
     }
+    cascade_runs_.resize(drawNum);
+    for(auto& runs : cascade_runs_)
+    {
+        runs.clear();
+    }
     individual_casters_.clear();
     collection.anything_collected = false;
     collection.has_static_batches = false;
     collection.has_skinned_batches = false;
+    collection.has_runs = false;
 
     const bool static_batching_enabled = batch_collector::is_static_mesh_batching_enabled();
     const bool skinned_batching_enabled = is_skinned_batching_enabled(currentSmSettings);
@@ -2731,7 +2767,12 @@ void shadowmap_generator::collect_shadow_casters(const shadow_map_models_t& mode
 
         if(element.instances != nullptr)
         {
-            const bool collected = element.instances->collect_mesh_shadow_instances(cascade_batch_collectors_, view_mask);
+            bool collected = element.instances->collect_mesh_shadow_instances(cascade_batch_collectors_, view_mask);
+            if(element.instances->collect_mesh_shadow_runs(cascade_runs_, view_mask))
+            {
+                collected = true;
+                collection.has_runs = true;
+            }
             // Scripted instance draws belong to no entity.
             auto* emitter = element.entity ? element.entity.try_get<particle_emitter_component>() : nullptr;
             if(collected && emitter != nullptr && emitter == element.instances)
@@ -3125,7 +3166,7 @@ void shadowmap_generator::submit_shadow_casters(uint8_t view_mask,
     }
 
     // Submit batched geometry for each cascade
-    if(!collection.has_static_batches && !collection.has_skinned_batches)
+    if(!collection.has_static_batches && !collection.has_skinned_batches && !collection.has_runs)
     {
         return;
     }
@@ -3145,6 +3186,10 @@ void shadowmap_generator::submit_shadow_casters(uint8_t view_mask,
         if(collection.has_skinned_batches)
         {
             submit_batched_shadow_geometry_cascade(cascade_skinned_batch_collectors_[ii], viewId, currentSmSettings, renderState, true, stats);
+        }
+        if(collection.has_runs)
+        {
+            submit_shadow_runs(cascade_runs_[ii], viewId, currentSmSettings, renderState, stats);
         }
     }
 }
@@ -3286,10 +3331,10 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
     context.enable_distance_sorting = false; // Shadow maps don't need distance sorting
     context.max_instances_per_batch = MAX_INSTANCES_PER_BATCH;
     context.enable_profiling = false;
-    
+
     collector.prepare_batches(context);
     const auto& prepared_batches = collector.get_prepared_batches();
-    
+
     if (prepared_batches.empty())
     {
         return;
@@ -3372,17 +3417,7 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
         bgfx::setInstanceDataBuffer(&instance_buffer);
         mesh_ptr->bind_render_buffers_for_submesh(submesh, lod_index);
 
-        uniforms_.submitPerDrawUniforms();
-        if(uses_cutout && batch->key.cutout.has_value())
-        {
-            uniforms_.submitShadowCutoutState(*batch->key.cutout);
-        }
-
-        const uint64_t draw_state = apply_shadow_cull(renderState.m_state, batch->key.cull);
-        bgfx::setStencil(renderState.m_fstencil, renderState.m_bstencil);
-        bgfx::setState(draw_state, renderState.m_blendFactorRgba);
-
-        bgfx::submit(viewId, prog->native_handle(), 0, BGFX_DISCARD_ALL);
+        submit_shadow_instances(*prog, batch->key, viewId, renderState);
         prog->end();
     }
 
@@ -3392,8 +3427,75 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
         const auto& batch_stats = collector.get_stats();
         stats->add_batch_stats(batch_stats);
     }
-    
+
     collector.clear();
+}
+
+void shadowmap_generator::submit_shadow_runs(instanced_run_list& runs,
+                                             bgfx::ViewId viewId,
+                                             ShadowMapSettings* currentSmSettings,
+                                             const RenderState& renderState,
+                                             ::unravel::rendering::pipeline_stats* stats)
+{
+    if(runs.empty())
+    {
+        return;
+    }
+    runs.merge();
+    gpu_program* const static_prog = currentSmSettings->m_progPackInstanced;
+    gpu_program* const baked_prog =
+        is_baked_animation_enabled(currentSmSettings)
+            ? resolve_skinned_baked_instanced_pack_program(programs_, currentSmSettings->m_progPackSkinned)
+            : nullptr;
+    auto& baked_animations = engine::context().get_cached<rendering_system>().get_baked_animations();
+    for(const auto& run : runs.get_runs())
+    {
+        const auto& part = *run.part;
+        gpu_program* const instanced_prog = part.is_baked ? baked_prog : static_prog;
+        gpu_program* const prog = part.shadow_key.uses_alpha_cutout()
+                                      ? resolve_cutout_pack_program(programs_, instanced_prog)
+                                      : instanced_prog;
+        const auto submesh = part.mesh_ptr->get_submesh(part.submesh, 0);
+        // Runs past the end of the frame's instance memory draw nothing.
+        if(prog == nullptr || !submesh || run.first >= run.buffer->num)
+        {
+            continue;
+        }
+        const uint32_t instance_count = std::min(run.count, run.buffer->num - run.first);
+        prog->begin();
+        bgfx::setInstanceDataBuffer(run.buffer, run.first, instance_count);
+        part.mesh_ptr->bind_render_buffers_for_submesh(submesh, 0);
+        if(part.is_baked)
+        {
+            baked_animations.bind(part.palette_offset, part.is_rigid);
+        }
+        if(stats != nullptr)
+        {
+            (part.is_baked ? stats->drawn_skinned_submeshes_for_shadows : stats->drawn_submeshes_for_shadows) +=
+                instance_count;
+        }
+        submit_shadow_instances(*prog, part.shadow_key, viewId, renderState);
+        prog->end();
+    }
+    runs.clear();
+}
+
+void shadowmap_generator::submit_shadow_instances(gpu_program& prog,
+                                                  const shadow_batch_key& key,
+                                                  bgfx::ViewId viewId,
+                                                  const RenderState& renderState)
+{
+    uniforms_.submitPerDrawUniforms();
+    if(key.uses_alpha_cutout() && key.cutout.has_value())
+    {
+        uniforms_.submitShadowCutoutState(*key.cutout);
+    }
+
+    const uint64_t draw_state = apply_shadow_cull(renderState.m_state, key.cull);
+    bgfx::setStencil(renderState.m_fstencil, renderState.m_bstencil);
+    bgfx::setState(draw_state, renderState.m_blendFactorRgba);
+
+    bgfx::submit(viewId, prog.native_handle(), 0, BGFX_DISCARD_ALL);
 }
 
 void Programs::init(rtti::context& ctx)
@@ -3476,6 +3578,19 @@ void Programs::init(rtti::context& ctx)
 
     m_packDepthSkinnedInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
     m_packDepthSkinnedInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+
+    // Pack depth baked animation (instances drawn with bones from the baked animation store).
+    m_packDepthSkinnedBakedInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth");
+    m_packDepthSkinnedBakedInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth_vsm");
+
+    m_packDepthSkinnedBakedInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth_linear");
+    m_packDepthSkinnedBakedInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
 }
 
 }
