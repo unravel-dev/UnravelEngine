@@ -110,7 +110,7 @@ public:
      * @param times The frame's times; the pipeline and the UI advance by the scaled time.
      * @return Whether a camera rendered: each active camera writes the whole output.
      */
-    void render_scene(const gfx::frame_buffer::ptr& output, scene& scn, const frame_times& times);
+    auto render_scene(const gfx::frame_buffer::ptr& output, scene& scn, const frame_times& times) -> bool;
 
     /**
      * @brief Renders the scene and returns the frame buffer.
