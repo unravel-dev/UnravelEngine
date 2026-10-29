@@ -244,28 +244,59 @@ public struct Vector3 : IEquatable<Vector3>, IFormattable
         }
     }
 
+    /// <summary>Below this length a vector has no direction to turn: Slerp falls back to a lerp.</summary>
+    private const float SLERP_MIN_LENGTH = 1e-6f;
+
+    /// <summary>Directions closer than this cosine are treated as parallel (or opposite), where sin(angle) is too
+    /// small to divide by.</summary>
+    private const float SLERP_PARALLEL_COSINE = 0.9995f;
+
     /// <summary>
-    /// Spherically interpolates between two vectors.
+    /// Spherically interpolates between two vectors: the direction turns through the angle between them and the
+    /// length goes linearly from the length of <paramref name="a"/> to the length of <paramref name="b"/>.
+    /// Parallel, opposite and zero-length vectors give a finite result (opposite ones turn about the up axis when
+    /// they can, as a heading would).
     /// </summary>
     /// <param name="a">The first vector.</param>
     /// <param name="b">The second vector.</param>
-    /// <param name="t">The interpolation parameter.</param>
+    /// <param name="t">The interpolation parameter (not clamped).</param>
     /// <returns>The spherically interpolated vector.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector3 Slerp(Vector3 a, Vector3 b, float t)
     {
-        // get cosine of angle between vectors (-1 -> 1)
-		float CosAlpha = Vector3.Dot(a, b);
-		// get angle (0 -> pi)
-		float Alpha = Mathf.Acos(CosAlpha);
-		// get sine of angle between vectors (0 -> 1)
-		float SinAlpha = Mathf.Sin(Alpha);
-		// this breaks down when SinAlpha = 0, i.e. Alpha = 0 or pi
-		float t1 = Mathf.Sin((1.0f - t) * Alpha) / SinAlpha;
-		float t2 = Mathf.Sin(t * Alpha) / SinAlpha;
+        float lengthA = Magnitude(a);
+        float lengthB = Magnitude(b);
+        if (lengthA < SLERP_MIN_LENGTH || lengthB < SLERP_MIN_LENGTH)
+        {
+            return LerpUnclamped(a, b, t);
+        }
+        Vector3 directionA = a / lengthA;
+        Vector3 directionB = b / lengthB;
+        float length = lengthA + (lengthB - lengthA) * t;
+        float cosine = Mathf.Clamp(Dot(directionA, directionB), -1.0f, 1.0f);
+        if (cosine > SLERP_PARALLEL_COSINE)
+        {
+            return Normalize(LerpUnclamped(directionA, directionB, t)) * length;
+        }
+        if (cosine < -SLERP_PARALLEL_COSINE)
+        {
+            float halfTurn = MathF.PI * t;
+            return (directionA * MathF.Cos(halfTurn) + GetPerpendicular(directionA) * MathF.Sin(halfTurn)) * length;
+        }
+        float angle = MathF.Acos(cosine);
+        float sine = MathF.Sin(angle);
+        Vector3 direction = directionA * (MathF.Sin((1.0f - t) * angle) / sine) + directionB * (MathF.Sin(t * angle) / sine);
+        return direction * length;
+    }
 
-		// interpolate src vectors
-		return a * t1 + b * t2;
+    /// <summary>A unit vector perpendicular to a unit <paramref name="direction"/>, about the up axis when possible.</summary>
+    private static Vector3 GetPerpendicular(Vector3 direction)
+    {
+        Vector3 perpendicular = Cross(up, direction);
+        if (SqrMagnitude(perpendicular) < SLERP_MIN_LENGTH)
+        {
+            perpendicular = Cross(right, direction);
+        }
+        return Normalize(perpendicular);
     }
 
     /// <summary>
