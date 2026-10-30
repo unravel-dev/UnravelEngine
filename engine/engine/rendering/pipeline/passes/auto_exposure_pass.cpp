@@ -39,6 +39,9 @@ constexpr const char* local_grid_key = "LOCAL_EXPOSURE_GRID";
 constexpr const char* local_downsampled_key = "LOCAL_EXPOSURE_DOWNSAMPLED";
 constexpr const char* local_blur_temp_key = "LOCAL_EXPOSURE_BLUR_TEMP";
 constexpr const char* local_blurred_key = "LOCAL_EXPOSURE_BLURRED";
+/// Half float, so the consumers filter the grid (cs_local_exposure_grid.sc); render_feature_support
+/// requires the same image format.
+constexpr bgfx::TextureFormat::Enum local_grid_format = bgfx::TextureFormat::RGBA16F;
 /// Largest blur radius in blurred texels: the blur's tap limit (63 taps per axis). Mirrors
 /// LOCAL_EXPOSURE_BLUR_MAX_RADIUS in cs_local_exposure_blur.sc.
 constexpr float local_blur_max_radius = 31.0f;
@@ -484,9 +487,9 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
         std::max(1u, (meter_size.width + local_exposure_tile_cells - 1) / local_exposure_tile_cells);
     const std::uint32_t tiles_y =
         std::max(1u, (meter_size.height + local_exposure_tile_cells - 1) / local_exposure_tile_cells);
-    // The grid is the flattened 3D atlas: one row per tile row, each tile's slices end to end.
-    const usize32_t grid_size{tiles_x * local_exposure_slices, tiles_y};
-    auto grid_tex = ensure_compute_target(rview, local_grid_key, grid_size, bgfx::TextureFormat::RGBA32F);
+    // The grid is the flattened 3D atlas: one page of tiles per slice, the pages side by side.
+    const usize32_t grid_size{local_exposure_slices * tiles_x, tiles_y};
+    auto grid_tex = ensure_compute_target(rview, local_grid_key, grid_size, local_grid_format);
 
     auto& layout = rview.data().get_or_emplace<local_exposure_view>(local_layout_key);
     layout.tiles_x = float(tiles_x);
@@ -499,7 +502,7 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
         gfx::render_pass pass("Auto Exposure/Local Grid");
         local_grid_program_.program->begin();
         gfx::set_texture(local_grid_program_.s_exposure_log_lum, 0, log_lum_tex, local_point_clamp);
-        bgfx::setImage(1, grid_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
+        bgfx::setImage(1, grid_tex->native_handle(), 0, bgfx::Access::Write, local_grid_format);
         const float grid_params[4] = {float(meter_size.width),
                                       float(meter_size.height),
                                       float(local_exposure_tile_cells),

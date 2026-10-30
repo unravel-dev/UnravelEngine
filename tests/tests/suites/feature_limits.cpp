@@ -159,6 +159,8 @@ void test_settings_round_trip()
     saved.graphics.limits.volumetric_fog = false;
     saved.graphics.limits.max_anti_aliasing = anti_aliasing_limit::fxaa;
     saved.graphics.limits.max_shadow_resolution = sm_resolution::medium;
+    saved.graphics.limits.subsurface = false;
+    saved.graphics.limits.volumetric_clouds = false;
     const auto document = serialization::save_to_document(saved, LIMITS_DOCUMENT_ROOT);
     settings loaded;
     limits_check(serialization::load_from_document(document, LIMITS_DOCUMENT_ROOT, loaded), "a settings document loads");

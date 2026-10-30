@@ -504,6 +504,20 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"name", "contact_shadows"},
             entt::attribute{"pretty_name", "Contact Shadows"},
             entt::attribute{"tooltip", "Allow contact shadows."},
+        })
+        .data<&feature_limits::subsurface>("subsurface"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "subsurface"},
+            entt::attribute{"pretty_name", "Subsurface"},
+            entt::attribute{"tooltip", "Allow subsurface scattering. When off, materials render without their subsurface "
+                                       "color, and the lights skip its cost."},
+        })
+        .data<&feature_limits::volumetric_clouds>("volumetric_clouds"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "volumetric_clouds"},
+            entt::attribute{"pretty_name", "Volumetric Clouds"},
+            entt::attribute{"tooltip", "Allow volumetric clouds. When off, skies that ask for them render flat clouds, "
+                                       "without the raymarch."},
         });
 }
 
@@ -519,6 +533,8 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
     try_save(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
     try_save(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
+    try_save(ar, ser20::make_nvp("subsurface", obj.subsurface));
+    try_save(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
 }
 
 LOAD_INLINE(feature_limits)
@@ -533,6 +549,8 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
     try_load(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
     try_load(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
+    try_load(ar, ser20::make_nvp("subsurface", obj.subsurface));
+    try_load(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
 }
 
 REFLECT_INLINE(settings::graphics_settings)

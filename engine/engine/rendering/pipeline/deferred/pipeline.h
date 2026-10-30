@@ -86,9 +86,12 @@ public:
                         const gfx::frame_buffer::ptr& input,
                         const gfx::frame_buffer::ptr& output);
 
+    /// Draws the visible models into the G-buffer; without subsurface in `limits` (feature_limits::subsurface), with
+    /// every subsurface color black.
     void run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                            const camera& camera,
                            gfx::render_view& rview,
+                           const feature_limits& limits,
                            delta_t dt);
 
     /// Produces the per-pixel velocity (motion vector) buffer ("VELOCITY", RG16F, uv delta
@@ -159,10 +162,12 @@ public:
     auto get_traced_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr;
     auto get_probe_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr;
 
+    /// Renders the sky and its clouds into @p input, in the cloud mode @p limits allow (as run_cloud_shadow_pass).
     auto run_atmospherics_pass(gfx::frame_buffer::ptr input,
                                scene& scn,
                                const camera& camera,
                                gfx::render_view& rview,
+                               const feature_limits& limits,
                                delta_t dt) -> gfx::frame_buffer::ptr;
 
     /**
@@ -179,8 +184,9 @@ public:
                       const run_params& rparams,
                       bool use_shadow_maps) -> fog_pass::shader_params;
 
-    /// Renders the cloud shadow map for this run into cloud_shadow_ (before the lighting passes).
-    void run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview);
+    /// Renders the cloud shadow map for this run into cloud_shadow_ (before the lighting passes), from the clouds in
+    /// the mode @p limits allow, so the shadows match the clouds run_atmospherics_pass draws.
+    void run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview, const feature_limits& limits);
 
     void run_ssr_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
@@ -719,6 +725,15 @@ private:
     /// probe layer.
     indirect_lighting_program indirect_lighting_probe_program_;
 
+    /// The two programs above for a view whose screen-space AO, GI / SSIL estimate and traced reflections are all
+    /// the default textures (PBR_INDIRECT_SCREEN_INPUTS 0): the same image without three fetches per pixel.
+    indirect_lighting_program indirect_lighting_no_screen_inputs_program_;
+    indirect_lighting_program indirect_lighting_probe_no_screen_inputs_program_;
+    /// Those two without the read of the subsurface attachment (PBR_SUBSURFACE 0), for a run whose G-buffer holds no
+    /// subsurface color (gbuffer_has_subsurface_).
+    indirect_lighting_program indirect_lighting_no_screen_inputs_no_subsurface_program_;
+    indirect_lighting_program indirect_lighting_probe_no_screen_inputs_no_subsurface_program_;
+
     /// The view's only reflection probe when the indirect pass samples it itself; no cubemap otherwise. Drawing
     /// a single probe into the layer first costs a full-screen pass that reads the G-buffer, and a layer the
     /// indirect pass reads back (run_reflection_probe_pass decides).
@@ -813,7 +828,9 @@ private:
 
     /// Scratch of submit_particle_lights.
     std::vector<ps_soa::particle_light> particle_lights_;
-    void submit_pbr_material(geom_program& program, const pbr_material& mat);
+    /// Binds @p mat's textures, values and states for @p program; without @p keeps_subsurface, with a black
+    /// subsurface color (gbuffer_has_subsurface_).
+    void submit_pbr_material(geom_program& program, const pbr_material& mat, bool keeps_subsurface = true);
     /**
      * @brief Prepares the batches of @p collector and draws them instanced into the G-buffer: the batches whose
      * instances carry material values with @p material_program and MaterialLayout, the others with @p plain_program
@@ -853,11 +870,26 @@ private:
     /// Velocity for the runs of the camera's instanced sources that have last frame's matrices, depth-tested EQUAL.
     void submit_source_velocity_runs(gfx::render_pass& pass, const math::transform& prev_vp);
 
-    color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
+    /// A light program and its variants without code a draw does not need, each the same image where
+    /// get_light_program picks it: "_no_contact" (PBR_CONTACT_SHADOWS 0) for a light without contact shadows, and
+    /// "_no_contact_no_subsurface" (PBR_SUBSURFACE 0 as well) for one in a run whose limits leave subsurface out
+    /// (gbuffer_has_subsurface_). Code a uniform switches off still holds its registers on every pixel, and the light
+    /// passes are register bound on mobile GPUs.
+    struct light_program_variants
+    {
+        color_lighting full;
+        color_lighting no_contact;
+        color_lighting no_contact_no_subsurface;
+    };
+    light_program_variants color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
     /// PCF programs with the 3x3 and the 7x7 tent (common_shadow.sh PCF_TENT_SIZE); the PCF programs of
     /// color_lighting_ have the 5x5 one. Slots without a program fall back to color_lighting_.
-    color_lighting color_lighting_pcf_tent_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][2];
-    color_lighting color_lighting_no_shadow_[uint8_t(light_type::count)];
+    light_program_variants color_lighting_pcf_tent_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][2];
+    light_program_variants color_lighting_no_shadow_[uint8_t(light_type::count)];
+    /// Whether this run's G-buffer holds subsurface colors: its limits allow subsurface (feature_limits::subsurface),
+    /// set by run_g_buffer_pass. Without it the G-buffer draws write every subsurface color black, and the light and
+    /// indirect passes use their programs without the subsurface code.
+    bool gbuffer_has_subsurface_{true};
 
     asset_handle<gfx::texture> ibl_brdf_lut_;
 

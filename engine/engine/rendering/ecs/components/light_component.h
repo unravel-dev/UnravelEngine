@@ -285,7 +285,8 @@ public:
     void set_cloud_world_space_altitude(bool enabled);
 
     /**
-     * @brief Whether the cloud layer casts a shadow on the scene (directional light).
+     * @brief Whether the cloud layer casts a shadow on the scene (directional light) and dims the sky's ambient light
+     * by its coverage. Off, the cloud shadow map is not rendered.
      */
     auto get_cloud_shadows() const noexcept -> bool;
     void set_cloud_shadows(bool enabled);

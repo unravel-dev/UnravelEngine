@@ -1,0 +1,14 @@
+$input v_texcoord0
+
+#define POINT_LIGHT 1
+#define SM_OMNI 1
+#define SM_VSM 1
+// Without the contact shadow code, for a light without contact shadows (deferred::get_light_program).
+#define PBR_CONTACT_SHADOWS 0
+
+#include "fs_pbr_lighting.sh"
+
+void main()
+{
+    gl_FragColor = pbr_light(v_texcoord0, gl_FragCoord.xy);
+}

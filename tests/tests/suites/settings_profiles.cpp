@@ -307,6 +307,8 @@ void test_profile_files(const fs::path& root)
     check(android.settings.is_overridden("graphics/limits/global_illumination") &&
               android.settings.is_overridden("graphics/limits/max_anti_aliasing") &&
               android.settings.is_overridden("graphics/limits/volumetric_fog") &&
+              android.settings.is_overridden("graphics/limits/subsurface") &&
+              android.settings.is_overridden("graphics/limits/volumetric_clouds") &&
               !android.settings.is_overridden("graphics/render_scale"),
           "and with the effects a phone cannot afford limited, at the project's render scale");
     check(deployment::make_profile("Desktop", target_platform::desktop, base).settings.is_empty(), "a new Desktop profile overrides nothing");

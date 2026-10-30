@@ -314,7 +314,8 @@ REFLECT(skylight_component)
             entt::attribute{"name", "cloud_shadows"},
             entt::attribute{"pretty_name", "Cloud Shadows"},
             entt::attribute{"group", "Clouds"},
-            entt::attribute{"tooltip", "Project the cloud layer as a soft shadow on the scene (directional light)."},
+            entt::attribute{"tooltip", "Project the cloud layer as a soft shadow on the scene (directional light) and "
+                                       "dim the sky's ambient light by its coverage. Off, the shadow costs nothing."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_cloud_shadow_opacity, &skylight_component::get_cloud_shadow_opacity>("cloud_shadow_opacity"_hs)

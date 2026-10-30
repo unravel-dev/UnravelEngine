@@ -296,13 +296,15 @@ constexpr const char* cloud_shadow_fbo_key = "CLOUD_SHADOW_FBO";
 // texels is ~600 units per texel at the default size; the sun's penumbra over the layer
 // altitude is wider than that, so the shadows are soft at any resolution.
 constexpr uint16_t cloud_shadow_resolution = 512;
-// With cloud shadows off the lights do not read the map: the irradiance bake reads only its lowest mip, the mean
-// transmittance, which a texel every quarter cloud size averages the same. 1/64 of the raymarch.
-constexpr uint16_t cloud_coverage_resolution = 64;
 constexpr float cloud_shadow_extent_sizes = 16.0f;
 // Below this sun elevation the shadow map is not rendered (the sun ray through the layer
 // is too long to be meaningful and the lighting shader ignores it as well).
 constexpr float cloud_shadow_min_sun_elevation = 0.05f;
+// clouds.sh CLOUD_PLANET_RADIUS: the planet the layer wraps around.
+constexpr float cloud_planet_radius = 6360000.0f;
+// Sine of elevation by which every view ray must pass below the ground horizon before the layer counts as out of
+// view: the shader's float rounding at planet-scale radii decides rays right at the horizon either way.
+constexpr float layer_view_margin = 1.0e-3f;
 } // namespace
 
 auto atmospheric_pass_perez::make_cloud_uniforms(const run_params& params,
@@ -346,12 +348,47 @@ auto atmospheric_pass_perez::layer_base_world_y(const run_params& params, const 
     return ground_y + params.cloud_base_altitude;
 }
 
+auto atmospheric_pass_perez::is_layer_in_view(const run_params& params, const camera& camera) -> bool
+{
+    const float base_y = layer_base_world_y(params, camera);
+    const float camera_y = camera.get_position().y;
+    if(camera_y >= base_y)
+    {
+        // Inside or above the layer, rays going down reach it too.
+        return true;
+    }
+    // At height h over the ground reference the planet's horizon dips below the horizontal by
+    // asin(sqrt(h * (2R + h)) / (R + h)); a ray below it meets the ground before the layer.
+    const float height = std::max(camera_y - (base_y - params.cloud_base_altitude), 0.0f);
+    const float horizon_dip_sin =
+        std::sqrt(height * (2.0f * cloud_planet_radius + height)) / (cloud_planet_radius + height);
+    // The rays below a height form a cap around the nadir, which holds the whole frustum when it holds the
+    // four corner rays. The corners are the shader's rays, unprojected from the far plane.
+    const math::mat4 inverse_view_proj = glm::inverse(camera.get_view_projection_relative().get_matrix());
+    for(const float x : {-1.0f, 1.0f})
+    {
+        for(const float y : {-1.0f, 1.0f})
+        {
+            const math::vec4 far_point = inverse_view_proj * math::vec4(x, y, 1.0f, 1.0f);
+            const math::vec3 ray = math::normalize(math::vec3(far_point) / far_point.w);
+            if(ray.y >= -horizon_dip_sin - layer_view_margin)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
                                                    gfx::render_view& rview,
                                                    const run_params& params) -> cloud_shadow_result
 {
     cloud_shadow_result result;
-    if(params.cloud_mode == 0 || !cloud_shadow_program_.program || !cloud_shadow_program_.program->is_valid())
+    // Cloud shadows off, nothing renders or reads the map: the lights take no cloud shadow and the sky irradiance no
+    // cloud coverage.
+    if(params.cloud_mode == 0 || !params.cloud_shadows || !cloud_shadow_program_.program ||
+       !cloud_shadow_program_.program->is_valid())
     {
         return result;
     }
@@ -375,10 +412,8 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     origin.y = std::floor(origin.y / texel) * texel;
     result.origin = origin;
 
-    // The origin keeps the full map's grid either way, so the coverage moves as smoothly as the shadows would.
-    const uint16_t resolution = params.cloud_shadows ? cloud_shadow_resolution : cloud_coverage_resolution;
     constexpr uint64_t flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-    const usize32_t size{resolution, resolution};
+    const usize32_t size{cloud_shadow_resolution, cloud_shadow_resolution};
     // Mips: the lowest level is the mean transmittance the irradiance bake reads.
     const auto& tex = rview.tex_acquire(
         cloud_shadow_tex_key,
@@ -420,7 +455,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
         gfx::set_texture(cloud_shadow_program_.s_cloudNoise2D, 1, cloud_noise.flat_noise.get());
     }
 
-    bgfx::setScissor(0, 0, resolution, resolution);
+    bgfx::setScissor(0, 0, cloud_shadow_resolution, cloud_shadow_resolution);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::setIndexBuffer(ib_->native_handle());
     bgfx::setVertexBuffer(0, vb_->native_handle());
@@ -447,7 +482,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
                                 result.base_world_y,
                                 result.opacity,
                                 result.apply_to_lights ? 1.0f : 0.0f,
-                                float(resolution)};
+                                float(cloud_shadow_resolution)};
     uint64_t signature = hash_floats(0xcbf29ce484222325ull, placement, std::size(placement));
     signature = hash_floats(signature, &perez.sun_direction.x, 3);
     signature = hash_floats(signature, &uniforms.exposition[0], sizeof(uniforms) / sizeof(float));
@@ -698,7 +733,16 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     const bool volumetric = params.cloud_mode == cloud_mode_volumetric;
     if(volumetric && cloud_program_.program && cloud_program_.program->is_valid())
     {
-        prepass = run_cloud_prepass(camera, rview, output_size, depth, perez, uniforms, params);
+        if(is_layer_in_view(params, camera))
+        {
+            prepass = run_cloud_prepass(camera, rview, output_size, depth, perez, uniforms, params);
+        }
+        else
+        {
+            // Without a pre-pass the composite is skipped too. The history stops describing the previous frame, so
+            // the next pre-pass starts a new one; the render view frees the idle targets.
+            rview.data().get_or_emplace<cloud_view_state>(cloud_view_state::view_key).frame_count = 0;
+        }
     }
     else
     {

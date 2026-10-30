@@ -194,10 +194,11 @@ public:
      * @brief The local exposure chain's two lookups for the tonemapper, or nulls when local
      *        exposure is off for this view (settings::is_local_exposure_enabled).
      *
-     * @c grid is the RGBA32F bilateral grid flattened to 2D (tiles x * @ref local_exposure_slices,
-     * tiles y), each texel holding sum(log2 luminance) and sum(weight) of the metering cells in
-     * that tile and luminance slice (raw sums). @c blurred is the R16F Gaussian of the log
-     * luminance at 1/32 of the view resolution, sampled bilinearly.
+     * @c grid is the RGBA16F bilateral grid flattened to 2D (@ref local_exposure_slices pages of
+     * tiles x by tiles y, side by side), each texel holding sum(log2 luminance) and sum(weight) of
+     * the metering cells in that tile and luminance slice (raw sums), sampled bilinearly inside a
+     * page. @c blurred is the R16F Gaussian of the log luminance at 1/32 of the view resolution,
+     * sampled bilinearly.
      */
     struct local_exposure_view
     {

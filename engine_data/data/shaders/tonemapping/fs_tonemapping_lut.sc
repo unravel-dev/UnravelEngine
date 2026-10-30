@@ -1,0 +1,74 @@
+$input v_texcoord0
+
+/*
+ * Bakes the colour grading, the tone curve and lift / gamma / gain into the table fs_tonemapping.sc reads
+ * (tonemapping_lut.sh): one texel per entry, so the per-pixel pass is one table lookup instead of the curve's math.
+ * The tonemapping pass renders it again only when these settings change.
+ */
+
+#include "../common.sh"
+#include "tonemapping.sh"
+#include "tonemapping_lut.sh"
+
+uniform vec4 u_tonemapping;
+uniform vec4 u_grading;
+uniform vec4 u_wb_lms;
+uniform vec4 u_lift;
+uniform vec4 u_gamma_inv;
+uniform vec4 u_gain;
+
+#define u_tonemappingMode int(u_tonemapping.y)
+#define u_midgray_match   u_tonemapping.w
+#define u_contrast        u_grading.x
+#define u_saturation      u_grading.y
+
+// Color grading in LINEAR space, on post-exposure values (the contrast pivot
+// only means "18% mid-gray" after exposure has normalized the scene).
+vec3 apply_color_grading(vec3 color)
+{
+    // White balance: von Kries scaling in CAT02 LMS. u_wb_lms is (1,1,1) at
+    // neutral settings, computed on the CPU from temperature/tint.
+    CONST(mat3) lin2lms = mtxFromRows3(
+        vec3(3.90405e-1, 5.49941e-1, 8.92632e-3),
+        vec3(7.08416e-2, 9.63172e-1, 1.35775e-3),
+        vec3(2.31082e-2, 1.28021e-1, 9.36245e-1));
+    CONST(mat3) lms2lin = mtxFromRows3(
+        vec3( 2.85847e+0, -1.62879e+0, -2.48910e-2),
+        vec3(-2.10182e-1,  1.15820e+0,  3.24281e-4),
+        vec3(-4.18120e-2, -1.18169e-1,  1.06867e+0));
+    vec3 lms = mul(lin2lms, color);
+    lms *= u_wb_lms.xyz;
+    color = max(mul(lms2lin, lms), vec3_splat(0.0));
+
+    // Log-space contrast around 18% gray: mids keep their exposure while the
+    // stops above/below expand (>1) or compress (<1).
+    // The exponent must be a vec3: glsl-optimizer folds exp2(log2(x) * y)
+    // back into pow(x, y), and a scalar y yields pow(vec3, float) - an
+    // overload GLSL does not have (C1115 on NVIDIA GL at runtime).
+    const float mid_gray = 0.18;
+    vec3 log_c = log2(max(color, vec3_splat(1e-6)) / mid_gray);
+    color = exp2(log_c * vec3_splat(u_contrast)) * mid_gray;
+
+    // Saturation around Rec.709 luma, still in linear.
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = max(vec3_splat(luma) + (color - luma) * u_saturation, vec3_splat(0.0));
+
+    return color;
+}
+
+void main()
+{
+    // The entry this texel holds: red is the column inside its slice, blue the slice, green the row.
+    ivec2 texel = ivec2(gl_FragCoord.xy);
+    vec3 index = vec3(float(texel.x % TONEMAPPING_LUT_SIZE), float(texel.y), float(texel.x / TONEMAPPING_LUT_SIZE));
+    vec3 color = apply_color_grading(tonemapping_lut_color(index));
+    color = apply_tonemapping(color, u_tonemappingMode, u_midgray_match);
+
+    // Lift/gamma/gain on the display-referred image (classic video grading):
+    // lift offsets the toe and fades toward white, gain scales the top end,
+    // gamma bends the mids. Neutral uniforms make this an exact identity.
+    color = max(color * u_gain.xyz + u_lift.xyz * (1.0 - color), vec3_splat(0.0));
+    color = pow(color, u_gamma_inv.xyz);
+
+    gl_FragColor = vec4(color, 1.0);
+}

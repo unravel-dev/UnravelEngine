@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <type_traits>
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 #include <graphics/vertex_buffer.h>
@@ -87,6 +88,57 @@ auto get_pcf_tent_slot(const light& l) -> hpp::optional<size_t>
     }
     return hpp::nullopt;
 }
+
+/// Whether a light runs the contact shadow ray march: the length submit_light uploads is above 0.
+auto has_contact_shadow(const light& l) -> bool
+{
+    return l.contact_shadow.enabled && l.contact_shadow.ray_length > 0.0f;
+}
+
+template<typename Program>
+auto is_program_loaded(const Program& program) -> bool
+{
+    return program.program && program.program->is_valid();
+}
+
+/// The leanest of a light's @p variants (deferred::light_program_variants) that draws its image: without the contact
+/// shadow code for a light without contact shadows, and without the subsurface code too when the G-buffer holds no
+/// subsurface color. A variant that did not load falls back to the fuller one.
+template<typename Variants>
+auto pick_light_variant(const light& l, bool gbuffer_has_subsurface, const Variants& variants) -> const auto&
+{
+    if(has_contact_shadow(l) || !is_program_loaded(variants.no_contact))
+    {
+        return variants.full;
+    }
+    const bool is_subsurface_free = !gbuffer_has_subsurface && is_program_loaded(variants.no_contact_no_subsurface);
+    return is_subsurface_free ? variants.no_contact_no_subsurface : variants.no_contact;
+}
+
+/// Where pbr_material::write_instance_constants puts the subsurface color (u_subsurface_color in fs_deferred_geom.sc).
+constexpr size_t subsurface_instance_constant = 1;
+
+/// Turns the subsurface color among a material's instance @p constants black, as a run without subsurface draws it.
+/// The opacity only counts under a subsurface color.
+void clear_subsurface_color(math::vec4* constants)
+{
+    auto& subsurface = constants[subsurface_instance_constant];
+    subsurface = math::vec4(0.0f, 0.0f, 0.0f, subsurface.w);
+}
+
+/// @p Layout (instance_material_vertex_data, skinned_instance_material_vertex_data) with a black subsurface color,
+/// for the batches of a run without subsurface.
+template<typename Layout>
+struct subsurface_free_layout : Layout
+{
+    subsurface_free_layout() = default;
+    subsurface_free_layout(const batch_instance& instance, const material& batch_material)
+        : Layout(instance, batch_material)
+    {
+        static_assert(sizeof(subsurface_free_layout) == sizeof(Layout), "packed into the instance buffer as Layout");
+        clear_subsurface_color(this->constants);
+    }
+};
 
 /// Whether a light of @p intensity and @p linear_color adds anything to a pixel. One that does not still costs a
 /// full G-buffer read per covered pixel, and its shadow maps a pass per caster.
@@ -588,26 +640,25 @@ auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
 
 auto deferred::get_light_program(const light& l) const -> const color_lighting&
 {
-    const auto& program = color_lighting_[uint8_t(l.type)][uint8_t(l.shadow_params.depth)][uint8_t(l.shadow_params.type)];
-    if(l.shadow_params.type != sm_impl::pcf)
+    const auto type = uint8_t(l.type);
+    const auto depth = uint8_t(l.shadow_params.depth);
+    const auto impl = uint8_t(l.shadow_params.type);
+    const hpp::optional<size_t> tent_slot =
+        l.shadow_params.type == sm_impl::pcf ? ANONYMOUS::get_pcf_tent_slot(l) : hpp::optional<size_t>{};
+    // The tent is chosen on the full programs, so a missing variant never changes the filter.
+    if(tent_slot && color_lighting_pcf_tent_[type][depth][*tent_slot].full.program)
     {
-        return program;
+        return ANONYMOUS::pick_light_variant(l, gbuffer_has_subsurface_, color_lighting_pcf_tent_[type][depth][*tent_slot]);
     }
-    const auto tent_slot = ANONYMOUS::get_pcf_tent_slot(l);
-    if(!tent_slot)
-    {
-        return program;
-    }
-    const auto& tent_program = color_lighting_pcf_tent_[uint8_t(l.type)][uint8_t(l.shadow_params.depth)][*tent_slot];
-    return tent_program.program ? tent_program : program;
+    return ANONYMOUS::pick_light_variant(l, gbuffer_has_subsurface_, color_lighting_[type][depth][impl]);
 }
 
 auto deferred::get_light_program_no_shadows(const light& l) const -> const color_lighting&
 {
-    return color_lighting_no_shadow_[uint8_t(l.type)];
+    return ANONYMOUS::pick_light_variant(l, gbuffer_has_subsurface_, color_lighting_no_shadow_[uint8_t(l.type)]);
 }
 
-void deferred::submit_pbr_material(geom_program& program, const pbr_material& mat)
+void deferred::submit_pbr_material(geom_program& program, const pbr_material& mat, bool keeps_subsurface)
 {
     const auto& color_map = mat.get_color_map();
     const auto& normal_map = mat.get_normal_map();
@@ -640,6 +691,10 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     // The values an instanced draw reads per instance (pbr_material::write_instance_constants), here as uniforms.
     std::array<math::vec4, material::MAX_INSTANCE_CONSTANTS> constants{};
     mat.write_instance_constants(constants.data());
+    if(!keeps_subsurface)
+    {
+        ANONYMOUS::clear_subsurface_color(constants.data());
+    }
     const auto& tiling = mat.get_tiling();
     const auto& dither_threshold = mat.get_dither_threshold();
     const auto surface_data2 = mat.get_surface_data2();
@@ -1185,7 +1240,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     const auto visibility_set = collect_visible_models(scn, camera, params, render_mask, dt);
 
-    run_g_buffer_pass(visibility_set, camera, rview, dt);
+    run_g_buffer_pass(visibility_set, camera, rview, params.limits, dt);
 
     run_velocity_pass(visibility_set, camera, rview, render_size);
 
@@ -1213,7 +1268,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     // Cloud shadow map before any lighting: the directional light and the irradiance bake
     // read it.
-    run_cloud_shadow_pass(scn, camera, rview);
+    run_cloud_shadow_pass(scn, camera, rview, params.limits);
 
     // The sky's irradiance SH, before GI: the radiance cache, the screen probes and the card radiosity read this
     // frame's sky on their misses (a view's first frame included), and the indirect pass composites it.
@@ -1242,7 +1297,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(stages & pipeline_steps::atmospheric)
     {
-        target = run_atmospherics_pass(target, scn, camera, rview, dt);
+        target = run_atmospherics_pass(target, scn, camera, rview, params.limits, dt);
     }
 
     // Over the sky and the clouds; the particles drawn next fog themselves with the same fog.
@@ -1497,6 +1552,7 @@ void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& vie
 void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                                  const camera& camera,
                                  gfx::render_view& rview,
+                                 const feature_limits& limits,
                                  delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/G-Buffer Pass");
@@ -1516,6 +1572,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     batch_collector_.clear();
     skinned_batch_collector_.clear();
     source_runs_.clear();
+    // The limits alone decide it: checking every drawn material would cost a scene with many of them on the CPU.
+    gbuffer_has_subsurface_ = limits.subsurface;
     skinned_batching_run_ = is_skinned_batching_active();
     auto& skinning_palettes = engine::context().get_cached<renderer>().get_skinning_palettes();
 
@@ -1599,7 +1657,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                 if(mat.is<pbr_material>())
                 {
                     const auto& pbr = static_cast<const pbr_material&>(mat);
-                    submit_pbr_material(prog, pbr);
+                    submit_pbr_material(prog, pbr, gbuffer_has_subsurface_);
                 }
             }
 
@@ -1890,7 +1948,7 @@ void deferred::submit_prepared_geometry(batch_collector& collector,
                 const bool material_submitted = mat.submit(program.program.get());
                 if(!material_submitted && mat.is<pbr_material>())
                 {
-                    submit_pbr_material(program, static_cast<const pbr_material&>(mat));
+                    submit_pbr_material(program, static_cast<const pbr_material&>(mat), gbuffer_has_subsurface_);
                 }
                 on_draw(program, instance_count);
                 bgfx::submit(pass.id, program.program->native_handle(), 0, BGFX_DISCARD_ALL);
@@ -1898,7 +1956,14 @@ void deferred::submit_prepared_geometry(batch_collector& collector,
         program.program->end();
     };
     draw_batches(plain_program, plain_batches_, PlainLayout{});
-    draw_batches(material_program, material_value_batches_, MaterialLayout{});
+    if(gbuffer_has_subsurface_)
+    {
+        draw_batches(material_program, material_value_batches_, MaterialLayout{});
+    }
+    else
+    {
+        draw_batches(material_program, material_value_batches_, ANONYMOUS::subsurface_free_layout<MaterialLayout>{});
+    }
     stats_.add_batch_stats(collector.get_stats());
 }
 
@@ -2011,7 +2076,7 @@ void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
             const bool material_submitted = mat.submit(program.program.get());
             if(!material_submitted && mat.is<pbr_material>())
             {
-                submit_pbr_material(program, static_cast<const pbr_material&>(mat));
+                submit_pbr_material(program, static_cast<const pbr_material&>(mat), gbuffer_has_subsurface_);
             }
             if(is_baked)
             {
@@ -3098,7 +3163,36 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     pass.set_view_proj(view, proj);
 
     const bool samples_probe_inline = apply_reflection && inline_probe_.cubemap;
-    const auto& iprogram = samples_probe_inline ? indirect_lighting_probe_program_ : indirect_lighting_program_;
+    const auto& defaults = default_textures::get();
+    const gfx::texture::ptr traced_layer = apply_reflection ? get_traced_reflection_layer(rview) : defaults.black_texture();
+    // Surface cache GI and SSIL produce the SAME quantity in the same units -- a hemispherical
+    // indirect diffuse estimate plus the weight with which it replaces the environment probe --
+    // so they feed one consumer slot and only one of them is used. The cache wins when present:
+    // it sees geometry off screen and behind the camera, which SSIL cannot at any sample count.
+    auto indirect_diffuse_tex = rview.tex_find("GI_RESOLVE");
+    if(!indirect_diffuse_tex)
+    {
+        indirect_diffuse_tex = rview.tex_find("SSIL");
+    }
+    // The occlusion of both indirect terms: the screen-space AO, and the GTSO table for the
+    // specular. The untraced reflection layer (PBUFFER) takes the full occlusion, the traced
+    // layers in RBUFFER only the material AO's.
+    const auto screen_ao = get_screen_ao_inputs(rview);
+    // With all three screen inputs at their defaults the variant takes their values instead of fetching them.
+    const bool has_screen_inputs = indirect_diffuse_tex || traced_layer != defaults.black_texture() ||
+                                   screen_ao.texture != defaults.white_texture();
+    const auto& full_program = samples_probe_inline ? indirect_lighting_probe_program_ : indirect_lighting_program_;
+    const auto& lean_program = samples_probe_inline ? indirect_lighting_probe_no_screen_inputs_program_
+                                                    : indirect_lighting_no_screen_inputs_program_;
+    const auto& subsurface_free_program = samples_probe_inline
+                                              ? indirect_lighting_probe_no_screen_inputs_no_subsurface_program_
+                                              : indirect_lighting_no_screen_inputs_no_subsurface_program_;
+    const bool uses_lean_program = !has_screen_inputs && ANONYMOUS::is_program_loaded(lean_program);
+    const bool uses_subsurface_free_program =
+        uses_lean_program && !gbuffer_has_subsurface_ && ANONYMOUS::is_program_loaded(subsurface_free_program);
+    const auto& iprogram = uses_subsurface_free_program ? subsurface_free_program
+                           : uses_lean_program          ? lean_program
+                                                        : full_program;
     iprogram.program->begin();
 
     float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
@@ -3111,23 +3205,12 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     {
         gfx::set_texture(iprogram.s_tex[i], i, gbuffer->get_texture(i));
     }
-    gfx::set_texture(iprogram.s_tex[i],
-                     i,
-                     apply_reflection ? get_traced_reflection_layer(rview) : default_textures::get().black_texture());
+    gfx::set_texture(iprogram.s_tex[i], i, traced_layer);
     i++;
     gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
     i++;
-    gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex ? irradiance_result.irradiance_tex : default_textures::get().black_texture());
-    
-    // Surface cache GI and SSIL produce the SAME quantity in the same units -- a hemispherical
-    // indirect diffuse estimate plus the weight with which it replaces the environment probe --
-    // so they feed one consumer slot and only one of them is used. The cache wins when present:
-    // it sees geometry off screen and behind the camera, which SSIL cannot at any sample count.
-    auto indirect_diffuse_tex = rview.tex_find("GI_RESOLVE");
-    if(!indirect_diffuse_tex)
-    {
-        indirect_diffuse_tex = rview.tex_find("SSIL");
-    }
+    gfx::set_texture(iprogram.s_irradiance, 7, irradiance_result.irradiance_tex ? irradiance_result.irradiance_tex : defaults.black_texture());
+
     // Transparent (alpha 0) fallback when both are disabled/absent so the shader's
     // mix(irradiance, ssil.rgb, ssil.a) collapses to the pure SH probe. The opaque-black
     // default (alpha 1) would instead force mix() to 0 and wipe out the ambient.
@@ -3139,10 +3222,6 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     // estimate is SSIL's, whose rays resolved the screen-space visibility per pixel: it takes
     // no screen-space AO, where the GI resolve takes it below its probe lattice.
     const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_find("GI_RESOLVE");
-    // The occlusion of both indirect terms: the screen-space AO, and the GTSO table for the
-    // specular. The untraced reflection layer (PBUFFER) takes the full occlusion, the traced
-    // layers in RBUFFER only the material AO's.
-    const auto screen_ao = get_screen_ao_inputs(rview);
     const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f,
                                       indirect_diffuse_is_ssil ? 1.0f : 0.0f,
                                       screen_ao.multi_bounce_albedo_cap,
@@ -3429,9 +3508,21 @@ auto deferred::is_probe_layer_debug_view() const -> bool
 
 namespace
 {
-/// Copies the skylight settings into the atmospheric pass parameters. Returns false when the
-/// scene has no active skylight. Only the sun direction depends on the directional light.
+/// The cloud mode @p limits let a sky render: without volumetric clouds, volumetric ones render flat.
+auto limit_cloud_mode(skylight_component::cloud_mode mode, const feature_limits& limits) -> skylight_component::cloud_mode
+{
+    if(!limits.volumetric_clouds && mode == skylight_component::cloud_mode::volumetric)
+    {
+        return skylight_component::cloud_mode::flat;
+    }
+    return mode;
+}
+
+/// Copies the skylight settings into the atmospheric pass parameters, the cloud mode as @p limits allow it (the
+/// cloud shadow map and the sky must both render the limited mode). Returns false when the scene has no active
+/// skylight. Only the sun direction depends on the directional light.
 auto gather_skylight_params(scene& scn,
+                            const feature_limits& limits,
                             atmospheric_pass_perez::run_params& params_perez,
                             atmospheric_pass_skybox::run_params& params_skybox,
                             skylight_component::sky_mode& mode) -> bool
@@ -3462,7 +3553,7 @@ auto gather_skylight_params(scene& scn,
 
             params_perez.turbidity = light_comp_ref.get_turbidity();
             params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
-            params_perez.cloud_mode = static_cast<int>(light_comp_ref.get_cloud_mode());
+            params_perez.cloud_mode = static_cast<int>(limit_cloud_mode(light_comp_ref.get_cloud_mode(), limits));
             params_perez.cloud_coverage = light_comp_ref.get_cloud_coverage();
             params_perez.cloud_macro_variation = light_comp_ref.get_cloud_macro_variation();
             params_perez.cloud_base_altitude = light_comp_ref.get_cloud_base_altitude();
@@ -3496,7 +3587,10 @@ auto gather_skylight_params(scene& scn,
 }
 } // namespace
 
-void deferred::run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview)
+void deferred::run_cloud_shadow_pass(scene& scn,
+                                     const camera& camera,
+                                     gfx::render_view& rview,
+                                     const feature_limits& limits)
 {
     cloud_shadow_ = {};
     // The map is an R8 target with mips the backend builds; without them the lights take no cloud shadow.
@@ -3507,7 +3601,7 @@ void deferred::run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::rend
     atmospheric_pass_perez::run_params params_perez;
     atmospheric_pass_skybox::run_params params_skybox;
     skylight_component::sky_mode mode{};
-    if(!gather_skylight_params(scn, params_perez, params_skybox, mode))
+    if(!gather_skylight_params(scn, limits, params_perez, params_skybox, mode))
     {
         return;
     }
@@ -3523,6 +3617,7 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                                      scene& scn,
                                      const camera& camera,
                                      gfx::render_view& rview,
+                                     const feature_limits& limits,
                                      delta_t dt) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Atmospheric Pass");
@@ -3530,7 +3625,7 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
     atmospheric_pass_perez::run_params params_perez;
     atmospheric_pass_skybox::run_params params_skybox;
     skylight_component::sky_mode mode{};
-    const bool found_sun = gather_skylight_params(scn, params_perez, params_skybox, mode);
+    const bool found_sun = gather_skylight_params(scn, limits, params_perez, params_skybox, mode);
 
     if(!found_sun)
     {
@@ -4673,6 +4768,22 @@ auto deferred::init(rtti::context& ctx) -> bool
     indirect_lighting_probe_program_.cache_uniforms();
     indirect_lighting_probe_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light_probe");
 
+    indirect_lighting_no_screen_inputs_program_.cache_uniforms();
+    indirect_lighting_no_screen_inputs_program_.program =
+        load_program("vs_clip_quad", "fs_deferred_indirect_light_no_screen_inputs");
+
+    indirect_lighting_probe_no_screen_inputs_program_.cache_uniforms();
+    indirect_lighting_probe_no_screen_inputs_program_.program =
+        load_program("vs_clip_quad", "fs_deferred_indirect_light_probe_no_screen_inputs");
+
+    indirect_lighting_no_screen_inputs_no_subsurface_program_.cache_uniforms();
+    indirect_lighting_no_screen_inputs_no_subsurface_program_.program =
+        load_program("vs_clip_quad", "fs_deferred_indirect_light_no_screen_inputs_no_subsurface");
+
+    indirect_lighting_probe_no_screen_inputs_no_subsurface_program_.cache_uniforms();
+    indirect_lighting_probe_no_screen_inputs_no_subsurface_program_.program =
+        load_program("vs_clip_quad", "fs_deferred_indirect_light_probe_no_screen_inputs_no_subsurface");
+
     auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.sc");
     if(cs_irradiance)
     {
@@ -4687,79 +4798,82 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     // Uniforms before programs (the cache_uniform order contract): every slot shares the
     // same uniform set, so registering one of each array is enough for all of them.
-    for(auto& byLightType : color_lighting_no_shadow_)
+    // Every program of an array of light programs, whatever its dimensions.
+    const auto cache_light_uniforms = [](const auto& self, auto& programs) -> void
     {
-        byLightType.cache_uniforms();
-    }
-    for(auto& byLightType : color_lighting_)
-    {
-        for(auto& byDepthType : byLightType)
+        for(auto& entry : programs)
         {
-            for(auto& bySmImpl : byDepthType)
+            if constexpr(std::is_array_v<std::remove_reference_t<decltype(entry)>>)
             {
-                bySmImpl.cache_uniforms();
+                self(self, entry);
+            }
+            else
+            {
+                entry.full.cache_uniforms();
+                entry.no_contact.cache_uniforms();
+                entry.no_contact_no_subsurface.cache_uniforms();
             }
         }
-    }
-    for(auto& byLightType : color_lighting_pcf_tent_)
+    };
+    cache_light_uniforms(cache_light_uniforms, color_lighting_no_shadow_);
+    cache_light_uniforms(cache_light_uniforms, color_lighting_);
+    cache_light_uniforms(cache_light_uniforms, color_lighting_pcf_tent_);
+    // Each light program with its variants (light_program_variants).
+    const auto load_light_program = [&](light_program_variants& variants, const std::string& name)
     {
-        for(auto& byDepthType : byLightType)
-        {
-            for(auto& byTent : byDepthType)
-            {
-                byTent.cache_uniforms();
-            }
-        }
-    }
+        variants.full.program = load_program("vs_clip_quad", name);
+        variants.no_contact.program = load_program("vs_clip_quad", name + "_no_contact");
+        variants.no_contact_no_subsurface.program = load_program("vs_clip_quad", name + "_no_contact_no_subsurface");
+    };
 
     // clang-format off
-    color_lighting_no_shadow_[uint8_t(light_type::spot)].program = load_program("vs_clip_quad", "fs_deferred_spot_light");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)].program = load_program("vs_clip_quad", "fs_deferred_spot_light_hard");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcf");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcss");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_vsm");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_esm");
+    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::spot)], "fs_deferred_spot_light");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light_hard");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light_pcf");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light_pcss");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light_vsm");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light_esm");
 
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)].program = load_program("vs_clip_quad", "fs_deferred_spot_light_hard_linear");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcf_linear");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcss_linear");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_vsm_linear");
-    color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_spot_light_esm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light_hard_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light_pcf_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light_pcss_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light_vsm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light_esm_linear");
 
-    color_lighting_no_shadow_[uint8_t(light_type::point)].program = load_program("vs_clip_quad", "fs_deferred_point_light");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)].program = load_program("vs_clip_quad", "fs_deferred_point_light_hard");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_pcf");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_pcss");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_vsm");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_esm");
+    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::point)], "fs_deferred_point_light");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_point_light_hard");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light_pcf");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light_pcss");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light_vsm");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light_esm");
 
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)].program = load_program("vs_clip_quad", "fs_deferred_point_light_hard_linear");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_pcf_linear");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_pcss_linear");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_vsm_linear");
-    color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_point_light_esm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_point_light_hard_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light_pcf_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light_pcss_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light_vsm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light_esm_linear");
 
-    color_lighting_no_shadow_[uint8_t(light_type::directional)].program = load_program("vs_clip_quad", "fs_deferred_directional_light");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)].program = load_program("vs_clip_quad", "fs_deferred_directional_light_hard");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcss");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_vsm");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_esm");
+    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::directional)], "fs_deferred_directional_light");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light_hard");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light_pcf");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light_pcss");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light_vsm");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light_esm");
 
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)].program = load_program("vs_clip_quad", "fs_deferred_directional_light_hard_linear");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_linear");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcss_linear");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_vsm_linear");
-    color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ].program = load_program("vs_clip_quad", "fs_deferred_directional_light_esm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light_hard_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light_pcf_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light_pcss_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light_vsm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light_esm_linear");
 
     // Linear spot and point maps keep the point-tap PCF and have no tent sizes; point lights never reach the 7x7.
-    color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcf_tent3");
-    color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot].program = load_program("vs_clip_quad", "fs_deferred_spot_light_pcf_tent7");
-    color_lighting_pcf_tent_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_point_light_pcf_tent3");
-    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_tent3");
-    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_tent7");
-    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent3_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_linear_tent3");
-    color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent7_slot].program = load_program("vs_clip_quad", "fs_deferred_directional_light_pcf_linear_tent7");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_spot_light_pcf_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_spot_light_pcf_tent7");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_point_light_pcf_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light_pcf_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light_pcf_tent7");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light_pcf_linear_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light_pcf_linear_tent7");
     // clang-format on
 
     ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");

@@ -66,7 +66,7 @@ constexpr image_need AUTO_EXPOSURE_IMAGES[] = {
 };
 constexpr const char* AUTO_EXPOSURE_SHADERS[] = {"exposure/cs_luminance_histogram", "exposure/cs_histogram_average"};
 
-constexpr image_need LOCAL_EXPOSURE_IMAGES[] = {{bgfx::TextureFormat::R16F}, {bgfx::TextureFormat::RGBA32F}};
+constexpr image_need LOCAL_EXPOSURE_IMAGES[] = {{bgfx::TextureFormat::R16F}, {bgfx::TextureFormat::RGBA16F}};
 constexpr const char* LOCAL_EXPOSURE_SHADERS[] = {"exposure/cs_local_exposure_"};
 
 constexpr image_need PRE_EXPOSURE_IMAGES[] = {{bgfx::TextureFormat::RGBA32F}};
@@ -457,6 +457,8 @@ auto intersect_feature_limits(const feature_limits& lhs, const feature_limits& r
     limits.max_shadow_resolution = std::min(lhs.max_shadow_resolution, rhs.max_shadow_resolution);
     limits.soft_shadows = lhs.soft_shadows && rhs.soft_shadows;
     limits.contact_shadows = lhs.contact_shadows && rhs.contact_shadows;
+    limits.subsurface = lhs.subsurface && rhs.subsurface;
+    limits.volumetric_clouds = lhs.volumetric_clouds && rhs.volumetric_clouds;
     return limits;
 }
 

@@ -21,7 +21,7 @@ namespace unravel
  */
 struct local_exposure_params
 {
-    /// Flattened bilateral grid: texel (tile_x * slices + slice, tile_y), rg = the slice's raw sum
+    /// Flattened bilateral grid: texel (slice * tiles_x + tile_x, tile_y), rg = the slice's raw sum
     /// of log2 luminance and of weight.
     gfx::texture::ptr grid;
     /// The 1/32 resolution Gaussian of the log luminance, the edge-blind level.
@@ -75,9 +75,9 @@ struct local_exposure_uniforms : uniforms_cache
      */
     void submit(const local_exposure_params& params, float pre_exposure) const
     {
-        // The grid is point-fetched (the shader gathers the flattened layout itself); the blurred
-        // level is filtered bilinearly.
-        constexpr std::uint64_t grid_sampler_flags = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+        // Both are filtered bilinearly: the grid inside one slice page at a time (the shader keeps
+        // its taps off the page edges), the blurred level as a plain image.
+        constexpr std::uint64_t grid_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
         constexpr std::uint64_t blurred_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
         const bool active = params.is_active();
         const auto stand_in = default_textures::get().black_texture();

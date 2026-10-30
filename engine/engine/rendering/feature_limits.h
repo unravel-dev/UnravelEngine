@@ -48,6 +48,12 @@ struct feature_limits
     bool soft_shadows{true};
     /// Contact shadows.
     bool contact_shadows{true};
+    /// Subsurface scattering: off, the G-buffer holds every material's subsurface color as black, and the lighting
+    /// programs leave the subsurface code out.
+    bool subsurface{true};
+    /// Volumetric clouds: off, a sky that asks for them renders flat clouds (one sample of the same layer in the sky
+    /// pass) instead of the half-resolution raymarch.
+    bool volumetric_clouds{true};
 
     friend auto operator==(const feature_limits& lhs, const feature_limits& rhs) -> bool = default;
 };

@@ -156,7 +156,8 @@ public:
         float cloud_brightness = 1.0f;
         /// Layer altitudes measured from world y = 0 (true) or from the camera (false).
         bool cloud_world_space_altitude = true;
-        /// Project the cloud layer as a shadow on the scene (directional light).
+        /// Project the cloud layer as a shadow on the scene (directional light) and dim the sky irradiance by its
+        /// coverage; off, there is no cloud shadow map.
         bool cloud_shadows = false;
         /// Opacity of the projected cloud shadow [0, 1].
         float cloud_shadow_opacity = 1.0f;
@@ -400,6 +401,10 @@ private:
 
     /// World y of the layer base for the altitude mode of `params`.
     static auto layer_base_world_y(const run_params& params, const camera& camera) -> float;
+
+    /// Whether a ray of `camera` can reach the layer. False when the camera is below the layer and every ray it casts
+    /// meets the ground first (fs_cloud.sc cloud_shell_interval): the pre-pass and the composite would draw nothing.
+    static auto is_layer_in_view(const run_params& params, const camera& camera) -> bool;
 
     /// Drops the per-view cloud history when the volumetric path is not in use.
     static void release_cloud_resources(gfx::render_view& rview);

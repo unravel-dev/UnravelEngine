@@ -37,7 +37,41 @@ SAMPLER2D(s_cloudShadow, 11);
 #include "cloud_shadow.sh"
 #endif
 
+// 0 in the "_no_contact" light programs, which deferred::get_light_program picks for a light without contact
+// shadows: a ray march behind a uniform branch still holds its registers on every pixel, and the light passes are
+// register bound on mobile GPUs.
+#ifndef PBR_CONTACT_SHADOWS
+#define PBR_CONTACT_SHADOWS 1
+#endif
+
+// 0 in the "_no_subsurface" programs, which the pipeline picks when the run's limits leave subsurface out
+// (feature_limits::subsurface) and its G-buffer holds every subsurface colour black (deferred::run_g_buffer_pass): the
+// subsurface attachment is not read, and with its colour black the transmittance and the subsurface shading compile out.
+#ifndef PBR_SUBSURFACE
+#define PBR_SUBSURFACE 1
+#endif
+
+/// The G-buffer's subsurface attachment at @p texel; black where the program leaves it unread (PBR_SUBSURFACE 0), as the
+/// G-buffer holds it then. The opacity only counts under a subsurface colour.
+GBufferDataSubsurface DecodeLightingSubsurfaceTexel(ivec2 texel)
+{
+#if PBR_SUBSURFACE
+    return DecodeGBufferSubsurfaceTexel(texel, s_tex3);
+#else
+    GBufferDataSubsurface subsurface;
+    subsurface.subsurface_color = vec3_splat(0.0);
+    subsurface.subsurface_opacity = 0.0;
+    return subsurface;
+#endif
+}
+
 #if PBR_INDIRECT
+// 0 in the programs for a view without screen-space AO, a GI or SSIL estimate and traced reflections: their
+// samplers hold the default textures then (deferred::run_indirect_lighting_pass), and pbr_indirect takes the values
+// those hold instead of fetching them per pixel.
+#ifndef PBR_INDIRECT_SCREEN_INPUTS
+#define PBR_INDIRECT_SCREEN_INPUTS 1
+#endif
 // RBUFFER (the traced reflections) and the BRDF LUT; the direct light programs bind neither.
 SAMPLER2D(s_tex5, 5);
 SAMPLER2D(s_tex6, 6);
@@ -916,7 +950,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     GBufferData data = ConstructGBuffer(DecodeGBufferColorAndAOTexel(gbuf_texel, s_tex0),
                                         DecodeGBufferNormalMetalRoughnessTexel(gbuf_texel, s_tex1),
                                         DecodeGBufferEmissiveTexel(gbuf_texel, s_tex2),
-                                        DecodeGBufferSubsurfaceTexel(gbuf_texel, s_tex3),
+                                        DecodeLightingSubsurfaceTexel(gbuf_texel),
                                         gbuffer_depth);
 #if POINT_LIGHT || SPOT_LIGHT
     // Other pixels of the quad may have left at the discard, and a screen derivative would read their values: the
@@ -974,6 +1008,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float subsurface_shadow = shadow.transmission;
     // Contact shadows: skipped where they cannot change the result (unlit, already fully
     // shadowed, sky). They shadow the transmission too.
+#if PBR_CONTACT_SHADOWS
     float contact_shadow_length = u_light_data.w;
     BRANCH
     if(contact_shadow_length > 0.0 && NoL > 0.0 && surface_shadow > CONTACT_SHADOW_SKIP_BELOW && data.depth01 < 1.0)
@@ -988,6 +1023,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
         surface_shadow = min(surface_shadow, contact);
         subsurface_shadow *= contact;
     }
+#endif
 #if DIRECTIONAL_LIGHT
     float cloud_shadow = CloudShadow(world_position, L);
     surface_shadow *= cloud_shadow;
@@ -1032,7 +1068,11 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // costs it far more than the fetch.
     vec4 pre_exposure_gpu = u_pre_exposure_gpu;
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
-    GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
+    GBufferData data = ConstructGBuffer(DecodeGBufferColorAndAOTexel(gbuf_texel, s_tex0),
+                                        DecodeGBufferNormalMetalRoughnessTexel(gbuf_texel, s_tex1),
+                                        DecodeGBufferEmissiveTexel(gbuf_texel, s_tex2),
+                                        DecodeLightingSubsurfaceTexel(gbuf_texel),
+                                        DecodeGBufferDepthTexel(gbuf_texel, s_tex4));
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
     vec3 world_position = u_camera_position.xyz + clipToWorld(u_invViewProjRelative, clip);
 
@@ -1049,7 +1089,12 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // Direct light takes none.
     // Sky pixels read no occlusion and no GI: the GI gather leaves them unwritten (selected, not multiplied away).
     bool is_surface = data.depth < 1.0;
+#if PBR_INDIRECT_SCREEN_INPUTS
     vec4 screen_ao_sample = is_surface ? texture2D(s_screen_ao, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
+#else
+    // The white default: full visibility.
+    vec4 screen_ao_sample = is_surface ? vec4_splat(1.0) : vec4(0.5, 0.5, 0.5, 1.0);
+#endif
     float material_ao = data.ambient_occlusion;
     float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao_intensity);
     float visibility = material_ao * screen_ao;
@@ -1077,7 +1122,12 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     SHIndirectTerms environment = eval_sh_cone_and_lobe(s_irradiance, diffuse_axis, visibility, dominant_dir, indirect_filtered_roughness);
     vec3 ambient_sh = environment.irradiance * bounce_gain * (RECIP_PI * pre_exposure_from_gpu(pre_exposure_gpu));
     bool gi_is_ssil = u_indirect_params.y > 0.5;
+#if PBR_INDIRECT_SCREEN_INPUTS
     vec4 gi_sample = gi_is_ssil || is_surface ? texture2D(s_ssil, texcoord0) : vec4_splat(0.0);
+#else
+    // The transparent default: no estimate.
+    vec4 gi_sample = vec4_splat(0.0);
+#endif
     float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (is_surface ? 1.0 : 0.0);
     float gi_served = saturate(u_indirect_params.x) * gi_coverage;
     vec3 gi_diffuse = gi_is_ssil ? gi_sample.rgb : gi_sample.rgb * u_indirect_params.w;
@@ -1101,7 +1151,13 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec4 probe_texel = texture2D(s_probe_layer, texcoord0);
 #endif
     vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(probe_texel, u_probe_layer_params), environment_specular);
-    vec3 indirect_specular = ComposeIndirectSpecular(texture2D(s_tex5, texcoord0), probe_layer, specular_occlusion);
+#if PBR_INDIRECT_SCREEN_INPUTS
+    vec4 traced_texel = texture2D(s_tex5, texcoord0);
+#else
+    // The opaque black default, the traced clear: no traced radiance, the whole pixel left to the probe layer.
+    vec4 traced_texel = vec4(0.0, 0.0, 0.0, 1.0);
+#endif
+    vec3 indirect_specular = ComposeIndirectSpecular(traced_texel, probe_layer, specular_occlusion);
 
     // The subsurface colour joins the diffuse lobe for indirect light (black without one), as the surface cache's
     // albedo carries it for the light other surfaces bounce off this one.

@@ -111,9 +111,15 @@ public:
     void release_resources(gfx::render_view& rview);
 
 private:
+    /// Entries per axis of the tone curve's table (TONEMAPPING_LUT_SIZE in tonemapping_lut.sh).
+    static constexpr std::uint32_t lut_size = 52;
+
     auto create_or_update_output_fb(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& input,
                                     const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
+    /// The view's table of the colour grading, tone curve and display encoding of @p config, rendered again only
+    /// when they changed (fs_tonemapping_lut.sc).
+    auto update_lut(gfx::render_view& rview, const settings& config) -> const gfx::texture::ptr&;
 
     struct tonemapping_program : uniforms_cache
     {
@@ -121,37 +127,53 @@ private:
         {
             cache_uniform(program.get(), u_tonemapping, "u_tonemapping", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_grading, "u_grading", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_wb_lms, "u_wb_lms", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_vignette, "u_vignette", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_lift, "u_lift", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_gamma_inv, "u_gamma_inv", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_gain, "u_gain", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_bloom, "u_bloom", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_bloom_tint, "u_bloom_tint", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_bloom, "s_bloom", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_dirt, "s_dirt", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tonemapping_lut, "s_tonemapping_lut", bgfx::UniformType::Sampler);
             local_exposure.cache_uniforms();
         }
 
         gfx::program::uniform_ptr u_tonemapping;
         gfx::program::uniform_ptr u_grading;
-        gfx::program::uniform_ptr u_wb_lms;
         gfx::program::uniform_ptr u_vignette;
-        gfx::program::uniform_ptr u_lift;
-        gfx::program::uniform_ptr u_gamma_inv;
-        gfx::program::uniform_ptr u_gain;
         gfx::program::uniform_ptr s_input;
         gfx::program::uniform_ptr s_exposure;
         gfx::program::uniform_ptr u_bloom;
         gfx::program::uniform_ptr u_bloom_tint;
         gfx::program::uniform_ptr s_bloom;
         gfx::program::uniform_ptr s_dirt;
+        gfx::program::uniform_ptr s_tonemapping_lut;
         local_exposure_uniforms local_exposure;
 
         std::unique_ptr<gpu_program> program;
 
     } tonemapping_program_;
+
+    struct lut_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_tonemapping, "u_tonemapping", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_grading, "u_grading", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_wb_lms, "u_wb_lms", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_lift, "u_lift", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gamma_inv, "u_gamma_inv", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gain, "u_gain", bgfx::UniformType::Vec4);
+        }
+
+        gfx::program::uniform_ptr u_tonemapping;
+        gfx::program::uniform_ptr u_grading;
+        gfx::program::uniform_ptr u_wb_lms;
+        gfx::program::uniform_ptr u_lift;
+        gfx::program::uniform_ptr u_gamma_inv;
+        gfx::program::uniform_ptr u_gain;
+
+        std::unique_ptr<gpu_program> program;
+    } lut_program_;
 };
 } // namespace unravel

@@ -8,10 +8,11 @@
  * luminance lands in grid slices that hold no data and snaps to the blurred level along
  * luminance contours.
  *
- * The grid is the flattened 3D atlas cs_local_exposure_grid.sc writes - texel (tile_x * slices +
- * slice, tile_y), rg = the slice's raw sum of log2 luminance and sum of weight - read with
- * texelFetch; the blurred texture is the 1/32 resolution Gaussian of the log luminance
- * (cs_local_exposure_blur.sc), read with a bilinear sampler. Both are bound as 1x1 stand-ins when
+ * The grid is the flattened 3D atlas cs_local_exposure_grid.sc writes - slice pages side by side,
+ * texel (slice * tiles_x + tile_x, tile_y), rg = the slice's raw sum of log2 luminance and sum of
+ * weight - read with a bilinear sampler inside a page; the blurred texture is the 1/32 resolution
+ * Gaussian of the log luminance (cs_local_exposure_blur.sc), read with a bilinear sampler too.
+ * Both are bound as 1x1 stand-ins when
  * local exposure is off, and the enable lane keeps them unread. Includers keep sampler stages
  * 2 and 3 free for them (local_exposure_uniforms on the C++ side binds them).
  */
@@ -55,42 +56,33 @@ uniform vec4 u_local_exposure4;
 // no cell at all); the blurred level answers instead.
 #define LOCAL_EXPOSURE_MIN_WEIGHT 0.001
 
-/// One cell of the flattened grid: (sum of log2 luminance, sum of weight) for a tile's slice.
-vec2 sample_local_grid_cell(int tile_x, int tile_y, int slice)
+/// One slice page of the grid read bilinearly at @p tile_position (in tiles, inside the page's
+/// texel centres): (sum of log2 luminance, sum of weight) interpolated between the four tiles.
+vec2 sample_local_grid_slice(vec2 tile_position, float slice)
 {
-    int slices = int(u_local_slices);
-    ivec2 texel = ivec2(tile_x * slices + slice, tile_y);
-    return texelFetch(s_local_exposure_grid, texel, 0).xy;
+    vec2 page_texel = tile_position + vec2(slice * u_local_tiles_x, 0.0);
+    return texture2DLod(s_local_exposure_grid, page_texel / vec2(u_local_slices * u_local_tiles_x, u_local_tiles_y), 0.0).xy;
 }
 
 /**
  * The pixel's local level in log2 SCENE luminance: a trilinear gather of the bilateral grid
  * over the two tiles and two slices around it, with the blurred level standing in wherever the
- * gathered weight is too thin to be a measurement. Hand-written because a hardware bilinear on
- * the flattened layout would blend across slice and tile boundaries indiscriminately.
+ * gathered weight is too thin to be a measurement. The tile position is clamped to the page's
+ * outer texel centres, so the hardware bilinear never reaches into the neighbouring slice's page.
  */
 float compute_local_base_log(vec2 uv, float scene_log_lum, float blurred_log_lum)
 {
-    vec2 tile_coord = uv * u_local_grid_uv_scale * vec2(u_local_tiles_x, u_local_tiles_y) - vec2_splat(0.5);
-    vec2 tile_base = floor(tile_coord);
-    vec2 tile_fraction = tile_coord - tile_base;
-    ivec2 last_tile = ivec2(int(u_local_tiles_x) - 1, int(u_local_tiles_y) - 1);
+    vec2 tiles = vec2(u_local_tiles_x, u_local_tiles_y);
+    vec2 tile_position = clamp(uv * u_local_grid_uv_scale * tiles, vec2_splat(0.5), tiles - vec2_splat(0.5));
     float last_slice = max(u_local_slices - 1.0, 1.0);
     float slice_position = saturate((scene_log_lum - u_local_min_log_lum) * u_local_inv_log_range) * last_slice;
     float slice_base = floor(slice_position);
     float slice_fraction = slice_position - slice_base;
-    int slice_low = int(min(slice_base, last_slice));
-    int slice_high = int(min(slice_base + 1.0, last_slice));
-
-    vec2 accumulated = vec2_splat(0.0);
-    for (int corner = 0; corner < 4; ++corner)
-    {
-        ivec2 tile = clamp(ivec2(tile_base) + ivec2(corner & 1, corner >> 1), ivec2(0, 0), last_tile);
-        float tile_weight = mix(1.0 - tile_fraction.x, tile_fraction.x, float(corner & 1)) *
-                            mix(1.0 - tile_fraction.y, tile_fraction.y, float(corner >> 1));
-        accumulated += sample_local_grid_cell(tile.x, tile.y, slice_low) * (tile_weight * (1.0 - slice_fraction));
-        accumulated += sample_local_grid_cell(tile.x, tile.y, slice_high) * (tile_weight * slice_fraction);
-    }
+    float slice_low = min(slice_base, last_slice);
+    float slice_high = min(slice_base + 1.0, last_slice);
+    vec2 accumulated = mix(sample_local_grid_slice(tile_position, slice_low),
+                           sample_local_grid_slice(tile_position, slice_high),
+                           slice_fraction);
     float bilateral = accumulated.y > LOCAL_EXPOSURE_MIN_WEIGHT ? accumulated.x / accumulated.y : blurred_log_lum;
     return mix(bilateral, blurred_log_lum, saturate(u_local_blurred_blend));
 }

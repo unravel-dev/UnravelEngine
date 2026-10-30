@@ -17,10 +17,14 @@
  * FLATTENED, not a 3D texture: an image3D of rg32f is rejected outright by the
  * D3D and SPIR-V paths here, and the GL path cannot sample one in a fragment shader
  * (texture3DLod is unresolved at profile 430 - the same wall the cloud shaders hit). The grid
- * is therefore one 2D RGBA32F image, tiles laid out left to right with their slices end to end:
- * texel (tile_x * slices + slice, tile_y). The tonemapper does its own trilinear gather over
- * that layout, which it would need in any case - a hardware bilinear would blend across slice
- * and tile boundaries indiscriminately.
+ * is therefore one 2D image of slice pages side by side, each page tiles x by tiles y: texel
+ * (slice * tiles_x + tile_x, tile_y). A hardware bilinear inside a page is the interpolation
+ * between tiles, so the consumers read the trilinear gather as two filtered fetches, one per
+ * slice around the pixel (local_exposure.sh). RGBA16F, because 32-bit float formats are not
+ * filterable on mobile GPUs and GLES has no rg16f image: the raw sums stay below 1024 x 30
+ * (see the fixed-point scales below), and the half float's 11-bit mantissa keeps a slice's mean
+ * log luminance within a few thousandths of a stop (a few hundredths for a full tile at the top
+ * of the axis).
  *
  * Input is the metering grid's log2 SCENE luminance (cs_luminance_histogram.sc; pre-exposure
  * already removed, floored at the bottom of the histogram range), so the axis is the same one the
@@ -32,7 +36,7 @@
 SAMPLER2D(s_exposure_log_lum, 0);
 // Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
 // a program declares, so an image named like a sampler is rebound to that sampler's stage.
-IMAGE2D_WO(i_local_exposure_grid, rgba32f, 1);
+IMAGE2D_WO(i_local_exposure_grid, rgba16f, 1);
 
 /// x = metering grid width, y = metering grid height, z = cells per tile edge, w = slice count.
 uniform vec4 u_local_grid_params;
@@ -44,6 +48,7 @@ uniform vec4 u_local_grid_range;
 #define u_slice_count   u_local_grid_params.w
 #define u_min_log_lum   u_local_grid_range.x
 #define u_inv_log_range u_local_grid_range.y
+#define u_tiles_x       u_local_grid_range.z
 
 /// Luminance slices per tile column; the CPU side mirrors it (auto_exposure_pass::local_exposure_slices).
 #define LOCAL_EXPOSURE_SLICES 32
@@ -112,7 +117,7 @@ void main()
 		float log_sum = float(shared_log[local_index]) / LOG_SCALE + u_min_log_lum * weight;
 		int slice = int(local_index);
 		imageStore(i_local_exposure_grid,
-		           ivec2(tile.x * LOCAL_EXPOSURE_SLICES + slice, tile.y),
+		           ivec2(slice * int(u_tiles_x) + tile.x, tile.y),
 		           vec4(log_sum, weight, 0.0, 0.0));
 	}
 }
