@@ -86,6 +86,13 @@ auto internal_m2n_application_get_temporary_cache_path() -> std::string
     return get_script_folder("cache:/");
 }
 
+auto find_main_window() -> os::window*
+{
+    auto& ctx = engine::context();
+    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
+    return window ? &window->get_window() : nullptr;
+}
+
 auto internal_m2n_screen_get_size() -> math::vec2
 {
     auto& ctx = engine::context();
@@ -116,19 +123,19 @@ auto internal_m2n_screen_get_safe_area() -> script_rect
         area.height = float(size.height) - device->inset_top - device->inset_bottom;
         return area;
     }
-    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
+    auto* window = find_main_window();
     if(window == nullptr)
     {
         return area;
     }
     // In the player the game view is the window. The editor's Game panel is a part of its window,
     // and nothing covers it.
-    const auto window_size = window->get_window().get_size();
+    const auto window_size = window->get_size();
     if(window_size.w != size.width || window_size.h != size.height)
     {
         return area;
     }
-    const auto insets = window->get_window().get_safe_area_insets();
+    const auto insets = window->get_safe_area_insets();
     area.x = float(insets.left);
     area.y = float(insets.top);
     area.width = float(int(size.width) - insets.left - insets.right);
@@ -153,8 +160,8 @@ auto internal_m2n_screen_get_dpi() -> float
     {
         return device->dpi;
     }
-    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
-    return window ? window->get_window().get_content_scale() * BASE_SCREEN_DPI : BASE_SCREEN_DPI;
+    auto* window = find_main_window();
+    return window ? window->get_content_scale() * BASE_SCREEN_DPI : BASE_SCREEN_DPI;
 }
 
 /// A resolution as it crosses to C#: the layout of the C# Resolution struct.
@@ -177,34 +184,30 @@ auto find_display_manager() -> display_manager*
     return ctx.has<display_manager>() ? &ctx.get_cached<display_manager>() : nullptr;
 }
 
-auto find_main_window() -> os::window*
+/// Says once, with `is_logged` as the record, why a script's change does nothing in the editor.
+void log_editor_change_once(bool& is_logged, const char* message)
 {
-    auto& ctx = engine::context();
-    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
-    return window ? &window->get_window() : nullptr;
-}
-
-/// Says once why a script's display change does nothing in the editor.
-void log_editor_display_change()
-{
-    static bool is_logged = false;
     if(!is_logged)
     {
         is_logged = true;
-        APPLOG_INFO("Display changes from scripts apply in the player. The editor keeps its own window, vsync and "
-                    "frame cap.");
+        APPLOG_INFO("{}", message);
     }
+}
+
+void log_editor_display_change()
+{
+    static bool is_logged = false;
+    log_editor_change_once(is_logged,
+                           "Display changes from scripts apply in the player. The editor keeps its own window, vsync "
+                           "and frame cap.");
 }
 
 void log_editor_background_change()
 {
     static bool is_logged = false;
-    if(!is_logged)
-    {
-        is_logged = true;
-        APPLOG_INFO("Application.runInBackground applies in the player. The editor keeps its frame rate while it is "
-                    "minimized.");
-    }
+    log_editor_change_once(is_logged,
+                           "Application.runInBackground applies in the player. The editor keeps its frame rate while "
+                           "it is minimized.");
 }
 
 /// The window mode of a C# FullScreenMode, whose values are the window_mode's.

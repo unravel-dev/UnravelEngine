@@ -1,9 +1,11 @@
 #include "windows_resources.h"
 
 #include <logging/logging.h>
+#include <string_utils/utf8.h>
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <limits>
 #include <utility>
 
@@ -55,60 +57,13 @@ constexpr std::uint32_t BYTE_MASK = 0xFF;
 constexpr unsigned HALF_SHIFT = 16;
 constexpr std::uint32_t HALF_MASK = 0xFFFF;
 constexpr std::uint32_t DECIMAL_BASE = 10;
-constexpr char32_t REPLACEMENT_CHARACTER = 0xFFFD;
-constexpr char32_t LAST_CODE_POINT = 0x10FFFF;
-constexpr char32_t FIRST_SUPPLEMENTARY_CODE_POINT = 0x10000;
-constexpr char32_t HIGH_SURROGATE_BASE = 0xD800;
-constexpr char32_t LOW_SURROGATE_BASE = 0xDC00;
-constexpr unsigned SURROGATE_BITS = 10;
-constexpr char32_t SURROGATE_MASK = 0x3FF;
 
-/// The code point at `index` of the UTF-8 `text`, moving `index` past it. A malformed byte is one
-/// replacement character.
-auto decode_utf8(const std::string& text, std::size_t& index) -> char32_t
-{
-    const auto lead = static_cast<unsigned char>(text[index++]);
-    if(lead < 0x80)
-    {
-        return lead;
-    }
-    const std::size_t extra = lead >= 0xF8 ? 0 : lead >= 0xF0 ? 3 : lead >= 0xE0 ? 2 : lead >= 0xC0 ? 1 : 0;
-    if(extra == 0 || index + extra > text.size())
-    {
-        return REPLACEMENT_CHARACTER;
-    }
-    char32_t code = lead & (0x3Fu >> extra);
-    for(std::size_t i = 0; i < extra; ++i)
-    {
-        const auto next = static_cast<unsigned char>(text[index + i]);
-        if((next & 0xC0) != 0x80)
-        {
-            return REPLACEMENT_CHARACTER;
-        }
-        code = (code << 6) | (next & 0x3F);
-    }
-    index += extra;
-    return code;
-}
-
-/// UTF-8 text as UTF-16, the text of version strings.
+/// UTF-8 text as UTF-16, the text of version strings; malformed bytes become replacement characters.
 auto to_utf16(const std::string& text) -> std::u16string
 {
+    const std::string valid = utf8::replace_invalid(text);
     std::u16string result;
-    std::size_t index = 0;
-    while(index < text.size())
-    {
-        char32_t code = decode_utf8(text, index);
-        code = code > LAST_CODE_POINT ? REPLACEMENT_CHARACTER : code;
-        if(code < FIRST_SUPPLEMENTARY_CODE_POINT)
-        {
-            result.push_back(static_cast<char16_t>(code));
-            continue;
-        }
-        code -= FIRST_SUPPLEMENTARY_CODE_POINT;
-        result.push_back(static_cast<char16_t>(HIGH_SURROGATE_BASE + (code >> SURROGATE_BITS)));
-        result.push_back(static_cast<char16_t>(LOW_SURROGATE_BASE + (code & SURROGATE_MASK)));
-    }
+    utf8::utf8to16(valid.begin(), valid.end(), std::back_inserter(result));
     return result;
 }
 

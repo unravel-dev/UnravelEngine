@@ -72,6 +72,18 @@ auto get_max_fps_text(std::uint32_t max_fps) -> std::string
     return max_fps > 0 ? std::to_string(max_fps) : std::string("uncapped");
 }
 
+/// Sets an option; false when it already had the value.
+template<typename T>
+auto update_option(T& option, const T& value) -> bool
+{
+    if(option == value)
+    {
+        return false;
+    }
+    option = value;
+    return true;
+}
+
 /// Leaves fullscreen and gives the window its size, centered in the display's usable area.
 void apply_windowed(os::window& window, display_options& options)
 {
@@ -373,52 +385,59 @@ auto display_manager::get_options() const -> const display_options&
 void display_manager::set_window(rtti::context& ctx, window_mode mode, const usize32_t& size, std::uint32_t refresh_rate)
 {
     auto* main_window = ctx.get_cached<renderer>().get_main_window();
-    const bool is_unchanged = mode == options_.mode && size == options_.size && refresh_rate == options_.refresh_rate;
-    if(main_window == nullptr || is_unchanged)
+    if(main_window == nullptr)
     {
         return;
     }
-    options_.mode = mode;
-    options_.size = size;
-    options_.refresh_rate = refresh_rate;
-    apply_window(main_window->get_window());
+    const bool is_unchanged = mode == options_.mode && size == options_.size && refresh_rate == options_.refresh_rate;
+    if(!is_unchanged)
+    {
+        options_.mode = mode;
+        options_.size = size;
+        options_.refresh_rate = refresh_rate;
+        apply_window(main_window->get_window());
+    }
     keep_window_options();
 }
 
 void display_manager::set_display(rtti::context& ctx, int display)
 {
     auto* main_window = ctx.get_cached<renderer>().get_main_window();
-    if(main_window == nullptr || resolve_display(display) == main_window->get_window().get_display_index())
+    if(main_window == nullptr)
     {
         return;
     }
-    options_.display = display;
-    apply_window(main_window->get_window());
+    options_.display = resolve_display(display);
+    if(options_.display != main_window->get_window().get_display_index())
+    {
+        apply_window(main_window->get_window());
+    }
     keep_window_options();
 }
 
 void display_manager::set_vsync(rtti::context& ctx, bool vsync)
 {
-    if(vsync == options_.vsync)
+    // The options this run shows may come from the command line; the saved ones are what the next run starts with.
+    if(update_option(options_.vsync, vsync))
     {
-        return;
+        ctx.get_cached<renderer>().set_vsync(vsync);
     }
-    ctx.get_cached<renderer>().set_vsync(vsync);
-    options_.vsync = vsync;
-    saved_options_.vsync = vsync;
-    save();
+    if(update_option(saved_options_.vsync, vsync))
+    {
+        save();
+    }
 }
 
 void display_manager::set_max_fps(rtti::context& ctx, std::uint32_t max_fps)
 {
-    if(max_fps == options_.max_fps)
+    if(update_option(options_.max_fps, max_fps))
     {
-        return;
+        ctx.get_cached<simulation>().set_max_fps(max_fps);
     }
-    ctx.get_cached<simulation>().set_max_fps(max_fps);
-    options_.max_fps = max_fps;
-    saved_options_.max_fps = max_fps;
-    save();
+    if(update_option(saved_options_.max_fps, max_fps))
+    {
+        save();
+    }
 }
 
 void display_manager::set_run_in_background(rtti::context& ctx, bool run_in_background)
@@ -542,6 +561,12 @@ void display_manager::apply_command_line(const cmd_line::parser& parser)
 
 void display_manager::keep_window_options()
 {
+    const bool is_kept = saved_options_.mode == options_.mode && saved_options_.display == options_.display &&
+                         saved_options_.size == options_.size && saved_options_.refresh_rate == options_.refresh_rate;
+    if(is_kept && !has_unsaved_window_)
+    {
+        return;
+    }
     saved_options_.mode = options_.mode;
     saved_options_.display = options_.display;
     saved_options_.size = options_.size;

@@ -22,7 +22,6 @@ struct simulation
     using timepoint_t = clock_t::time_point;
     using duration_t = clock_t::duration;
     using delta_t = std::chrono::duration<float>;
-    simulation();
 
     //-----------------------------------------------------------------------------
     //  Name : run_one_frame ()

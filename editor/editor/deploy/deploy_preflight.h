@@ -37,11 +37,16 @@ class problems_cache
 {
 public:
     auto get(rtti::context& ctx, const deploy_settings& params) -> const std::vector<std::string>&;
+    /// get_steam_upload_problem, kept like get's answer; empty for a profile without a Steam upload.
+    auto get_steam_upload_problem(rtti::context& ctx, const deploy_settings& params) -> const std::string&;
     /// Checks again on the next get: something the checks read just changed.
     void invalidate();
 
 private:
+    void refresh(rtti::context& ctx, const deploy_settings& params);
+
     std::vector<std::string> problems_;
+    std::string steam_upload_problem_;
     std::string signature_;
     std::chrono::steady_clock::time_point checked_at_{};
 };

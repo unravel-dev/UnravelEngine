@@ -1,6 +1,7 @@
 #include "deploy_preflight.h"
 #include "deploy_android.h"
 #include "deploy_runtime.h"
+#include "deploy_steam.h"
 
 #include <deploy/folders.h>
 #include <deploy/keys.h>
@@ -211,6 +212,18 @@ auto can_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
 
 auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> const std::vector<std::string>&
 {
+    refresh(ctx, params);
+    return problems_;
+}
+
+auto problems_cache::get_steam_upload_problem(rtti::context& ctx, const deploy_settings& params) -> const std::string&
+{
+    refresh(ctx, params);
+    return steam_upload_problem_;
+}
+
+void problems_cache::refresh(rtti::context& ctx, const deploy_settings& params)
+{
     const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                                        params.profile,
                                        params.deploy_location.generic_string(),
@@ -231,10 +244,10 @@ auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> c
     if(signature != signature_ || now - checked_at_ >= PROBLEMS_REFRESH_INTERVAL)
     {
         problems_ = get_problems(ctx, params);
+        steam_upload_problem_ = has_steam_upload(params) ? deployment::get_steam_upload_problem(ctx, params) : std::string{};
         signature_ = signature;
         checked_at_ = now;
     }
-    return problems_;
 }
 
 void problems_cache::invalidate()

@@ -338,17 +338,35 @@ auto read_desktop_icon(rtti::context& ctx,
     return true;
 }
 
-/// Reads a Steam id at `key` when the arguments have one: a whole number from 0 (none) up.
+/// Reads a Steam id at `key` when the arguments have one: a whole number from 0 (none) up. Any other value is
+/// refused, not skipped.
 auto read_steam_id(const simdjson::dom::object& args, const char* key, std::uint32_t& id, std::string& error) -> bool
 {
-    const auto value = read_int64_or(args, key, id);
-    if(value < 0 || value > std::numeric_limits<std::uint32_t>::max())
+    simdjson::dom::element value;
+    if(args[key].get(value) != simdjson::SUCCESS)
     {
-        error = fmt::format("{} must be from 0 to {}.", key, std::numeric_limits<std::uint32_t>::max());
+        return true;
+    }
+    int64_t number = 0;
+    if(value.get(number) != simdjson::SUCCESS || number < 0 || number > std::numeric_limits<std::uint32_t>::max())
+    {
+        error = fmt::format("{} must be a whole number from 0 to {}.", key, std::numeric_limits<std::uint32_t>::max());
         return false;
     }
-    id = static_cast<std::uint32_t>(value);
+    id = static_cast<std::uint32_t>(number);
     return true;
+}
+
+/// Reads a Steam name at `key` when the arguments have one: text, or null for none. Any other value is refused.
+auto read_steam_name(const simdjson::dom::object& args, const char* key, std::string& name, std::string& error) -> bool
+{
+    simdjson::dom::element value;
+    if(args[key].get(value) != simdjson::SUCCESS || parse_string(value, name, error))
+    {
+        return true;
+    }
+    error = fmt::format("{} must be text or null.", key);
+    return false;
 }
 
 /// The desktop settings deploy_set_settings takes, read over the profile's: desktop_icon and steam_*. `is_given`
@@ -370,12 +388,12 @@ auto read_desktop_settings(rtti::context& ctx,
     bool has_icon = false;
     if(!read_desktop_icon(ctx, args, desktop, has_icon, error) ||
        !read_steam_id(args, "steam_app_id", desktop.steam.app_id, error) ||
-       !read_steam_id(args, "steam_depot_id", desktop.steam.depot_id, error))
+       !read_steam_id(args, "steam_depot_id", desktop.steam.depot_id, error) ||
+       !read_steam_name(args, "steam_account", desktop.steam.account, error) ||
+       !read_steam_name(args, "steam_branch", desktop.steam.branch, error))
     {
         return false;
     }
-    read_string(args, "steam_account", desktop.steam.account);
-    read_string(args, "steam_branch", desktop.steam.branch);
     is_given = has_icon || has_steam;
     return true;
 }

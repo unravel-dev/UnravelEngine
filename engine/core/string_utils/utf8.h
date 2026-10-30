@@ -40,7 +40,20 @@ Some library features will be disabled.
 If you leave UTF_CPP_CPLUSPLUS undefined, it will be internally assigned to __cplusplus.
 */
 
+// The library compares and converts between its char16_t and char32_t code units on purpose, which newer clang
+// reports with -Wcharacter-conversion.
+#if defined(__clang__)
+#pragma clang diagnostic push
+#if __has_warning("-Wcharacter-conversion")
+#pragma clang diagnostic ignored "-Wcharacter-conversion"
+#endif
+#endif
+
 #include "utf8/checked.h"
 #include "utf8/unchecked.h"
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #endif // header guard

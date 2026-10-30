@@ -6,14 +6,6 @@
 namespace unravel
 {
 
-simulation::simulation()
-{
-    if(max_inactive_fps_ == 0)
-    {
-        max_inactive_fps_ = std::max(max_inactive_fps_, max_fps_);
-    }
-}
-
 void simulation::run_one_frame(bool is_active)
 {
     // perform waiting loop if maximum fps set

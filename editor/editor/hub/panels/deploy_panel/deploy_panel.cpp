@@ -75,6 +75,7 @@ constexpr const char* RENAME_PROFILE_POPUP = "##rename_profile";
 constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
 constexpr const char* STEAM_UPLOAD_POPUP = "##steam_upload_confirm";
 constexpr const char* STEAM_UPLOAD_LABEL = ICON_MDI_STEAM " Upload to Steam";
+const std::string DEPLOY_RUNNING_PROBLEM = "A deploy is running.";
 // The space between a device's name and its details, in item spacings.
 constexpr float DEVICE_DETAILS_GAP = 2.0f;
 constexpr const char* CHOOSE_DEVICE_LABEL = "Choose a device";
@@ -124,22 +125,44 @@ auto draw_confirmation(const char* id, const std::string& question, const char* 
     return is_confirmed;
 }
 
+/// Draws properties of a profile's settings without undo: the Deploy window saves an edit to the profile itself.
+auto inspect_profile_data(rtti::context& ctx, entt::meta_any& object, const std::vector<entt::meta_data>& props)
+    -> inspect_result
+{
+    inspect_result result;
+    const inspect_without_undo_scope no_undo;
+    for(const auto& prop : props)
+    {
+        result |= inspect_property(ctx, object, make_proxy(object), prop);
+    }
+    return result;
+}
+
+/// inspect_profile_data for the properties of `settings` named in `names`.
+template<typename T>
+auto inspect_profile_properties(rtti::context& ctx, T& settings, std::initializer_list<entt::hashed_string> names)
+    -> inspect_result
+{
+    entt::meta_any object = entt::forward_as_meta(settings);
+    const auto type = entt::resolve<T>();
+    std::vector<entt::meta_data> props;
+    for(const auto& name : names)
+    {
+        if(const auto prop = type.data(name))
+        {
+            props.push_back(prop);
+        }
+    }
+    return inspect_profile_data(ctx, object, props);
+}
+
 /// The profile's Steam settings in rows, with what keeps them from uploading once an app is set.
 auto draw_steam_settings(rtti::context& ctx, steam_deploy_settings& steam) -> inspect_result
 {
     ImGui::SeparatorText("Steam");
     widgets::draw_muted_text("Upload to Steam sends the build in the profile's folder to this depot with steamcmd, "
                              "which Editor Settings > External Tools names.");
-    entt::meta_any object = entt::forward_as_meta(steam);
-    const auto type = entt::resolve<steam_deploy_settings>();
-    inspect_result result;
-    {
-        const inspect_without_undo_scope no_undo;
-        for(const auto& name : {"app_id"_hs, "depot_id"_hs, "account"_hs, "branch"_hs})
-        {
-            result |= inspect_property(ctx, object, make_proxy(object), type.data(name));
-        }
-    }
+    const auto result = inspect_profile_properties(ctx, steam, {"app_id"_hs, "depot_id"_hs, "account"_hs, "branch"_hs});
     const auto problem = steam.app_id == 0 ? std::string{} : deployment::check_steam_settings(steam);
     if(!problem.empty())
     {
@@ -1135,12 +1158,7 @@ void deploy_panel::draw_desktop_section(rtti::context& ctx)
                                          settings_editor_.get_profile())
                                  .c_str());
     auto& desktop = settings_editor_.get().desktop;
-    entt::meta_any object = entt::forward_as_meta(desktop);
-    inspect_result result;
-    {
-        const inspect_without_undo_scope no_undo;
-        result |= inspect_property(ctx, object, make_proxy(object), entt::resolve<desktop_deploy_settings>().data("icon"_hs));
-    }
+    auto result = inspect_profile_properties(ctx, desktop, {"icon"_hs});
     if(!desktop.icon)
     {
         widgets::draw_muted_text("Without an image, the icon is the engine's logo.");
@@ -1156,30 +1174,15 @@ void deploy_panel::draw_desktop_section(rtti::context& ctx)
 
 void deploy_panel::inspect_android_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names)
 {
-    entt::meta_any object = entt::forward_as_meta(settings_editor_.get().android);
-    const auto type = entt::resolve<android_deploy_settings>();
-    std::vector<entt::meta_data> props;
-    for(const auto& name : names)
+    if(inspect_profile_properties(ctx, settings_editor_.get().android, names).edit_finished)
     {
-        if(const auto prop = type.data(name))
-        {
-            props.push_back(prop);
-        }
+        save_android_settings(ctx);
     }
-    inspect_android_data(ctx, object, props);
 }
 
 void deploy_panel::inspect_android_data(rtti::context& ctx, entt::meta_any& object, const std::vector<entt::meta_data>& props)
 {
-    inspect_result result;
-    {
-        const inspect_without_undo_scope no_undo;
-        for(const auto& prop : props)
-        {
-            result |= inspect_property(ctx, object, make_proxy(object), prop);
-        }
-    }
-    if(result.edit_finished)
+    if(inspect_profile_data(ctx, object, props).edit_finished)
     {
         save_android_settings(ctx);
     }
@@ -1779,7 +1782,7 @@ void deploy_panel::draw_actions(rtti::context& ctx)
 
 void deploy_panel::draw_steam_upload_button(rtti::context& ctx, const deploy_settings& params)
 {
-    const auto problem = is_deploying() ? std::string("A deploy is running.") : deployment::get_steam_upload_problem(ctx, params);
+    const auto& problem = is_deploying() ? DEPLOY_RUNNING_PROBLEM : problems_.get_steam_upload_problem(ctx, params);
     if(widgets::draw_button(STEAM_UPLOAD_LABEL, false, problem.empty()))
     {
         ImGui::OpenPopup(STEAM_UPLOAD_POPUP);
@@ -1787,6 +1790,10 @@ void deploy_panel::draw_steam_upload_button(rtti::context& ctx, const deploy_set
     if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {
         ImGui::SetTooltip("%s", problem.empty() ? "Upload the build in the profile's folder to Steam with steamcmd." : problem.c_str());
+    }
+    if(!ImGui::IsPopupOpen(STEAM_UPLOAD_POPUP))
+    {
+        return;
     }
     // Above the button, its right edges aligned: at the mouse it would reach past the window's bottom edge.
     const ImVec2 anchor(ImGui::GetItemRectMax().x, ImGui::GetItemRectMin().y - ImGui::GetStyle().ItemSpacing.y);

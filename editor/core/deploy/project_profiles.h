@@ -7,6 +7,7 @@
 #include <hpp/string_view.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -70,7 +71,7 @@ public:
 
     /// Replaces an Android profile's identity, signing and texture formats.
     auto set_android(const std::string& name, const android_deploy_settings& android) -> result;
-    /// Replaces a desktop profile's icon.
+    /// Replaces a desktop profile's icon and Steam settings.
     auto set_desktop(const std::string& name, const desktop_deploy_settings& desktop) -> result;
 
     /**
@@ -118,6 +119,8 @@ private:
     auto find_mutable(const std::string& name) -> settings_profile*;
     /// Writes a profile and counts the change.
     auto store(const settings_profile& profile) -> result;
+    /// Edits a copy of a profile and keeps it once it is stored; a failed store leaves the profile as it was.
+    auto change(const std::string& name, const std::function<void(settings_profile&)>& edit) -> result;
     /// The error for an edit of overrides read from a file that could not be read; empty when they can change.
     auto check_editable(const settings_profile& profile, const profile_overrides& overrides, const char* file) const -> result;
 

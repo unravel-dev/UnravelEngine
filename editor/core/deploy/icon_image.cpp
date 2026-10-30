@@ -9,7 +9,6 @@
 #include <array>
 #include <cmath>
 #include <fstream>
-#include <iterator>
 
 namespace unravel::deployment
 {
@@ -20,12 +19,6 @@ constexpr std::uint32_t ALPHA = 3;
 constexpr float BYTE_MAX = 255.0f;
 /// The samples a target texel takes along each axis at most, when the image shrinks a lot.
 constexpr std::uint32_t MAX_SAMPLES_PER_AXIS = 16;
-
-auto read_bytes(const fs::path& file) -> std::vector<char>
-{
-    std::ifstream stream(file, std::ios::binary);
-    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
-}
 
 void premultiply(icon_image& image)
 {
@@ -89,7 +82,8 @@ auto icon_image::is_empty() const -> bool
 
 auto load_icon_image(const fs::path& file) -> icon_image
 {
-    const auto bytes = read_bytes(file);
+    std::ifstream stream(file, std::ios::binary);
+    const auto bytes = fs::read_stream(stream);
     if(bytes.empty())
     {
         return {};
