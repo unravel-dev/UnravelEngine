@@ -70,6 +70,8 @@ Skill catalog: `.agents/skills/README.md`.
   list before adding components or reflected fields.
 - Prefer English in code and comments; ASCII only in source.
 - Do not create git commits, amend, push, or open PRs unless the user explicitly asks.
+- Commit messages and PR texts never name an agent, a model or an email: no `Co-Authored-By`
+  trailers and no "Generated with" lines. Keep messages short and clear.
 - Never update git config; never force-push `main`/`master`; avoid destructive git
   commands unless the user explicitly requests them.
 
