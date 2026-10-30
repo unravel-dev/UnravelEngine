@@ -11,6 +11,7 @@
 #include "bundled_files.h"
 #include "runner/runner.h"
 
+#include <base/platform/config.hpp>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <logging/logging.h>
@@ -22,6 +23,9 @@ namespace unravel
 namespace
 {
 constexpr const char* SETTINGS_PATH = "app:/settings/settings.cfg";
+/// The folder of the log and the crash log. The install folder may not be writable (a Steam library of another
+/// user, a read-only drive), and an update or a file check treats files there as foreign.
+constexpr const char* LOGS_PATH = "user:/logs";
 
 auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
 {
@@ -115,7 +119,10 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<runner>(ctx);
 
     parser.set_optional<std::string>("a", "appdata", "", "Application data directory. Defaults to binary directory.");
-
+    parser.set_optional<bool>("",
+                              "log-here",
+                              false,
+                              "Write the log and the crash log beside the executable, not in the user's data folder.");
 
     return true;
 }
@@ -132,6 +139,7 @@ auto game::init(const cmd_line::parser& parser) -> bool
         return false;
     }
     init_user_protocols(parser);
+    open_log(parser);
 
     auto& ctx = engine::context();
 
@@ -221,6 +229,20 @@ void game::init_user_protocols(const cmd_line::parser& parser)
     const std::string product =
         app.product.empty() ? fs::executable_path(parser.app_name().c_str()).stem().string() : app.product;
     engine::set_user_protocols(app.company, product);
+}
+
+void game::open_log(const cmd_line::parser& parser)
+{
+    bool is_beside_binary = false;
+    parser.try_get("log-here", is_beside_binary);
+#if UNRAVEL_PLATFORM_ANDROID
+    // binary:/ is the application's own storage there, outside the folder its backup rules keep.
+    is_beside_binary = true;
+#endif
+    if(is_beside_binary || !engine::open_log(fs::resolve_protocol(LOGS_PATH)))
+    {
+        engine::open_log(fs::resolve_protocol("binary:/"));
+    }
 }
 
 auto game::prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser) -> bool

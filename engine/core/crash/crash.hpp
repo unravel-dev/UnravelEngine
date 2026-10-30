@@ -56,4 +56,12 @@ struct crash_handlers
  */
 auto install_handlers(const crash_handlers& handlers) -> void;
 
+/**
+ * @brief Moves the crash log, and the minidump beside it, to another file.
+ *
+ * For a host that knows where its logs belong only after the handlers are installed.
+ * @param crash_log_path The new path, copied; an empty one keeps the current path.
+ */
+auto set_crash_log_path(const char* crash_log_path) -> void;
+
 } // namespace unravel::crash

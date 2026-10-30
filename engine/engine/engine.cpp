@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <exception>
 #include <logging/logging.h>
+#include <system_error>
 #include <service/service.h>
 
 
@@ -47,7 +48,7 @@ namespace unravel
 namespace
 {
 
-// Written into the binary folder, never into the launching shell's current directory.
+// Written into the folder the host names (open_log), never into the launching shell's current directory.
 constexpr const char* LOG_FILE_NAME = "Log.txt";
 constexpr const char* CRASH_LOG_FILE_NAME = "CrashLog.txt";
 /// The folder of user:/ inside binary:/ until a game names its own, and inside the internal storage
@@ -56,9 +57,9 @@ constexpr const char* USER_FOLDER_NAME = "user";
 /// The folder of cache:/ inside binary:/ until a game names its own.
 constexpr const char* CACHE_FOLDER_NAME = ".cache";
 
-/// The binary folder (binary:/): the application's own files, and where the engine writes its log,
-/// crash log and caches. On desktop it is the executable's folder. An Android application runs in
-/// the system's app_process, whose folder is read-only, so its internal storage takes that place.
+/// The binary folder (binary:/): the application's own files, and where a crash before open_log writes
+/// its crash log. On desktop it is the executable's folder. An Android application runs in the system's
+/// app_process, whose folder is read-only, so its internal storage takes that place.
 auto get_binary_path(const cmd_line::parser& parser) -> fs::path
 {
 #if UNRAVEL_PLATFORM_ANDROID
@@ -67,6 +68,46 @@ auto get_binary_path(const cmd_line::parser& parser) -> fs::path
 #else
     return fs::executable_path(parser.app_name().c_str()).parent_path();
 #endif
+}
+
+/// Points a protocol at a folder. Protocol roots are kept in the system code page on Windows, so a folder
+/// it cannot spell (a user name in another script) leaves the protocol where it was.
+void set_protocol_folder(const std::string& protocol, const fs::path& folder)
+{
+    try
+    {
+        fs::add_path_protocol(protocol, folder);
+    }
+    catch(const std::system_error&)
+    {
+        APPLOG_WARNING("{}:/ stays in {}: the system code page cannot spell {}",
+                       protocol,
+                       fs::to_utf8_string(fs::resolve_protocol(protocol + ":/")),
+                       fs::to_utf8_string(folder));
+    }
+}
+
+/// Moves the log and the crash log into a folder that exists.
+auto open_log_files(logging& log, const fs::path& folder) -> bool
+{
+    // The log and the crash module open files by narrow names: the system code page on Windows.
+    std::string log_file;
+    std::string crash_log_file;
+    try
+    {
+        log_file = (folder / LOG_FILE_NAME).string();
+        crash_log_file = (folder / CRASH_LOG_FILE_NAME).string();
+    }
+    catch(const std::system_error&)
+    {
+        return false;
+    }
+    if(!log.open_file(log_file))
+    {
+        return false;
+    }
+    crash::set_crash_log_path(crash_log_file.c_str());
+    return true;
 }
 
 auto context_ptr() -> rtti::context*&
@@ -243,12 +284,13 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     };
     serialization::init();
 
-    ctx.add<logging>((binary_path / LOG_FILE_NAME).string());
+    // In memory until the host names the log's folder (open_log).
+    ctx.add<logging>();
     ctx.add<loading_screen>();
 
     // Install engine crash handlers immediately after logging is available.
     // Windows AVs go through SEH; CrashLog.txt (+ .dmp) are written crash-safely
-    // before these callbacks run. install_handlers copies the path.
+    // before these callbacks run. install_handlers copies the path; open_log moves it.
     const std::string crash_log_path = (binary_path / CRASH_LOG_FILE_NAME).string();
     crash::install_handlers(crash::crash_handlers{
         .interrupt_handler = engine_interrupt_handler,
@@ -320,20 +362,21 @@ void engine::set_user_protocols(const std::string& company, const std::string& p
 {
     const fs::path previous_user = fs::resolve_protocol("user:/");
     const fs::path previous_cache = fs::resolve_protocol("cache:/");
+    // The platform names the folders in UTF-8, which a narrow fs::path reads in the system code page on Windows.
     const std::string preferences_folder = os::paths::get_preferences_path(company, product);
     if(!preferences_folder.empty())
     {
 #if UNRAVEL_PLATFORM_ANDROID
         // The internal storage also holds the extracted game files and the log.
-        fs::add_path_protocol("user", fs::path(preferences_folder) / USER_FOLDER_NAME);
+        set_protocol_folder("user", fs::from_utf8_string(preferences_folder) / USER_FOLDER_NAME);
 #else
-        fs::add_path_protocol("user", preferences_folder);
+        set_protocol_folder("user", fs::from_utf8_string(preferences_folder));
 #endif
     }
     const std::string cache_folder = os::paths::get_cache_path(company, product);
     if(!cache_folder.empty())
     {
-        fs::add_path_protocol("cache", cache_folder);
+        set_protocol_folder("cache", fs::from_utf8_string(cache_folder));
     }
     const fs::path user = fs::resolve_protocol("user:/");
     const fs::path cache = fs::resolve_protocol("cache:/");
@@ -341,6 +384,19 @@ void engine::set_user_protocols(const std::string& company, const std::string& p
     {
         APPLOG_INFO("User data in {}, cache in {}", user.generic_string(), cache.generic_string());
     }
+}
+
+auto engine::open_log(const fs::path& folder) -> bool
+{
+    fs::error_code err;
+    fs::create_directories(folder, err);
+    if(!open_log_files(context().get_cached<logging>(), folder))
+    {
+        APPLOG_WARNING("The log cannot be written in {}", fs::to_utf8_string(folder));
+        return false;
+    }
+    APPLOG_INFO("Log and crash log in {}", fs::to_utf8_string(folder));
+    return true;
 }
 
 auto engine::init_core(const cmd_line::parser& parser, const std::function<bool()>& create_main_window) -> bool

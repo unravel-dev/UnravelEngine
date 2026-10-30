@@ -66,6 +66,7 @@ auto tests::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     {
         return false;
     }
+    engine::open_log(fs::resolve_protocol("binary:/"));
 
     parser.set_optional<std::string>("s", "suite", "", "Run only suites whose name contains this.");
     parser.set_optional<bool>("b", "bench", false, "Run benchmarks as well as correctness checks.");

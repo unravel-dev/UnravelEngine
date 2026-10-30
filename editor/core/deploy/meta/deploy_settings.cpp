@@ -387,7 +387,8 @@ REFLECT(deploy_settings)
             entt::attribute{"tooltip",
                             "Command line options the game starts with after the deploy, separated by spaces.\n"
                             "--gfx-stats shows the graphics statistics over the game.\n"
-                            "--novsync turns off vsync.\n\n"
+                            "--novsync turns off vsync.\n"
+                            "--log-here writes the log beside the game, not in the user's data folder.\n\n"
                             "In Android debug packages a four-finger tap switches the\n"
                             "graphics statistics on and off."},
         })

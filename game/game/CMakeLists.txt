@@ -45,7 +45,7 @@ if(UNRAVEL_UNITY_BUILD AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 # The deploy ships the player of the editor's own configuration, so every configuration opens the game
-# without a console window. The log and the crash log are files beside the executable.
+# without a console window. The log and the crash log are files in the user's data folder.
 if(WIN32)
     set_target_properties(${target_name} PROPERTIES
         WIN32_EXECUTABLE TRUE

@@ -2,6 +2,7 @@
 
 #include <spdlog/sinks/callback_sink.h>
 #include <spdlog/sinks/dist_sink.h>
+#include <spdlog/sinks/ringbuffer_sink.h>
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/chrono.h>
 #include <spdlog/fmt/ranges.h>
@@ -45,10 +46,32 @@ SPDLOG_LOGGER_CALL_LOC(spdlog::get(APPLOG), FILE_LOC, LINE_LOC, FUNC_LOC, spdlog
 
 auto get_mutable_logging_container() -> std::shared_ptr<spdlog::sinks::dist_sink_mt>;
 
+/**
+ * @brief The application log: the console, and a file once the host names one.
+ *
+ * Until open_file() the lines are kept in memory, so a host that learns where its log belongs only
+ * after startup (the player, from its settings and command line) still gets them in the file.
+ */
 struct logging
 {
-    logging(const std::string& output_file = "Log.txt");
+    logging();
     ~logging();
+
+    /**
+     * @brief Writes the log to @p output_file from now on, in place of the memory or the previous file.
+     *
+     * The first file begins with the lines kept in memory. Call it before other threads log: a line
+     * logged while the file takes over may be written twice.
+     * @param output_file The file, created or emptied.
+     * @return False when the file cannot be opened; the log goes on where it went.
+     */
+    auto open_file(const std::string& output_file) -> bool;
+
+private:
+    /// The lines logged before the first file; null once a file has them.
+    std::shared_ptr<spdlog::sinks::ringbuffer_sink_mt> early_lines_;
+    /// The file of open_file(); null until then.
+    std::shared_ptr<spdlog::sinks::sink> file_;
 };
 
 

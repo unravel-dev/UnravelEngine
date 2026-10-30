@@ -73,6 +73,8 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     {
         return false;
     }
+    // A development tool: its log stays beside it.
+    engine::open_log(fs::resolve_protocol("binary:/"));
 
     // The engine's first script build runs while its systems initialize.
     script_system::set_library_builder(&asset_compiler::compile<script_library>);

@@ -22,6 +22,11 @@ struct game
      *        keeps its pipeline cache in cache:/.
      */
     static void init_user_protocols(const cmd_line::parser& parser);
+    /**
+     * @brief Writes the log and the crash log into the "logs" folder of user:/, or beside the executable
+     *        with --log-here. Falls back to the executable's folder when user:/ cannot hold them.
+     */
+    static void open_log(const cmd_line::parser& parser);
     static auto prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     static auto init_settings(rtti::context& ctx) -> bool;
     /**

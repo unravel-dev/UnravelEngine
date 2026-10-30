@@ -47,7 +47,10 @@ termination_handler_t g_termination_handler{nullptr};
 crash_handler_t g_crash_handler{nullptr};
 exception_handler_t g_exception_handler{nullptr};
 
-char g_crash_log_path[512]{"CrashLog.txt"};
+constexpr std::size_t k_max_crash_log_path = 512;
+/// Two buffers for the crash log path, so that a crash while set_crash_log_path moves it still reads a whole path.
+char g_crash_log_paths[2][k_max_crash_log_path]{{"CrashLog.txt"}, {}};
+std::atomic<const char*> g_crash_log_path{g_crash_log_paths[0]};
 bool g_write_minidump{true};
 
 #if !UNRAVEL_PLATFORM_WINDOWS
@@ -118,7 +121,7 @@ auto emergency_write(const char* data, std::size_t len) noexcept -> void
         WriteFile(err, data, static_cast<DWORD>(len), &written, nullptr);
         FlushFileBuffers(err);
     }
-    HANDLE file = CreateFileA(g_crash_log_path,
+    HANDLE file = CreateFileA(g_crash_log_path.load(),
                               FILE_APPEND_DATA,
                               FILE_SHARE_READ | FILE_SHARE_WRITE,
                               nullptr,
@@ -137,7 +140,7 @@ auto emergency_write(const char* data, std::size_t len) noexcept -> void
     {
         (void)::write(STDERR_FILENO, data, len);
     }
-    const int fd = ::open(g_crash_log_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    const int fd = ::open(g_crash_log_path.load(), O_WRONLY | O_CREAT | O_APPEND, 0644);
     if(fd >= 0)
     {
         (void)::write(fd, data, len);
@@ -326,7 +329,7 @@ auto write_minidump_windows(EXCEPTION_POINTERS* exception_pointers) noexcept -> 
     }
     char dump_path[560]{};
     std::size_t used = 0;
-    append_cstr(dump_path, sizeof(dump_path), used, g_crash_log_path);
+    append_cstr(dump_path, sizeof(dump_path), used, g_crash_log_path.load());
     // Replace extension / append .dmp
     char* dot = nullptr;
     for(char* p = dump_path; *p != '\0'; ++p)
@@ -740,14 +743,22 @@ auto install_handlers(const crash_handlers& handlers) -> void
     g_crash_handler = handlers.crash_handler;
     g_exception_handler = handlers.exception_handler;
     g_write_minidump = handlers.write_minidump;
-    if(handlers.crash_log_path != nullptr && handlers.crash_log_path[0] != '\0')
-    {
-        std::size_t used = 0;
-        g_crash_log_path[0] = '\0';
-        append_cstr(g_crash_log_path, sizeof(g_crash_log_path), used, handlers.crash_log_path);
-    }
+    set_crash_log_path(handlers.crash_log_path);
     std::set_terminate(terminate_handler);
     install_platform_handlers();
+}
+
+auto set_crash_log_path(const char* crash_log_path) -> void
+{
+    if(crash_log_path == nullptr || crash_log_path[0] == '\0')
+    {
+        return;
+    }
+    char* next = g_crash_log_path.load() == g_crash_log_paths[0] ? g_crash_log_paths[1] : g_crash_log_paths[0];
+    std::size_t used = 0;
+    next[0] = '\0';
+    append_cstr(next, k_max_crash_log_path, used, crash_log_path);
+    g_crash_log_path.store(next);
 }
 
 } // namespace unravel::crash

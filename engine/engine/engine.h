@@ -4,6 +4,7 @@
 #include <base/basetypes.hpp>
 #include <cmd_line/parser.h>
 #include <context/context.hpp>
+#include <filesystem/filesystem.h>
 
 #include <functional>
 #include <string>
@@ -41,6 +42,16 @@ struct engine
      * @param product The game's name; the caller substitutes one when the settings leave it empty.
      */
     static void set_user_protocols(const std::string& company, const std::string& product);
+
+    /**
+     * @brief Writes the log, the crash log and its minidump into @p folder, created when missing.
+     *
+     * create() keeps the log in memory and points the crash log at binary:/, so a host names the folder once
+     * it knows it: the editor and the test runner binary:/, the player a folder of the user's data, as an
+     * install folder may not be writable. The log file begins with the lines logged before.
+     * @return False when the log file cannot be created there; the log and the crash log stay where they were.
+     */
+    static auto open_log(const fs::path& folder) -> bool;
 
     static auto interrupt() -> bool;
 
