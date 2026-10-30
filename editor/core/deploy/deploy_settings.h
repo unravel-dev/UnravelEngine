@@ -88,6 +88,30 @@ struct android_deploy_settings
     android_texture_compression texture_compression{android_texture_compression::astc};
 };
 
+/// Where a desktop build goes on Steam. The upload logs in with the login steamcmd keeps for `account`, so
+/// no password is saved, and it never sets a build live on the default branch: Steam allows that only on
+/// the Steamworks website.
+struct steam_deploy_settings
+{
+    /// The game's app id in Steamworks; 0: the profile is not uploaded.
+    std::uint32_t app_id{};
+    /// The depot the build goes to: the app's depot of the operating system the profile builds for.
+    std::uint32_t depot_id{};
+    /// The Steam account that uploads, best one with build rights only.
+    std::string account;
+    /// The branch the build is set live on once uploaded; empty: none, it is set live on the website.
+    std::string branch;
+};
+
+/// What a desktop build shows of itself besides the project's product, company and version, and where it
+/// goes on Steam. A desktop profile holds one (profiles/<name>/profile.cfg).
+struct desktop_deploy_settings
+{
+    /// The image the executable's icon is made from, square at best. None: the engine's logo.
+    asset_handle<gfx::texture> icon;
+    steam_deploy_settings steam;
+};
+
 /// The open project's folder, which a relative deploy location lies in.
 constexpr const char* PROJECT_ROOT_KEY = "app:/";
 /// The deploy location a project starts with: a folder of its own in the project.
@@ -108,6 +132,8 @@ struct deploy_settings
     deploy_platform deploy_target{deploy_platform::desktop};
     /// The Android profile's identity, signing and texture formats. From the profile.
     android_deploy_settings android;
+    /// The desktop profile's icon. From the profile.
+    desktop_deploy_settings desktop;
 
     /// The folder builds go to, each profile into a folder of its own in it (get_output_location). A
     /// relative location lies in the project's folder. Shared: no profile overrides it.

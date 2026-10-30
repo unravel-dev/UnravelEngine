@@ -303,6 +303,110 @@ LOAD(android_deploy_settings)
 LOAD_INSTANTIATE(android_deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(android_deploy_settings, ser20::iarchive_binary_t);
 
+REFLECT(steam_deploy_settings)
+{
+    entt::meta_factory<steam_deploy_settings>{}
+        .type("steam_deploy_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "steam_deploy_settings"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Steam"},
+        })
+        .data<&steam_deploy_settings::app_id>("app_id"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "app_id"},
+            entt::attribute{"pretty_name", "App ID"},
+            entt::attribute{"tooltip",
+                            "The game's app ID in Steamworks.\n"
+                            "0: the profile is not uploaded to Steam."},
+        })
+        .data<&steam_deploy_settings::depot_id>("depot_id"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "depot_id"},
+            entt::attribute{"pretty_name", "Depot ID"},
+            entt::attribute{"tooltip",
+                            "The depot the build goes to: the app's depot for the operating system\n"
+                            "this profile builds for (the one the editor runs on)."},
+        })
+        .data<&steam_deploy_settings::account>("account"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "account"},
+            entt::attribute{"pretty_name", "Account"},
+            entt::attribute{"tooltip",
+                            "The Steam account that uploads, best one with build rights only.\n\n"
+                            "Its password is never saved. Log it in once in a terminal with\n"
+                            "steamcmd +login <account>, with the password and the Steam Guard\n"
+                            "code. Uploads then use the login steamcmd keeps."},
+        })
+        .data<&steam_deploy_settings::branch>("branch"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "branch"},
+            entt::attribute{"pretty_name", "Set Live On"},
+            entt::attribute{"tooltip",
+                            "The branch the build is set live on once uploaded, such as beta. The branch\n"
+                            "must exist in Steamworks.\n\n"
+                            "Empty: the build is only uploaded, and set live on the Steamworks website.\n"
+                            "Steam sets builds live on the default branch only from the website."},
+        });
+}
+
+SAVE(steam_deploy_settings)
+{
+    try_save(ar, ser20::make_nvp("app_id", obj.app_id));
+    try_save(ar, ser20::make_nvp("depot_id", obj.depot_id));
+    try_save(ar, ser20::make_nvp("account", obj.account));
+    try_save(ar, ser20::make_nvp("branch", obj.branch));
+}
+SAVE_INSTANTIATE(steam_deploy_settings, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(steam_deploy_settings, ser20::oarchive_binary_t);
+
+LOAD(steam_deploy_settings)
+{
+    try_load(ar, ser20::make_nvp("app_id", obj.app_id));
+    try_load(ar, ser20::make_nvp("depot_id", obj.depot_id));
+    try_load(ar, ser20::make_nvp("account", obj.account));
+    try_load(ar, ser20::make_nvp("branch", obj.branch));
+}
+LOAD_INSTANTIATE(steam_deploy_settings, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(steam_deploy_settings, ser20::iarchive_binary_t);
+
+REFLECT(desktop_deploy_settings)
+{
+    entt::meta_factory<desktop_deploy_settings>{}
+        .type("desktop_deploy_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop_deploy_settings"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Desktop"},
+        })
+        .data<&desktop_deploy_settings::icon>("icon"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "icon"},
+            entt::attribute{"pretty_name", "Icon"},
+            entt::attribute{"tooltip",
+                            "The image the game's icon is made from: the icon of its executable in\n"
+                            "the file manager, the taskbar and the window's title bar. Square images\n"
+                            "fit best, at 256 x 256 pixels or more.\n\n"
+                            "Windows only. None: the engine's logo."},
+        });
+}
+
+SAVE(desktop_deploy_settings)
+{
+    try_save(ar, ser20::make_nvp("icon", obj.icon));
+    try_save(ar, ser20::make_nvp("steam", obj.steam));
+}
+SAVE_INSTANTIATE(desktop_deploy_settings, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(desktop_deploy_settings, ser20::oarchive_binary_t);
+
+LOAD(desktop_deploy_settings)
+{
+    try_load(ar, ser20::make_nvp("icon", obj.icon));
+    try_load(ar, ser20::make_nvp("steam", obj.steam));
+}
+LOAD_INSTANTIATE(desktop_deploy_settings, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(desktop_deploy_settings, ser20::iarchive_binary_t);
+
 REFLECT(deploy_settings)
 {
     entt::meta_factory<deploy_settings>{}

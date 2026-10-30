@@ -39,6 +39,9 @@ auto is_deploy_running() -> bool;
 /// Why a finished step failed; empty while it runs and once it succeeded.
 auto get_step_error(const tpp::shared_future<void>& step) -> std::string;
 
+/// The last `count` lines of a tool's output, which a failed step quotes.
+auto get_last_lines(const std::string& output, std::size_t count) -> std::string;
+
 /// Starts the built game with the command line options `arguments` and returns at once; it keeps running
 /// when the editor closes.
 void run_game(const fs::path& executable, const std::vector<std::string>& arguments);

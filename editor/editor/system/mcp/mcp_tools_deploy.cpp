@@ -9,6 +9,7 @@
 #include <editor/deploy/deploy_android.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/deploy/deploy_preflight.h>
+#include <editor/deploy/deploy_steam.h>
 #include <editor/deploy/project_releases.h>
 #include <engine/assets/asset_manager.h>
 #include <editor/hub/hub.h>
@@ -19,6 +20,7 @@
 #include <filesystem/filesystem.h>
 
 #include <chrono>
+#include <limits>
 #include <string>
 #include <thread>
 #include <vector>
@@ -123,6 +125,71 @@ auto deploy_progress_json(const deploy_snapshot& snapshot) -> std::string
                        snapshot.steps.size(),
                        make_json_string(snapshot.location),
                        steps_to_json(snapshot.steps));
+}
+
+/// Waits for the jobs the Deploy window shows to end, or for the deadline. It waits on the HTTP worker so frames
+/// keep pumping; each look at the jobs hops to the main thread, where the panel owns them.
+auto wait_for_panel_jobs(rtti::context& ctx, mcp_manager& mcp, std::chrono::steady_clock::time_point deadline) -> deploy_snapshot
+{
+    deploy_snapshot snapshot;
+    while(true)
+    {
+        auto taken = mcp.invoke_on_main(
+            [&ctx]() -> deploy_snapshot
+            {
+                return take_snapshot(ctx);
+            });
+        if(taken)
+        {
+            snapshot = std::move(*taken);
+        }
+        const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
+        const bool is_untracked = taken && snapshot.steps.empty();
+        if(finished || is_untracked || std::chrono::steady_clock::now() >= deadline)
+        {
+            return snapshot;
+        }
+        std::this_thread::sleep_for(k_deploy_poll_interval);
+    }
+}
+
+/// What the jobs wait_for_panel_jobs waited for came to: done, failed with the failed steps, or still running.
+auto make_jobs_result(const deploy_snapshot& snapshot) -> tool_result
+{
+    if(snapshot.steps.empty())
+    {
+        return {.text = "The deploy's steps are no longer tracked; check the deploy folder and logs_get_recent", .is_error = true};
+    }
+    if(snapshot.ready < snapshot.steps.size())
+    {
+        return {.text = fmt::format(R"({{"ok":false,"timed_out":true,"done":{},"total":{},"location":{},)"
+                                    R"("steps":{},"note":"The deploy is still running; poll deploy_get_state."}})",
+                                    snapshot.ready,
+                                    snapshot.steps.size(),
+                                    make_json_string(snapshot.location),
+                                    steps_to_json(snapshot.steps)),
+                .is_error = true};
+    }
+    std::vector<std::string> failed;
+    for(const auto& step : snapshot.steps)
+    {
+        if(!step.error.empty())
+        {
+            failed.push_back(step.name + ": " + step.error);
+        }
+    }
+    if(!failed.empty())
+    {
+        return {.text = fmt::format(R"({{"ok":false,"location":{},"failed_steps":{},"steps":{}}})",
+                                    make_json_string(snapshot.location),
+                                    strings_to_json_array(failed),
+                                    steps_to_json(snapshot.steps)),
+                .is_error = true};
+    }
+    return {.text = fmt::format(R"({{"ok":true,"location":{},"steps":{}}})",
+                                make_json_string(snapshot.location),
+                                steps_to_json(snapshot.steps)),
+            .is_error = false};
 }
 
 constexpr const char* ORIENTATION_NAMES[] = {"landscape", "portrait", "automatic"};
@@ -236,6 +303,92 @@ auto read_android_icon(rtti::context& ctx, const simdjson::dom::object& args, an
     }
     android.icon = icon;
     return true;
+}
+
+/// Reads desktop_icon, a texture's key or uid; null or an empty string choose the engine's logo. `is_given` says
+/// whether the arguments had it.
+auto read_desktop_icon(rtti::context& ctx,
+                       const simdjson::dom::object& args,
+                       desktop_deploy_settings& desktop,
+                       bool& is_given,
+                       std::string& error) -> bool
+{
+    simdjson::dom::element value;
+    is_given = args["desktop_icon"].get(value) == simdjson::SUCCESS;
+    if(!is_given)
+    {
+        return true;
+    }
+    std::string key;
+    if(!value.is_null() && !parse_string(value, key, error))
+    {
+        return false;
+    }
+    if(key.empty())
+    {
+        desktop.icon = {};
+        return true;
+    }
+    auto icon = find_existing_asset<gfx::texture>(ctx, to_asset_key(key), error);
+    if(!icon)
+    {
+        return false;
+    }
+    desktop.icon = icon;
+    return true;
+}
+
+/// Reads a Steam id at `key` when the arguments have one: a whole number from 0 (none) up.
+auto read_steam_id(const simdjson::dom::object& args, const char* key, std::uint32_t& id, std::string& error) -> bool
+{
+    const auto value = read_int64_or(args, key, id);
+    if(value < 0 || value > std::numeric_limits<std::uint32_t>::max())
+    {
+        error = fmt::format("{} must be from 0 to {}.", key, std::numeric_limits<std::uint32_t>::max());
+        return false;
+    }
+    id = static_cast<std::uint32_t>(value);
+    return true;
+}
+
+/// The desktop settings deploy_set_settings takes, read over the profile's: desktop_icon and steam_*. `is_given`
+/// says whether the arguments had any.
+auto read_desktop_settings(rtti::context& ctx,
+                           const simdjson::dom::object& args,
+                           desktop_deploy_settings& desktop,
+                           bool& is_given,
+                           std::string& error) -> bool
+{
+    static constexpr const char* STEAM_KEYS[] = {"steam_app_id", "steam_depot_id", "steam_account", "steam_branch"};
+    const bool has_steam = std::any_of(std::begin(STEAM_KEYS),
+                                       std::end(STEAM_KEYS),
+                                       [&args](const char* key)
+                                       {
+                                           simdjson::dom::element value;
+                                           return args[key].get(value) == simdjson::SUCCESS;
+                                       });
+    bool has_icon = false;
+    if(!read_desktop_icon(ctx, args, desktop, has_icon, error) ||
+       !read_steam_id(args, "steam_app_id", desktop.steam.app_id, error) ||
+       !read_steam_id(args, "steam_depot_id", desktop.steam.depot_id, error))
+    {
+        return false;
+    }
+    read_string(args, "steam_account", desktop.steam.account);
+    read_string(args, "steam_branch", desktop.steam.branch);
+    is_given = has_icon || has_steam;
+    return true;
+}
+
+auto desktop_settings_to_json(const desktop_deploy_settings& desktop) -> std::string
+{
+    const auto& steam = desktop.steam;
+    return fmt::format(R"({{"icon":{},"steam":{{"app_id":{},"depot_id":{},"account":{},"branch":{}}}}})",
+                       asset_handle_key_json(desktop.icon),
+                       steam.app_id,
+                       steam.depot_id,
+                       steam.account.empty() ? "null" : make_json_string(steam.account),
+                       steam.branch.empty() ? "null" : make_json_string(steam.branch));
 }
 
 /// android_permissions: the named permissions as booleans and `other` as names. A partial object changes
@@ -408,7 +561,7 @@ auto refuse_platform_argument(const simdjson::dom::object& args, std::string& er
 auto deploy_settings_to_json(const deploy_settings& params) -> std::string
 {
     return fmt::format(
-        R"({{"profile":{},"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"run_arguments":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{}}})",
+        R"({{"profile":{},"platform":{},"location":{},"output":{},"deploy_dependencies":{},"run_after_deploy":{},"run_arguments":{},"cook_assets":{},"include_debug_symbols":{},"pack_assets":{},"patch_release":{},"only_used_assets":{},"scenes":{},"include":{},"exclude":{},"android":{},"desktop":{}}})",
         make_json_string(params.profile),
         make_json_string(get_platform_name(params.deploy_target)),
         params.deploy_location.empty() ? "null" : make_json_string(fs::to_utf8_string(params.deploy_location)),
@@ -425,7 +578,8 @@ auto deploy_settings_to_json(const deploy_settings& params) -> std::string
         strings_to_json_array(params.deploy_included),
         strings_to_json_array(params.deploy_excluded),
         params.deploy_target == deploy_platform::android ? android_settings_to_json(params.android, params.android_device)
-                                                         : std::string("null"));
+                                                         : std::string("null"),
+        params.deploy_target == deploy_platform::desktop ? desktop_settings_to_json(params.desktop) : std::string("null"));
 }
 
 /// The deploy settings a profile overrides, as deploy_set_settings names them.
@@ -607,8 +761,10 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "deploy_profile selects the profile deploys build. "
              "scope says where the settings other than location, patch_release and android_* go: \"shared\" (default) "
              "writes them for every profile that does not override them, \"profile\" stores them as overrides of the "
-             "profile only. location is always shared; patch_release and the android_* settings always belong to the "
-             "profile. written lists where each value went; shadowed lists shared values the profile overrides, so it "
+             "profile only. location is always shared; patch_release, desktop_icon, steam_* and the android_* settings "
+             "always belong to the profile. steam_app_id, steam_depot_id and steam_account say where deploy_upload_steam "
+             "sends a desktop profile's build; steam_branch is the branch it is set live on (empty: none; never "
+             "default, which Steam sets live only on its website). written lists where each value went; shadowed lists shared values the profile overrides, so it "
              "keeps deploying with its own (revert them, or pass scope profile). revert lists settings, named as this "
              "tool's arguments, the profile stops overriding. "
              "location is an absolute folder, or one relative to the project folder (default .deploy, stored relative "
@@ -629,7 +785,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "default, etc2, or bc: the desktop formats, which ship the editor's own files and which only some "
              "Android GPUs read). Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, android_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location, patch_release and android_* go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, android_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location, patch_release and android_* go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":"string","description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>"},"steam_branch":{"type":"string","description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"A kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -686,9 +842,12 @@ void register_deploy_tools(mcp_tool_registry& registry)
              read_bool(args, "only_used_assets", params.deploy_only_used_assets);
              auto android = found->android;
              bool has_android_settings = false;
+             auto desktop = found->desktop;
+             bool has_desktop_settings = false;
              std::string device;
              const bool has_device = read_string(args, "android_device", device);
              if(!read_android_settings(ctx, args, android, has_android_settings, error) ||
+                !read_desktop_settings(ctx, args, desktop, has_desktop_settings, error) ||
                 !read_key_list(args, "scenes", params.deploy_scenes, error) ||
                 !read_key_list(args, "include", params.deploy_included, error) ||
                 !read_key_list(args, "exclude", params.deploy_excluded, error))
@@ -699,6 +858,13 @@ void register_deploy_tools(mcp_tool_registry& registry)
              {
                  return {.text = fmt::format("Profile {} is no Android profile: android_* settings belong to an Android "
                                              "profile (pass profile).",
+                                             profile),
+                         .is_error = true};
+             }
+             if(has_desktop_settings && found->platform != deploy_platform::desktop)
+             {
+                 return {.text = fmt::format("Profile {} is no desktop profile: desktop_icon and steam_* belong to a "
+                                             "desktop profile (pass profile).",
                                              profile),
                          .is_error = true};
              }
@@ -742,6 +908,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  params.android_device = pm->get_deploy_settings().android_device;
                  params.profile.clear();
                  params.android = {};
+                 params.desktop = {};
                  pm->get_deploy_settings() = params;
                  pm->save_deploy_settings();
                  written_shared.insert(written_shared.end(), scoped.begin(), scoped.end());
@@ -772,6 +939,14 @@ void register_deploy_tools(mcp_tool_registry& registry)
                      return {.text = changed.error, .is_error = true};
                  }
                  written_profile.emplace_back("android");
+             }
+             if(has_desktop_settings)
+             {
+                 if(auto changed = pm->set_profile_desktop(ctx, profile, desktop); !changed.is_ok())
+                 {
+                     return {.text = changed.error, .is_error = true};
+                 }
+                 written_profile.emplace_back("desktop");
              }
              if(deploy_profile != pm->get_deploy_profile())
              {
@@ -1135,67 +1310,68 @@ void register_deploy_tools(mcp_tool_registry& registry)
                  return *start;
              }
 
-             // Wait on the HTTP worker so frames keep pumping; each look at the jobs hops to the
-             // main thread, where the panel owns them.
-             deploy_snapshot snapshot;
-             while(true)
-             {
-                 auto taken = mcp.invoke_on_main(
-                     [&ctx]() -> deploy_snapshot
+             return make_jobs_result(wait_for_panel_jobs(ctx, mcp, deadline));
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false,
+         .effect = tool_effect::destructive});
+
+    registry.add(
+        {.name = "deploy_upload_steam",
+         .description =
+             "Upload a desktop profile's build in its deploy folder to Steam, as the Deploy window's Upload to Steam "
+             "does. steamcmd (Editor Settings > External Tools, or the one on PATH) logs in the profile's steam_account "
+             "with the login it keeps from an earlier one in a terminal (steamcmd +login <account>; no password is ever "
+             "passed), uploads every file of the folder but logs left by --log-here to steam_depot_id of steam_app_id, "
+             "and sets the build live on steam_branch when it names one (deploy_set_settings sets them). Deploy the "
+             "profile first (project_deploy). profile defaults to the deploy profile. Waits up to timeout_ms (default "
+             "180000); on timeout the upload keeps running and deploy_get_state reports it. steamcmd's output goes to "
+             "the editor log ([steamcmd] lines, logs_get_recent); a failed step quotes its last lines.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The desktop profile to upload; default the deploy profile"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             const auto timeout = read_timeout_ms(args, k_default_deploy_timeout_ms, k_max_deploy_timeout_ms, "timeout_ms");
+             const auto deadline = std::chrono::steady_clock::now() + timeout;
+             auto start = mcp.invoke_on_main(
+                 [&ctx, &args]() -> tool_result
+                 {
+                     std::string error;
+                     auto* pm = get_open_project(ctx, error);
+                     std::string profile;
+                     if(pm == nullptr || !require_not_deploying(ctx, error) ||
+                        !read_target_profile(*pm, args, "profile", profile, error))
                      {
-                         return take_snapshot(ctx);
-                     });
-                 if(taken)
-                 {
-                     snapshot = std::move(*taken);
-                 }
-                 const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
-                 const bool is_untracked = taken && snapshot.steps.empty();
-                 if(finished || is_untracked || std::chrono::steady_clock::now() >= deadline)
-                 {
-                     break;
-                 }
-                 std::this_thread::sleep_for(k_deploy_poll_interval);
-             }
-             if(snapshot.steps.empty())
+                         return {.text = error, .is_error = true};
+                     }
+                     auto* panel = get_deploy_panel(ctx);
+                     if(panel == nullptr)
+                     {
+                         return {.text = "Deploy window unavailable", .is_error = true};
+                     }
+                     const auto params = *pm->get_profile_deploy_settings(profile);
+                     if(const auto problem = deployment::get_steam_upload_problem(ctx, params); !problem.empty())
+                     {
+                         return {.text = problem, .is_error = true};
+                     }
+                     if(!panel->start_steam_upload(ctx, params))
+                     {
+                         return {.text = "The upload did not start; see logs_get_recent", .is_error = true};
+                     }
+                     return {.text = "started", .is_error = false};
+                 },
+                 std::chrono::milliseconds(30000));
+             if(!start)
              {
-                 return {.text = "The deploy's steps are no longer tracked; check the deploy folder and logs_get_recent",
-                         .is_error = true};
+                 return {.text = "Timed out starting the upload on the main thread", .is_error = true};
              }
-
-             const bool finished = !snapshot.steps.empty() && snapshot.ready == snapshot.steps.size();
-             if(!finished)
+             if(start->is_error)
              {
-                 return {.text = fmt::format(
-                             R"({{"ok":false,"timed_out":true,"done":{},"total":{},"location":{},)"
-                             R"("steps":{},"note":"The deploy is still running; poll deploy_get_state."}})",
-                             snapshot.ready,
-                             snapshot.steps.size(),
-                             make_json_string(snapshot.location),
-                             steps_to_json(snapshot.steps)),
-                         .is_error = true};
+                 return *start;
              }
-
-             std::vector<std::string> failed;
-             for(const auto& step : snapshot.steps)
-             {
-                 if(!step.error.empty())
-                 {
-                     failed.push_back(step.name + ": " + step.error);
-                 }
-             }
-             if(!failed.empty())
-             {
-                 return {.text = fmt::format(R"({{"ok":false,"location":{},"failed_steps":{},"steps":{}}})",
-                                             make_json_string(snapshot.location),
-                                             strings_to_json_array(failed),
-                                             steps_to_json(snapshot.steps)),
-                         .is_error = true};
-             }
-             return {.text = fmt::format(R"({{"ok":true,"location":{},"steps":{}}})",
-                                         make_json_string(snapshot.location),
-                                         steps_to_json(snapshot.steps)),
-                     .is_error = false};
+             return make_jobs_result(wait_for_panel_jobs(ctx, mcp, deadline));
          },
          .mutates_scene = false,
          .requires_main_thread = false,

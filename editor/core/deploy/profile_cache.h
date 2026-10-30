@@ -24,6 +24,10 @@ auto get_profile_cache_folder(const fs::path& project_root, const std::string& p
 /// The folder of a profile's variants of a protocol's compiled files: cache/profiles/<profile>/<protocol>.
 auto get_profile_variants_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path;
 
+/// The debug files of the profile's last deploy: its executable and the player's symbols, which a kept
+/// release takes along (cache/profiles/<profile>/symbols).
+auto get_profile_symbols_folder(const fs::path& project_root, const std::string& profile) -> fs::path;
+
 /// What a sweep did: how many files it deleted, and the ones it could not delete.
 struct sweep_report
 {

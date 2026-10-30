@@ -23,6 +23,9 @@
  *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
  *     lines, which are the game's or the device system's and the engine lines' text, the player template's
  *     stamp checks, Gradle's command line, the start command with the game's options;
+ *   - Windows executables: version numbers from version text, the icon group and version resources byte by
+ *     byte, icon images per size, and on Windows a copied executable's icon and version replaced and read
+ *     back as Windows reads them; the window icon file written beside executables that carry no icon;
  *   - run arguments: split on whitespace, quoted for a device shell;
  *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
  *     its process at once;
@@ -30,7 +33,10 @@
  *     with left out assets;
  *   - the content walk over a profile's shipped settings instead of the settings file;
  *   - releases: names, keep / list / remove, and their refusals; a profile's releases folder, and the
- *     releases of a project from before profiles moved into one;
+ *     releases of a project from before profiles moved into one; a build's debug files kept, and kept with
+ *     a release;
+ *   - Steam: the settings an upload needs, the app build script byte by byte, steamcmd's command line, the
+ *     build id and login failures read from its output;
  *   - dependency scanner output parsed; a failed scan throws every time;
  *   - folder checks: earlier deploys, Android package folders, inside / outside, an executable in use;
  *   - unravel::process::spawn_detached runs a program and reports one that does not start.
@@ -46,10 +52,13 @@
 #include <deploy/dependencies.h>
 #include <deploy/files.h>
 #include <deploy/folders.h>
+#include <deploy/icon_image.h>
 #include <deploy/keys.h>
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
 #include <deploy/run_arguments.h>
+#include <deploy/steam.h>
+#include <deploy/windows_resources.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
@@ -62,6 +71,7 @@
 #include <bx/file.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -71,6 +81,16 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
 
 namespace
 {
@@ -898,6 +918,197 @@ void test_android_icon(const fs::path& root)
     check(deployment::make_android_color(math::color(1.0f, 0.0f, 0.0f, 0.2f)) == "#FF0000", "colors are written without alpha");
 }
 
+void test_windows_version_numbers()
+{
+    std::printf("test_windows_version_numbers\n");
+    using numbers = std::array<std::uint16_t, 4>;
+    check(deployment::parse_windows_version("1.2.3") == numbers{1, 2, 3, 0}, "three numbers fill the first three");
+    check(deployment::parse_windows_version("v2.10") == numbers{2, 10, 0, 0}, "a leading v is skipped");
+    check(deployment::parse_windows_version("1.2.3-beta") == numbers{1, 2, 3, 0} &&
+              deployment::parse_windows_version("1.2.3.4.5") == numbers{1, 2, 3, 4},
+          "text after the numbers and a fifth number are left out");
+    check(deployment::parse_windows_version("") == numbers{} && deployment::parse_windows_version("beta") == numbers{},
+          "a version without numbers is 0.0.0.0");
+    check(deployment::parse_windows_version("70000.1") == numbers{65535, 1, 0, 0}, "a number past 65535 is 65535");
+}
+
+/// The little-endian 16-bit value at `offset`.
+auto read_u16(const std::vector<std::uint8_t>& bytes, std::size_t offset) -> std::uint32_t
+{
+    return bytes[offset] | (std::uint32_t(bytes[offset + 1]) << 8);
+}
+
+/// The little-endian 32-bit value at `offset`.
+auto read_u32(const std::vector<std::uint8_t>& bytes, std::size_t offset) -> std::uint32_t
+{
+    return read_u16(bytes, offset) | (read_u16(bytes, offset + 2) << 16);
+}
+
+void test_windows_icon_group()
+{
+    std::printf("test_windows_icon_group\n");
+    // A 6-byte header, then a 14-byte entry per image: sizes, palette, planes, bits, bytes, id.
+    constexpr std::size_t header = 6;
+    constexpr std::size_t entry = 14;
+    const std::vector<deployment::windows_icon_image> images{{16, std::vector<std::uint8_t>(10)}, {256, std::vector<std::uint8_t>(20)}};
+    const auto group = deployment::make_icon_group_resource(images, 7);
+    check(group.size() == header + 2 * entry && read_u16(group, 2) == 1 && read_u16(group, 4) == 2,
+          "an icon group lists its images after its header");
+    check(group[header] == 16 && group[header + entry] == 0, "a 256 pixel image is listed as size 0");
+    check(read_u32(group, header + 8) == 10 && read_u16(group, header + 12) == 7 && read_u16(group, header + entry + 12) == 8,
+          "the entries hold the images' byte counts and their ids from the first one on");
+}
+
+void test_windows_icon_images(const fs::path& root)
+{
+    std::printf("test_windows_icon_images\n");
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    // Twice as wide as tall: in the 256 px image it fills rows 64 to 191.
+    write_solid_png(root / "wide.png", 64, 32);
+    const auto images = deployment::make_windows_icon_images(deployment::load_icon_image(root / "wide.png"));
+    check(images.size() == deployment::WINDOWS_ICON_SIZES.size() && images.front().size == 16 && images.back().size == 256,
+          "an icon has an image per size");
+    std::ofstream(root / "256.png", std::ios::binary).write(reinterpret_cast<const char*>(images.back().png.data()),
+                                                           std::streamsize(images.back().png.size()));
+    std::uint32_t width = 0;
+    check(read_png_alpha(root / "256.png", 128, 128, width) == 255 && width == 256, "the image is scaled to fit");
+    check(read_png_alpha(root / "256.png", 128, 20, width) == 0, "it is centered on a clear square");
+    check(deployment::load_icon_image(root / "missing.png").is_empty(), "a missing image loads empty");
+}
+
+void test_window_icon_file(const fs::path& root)
+{
+    std::printf("test_window_icon_file\n");
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    write_solid_png(root / "wide.png", 64, 32);
+    const auto file = root / "icon.png";
+    check(deployment::write_window_icon(file, deployment::load_icon_image(root / "wide.png")), "the window icon is written");
+    std::uint32_t width = 0;
+    check(read_png_alpha(file, 128, 128, width) == 255 && width == deployment::WINDOW_ICON_SIZE,
+          "the window icon is a square of the window icon size with the image inside");
+    check(read_png_alpha(file, 128, 20, width) == 0, "the window icon keeps the image's proportions");
+}
+
+auto make_test_version_info() -> deployment::windows_version_info
+{
+    deployment::windows_version_info info;
+    info.version = "1.2.3-beta";
+    info.product_name = "Test Game";
+    info.company_name = "Test Company";
+    info.original_filename = "Test Game.exe";
+    return info;
+}
+
+void test_windows_version_resource()
+{
+    std::printf("test_windows_version_resource\n");
+    const auto bytes = deployment::make_version_resource(make_test_version_info());
+    // The root block: its length, the length of its value, its type, "VS_VERSION_INFO" with its null in
+    // UTF-16 (32 bytes), then padding to 40, where the fixed information starts.
+    constexpr std::size_t fixed_info = 40;
+    check(read_u16(bytes, 0) == bytes.size() && read_u16(bytes, 2) == 52 && read_u16(bytes, 4) == 0,
+          "the root block covers the resource and holds a binary VS_FIXEDFILEINFO");
+    check(read_u32(bytes, fixed_info) == 0xFEEF04BD, "the fixed information follows the key");
+    check(read_u32(bytes, fixed_info + 8) == ((1u << 16) | 2) && read_u32(bytes, fixed_info + 12) == (3u << 16),
+          "the file version is 1.2.3.0");
+}
+
+#ifdef _WIN32
+/// A version string of `file` as Windows reads it, from the US English Unicode table.
+auto read_version_string(const fs::path& file, const std::wstring& name) -> std::wstring
+{
+    DWORD handle = 0;
+    const DWORD size = GetFileVersionInfoSizeW(file.c_str(), &handle);
+    std::vector<std::uint8_t> data(size);
+    wchar_t* value = nullptr;
+    UINT length = 0;
+    const std::wstring path = L"\\StringFileInfo\\040904B0\\" + name;
+    if(size == 0 || !GetFileVersionInfoW(file.c_str(), 0, size, data.data()) ||
+       !VerQueryValueW(data.data(), path.c_str(), reinterpret_cast<void**>(&value), &length) || value == nullptr)
+    {
+        return {};
+    }
+    return value;
+}
+
+/// The file version of `file` as Windows reads it, its most significant half first.
+auto read_file_version(const fs::path& file) -> std::pair<DWORD, DWORD>
+{
+    DWORD handle = 0;
+    const DWORD size = GetFileVersionInfoSizeW(file.c_str(), &handle);
+    std::vector<std::uint8_t> data(size);
+    VS_FIXEDFILEINFO* info = nullptr;
+    UINT length = 0;
+    if(size == 0 || !GetFileVersionInfoW(file.c_str(), 0, size, data.data()) ||
+       !VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &length) || info == nullptr)
+    {
+        return {};
+    }
+    return {info->dwFileVersionMS, info->dwFileVersionLS};
+}
+
+BOOL CALLBACK count_resource(HMODULE /*module*/, LPCWSTR /*type*/, LPWSTR /*name*/, LONG_PTR count)
+{
+    ++*reinterpret_cast<std::size_t*>(count);
+    return TRUE;
+}
+
+/// How many resources of `type` (RT_ICON 3, RT_GROUP_ICON 14) `file` has.
+auto count_resources(const fs::path& file, WORD type) -> std::size_t
+{
+    HMODULE module = LoadLibraryExW(file.c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+    if(module == nullptr)
+    {
+        return 0;
+    }
+    std::size_t count = 0;
+    EnumResourceNamesW(module, MAKEINTRESOURCEW(type), count_resource, reinterpret_cast<LONG_PTR>(&count));
+    FreeLibrary(module);
+    return count;
+}
+#endif
+
+void test_windows_executable_resources(const fs::path& root)
+{
+#ifdef _WIN32
+    std::printf("test_windows_executable_resources\n");
+    constexpr WORD icon_type = 3;
+    constexpr WORD icon_group_type = 14;
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    // The player the deploy copies, with the engine's icon, when it was built beside the runner; otherwise the
+    // runner itself, without an icon. (A system executable will not do: Windows refuses to remove the icons
+    // of one that has language files.)
+    const auto player = fs::resolve_protocol("binary:/unravel-player.exe");
+    const bool has_player = fs::exists(player, ec);
+    const auto file = root / "game.exe";
+    fs::copy_file(has_player ? player : fs::executable_path(nullptr), file, fs::copy_options::overwrite_existing, ec);
+    check(!ec && (!has_player || count_resources(file, icon_group_type) > 0), "the copied executable has the engine's icon");
+    write_solid_png(root / "icon.png", 48, 48);
+    const auto icon = deployment::make_windows_icon_images(deployment::load_icon_image(root / "icon.png"));
+    const auto info = make_test_version_info();
+    const auto written = deployment::set_windows_executable_resources(file, icon, info);
+    check(written.is_ok(), "an executable takes an icon and version information: " + written.error);
+    check(count_resources(file, icon_group_type) == 1 && count_resources(file, icon_type) == icon.size(),
+          "the icon replaces every earlier one");
+    check(read_version_string(file, L"ProductName") == L"Test Game" && read_version_string(file, L"CompanyName") == L"Test Company" &&
+              read_version_string(file, L"FileVersion") == L"1.2.3-beta" &&
+              read_version_string(file, L"OriginalFilename") == L"Test Game.exe",
+          "Windows reads the version strings");
+    check(read_file_version(file) == std::pair<DWORD, DWORD>{(1u << 16) | 2, 3u << 16}, "and the file version 1.2.3.0");
+    auto renamed = info;
+    renamed.product_name = "Renamed";
+    check(deployment::set_windows_executable_resources(file, {}, renamed).is_ok() && count_resources(file, icon_type) == icon.size() &&
+              read_version_string(file, L"ProductName") == L"Renamed",
+          "without images the icon stays and the version information is replaced");
+    check(!deployment::set_windows_executable_resources(root / "missing.exe", icon, info).is_ok(), "a missing file is reported");
+#else
+    (void)root;
+#endif
+}
+
 void test_run_arguments()
 {
     std::printf("test_run_arguments\n");
@@ -1158,19 +1369,29 @@ void test_keep_and_remove_release(const fs::path& root)
     const auto project = deployment::get_profile_releases_folder(root / "project", "Desktop");
     check(project == root / "project" / "releases" / "Desktop", "a profile's releases are in releases/<profile>");
     const auto build = root / "build";
-    check(!deployment::keep_release(project, build, "1.0").is_ok(), "a folder without a packed build cannot be kept");
+    const auto symbols = root / "symbols";
+    check(!deployment::keep_release(project, build, symbols, "1.0").is_ok(), "a folder without a packed build cannot be kept");
     for(const auto* protocol : deployment::PACKED_PROTOCOLS)
     {
         write_text(build / deployment::DATA_FOLDER / protocol / ex::get_pack_file_name(), std::string("pack of ") + protocol);
     }
-    check(!deployment::keep_release(project, build, "a/b").is_ok(), "an invalid name is refused");
-    check(deployment::keep_release(project, build, "1.0").is_ok(), "a full packed build is kept");
+    check(!deployment::keep_release(project, build, symbols, "a/b").is_ok(), "an invalid name is refused");
+    check(deployment::keep_release(project, build, symbols, "0.9").is_ok() &&
+              !fs::exists(deployment::get_release_symbols_folder(project, "0.9")),
+          "a build without debug files is kept without them");
+    write_text(symbols / "game.exe", "game");
+    write_text(symbols / "unravel-player.pdb", "symbols");
+    check(deployment::keep_release(project, build, symbols, "1.0").is_ok(), "a full packed build is kept");
     check(deployment::is_kept_release(project, "1.0"), "the release is kept");
-    check(deployment::list_releases(project) == std::vector<std::string>{"1.0"}, "it is listed");
+    check(deployment::list_releases(project) == std::vector<std::string>{"0.9", "1.0"}, "it is listed");
     check(read_text(deployment::get_release_pack(project, "1.0", "app")) == "pack of app", "its packs are copied");
-    check(!deployment::keep_release(project, build, "1.0").is_ok(), "a name already kept is refused");
+    const auto kept_symbols = deployment::get_release_symbols_folder(project, "1.0");
+    check(read_text(kept_symbols / "game.exe") == "game" && read_text(kept_symbols / "unravel-player.pdb") == "symbols",
+          "its executable and symbols are kept with it");
+    check(!deployment::keep_release(project, build, symbols, "1.0").is_ok(), "a name already kept is refused");
     write_text(build / deployment::DATA_FOLDER / "app" / ex::get_patch_pack_file_name(1), "patch");
-    check(!deployment::keep_release(project, build, "1.1").is_ok(), "a patched build cannot be kept");
+    check(!deployment::keep_release(project, build, symbols, "1.1").is_ok(), "a patched build cannot be kept");
+    check(deployment::remove_release(project, "0.9").is_ok(), "the release without debug files is removed");
     check(!deployment::remove_release(project, "2.0").is_ok(), "removing a release that is not kept fails");
     check(deployment::remove_release(project, "1.0").is_ok() && deployment::list_releases(project).empty(),
           "a removed release is gone");
@@ -1188,6 +1409,133 @@ void test_keep_and_remove_release(const fs::path& root)
     check(deployment::move_releases_into_profile(old_project, "Desktop").is_ok() &&
               deployment::list_releases(moved) == std::vector<std::string>{"0.9"},
           "moving again changes nothing: a profile's folder is no release");
+}
+
+void test_debug_files(const fs::path& root)
+{
+    std::printf("test_debug_files\n");
+    const auto folder = root / "symbols";
+    write_text(root / "build" / "game.exe", "game 1");
+    write_text(root / "player" / "unravel-player.pdb", "symbols 1");
+    write_text(folder / "old-game.exe", "an earlier build's executable");
+    const std::vector<fs::path> files{root / "build" / "game.exe", root / "player" / "unravel-player.pdb"};
+    check(deployment::keep_debug_files(files, folder).is_ok(), "a build's debug files are kept");
+    check(read_text(folder / "game.exe") == "game 1" && read_text(folder / "unravel-player.pdb") == "symbols 1",
+          "the executable and the symbols are copied");
+    check(!fs::exists(folder / "old-game.exe"), "an earlier build's files are removed");
+    write_text(root / "build" / "game.exe", "game 2");
+    check(deployment::keep_debug_files(files, folder).is_ok() && read_text(folder / "game.exe") == "game 2",
+          "a changed executable is copied again");
+    check(!deployment::keep_debug_files({root / "missing.pdb"}, folder).is_ok(), "a missing file fails");
+}
+
+//-----------------------------------------------------------------------------
+// Steam
+//-----------------------------------------------------------------------------
+
+auto make_steam_settings() -> unravel::steam_deploy_settings
+{
+    unravel::steam_deploy_settings steam;
+    steam.app_id = 480;
+    steam.depot_id = 481;
+    steam.account = "builder";
+    return steam;
+}
+
+void test_steam_settings()
+{
+    std::printf("test_steam_settings\n");
+    check(deployment::check_steam_settings(make_steam_settings()).empty(), "an app, a depot and an account upload");
+    auto steam = make_steam_settings();
+    steam.branch = "beta";
+    check(deployment::check_steam_settings(steam).empty(), "with a beta branch too");
+    auto missing = make_steam_settings();
+    missing.app_id = 0;
+    check(!deployment::check_steam_settings(missing).empty(), "an app is needed");
+    missing = make_steam_settings();
+    missing.depot_id = 0;
+    check(!deployment::check_steam_settings(missing).empty(), "a depot is needed");
+    missing = make_steam_settings();
+    missing.account.clear();
+    check(!deployment::check_steam_settings(missing).empty(), "an account is needed");
+    for(const char* branch : {"default", "Default", "two words", "quo\"te"})
+    {
+        steam.branch = branch;
+        check(!deployment::check_steam_settings(steam).empty(),
+              std::string("the branch '") + branch + "' is refused: no default branch, no spaces or quotes");
+    }
+    steam = make_steam_settings();
+    steam.account = "build er";
+    check(!deployment::check_steam_settings(steam).empty(), "an account with a space is refused");
+}
+
+void test_steam_build_script()
+{
+    std::printf("test_steam_build_script\n");
+    deployment::steam_build build;
+    build.app_id = 480;
+    build.depot_id = 481;
+    build.description = "Game \"Deluxe\" 1.0\n(Desktop)";
+    build.content_root = fs::path("C:/projects/game/.deploy/Desktop");
+    build.build_output = fs::path("C:/temp/steam/output/");
+    const auto script = deployment::make_steam_app_build_script(build);
+    const std::string expected = "\"AppBuild\"\n"
+                                 "{\n"
+                                 "\t\"AppID\" \"480\"\n"
+                                 "\t\"Desc\" \"Game 'Deluxe' 1.0 (Desktop)\"\n"
+                                 "\t\"ContentRoot\" \"C:/projects/game/.deploy/Desktop/\"\n"
+                                 "\t\"BuildOutput\" \"C:/temp/steam/output/\"\n"
+                                 "\t\"Depots\"\n"
+                                 "\t{\n"
+                                 "\t\t\"481\"\n"
+                                 "\t\t{\n"
+                                 "\t\t\t\"FileMapping\"\n"
+                                 "\t\t\t{\n"
+                                 "\t\t\t\t\"LocalPath\" \"*\"\n"
+                                 "\t\t\t\t\"DepotPath\" \".\"\n"
+                                 "\t\t\t\t\"recursive\" \"1\"\n"
+                                 "\t\t\t}\n"
+                                 "\t\t\t\"FileExclusion\" \"Log.txt\"\n"
+                                 "\t\t\t\"FileExclusion\" \"CrashLog.txt\"\n"
+                                 "\t\t\t\"FileExclusion\" \"CrashLog.dmp\"\n"
+                                 "\t\t}\n"
+                                 "\t}\n"
+                                 "}\n";
+    check(script == expected, "the app build script maps the whole folder into the depot, logs left out:\n" + script);
+    check(script.find("SetLive") == std::string::npos, "no branch: the build is set live nowhere");
+    build.branch = "beta";
+    check(deployment::make_steam_app_build_script(build).find("\t\"SetLive\" \"beta\"\n") != std::string::npos,
+          "a branch: the build is set live on it");
+}
+
+void test_steamcmd_output()
+{
+    std::printf("test_steamcmd_output\n");
+    const std::vector<std::string> expected{"steamcmd",
+                                            "+@ShutdownOnFailedCommand",
+                                            "1",
+                                            "+@NoPromptForPassword",
+                                            "1",
+                                            "+login",
+                                            "builder",
+                                            "+run_app_build",
+                                            fs::to_utf8_string(fs::path("C:/temp/app_build_480.vdf")),
+                                            "+quit"};
+    check(deployment::make_steamcmd_arguments({}, "builder", "C:/temp/app_build_480.vdf") == expected,
+          "steamcmd from PATH logs in without asking for a password, builds and quits");
+    check(deployment::make_steamcmd_arguments("D:/sdk/steamcmd.exe", "builder", "C:/temp/app_build_480.vdf").front() ==
+              fs::to_utf8_string(fs::path("D:/sdk/steamcmd.exe")),
+          "a set steamcmd runs instead");
+    const std::string finished = "Uploading content...\r\n"
+                                 "Successfully finished AppID 480 build (BuildID 12345678).\r\n";
+    check(deployment::find_steam_build_id(finished) == "12345678", "a finished build's id is read");
+    check(deployment::find_steam_build_id("BuildID 12 without a finished build").empty(), "no finished build: no id");
+    check(deployment::find_steam_build_id("").empty(), "no output: no id");
+    check(deployment::is_steam_login_failure("Logging in user 'builder' to Steam Public...\nFAILED (Invalid Password)"),
+          "a refused password is a login failure");
+    check(deployment::is_steam_login_failure("Cached credentials not found."), "a missing kept login is one too");
+    check(!deployment::is_steam_login_failure("ERROR! Failed to commit build for AppID 480 : Access Denied"),
+          "a refused build is not");
 }
 
 //-----------------------------------------------------------------------------
@@ -1348,6 +1696,12 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_gradle_arguments();
         test_android_permissions();
         test_android_icon(temp / "icon");
+        test_windows_version_numbers();
+        test_windows_icon_group();
+        test_windows_icon_images(temp / "windows_icon");
+        test_window_icon_file(temp / "window_icon");
+        test_windows_version_resource();
+        test_windows_executable_resources(temp / "windows_executable");
         test_run_arguments();
         test_subprocess(temp / "subprocess");
         test_pack_inputs(temp / "inputs");
@@ -1358,6 +1712,10 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_patch_over_release(job, temp / "protocol");
         test_release_names();
         test_keep_and_remove_release(temp / "releases");
+        test_debug_files(temp / "debug_files");
+        test_steam_settings();
+        test_steam_build_script();
+        test_steamcmd_output();
         test_dependency_parse(temp / "dependencies");
         test_failed_scan_throws(temp / "dependencies");
         test_folders(temp / "folders");

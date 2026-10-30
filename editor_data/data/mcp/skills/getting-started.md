@@ -86,7 +86,12 @@ Building a scene is not shipping a game. The rest of the chain:
   deploy_keep_release (named by app.version), then deploy_set_settings
   patch_release to that name - later deploys ship the release's packs
   unchanged plus content_p1.pak with every change since; deploy_remove_release
-  deletes a kept release. Releases are kept per profile. To ship only what the game uses: deploy_set_settings
+  deletes a kept release. Releases are kept per profile, with the build's
+  executable and the player's debug symbols (to read crash dumps of it). To
+  upload a desktop profile to Steam: deploy_set_settings steam_app_id,
+  steam_depot_id, steam_account (logged in once in a terminal with steamcmd
+  +login <account>) and optionally steam_branch, deploy it, then
+  deploy_upload_steam. To ship only what the game uses: deploy_set_settings
   only_used_assets true, scenes (the scenes scripts load besides the startup
   scene) and include (folders or assets scripts load by a path built at run
   time); keys that name nothing come back as warnings. deploy_get_content lists

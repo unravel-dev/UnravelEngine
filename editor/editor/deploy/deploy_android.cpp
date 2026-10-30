@@ -130,20 +130,6 @@ void write_text_or_throw(const fs::path& file, const std::string& text)
     }
 }
 
-/// The last `count` lines of `output`.
-auto get_last_lines(const std::string& output, std::size_t count) -> std::string
-{
-    std::size_t begin = output.size();
-    for(std::size_t found = 0; begin > 0 && found <= count; --begin)
-    {
-        if(output[begin - 1] == '\n')
-        {
-            ++found;
-        }
-    }
-    return output.substr(begin);
-}
-
 auto trim(std::string text) -> std::string
 {
     const auto begin = text.find_first_not_of(" \t\r\n");

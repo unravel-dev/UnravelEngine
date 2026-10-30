@@ -19,6 +19,8 @@ struct editor_settings
     struct external_tools_settings
     {
         fs::path vscode_executable;
+        /// The steamcmd Upload to Steam runs; empty: the one on PATH.
+        fs::path steamcmd_executable;
     } external_tools;
 
     struct scripting_settings

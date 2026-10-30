@@ -111,6 +111,8 @@ struct settings_profile
     target_platform platform{target_platform::desktop};
     /// The Android build's identity, signing and texture formats; used by Android profiles only.
     android_deploy_settings android;
+    /// The desktop build's icon; used by desktop profiles only.
+    desktop_deploy_settings desktop;
     /// Overrides of the project settings (settings/settings.cfg), in profiles/<name>/settings.cfg.
     profile_overrides settings;
     /// Overrides of the shared deploy settings (deploy/deploy.cfg), in profiles/<name>/deploy.cfg.

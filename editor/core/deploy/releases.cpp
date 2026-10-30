@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
 #include <stdexcept>
 
 namespace unravel::deployment
@@ -165,7 +166,13 @@ auto move_releases_into_profile(const fs::path& project_root, const std::string&
     return {};
 }
 
-auto keep_release(const fs::path& releases, const fs::path& deploy_location, const std::string& name) -> result
+auto get_release_symbols_folder(const fs::path& releases, const std::string& name) -> fs::path
+{
+    return get_release_folder(releases, name) / SYMBOLS_FOLDER;
+}
+
+auto keep_release(const fs::path& releases, const fs::path& deploy_location, const fs::path& symbols, const std::string& name)
+    -> result
 {
     if(!is_valid_release_name(name))
     {
@@ -195,7 +202,40 @@ auto keep_release(const fs::path& releases, const fs::path& deploy_location, con
             return result::failure(fmt::format("Keeping the release failed: {}", ec.message()));
         }
     }
-    APPLOG_INFO("Kept release {} in {}", name, release.generic_string());
+    const bool has_symbols = fs::is_directory(symbols, ec);
+    fs::mirror_stats stats;
+    if(has_symbols && !fs::mirror_directory(symbols, get_release_symbols_folder(releases, name), {}, stats, ec))
+    {
+        fs::error_code cleanup_ec;
+        fs::remove_all(release, cleanup_ec);
+        return result::failure(fmt::format("Keeping the release's debug files failed: {}", ec.message()));
+    }
+    APPLOG_INFO("Kept release {} in {}{}", name, release.generic_string(), has_symbols ? ", with its debug files" : "");
+    return {};
+}
+
+auto keep_debug_files(const std::vector<fs::path>& files, const fs::path& folder) -> result
+{
+    fs::error_code ec;
+    fs::create_directories(folder, ec);
+    std::set<std::string> kept;
+    for(const auto& file : files)
+    {
+        bool is_copied = false;
+        if(!fs::copy_file_if_changed(file, folder / file.filename(), is_copied, ec))
+        {
+            return result::failure(fmt::format("Keeping {} failed: {}", file.generic_string(), ec.message()));
+        }
+        kept.insert(fs::make_path_key(file.filename().generic_string()));
+    }
+    for(const auto& entry : fs::directory_iterator(folder, ec))
+    {
+        if(!kept.contains(fs::make_path_key(entry.path().filename().generic_string())))
+        {
+            fs::error_code remove_ec;
+            fs::remove_all(entry.path(), remove_ec);
+        }
+    }
     return {};
 }
 

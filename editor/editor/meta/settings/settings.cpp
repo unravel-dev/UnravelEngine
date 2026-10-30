@@ -50,12 +50,23 @@ REFLECT_INLINE(editor_settings::external_tools_settings)
             entt::attribute{"pretty_name", "Visual Studio Code"},
             entt::attribute{"tooltip", "Full path to executable."},
             entt::attribute{"type", "file"},
+        })
+        .data<&editor_settings::external_tools_settings::steamcmd_executable>("steamcmd_executable"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "steamcmd_executable"},
+            entt::attribute{"pretty_name", "SteamCMD"},
+            entt::attribute{"tooltip",
+                            "Full path to steamcmd, which Upload to Steam runs: the one in the Steamworks\n"
+                            "SDK (tools/ContentBuilder/builder) or Valve's standalone download.\n"
+                            "Empty: the steamcmd on PATH."},
+            entt::attribute{"type", "file"},
         });
 }
 
 SAVE_INLINE(editor_settings::external_tools_settings)
 {
     try_save(ar, ser20::make_nvp("vscode_executable", obj.vscode_executable.generic_string()));
+    try_save(ar, ser20::make_nvp("steamcmd_executable", fs::to_utf8_string(obj.steamcmd_executable)));
 }
 
 LOAD_INLINE(editor_settings::external_tools_settings)
@@ -64,6 +75,11 @@ LOAD_INLINE(editor_settings::external_tools_settings)
     if(try_load(ar, ser20::make_nvp("vscode_executable", vscode_executable)))
     {
         obj.vscode_executable = vscode_executable;
+    }
+    std::string steamcmd_executable;
+    if(try_load(ar, ser20::make_nvp("steamcmd_executable", steamcmd_executable)))
+    {
+        obj.steamcmd_executable = fs::from_utf8_string(steamcmd_executable);
     }
 }
 

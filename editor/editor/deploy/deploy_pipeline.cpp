@@ -6,11 +6,14 @@
 #include <deploy/content.h>
 #include <deploy/dependencies.h>
 #include <deploy/files.h>
+#include <deploy/icon_image.h>
 #include <deploy/keys.h>
+#include <deploy/profile_cache.h>
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
 #include <deploy/run_arguments.h>
 #include <deploy/texture_variants.h>
+#include <deploy/windows_resources.h>
 #include <editor/editing/prefab_bake.h>
 #include <editor/system/project_manager.h>
 #include <engine/assets/asset_manager.h>
@@ -50,6 +53,8 @@ constexpr const char* COOK_STAGING_PREFIX = "unravel-deploy-cook-";
 constexpr const char* DEPENDENCY_SCANNER = "editor:/tools/dependencies/Dependencies.exe";
 constexpr const char* SETTINGS_FOLDER = "settings";
 constexpr const char* SETTINGS_FILE = "settings.cfg";
+/// The player's symbols beside it, where its build put them (Windows).
+constexpr const char* PLAYER_SYMBOLS_EXTENSION = ".pdb";
 
 std::atomic<int> running_deploys{0};
 
@@ -61,6 +66,14 @@ struct deploy_plan
     fs::path output;
     fs::path executable;
     fs::path player;
+    /// The player's symbols; missing where its build leaves none beside it.
+    fs::path player_symbols;
+    /// The profile's cache of the build's debug files, which Keep as Release takes along.
+    fs::path symbols;
+    /// The image of the profile's executable icon; empty: the player keeps the engine's.
+    fs::path icon_image;
+    /// What the executable says of itself (Windows): the project's product, company and version.
+    windows_version_info version_info;
     fs::path dependency_scanner;
     /// The project settings the profile runs with: what the game loads.
     settings runtime_settings;
@@ -227,6 +240,18 @@ auto make_protocol_job(asset_manager& am,
     return job;
 }
 
+/// The version information of the game's executable: the project's product (the executable's name when it
+/// names none, as the game itself does), company and version.
+auto make_version_info(const settings::app_settings& app, const fs::path& executable) -> windows_version_info
+{
+    windows_version_info info;
+    info.version = app.version;
+    info.product_name = app.product.empty() ? fs::to_utf8_string(executable.stem()) : app.product;
+    info.company_name = app.company;
+    info.original_filename = fs::to_utf8_string(executable.filename());
+    return info;
+}
+
 auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path& staging, std::unordered_set<std::string> left_out)
     -> deploy_plan
 {
@@ -241,6 +266,10 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     data_params.deploy_location = is_android(plan) ? get_android_content_dir(params.profile) : plan.output;
     plan.executable = get_deployed_executable(ctx, params);
     plan.player = fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
+    plan.player_symbols = fs::path(plan.player).replace_extension(PLAYER_SYMBOLS_EXTENSION);
+    plan.symbols = get_profile_symbols_folder(get_project_root(), params.profile);
+    plan.icon_image = params.desktop.icon ? fs::resolve_protocol(params.desktop.icon.id()) : fs::path{};
+    plan.version_info = make_version_info(plan.runtime_settings.app, plan.executable);
     plan.dependency_scanner = fs::resolve_protocol(DEPENDENCY_SCANNER);
     plan.settings_folder = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
     plan.textures = make_texture_cook_plan(get_project_root(),
@@ -264,6 +293,67 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     return plan;
 }
 
+/// The profile's icon image; empty for a profile without one.
+auto load_profile_icon(const deploy_plan& plan) -> icon_image
+{
+    if(plan.icon_image.empty())
+    {
+        return {};
+    }
+    auto image = load_icon_image(plan.icon_image);
+    if(image.is_empty())
+    {
+        throw std::runtime_error(fmt::format("The icon image {} could not be read as an image.", plan.icon_image.generic_string()));
+    }
+    return image;
+}
+
+/// Writes the profile's icon and the project's version information into the game's copy of the player, so
+/// Explorer, the taskbar and crash reports show the game, not the engine. Elsewhere an executable carries
+/// neither: the icon goes beside it as the image the game shows on its window, and a deploy without an icon
+/// removes the one an earlier deploy wrote.
+void write_executable_resources(const deploy_plan& plan)
+{
+    const auto image = load_profile_icon(plan);
+#ifdef _WIN32
+    const auto icon = image.is_empty() ? std::vector<windows_icon_image>{} : make_windows_icon_images(image);
+    const auto written = set_windows_executable_resources(plan.executable, icon, plan.version_info);
+    if(!written.is_ok())
+    {
+        throw std::runtime_error(written.error);
+    }
+#else
+    const auto file = plan.output / ex::get_window_icon_file_name();
+    fs::error_code ec;
+    if(image.is_empty())
+    {
+        fs::remove(file, ec);
+        return;
+    }
+    if(!write_window_icon(file, image))
+    {
+        throw std::runtime_error(fmt::format("Writing {} failed", file.generic_string()));
+    }
+#endif
+}
+
+/// Keeps the executable and the player's symbols in the profile's cache, never in the build: a crash dump from
+/// players is read with the executable and symbols of its own build, which Keep as Release stores.
+void keep_build_debug_files(const deploy_plan& plan)
+{
+    std::vector<fs::path> files{plan.executable};
+    fs::error_code ec;
+    if(fs::exists(plan.player_symbols, ec))
+    {
+        files.push_back(plan.player_symbols);
+    }
+    const auto kept = keep_debug_files(files, plan.symbols);
+    if(!kept.is_ok())
+    {
+        throw std::runtime_error(kept.error);
+    }
+}
+
 /// The player renamed after the project, and the libraries it loads beside it; binaries an older build
 /// left at the top of the folder are removed.
 void deploy_dependencies(const deploy_plan& plan)
@@ -276,6 +366,8 @@ void deploy_dependencies(const deploy_plan& plan)
         shipped.insert(get_binary_key(library));
     }
     copy_file_or_throw(plan.player, plan.executable);
+    write_executable_resources(plan);
+    keep_build_debug_files(plan);
     shipped.insert(get_binary_key(plan.executable));
     remove_stale_binaries(plan.output, shipped);
 }
@@ -483,6 +575,19 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
 auto is_deploy_running() -> bool
 {
     return running_deploys.load() > 0;
+}
+
+auto get_last_lines(const std::string& output, std::size_t count) -> std::string
+{
+    std::size_t begin = output.size();
+    for(std::size_t found = 0; begin > 0 && found <= count; --begin)
+    {
+        if(output[begin - 1] == '\n')
+        {
+            ++found;
+        }
+    }
+    return output.substr(begin);
 }
 
 /// A ready future rethrows its job's exception.

@@ -70,6 +70,8 @@ public:
 
     /// Replaces an Android profile's identity, signing and texture formats.
     auto set_android(const std::string& name, const android_deploy_settings& android) -> result;
+    /// Replaces a desktop profile's icon.
+    auto set_desktop(const std::string& name, const desktop_deploy_settings& desktop) -> result;
 
     /**
      * @brief Overrides, in a profile, the project settings an edit changed; an edit of the settings every

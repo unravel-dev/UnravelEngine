@@ -53,6 +53,9 @@ public:
     /// Run Last Build: installs the package of an earlier Android deploy on the chosen device and starts
     /// it, its steps shown as a deploy's. @return False while a deploy runs.
     auto run_last_android_build(rtti::context& ctx, const deploy_settings& params) -> bool;
+    /// Upload to Steam: sends the build in the profile's folder to its Steam depot, its step shown as a deploy's.
+    /// @return False while a deploy runs or when deployment::get_steam_upload_problem finds a problem.
+    auto start_steam_upload(rtti::context& ctx, const deploy_settings& params) -> bool;
     /// The steps of the running deploy, or of the last one until the window is closed.
     auto get_jobs() const -> const deployment::deploy_jobs&;
     auto is_deploying() const -> bool;
@@ -104,7 +107,8 @@ private:
     void draw_profile_picker(rtti::context& ctx);
     void draw_new_profile_popup(rtti::context& ctx);
     void draw_rename_profile_popup(rtti::context& ctx);
-    /// What a desktop profile builds: the player.
+    /// What a desktop profile builds: the player, its icon and where it goes on Steam, saved with the profile once
+    /// an edit is finished.
     void draw_desktop_section(rtti::context& ctx);
     /// The Android settings: the device, the game's id and version, its orientation, signing and textures.
     void draw_android_section(rtti::context& ctx);
@@ -128,6 +132,8 @@ private:
     void draw_install_conflict();
     void draw_status(rtti::context& ctx);
     void draw_actions(rtti::context& ctx);
+    /// Upload to Steam, after a confirmation; disabled with the reason while the build cannot go.
+    void draw_steam_upload_button(rtti::context& ctx, const deploy_settings& params);
     void keep_release(rtti::context& ctx);
     void remove_release(rtti::context& ctx, const std::string& name);
     void refresh_releases();
@@ -140,6 +146,8 @@ private:
     deployment::deploy_jobs deploy_jobs_;
     /// The folder the steps in deploy_jobs_ build into.
     fs::path deployed_location_;
+    /// Whether deploy_jobs_ upload that folder to Steam rather than build it.
+    bool is_steam_upload_{};
     /// What keeps the project from deploying, checked again a moment after the settings change.
     deployment::problems_cache problems_;
     deploy_content_view content_view_;

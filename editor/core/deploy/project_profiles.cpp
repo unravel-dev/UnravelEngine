@@ -464,6 +464,23 @@ auto project_profiles::set_android(const std::string& name, const android_deploy
     return {};
 }
 
+auto project_profiles::set_desktop(const std::string& name, const desktop_deploy_settings& desktop) -> result
+{
+    const auto* profile = find(name);
+    if(profile == nullptr)
+    {
+        return result::failure(fmt::format("No profile named {}.", name));
+    }
+    auto changed = *profile;
+    changed.desktop = desktop;
+    if(auto stored = store(changed); !stored.is_ok())
+    {
+        return stored;
+    }
+    *find_mutable(name) = std::move(changed);
+    return {};
+}
+
 auto project_profiles::check_editable(const settings_profile& profile, const profile_overrides& overrides, const char* file) const
     -> result
 {

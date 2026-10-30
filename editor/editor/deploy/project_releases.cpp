@@ -1,6 +1,7 @@
 #include "project_releases.h"
 #include "deploy_preflight.h"
 
+#include <deploy/profile_cache.h>
 #include <deploy/releases.h>
 #include <editor/system/project_manager.h>
 #include <logging/logging.h>
@@ -29,8 +30,13 @@ auto keep_project_release(const deploy_settings& params, const std::string& name
     {
         return result::failure("Releases are kept of desktop profiles: an Android package always carries every pack whole.");
     }
-    // Releases are desktop builds: their packs ship beside the player, and patches update them.
-    return keep_release(get_profile_releases_folder(get_project_root(), params.profile), get_output_location(params), name);
+    // Releases are desktop builds: their packs ship beside the player, and patches update them. The debug files
+    // of the profile's last deploy go with them, so crash dumps of the release can be read later.
+    const auto root = get_project_root();
+    return keep_release(get_profile_releases_folder(root, params.profile),
+                        get_output_location(params),
+                        get_profile_symbols_folder(root, params.profile),
+                        name);
 }
 
 auto remove_project_release(rtti::context& ctx, const std::string& profile, const std::string& name) -> result

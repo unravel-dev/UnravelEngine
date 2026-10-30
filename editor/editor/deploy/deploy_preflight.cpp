@@ -72,6 +72,22 @@ auto get_folder_problem(const fs::path& location, const fs::path& output, bool i
     return {};
 }
 
+/// The image of a desktop profile's icon must exist; without one the game keeps the engine's icon.
+auto get_desktop_icon_problem(const deploy_settings& params) -> std::string
+{
+    if(!params.desktop.icon)
+    {
+        return {};
+    }
+    const auto image = fs::resolve_protocol(params.desktop.icon.id());
+    fs::error_code ec;
+    if(fs::exists(image, ec))
+    {
+        return {};
+    }
+    return fmt::format("The icon image {} is missing. Choose another one, or none for the engine's logo.", image.generic_string());
+}
+
 auto get_patch_problem(const deploy_settings& params) -> std::string
 {
     if(params.deploy_patch_release.empty())
@@ -182,6 +198,7 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
         add_problem(problems, get_runtime_problem());
         // An Android package carries every pack whole, so only desktop deploys patch.
         add_problem(problems, get_patch_problem(params));
+        add_problem(problems, get_desktop_icon_problem(params));
     }
     add_problem(problems, get_compile_problem(ctx));
     return problems;
@@ -194,7 +211,7 @@ auto can_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
 
 auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> const std::vector<std::string>&
 {
-    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+    const auto signature = fmt::format("{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                                        params.profile,
                                        params.deploy_location.generic_string(),
                                        params.deploy_patch_release,
@@ -208,6 +225,7 @@ auto problems_cache::get(rtti::context& ctx, const deploy_settings& params) -> c
                                        params.android.keystore.generic_string(),
                                        params.android.key_alias,
                                        params.android.icon.id(),
+                                       params.desktop.icon.id(),
                                        ctx.get_cached<project_manager>().get_profiles().get_revision());
     const auto now = std::chrono::steady_clock::now();
     if(signature != signature_ || now - checked_at_ >= PROBLEMS_REFRESH_INTERVAL)

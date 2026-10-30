@@ -12,6 +12,14 @@ SAVE_EXTERN(android_deploy_settings);
 LOAD_EXTERN(android_deploy_settings);
 REFLECT_EXTERN(android_deploy_settings);
 
+SAVE_EXTERN(steam_deploy_settings);
+LOAD_EXTERN(steam_deploy_settings);
+REFLECT_EXTERN(steam_deploy_settings);
+
+SAVE_EXTERN(desktop_deploy_settings);
+LOAD_EXTERN(desktop_deploy_settings);
+REFLECT_EXTERN(desktop_deploy_settings);
+
 /// Saves and loads the settings every profile shares: not the profile's own fields, not the device.
 SAVE_EXTERN(deploy_settings);
 LOAD_EXTERN(deploy_settings);

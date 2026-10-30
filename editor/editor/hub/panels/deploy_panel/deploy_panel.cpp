@@ -5,7 +5,9 @@
 #include "../visualization_widgets.h"
 #include "deploy_panel_widgets.h"
 
+#include <deploy/steam.h>
 #include <editor/deploy/deploy_android.h>
+#include <editor/deploy/deploy_steam.h>
 #include <editor/deploy/project_releases.h>
 #include <editor/format/format_bytes.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h>
@@ -71,6 +73,8 @@ constexpr const char* PATCH_RELEASE_PATH = "deploy_patch_release";
 constexpr const char* NEW_PROFILE_POPUP = "##new_profile";
 constexpr const char* RENAME_PROFILE_POPUP = "##rename_profile";
 constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
+constexpr const char* STEAM_UPLOAD_POPUP = "##steam_upload_confirm";
+constexpr const char* STEAM_UPLOAD_LABEL = ICON_MDI_STEAM " Upload to Steam";
 // The space between a device's name and its details, in item spacings.
 constexpr float DEVICE_DETAILS_GAP = 2.0f;
 constexpr const char* CHOOSE_DEVICE_LABEL = "Choose a device";
@@ -118,6 +122,43 @@ auto draw_confirmation(const char* id, const std::string& question, const char* 
     }
     ImGui::EndPopup();
     return is_confirmed;
+}
+
+/// The profile's Steam settings in rows, with what keeps them from uploading once an app is set.
+auto draw_steam_settings(rtti::context& ctx, steam_deploy_settings& steam) -> inspect_result
+{
+    ImGui::SeparatorText("Steam");
+    widgets::draw_muted_text("Upload to Steam sends the build in the profile's folder to this depot with steamcmd, "
+                             "which Editor Settings > External Tools names.");
+    entt::meta_any object = entt::forward_as_meta(steam);
+    const auto type = entt::resolve<steam_deploy_settings>();
+    inspect_result result;
+    {
+        const inspect_without_undo_scope no_undo;
+        for(const auto& name : {"app_id"_hs, "depot_id"_hs, "account"_hs, "branch"_hs})
+        {
+            result |= inspect_property(ctx, object, make_proxy(object), type.data(name));
+        }
+    }
+    const auto problem = steam.app_id == 0 ? std::string{} : deployment::check_steam_settings(steam);
+    if(!problem.empty())
+    {
+        widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE, widgets::WARNING_COLOR, problem.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
+    }
+    return result;
+}
+
+/// What the upload's confirmation says it does.
+auto describe_steam_upload(const deploy_settings& params) -> std::string
+{
+    const auto& steam = params.desktop.steam;
+    return fmt::format("The build in {} goes to app {}, depot {}, as {}.\n{}",
+                       get_output_location(params).generic_string(),
+                       steam.app_id,
+                       steam.depot_id,
+                       steam.account,
+                       steam.branch.empty() ? std::string("Set it live on the Steamworks website.")
+                                            : fmt::format("It is set live on branch {}.", steam.branch));
 }
 
 /// A square icon button that takes its place in the layout.
@@ -481,6 +522,7 @@ auto deploy_panel::start_deploy(rtti::context& ctx, const deploy_settings& param
     }
     deploy_jobs_ = deployment::deploy_project(ctx, params);
     deployed_location_ = get_output_location(params);
+    is_steam_upload_ = false;
     return true;
 }
 
@@ -492,6 +534,19 @@ auto deploy_panel::run_last_android_build(rtti::context& ctx, const deploy_setti
     }
     deploy_jobs_ = deployment::run_last_android_build(ctx, params);
     deployed_location_ = get_output_location(params);
+    is_steam_upload_ = false;
+    return true;
+}
+
+auto deploy_panel::start_steam_upload(rtti::context& ctx, const deploy_settings& params) -> bool
+{
+    if(is_deploying() || !deployment::get_steam_upload_problem(ctx, params).empty())
+    {
+        return false;
+    }
+    deploy_jobs_ = deployment::upload_to_steam(ctx, params);
+    deployed_location_ = get_output_location(params);
+    is_steam_upload_ = true;
     return true;
 }
 
@@ -1071,9 +1126,32 @@ void deploy_panel::set_profile_message(const deployment::result& outcome, const 
     profile_message_ = is_profile_message_error_ ? outcome.error : success;
 }
 
-void deploy_panel::draw_desktop_section(rtti::context& /*ctx*/)
+void deploy_panel::draw_desktop_section(rtti::context& ctx)
 {
     widgets::draw_muted_text("The player for this computer, with the game's data beside it. Run After Deploy starts it.");
+    ImGui::SeparatorText("Executable");
+    widgets::draw_muted_text(fmt::format("Named after the project. Its product name, company and version come from the "
+                                         "project settings, its icon from profile {}.",
+                                         settings_editor_.get_profile())
+                                 .c_str());
+    auto& desktop = settings_editor_.get().desktop;
+    entt::meta_any object = entt::forward_as_meta(desktop);
+    inspect_result result;
+    {
+        const inspect_without_undo_scope no_undo;
+        result |= inspect_property(ctx, object, make_proxy(object), entt::resolve<desktop_deploy_settings>().data("icon"_hs));
+    }
+    if(!desktop.icon)
+    {
+        widgets::draw_muted_text("Without an image, the icon is the engine's logo.");
+    }
+    result |= draw_steam_settings(ctx, desktop.steam);
+    if(result.edit_finished)
+    {
+        auto& pm = ctx.get_cached<project_manager>();
+        set_profile_message(pm.set_profile_desktop(ctx, settings_editor_.get_profile(), desktop), {});
+        problems_.invalidate();
+    }
 }
 
 void deploy_panel::inspect_android_properties(rtti::context& ctx, std::initializer_list<entt::hashed_string> names)
@@ -1463,7 +1541,8 @@ void deploy_panel::draw_kept_releases(rtti::context& ctx)
     if(widgets::draw_section_title_button("Kept Releases",
                                           ICON_MDI_TAG_PLUS_OUTLINE " Keep as Release",
                                           "Keep the profile's build in the deploy folder as a release named by the product\n"
-                                          "version, so later deploys of the profile can ship patches for it.",
+                                          "version, so later deploys of the profile can ship patches for it. Its executable\n"
+                                          "and the player's debug symbols are kept with it, to read its crash dumps.",
                                           has_folder && !is_deploying()))
     {
         keep_release(ctx);
@@ -1575,6 +1654,7 @@ void deploy_panel::draw_install_conflict()
                          ICON_MDI_DELETE_OUTLINE " Uninstall and Install"))
     {
         deploy_jobs_ = deployment::replace_android_game();
+        is_steam_upload_ = false;
     }
     widgets::draw_gap(widgets::LINE_GAP);
 }
@@ -1619,14 +1699,15 @@ void deploy_panel::draw_status(rtti::context& ctx)
                                         });
     const auto step_count = deploy_jobs_.size();
     const auto done_count = static_cast<std::size_t>(get_progress() * static_cast<float>(step_count) + 0.5f);
-    std::string summary = fmt::format("Deployed to {}", location);
+    std::string summary = is_steam_upload_ ? fmt::format("Uploaded {} to Steam", location) : fmt::format("Deployed to {}", location);
     if(is_in_progress)
     {
-        summary = fmt::format("Deploying to {}", location);
+        summary = is_steam_upload_ ? fmt::format("Uploading {} to Steam", location) : fmt::format("Deploying to {}", location);
     }
     else if(has_failed)
     {
-        summary = fmt::format("Deploy to {} failed", location);
+        summary = is_steam_upload_ ? fmt::format("Upload of {} to Steam failed", location)
+                                   : fmt::format("Deploy to {} failed", location);
     }
     // One bar says what the deploy does and how far it is; the steps follow in a row under it.
     widgets::draw_progress_bar(get_progress(), summary.c_str(), fmt::format("{} of {} steps", done_count, step_count).c_str());
@@ -1646,11 +1727,16 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     const char* deploy_label = params.deploy_and_run ? ICON_MDI_PLAY " Deploy and Run" : ICON_MDI_PACKAGE_VARIANT " Deploy";
     const char* stop_label = ICON_MDI_STOP " Stop Game";
     const bool is_game_running = deployment::is_android_game_running();
+    const bool has_steam_upload = deployment::has_steam_upload(params);
     float buttons_width =
         widgets::calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x + widgets::calc_button_width(deploy_label);
     if(is_game_running)
     {
         buttons_width += widgets::calc_button_width(stop_label) + ImGui::GetStyle().ItemSpacing.x;
+    }
+    if(has_steam_upload)
+    {
+        buttons_width += widgets::calc_button_width(STEAM_UPLOAD_LABEL) + ImGui::GetStyle().ItemSpacing.x;
     }
     if(widgets::draw_button("Close", false, true))
     {
@@ -1666,6 +1752,11 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     }
     ImGui::SetItemTooltipEx("%s", "Show the profile's folder in the file browser.");
     ImGui::SameLine();
+    if(has_steam_upload)
+    {
+        draw_steam_upload_button(ctx, params);
+        ImGui::SameLine();
+    }
     if(is_game_running)
     {
         if(widgets::draw_button(stop_label, false, true))
@@ -1683,6 +1774,27 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     if(!can_deploy && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     {
         ImGui::SetTooltip("%s", is_deploying() ? "A deploy is running." : "See what is missing above.");
+    }
+}
+
+void deploy_panel::draw_steam_upload_button(rtti::context& ctx, const deploy_settings& params)
+{
+    const auto problem = is_deploying() ? std::string("A deploy is running.") : deployment::get_steam_upload_problem(ctx, params);
+    if(widgets::draw_button(STEAM_UPLOAD_LABEL, false, problem.empty()))
+    {
+        ImGui::OpenPopup(STEAM_UPLOAD_POPUP);
+    }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("%s", problem.empty() ? "Upload the build in the profile's folder to Steam with steamcmd." : problem.c_str());
+    }
+    // Above the button, its right edges aligned: at the mouse it would reach past the window's bottom edge.
+    const ImVec2 anchor(ImGui::GetItemRectMax().x, ImGui::GetItemRectMin().y - ImGui::GetStyle().ItemSpacing.y);
+    ImGui::SetNextWindowPos(anchor, ImGuiCond_Appearing, ImVec2(1.0f, 1.0f));
+    const auto consequence = describe_steam_upload(params);
+    if(draw_confirmation(STEAM_UPLOAD_POPUP, fmt::format("Upload {} to Steam?", params.profile), consequence.c_str(), STEAM_UPLOAD_LABEL))
+    {
+        start_steam_upload(ctx, params);
     }
 }
 

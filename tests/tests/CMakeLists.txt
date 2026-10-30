@@ -11,6 +11,10 @@ target_include_directories(${target_name}
 add_dependencies(${target_name} engine)
 # The mesh import suites read assimp's scene types directly.
 target_link_libraries(${target_name} PUBLIC engine deploy asset_compiler assimp)
+# The deploy suite reads the version information it writes into an executable as Windows does.
+if(WIN32)
+    target_link_libraries(${target_name} PRIVATE version)
+endif()
 
 # The GI constants parity test parses the shader mirror from the source tree, so the suite
 # fails when gi_constants.h and gi_constants.sh drift (tasks/gi_rewrite_plan.md, R9), and the

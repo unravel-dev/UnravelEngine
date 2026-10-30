@@ -319,6 +319,10 @@ void test_profile_files(const fs::path& root)
                               s.physics.fixed_timestep = 0.04f;
                           });
     auto desktop = deployment::make_profile("Desktop", target_platform::desktop, base);
+    desktop.desktop.steam.app_id = 480;
+    desktop.desktop.steam.depot_id = 481;
+    desktop.desktop.steam.account = "builder";
+    desktop.desktop.steam.branch = "beta";
     check(deployment::save_profile(root, android).is_ok() && deployment::save_profile(root, desktop).is_ok(), "profiles save");
     check(!is_present(deployment::get_profile_folder(root, "Desktop") / "settings.cfg"),
           "a profile that overrides nothing has no settings file");
@@ -328,6 +332,10 @@ void test_profile_files(const fs::path& root)
     check(loaded.name == "Android" && loaded.platform == target_platform::android && loaded.android.application_id == "com.test.game" &&
               loaded.android.texture_compression == unravel::android_texture_compression::etc2,
           "a profile's platform and Android settings round trip");
+    const auto& loaded_steam = list.profiles.back().desktop.steam;
+    check(list.profiles.back().name == "Desktop" && loaded_steam.app_id == 480 && loaded_steam.depot_id == 481 &&
+              loaded_steam.account == "builder" && loaded_steam.branch == "beta",
+          "a desktop profile's Steam settings round trip");
     check(loaded.settings.get_paths() == android.settings.get_paths() &&
               deployment::resolve_settings(base, loaded).physics.fixed_timestep == 0.04f,
           "and its overrides");

@@ -93,6 +93,7 @@ struct profile_header
 {
     target_platform platform{target_platform::desktop};
     android_deploy_settings android;
+    desktop_deploy_settings desktop;
 };
 
 /// The target fields deploy.cfg held before profiles, and which of them it had.
@@ -111,12 +112,17 @@ SAVE_INLINE(profile_header)
     {
         try_save(ar, ser20::make_nvp("android", obj.android));
     }
+    if(obj.platform == target_platform::desktop)
+    {
+        try_save(ar, ser20::make_nvp("desktop", obj.desktop));
+    }
 }
 
 LOAD_INLINE(profile_header)
 {
     try_load(ar, ser20::make_nvp("platform", obj.platform));
     try_load(ar, ser20::make_nvp("android", obj.android));
+    try_load(ar, ser20::make_nvp("desktop", obj.desktop));
 }
 
 LOAD_INLINE(legacy_target_fields)
@@ -257,6 +263,7 @@ auto load_profile(const fs::path& folder,
     }
     profile.platform = header.platform;
     profile.android = header.android;
+    profile.desktop = header.desktop;
     for(auto&& warning : {read_overrides_file(profile.name,
                                               folder / PROFILE_SETTINGS_FILE_NAME,
                                               base_settings,
@@ -357,6 +364,7 @@ auto resolve_deploy_settings(const deploy_settings& base, const settings_profile
     resolved.profile = profile.name;
     resolved.deploy_target = profile.platform;
     resolved.android = profile.android;
+    resolved.desktop = profile.desktop;
     resolved.android_device.clear();
     resolved.android_replace_installed = false;
     return resolved;
@@ -430,6 +438,7 @@ auto save_profile(const fs::path& project_root, const settings_profile& profile)
     profile_header header;
     header.platform = profile.platform;
     header.android = profile.android;
+    header.desktop = profile.desktop;
     auto written = write_text_file(folder / PROFILE_FILE_NAME, serialization::save_to_document(header, PROFILE_DOCUMENT_ROOT));
     if(!written.is_ok())
     {

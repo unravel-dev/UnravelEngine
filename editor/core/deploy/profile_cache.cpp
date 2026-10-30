@@ -1,5 +1,6 @@
 #include "profile_cache.h"
 #include "folders.h"
+#include "releases.h"
 
 #include <logging/logging.h>
 
@@ -52,6 +53,11 @@ auto get_profile_cache_folder(const fs::path& project_root, const std::string& p
 auto get_profile_variants_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path
 {
     return get_profile_cache_folder(project_root, profile) / protocol;
+}
+
+auto get_profile_symbols_folder(const fs::path& project_root, const std::string& profile) -> fs::path
+{
+    return get_profile_cache_folder(project_root, profile) / SYMBOLS_FOLDER;
 }
 
 auto sweep_folder(const fs::path& folder, const std::unordered_set<std::string>& kept) -> sweep_report

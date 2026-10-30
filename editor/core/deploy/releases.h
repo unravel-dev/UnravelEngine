@@ -17,6 +17,8 @@ namespace unravel::deployment
 
 /// The project's folder of kept releases: one subfolder per profile, holding one per release.
 constexpr const char* RELEASES_FOLDER = "releases";
+/// The folder of a build's debug files: its executable and the symbols a crash dump is read with.
+constexpr const char* SYMBOLS_FOLDER = "symbols";
 /// The protocols a deploy packs, each into data/<protocol>.
 constexpr std::array<const char*, 2> PACKED_PROTOCOLS = {ENGINE_PROTOCOL, CONTENT_PROTOCOL};
 
@@ -36,8 +38,19 @@ auto is_kept_release(const fs::path& releases, const std::string& name) -> bool;
 /// The kept releases, by name.
 auto list_releases(const fs::path& releases) -> std::vector<std::string>;
 
-/// Keeps the full packed build in `deploy_location` as release `name`.
-auto keep_release(const fs::path& releases, const fs::path& deploy_location, const std::string& name) -> result;
+/// Where a release keeps its build's debug files.
+auto get_release_symbols_folder(const fs::path& releases, const std::string& name) -> fs::path;
+
+/**
+ * @brief Keeps the full packed build in `deploy_location` as release `name`, with its debug files.
+ * @param symbols The build's debug files (keep_debug_files); a release without them is kept when the
+ *        folder is missing.
+ */
+auto keep_release(const fs::path& releases, const fs::path& deploy_location, const fs::path& symbols, const std::string& name)
+    -> result;
+
+/// Makes `folder` hold the build's debug files `files` and nothing else; unchanged files are not copied.
+auto keep_debug_files(const std::vector<fs::path>& files, const fs::path& folder) -> result;
 /// Deletes a kept release's packs.
 auto remove_release(const fs::path& releases, const std::string& name) -> result;
 
