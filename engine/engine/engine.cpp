@@ -118,6 +118,15 @@ auto context_ptr() -> rtti::context*&
 std::atomic<bool> is_shutting_down{false};
 std::atomic<bool> is_restart_requested{false};
 
+/// Whether the main window shows anything. While it is minimized its frames wait for the simulation's inactive fps,
+/// which the player sets unless the game runs in the background (display_manager::set_run_in_background). The editor
+/// sets none: it keeps working minimized.
+auto is_main_window_shown(const renderer& rend) -> bool
+{
+    auto* window = rend.get_main_window();
+    return window == nullptr || !window->get_window().is_minimized();
+}
+
 void update_input_zone(const renderer& rend, input_system& input)
 {
     const auto& window = rend.get_main_window();
@@ -723,7 +732,7 @@ auto engine::process() -> int
 
         ctx.get_cached<asset_manager>().free_retired_handle_states();
 
-        sim.run_one_frame(true);
+        sim.run_one_frame(is_main_window_shown(rend));
 
         auto& play = ctx.get_cached<play_mode>();
         frame_times times{};

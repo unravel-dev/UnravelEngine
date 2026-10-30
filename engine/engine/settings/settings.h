@@ -224,6 +224,8 @@ struct settings
         friend auto operator==(const standalone_settings& lhs, const standalone_settings& rhs) -> bool = default;
 
         asset_handle<scene_prefab> startup_scene;
+        /// Whether a minimized game keeps its frame rate; otherwise the player caps it (display_manager).
+        bool run_in_background{};
     } standalone;
 
     struct input_settings

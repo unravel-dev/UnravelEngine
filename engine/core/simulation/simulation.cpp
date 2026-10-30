@@ -18,9 +18,9 @@ void simulation::run_one_frame(bool is_active)
 {
     // perform waiting loop if maximum fps set
     auto max_fps = max_fps_;
-    if(!is_active && max_fps > 0)
+    if(!is_active && max_inactive_fps_ > 0)
     {
-        max_fps = std::min(max_inactive_fps_, max_fps);
+        max_fps = max_fps > 0 ? std::min(max_inactive_fps_, max_fps) : max_inactive_fps_;
     }
 
     const auto wait_begin = clock_t::now();
@@ -183,6 +183,11 @@ auto simulation::get_time_scale() const -> float
 auto simulation::get_max_fps() const -> uint32_t
 {
     return max_fps_;
+}
+
+auto simulation::get_max_inactive_fps() const -> uint32_t
+{
+    return max_inactive_fps_;
 }
 
 auto simulation::get_frame_duration() const -> duration_t

@@ -38,6 +38,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
 {
     static const std::vector<reflected_row> rows{
         {"standalone", "startup_scene"},
+        {"standalone", "run_in_background"},
         {"app", "company"},
         {"app", "product"},
         {"app", "version"},

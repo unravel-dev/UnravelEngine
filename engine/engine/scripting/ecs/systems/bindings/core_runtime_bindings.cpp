@@ -6,6 +6,7 @@
 #include <engine/events.h>
 #include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/display_manager.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
@@ -13,6 +14,9 @@
 #include <seq/seq.h>
 #include <simulation/simulation.h>
 #include <uuid/uuid.h>
+
+#include <algorithm>
+#include <iterator>
 
 namespace unravel
 {
@@ -153,6 +157,211 @@ auto internal_m2n_screen_get_dpi() -> float
     return window ? window->get_window().get_content_scale() * BASE_SCREEN_DPI : BASE_SCREEN_DPI;
 }
 
+/// A resolution as it crosses to C#: the layout of the C# Resolution struct.
+struct script_resolution
+{
+    int width{};
+    int height{};
+    int refresh_rate{};
+};
+
+auto to_script_resolution(const os::display::mode& mode) -> script_resolution
+{
+    return {int(mode.w), int(mode.h), int(mode.refresh_rate)};
+}
+
+/// The player's display options; null in the editor, whose window is not the game's to change.
+auto find_display_manager() -> display_manager*
+{
+    auto& ctx = engine::context();
+    return ctx.has<display_manager>() ? &ctx.get_cached<display_manager>() : nullptr;
+}
+
+auto find_main_window() -> os::window*
+{
+    auto& ctx = engine::context();
+    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
+    return window ? &window->get_window() : nullptr;
+}
+
+/// Says once why a script's display change does nothing in the editor.
+void log_editor_display_change()
+{
+    static bool is_logged = false;
+    if(!is_logged)
+    {
+        is_logged = true;
+        APPLOG_INFO("Display changes from scripts apply in the player. The editor keeps its own window, vsync and "
+                    "frame cap.");
+    }
+}
+
+void log_editor_background_change()
+{
+    static bool is_logged = false;
+    if(!is_logged)
+    {
+        is_logged = true;
+        APPLOG_INFO("Application.runInBackground applies in the player. The editor keeps its frame rate while it is "
+                    "minimized.");
+    }
+}
+
+/// The window mode of a C# FullScreenMode, whose values are the window_mode's.
+auto to_window_mode(int mode, window_mode& result) -> bool
+{
+    if(mode < int(window_mode::windowed) || mode > int(window_mode::exclusive_fullscreen))
+    {
+        return false;
+    }
+    result = static_cast<window_mode>(mode);
+    return true;
+}
+
+auto internal_m2n_screen_get_full_screen_mode() -> int
+{
+    auto* display = find_display_manager();
+    return int(display ? display->get_options().mode : window_mode::windowed);
+}
+
+void internal_m2n_screen_set_resolution(int width, int height, int mode, int refresh_rate)
+{
+    auto* display = find_display_manager();
+    if(display == nullptr)
+    {
+        log_editor_display_change();
+        return;
+    }
+    window_mode new_mode{};
+    if(!to_window_mode(mode, new_mode))
+    {
+        return;
+    }
+    const usize32_t size{std::uint32_t(std::max(width, 0)), std::uint32_t(std::max(height, 0))};
+    display->set_window(engine::context(), new_mode, size, std::uint32_t(std::max(refresh_rate, 0)));
+}
+
+void internal_m2n_screen_set_full_screen_mode(int mode)
+{
+    auto* display = find_display_manager();
+    if(display == nullptr)
+    {
+        log_editor_display_change();
+        return;
+    }
+    window_mode new_mode{};
+    if(!to_window_mode(mode, new_mode))
+    {
+        return;
+    }
+    const auto& options = display->get_options();
+    display->set_window(engine::context(), new_mode, options.size, options.refresh_rate);
+}
+
+auto internal_m2n_screen_get_display_index() -> int
+{
+    auto* window = find_main_window();
+    return window ? window->get_display_index() : os::display::get_primary_display_index();
+}
+
+void internal_m2n_screen_set_display_index(int display_index)
+{
+    auto* display = find_display_manager();
+    if(display == nullptr)
+    {
+        log_editor_display_change();
+        return;
+    }
+    display->set_display(engine::context(), display_index);
+}
+
+auto internal_m2n_screen_get_current_resolution() -> script_resolution
+{
+    auto* display = find_display_manager();
+    if(display && display->get_options().mode == window_mode::exclusive_fullscreen)
+    {
+        const auto& options = display->get_options();
+        return {int(options.size.width), int(options.size.height), int(options.refresh_rate)};
+    }
+    return to_script_resolution(os::display::get_desktop_mode(internal_m2n_screen_get_display_index()));
+}
+
+auto internal_m2n_screen_get_resolutions(int display_index) -> std::vector<script_resolution>
+{
+    if(display_index < 0 || display_index >= os::display::get_available_displays_count())
+    {
+        return {};
+    }
+    const auto modes = sort_display_modes(os::display::get_available_modes(display_index));
+    std::vector<script_resolution> resolutions;
+    resolutions.reserve(modes.size());
+    std::transform(modes.begin(), modes.end(), std::back_inserter(resolutions), to_script_resolution);
+    return resolutions;
+}
+
+auto internal_m2n_screen_get_display_count() -> int
+{
+    return os::display::get_available_displays_count();
+}
+
+auto internal_m2n_screen_get_display_name(int display_index) -> std::string
+{
+    if(display_index < 0 || display_index >= os::display::get_available_displays_count())
+    {
+        return {};
+    }
+    return os::display::get_name(display_index);
+}
+
+auto internal_m2n_screen_get_vsync() -> bool
+{
+    auto& ctx = engine::context();
+    return ctx.has<renderer>() && ctx.get_cached<renderer>().get_vsync();
+}
+
+void internal_m2n_screen_set_vsync(bool vsync)
+{
+    auto* display = find_display_manager();
+    if(display == nullptr)
+    {
+        log_editor_display_change();
+        return;
+    }
+    display->set_vsync(engine::context(), vsync);
+}
+
+auto internal_m2n_application_get_target_frame_rate() -> int
+{
+    return static_cast<int>(engine::context().get_cached<simulation>().get_max_fps());
+}
+
+void internal_m2n_application_set_target_frame_rate(int frame_rate)
+{
+    auto* display = find_display_manager();
+    if(display == nullptr)
+    {
+        log_editor_display_change();
+        return;
+    }
+    display->set_max_fps(engine::context(), static_cast<std::uint32_t>(std::max(frame_rate, 0)));
+}
+
+auto internal_m2n_application_get_run_in_background() -> bool
+{
+    return engine::context().get_cached<simulation>().get_max_inactive_fps() == 0;
+}
+
+void internal_m2n_application_set_run_in_background(bool run_in_background)
+{
+    auto* display = find_display_manager();
+    if(display == nullptr)
+    {
+        log_editor_background_change();
+        return;
+    }
+    display->set_run_in_background(engine::context(), run_in_background);
+}
+
 void internal_m2n_set_time_scale(float scale)
 {
     auto& ctx = engine::context();
@@ -242,6 +451,14 @@ void register_core_runtime_script_bindings()
                               script_internal_call(internal_m2n_application_get_persistent_data_path));
         reg.add_internal_call("internal_m2n_application_get_temporary_cache_path",
                               script_internal_call(internal_m2n_application_get_temporary_cache_path));
+        reg.add_internal_call("internal_m2n_application_get_target_frame_rate",
+                              script_internal_call(internal_m2n_application_get_target_frame_rate));
+        reg.add_internal_call("internal_m2n_application_set_target_frame_rate",
+                              script_internal_call(internal_m2n_application_set_target_frame_rate));
+        reg.add_internal_call("internal_m2n_application_get_run_in_background",
+                              script_internal_call(internal_m2n_application_get_run_in_background));
+        reg.add_internal_call("internal_m2n_application_set_run_in_background",
+                              script_internal_call(internal_m2n_application_set_run_in_background));
 
     }
     {
@@ -249,6 +466,23 @@ void register_core_runtime_script_bindings()
         reg.add_internal_call("internal_m2n_screen_get_size", script_internal_call(internal_m2n_screen_get_size));
         reg.add_internal_call("internal_m2n_screen_get_dpi", script_internal_call(internal_m2n_screen_get_dpi));
         reg.add_internal_call("internal_m2n_screen_get_safe_area", script_internal_call(internal_m2n_screen_get_safe_area));
+        reg.add_internal_call("internal_m2n_screen_get_full_screen_mode",
+                              script_internal_call(internal_m2n_screen_get_full_screen_mode));
+        reg.add_internal_call("internal_m2n_screen_set_full_screen_mode",
+                              script_internal_call(internal_m2n_screen_set_full_screen_mode));
+        reg.add_internal_call("internal_m2n_screen_set_resolution", script_internal_call(internal_m2n_screen_set_resolution));
+        reg.add_internal_call("internal_m2n_screen_get_current_resolution",
+                              script_internal_call(internal_m2n_screen_get_current_resolution));
+        reg.add_internal_call("internal_m2n_screen_get_resolutions", script_internal_call(internal_m2n_screen_get_resolutions));
+        reg.add_internal_call("internal_m2n_screen_get_display_count",
+                              script_internal_call(internal_m2n_screen_get_display_count));
+        reg.add_internal_call("internal_m2n_screen_get_display_name", script_internal_call(internal_m2n_screen_get_display_name));
+        reg.add_internal_call("internal_m2n_screen_get_display_index",
+                              script_internal_call(internal_m2n_screen_get_display_index));
+        reg.add_internal_call("internal_m2n_screen_set_display_index",
+                              script_internal_call(internal_m2n_screen_set_display_index));
+        reg.add_internal_call("internal_m2n_screen_get_vsync", script_internal_call(internal_m2n_screen_get_vsync));
+        reg.add_internal_call("internal_m2n_screen_set_vsync", script_internal_call(internal_m2n_screen_set_vsync));
 
     }
     {

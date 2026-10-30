@@ -987,17 +987,28 @@ REFLECT_INLINE(settings::standalone_settings)
             entt::attribute{"name", "startup_scene"},
             entt::attribute{"pretty_name", "Startup Scene"},
             entt::attribute{"tooltip", "The scene to load first."},
+        })
+        .data<&settings::standalone_settings::run_in_background>("run_in_background"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "run_in_background"},
+            entt::attribute{"pretty_name", "Run In Background"},
+            entt::attribute{"tooltip",
+                            "Whether the game keeps its frame rate while its window is minimized. When it is off, a "
+                            "minimized game runs at most 20 frames per second. Scripts change it with "
+                            "Application.runInBackground."},
         });
 }
 
 SAVE_INLINE(settings::standalone_settings)
 {
     try_save(ar, ser20::make_nvp("startup_scene", obj.startup_scene));
+    try_save(ar, ser20::make_nvp("run_in_background", obj.run_in_background));
 }
 
 LOAD_INLINE(settings::standalone_settings)
 {
     try_load(ar, ser20::make_nvp("startup_scene", obj.startup_scene));
+    try_load(ar, ser20::make_nvp("run_in_background", obj.run_in_background));
 }
 
 REFLECT_INLINE(physics_backend_type)

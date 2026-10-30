@@ -2,6 +2,7 @@
 
 #include <engine/engine.h>
 #include <engine/play_mode.h>
+#include <engine/rendering/display_manager.h>
 #include <engine/rendering/renderer.h>
 #include <engine/meta/settings/settings.hpp>
 #include <engine/assets/asset_manager.h>
@@ -12,11 +13,15 @@
 #include "runner/runner.h"
 
 #include <base/platform/config.hpp>
+#include <bimg/decode.h>
+#include <bx/allocator.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <logging/logging.h>
 #include <ospp/bundle.h>
 #include <reflection/registration.h>
+
+#include <fstream>
 
 namespace unravel
 {
@@ -26,6 +31,40 @@ constexpr const char* SETTINGS_PATH = "app:/settings/settings.cfg";
 /// The folder of the log and the crash log. The install folder may not be writable (a Steam library of another
 /// user, a read-only drive), and an update or a file check treats files there as foreign.
 constexpr const char* LOGS_PATH = "user:/logs";
+/// Bytes of an RGBA8 texel.
+constexpr std::size_t RGBA8_TEXEL_SIZE = 4;
+
+/// Shows the icon a deploy puts beside the game where the executable carries none (Linux); nothing without one.
+void set_window_icon(os::window& window)
+{
+    const auto file = fs::resolve_protocol("binary:/" + ex::get_window_icon_file_name());
+    std::ifstream stream(file, std::ios::binary);
+    if(!stream.good())
+    {
+        return;
+    }
+    const auto bytes = fs::read_stream(stream);
+    bx::DefaultAllocator allocator;
+    bimg::ImageContainer* container =
+        bimg::imageParse(&allocator, bytes.data(), static_cast<std::uint32_t>(bytes.size()), bimg::TextureFormat::RGBA8);
+    if(container == nullptr)
+    {
+        APPLOG_WARNING("The window icon {} could not be read as an image.", file.generic_string());
+        return;
+    }
+    os::image icon;
+    bimg::ImageMip mip;
+    if(bimg::imageGetRawData(*container, 0, 0, container->m_data, container->m_size, mip))
+    {
+        icon.size = {mip.m_width, mip.m_height};
+        icon.pixels.assign(mip.m_data, mip.m_data + std::size_t(mip.m_width) * mip.m_height * RGBA8_TEXEL_SIZE);
+    }
+    bimg::imageFree(container);
+    if(!icon.pixels.empty())
+    {
+        window.set_icon(icon);
+    }
+}
 
 auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
 {
@@ -117,6 +156,7 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     }
 
     ctx.add<runner>(ctx);
+    ctx.add<display_manager>(ctx, parser);
 
     parser.set_optional<std::string>("a", "appdata", "", "Application data directory. Defaults to binary directory.");
     parser.set_optional<bool>("",
@@ -309,30 +349,7 @@ auto game::init_assets(rtti::context& ctx) -> bool
 auto game::create_main_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     // Settings and the backend are not loaded yet; show_main_window sets the final title.
-    const std::string title = "Unravel Game";
-    auto& rend = ctx.get_cached<renderer>();
-    std::string window_geometry;
-    int32_t x = 0;
-    int32_t y = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    bool maximized = false;
-    if(parser.try_get("window", window_geometry) &&
-       renderer::parse_window_geometry(window_geometry, x, y, width, height, maximized))
-    {
-        uint32_t flags = os::window::resizable;
-        if(maximized)
-        {
-            flags |= os::window::maximized;
-        }
-        rend.create_window(title, x, y, width, height, flags);
-        return true;
-    }
-    // Deploy default "Fullscreen Window"
-    const uint32_t flags = os::window::fullscreen_desktop;
-    const auto primary_display = os::display::get_primary_display_index();
-    rend.create_window_for_display(primary_display, title, flags);
-    return true;
+    return ctx.get_cached<display_manager>().create_main_window(ctx, parser, "Unravel Game");
 }
 
 auto game::show_main_window(rtti::context& ctx) -> bool
@@ -350,10 +367,14 @@ auto game::show_main_window(rtti::context& ctx) -> bool
     }
     if(!s.app.version.empty())
     {
-        title += fmt::format("v{}", s.app.version);
+        title += fmt::format(" v{}", s.app.version);
     }
+    auto& display = ctx.get_cached<display_manager>();
+    display.init(ctx);
+    display.set_run_in_background(ctx, s.standalone.run_in_background);
     auto& window = main_window->get_window();
     window.set_title(title);
+    set_window_icon(window);
     window.show();
     return true;
 }
@@ -362,6 +383,11 @@ auto game::show_main_window(rtti::context& ctx) -> bool
 auto game::deinit() -> bool
 {
     auto& ctx = engine::context();
+
+    if(!ctx.get_cached<display_manager>().deinit(ctx))
+    {
+        return false;
+    }
 
     if(!ctx.get_cached<runner>().deinit(ctx))
     {
@@ -376,6 +402,7 @@ auto game::destroy() -> bool
     auto& ctx = engine::context();
 
     ctx.remove<settings>();
+    ctx.remove<display_manager>();
     ctx.remove<runner>();
     ctx.remove<deploy>();
 

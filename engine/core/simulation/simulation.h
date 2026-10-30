@@ -27,7 +27,8 @@ struct simulation
     //-----------------------------------------------------------------------------
     //  Name : run_one_frame ()
     /// <summary>
-    /// Perform on frame computations with specified fps
+    /// Perform on frame computations with specified fps. An inactive frame waits for
+    /// the inactive fps, uncapped or not.
     /// </summary>
     //-----------------------------------------------------------------------------
     void run_one_frame(bool is_active);
@@ -70,11 +71,19 @@ struct simulation
     //-----------------------------------------------------------------------------
     //  Name : set_max_inactive_fps ()
     /// <summary>
-    /// Set maximum frames per second when the application does not have input
-    /// focus.
+    /// Set maximum frames per second when the application is inactive (see
+    /// run_one_frame); 0, the default, leaves it at the maximum fps.
     /// </summary>
     //-----------------------------------------------------------------------------
     void set_max_inactive_fps(uint32_t fps);
+
+    //-----------------------------------------------------------------------------
+    //  Name : get_max_inactive_fps ()
+    /// <summary>
+    /// Returns the cap of inactive frames (0 means the maximum fps applies).
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto get_max_inactive_fps() const -> uint32_t;
 
     //-----------------------------------------------------------------------------
     //  Name : set_time_smoothing_step ()
@@ -157,7 +166,7 @@ protected:
     ///
     uint32_t max_fps_ = 0;
     ///
-    uint32_t max_inactive_fps_ = 20;
+    uint32_t max_inactive_fps_ = 0;
     /// previous time steps for smoothing in seconds
     std::vector<duration_t> previous_timesteps_;
     /// next frame time step in seconds

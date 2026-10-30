@@ -569,6 +569,13 @@ inline auto get_patch_pack_file_name(std::uint32_t level) -> std::string
     return "content_p" + std::to_string(level) + ".pak";
 }
 
+/// The image beside a deployed game's executable that the game shows as its window's icon, where the executable
+/// cannot carry one (Linux).
+inline auto get_window_icon_file_name() -> std::string
+{
+    return "icon.png";
+}
+
 
 inline auto get_type(const std::string& ex, bool is_directory = false) -> const std::string&
 {

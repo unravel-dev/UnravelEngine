@@ -216,6 +216,21 @@ void test_sparse_overrides()
     check(!resolved.graphics.particles.sorting && resolved.physics.solver_iterations == 3, "and the rest follows the base");
     check(resolved.build.profile == "Phone" && resolved.build.platform == target_platform::desktop, "the build names the profile");
 
+    {
+        settings_profile store;
+        store.name = "Store";
+        edit_profile_settings(store,
+                              base,
+                              [](settings& s)
+                              {
+                                  s.standalone.run_in_background = true;
+                              });
+        check(store.settings.get_paths() == serialization::path_set{"standalone/run_in_background"},
+              "running in the background is a per-profile setting");
+        check(!base.standalone.run_in_background && deployment::resolve_settings(base, store).standalone.run_in_background,
+              "a minimized game is capped unless its profile runs it in the background");
+    }
+
     edit_profile_settings(profile,
                           base,
                           [](settings& s)
