@@ -61,7 +61,7 @@ auto gi_object_grid::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     // Uniforms before programs: the OpenGL renderer wires a program's uniforms at link time.
     uniforms_.cache_uniforms();
-    auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_object_grid.sc");
+    auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_object_grid.eshader");
     program_ = std::make_shared<gpu_program>(shader);
     dummy_ = std::make_shared<gfx::texture>(uint16_t(1),
                                             uint16_t(1),

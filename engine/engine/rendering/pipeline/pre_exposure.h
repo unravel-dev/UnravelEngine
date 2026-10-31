@@ -21,7 +21,7 @@ namespace unravel
  * The pre-exposure is @ref value, the CPU's share (the manual exposure), times the GPU's share, the
  * adapted exposure, which never reaches the CPU. A pass at the start of each run writes the GPU's share
  * from the adapted exposure the last frame left in AUTO_EXPOSURE into the view's environment SH
- * (IRRADIANCE_SH), as the texel after the nine coefficients (cs_pre_exposure.sc), and every shader that
+ * (IRRADIANCE_SH), as the texel after the nine coefficients (cs_pre_exposure.eshader), and every shader that
  * writes or reads scene lighting multiplies it in (pre_exposure.sh, @ref bind).
  */
 struct pre_exposure_state
@@ -34,7 +34,7 @@ struct pre_exposure_state
     /// The stage pre_exposure.sh declares s_pre_exposure at unless the shader sets PRE_EXPOSURE_STAGE.
     static constexpr std::uint8_t default_stage = 15;
     /// The texel of the view's environment SH that holds the GPU's share, after the nine coefficients
-    /// (PRE_EXPOSURE_GPU_TEXEL of pre_exposure.sh and cs_pre_exposure.sc).
+    /// (PRE_EXPOSURE_GPU_TEXEL of pre_exposure.sh and cs_pre_exposure.eshader).
     static constexpr std::uint16_t gpu_texel = 9;
 
     /// The CPU's share of this frame's scale on scene color: the manual exposure.

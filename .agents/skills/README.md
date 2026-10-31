@@ -56,7 +56,7 @@ Start non-trivial work with **`unravel-triage`**.
 | `unravel-add-component` | End-to-end new ECS component |
 | `unravel-add-render-pass` | New pass in deferred pipeline |
 | `unravel-add-inspector` | Custom inspector for a reflected type |
-| `unravel-shader-change` | Edit bgfx `.sc` shaders |
+| `unravel-shader-change` | Edit bgfx `.eshader` shaders |
 | `unravel-play-mode-change` | Edit vs play mode separation |
 | `unravel-build-verify` | CMake, CI, data targets, .NET SDK |
 | `unravel-bug-investigation` | Structured bug fix workflow |

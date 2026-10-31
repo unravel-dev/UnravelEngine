@@ -7,7 +7,7 @@
  *
  * What it pins:
  *   - the environment SH texel that holds the GPU's share is the same in pre_exposure_state::gpu_texel, in
- *     pre_exposure.sh, which reads it, and in cs_pre_exposure.sc, which writes it;
+ *     pre_exposure.sh, which reads it, and in cs_pre_exposure.eshader, which writes it;
  *   - pre_exposure_state's uniform layout (pre_exposure.sh u_pre_exposure): the value, its inverse, the history
  *     correction and the previous value.
  */
@@ -45,7 +45,7 @@ void pre_exposure_check(bool condition, const std::string& what)
 /// The shader header that reads the GPU's share.
 constexpr const char* PRE_EXPOSURE_HEADER = "engine:/data/shaders/pre_exposure.sh";
 /// The compute shader that writes the GPU's share.
-constexpr const char* PRE_EXPOSURE_SHADER = "engine:/data/shaders/exposure/cs_pre_exposure.sc";
+constexpr const char* PRE_EXPOSURE_SHADER = "engine:/data/shaders/exposure/cs_pre_exposure.eshader";
 /// Tolerance of the uniform layout's float checks.
 constexpr float LAYOUT_TOLERANCE = 1e-6f;
 

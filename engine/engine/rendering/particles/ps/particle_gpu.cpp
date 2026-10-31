@@ -213,10 +213,10 @@ void particle_gpu::init(rtti::context& ctx)
     u_draw_ = bgfx::createUniform("u_particle_draw", bgfx::UniformType::Vec4);
     u_noise_ = bgfx::createUniform("s_particle_noise", bgfx::UniformType::Sampler);
     auto& assets = ctx.get_cached<asset_manager>();
-    scatter_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_scatter.sc", "record scatter");
-    keygen_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_keygen.sc", "cull / sort keys");
-    sort_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_sort.sc", "sort");
-    args_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_draw_args.sc", "draw arguments");
+    scatter_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_scatter.eshader", "record scatter");
+    keygen_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_keygen.eshader", "cull / sort keys");
+    sort_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_sort.eshader", "sort");
+    args_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_draw_args.eshader", "draw arguments");
     clear_.init(ctx);
     refresh_programs();
     if(!can_draw())

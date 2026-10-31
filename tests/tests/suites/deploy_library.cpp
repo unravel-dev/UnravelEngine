@@ -487,7 +487,7 @@ void test_file_classification(const fs::path& root)
     check(compiled == std::vector<fs::path>{root / "compiled/a/b.png.asset"}, "an asset compiles to one file");
     check(deployment::get_compiled_paths("app:/settings/settings.cfg", root).empty(), "a key outside the data folder has none");
     check(deployment::get_compiled_paths("app:/data/scripts/game.cs", root).empty(), "a script has none");
-    check(!deployment::get_compiled_paths("app:/data/shaders/fs_a.sc", root).empty(), "a shader compiles once per renderer");
+    check(!deployment::get_compiled_paths("app:/data/shaders/fs_a.eshader", root).empty(), "a shader compiles once per renderer");
     check(deployment::get_source_key("app", "a/b.png.asset") == "app:/data/a/b.png", "a compiled file names its source");
     write_text(root / "libs/game.dll", "dll");
     write_text(root / "libs/game.xml", "docs");
@@ -507,13 +507,13 @@ void test_shader_variants(const fs::path& root)
 {
     std::printf("test_shader_variants\n");
     const std::set<std::string> vulkan{".spirv"};
-    const auto paths = deployment::get_compiled_paths("app:/data/shaders/fs_a.sc", root, vulkan);
+    const auto paths = deployment::get_compiled_paths("app:/data/shaders/fs_a.eshader", root, vulkan);
     check(paths.size() == 1 && paths.front().extension() == ".spirv", "a target's shader has its renderer's variant only");
-    check(deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.sc.asset.dxbc", vulkan),
+    check(deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.eshader.asset.dxbc", vulkan),
           "another renderer's variant is told apart");
-    check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.sc.asset.spirv", vulkan), "the target's variant ships");
+    check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.eshader.asset.spirv", vulkan), "the target's variant ships");
     check(!deployment::is_other_shader_variant(root / "compiled/a.png.asset", vulkan), "other compiled files are no variant");
-    check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.sc.asset.dxbc", {}), "no target ships every variant");
+    check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.eshader.asset.dxbc", {}), "no target ships every variant");
 }
 
 //-----------------------------------------------------------------------------

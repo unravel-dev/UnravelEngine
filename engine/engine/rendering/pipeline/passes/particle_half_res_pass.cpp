@@ -31,9 +31,9 @@ auto get_half_size(const usize32_t& full_size) -> usize32_t
 auto particle_half_res_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_depth = am.get_asset<gfx::shader>("engine:/data/shaders/particles/fs_particle_half_depth.sc");
-    auto fs_composite = am.get_asset<gfx::shader>("engine:/data/shaders/particles/fs_particle_half_composite.sc");
+    auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_depth = am.get_asset<gfx::shader>("engine:/data/shaders/particles/fs_particle_half_depth.eshader");
+    auto fs_composite = am.get_asset<gfx::shader>("engine:/data/shaders/particles/fs_particle_half_composite.eshader");
     depth_program_.cache_uniforms();
     composite_program_.cache_uniforms();
     depth_program_.program = std::make_unique<gpu_program>(vs, fs_depth);

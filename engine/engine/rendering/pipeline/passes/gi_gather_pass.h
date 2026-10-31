@@ -122,7 +122,7 @@ public:
         adaptive_probes_.bind_state(stage, bgfx::Access::Read);
     }
 
-    /// The rays the screen probe trace visualization draws (cs_gi_probe_trace_visualize.sc), or an invalid
+    /// The rays the screen probe trace visualization draws (cs_gi_probe_trace.eshader#visualize), or an invalid
     /// handle before a frame recorded any.
     auto get_visualized_traces() const -> bgfx::DynamicVertexBufferHandle
     {
@@ -137,13 +137,13 @@ public:
 
 private:
     /// The programs whose layout depends on the probes' tracing resolution, compiled once per resolution (thread group
-    /// size permutations: cs_gi_*.sc at 8 x 8 rays, the _res4 / _res16 wrappers at 4 x 4 / 16 x 16).
+    /// size permutations: cs_gi_*.eshader at 8 x 8 rays, the res4 / res16 variants at 4 x 4 / 16 x 16).
     struct probe_programs
     {
         gpu_program::ptr generate_rays;
-        ///< The trace's screen pass (cs_gi_probe_trace.sc) and its far-field pass over the rays the screen left
-        ///< (cs_gi_probe_trace_far_field.sc), then its hit pass over the same rays
-        ///< (cs_gi_probe_trace_hit_shade.sc).
+        ///< The trace's screen pass (cs_gi_probe_trace.eshader) and its far-field pass over the rays the screen left
+        ///< (cs_gi_probe_trace.eshader#far_field), then its hit pass over the same rays
+        ///< (cs_gi_probe_trace.eshader#hit_shade).
         gpu_program::ptr trace;
         gpu_program::ptr trace_far_field;
         gpu_program::ptr trace_hit_shade;
@@ -152,9 +152,9 @@ private:
         gpu_program::ptr sh;
         gpu_program::ptr border;
         gpu_program::ptr integrate;
-        ///< cs_gi_integrate_ao.sc: the integrate with the short-range AO's accumulation.
+        ///< cs_gi_integrate.eshader#ao: the integrate with the short-range AO's accumulation.
         gpu_program::ptr integrate_short_range_ao;
-        ///< cs_gi_probe_trace_visualize.sc; the gather runs without it.
+        ///< cs_gi_probe_trace.eshader#visualize; the gather runs without it.
         gpu_program::ptr trace_visualize;
 
         auto is_valid() const -> bool;
@@ -244,11 +244,11 @@ private:
         gfx::texture::ptr probe_radiance;
         gfx::texture::ptr filtered;
         gfx::texture::ptr sh;
-        ///< The final filtered radiance with its octahedral border, bilinear (cs_gi_probe_border.sc).
+        ///< The final filtered radiance with its octahedral border, bilinear (cs_gi_probe_border.eshader).
         gfx::texture::ptr probe_border;
         gfx::texture::ptr ray_info;
         gfx::texture::ptr screen_data;
-        ///< One texel per probe: the fraction of its rays that hit a moving surface (cs_gi_probe_composite.sc).
+        ///< One texel per probe: the fraction of its rays that hit a moving surface (cs_gi_probe_composite.eshader).
         gfx::texture::ptr probe_moving;
         gfx::texture::ptr history_records;
         gfx::texture::ptr history_radiance;
@@ -302,7 +302,7 @@ private:
         ///< Keep one tracing stage's radiance: low = screen, high = distance field, both = radiance cache.
         experiment_keep_stage_low = 1u << 14u,
         experiment_keep_stage_high = 1u << 15u,
-        ///< The diffuse paints the pixels the uniform probes cannot interpolate (cs_gi_integrate.sc).
+        ///< The diffuse paints the pixels the uniform probes cannot interpolate (cs_gi_integrate.eshader).
         experiment_show_interpolation_fallback = 1u << 22u,
         ///< The short-range AO's noise rotates by a per-frame hash instead of the R2 sequence over frames.
         experiment_short_range_ao_hash_noise = 1u << 23u,
@@ -319,7 +319,7 @@ private:
     void run_adaptive_probes(const gi_run_params& params,
                              const frame_layout& layout,
                              const probe_targets& targets);
-    /// Structured importance sampling: each probe's ray slots (cs_gi_probe_generate_rays.sc).
+    /// Structured importance sampling: each probe's ray slots (cs_gi_probe_generate_rays.eshader).
     void run_generate_rays(const gi_run_params& params,
                            const frame_layout& layout,
                            const probe_targets& targets,
@@ -329,7 +329,7 @@ private:
                    const frame_layout& layout,
                    const probe_targets& targets,
                    bool radiance_cache_ready);
-    /// The rays the trace's screen pass can leave to its far-field pass this frame (cs_gi_probe_trace.sc
+    /// The rays the trace's screen pass can leave to its far-field pass this frame (cs_gi_probe_trace.eshader
     /// b_gi_trace_rays: a count, then trace_ray_stride uints per ray) and the far-field hits it leaves to the hit
     /// pass (b_gi_trace_hits: a count, then one ray slot per hit), grown to @p rays when smaller.
     void ensure_trace_rays(uint32_t rays);
@@ -376,7 +376,7 @@ private:
                                        const gi_short_range_ao_pass::frame_targets& short_range_ao);
 
     gpu_program::ptr place_program_;
-    /// cs_gi_trace_far_field_args.sc: the far-field and hit passes' dispatch arguments.
+    /// cs_gi_trace_far_field_args.eshader: the far-field and hit passes' dispatch arguments.
     gpu_program::ptr far_field_args_program_;
     /// See ensure_trace_rays, and the far-field and hit passes' indirect dispatch arguments.
     bgfx::DynamicIndexBufferHandle trace_rays_{bgfx::kInvalidHandle};

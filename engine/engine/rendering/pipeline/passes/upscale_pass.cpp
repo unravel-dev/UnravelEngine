@@ -19,9 +19,9 @@ constexpr std::uint32_t UPSCALE_GRAIN_SEED_PERIOD = 1024;
 auto upscale_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_upscale = am.get_asset<gfx::shader>("engine:/data/shaders/fs_upscale.sc");
-    auto fs_upscale_depth = am.get_asset<gfx::shader>("engine:/data/shaders/fs_upscale_depth.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_upscale = am.get_asset<gfx::shader>("engine:/data/shaders/fs_upscale.eshader");
+    auto fs_upscale_depth = am.get_asset<gfx::shader>("engine:/data/shaders/fs_upscale_depth.eshader");
     // Uniforms are cached before the program is created (GL >= 400 contract).
     upscale_program_.cache_uniforms();
     upscale_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_upscale);

@@ -14,11 +14,11 @@ namespace unravel
 {
 namespace
 {
-/// Must match NUM_THREADS in cs_gi_clipmap_compose.sc (gi/brick_dispatch.sh BRICK_DISPATCH_EDGE).
+/// Must match NUM_THREADS in cs_gi_clipmap_compose.eshader (gi/brick_dispatch.sh BRICK_DISPATCH_EDGE).
 constexpr uint32_t compose_group_size = 4u;
 /// Groups per row of a brick dispatch: below the 65535 groups an axis takes.
 constexpr uint32_t max_bricks_per_row = 32768u;
-/// Must match NUM_THREADS in cs_gi_clipmap_mip.sc.
+/// Must match NUM_THREADS in cs_gi_clipmap_mip.eshader.
 constexpr uint32_t mip_group_size = 4u;
 /// Passes of a level's coarse mip, the first reading the level: the distance travels this
 /// many mip texels from the level's surfaces. Odd, so the last pass writes the level's slab.
@@ -33,10 +33,10 @@ gi_clipmap_compose_pass::~gi_clipmap_compose_pass()
 auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto cs_compose = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_compose.sc");
+    auto cs_compose = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_compose.eshader");
     compose_program_.cache_uniforms();
     compose_program_.program = std::make_unique<gpu_program>(cs_compose);
-    auto cs_mip = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_mip.sc");
+    auto cs_mip = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_mip.eshader");
     mip_program_.cache_uniforms();
     mip_program_.program = std::make_unique<gpu_program>(cs_mip);
     if(!mip_program_.is_valid())

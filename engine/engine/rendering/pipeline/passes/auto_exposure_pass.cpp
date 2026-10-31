@@ -31,7 +31,7 @@ constexpr const char* exposure_key = "AUTO_EXPOSURE";
 constexpr const char* history_key = "AUTO_EXPOSURE_HISTORY";
 constexpr const char* histogram_key = "AUTO_EXPOSURE_HISTOGRAM";
 /// Per metering cell, its log2 scene luminance: the histogram writes it, the local exposure
-/// grid bins it (cs_local_exposure_grid.sc).
+/// grid bins it (cs_local_exposure_grid.eshader).
 constexpr const char* log_lum_key = "EXPOSURE_LOG_LUM";
 /// Local exposure, only while the settings are not neutral: the flattened bilateral grid, the
 /// 1/32 resolution log luminance, the horizontal blur pass and the blurred result.
@@ -39,11 +39,11 @@ constexpr const char* local_grid_key = "LOCAL_EXPOSURE_GRID";
 constexpr const char* local_downsampled_key = "LOCAL_EXPOSURE_DOWNSAMPLED";
 constexpr const char* local_blur_temp_key = "LOCAL_EXPOSURE_BLUR_TEMP";
 constexpr const char* local_blurred_key = "LOCAL_EXPOSURE_BLURRED";
-/// Half float, so the consumers filter the grid (cs_local_exposure_grid.sc); render_feature_support
+/// Half float, so the consumers filter the grid (cs_local_exposure_grid.eshader); render_feature_support
 /// requires the same image format.
 constexpr bgfx::TextureFormat::Enum local_grid_format = bgfx::TextureFormat::RGBA16F;
 /// Largest blur radius in blurred texels: the blur's tap limit (63 taps per axis). Mirrors
-/// LOCAL_EXPOSURE_BLUR_MAX_RADIUS in cs_local_exposure_blur.sc.
+/// LOCAL_EXPOSURE_BLUR_MAX_RADIUS in cs_local_exposure_blur.eshader.
 constexpr float local_blur_max_radius = 31.0f;
 /// The layout (tile count, uv scales) of the view's local exposure textures.
 constexpr const char* local_layout_key = "LOCAL_EXPOSURE_LAYOUT";
@@ -115,13 +115,13 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto cs_histogram = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_luminance_histogram.sc");
-    auto cs_average = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_histogram_average.sc");
-    auto cs_local_grid = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_grid.sc");
+    auto cs_histogram = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_luminance_histogram.eshader");
+    auto cs_average = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_histogram_average.eshader");
+    auto cs_local_grid = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_grid.eshader");
     auto cs_local_downsample =
-        am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_downsample.sc");
-    auto cs_local_blur = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_blur.sc");
-    auto cs_pre_exposure = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_pre_exposure.sc");
+        am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_downsample.eshader");
+    auto cs_local_blur = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_local_exposure_blur.eshader");
+    auto cs_pre_exposure = am.get_asset<gfx::shader>("engine:/data/shaders/exposure/cs_pre_exposure.eshader");
 
     if(!cs_histogram || !cs_average || !cs_pre_exposure)
     {
@@ -510,7 +510,7 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
         gfx::set_uniform(local_grid_program_.u_local_grid_params, grid_params);
         const float grid_range[4] = {min_log_lum, 1.0f / log_range, float(tiles_x), float(tiles_y)};
         gfx::set_uniform(local_grid_program_.u_local_grid_range, grid_range);
-        // One workgroup per tile (cs_local_exposure_grid.sc).
+        // One workgroup per tile (cs_local_exposure_grid.eshader).
         gfx::dispatch(pass.id, local_grid_program_.program->native_handle(), tiles_x, tiles_y, 1);
         local_grid_program_.program->end();
     }

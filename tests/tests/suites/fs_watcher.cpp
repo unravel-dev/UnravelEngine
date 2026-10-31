@@ -697,7 +697,7 @@ void test_filters_on_shared_listener()
     // One filter per source format, the way the asset watcher registers them on the compiled folder.
     const std::vector<std::string> formats = {
         ".etex", ".png", ".jpg", ".jpeg", ".tga", ".dds", ".ktx", ".ktx2", ".pvr", ".exr", ".hdr",
-        ".bmp", ".gif", ".psd", ".sc", ".emesh", ".gltf", ".glb", ".obj", ".fbx", ".FBX",
+        ".bmp", ".gif", ".psd", ".eshader", ".emesh", ".gltf", ".glb", ".obj", ".fbx", ".FBX",
         ".dae", ".blend", ".3ds", ".mat", ".ematerial", ".anim", ".pfb", ".spfb", ".phm", ".ephmaterial",
         ".eaudioclip", ".ogg", ".wav", ".flac", ".mp3", ".ttf", ".otf", ".cs", ".rhtml", ".rcss"};
     const auto tree = make_tree("filters");

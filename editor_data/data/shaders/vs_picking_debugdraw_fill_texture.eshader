@@ -1,0 +1,23 @@
+[inputs]
+vec3 a_position
+vec2 a_texcoord0
+vec4 a_color0
+
+[outputs]
+vec2 v_texcoord0
+vec4 v_color0 = vec4(1.0, 0.0, 0.0, 1.0)
+
+[code]
+/*
+ * Copyright 2011-2025 Branimir Karadzic. All rights reserved.
+ * License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
+ */
+
+#include <bgfx_shader.sh>
+
+void main()
+{
+	gl_Position = mul(u_modelViewProj, vec4(a_position, 1.0) );
+	v_texcoord0 = a_texcoord0;
+	v_color0    = a_color0;
+}

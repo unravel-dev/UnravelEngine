@@ -9,9 +9,9 @@ namespace unravel
 {
 namespace
 {
-/// Threads per group of cs_clear_uints.sc (NUM_THREADS(64, 1, 1)), one uint each.
+/// Threads per group of cs_clear_uints.eshader (NUM_THREADS(64, 1, 1)), one uint each.
 constexpr uint32_t CLEAR_GROUP_SIZE = 64;
-/// The cleared buffer's stage (cs_clear_uints.sc).
+/// The cleared buffer's stage (cs_clear_uints.eshader).
 constexpr uint8_t CLEAR_BUFFER_STAGE = 0;
 
 /// The groups that clear @p count uints.
@@ -31,7 +31,7 @@ auto buffer_clear::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     // Uniforms before programs: the OpenGL renderer wires a program's uniforms at link time.
     program_.cache_uniforms();
-    auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/cs_clear_uints.sc");
+    auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/cs_clear_uints.eshader");
     program_.program = std::make_unique<gpu_program>(shader);
     if(!is_ready())
     {

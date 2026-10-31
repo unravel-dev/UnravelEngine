@@ -19,6 +19,7 @@
 #include "../tests.h"
 #include "gi_reference_tracer.h"
 
+#include <asset_compiler/eshader_file.h>
 #include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
@@ -191,22 +192,7 @@ void test_gi_shaders_compile_sm50()
         return;
     }
     const fs::path include_dir = GI_TESTS_SHADER_DIR;
-    // The varyings the engine's compiler gives a shader (asset_compiler.cpp): its own <name>.io, else its folder's
-    // varying.def.io, else varying.def.sc.
-    const auto get_varying = [](const fs::path& shader) -> fs::path
-    {
-        const fs::path dir = shader.parent_path();
-        fs::path varying = dir / (shader.stem().string() + ".io");
-        if(!fs::exists(varying))
-        {
-            varying = dir / "varying.def.io";
-        }
-        if(!fs::exists(varying))
-        {
-            varying = dir / "varying.def.sc";
-        }
-        return varying;
-    };
+    namespace ac = unravel::asset_compiler;
     const fs::path out_dir = fs::temp_directory_path() / "gi_shader_compile_test";
     fs::create_directories(out_dir);
     size_t compiled = 0;
@@ -222,7 +208,7 @@ void test_gi_shaders_compile_sm50()
     for(const auto& entry : entries)
     {
         const auto name = entry.path().filename().string();
-        if(entry.path().extension() != ".sc")
+        if(entry.path().extension() != ".eshader")
         {
             continue;
         }
@@ -233,7 +219,19 @@ void test_gi_shaders_compile_sm50()
         {
             continue;
         }
-        const fs::path varying = get_varying(entry.path());
+        ac::eshader_file file;
+        std::string error;
+        const bool is_parsed = ac::load_eshader_file(entry.path(), file, error);
+        check(is_parsed, name + " parses: " + error);
+        if(!is_parsed)
+        {
+            continue;
+        }
+        // What the engine's compiler hands shaderc (asset_compiler.cpp).
+        const fs::path source = out_dir / (name + ".source");
+        const fs::path varying = out_dir / (name + ".varying");
+        std::ofstream(source, std::ios::binary) << ac::make_eshader_source_text(file, entry.path());
+        std::ofstream(varying, std::ios::binary) << ac::make_eshader_varying_text(file);
         // The D3D floor AND the OpenGL profile: the backends disagree on real things -
         // GLSL reserves `packed`, rejects expressions in local_size, lacks scalar
         // equal()/notEqual() and legacy *Lod entry points - and every one of those shipped
@@ -253,35 +251,44 @@ void test_gi_shaders_compile_sm50()
             {"linux", "440", "GLSL 440"},
             {"windows", "spirv", "SPIR-V"},
         };
-        for(const auto& profile : profiles)
+        for(const auto& variant : file.variants)
         {
-            const fs::path out_bin = out_dir / (name + "." + profile.profile + ".bin");
-            const fs::path out_log = out_dir / (name + "." + profile.profile + ".log");
-            std::string command = "\"\"" + shaderc.string() + "\" -f \"" + entry.path().string() +
-                                  "\" -o \"" + out_bin.string() + "\" -i \"" + include_dir.string() +
-                                  "\" --varyingdef \"" + varying.string() +
-                                  "\" --type " + (compute ? "compute" : (vertex ? "vertex" : "fragment")) +
-                                  " --define BGFX_CONFIG_MAX_BONES=64 --platform " + profile.platform +
-                                  " -p " + profile.profile + " > \"" + out_log.string() + "\" 2>&1\"";
-            const int exit_code = std::system(command.c_str());
-            std::string log;
+            std::string defines = "BGFX_CONFIG_MAX_BONES=64";
+            for(const auto& define : variant.defines)
             {
-                std::ifstream log_file(out_log);
-                std::stringstream buffer;
-                buffer << log_file.rdbuf();
-                log = buffer.str();
+                defines += ";" + define;
             }
-            // shaderc is quiet on success; any output or a non-zero exit is a failure worth
-            // the full log, because the editor would have swallowed it.
-            const bool ok = exit_code == 0 && log.find("Error") == std::string::npos &&
-                            log.find("error") == std::string::npos;
-            if(!ok)
+            const std::string variant_name = name + "#" + variant.name;
+            for(const auto& profile : profiles)
             {
-                std::printf("--- %s (%s) ---\n%.2000s\n", name.c_str(), profile.label, log.c_str());
+                const fs::path out_bin = out_dir / (variant_name + "." + profile.profile + ".bin");
+                const fs::path out_log = out_dir / (variant_name + "." + profile.profile + ".log");
+                std::string command = "\"\"" + shaderc.string() + "\" -f \"" + source.string() +
+                                      "\" -o \"" + out_bin.string() + "\" -i \"" + entry.path().parent_path().string() + ";" + include_dir.string() +
+                                      "\" --varyingdef \"" + varying.string() +
+                                      "\" --type " + (compute ? "compute" : (vertex ? "vertex" : "fragment")) +
+                                      " --define \"" + defines + "\" --platform " + profile.platform +
+                                      " -p " + profile.profile + " > \"" + out_log.string() + "\" 2>&1\"";
+                const int exit_code = std::system(command.c_str());
+                std::string log;
+                {
+                    std::ifstream log_file(out_log);
+                    std::stringstream buffer;
+                    buffer << log_file.rdbuf();
+                    log = buffer.str();
+                }
+                // shaderc is quiet on success; any output or a non-zero exit is a failure worth
+                // the full log, because the editor would have swallowed it.
+                const bool ok = exit_code == 0 && log.find("Error") == std::string::npos &&
+                                log.find("error") == std::string::npos;
+                if(!ok)
+                {
+                    std::printf("--- %s (%s) ---\n%.2000s\n", variant_name.c_str(), profile.label, log.c_str());
+                }
+                check(ok, variant_name + " compiles for " + profile.label);
             }
-            check(ok, name + " compiles for " + profile.label);
+            ++compiled;
         }
-        ++compiled;
     }
     std::printf("  %zu shaders compiled\n", compiled);
     check(compiled > 0, "the shader directory was found and scanned");

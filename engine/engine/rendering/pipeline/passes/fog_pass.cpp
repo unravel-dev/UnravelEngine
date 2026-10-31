@@ -27,7 +27,7 @@ constexpr float MAX_ANISOTROPY = 0.95f;
 constexpr std::uint8_t FOG_DEPTH_STAGE = 0;
 constexpr std::uint8_t FOG_ENVIRONMENT_STAGE = 1;
 constexpr std::uint8_t FOG_VOLUME_STAGE = 2;
-/// Stages of the froxel lighting (fog/cs_fog_lighting.sc). The images stay below 8 (GL image units).
+/// Stages of the froxel lighting (fog/cs_fog_lighting.eshader). The images stay below 8 (GL image units).
 constexpr std::uint8_t LIGHTING_OUTPUT_STAGE = 0;
 constexpr std::uint8_t LIGHTING_HISTORY_STAGE = 2;
 constexpr std::uint8_t LIGHTING_ENVIRONMENT_STAGE = 3;
@@ -37,9 +37,9 @@ constexpr std::uint8_t LIGHTING_NOISE_STAGE = 9;
 constexpr std::uint8_t LIGHTING_SHADOW_ATLAS_STAGE = 10;
 constexpr std::uint8_t LIGHTING_LIGHT_SHADOWS_STAGE = 11;
 constexpr std::uint8_t LIGHTING_LIGHT_MASKS_STAGE = 12;
-/// Stage of the froxel light culling's masks (fog/cs_fog_cull.sc).
+/// Stage of the froxel light culling's masks (fog/cs_fog_cull.eshader).
 constexpr std::uint8_t CULL_MASKS_STAGE = 0;
-/// Stages of the froxel integration (fog/cs_fog_integrate.sc).
+/// Stages of the froxel integration (fog/cs_fog_integrate.eshader).
 constexpr std::uint8_t INTEGRATE_OUTPUT_STAGE = 0;
 constexpr std::uint8_t INTEGRATE_LIT_STAGE = 1;
 /// Threads per group along each axis of the lighting and of the culling (4x4x4), and per column group of the
@@ -81,7 +81,7 @@ constexpr std::uint32_t LIGHT_SHADOW_MATRICES_OFFSET = 2;
 /// Maps of a spot light and of a point light (its tetrahedron faces).
 constexpr std::uint8_t SPOT_SHADOW_MAPS = 1;
 constexpr std::uint8_t POINT_SHADOW_MAPS = 4;
-/// The kind of a light's shadow record (cs_fog_lighting.sc): none (unshadowed), a spot map, a point light's faces.
+/// The kind of a light's shadow record (cs_fog_lighting.eshader): none (unshadowed), a spot map, a point light's faces.
 constexpr float UNSHADOWED_LIGHT = 0.0f;
 constexpr float SPOT_LIGHT_SHADOW = 1.0f;
 constexpr float POINT_LIGHT_SHADOW = 2.0f;
@@ -359,19 +359,18 @@ void fog_pass::volumetric_programs::cache_uniforms()
 auto fog_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_fog = am.get_asset<gfx::shader>("engine:/data/shaders/fog/fs_fog.sc");
-    auto fs_fog_volumetric = am.get_asset<gfx::shader>("engine:/data/shaders/fog/fs_fog_volumetric.sc");
-    auto cs_fog_lighting = am.get_asset<gfx::shader>("engine:/data/shaders/fog/cs_fog_lighting.sc");
-    auto cs_fog_integrate = am.get_asset<gfx::shader>("engine:/data/shaders/fog/cs_fog_integrate.sc");
-    auto cs_fog_cull = am.get_asset<gfx::shader>("engine:/data/shaders/fog/cs_fog_cull.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_fog = am.get_asset<gfx::shader>("engine:/data/shaders/fog/fs_fog.eshader");
+    auto cs_fog_lighting = am.get_asset<gfx::shader>("engine:/data/shaders/fog/cs_fog_lighting.eshader");
+    auto cs_fog_integrate = am.get_asset<gfx::shader>("engine:/data/shaders/fog/cs_fog_integrate.eshader");
+    auto cs_fog_cull = am.get_asset<gfx::shader>("engine:/data/shaders/fog/cs_fog_cull.eshader");
     // Uniforms before programs (GL uniform order contract, gpu_program.h). The particle programs read the
     // u_fog_* uniforms too: the pipeline initializes this pass before it creates them.
     fog_uniforms_.cache_uniforms();
     fog_program_.cache_uniforms();
     volumetric_.cache_uniforms();
     fog_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_fog);
-    fog_program_.volumetric_program = std::make_unique<gpu_program>(vs_clip_quad, fs_fog_volumetric);
+    fog_program_.volumetric_program = std::make_unique<gpu_program>(vs_clip_quad, gfx::shader::DEFAULT_VARIANT, fs_fog, "volumetric");
     volumetric_.lighting = std::make_unique<gpu_program>(cs_fog_lighting);
     volumetric_.integrate = std::make_unique<gpu_program>(cs_fog_integrate);
     volumetric_.cull = std::make_unique<gpu_program>(cs_fog_cull);

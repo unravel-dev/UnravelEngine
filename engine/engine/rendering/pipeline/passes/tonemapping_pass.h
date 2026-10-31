@@ -118,7 +118,7 @@ private:
                                     const gfx::frame_buffer::ptr& input,
                                     const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
     /// The view's table of the colour grading, tone curve and display encoding of @p config, rendered again only
-    /// when they changed (fs_tonemapping_lut.sc).
+    /// when they changed (fs_tonemapping_lut.eshader).
     auto update_lut(gfx::render_view& rview, const settings& config) -> const gfx::texture::ptr&;
 
     struct tonemapping_program : uniforms_cache

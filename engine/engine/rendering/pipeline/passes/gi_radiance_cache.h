@@ -83,7 +83,7 @@ private:
         void cache_uniforms();
     } uniforms_;
 
-    /// The bookkeeping pass's modes (cs_gi_rc_bookkeeping.sc).
+    /// The bookkeeping pass's modes (cs_gi_rc_bookkeeping.eshader).
     enum class bookkeeping : int
     {
         reset = 0,

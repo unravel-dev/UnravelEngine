@@ -48,7 +48,7 @@ public:
         bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Unknown;
         /// The displayed image as rendered, rows from the top of the image.
         std::vector<uint8_t> color;
-        /// Frames each pixel's surface had stayed visible within the measurement (see cs_temporal_probe.sc), rows
+        /// Frames each pixel's surface had stayed visible within the measurement (see cs_temporal_probe.eshader), rows
         /// from the top of the image.
         std::vector<float> age;
     };
@@ -103,7 +103,7 @@ public:
     auto init(rtti::context& ctx) -> bool;
 
     /// Arms a measurement of @p frames frames starting with the next run; a running one restarts. @p is_lowpass
-    /// runs every statistic on a small box mean of the displayed luminance (cs_temporal_probe.sc,
+    /// runs every statistic on a small box mean of the displayed luminance (cs_temporal_probe.eshader,
     /// PROBE_LOWPASS_RADIUS): under camera motion the raw reprojected change is dominated by the sub-pixel
     /// resampling of textured detail, which the box removes while patch-scale flicker stays.
     /// @p keeps_images also reads back the per-pixel planes (result::images). @p marks lists 1-based frame

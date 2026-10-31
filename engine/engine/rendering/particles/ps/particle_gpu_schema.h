@@ -18,11 +18,11 @@ enum class particle_sort_backend : uint8_t
 
 /// Threads per group of the scatter, cull / key and draw-argument kernels.
 constexpr uint32_t gpu_group_threads = 64;
-/// Elements one group of cs_particle_sort.sc sorts in groupshared memory (PARTICLE_SORT_BLOCK).
+/// Elements one group of cs_particle_sort.eshader sorts in groupshared memory (PARTICLE_SORT_BLOCK).
 constexpr uint32_t gpu_sort_block = 1024;
-/// Threads per group of cs_particle_sort.sc.
+/// Threads per group of cs_particle_sort.eshader.
 constexpr uint32_t gpu_sort_threads = 512;
-/// uints per task of cs_particle_keygen.sc (PARTICLE_TASK_UINTS).
+/// uints per task of cs_particle_keygen.eshader (PARTICLE_TASK_UINTS).
 constexpr uint32_t gpu_task_uints = 8;
 /// Indices of the particle quad and of the octagon after it in the particle index buffer.
 constexpr uint32_t quad_index_count = 6;
@@ -51,7 +51,7 @@ constexpr uint8_t gpu_scene_depth_stage = 15;
 /// uints per batch of the per-view batch table: index count, first index.
 constexpr uint32_t gpu_batch_uints = 2;
 
-/// cs_particle_keygen.sc PARTICLE_SORT_KIND_*.
+/// cs_particle_keygen.eshader PARTICLE_SORT_KIND_*.
 enum class gpu_sort_kind : uint32_t
 {
     append = 0,

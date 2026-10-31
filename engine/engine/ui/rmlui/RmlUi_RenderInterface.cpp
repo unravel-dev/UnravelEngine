@@ -1970,7 +1970,7 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     auto& am = ctx_->get_cached<asset_manager>();
 
     // Load vertex shader
-    auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_main.sc");
+    auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_main.eshader");
     if(!vs_shader)
     {
         APPLOG_ERROR("Failed to load RmlUi vertex shader");
@@ -1978,26 +1978,25 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
     }
 
     // Load additional vertex shaders
-    auto vs_passthrough_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_passthrough.sc");
-    auto vs_blur_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_blur.sc");
+    auto vs_passthrough_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_passthrough.eshader");
 
     // Load fragment shaders
-    auto fs_color_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_color.sc");
-    auto fs_texture_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_texture.sc");
-    auto fs_gradient_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_gradient.sc");
-    auto fs_creation_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_creation.sc");
-    auto fs_passthrough_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_passthrough.sc");
-    auto fs_color_matrix_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_color_matrix.sc");
-    auto fs_blend_mask_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_blend_mask.sc");
-    auto fs_blur_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_blur.sc");
-    auto fs_drop_shadow_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_drop_shadow.sc");
-    auto vs_world_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_world.sc");
-    auto fs_world_color_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_color.sc");
-    auto fs_world_texture_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_texture.sc");
-    auto fs_world_gradient_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_gradient.sc");
-    auto fs_world_creation_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_creation.sc");
+    auto fs_color_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_color.eshader");
+    auto fs_texture_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_texture.eshader");
+    auto fs_gradient_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_gradient.eshader");
+    auto fs_creation_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_creation.eshader");
+    auto fs_passthrough_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_passthrough.eshader");
+    auto fs_color_matrix_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_color_matrix.eshader");
+    auto fs_blend_mask_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_blend_mask.eshader");
+    auto fs_blur_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_blur.eshader");
+    auto fs_drop_shadow_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_drop_shadow.eshader");
+    auto vs_world_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/vs_rmlui_world.eshader");
+    auto fs_world_color_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_color.eshader");
+    auto fs_world_texture_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_texture.eshader");
+    auto fs_world_gradient_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_gradient.eshader");
+    auto fs_world_creation_shader = am.get_asset<gfx::shader>("engine:/data/shaders/rmlui/fs_rmlui_world_creation.eshader");
 
-    if(!vs_passthrough_shader || !vs_blur_shader || !fs_color_shader || !fs_texture_shader || !fs_gradient_shader ||
+    if(!vs_passthrough_shader || !fs_color_shader || !fs_texture_shader || !fs_gradient_shader ||
        !fs_creation_shader || !fs_passthrough_shader || !fs_color_matrix_shader || !fs_blend_mask_shader ||
        !fs_blur_shader || !fs_drop_shadow_shader || !vs_world_shader || !fs_world_color_shader || !fs_world_texture_shader ||
        !fs_world_gradient_shader || !fs_world_creation_shader)
@@ -2017,7 +2016,7 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
         gpu_program(vs_passthrough_shader, fs_color_matrix_shader);
     programs_[static_cast<size_t>(RmlUi_ProgramId::BlendMask)] =
         gpu_program(vs_passthrough_shader, fs_blend_mask_shader);
-    programs_[static_cast<size_t>(RmlUi_ProgramId::Blur)] = gpu_program(vs_blur_shader, fs_blur_shader);
+    programs_[static_cast<size_t>(RmlUi_ProgramId::Blur)] = gpu_program(vs_passthrough_shader, fs_blur_shader);
     programs_[static_cast<size_t>(RmlUi_ProgramId::DropShadow)] =
         gpu_program(vs_passthrough_shader, fs_drop_shadow_shader);
     programs_[static_cast<size_t>(RmlUi_ProgramId::WorldColor)] = gpu_program(vs_world_shader, fs_world_color_shader);

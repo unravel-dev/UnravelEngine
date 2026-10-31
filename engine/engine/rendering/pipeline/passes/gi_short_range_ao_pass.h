@@ -18,7 +18,7 @@ namespace unravel
  * GI views composite it in place of the screen-space AO, which does not apply while the short-range AO is on. A
  * horizon search at the tier's downsample factor (every pixel at the epic tier, half resolution at the high tier)
  * here, then the gather's integrate accumulates it at full resolution over its own reprojection taps and history
- * length (cs_gi_integrate_ao.sc). The constants are in engine/rendering/gi/gi_pass_constants.h; the measurements in
+ * length (cs_gi_integrate.eshader#ao). The constants are in engine/rendering/gi/gi_pass_constants.h; the measurements in
  * tasks/gi_transform.
  */
 class gi_short_range_ao_pass
@@ -59,13 +59,13 @@ public:
     auto run_search(gfx::render_view& rview, const run_params& params) -> frame_targets;
 
     /**
-     * @brief Binds the AO's part of the gather's integrate (cs_gi_integrate_ao.sc): the search at stage 14, last
+     * @brief Binds the AO's part of the gather's integrate (cs_gi_integrate.eshader#ao): the search at stage 14, last
      *        frame's accumulation at 15, the accumulation and the screen AO as images 5 and 7, and the uniform.
      * @param has_gather_history The integrate's histories hold last frame (its taps are valid).
      */
     void bind_accumulation(const frame_targets& targets, const run_params& params, bool has_gather_history) const;
 
-    /// Unpacks the screen AO from this frame's accumulation (cs_gi_short_range_ao_screen.sc), after the integrate:
+    /// Unpacks the screen AO from this frame's accumulation (cs_gi_short_range_ao_screen.eshader), after the integrate:
     /// the integrate's stage 7 holds the GPU pre-exposure.
     void resolve_screen(const frame_targets& targets, const run_params& params) const;
 

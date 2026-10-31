@@ -1,0 +1,14 @@
+[inputs]
+vec2 v_texcoord0
+vec4 v_color0
+vec4 v_document_position
+
+[code]
+#include "../common.sh"
+#include "clip.sh"
+#include "creation.sh"
+
+void main()
+{
+    gl_FragColor = getCreationColor(v_texcoord0, v_color0.a) * getClipCoverage(v_document_position);
+}

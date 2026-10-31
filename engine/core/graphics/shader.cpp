@@ -1,13 +1,7 @@
 #include "shader.h"
-#include "utils/bgfx_utils.h"
 
 namespace gfx
 {
-shader::shader(const std::string& path)
-    : shader(loadShader(bx::FilePath(path.c_str())))
-{
-}
-
 shader::shader(const bgfx::Memory* mem) : shader(bgfx::createShader(mem))
 {
 }
@@ -22,6 +16,16 @@ shader::shader(handle_type_t hndl)
     handle_ = hndl;
 
     populate_uniforms();
+}
+
+auto shader::find_variant(const std::string& name) const -> const shader*
+{
+    if(name == DEFAULT_VARIANT)
+    {
+        return this;
+    }
+    const auto it = variants.find(name);
+    return it != variants.end() ? it->second.get() : nullptr;
 }
 
 void shader::populate_uniforms()

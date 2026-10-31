@@ -12,7 +12,7 @@ class camera;
  * @brief Snapshots the scene-referred HDR target into @c PREV_SCENE_HDR for next frame's
  *        feedback readers (the GI gather's screen tier and far field, SSR), with each pixel's
  *        view depth in alpha so a reader can validate its reprojection against the surface the
- *        pixel was rendered from (fs_gi_scene_snapshot.sc).
+ *        pixel was rendered from (fs_gi_scene_snapshot.eshader).
  *
  * Replaces a plain blit: same cost (one full-screen pass over the same target), one more
  * channel of meaning.

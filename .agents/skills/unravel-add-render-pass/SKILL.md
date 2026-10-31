@@ -48,7 +48,7 @@ enum pipeline_steps : uint32_t
 
 Follow `unravel-shader-change`:
 
-- Add `.sc` files in `engine_data/data/shaders/`
+- Add `.eshader` files in `engine_data/data/shaders/`
 - Register in CMake shader compile list if needed
 - Bind uniforms/samplers matching engine conventions
 

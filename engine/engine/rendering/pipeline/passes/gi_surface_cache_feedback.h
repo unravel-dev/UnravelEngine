@@ -18,7 +18,7 @@ namespace unravel
 
 /**
  * @brief The reflections' surface cache feedback, from the GPU to gi_scene::set_feedback. The reflection
- *        feedback pass (cs_gi_reflection_feedback.sc) counts its elements in a hash table that lasts a window of
+ *        feedback pass (cs_gi_reflection_feedback.eshader) counts its elements in a hash table that lasts a window of
  *        frames; at the window's end the table is copied into an image and cleared, the image blitted into a
  *        read-back texture in a view of its own (bgfx runs a view's blits before its dispatches) and read, and once
  *        the GPU has delivered it the elements are decoded for the scene.

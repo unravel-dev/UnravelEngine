@@ -14,13 +14,13 @@ auto ssil_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
 
-    auto fs_ssil_trace = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/fs_ssil_trace.sc");
-    auto fs_ssil_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/fs_ssil_temporal_resolve.sc");
-    auto cs_ssil_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/cs_ssil_spatial_denoise.sc");
-    auto cs_ssil_downsample = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/cs_ssil_downsample.sc");
-    auto fs_ssil_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/fs_ssil_upsample.sc");
+    auto fs_ssil_trace = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/fs_ssil_trace.eshader");
+    auto fs_ssil_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/fs_ssil_temporal_resolve.eshader");
+    auto cs_ssil_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/cs_ssil_spatial_denoise.eshader");
+    auto cs_ssil_downsample = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/cs_ssil_downsample.eshader");
+    auto fs_ssil_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/ssil/fs_ssil_upsample.eshader");
 
     trace_program_.cache_uniforms();
     trace_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssil_trace);

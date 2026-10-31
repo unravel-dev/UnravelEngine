@@ -295,7 +295,7 @@ private:
     bgfx::DynamicIndexBufferHandle sort_ = BGFX_INVALID_HANDLE;
     uint32_t sort_capacity_ = 0;
     bgfx::DynamicIndexBufferHandle counters_ = BGFX_INVALID_HANDLE;
-    /// Each batch's live count of the last dispatch (cs_particle_draw_args.sc), for the vertex shaders.
+    /// Each batch's live count of the last dispatch (cs_particle_draw_args.eshader), for the vertex shaders.
     bgfx::DynamicIndexBufferHandle batch_counts_ = BGFX_INVALID_HANDLE;
     bgfx::IndirectBufferHandle draw_args_ = BGFX_INVALID_HANDLE;
     uint32_t batch_capacity_ = 0;

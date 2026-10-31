@@ -18,7 +18,7 @@
  */
 
 /// x = the adaptive probe capacity (trunc(uniform probes x GI_ADAPTIVE_ALLOCATION_FRACTION)), y = the texels per
-/// axis of a probe's bordered radiance (cs_gi_adaptive_args.sc), z / w = the candidates per uniform tile along x / y,
+/// axis of a probe's bordered radiance (cs_gi_adaptive_args.eshader), z / w = the candidates per uniform tile along x / y,
 /// the quality tier's (8 = GI_ADAPTIVE_SAMPLES_X x _Y at Epic, 16 = 4 x 4 at High).
 uniform vec4 u_gi_adaptive;
 

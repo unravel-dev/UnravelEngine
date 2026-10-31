@@ -9,6 +9,7 @@
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/mesh.hpp>
 #include <engine/meta/rendering/font.hpp>
+#include <engine/meta/rendering/shader_variants.hpp>
 #include <engine/meta/rendering/standard_material.hpp>
 #include <engine/meta/scripting/script.hpp>
 #include <engine/meta/ui/ui_tree.hpp>
@@ -188,6 +189,44 @@ auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::s
     return true;
 }
 
+/// One compiled variant as a GPU shader, named so a GPU capture tells the variants apart.
+auto create_shader_variant(const compiled_shader_variant& variant, const std::string& key) -> std::shared_ptr<gfx::shader>
+{
+    auto shader = std::make_shared<gfx::shader>(bgfx::copy(variant.bytes.data(), static_cast<std::uint32_t>(variant.bytes.size())));
+    shader->varyings = variant.varyings;
+    if(shader->is_valid())
+    {
+        shader->set_name(fs::path(key).filename().string() + "#" + variant.name);
+    }
+    return shader;
+}
+
+/// A compiled shader as one asset: the default variant is the shader itself, the others its variants.
+auto create_shader_with_variants(const std::string& path, const std::string& key) -> std::shared_ptr<gfx::shader>
+{
+    std::vector<compiled_shader_variant> compiled;
+    load_from_file_bin(path, compiled);
+    const auto is_default = [](const compiled_shader_variant& variant)
+    {
+        return variant.name == gfx::shader::DEFAULT_VARIANT;
+    };
+    const auto default_variant = std::find_if(compiled.begin(), compiled.end(), is_default);
+    if(default_variant == compiled.end())
+    {
+        APPLOG_ERROR("Compiled shader {0} holds no default variant.", path);
+        return nullptr;
+    }
+    auto result = create_shader_variant(*default_variant, key);
+    for(const auto& variant : compiled)
+    {
+        if(!is_default(variant))
+        {
+            result->variants.emplace(variant.name, create_shader_variant(variant, key));
+        }
+    }
+    return result;
+}
+
 } // namespace detail
 
 template<>
@@ -209,7 +248,7 @@ auto load_from_file<gfx::shader>(tpp::thread_pool& pool, asset_handle<gfx::shade
         gfx::get_current_renderer_filename_extension(), source_fallback::none,
         [key](const std::string& path)
         {
-            return std::make_shared<gfx::shader>(path);
+            return detail::create_shader_with_variants(path, key);
         }, mode);
 }
 

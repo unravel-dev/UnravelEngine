@@ -64,7 +64,7 @@ auto gi_short_range_ao_pass::init(rtti::context& ctx) -> bool
     uniforms_.cache_uniforms();
     const auto load = [&](const char* name) -> gpu_program::ptr
     {
-        auto shader = am.get_asset<gfx::shader>(std::string("engine:/data/shaders/gi/") + name + ".sc");
+        auto shader = am.get_asset<gfx::shader>(std::string("engine:/data/shaders/gi/") + name + ".eshader");
         return std::make_shared<gpu_program>(shader);
     };
     search_program_ = load("cs_gi_short_range_ao");

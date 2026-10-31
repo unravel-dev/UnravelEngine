@@ -2,8 +2,8 @@
 #define __GI_SURFACE_CACHE_LIGHTING_SH__
 
 /*
- * Surface cache lighting, shared by the capture copy (cs_gi_card_copy.sc), the lighting resample
- * (cs_gi_card_resample.sc) and the radiosity integrate (cs_gi_radiosity_integrate.sc). The copy and the resample
+ * Surface cache lighting, shared by the capture copy (cs_gi_card_copy.eshader), the lighting resample
+ * (cs_gi_card_resample.eshader) and the radiosity integrate (cs_gi_radiosity_integrate.eshader). The copy and the resample
  * read their tiles through gi_tile_records.sh (GiLoadCopyTile).
  *
  * The normal atlas holds card-space normals: a placement that rotates keeps its captured normals, which every reader

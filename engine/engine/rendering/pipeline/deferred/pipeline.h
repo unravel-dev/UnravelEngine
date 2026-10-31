@@ -278,7 +278,7 @@ public:
     /// The screen-space AO bent normal, through the G-buffer visualization program.
     static constexpr int debug_pass_ao_bent_normals = 31;
     /// Auto exposure's own state, drawn as a blended panel OVER the finished image
-    /// (fs_exposure_debug.sc): an overlay, not a replacement image.
+    /// (fs_exposure_debug.eshader): an overlay, not a replacement image.
     static constexpr int debug_pass_exposure = 41;
     /// The GI debug views, ids debug_pass_gi_scene + gi_visualize_pass::view (gi_visualize_pass): the
     /// scene, lighting and update views, the physical card atlas, the card coverage, the object grid, the screen-space
@@ -303,7 +303,7 @@ public:
     static constexpr int debug_pass_gi_screen_probe_frames = 59;
     static constexpr int debug_pass_gi_overview = 60;
     static constexpr int debug_pass_gi_performance_overview = 61;
-    /// The particle layers each pixel shaded (the particle pass counts them, fs_particle_overdraw_debug.sc
+    /// The particle layers each pixel shaded (the particle pass counts them, fs_particle_overdraw_debug.eshader
     /// draws them blended over the finished image).
     static constexpr int debug_pass_particle_overdraw = 62;
     void run_exposure_debug_pass(gfx::render_view& rview,
@@ -471,7 +471,7 @@ private:
     };
 
     /// The geometry program of the surface cache card captures: each draw brings its own world -> clip transform, so
-    /// one pass draws every capture into its tile of the capture atlas (vs_deferred_geom_card_capture.sc).
+    /// one pass draws every capture into its tile of the capture atlas (vs_deferred_geom.eshader#card_capture).
     struct card_capture_program : geom_program
     {
         void cache_uniforms()
@@ -487,13 +487,13 @@ private:
     geom_program geom_program_skinned_;
     geom_program geom_program_instanced_;
     /// The instanced program of batches whose instances carry per-instance material values
-    /// (vs_deferred_geom_instanced_material.sc, instance_material_vertex_data).
+    /// (vs_deferred_geom.eshader#instanced_material, instance_material_vertex_data).
     geom_program geom_program_instanced_material_;
-    /// The instanced skinned programs (vs_deferred_geom_skinned_instanced*.sc, skinned_instance_vertex_data and
+    /// The instanced skinned programs (vs_deferred_geom.eshader#skinned_instanced*, skinned_instance_vertex_data and
     /// skinned_instance_material_vertex_data); the bones come from the skinning palette buffer.
     geom_program geom_program_skinned_instanced_;
     geom_program geom_program_skinned_instanced_material_;
-    /// The baked animation program (vs_deferred_geom_skinned_baked_instanced.sc, baked_instance_vertex_data); the bones
+    /// The baked animation program (vs_deferred_geom.eshader#skinned_baked_instanced, baked_instance_vertex_data); the bones
     /// come from the baked animation store.
     geom_program geom_program_skinned_baked_instanced_;
     card_capture_program card_capture_program_;
@@ -548,7 +548,7 @@ private:
         std::unique_ptr<gpu_program> program;
     } velocity_debug_program_;
 
-    /// The particle overdraw view (particles/fs_particle_overdraw_debug.sc).
+    /// The particle overdraw view (particles/fs_particle_overdraw_debug.eshader).
     struct particle_overdraw_debug_program : uniforms_cache
     {
         void cache_uniforms()
@@ -561,7 +561,7 @@ private:
         std::unique_ptr<gpu_program> program;
     } particle_overdraw_debug_program_;
 
-    /// The exposure overlay (exposure/fs_exposure_debug.sc): the adaptation trace and this
+    /// The exposure overlay (exposure/fs_exposure_debug.eshader): the adaptation trace and this
     /// frame's metering histogram, drawn blended over the lit image.
     struct exposure_debug_program : uniforms_cache
     {

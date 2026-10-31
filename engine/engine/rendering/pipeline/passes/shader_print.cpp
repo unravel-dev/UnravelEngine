@@ -16,9 +16,9 @@ namespace
 /// The buffer's layout (shader_print.sh): a header ([0] = the symbols printed), then four words per symbol.
 constexpr uint32_t header_words = 4;
 constexpr uint32_t symbol_words = 4;
-/// Per symbol, two quads of six vertices: its drop shadow, then its glyph (vs_shader_print.sc).
+/// Per symbol, two quads of six vertices: its drop shadow, then its glyph (vs_shader_print.eshader).
 constexpr uint32_t vertices_per_symbol = 12;
-/// The draw's stages (vs_shader_print.sc, fs_shader_print.sc).
+/// The draw's stages (vs_shader_print.eshader, fs_shader_print.eshader).
 constexpr uint8_t draw_buffer_stage = 0;
 constexpr uint8_t draw_font_stage = 1;
 /// A set bit of a glyph row.
@@ -72,8 +72,8 @@ auto shader_print::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     // Uniforms before programs: the OpenGL renderer wires a program's uniforms at link time.
     draw_program_.cache_uniforms();
-    auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/shader_print/vs_shader_print.sc");
-    auto fs = am.get_asset<gfx::shader>("engine:/data/shaders/shader_print/fs_shader_print.sc");
+    auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/shader_print/vs_shader_print.eshader");
+    auto fs = am.get_asset<gfx::shader>("engine:/data/shaders/shader_print/fs_shader_print.eshader");
     draw_program_.program = std::make_unique<gpu_program>(vs, fs);
     const bool has_clear = header_clear_.init(ctx);
     return draw_program_.program->is_valid() && has_clear;

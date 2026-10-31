@@ -43,11 +43,11 @@ auto assao_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto loadProgram = [&](const std::string& cs)
+    auto loadProgram = [&](const std::string& cs, const std::string& variant = gfx::shader::DEFAULT_VARIANT)
     {
-        auto cs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/assao/" + cs + ".sc");
+        auto cs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/assao/" + cs + ".eshader");
 
-        auto prog = std::make_shared<gpu_program>(cs_shader);
+        auto prog = std::make_shared<gpu_program>(cs_shader, variant);
         m_programs.emplace_back(prog);
         return prog->native_handle();
     };
@@ -78,16 +78,16 @@ auto assao_pass::init(rtti::context& ctx) -> bool
     m_prepareDepthsHalfProgram           = loadProgram("cs_assao_prepare_depths_half");
     m_prepareDepthsAndNormalsHalfProgram = loadProgram("cs_assao_prepare_depths_and_normals_half");
     m_prepareDepthMipProgram             = loadProgram("cs_assao_prepare_depth_mip");
-    m_generateQ0Program                  = loadProgram("cs_assao_generate_q0");
-    m_generateQ1Program                  = loadProgram("cs_assao_generate_q1");
-    m_generateQ2Program                  = loadProgram("cs_assao_generate_q2");
-    m_generateQ3Program                  = loadProgram("cs_assao_generate_q3");
-    m_generateQ3BaseProgram              = loadProgram("cs_assao_generate_q3base");
-    m_generateQ0ProgramRgba16f           = loadProgram("cs_assao_generate_q0_normal_rgba16f");
-    m_generateQ1ProgramRgba16f           = loadProgram("cs_assao_generate_q1_normal_rgba16f");
-    m_generateQ2ProgramRgba16f           = loadProgram("cs_assao_generate_q2_normal_rgba16f");
-    m_generateQ3ProgramRgba16f           = loadProgram("cs_assao_generate_q3_normal_rgba16f");
-    m_generateQ3BaseProgramRgba16f       = loadProgram("cs_assao_generate_q3base_normal_rgba16f");
+    m_generateQ0Program                  = loadProgram("cs_assao_generate");
+    m_generateQ1Program                  = loadProgram("cs_assao_generate", "q1");
+    m_generateQ2Program                  = loadProgram("cs_assao_generate", "q2");
+    m_generateQ3Program                  = loadProgram("cs_assao_generate", "q3");
+    m_generateQ3BaseProgram              = loadProgram("cs_assao_generate", "q3base");
+    m_generateQ0ProgramRgba16f           = loadProgram("cs_assao_generate", "q0_normal_rgba16f");
+    m_generateQ1ProgramRgba16f           = loadProgram("cs_assao_generate", "q1_normal_rgba16f");
+    m_generateQ2ProgramRgba16f           = loadProgram("cs_assao_generate", "q2_normal_rgba16f");
+    m_generateQ3ProgramRgba16f           = loadProgram("cs_assao_generate", "q3_normal_rgba16f");
+    m_generateQ3BaseProgramRgba16f       = loadProgram("cs_assao_generate", "q3base_normal_rgba16f");
     m_smartBlurProgram                   = loadProgram("cs_assao_smart_blur");
     m_smartBlurWideProgram               = loadProgram("cs_assao_smart_blur_wide");
     m_nonSmartBlurProgram                = loadProgram("cs_assao_non_smart_blur");

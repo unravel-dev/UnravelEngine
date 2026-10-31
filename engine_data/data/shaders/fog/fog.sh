@@ -4,7 +4,7 @@
 /*
  * Exponential height fog (engine/engine/rendering/pipeline/passes/fog_pass.h). The full-screen composite
  * (fog_composite.sh) fogs the lit scene; the particles (particles/particle_fragment.sh) fog themselves with the same
- * model and uniforms; the froxel passes (cs_fog_lighting.sc, cs_fog_integrate.sc) light and integrate the
+ * model and uniforms; the froxel passes (cs_fog_lighting.eshader, cs_fog_integrate.eshader) light and integrate the
  * volumetric layer near the camera.
  *
  * The extinction is sigma0 at and below the base height and sigma0 * exp(-(h - base) / H) above it. Its integral

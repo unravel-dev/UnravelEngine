@@ -2,7 +2,7 @@
 #define PARTICLE_LIGHTING_SH_HEADER_GUARD
 
 /*
- * Lit particles (vs_particle_lit.sc), lit at the particle: the sky's irradiance SH, the sun with its cascaded
+ * Lit particles (vs_particle.eshader#lit), lit at the particle: the sky's irradiance SH, the sun with its cascaded
  * shadow, and up to PARTICLE_MAX_LIGHTS nearby point / spot lights the CPU picked for the draw. Every term is
  * irradiance; the particle's color is its albedo (Lambert: radiance = albedo x irradiance / pi). Bound by
  * the renderer per lit draw (pipeline.cpp, the particle lighting).

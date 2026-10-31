@@ -1,0 +1,207 @@
+[code]
+/*
+ * Composes ONE cascade level of the global SDF clipmap, one thread per voxel.
+ *
+ * TRANSCRIPTION of global_sdf_clipmap::compose_level. That function is the reference
+ * implementation and the fallback when compute is unavailable, and
+ * test_clipmap_gpu_composition_matches_cpu asserts the two agree -- the same arrangement that
+ * guards SdfResolveSurfacePoint, which is the one place this system's correctness rests on
+ * agreement between a CPU writer and a GPU reader.
+ *
+ * Why on the GPU: the CPU composer costs milliseconds of main-thread WALL time, most of it
+ * blocked on the pool it dispatches to, and it fires whenever the camera moves far enough to
+ * re-snap a level, so it lands as a stutter during movement rather than as steady cost.
+ *
+ * No GPU data of its own. The instances, their transforms, the atlas and the cull grid are all
+ * resident for tracing, so this reads exactly what a ray reads -- which is also what keeps the
+ * composed field and the traced field from drifting apart.
+ */
+
+#include "bgfx_compute.sh"
+#include "gi/sdf_common.sh"
+#include "gi/gi_pass_constants.sh"
+
+IMAGE3D_WO(s_clipmap_out, r8, 5);
+/// The GI coverage of a distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), written at the voxels
+/// whose coordinates are all multiples of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE when u_compose_gi: 0 where the instances
+/// within GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS are all two-sided, 1 elsewhere.
+IMAGE3D_WO(s_clipmap_coverage_out, r8, 6);
+
+/// x = level index, y = voxels per axis, z = this level's voxel size, w = reach in world units
+/// (encode_range * voxel_size), the distance beyond a voxel at which an instance cannot change
+/// the byte written here.
+uniform vec4 u_clipmap_compose_params;
+#define u_compose_level      int(u_clipmap_compose_params.x)
+#define u_compose_resolution u_clipmap_compose_params.y
+#define u_compose_voxel_size u_clipmap_compose_params.z
+#define u_compose_reach      u_clipmap_compose_params.w
+
+/// xyz = this level's world-space origin (its minimum corner, already snapped), w > 0.5 when the dispatch composes a
+/// GI cascade: it writes the coverage too and leaves small objects out (SdfGiCascadeKeepsInstance).
+uniform vec4 u_clipmap_compose_origin;
+#define u_compose_gi (u_clipmap_compose_origin.w > 0.5)
+
+/// The voxel boxes this dispatch composes (gi/brick_dispatch.sh): a full recompose is one box over the whole level; a
+/// PARTIAL recompose (global_sdf_clipmap::level::is_partial) blits the overlap of the old and new windows into place
+/// and composes the exposed slabs and the boxes within reach of the changed instances.
+#define BRICK_DISPATCH_STAGE 7
+#include "gi/brick_dispatch.sh"
+/// x = the scale of the smallest object a GI cascade keeps (global_sdf_clipmap::settings::object_radius_scale,
+/// 1 / the scene detail); yzw unused.
+uniform vec4 u_clipmap_compose_scale;
+
+NUM_THREADS(4, 4, 4)
+void main()
+{
+	BrickDispatchVoxel target = BrickDispatchFindVoxel(gl_WorkGroupID, gl_LocalInvocationID);
+	if(!target.valid)
+	{
+		return;
+	}
+	ivec3 voxel = target.voxel;
+	int resolution = int(u_compose_resolution);
+	if(voxel.x >= resolution || voxel.y >= resolution || voxel.z >= resolution)
+	{
+		return;
+	}
+	vec3 world_position =
+	    u_clipmap_compose_origin.xyz + (vec3(voxel) + vec3_splat(0.5)) * u_compose_voxel_size;
+	ivec3 coverage_texel = voxel / SDF_CLIPMAP_COVERAGE_DOWNSAMPLE;
+	bool writes_coverage = u_compose_gi && all(equal(coverage_texel * SDF_CLIPMAP_COVERAGE_DOWNSAMPLE, voxel));
+	float coverage_band = GI_GLOBAL_SDF_COVERAGE_BAND_VOXELS * u_compose_voxel_size;
+	bool near_one_sided = false;
+	bool near_two_sided = false;
+
+	// Seeded at the reach rather than at infinity. A voxel stores distances in [-reach, reach]
+	// and saturates beyond, so an instance further away cannot change the byte written here --
+	// and starting at infinity would force the FIRST candidate to be sampled in full before the
+	// cheap reject below could do anything. Output-identical by construction: with nothing
+	// sampled this encodes to exactly the saturated value infinity would have produced.
+	float nearest = u_compose_reach;
+
+	// Candidates from the TRACER's grid, not a grid of its own. The CPU composer builds a private
+	// per-level grid because it has no other one to hand; here the world grid is already resident.
+	//
+	// It is binned from RAW instance bounds, though, while the CPU inflates them by the reach
+	// before binning. That difference is not an optimisation detail: an instance within reach of
+	// this voxel but not CONTAINING it would be missed, the voxel would keep the saturated seed,
+	// and the composed distance would be an OVER-estimate -- the one direction a conservative
+	// field may never err in, and one a sphere trace turns into stepping straight through a wall.
+	//
+	// So the cell RANGE covering [position - reach, position + reach] is walked rather than the
+	// single containing cell. That is exactly the set the CPU's inflated binning produces, because
+	// the cheap reject below discards anything further than the reach anyway. Instances shared
+	// between cells are tested more than once, which costs time and cannot change a minimum.
+	if(u_sdf_grid_enabled)
+	{
+		vec3 grid_min = u_sdf_grid_origin;
+		vec3 inv_cell = vec3_splat(1.0) / vec3_splat(u_sdf_grid_cell_size);
+		vec3 last_cell = u_sdf_grid_dim - vec3_splat(1.0);
+		// Clamped rather than skipped when outside: the edge cell holds every instance near that
+		// face, so clamping over-reports candidates and can never drop one.
+		vec3 lo_f = clamp(floor((world_position - vec3_splat(u_compose_reach) - grid_min) * inv_cell),
+		                  vec3_splat(0.0),
+		                  last_cell);
+		vec3 hi_f = clamp(floor((world_position + vec3_splat(u_compose_reach) - grid_min) * inv_cell),
+		                  vec3_splat(0.0),
+		                  last_cell);
+		ivec3 lo = ivec3(lo_f);
+		ivec3 hi = ivec3(hi_f);
+		int dim_x = int(u_sdf_grid_dim.x);
+		int dim_xy = int(u_sdf_grid_dim.x * u_sdf_grid_dim.y);
+		for(int cz = lo.z; cz <= hi.z; ++cz)
+		{
+			for(int cy = lo.y; cy <= hi.y; ++cy)
+			{
+				for(int cx = lo.x; cx <= hi.x; ++cx)
+				{
+					uint cell = uint(cx + cy * dim_x + cz * dim_xy);
+					uint candidate_begin = b_sdf_grid[cell] + u_sdf_grid_instance_base;
+					uint candidate_end = b_sdf_grid[cell + 1u] + u_sdf_grid_instance_base;
+					for(uint candidate = candidate_begin; candidate < candidate_end; ++candidate)
+					{
+						int index = int(b_sdf_grid[candidate]);
+						SdfInstance inst = SdfLoadInstance(index);
+						BRANCH
+						if(u_compose_gi)
+						{
+							if(!SdfGiCascadeKeepsInstance(inst,
+							                                 u_compose_voxel_size,
+							                                 GI_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_clipmap_compose_scale.x,
+							                                 GI_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_clipmap_compose_scale.x))
+							{
+								continue;
+							}
+						}
+						// Cheap reject before the field lookup: outside the instance's bounds the
+						// distance to those bounds is already a valid conservative answer, and
+						// usually a worse one than what another instance contributes.
+						vec3 clamped_to_bounds =
+						    clamp(world_position, inst.world_bounds_min, inst.world_bounds_max);
+						float to_bounds = length(world_position - clamped_to_bounds);
+						// Guarded on nearest being non-negative, exactly as the CPU composer is:
+						// to_bounds is zero inside any bounds and never negative, so once the
+						// voxel is inside some instance this would skip every remaining candidate
+						// and the interior would depend on visit order. A voxel writing the coverage
+						// keeps every candidate within the band, whose sidedness decides it. Strict: at
+						// nearest == 0 (a voxel centre on a face) an instance containing the voxel reads
+						// to_bounds 0 too.
+						float reject_distance = writes_coverage ? max(nearest, coverage_band) : nearest;
+						if(nearest >= 0.0 && to_bounds > reject_distance)
+						{
+							continue;
+						}
+						SdfHeader header = SdfLoadHeader(inst.header_index);
+						vec3 local_position =
+						    SdfTransformPoint(inst.world_to_local_rows, world_position);
+						// Two-sided fields compose as zero-thickness sheets (see SdfSheetDistance); a
+						// non-uniformly scaled placement is bounded per axis (SdfInstanceWorldDistance). A GI
+						// cascade reads beyond the traced level's band from the chain's coarsest level
+						// (SdfInstanceStandaloneDistance); y = the answering level's exact reach.
+						vec2 distance_and_reach = vec2(0.0, 0.0);
+						BRANCH
+						if(u_compose_gi)
+						{
+							distance_and_reach = SdfInstanceStandaloneDistance(inst, header, local_position, true);
+						}
+						else
+						{
+							distance_and_reach.x = SdfInstanceWorldDistance(inst, header, local_position, true);
+						}
+						float world_distance = distance_and_reach.x;
+						nearest = min(nearest, world_distance);
+						// A level's sample is its distance only inside its narrow band: beyond it the voxels
+						// saturate and empty bricks report a lower bound. A two-sided field is near where that
+						// lower bound lies within the coverage band (the exact distance would too, or nearly), a
+						// one-sided field only within the answering level's exact band: a large wall's saturated
+						// reading would otherwise cover all the space inside its bounds. The coarsest level's band
+						// reaches the coverage band.
+						float near_reach = inst.is_two_sided ? coverage_band : min(coverage_band, distance_and_reach.y);
+						if(writes_coverage && abs(world_distance) < near_reach)
+						{
+							near_two_sided = near_two_sided || inst.is_two_sided;
+							near_one_sided = near_one_sided || !inst.is_two_sided;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Same encoding as encode_clipmap_distance, in VOXELS of this level. The two must agree
+	// exactly: the CPU path still composes levels this dispatch does not, and a sampler cannot
+	// tell which path wrote the voxel it reads.
+	float distance_in_voxels = nearest / u_compose_voxel_size;
+	float encoded = clamp(distance_in_voxels / (2.0 * u_sdf_clipmap_encode_range) + 0.5, 0.0, 1.0);
+	// The levels are stacked along Z in one volume, so this level's slab starts at level * res.
+	ivec3 texel = ivec3(voxel.x, voxel.y, voxel.z + u_compose_level * resolution);
+	imageStore(s_clipmap_out, texel, vec4_splat(encoded));
+	if(writes_coverage)
+	{
+		int coverage_resolution = resolution / SDF_CLIPMAP_COVERAGE_DOWNSAMPLE;
+		float coverage = near_two_sided && !near_one_sided ? 0.0 : 1.0;
+		imageStore(s_clipmap_coverage_out,
+		           ivec3(coverage_texel.x, coverage_texel.y, coverage_texel.z + u_compose_level * coverage_resolution),
+		           vec4_splat(coverage));
+	}
+}

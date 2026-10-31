@@ -42,11 +42,11 @@ public:
     /// "render feature shaders" checks them against the compiled shaders.
     struct stages
     {
-        /// s_pre_exposure of cs_luminance_histogram.sc: below 8, the compute bindings of D3D11 feature level 11_0.
+        /// s_pre_exposure of cs_luminance_histogram.eshader: below 8, the compute bindings of D3D11 feature level 11_0.
         static constexpr std::uint8_t histogram_pre_exposure = 3;
-        /// s_previous_exposure of cs_histogram_average.sc.
+        /// s_previous_exposure of cs_histogram_average.eshader.
         static constexpr std::uint8_t average_previous_exposure = 5;
-        /// s_previous_pre_exposure of cs_pre_exposure.sc.
+        /// s_previous_pre_exposure of cs_pre_exposure.eshader.
         static constexpr std::uint8_t previous_pre_exposure = 2;
     };
 
@@ -167,7 +167,7 @@ public:
     /**
      * @brief Writes this frame's GPU share of the pre-exposure for @p rview into texel
      * pre_exposure_state::gpu_texel of the view's environment SH @p environment_sh (pre_exposure.sh,
-     * cs_pre_exposure.sc), before any pass of the frame writes or reads scene lighting.
+     * cs_pre_exposure.eshader), before any pass of the frame writes or reads scene lighting.
      *
      * The share follows the adapted exposure the last frame left in AUTO_EXPOSURE while
      * @p is_auto_exposure_active, and is 1 otherwise; @p manual_exposure is the CPU's share, which the
@@ -215,14 +215,14 @@ public:
     auto get_local_exposure_view(gfx::render_view& rview) const -> local_exposure_view;
 
     /// Luminance slices per bilateral-grid column. Mirrors LOCAL_EXPOSURE_SLICES in
-    /// cs_local_exposure_grid.sc.
+    /// cs_local_exposure_grid.eshader.
     static constexpr std::uint32_t local_exposure_slices = 32;
     /// Metering cells per bilateral-grid tile edge (128 view pixels). Mirrors
     /// LOCAL_EXPOSURE_TILE_CELLS there.
     static constexpr std::uint32_t local_exposure_tile_cells = 32;
     /// Metering cells per blurred log luminance texel edge: 32 view pixels, so the blur runs at
     /// 1/32 of the view resolution. Mirrors LOCAL_EXPOSURE_BLUR_CELLS in
-    /// cs_local_exposure_downsample.sc.
+    /// cs_local_exposure_downsample.eshader.
     static constexpr std::uint32_t local_exposure_blur_cells = 8;
 
     void release_resources(gfx::render_view& rview);

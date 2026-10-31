@@ -619,7 +619,7 @@ void test_texture_files()
     check(ex::get_source_path_from_compiled("c/Models/Torso01.001_baseColor.png.asset")
               == fs::path("c/Models/Torso01.001_baseColor.png"),
           "a dotted source name survives the compiled-path mapping");
-    check(ex::get_source_path_from_compiled("c/x.sc.asset.dxbc") == fs::path("c/x.sc"), "shader variant suffix dropped");
+    check(ex::get_source_path_from_compiled("c/x.eshader.asset.dxbc") == fs::path("c/x.eshader"), "shader variant suffix dropped");
     check(ex::get_source_path_from_compiled("c/my.asset.png.asset") == fs::path("c/my.asset.png"),
           "only the trailing compiled suffix is dropped");
 }

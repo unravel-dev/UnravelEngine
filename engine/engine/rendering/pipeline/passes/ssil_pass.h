@@ -262,7 +262,7 @@ private:
     } denoise_program_;
 
     // Geometry-aware 2x downsample compute program. Produces the half-resolution input the
-    // wide a-trous passes run on (see cs_ssil_downsample.sc).
+    // wide a-trous passes run on (see cs_ssil_downsample.eshader).
     struct downsample_program : uniforms_cache
     {
         gpu_program::ptr program;

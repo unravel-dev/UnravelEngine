@@ -3509,12 +3509,22 @@ void Programs::init(rtti::context& ctx)
     auto& am = ctx.get_cached<asset_manager>();
     // clang-format on
 
-    auto loadProgram = [&](const std::string& vs, const std::string& fs)
-    {
-        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/" + vs + ".sc");
-        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/" + fs + ".sc");
+    constexpr auto defaultVariant = gfx::shader::DEFAULT_VARIANT;
 
-        return std::make_shared<gpu_program>(vs_shader, fs_shadfer);
+    auto loadProgram = [&](const std::string& vs, const std::string& fs, const std::string& fsVariant = gfx::shader::DEFAULT_VARIANT)
+    {
+        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/" + vs + ".eshader");
+        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/" + fs + ".eshader");
+
+        return std::make_shared<gpu_program>(vs_shader, defaultVariant, fs_shadfer, fsVariant);
+    };
+
+    auto loadPackDepth = [&](const std::string& vsVariant, const std::string& fsVariant)
+    {
+        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/packdepth/vs_shadowmaps_packdepth.eshader");
+        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/packdepth/fs_shadowmaps_packdepth.eshader");
+
+        return std::make_shared<gpu_program>(vs_shader, vsVariant, fs_shadfer, fsVariant);
     };
 
     // clang-format off
@@ -3523,79 +3533,79 @@ void Programs::init(rtti::context& ctx)
     m_restore      = loadProgram("vs_shadowmaps_unpackdepth",   "fs_shadowmaps_restore");
 
     // Blur.
-    m_vBlur[PackDepth::RGBA] = loadProgram("vs_shadowmaps_vblur", "fs_shadowmaps_vblur");
-    m_hBlur[PackDepth::RGBA] = loadProgram("vs_shadowmaps_hblur", "fs_shadowmaps_hblur");
-    m_vBlur[PackDepth::VSM]  = loadProgram("vs_shadowmaps_vblur", "fs_shadowmaps_vblur_vsm");
-    m_hBlur[PackDepth::VSM]  = loadProgram("vs_shadowmaps_hblur", "fs_shadowmaps_hblur_vsm");
+    m_vBlur[PackDepth::RGBA] = loadProgram("vs_shadowmaps_vblur", "fs_shadowmaps_blur");
+    m_hBlur[PackDepth::RGBA] = loadProgram("vs_shadowmaps_hblur", "fs_shadowmaps_blur");
+    m_vBlur[PackDepth::VSM]  = loadProgram("vs_shadowmaps_vblur", "fs_shadowmaps_blur", "vsm");
+    m_hBlur[PackDepth::VSM]  = loadProgram("vs_shadowmaps_hblur", "fs_shadowmaps_blur", "vsm");
 
     // Draw depth.
     m_drawDepth[PackDepth::RGBA] = loadProgram("vs_shadowmaps_unpackdepth", "fs_shadowmaps_unpackdepth");
-    m_drawDepth[PackDepth::VSM]  = loadProgram("vs_shadowmaps_unpackdepth", "fs_shadowmaps_unpackdepth_vsm");
+    m_drawDepth[PackDepth::VSM]  = loadProgram("vs_shadowmaps_unpackdepth", "fs_shadowmaps_unpackdepth");
 
     // Pack depth.
-    m_packDepth[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth", "packdepth/fs_shadowmaps_packdepth");
-    m_packDepth[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth", "packdepth/fs_shadowmaps_packdepth_vsm");
+    m_packDepth[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth(defaultVariant, defaultVariant);
+    m_packDepth[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth(defaultVariant, "vsm");
 
-    m_packDepth[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear", "packdepth/fs_shadowmaps_packdepth_linear");
-    m_packDepth[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepth[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear", "linear");
+    m_packDepth[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear", "vsm_linear");
 
-    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned", "packdepth/fs_shadowmaps_packdepth");
-    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned", "packdepth/fs_shadowmaps_packdepth_vsm");
+    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("skinned", defaultVariant);
+    m_packDepthSkinned[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("skinned", "vsm");
 
-    m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned", "packdepth/fs_shadowmaps_packdepth_linear");
-    m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepthSkinned[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_skinned", "linear");
+    m_packDepthSkinned[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_skinned", "vsm_linear");
 
     // Pack depth instanced (for static mesh batching).
-    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced", "packdepth/fs_shadowmaps_packdepth");
-    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced", "packdepth/fs_shadowmaps_packdepth_vsm");
+    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("instanced", defaultVariant);
+    m_packDepthInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("instanced", "vsm");
 
-    m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced", "packdepth/fs_shadowmaps_packdepth_linear");
-    m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_instanced", "linear");
+    m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_instanced", "vsm_linear");
 
     // Pack depth cutout (alpha test — matches lit material clip semantics).
-    m_packDepthCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
-    m_packDepthCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+    m_packDepthCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("cutout", "cutout");
+    m_packDepthCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("cutout", "vsm_cutout");
 
-    m_packDepthCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
-    m_packDepthCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+    m_packDepthCutout[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_cutout", "linear_cutout");
+    m_packDepthCutout[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_cutout", "vsm_linear_cutout");
 
-    m_packDepthSkinnedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
-    m_packDepthSkinnedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+    m_packDepthSkinnedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("skinned_cutout", "cutout");
+    m_packDepthSkinnedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("skinned_cutout", "vsm_cutout");
 
-    m_packDepthSkinnedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
-    m_packDepthSkinnedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+    m_packDepthSkinnedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_skinned_cutout", "linear_cutout");
+    m_packDepthSkinnedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_skinned_cutout", "vsm_linear_cutout");
 
-    m_packDepthInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
-    m_packDepthInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+    m_packDepthInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("instanced_cutout", "cutout");
+    m_packDepthInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("instanced_cutout", "vsm_cutout");
 
-    m_packDepthInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
-    m_packDepthInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+    m_packDepthInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_instanced_cutout", "linear_cutout");
+    m_packDepthInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_instanced_cutout", "vsm_linear_cutout");
 
     // Pack depth instanced skinned (skinned mesh batching; bones from the skinning palette buffer).
-    m_packDepthSkinnedInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_instanced", "packdepth/fs_shadowmaps_packdepth");
-    m_packDepthSkinnedInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_instanced", "packdepth/fs_shadowmaps_packdepth_vsm");
+    m_packDepthSkinnedInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("skinned_instanced", defaultVariant);
+    m_packDepthSkinnedInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("skinned_instanced", "vsm");
 
-    m_packDepthSkinnedInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_instanced", "packdepth/fs_shadowmaps_packdepth_linear");
-    m_packDepthSkinnedInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_instanced", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepthSkinnedInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_skinned_instanced", "linear");
+    m_packDepthSkinnedInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_skinned_instanced", "vsm_linear");
 
-    m_packDepthSkinnedInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
-    m_packDepthSkinnedInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+    m_packDepthSkinnedInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("skinned_instanced_cutout", "cutout");
+    m_packDepthSkinnedInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("skinned_instanced_cutout", "vsm_cutout");
 
-    m_packDepthSkinnedInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
-    m_packDepthSkinnedInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+    m_packDepthSkinnedInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_skinned_instanced_cutout", "linear_cutout");
+    m_packDepthSkinnedInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_skinned_instanced_cutout", "vsm_linear_cutout");
 
     // Pack depth baked animation (instances drawn with bones from the baked animation store).
-    m_packDepthSkinnedBakedInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth");
-    m_packDepthSkinnedBakedInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth_vsm");
+    m_packDepthSkinnedBakedInstanced[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("skinned_baked_instanced", defaultVariant);
+    m_packDepthSkinnedBakedInstanced[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("skinned_baked_instanced", "vsm");
 
-    m_packDepthSkinnedBakedInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth_linear");
-    m_packDepthSkinnedBakedInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced", "packdepth/fs_shadowmaps_packdepth_vsm_linear");
+    m_packDepthSkinnedBakedInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_skinned_baked_instanced", "linear");
+    m_packDepthSkinnedBakedInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_skinned_baked_instanced", "vsm_linear");
 
-    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_cutout");
-    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_cutout");
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("skinned_baked_instanced_cutout", "cutout");
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("skinned_baked_instanced_cutout", "vsm_cutout");
 
-    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_linear_cutout");
-    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadProgram("packdepth/vs_shadowmaps_packdepth_linear_skinned_baked_instanced_cutout", "packdepth/fs_shadowmaps_packdepth_vsm_linear_cutout");
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_skinned_baked_instanced_cutout", "linear_cutout");
+    m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_skinned_baked_instanced_cutout", "vsm_linear_cutout");
 }
 
 }

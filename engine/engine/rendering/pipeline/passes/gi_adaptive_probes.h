@@ -14,19 +14,19 @@ namespace unravel
 {
 
 /**
- * @brief The adaptive screen probes (cs_gi_adaptive_mark.sc, cs_gi_adaptive_spawn.sc, cs_gi_adaptive_args.sc):
+ * @brief The adaptive screen probes (cs_gi_adaptive_mark.eshader, cs_gi_adaptive_spawn.eshader, cs_gi_adaptive_args.eshader):
  *        extra screen probes where the uniform probes cannot interpolate a pixel (thin features, silhouettes, depth
  *        discontinuities), placed in the probe atlas rows below the uniform probes, and the dispatch arguments every
  *        per-probe pass runs with over the probes placed this frame.
  *
- * Owned by gi_gather_pass. The uniform placement clears the adaptive state each frame (cs_gi_probe_place.sc);
+ * Owned by gi_gather_pass. The uniform placement clears the adaptive state each frame (cs_gi_probe_place.eshader);
  * run() then marks and spawns this frame's adaptive probes and writes the arguments. The state buffer's layout is
  * gi_adaptive_probes.sh's; the integrate reads its tile lists.
  */
 class gi_adaptive_probes
 {
 public:
-    /// The dispatch argument slots run() writes (cs_gi_adaptive_args.sc).
+    /// The dispatch argument slots run() writes (cs_gi_adaptive_args.eshader).
     enum args_slot : uint16_t
     {
         /// One group per probe.

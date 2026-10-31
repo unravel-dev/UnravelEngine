@@ -200,7 +200,7 @@
       "slices", "experiment_jitter_slice_dither: the composite re-bins with ray-jitter slice frame % 8 + 31") \
     X(GI_SH_TEXELS_PER_PROBE, 7,                                                                   \
       "texels", "SH3 storage per probe in RGBA16F texels: c0 rgb with the probe's moving"          \
-      " fraction, then (c1..c4), (c5..c8) per colour channel: 1 + 3 x 2 (cs_gi_probe_sh.sc)")      \
+      " fraction, then (c1..c4), (c5..c8) per colour channel: 1 + 3 x 2 (cs_gi_probe_sh.eshader)")      \
     X(GI_FULL_RES_JITTER_FAR_SCALE, 0.5f,                                                          \
       "ratio", "the full-resolution jitter width scales by lerp(1, this, saturate((depth -"        \
       " GI_FULL_RES_JITTER_NEAR) / GI_FULL_RES_JITTER_RAMP))")                                     \
@@ -308,7 +308,7 @@
     X(GI_IS_MIN_PDF_TO_TRACE, 0.1f,                                                                \
       "", "texels whose BRDF PDF reaches this keep a ray PDF of at least this; after the rank"     \
       " sort every three lowest texels below it go to the highest remaining one, which traces"     \
-      " four rays at the 2N x 2N level instead of one (cs_gi_probe_generate_rays.sc)")             \
+      " four rays at the 2N x 2N level instead of one (cs_gi_probe_generate_rays.eshader)")             \
     X(GI_IS_HISTORY_MIN_WEIGHT, 0.1f,                                                              \
       "", "a history probe feeds the lighting PDF only when exp2(-GI_INTERP_DEPTH_WEIGHT r^2)"     \
       " passes this, r = its distance from the probe's plane / depth")                             \
@@ -346,7 +346,7 @@
     X(GI_PROBE_RADIANCE_BORDER, 1,                                                                 \
       "texels", "border around each probe's filtered radiance, wrapped across the octahedron's"    \
       " folds so a hardware bilinear lookup stays inside the probe's tile (one mip,"               \
-      " cs_gi_probe_border.sc)")                                                                   \
+      " cs_gi_probe_border.eshader)")                                                                   \
     X(GI_REFLECTION_MAX_RAY_INTENSITY, 40.0f,                                                      \
       "pre-exposed", "per-ray clamp of max3(radiance) of the reflection traces: lower cuts the"    \
       " noise of rare bright rays and the energy of bright reflected sources")                     \

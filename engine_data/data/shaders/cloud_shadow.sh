@@ -2,7 +2,7 @@
 #define __CLOUD_SHADOW_SH__
 
 /*
- * The sun's transmittance through the cloud layer (atmospherics/fs_cloud_shadow.sc renders the map): one texel per
+ * The sun's transmittance through the cloud layer (atmospherics/fs_cloud_shadow.eshader renders the map): one texel per
  * entry point of the sun ray at the layer base. The deferred directional light and the GI's card direct lighting
  * read it the same way (a compute shader at the map's top mip, having no derivatives). The includer declares
  * s_cloudShadow (sampler2D).

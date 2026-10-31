@@ -2,9 +2,9 @@
 #define __GI_VISUALIZE_SH__
 
 /*
- * Shared by the GI debug views: the overview tiles of fs_gi_scene_debug.sc and fs_gi_visualize_screen.sc, and
- * the layout of the visualizations' lines (cs_gi_probe_trace_visualize.sc and
- * cs_gi_visualize_reflection_trace.sc write them, vs_gi_visualize_lines.sc draws them).
+ * Shared by the GI debug views: the overview tiles of fs_gi_scene_debug.eshader and fs_gi_visualize_screen.eshader, and
+ * the layout of the visualizations' lines (cs_gi_probe_trace.eshader#visualize and
+ * cs_gi_visualize_reflection_trace.eshader write them, vs_gi_visualize_lines.eshader draws them).
  */
 
 /// The rounding of a tile's corners, in pixels.

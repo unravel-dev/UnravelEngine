@@ -37,7 +37,7 @@ struct debug_view_label
 /**
  * @brief The GI debug views, drawn over the finished image: the scene views the surface cache traces
  *        (gi_surface_cache_pass::run_debug, the card atlas, coverage and object grid views among them), the
- *        screen-space views (fs_gi_visualize_screen.sc: Dedicated Reflection Rays, Screen Probe Frames
+ *        screen-space views (fs_gi_visualize_screen.eshader: Dedicated Reflection Rays, Screen Probe Frames
  *        Accumulated), and two overviews, which tile views over the lit image and name each tile.
  */
 class gi_visualize_pass
@@ -229,7 +229,7 @@ private:
         gfx::program::uniform_ptr s_gi_radiosity_sh_r;
         gfx::program::uniform_ptr s_gi_radiosity_sh_g;
         gfx::program::uniform_ptr s_gi_radiosity_sh_b;
-        ///< The radiance cache's atlas (fs_gi_visualize_probe.sc stage 7): a black stand-in for the radiosity
+        ///< The radiance cache's atlas (fs_gi_visualize_probe.eshader stage 7): a black stand-in for the radiosity
         ///< probes, which do not read it.
         gfx::program::uniform_ptr s_gi_rc_final;
         std::unique_ptr<gpu_program> program;
@@ -303,7 +303,7 @@ private:
         std::unique_ptr<gpu_program> program;
     };
 
-    /// cs_gi_visualize_rc_stats.sc.
+    /// cs_gi_visualize_rc_stats.eshader.
     struct rc_stats_program : uniforms_cache
     {
         void cache_uniforms();
@@ -429,7 +429,7 @@ private:
     probe_program probe_program_;
     lines_program lines_program_;
     surfel_program surfel_program_;
-    ///< The disc's twelve fan corners (vs_gi_visualize_surfel.sc).
+    ///< The disc's twelve fan corners (vs_gi_visualize_surfel.eshader).
     bgfx::VertexBufferHandle surfel_disc_{bgfx::kInvalidHandle};
     std::unordered_map<const gi_card_build_debug*, card_generation_buffers> card_generation_cache_;
     ///< The card generation views asked for recorded builds since the last release.
@@ -439,7 +439,7 @@ private:
     rc_stats_program rc_stats_program_;
     reflection_trace_program reflection_trace_program_;
     bgfx::DynamicVertexBufferHandle page_buffer_{bgfx::kInvalidHandle};
-    ///< The reflection trace's lines (cs_gi_visualize_reflection_trace.sc).
+    ///< The reflection trace's lines (cs_gi_visualize_reflection_trace.eshader).
     bgfx::DynamicVertexBufferHandle reflection_lines_{bgfx::kInvalidHandle};
     std::vector<math::vec4> visualized_pages_;
     std::vector<gi_scene::visualized_card> visualized_cards_;

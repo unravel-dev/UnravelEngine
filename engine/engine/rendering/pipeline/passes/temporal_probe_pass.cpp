@@ -56,7 +56,7 @@ auto share_above(const std::vector<float>& values, float threshold) -> float
 auto temporal_probe_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/taa/cs_temporal_probe.sc");
+    auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/taa/cs_temporal_probe.eshader");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(cs);
     return program_.is_valid();

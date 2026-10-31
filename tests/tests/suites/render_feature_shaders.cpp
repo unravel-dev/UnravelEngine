@@ -5,7 +5,7 @@
  *   cmake --build <build-dir> --target tests
  *   <build-dir>/bin/unravel-tests --suite "render feature shaders"
  *
- * For every compute shader with a source in engine_data/data/shaders, it reads the committed SPIR-V binary's
+ * For every variant of every compute shader with a source in engine_data/data/shaders, it reads the committed SPIR-V binary's
  * uniform table (binding stages, storage image formats and dimensions) and the GLSL text (image access), and
  * pins:
  *   - every compute shader belongs to a rendering feature (the longest shader prefix of the table) or is a
@@ -21,12 +21,14 @@
 
 #include "../tests.h"
 
+#include <engine/meta/rendering/shader_variants.hpp>
 #include <engine/rendering/pipeline/passes/auto_exposure_pass.h>
 #include <engine/rendering/render_feature_support.h>
 
 #include <bimg/bimg.h>
 
 #include <filesystem/filesystem.h>
+#include <graphics/shader.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -115,6 +117,19 @@ auto read_value(const std::string& data, std::size_t& offset) -> T
 }
 
 /// The binding stages and storage images of a compiled SPIR-V compute shader (bgfx shader binary 12+).
+/// A renderer's compiled file: the shaderc binary of each variant.
+auto read_compiled_variants(const fs::path& path) -> std::vector<compiled_shader_variant>
+{
+    std::vector<compiled_shader_variant> variants;
+    load_from_file_bin(path.string(), variants);
+    return variants;
+}
+
+auto get_bytes(const compiled_shader_variant& variant) -> std::string
+{
+    return std::string(variant.bytes.begin(), variant.bytes.end());
+}
+
 auto parse_spirv_bindings(const std::string& data) -> shader_bindings
 {
     shader_bindings result;
@@ -304,7 +319,7 @@ void test_compiled_compute_shaders()
     {
         const auto& path = entry.path();
         const std::string file_name = path.filename().string();
-        if(!entry.is_regular_file() || path.extension() != ".sc" || file_name.rfind("cs_", 0) != 0)
+        if(!entry.is_regular_file() || path.extension() != ".eshader" || file_name.rfind("cs_", 0) != 0)
         {
             continue;
         }
@@ -317,8 +332,16 @@ void test_compiled_compute_shaders()
         {
             continue;
         }
-        check_shader(shader, parse_spirv_bindings(read_file(compiled)), read_file(glsl), matched_features);
-        ++scanned;
+        const auto spirv_variants = read_compiled_variants(compiled);
+        const auto glsl_variants = read_compiled_variants(glsl);
+        check(!spirv_variants.empty() && spirv_variants.size() == glsl_variants.size(), shader + " has its variants on SPIR-V and GLSL");
+        for(std::size_t i = 0; i < std::min(spirv_variants.size(), glsl_variants.size()); ++i)
+        {
+            const auto& variant = spirv_variants[i].name;
+            const auto label = variant == gfx::shader::DEFAULT_VARIANT ? shader : shader + "#" + variant;
+            check_shader(label, parse_spirv_bindings(get_bytes(spirv_variants[i])), get_bytes(glsl_variants[i]), matched_features);
+            ++scanned;
+        }
     }
     std::printf("  %zu compute shaders scanned\n", scanned);
     check(scanned > 0, "the compiled shader directory was found and scanned");
@@ -354,8 +377,10 @@ void test_hand_bound_stages()
     const fs::path compiled_dir = fs::path(ENGINE_DATA_DIR) / "compiled" / "shaders";
     for(const auto& sampler : samplers)
     {
-        const fs::path compiled = compiled_dir / (std::string(sampler.shader) + ".sc.asset.spirv");
-        const auto bindings = parse_spirv_bindings(read_file(compiled));
+        const fs::path compiled = compiled_dir / (std::string(sampler.shader) + ".eshader.asset.spirv");
+        const auto variants = read_compiled_variants(compiled);
+        check(variants.size() == 1, std::string(sampler.shader) + " has one variant");
+        const auto bindings = parse_spirv_bindings(variants.empty() ? std::string{} : get_bytes(variants.front()));
         const auto found = std::find_if(bindings.samplers.begin(),
                                         bindings.samplers.end(),
                                         [&](const shader_sampler& declared)

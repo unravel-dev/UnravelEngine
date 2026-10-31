@@ -46,10 +46,10 @@ constexpr std::array<std::array<uint32_t, 2>, 12> card_box_edges = {
     {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}}};
 constexpr std::array<uint32_t, 6> card_face_triangles = {4, 7, 5, 4, 6, 7};
 /// The radiosity probes: one slot per probe cell of a 128 x 128 page (the radiosity's probe spacing squared), drawn as
-/// 36-vertex cubes (vs_gi_visualize_probe.sc).
+/// 36-vertex cubes (vs_gi_visualize_probe.eshader).
 constexpr uint32_t radiosity_page_size = 128;
 constexpr uint32_t probe_cube_vertices = 36;
-/// vs_gi_visualize_probe.sc's modes.
+/// vs_gi_visualize_probe.eshader's modes.
 constexpr float probe_mode_radiosity = 0.0f;
 constexpr float probe_mode_radiance_cache = 1.0f;
 /// The radiance cache spheres' radius: radiance_cache_radius_scale times this many cell sizes.
@@ -76,17 +76,17 @@ const math::vec4 ray_miss_color{1.0f, 1.0f, 1.0f, 1.0f};
 constexpr float cluster_bounds_margin = 0.01f;
 constexpr float cluster_normal_length = 1.0f;
 const math::vec3 cluster_normal_color{1.0f, 0.0f, 0.0f};
-/// The lines' buffer (vs_gi_visualize_lines.sc) and the scene depth (fs_gi_visualize_lines.sc).
+/// The lines' buffer (vs_gi_visualize_lines.eshader) and the scene depth (fs_gi_visualize_lines.eshader).
 constexpr uint8_t lines_buffer_stage = 0;
 constexpr uint8_t lines_depth_stage = 1;
 /// Two vertices per line.
 constexpr uint32_t line_vertices = 2;
-/// The print buffer's stages of the reflection trace (cs_gi_visualize_reflection_trace.sc) and the probe counts
-/// (cs_gi_visualize_probe_counts.sc), and the counts' adaptive state.
+/// The print buffer's stages of the reflection trace (cs_gi_visualize_reflection_trace.eshader) and the probe counts
+/// (cs_gi_visualize_probe_counts.eshader), and the counts' adaptive state.
 constexpr uint8_t reflection_trace_print_stage = 5;
 constexpr uint8_t counts_adaptive_stage = 0;
 constexpr uint8_t counts_print_stage = 1;
-/// The radiance cache stats' counters and print buffer (cs_gi_visualize_rc_stats.sc).
+/// The radiance cache stats' counters and print buffer (cs_gi_visualize_rc_stats.eshader).
 constexpr uint8_t rc_stats_counters_stage = 0;
 constexpr uint8_t rc_stats_print_stage = 1;
 /// The lines the reflection trace's text takes, with a blank one: the cache stats start below it.
@@ -96,14 +96,14 @@ constexpr uint32_t reflection_trace_lines = 4;
 /// Both texts start in the view's top left, away from the editor's navigation cube in the top right: the reflection
 /// trace's below the probe counts' three lines and a blank one.
 constexpr uint32_t reflection_text_line_below_probe_counts = 4;
-/// vs_gi_visualize_probe_placement.sc: four lines per probe atlas tile.
+/// vs_gi_visualize_probe_placement.eshader: four lines per probe atlas tile.
 constexpr uint32_t placement_vertices_per_probe = 8;
 /// The lines rasterize with MSAA on, which D3D draws as quads 1.4 pixels wide.
 constexpr uint64_t line_raster_state = BGFX_STATE_PT_LINES | BGFX_STATE_MSAA;
 /// shader_print's premultiplied composition; the image's alpha stays.
 constexpr uint64_t overlay_line_state =
     BGFX_STATE_WRITE_RGB | line_raster_state | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
-/// fs_gi_visualize_screen.sc's modes.
+/// fs_gi_visualize_screen.eshader's modes.
 constexpr float screen_mode_dedicated_reflection_rays = 0.0f;
 constexpr float screen_mode_screen_probe_frames = 1.0f;
 
@@ -363,36 +363,36 @@ auto gi_visualize_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     // Uniforms before programs: the OpenGL renderer wires a program's uniforms at link time.
     screen_program_.cache_uniforms();
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_screen = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_screen.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_screen = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_screen.eshader");
     screen_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_screen);
     primitive_program_.cache_uniforms();
-    auto vs_primitive = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_primitive.sc");
-    auto fs_primitive = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_primitive.sc");
+    auto vs_primitive = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_primitive.eshader");
+    auto fs_primitive = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_primitive.eshader");
     primitive_program_.program = std::make_unique<gpu_program>(vs_primitive, fs_primitive);
     probe_program_.cache_uniforms();
-    auto vs_probe = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_probe.sc");
-    auto fs_probe = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_probe.sc");
+    auto vs_probe = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_probe.eshader");
+    auto fs_probe = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_probe.eshader");
     probe_program_.program = std::make_unique<gpu_program>(vs_probe, fs_probe);
     lines_program_.cache_uniforms();
-    auto vs_lines = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_lines.sc");
-    auto fs_lines = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_lines.sc");
+    auto vs_lines = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_lines.eshader");
+    auto fs_lines = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_visualize_lines.eshader");
     lines_program_.program = std::make_unique<gpu_program>(vs_lines, fs_lines);
     placement_program_.cache_uniforms();
-    auto vs_placement = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_probe_placement.sc");
+    auto vs_placement = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_probe_placement.eshader");
     placement_program_.program = std::make_unique<gpu_program>(vs_placement, fs_lines);
     reflection_trace_program_.cache_uniforms();
     auto cs_reflection_trace =
-        am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_visualize_reflection_trace.sc");
+        am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_visualize_reflection_trace.eshader");
     reflection_trace_program_.program = std::make_unique<gpu_program>(cs_reflection_trace);
     counts_program_.cache_uniforms();
-    auto cs_counts = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_visualize_probe_counts.sc");
+    auto cs_counts = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_visualize_probe_counts.eshader");
     counts_program_.program = std::make_unique<gpu_program>(cs_counts);
     rc_stats_program_.cache_uniforms();
-    auto cs_rc_stats = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_visualize_rc_stats.sc");
+    auto cs_rc_stats = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_visualize_rc_stats.eshader");
     rc_stats_program_.program = std::make_unique<gpu_program>(cs_rc_stats);
     surfel_program_.cache_uniforms();
-    auto vs_surfel = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_surfel.sc");
+    auto vs_surfel = am.get_asset<gfx::shader>("engine:/data/shaders/gi/vs_gi_visualize_surfel.eshader");
     surfel_program_.program = std::make_unique<gpu_program>(vs_surfel, fs_primitive);
     return screen_program_.program->is_valid() && primitive_program_.program->is_valid() &&
            probe_program_.program->is_valid() && lines_program_.program->is_valid() &&

@@ -13,9 +13,9 @@ auto bloom_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_downsample = am.get_asset<gfx::shader>("engine:/data/shaders/bloom/fs_bloom_downsample.sc");
-    auto fs_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/bloom/fs_bloom_upsample.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_downsample = am.get_asset<gfx::shader>("engine:/data/shaders/bloom/fs_bloom_downsample.eshader");
+    auto fs_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/bloom/fs_bloom_upsample.eshader");
 
     downsample_program_.cache_uniforms();
     downsample_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_downsample);

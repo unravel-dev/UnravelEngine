@@ -609,11 +609,11 @@ struct Programs
     gpu_program::ptr m_packDepthCutout[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinnedCutout[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthInstancedCutout[DepthImpl::Count][PackDepth::Count];
-    /// Instanced skinned casters, the bones from the skinning palette buffer (vs_*_skinned_instanced*.sc). Reached from
+    /// Instanced skinned casters, the bones from the skinning palette buffer (vs_shadowmaps_packdepth.eshader#*skinned_instanced*). Reached from
     /// the settings table's skinned program through resolve_skinned_instanced_pack_program.
     gpu_program::ptr m_packDepthSkinnedInstanced[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinnedInstancedCutout[DepthImpl::Count][PackDepth::Count];
-    /// Baked animation casters, the bones from the baked animation store (vs_*_skinned_baked_instanced*.sc). Reached
+    /// Baked animation casters, the bones from the baked animation store (vs_shadowmaps_packdepth.eshader#*skinned_baked_instanced*). Reached
     /// from the settings table's skinned program like the instanced skinned ones.
     gpu_program::ptr m_packDepthSkinnedBakedInstanced[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Count][PackDepth::Count];

@@ -91,6 +91,7 @@ build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
 | `settings profiles` | Settings profiles (`editor/core/deploy/profile*`, `project_profiles`, `texture_variants`, `core/serialization/document_paths`): leaf paths of a document, sparse overrides (save only what differs, resolve, revert, stale paths), profile files, the migration of a project from before profiles, create / rename / delete with their releases and caches, per-platform texture parameters, the texture variant cook (ASTC / ETC2 formats, blocks that keep a texture's size, in-place recompiles on changed defaults, the sweep of stale variants) | Profiles, Project Settings overrides, the deploy's texture cook, `settings_*` / `settings_profiles_*` MCP tools |
 | `deploy library` | The `deploy` library (`editor/core/deploy`): key normalization, rule precedence and set_shipped / normalize / orphan rules, the content walk over a temp project (uids, paths, UI links, generated assets, settings, script literals incl. interpolated, binary files skipped, missing scenes), the content tree (counts, rows, search, filter), file classification and pack inputs, a protocol shipped packed / loose / as a patch, releases, dependency parsing and failed scans, folder checks, `process::spawn_detached` | `editor/core/deploy/`, `editor/editor/deploy/`, the Deploy window and deploy MCP tools |
 | `audio clip encoding` | Compiled clips keep the source codec and decode at load (`decode_sound`, mono, bad codec/bytes, old-format file refused); `asset_manager::save_database` filter | Audio import/load, deploy asset index |
+| `eshader files` | The `.eshader` parser and its errors, vertex input names and what they map to, generated tags and interface lines, the format (the `.sh` trap, deploy paths), `gfx::shader::find_variant`, dependencies, a compiled file read from a pack, each variant's binary equal to a file that defines the same in its code on every renderer, a failed variant changing nothing, and **compiles every `.eshader` the engine and editor ship**, failing on variants that are the same binary everywhere | `editor/core/asset_compiler/`, `gfx::shader`, `gpu_program`, any `.eshader` |
 | `fs watcher` | Created / modified / removed / renamed reporting, non-atomic moves and safe saves pairing up, pause / resume, unwatch during a callback, per-format filters on one listener (`--bench` adds latency and fan-out timings; ~50 s) | `engine/core/filesystem/watchers/`, syncer, asset watcher |
 
 Suites self-register (`REGISTER_TEST_SUITE` in `tests/tests/suites/`); adding one is
@@ -144,7 +145,7 @@ After code changes:
 
 ## Shader rebuild
 
-The `engine_data` target only **COPIES** `.sc`/`.sh` sources into
+The `engine_data` target only **COPIES** `.eshader`/`.sh` sources into
 `<runtime dir>/data/engine/` (and syncs `bgfx_shader.sh` / `bgfx_compute.sh`) - it does
 **not** compile shaders. The editor's asset importer invokes `shaderc` at import time,
 so a shader syntax error shows up only as a runtime import failure, and a failed
@@ -177,7 +178,7 @@ CPack configured for Windows/Linux/macOS ZIP. Test packaging only when release-r
 | Error | Check |
 |-------|-------|
 | Missing meta symbol | Forgot to add `.cpp` to CMake |
-| Shader compile fail | `.sc` syntax; rebuild engine_data |
+| Shader compile fail | `.eshader` syntax; rebuild engine_data |
 | `dotnet` not found | Install .NET 9 SDK; ensure it is on `PATH` |
 | Script compile fails | `dotnet --info` must show an SDK |
 | Stale shader binary | Clean engine_data compiled output |

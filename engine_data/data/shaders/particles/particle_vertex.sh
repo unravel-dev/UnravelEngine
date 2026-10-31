@@ -9,7 +9,7 @@
  * particle_common.sh and s_particle_sorted at stage 4, then includes particle_common.sh.
  */
 
-/// Each GPU batch's live count (cs_particle_draw_args.sc): a ribbon reads its neighbours within it. The vertex
+/// Each GPU batch's live count (cs_particle_draw_args.eshader): a ribbon reads its neighbours within it. The vertex
 /// shaders' buffers stay below stage 8 (particle_gpu_schema.h).
 BUFFER_RO(s_particle_batch_counts, uint, 5);
 /// Cutout tables (particle_cutout.h): per sheet frame 4 vec4, two polygon points (texture coordinates) each.

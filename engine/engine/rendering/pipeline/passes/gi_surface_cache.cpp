@@ -29,7 +29,7 @@ namespace
 constexpr uint32_t tile_size = 8;
 /// float4s per copy page record (gi_surface_cache_lighting.sh GI_CARD_COPY_PAGE_STRIDE).
 constexpr uint32_t copy_page_stride = 6;
-/// float4s per lighting page record (cs_gi_card_lighting.sc, gi_tile_records.sh GI_LIGHT_PAGE_STRIDE).
+/// float4s per lighting page record (cs_gi_card_lighting.eshader, gi_tile_records.sh GI_LIGHT_PAGE_STRIDE).
 constexpr uint32_t light_page_stride = 4;
 /// A tile list's words (gi_tile_records.sh): four per float4, page x 256 + column x 16 + row, in 8-texel tiles.
 constexpr uint32_t tile_words_per_vec4 = 4;
@@ -251,7 +251,7 @@ auto gi_surface_cache::init(rtti::context& ctx) -> bool
     uniforms_.cache_uniforms();
     const auto load = [&](const char* name) -> gpu_program::ptr
     {
-        auto shader = am.get_asset<gfx::shader>(std::string("engine:/data/shaders/gi/") + name + ".sc");
+        auto shader = am.get_asset<gfx::shader>(std::string("engine:/data/shaders/gi/") + name + ".eshader");
         return std::make_shared<gpu_program>(shader);
     };
     copy_program_ = load("cs_gi_card_copy");
@@ -260,8 +260,8 @@ auto gi_surface_cache::init(rtti::context& ctx) -> bool
     radiosity_trace_program_ = load("cs_gi_radiosity_trace");
     radiosity_sh_program_ = load("cs_gi_radiosity_sh");
     radiosity_integrate_program_ = load("cs_gi_radiosity_integrate");
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_debug = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_scene_debug.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_debug = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_scene_debug.eshader");
     debug_program_ = std::make_unique<gpu_program>(vs_clip_quad, fs_debug);
     feedback_.init(ctx);
     // The atlases come with the first update with a user (has_targets).
@@ -817,7 +817,7 @@ void gi_surface_cache::build_copy_tiles()
         const auto& cap = captures[page];
         const int32_t resample_card = resamples ? cap.resample_card : -1;
         const bool keeps_lighting = cap.keeps_lighting && resample_card >= 0;
-        // A page refreshed in place keeps its lighting where it is (cs_gi_card_copy.sc): only reallocations
+        // A page refreshed in place keeps its lighting where it is (cs_gi_card_copy.eshader): only reallocations
         // resample.
         has_resample_ = has_resample_ || (resample_card >= 0 && !keeps_lighting);
         // The card's world axes (the card table's rows 1-3, gi_surface_cache.sh GiLoadCard): the copy stores
@@ -908,7 +908,7 @@ auto gi_surface_cache::compute_capture_view(const gi_scene::capture& cap) const 
     // q = card-local position: depth 0 at the card's front plane, 1 at its back.
     // One pass draws every capture (deferred::capture_gi_cards), so the transform also places the tile in the
     // capture atlas: x = tile.x w / W + (2 left + w) / W - 1, y = tile.y h / H + 1 - (2 top + h) / H with the first row
-    // at the top. The copy reads the captures by texel (cs_gi_card_copy.sc), so they fill the same rows with the
+    // at the top. The copy reads the captures by texel (cs_gi_card_copy.eshader), so they fill the same rows with the
     // same depth on every renderer: y flips where a target's first row is its bottom (OpenGL), and the depth maps to
     // -1..1 where clip space depth is homogeneous.
     const auto atlas = capture_target_->get_size();

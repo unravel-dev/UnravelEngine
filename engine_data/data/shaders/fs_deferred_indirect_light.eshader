@@ -1,0 +1,26 @@
+[variants]
+default
+no_screen_inputs                                  PBR_INDIRECT_SCREEN_INPUTS=0
+no_screen_inputs_low_detail                       PBR_INDIRECT_SCREEN_INPUTS=0 PBR_INDIRECT_DETAIL=0
+no_screen_inputs_no_subsurface                    PBR_INDIRECT_SCREEN_INPUTS=0 PBR_SUBSURFACE=0
+no_screen_inputs_no_subsurface_low_detail         PBR_INDIRECT_SCREEN_INPUTS=0 PBR_SUBSURFACE=0 PBR_INDIRECT_DETAIL=0
+probe                                             PROBE_LAYER_INLINE
+probe_no_screen_inputs                            PBR_INDIRECT_SCREEN_INPUTS=0 PROBE_LAYER_INLINE
+probe_no_screen_inputs_low_detail                 PBR_INDIRECT_SCREEN_INPUTS=0 PBR_INDIRECT_DETAIL=0 PROBE_LAYER_INLINE
+probe_no_screen_inputs_no_subsurface              PBR_INDIRECT_SCREEN_INPUTS=0 PBR_SUBSURFACE=0 PROBE_LAYER_INLINE
+probe_no_screen_inputs_no_subsurface_low_detail   PBR_INDIRECT_SCREEN_INPUTS=0 PBR_SUBSURFACE=0 PBR_INDIRECT_DETAIL=0 PROBE_LAYER_INLINE
+
+[inputs]
+vec2 v_texcoord0
+
+[code]
+#define DIRECTIONAL_LIGHT 1
+#define SM_NOOP 1
+#define PBR_INDIRECT 1
+
+#include "fs_pbr_lighting.sh"
+
+void main()
+{
+    gl_FragColor = pbr_indirect(v_texcoord0, gl_FragCoord.xy);
+}

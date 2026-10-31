@@ -3,7 +3,7 @@
 
 /*
  * The short-range AO's layout at the tier's downsample factor (u_gi_short_range_ao.z: 1 at Epic, one texel per
- * pixel; 2 at High, half resolution), which cs_gi_short_range_ao.sc writes and the gather's temporal reconstructs
+ * pixel; 2 at High, half resolution), which cs_gi_short_range_ao.eshader writes and the gather's temporal reconstructs
  * from (gi_short_range_ao_temporal.sh): each half-resolution texel holds the search of one full-resolution pixel of
  * its 2x2 block, the block's four pixels taken in turn over four frames and neighbouring blocks out of phase (a 4-rooks
  * pattern).

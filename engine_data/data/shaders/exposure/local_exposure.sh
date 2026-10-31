@@ -8,10 +8,10 @@
  * luminance lands in grid slices that hold no data and snaps to the blurred level along
  * luminance contours.
  *
- * The grid is the flattened 3D atlas cs_local_exposure_grid.sc writes - slice pages side by side,
+ * The grid is the flattened 3D atlas cs_local_exposure_grid.eshader writes - slice pages side by side,
  * texel (slice * tiles_x + tile_x, tile_y), rg = the slice's raw sum of log2 luminance and sum of
  * weight - read with a bilinear sampler inside a page; the blurred texture is the 1/32 resolution
- * Gaussian of the log luminance (cs_local_exposure_blur.sc), read with a bilinear sampler too.
+ * Gaussian of the log luminance (cs_local_exposure_blur.eshader), read with a bilinear sampler too.
  * Both are bound as 1x1 stand-ins when
  * local exposure is off, and the enable lane keeps them unread. Includers keep sampler stages
  * 2 and 3 free for them (local_exposure_uniforms on the C++ side binds them).

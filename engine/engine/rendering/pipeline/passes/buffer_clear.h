@@ -13,7 +13,7 @@ namespace unravel
 {
 
 /**
- * @brief Zeroes a range of a uint buffer the GPU writes (cs_clear_uints.sc). bgfx updates no BGFX_BUFFER_COMPUTE_WRITE
+ * @brief Zeroes a range of a uint buffer the GPU writes (cs_clear_uints.eshader). bgfx updates no BGFX_BUFFER_COMPUTE_WRITE
  *        buffer from the CPU (its debug checks fail every such update, and the D3D11 backend did not create the buffer
  *        dynamic), so a frame's counters in one start over by a dispatch ordered before their first reader: earlier in
  *        the same view (bgfx runs a view's dispatches in submission order) or in an earlier view.

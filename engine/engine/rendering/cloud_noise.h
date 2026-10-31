@@ -8,7 +8,7 @@ namespace unravel
 {
 
 /// Tileable noise textures for the sky clouds (consumed by atmospherics/clouds.sh,
-/// fs_cloud.sc and fs_sky.sc).
+/// fs_cloud.eshader and fs_sky.eshader).
 struct cloud_noise_textures
 {
     /// 3D base texture edge in texels. With tile_period 6 every baked octave (Perlin up to

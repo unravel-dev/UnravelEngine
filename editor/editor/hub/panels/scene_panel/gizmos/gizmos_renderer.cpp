@@ -39,7 +39,7 @@ void gizmos_renderer::draw_grid(const camera& cam,
         return;
     }
     // Drawn with the unjittered camera so the lines hold still under TAA. The depth test
-    // runs in the shader against the jittered scene depth (fs_grid.sc), and the translucent
+    // runs in the shader against the jittered scene depth (fs_grid.eshader), and the translucent
     // grid writes no depth, so it never occludes the gizmos drawn after it.
     gfx::render_pass pass("Gizmos/Grid Pass");
     pass.bind(output.get());
@@ -129,43 +129,33 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
 
     {
-        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe.sc");
-        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.sc");
+        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe.eshader");
+        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.eshader");
         wireframe_program_.cache_uniforms();
         wireframe_program_.program = std::make_unique<gpu_program>(vs, fs);
-    }
-
-    {
-        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_wf_wireframe_skinned.sc");
-        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_wf_wireframe.sc");
         wireframe_program_skinned_.cache_uniforms();
-        wireframe_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
+        wireframe_program_skinned_.program = std::make_unique<gpu_program>(vs, "skinned", fs);
     }
 
     {
-        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_grid.sc");
-        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_grid.sc");
+        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_grid.eshader");
+        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_grid.eshader");
         grid_program_.cache_uniforms();
         grid_program_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     {
-        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_outline_mask.sc");
-        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_mask.sc");
+        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_outline_mask.eshader");
+        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_mask.eshader");
         outline_mask_program_.cache_uniforms();
         outline_mask_program_.program = std::make_unique<gpu_program>(vs, fs);
-    }
-
-    {
-        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_outline_mask_skinned.sc");
-        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_mask.sc");
         outline_mask_program_skinned_.cache_uniforms();
-        outline_mask_program_skinned_.program = std::make_unique<gpu_program>(vs, fs);
+        outline_mask_program_skinned_.program = std::make_unique<gpu_program>(vs, "skinned", fs);
     }
 
     {
-        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_clip_quad.sc");
-        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_detect.sc");
+        auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_clip_quad.eshader");
+        auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_outline_detect.eshader");
         outline_program_.cache_uniforms();
         outline_program_.program = std::make_unique<gpu_program>(vs, fs);
     }

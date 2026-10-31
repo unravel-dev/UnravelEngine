@@ -61,26 +61,6 @@ auto visit_key_for_path(const fs::path& file_path) -> std::string
     return fs::absolute(file_path).string();
 }
 
-void append_shader_varying_dependency(const fs::path& file_path, std::vector<fs::path>& processed_files)
-{
-    const std::string file_name = file_path.stem().string();
-    const fs::path dir = file_path.parent_path();
-    fs::path varying = dir / (file_name + ".io");
-    fs::error_code err;
-    if(!fs::exists(varying, err))
-    {
-        varying = dir / "varying.def.io";
-    }
-    if(!fs::exists(varying, err))
-    {
-        varying = dir / "varying.def.sc";
-    }
-    if(fs::exists(varying, err))
-    {
-        processed_files.push_back(varying);
-    }
-}
-
 /// Directory shaderc treats as the include root, found by walking up to the `shaders` directory.
 ///
 /// Shaders in this project include shared headers two ways: relative (`../common.sh`) and
@@ -102,6 +82,29 @@ auto find_shader_include_root(const fs::path& file_path) -> fs::path
     return file_path.parent_path();
 }
 
+/// The file an #include names, looked for where shaderc looks: the including file's directory, the shared shader include
+/// root, and the engine's shaders, which every compile has on its include list. Relative-only resolution silently drops
+/// every root-relative include -- `#include "gi/foo.sh"` from inside `shaders/gi/` becomes `shaders/gi/gi/foo.sh`, which
+/// does not exist -- and an editor or project shader finds `common.sh` only among the engine's.
+///
+/// A dropped dependency is not a build error, it is a STALE BINARY: editing the shared header leaves every shader that
+/// includes it compiled from the previous version, so writers and readers of a shared layout silently disagree. That
+/// fails as corrupt data at runtime, with nothing pointing back at the build.
+auto resolve_shader_include(const fs::path& file_path, const fs::path& include_path) -> fs::path
+{
+    const fs::path folders[] = {file_path.parent_path(), find_shader_include_root(file_path), fs::resolve_protocol("engine:/data/shaders")};
+    for(const auto& folder : folders)
+    {
+        const fs::path candidate = fs::absolute(folder / include_path);
+        fs::error_code err;
+        if(fs::exists(candidate, err) && !err)
+        {
+            return candidate;
+        }
+    }
+    return fs::absolute(folders[0] / include_path);
+}
+
 void resolve_shader_dependencies(const fs::path& file_path,
                                  std::vector<fs::path>& processed_files,
                                  std::unordered_set<std::string>& visited,
@@ -113,11 +116,7 @@ void resolve_shader_dependencies(const fs::path& file_path,
     }
 
     // Root source is watched separately; only emit external deps here.
-    if(is_root)
-    {
-        append_shader_varying_dependency(file_path, processed_files);
-    }
-    else
+    if(!is_root)
     {
         processed_files.push_back(file_path);
     }
@@ -148,26 +147,7 @@ void resolve_shader_dependencies(const fs::path& file_path,
             continue;
         }
         const std::string include_path = normalize_dependency_path_string(line.substr(start, end - start));
-        // Resolved against the including file's directory AND against the shared shader include
-        // root, because shaderc searches both. Relative-only resolution silently drops every
-        // root-relative include -- `#include "gi/foo.sh"` from inside `shaders/gi/` becomes
-        // `shaders/gi/gi/foo.sh`, which does not exist.
-        //
-        // A dropped dependency is not a build error, it is a STALE BINARY: editing the shared
-        // header leaves every shader that includes it compiled from the previous version, so
-        // writers and readers of a shared layout silently disagree. That fails as corrupt data
-        // at runtime, with nothing pointing back at the build.
-        fs::path resolved_path = fs::absolute(file_path.parent_path() / fs::path(include_path));
-        fs::error_code exists_err;
-        if(!fs::exists(resolved_path, exists_err) || exists_err)
-        {
-            const fs::path root_relative = fs::absolute(find_shader_include_root(file_path) / fs::path(include_path));
-            if(fs::exists(root_relative, exists_err) && !exists_err)
-            {
-                resolved_path = root_relative;
-            }
-        }
-        resolve_shader_dependencies(resolved_path, processed_files, visited, false);
+        resolve_shader_dependencies(resolve_shader_include(file_path, include_path), processed_files, visited, false);
     }
 }
 

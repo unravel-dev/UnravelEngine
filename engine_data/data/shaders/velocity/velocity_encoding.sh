@@ -2,8 +2,8 @@
 #define __VELOCITY_ENCODING_SH__
 
 /*
- * The velocity buffer (RGBA16F, full camera resolution), written by fs_velocity_camera.sc for every pixel and
- * fs_velocity.sc over movers:
+ * The velocity buffer (RGBA16F, full camera resolution), written by fs_velocity_camera.eshader for every pixel and
+ * fs_velocity.eshader over movers:
  *   RG = total motion in uv: uv_curr - uv_prev; consumers reproject as prev_uv = uv - RG.
  *   B  = the object-only part of the motion in pixels: |uv_prev(current pose) - uv_prev(previous pose)| x the
  *        target size, 0 for every pixel the camera alone moved; consumers classify object motion from it.

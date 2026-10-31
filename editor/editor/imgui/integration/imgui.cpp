@@ -566,8 +566,8 @@ struct OcornutImguiContext
     {
         auto& ctx = unravel::engine::context();
         auto& am = ctx.get_cached<unravel::asset_manager>();
-        auto vs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/vs_imgui_cubemap_image.sc");
-        auto fs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/fs_imgui_cubemap_image.sc");
+        auto vs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/vs_imgui_cubemap_image.eshader");
+        auto fs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/fs_imgui_cubemap_image.eshader");
         m_cubemapImageProgram = bgfx::createProgram(vs_imgui_cubemap_image.get()->native_handle(),
                                                     fs_imgui_cubemap_image.get()->native_handle(),
                                                     false);

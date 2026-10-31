@@ -15,7 +15,7 @@
 #include "sampling.sh"
 
 #define GI_PI 3.14159265359
-/// The probe trace's far-field pass (cs_gi_probe_trace.sc): threads per group, and groups per row of its indirect
+/// The probe trace's far-field pass (cs_gi_probe_trace.eshader): threads per group, and groups per row of its indirect
 /// dispatch (below the 65535 groups an axis takes).
 #define GI_TRACE_FAR_FIELD_GROUP 64
 #define GI_TRACE_FAR_FIELD_ROW_GROUPS 32768
@@ -29,7 +29,7 @@ uniform vec4 u_gi_frame;
 uniform vec4 u_gi_probes;
 /// x, y = full-resolution view size, z, w = 1 / size.
 uniform vec4 u_gi_view;
-/// x > 0 when the probes trace importance-sampled ray slots (cs_gi_probe_generate_rays.sc); y > 0 turns
+/// x > 0 when the probes trace importance-sampled ray slots (cs_gi_probe_generate_rays.eshader); y > 0 turns
 /// the integrate's full-resolution jitter off, z > 0 rejects screen hits within a few pixels of the probe,
 /// w = experiment bits: 1 shades screen hits from the distance-field hits' store (the cards) instead of last frame's
 /// colour, 2 re-bins the composite with a second slice of the ray jitter (experiment toggles).

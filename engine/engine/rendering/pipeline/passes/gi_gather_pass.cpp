@@ -29,13 +29,13 @@ using gi_pass::group_edge;
 
 /// The tracing resolutions of the program sets, in order, and the suffixes of their programs' files.
 constexpr std::array<uint32_t, 3> probe_trace_resolutions = {4u, 8u, 16u};
-constexpr std::array<const char*, 3> probe_program_suffixes = {"_res4", "", "_res16"};
+constexpr std::array<const char*, 3> probe_resolution_variants = {"res4", "", "res16"};
 /// The range of the screen probe spacing in pixels.
 constexpr uint32_t min_probe_downsample = 4;
 constexpr uint32_t max_probe_downsample = 64;
 /// The bordered probe radiance is read with hardware bilinear filtering.
 constexpr uint64_t bilinear_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-/// The rough specular history (cs_gi_integrate.sc s_gi_rough_history_out, rg11b10f).
+/// The rough specular history (cs_gi_integrate.eshader s_gi_rough_history_out, rg11b10f).
 constexpr bgfx::TextureFormat::Enum rough_history_format = bgfx::TextureFormat::RG11B10F;
 /// The render view's two ping-pongs: the screen probe atlases, and the full-resolution diffuse history.
 constexpr const char* probe_ping_pong_key = "GI_PROBE_PING_PONG";
@@ -48,14 +48,25 @@ constexpr uint8_t trace_output_stage = 5;
 /// generation takes pre_exposure.sh's default; the far-field stages read it from the environment SH (s_gi_env_sh).
 constexpr uint8_t trace_screen_pre_exposure_stage = 7;
 constexpr uint8_t integrate_pre_exposure_stage = 7;
-/// The stage of the rays the screen pass leaves to the far-field pass, in each (cs_gi_probe_trace.sc).
+/// The stage of the rays the screen pass leaves to the far-field pass, in each (cs_gi_probe_trace.eshader).
 constexpr uint8_t trace_rays_screen_stage = 3;
 constexpr uint8_t trace_rays_far_field_stage = 1;
 constexpr uint8_t trace_hits_stage = 2;
 constexpr uint8_t trace_args_count_stage = 0;
 constexpr uint8_t trace_args_output_stage = 1;
-/// The uints per ray of b_gi_trace_rays (cs_gi_probe_trace.sc GI_TRACE_RAY_STRIDE).
+/// The uints per ray of b_gi_trace_rays (cs_gi_probe_trace.eshader GI_TRACE_RAY_STRIDE).
 constexpr uint32_t trace_ray_stride = 4;
+
+/// The variant of a probe program: @p pass (cs_gi_probe_trace.eshader's far_field, say) at @p resolution, each empty when
+/// the program has none.
+auto get_probe_variant(const std::string& pass, const std::string& resolution) -> std::string
+{
+    if(pass.empty() && resolution.empty())
+    {
+        return gfx::shader::DEFAULT_VARIANT;
+    }
+    return pass.empty() || resolution.empty() ? pass + resolution : pass + "_" + resolution;
+}
 
 /// Hammersley16(index, count, 0) of sampling.sh: (index / count, 16-bit radical inverse of index).
 auto hammersley16(uint32_t index, uint32_t count) -> std::array<float, 2>
@@ -68,7 +79,7 @@ auto hammersley16(uint32_t index, uint32_t count) -> std::array<float, 2>
     return {float(index) / float(count), float(reversed) / 65536.0f};
 }
 
-/// Texels per axis of a probe's bordered radiance (cs_gi_probe_border.sc).
+/// Texels per axis of a probe's bordered radiance (cs_gi_probe_border.eshader).
 auto get_probe_border_resolution(uint32_t trace_resolution) -> uint32_t
 {
     return trace_resolution + 2u * uint32_t(GI_PROBE_RADIANCE_BORDER);
@@ -153,28 +164,28 @@ auto gi_gather_pass::init(rtti::context& ctx) -> bool
     uniforms_.cache_uniforms();
     short_range_ao_.init(ctx);
     radiance_cache_.init(ctx);
-    const auto load = [&](const std::string& name) -> gpu_program::ptr
+    const auto load = [&](const std::string& name, const std::string& variant = gfx::shader::DEFAULT_VARIANT) -> gpu_program::ptr
     {
-        auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/gi/" + name + ".sc");
-        return std::make_shared<gpu_program>(shader);
+        auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/gi/" + name + ".eshader");
+        return std::make_shared<gpu_program>(shader, variant);
     };
     place_program_ = load("cs_gi_probe_place");
     far_field_args_program_ = load("cs_gi_trace_far_field_args");
     for(size_t i = 0; i < probe_programs_.size(); ++i)
     {
-        const std::string suffix = probe_program_suffixes[i];
+        const std::string resolution = probe_resolution_variants[i];
         auto& programs = probe_programs_[i];
-        programs.generate_rays = load("cs_gi_probe_generate_rays" + suffix);
-        programs.trace = load("cs_gi_probe_trace" + suffix);
-        programs.trace_far_field = load("cs_gi_probe_trace_far_field" + suffix);
-        programs.trace_hit_shade = load("cs_gi_probe_trace_hit_shade" + suffix);
-        programs.composite = load("cs_gi_probe_composite" + suffix);
-        programs.filter = load("cs_gi_probe_filter" + suffix);
-        programs.sh = load("cs_gi_probe_sh" + suffix);
-        programs.border = load("cs_gi_probe_border" + suffix);
-        programs.integrate = load("cs_gi_integrate" + suffix);
-        programs.integrate_short_range_ao = load("cs_gi_integrate_ao" + suffix);
-        programs.trace_visualize = load("cs_gi_probe_trace_visualize" + suffix);
+        programs.generate_rays = load("cs_gi_probe_generate_rays", get_probe_variant({}, resolution));
+        programs.trace = load("cs_gi_probe_trace", get_probe_variant({}, resolution));
+        programs.trace_far_field = load("cs_gi_probe_trace", get_probe_variant("far_field", resolution));
+        programs.trace_hit_shade = load("cs_gi_probe_trace", get_probe_variant("hit_shade", resolution));
+        programs.composite = load("cs_gi_probe_composite", get_probe_variant({}, resolution));
+        programs.filter = load("cs_gi_probe_filter", get_probe_variant({}, resolution));
+        programs.sh = load("cs_gi_probe_sh", get_probe_variant({}, resolution));
+        programs.border = load("cs_gi_probe_border", get_probe_variant({}, resolution));
+        programs.integrate = load("cs_gi_integrate", get_probe_variant({}, resolution));
+        programs.integrate_short_range_ao = load("cs_gi_integrate", get_probe_variant("ao", resolution));
+        programs.trace_visualize = load("cs_gi_probe_trace", get_probe_variant("visualize", resolution));
     }
     adaptive_probes_.init(ctx);
     ray_count_clear_.init(ctx);

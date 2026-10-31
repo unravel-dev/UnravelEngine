@@ -745,16 +745,24 @@ auto pipeline::init(rtti::context& ctx) -> bool
 
     auto load_program = [&](const std::string& vs, const std::string& fs)
     {
-        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/" + vs + ".sc");
-        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/" + fs + ".sc");
+        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/" + vs + ".eshader");
+        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/" + fs + ".eshader");
 
         return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
     };
 
+    const auto load_particle_program = [&](const std::string& vs_variant, const std::string& fs, const std::string& fs_variant)
+    {
+        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/particles/vs_particle.eshader");
+        auto fs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/particles/" + fs + ".eshader");
+        return std::make_unique<gpu_program>(vs_shader, vs_variant, fs_shader, fs_variant);
+    };
+    constexpr auto default_variant = gfx::shader::DEFAULT_VARIANT;
+
     // Uniforms before programs (GL uniform order contract, gpu_program.h).
     particle_pre_exposure_uniform_ = std::make_shared<gfx::uniform>("u_pre_exposure", bgfx::UniformType::Vec4);
-    particle_program_ = load_program("particles/vs_particle", "particles/fs_particle");
-    particle_program_mask_ = load_program("particles/vs_particle", "particles/fs_particle_mask");
+    particle_program_ = load_particle_program(default_variant, "fs_particle", default_variant);
+    particle_program_mask_ = load_particle_program(default_variant, "fs_particle", "mask");
     particle_prev_view_proj_uniform_ = std::make_shared<gfx::uniform>("u_prev_view_proj", bgfx::UniformType::Mat4);
     particle_sun_direction_uniform_ = std::make_shared<gfx::uniform>("u_particle_sun_direction", bgfx::UniformType::Vec4);
     particle_sun_color_uniform_ = std::make_shared<gfx::uniform>("u_particle_sun_color", bgfx::UniformType::Vec4);
@@ -768,11 +776,11 @@ auto pipeline::init(rtti::context& ctx) -> bool
         particle_shadow_samplers_[i] =
             std::make_shared<gfx::uniform>("s_shadowMap" + std::to_string(i), bgfx::UniformType::Sampler);
     }
-    particle_program_lit_ = load_program("particles/vs_particle_lit", "particles/fs_particle_lit");
-    particle_program_lit_mask_ = load_program("particles/vs_particle_lit", "particles/fs_particle_mask_lit");
+    particle_program_lit_ = load_particle_program("lit", "fs_particle", "lit");
+    particle_program_lit_mask_ = load_particle_program("lit", "fs_particle", "mask_lit");
     create_particle_light_fallbacks(particle_no_sky_, particle_no_shadow_);
-    particle_velocity_program_ = load_program("particles/vs_particle_velocity", "particles/fs_particle_velocity");
-    particle_overdraw_program_ = load_program("particles/vs_particle", "particles/fs_particle_overdraw");
+    particle_velocity_program_ = load_particle_program("velocity", "fs_particle_velocity", default_variant);
+    particle_overdraw_program_ = load_particle_program(default_variant, "fs_particle_overdraw", default_variant);
     world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");
 
     return true;

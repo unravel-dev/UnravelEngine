@@ -43,10 +43,11 @@ Do not add passes without understanding stage ordering in `run_pipeline_impl`.
 
 ## Shader workflow
 
-1. Edit `.sc` in `engine_data/data/shaders/`
+1. Edit the `.eshader` in `engine_data/data/shaders/` (variants, inputs, outputs and code in one file, see
+   `unravel-shader-change`)
 2. `cmake --build build/<Config> --target engine_data` - this only **copies** sources
    into the runtime tree; the editor's asset importer compiles via `shaderc` at import
-   time. Validate offline with the in-tree `shaderc.exe` (`s_5_0` + `spirv`) - a
+   time. Validate offline with `unravel-tests --suite "eshader files"` - a
    failed compile silently keeps the stale binary
 3. Shader includes: `bgfx_shader.sh`, `bgfx_compute.sh` synced by CMake
 4. Do **not** edit `deps/3rdparty/bgfx/` unless absolutely necessary
@@ -255,7 +256,7 @@ light's map, or a cascade of the sun, renders again only when its key changes. P
 - The sun's reach test follows the camera at submesh level, so its cascade keys also take the collected batches'
   content hash; local lights key on caster facts alone.
 - Static copy: a local light in the atlas with moving casters in reach restores its casters that hold still from a
-  depth-only copy (`shadow_atlas::get_static_frame_buffer`, `fs_shadowmaps_restore.sc` rebuilds the R32F colour
+  depth-only copy (`shadow_atlas::get_static_frame_buffer`, `fs_shadowmaps_restore.eshader` rebuilds the R32F colour
   from depth, InvZ only) and draws only the movers. A caster is a mover while
   `has_changed_within(render_interest::shadow_caster, MOVER_SETTLE_FRAMES, frame)`.
 - Verify a change with caching on vs off on a paused frame: the captures must match.
@@ -286,7 +287,7 @@ When fixing visual bugs, identify whether the issue is pipeline output, editor o
 
 ## Common mistakes
 
-- Editing compiled `.asset.*` blobs directly instead of `.sc` source
+- Editing compiled `.asset.*` blobs directly instead of the `.eshader` source
 - Breaking `pipeline_steps` bitmask semantics
 - Scene draws leaking into wrong render target
 - Forgetting meta registration for new volume component

@@ -1,0 +1,29 @@
+[variants]
+default
+skinned   SKINNED
+
+[inputs]
+vec3 a_position
+#if SKINNED
+vec4 a_weight
+vec4 a_indices
+#endif
+
+[code]
+#include "common.sh"
+
+void main()
+{
+#if SKINNED
+    //u_world should already be in the right space
+    mat4 model = a_weight.x * u_world[int(a_indices.x)] +
+                 a_weight.y * u_world[int(a_indices.y)] +
+                 a_weight.z * u_world[int(a_indices.z)] +
+                 a_weight.w * u_world[int(a_indices.w)];
+#else
+    mat4 model = u_world[0];
+#endif
+
+    vec4 wpos = mul(model, vec4(a_position, 1.0) );
+    gl_Position = mul(u_viewProj, wpos );
+}

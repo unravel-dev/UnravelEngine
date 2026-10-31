@@ -9,7 +9,7 @@
 uniform vec4 u_pre_exposure;
 
 // The environment SH's texel that holds the GPU's share, after the nine coefficients
-// (pre_exposure_state::gpu_texel, cs_pre_exposure.sc writes it).
+// (pre_exposure_state::gpu_texel, cs_pre_exposure.eshader writes it).
 #define PRE_EXPOSURE_GPU_TEXEL 9
 
 #ifdef PRE_EXPOSURE_ENVIRONMENT

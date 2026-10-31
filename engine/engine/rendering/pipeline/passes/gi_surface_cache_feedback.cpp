@@ -14,10 +14,10 @@ namespace unravel
 namespace
 {
 
-/// The readback image's rows of table slots, and the copy's threads per group (cs_gi_feedback_copy.sc).
+/// The readback image's rows of table slots, and the copy's threads per group (cs_gi_feedback_copy.eshader).
 constexpr uint32_t readback_width = 64;
 constexpr uint32_t copy_group_size = 64;
-/// An element's fields (cs_gi_reflection_feedback.sc): card | level << 20 | page x << 24 | page y << 28.
+/// An element's fields (cs_gi_reflection_feedback.eshader): card | level << 20 | page x << 24 | page y << 28.
 constexpr uint32_t card_bits = 0xFFFFFu;
 constexpr uint32_t level_shift = 20u;
 constexpr uint32_t u_shift = 24u;
@@ -65,7 +65,7 @@ auto gi_surface_cache_feedback::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     // Uniforms before the program: the OpenGL renderer wires a program's uniforms at link time.
     copy_.cache_uniforms();
-    copy_.program = std::make_unique<gpu_program>(am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_feedback_copy.sc"));
+    copy_.program = std::make_unique<gpu_program>(am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_feedback_copy.eshader"));
     clear_.init(ctx);
     if(!is_ready())
     {

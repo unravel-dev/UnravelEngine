@@ -77,7 +77,7 @@ struct irradiance_perez_params
 
 /**
  * @brief The horizontal irradiance the irradiance SH bake produces from this sky at unit
- * exposition: a CPU transcription of cs_irradiance_sh.sc mode 1 (the same 64 Hammersley
+ * exposition: a CPU transcription of cs_irradiance_sh.eshader mode 1 (the same 64 Hammersley
  * hemisphere samples, the same Perez chain, the SH bands the bake stores, read back at the
  * zenith through eval_irradiance_sh's cosine lobe). Clear sky only - the bake's cloud
  * coverage blend darkens it further, as an overcast sky should. Keep in step with the shader.

@@ -15,8 +15,8 @@ auto hiz_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
 
     // Load compute shaders
-    auto cs_hiz_generate = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_hiz_generate.sc");
-    auto cs_hiz_downsample = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_hiz_downsample.sc");
+    auto cs_hiz_generate = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_hiz_generate.eshader");
+    auto cs_hiz_downsample = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_hiz_downsample.eshader");
 
     if (!cs_hiz_generate || !cs_hiz_downsample)
     {
@@ -91,7 +91,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
             const uint32_t input_mip_width = std::max(hiz_width >> (mip - 1u), 1u);
             const uint32_t input_mip_height = std::max(hiz_height >> (mip - 1u), 1u);
 
-            // Input (previous mip level): read-write, as cs_hiz_downsample.sc declares it. A read-only bind is a
+            // Input (previous mip level): read-write, as cs_hiz_downsample.eshader declares it. A read-only bind is a
             // shader resource view on D3D11, which the shader's image slot never sees (every mip would read 0), and
             // on D3D12 it would transition the whole texture away from the write of the next mip.
             bgfx::setImage(0, output_hiz->native_handle(), mip - 1, bgfx::Access::ReadWrite);

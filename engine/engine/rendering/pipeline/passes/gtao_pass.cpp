@@ -75,11 +75,11 @@ auto gtao_pass::get_steps_per_slice(int32_t quality_level) -> uint32_t
 auto gtao_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto cs_prefilter = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_prefilter_depth.sc");
-    auto cs_main = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_main.sc");
-    auto cs_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_denoise.sc");
-    auto cs_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_temporal.sc");
-    auto cs_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_upsample.sc");
+    auto cs_prefilter = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_prefilter_depth.eshader");
+    auto cs_main = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_main.eshader");
+    auto cs_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_denoise.eshader");
+    auto cs_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_temporal.eshader");
+    auto cs_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_upsample.eshader");
     // Uniforms before programs (the GL contract in gpu_program.h).
     common_cache_.cache_uniform(nullptr, common_.u_gtao_size, "u_gtao_size", bgfx::UniformType::Vec4);
     common_cache_.cache_uniform(nullptr, common_.u_gtao_full_size, "u_gtao_full_size", bgfx::UniformType::Vec4);

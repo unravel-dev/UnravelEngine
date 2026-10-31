@@ -124,9 +124,9 @@ private:
         gfx::program::uniform_ptr s_gi_rough_specular;
         gfx::program::uniform_ptr s_gi_reflection_tiles;
         gfx::program::uniform_ptr s_gi_reflection_tiles_history;
-        /// The surface cache feedback (cs_gi_reflection_feedback.sc): the tile jitter and the table's mask.
+        /// The surface cache feedback (cs_gi_reflection_feedback.eshader): the tile jitter and the table's mask.
         gfx::program::uniform_ptr u_gi_feedback;
-        /// The resolve's minimum neighbour weight (cs_gi_reflection_resolve.sc).
+        /// The resolve's minimum neighbour weight (cs_gi_reflection_resolve.eshader).
         gfx::program::uniform_ptr u_gi_reflection_resolve;
         /// The velocity buffer for the screen trace and the temporal (gi_motion.sh).
         gi_pass::motion_uniforms motion;

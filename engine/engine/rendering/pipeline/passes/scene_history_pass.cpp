@@ -13,8 +13,8 @@ namespace unravel
 auto scene_history_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_snapshot = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_scene_snapshot.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_snapshot = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_scene_snapshot.eshader");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_snapshot);
     return is_valid();

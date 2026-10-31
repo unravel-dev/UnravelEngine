@@ -173,7 +173,7 @@ public:
     };
 
     /// Cloud shadow map of one frame: sun transmittance of the cloud layer over a square of
-    /// the world around the camera (fs_cloud_shadow.sc). Texel (u, v) is the entry point of
+    /// the world around the camera (fs_cloud_shadow.eshader). Texel (u, v) is the entry point of
     /// the sun ray at the layer base at world (origin + (uv - 0.5) * extent); the lighting
     /// pass projects surface points up the sun direction to read it, the irradiance bake
     /// reads the lowest mip as the sky's cloud coverage.
@@ -403,7 +403,7 @@ private:
     static auto layer_base_world_y(const run_params& params, const camera& camera) -> float;
 
     /// Whether a ray of `camera` can reach the layer. False when the camera is below the layer and every ray it casts
-    /// meets the ground first (fs_cloud.sc cloud_shell_interval): the pre-pass and the composite would draw nothing.
+    /// meets the ground first (fs_cloud.eshader cloud_shell_interval): the pre-pass and the composite would draw nothing.
     static auto is_layer_in_view(const run_params& params, const camera& camera) -> bool;
 
     /// Drops the per-view cloud history when the volumetric path is not in use.

@@ -1,5 +1,6 @@
 #include "asset_compiler.h"
 #include "asset_dependencies.h"
+#include "eshader_file.h"
 #include "texture_target.h"
 #include <engine/assets/impl/asset_writer.h>
 #include "asset_manifest.h"
@@ -35,6 +36,7 @@
 #include <engine/meta/rendering/font.hpp>
 #include <engine/meta/rendering/material.hpp>
 #include <engine/meta/rendering/mesh.hpp>
+#include <engine/meta/rendering/shader_variants.hpp>
 
 #include <engine/meta/scripting/script.hpp>
 
@@ -50,8 +52,10 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <iterator>
 #include <numeric>
 #include <set>
+#include <stdexcept>
 #include <thread>
 #include <fstream>
 #include <dotnetpp/dotnetpp.h>
@@ -756,34 +760,33 @@ auto compile_texture_to_file(const fs::path& input_path,
     return true;
 }
 
-auto compile_shader_to_file(const fs::path& input_path, 
-                           const fs::path& output_path,
-                           bgfx::RendererType::Enum renderer) -> bool
+/// What one shaderc run reads.
+struct shader_compile_input
 {
+    /// The file holding the code.
+    fs::path source;
+    /// The shader's name, whose vs_, fs_ or cs_ prefix gives the stage.
+    std::string name;
+    /// The file holding the varyings.
+    fs::path varying;
+    /// The include folders, separated by ';'.
+    std::string include_dirs;
+    /// Defines beside the engine's own, each NAME or NAME=VALUE.
+    std::vector<std::string> defines;
+};
 
-    std::string str_input = input_path.string();
+/// Runs shaderc once. @p error receives what it reported.
+auto run_shaderc(const shader_compile_input& input,
+                 const fs::path& output_path,
+                 bgfx::RendererType::Enum renderer,
+                 std::string& error) -> bool
+{
+    std::string str_input = input.source.string();
     std::string str_output = output_path.string();
-    
-    std::string file = input_path.stem().string();
-    fs::path dir = input_path.parent_path();
 
-    fs::path include = fs::resolve_protocol("engine:/data/shaders");
-    std::string str_include = include.string();
-    
-    fs::path varying = dir / (file + ".io");
+    const std::string& file = input.name;
+    std::string str_varying = input.varying.string();
 
-    fs::error_code err;
-    if(!fs::exists(varying, err))
-    {
-        varying = dir / "varying.def.io";
-    }
-    if(!fs::exists(varying, err))
-    {
-        varying = dir / "varying.def.sc";
-    }
-    
-    std::string str_varying = varying.string();
-    
     std::string str_platform;
     std::string str_profile;
     std::string str_type;
@@ -795,9 +798,10 @@ auto compile_shader_to_file(const fs::path& input_path,
 
     std::string str_opt = optimize ? "3" : "0";
 
-    bool vs = hpp::string_view(file).starts_with("vs_");
-    bool fs = hpp::string_view(file).starts_with("fs_");
-    bool cs = hpp::string_view(file).starts_with("cs_");
+    const auto stage = get_shader_stage(file);
+    bool vs = stage == shader_stage::vertex;
+    bool fs = stage == shader_stage::fragment;
+    bool cs = stage == shader_stage::compute;
 
     if(renderer == bgfx::RendererType::Vulkan)
     {
@@ -855,19 +859,26 @@ auto compile_shader_to_file(const fs::path& input_path,
     else
         str_type = "unknown";
 
+    // shaderc reads --define once, as one list.
+    std::string str_defines = "BGFX_CONFIG_MAX_BONES=" + std::to_string(gfx::get_max_blend_transforms());
+    for(const auto& define : input.defines)
+    {
+        str_defines += ";" + define;
+    }
+
     std::vector<std::string> args_array = {
         "-f",
         str_input,
         "-o",
         str_output,
         "-i",
-        str_include,
+        input.include_dirs,
         "--varyingdef",
         str_varying,
         "--type",
         str_type,
         "--define",
-        "BGFX_CONFIG_MAX_BONES=" + std::to_string(gfx::get_max_blend_transforms())
+        str_defines
         //        "--Werror"
     };
 
@@ -889,8 +900,6 @@ auto compile_shader_to_file(const fs::path& input_path,
         args_array.emplace_back(str_opt);
     }
 
-    std::string error;
-
     // Create an empty file at the output location
     {
         std::ofstream output_file(str_output);
@@ -899,15 +908,7 @@ auto compile_shader_to_file(const fs::path& input_path,
 
     auto shaderc = fs::resolve_protocol("binary:/shaderc");
 
-    if(!run_process(shaderc.string(), args_array, true, error))
-    {
-        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", str_input, output_path.filename().string(), error);
-        // Non-throwing: this runs inside atomic_write_file's noexcept callback, where any removal error would
-        // terminate the process. Whatever survives here, atomic_write_file's temp guard reclaims.
-        fs::remove(output_path, err);
-        return false;
-    }
-    return true;
+    return run_process(shaderc.string(), args_array, true, error);
 }
 
 /// The manifest of the source at `input_path` as it is now, with its dependencies' fingerprints.
@@ -953,6 +954,190 @@ auto write_manifest(const fs::path& output_path, const asset_manifest& manifest)
     }
 
     return ok;
+}
+
+/// The files one compile writes beside its output and reads back. Removed when the compile ends, however it ends; a
+/// crash leaves them to asset_writer::cleanup_stale_temp_files, which knows make_temp_path's names.
+class compile_temp_files
+{
+public:
+    explicit compile_temp_files(fs::path dir) : dir_(std::move(dir))
+    {
+    }
+
+    compile_temp_files(const compile_temp_files&) = delete;
+    auto operator=(const compile_temp_files&) -> compile_temp_files& = delete;
+
+    ~compile_temp_files()
+    {
+        for(const auto& path : paths_)
+        {
+            fs::error_code err;
+            fs::remove(path, err);
+        }
+    }
+
+    /// Makes @p path a new path in the folder, removed with this object. False when there is none to make.
+    auto add_path(fs::path& path) -> bool
+    {
+        fs::error_code err;
+        if(!asset_writer::make_temp_path(dir_, path, err))
+        {
+            return false;
+        }
+        paths_.push_back(path);
+        return true;
+    }
+
+private:
+    fs::path dir_;
+    std::vector<fs::path> paths_;
+};
+
+auto write_compile_input(const fs::path& path, const std::string& text) -> bool
+{
+    std::ofstream stream(path, std::ios::binary);
+    stream << text;
+    return stream.good();
+}
+
+/// One variant's shaderc run: what it wrote, or why there is nothing.
+struct eshader_variant_job
+{
+    const eshader_variant* variant = nullptr;
+    fs::path output;
+    std::vector<std::uint8_t> bytes;
+    std::string error;
+};
+
+auto is_failed_job(const eshader_variant_job& job) -> bool
+{
+    return job.bytes.empty();
+}
+
+void run_eshader_variant_job(eshader_variant_job& job, shader_compile_input input, bgfx::RendererType::Enum renderer)
+{
+    input.defines = job.variant->defines;
+    if(!run_shaderc(input, job.output, renderer, job.error))
+    {
+        return;
+    }
+    std::ifstream stream(job.output, std::ios::binary);
+    job.bytes = fs::read_stream(stream);
+    if(job.bytes.empty())
+    {
+        job.error = "shaderc reported success and wrote nothing.";
+    }
+}
+
+/// Logs the first failed job in full. One broken line usually fails every variant, with the same error each.
+void log_failed_eshader_variants(const fs::path& source_path, const std::vector<eshader_variant_job>& jobs)
+{
+    const auto first_failed = std::find_if(jobs.begin(), jobs.end(), is_failed_job);
+    APPLOG_ERROR("Failed compilation of {0} variant {1} [{2}] ({3} of {4} variants failed) with error: {5}",
+                 source_path.string(),
+                 first_failed->variant->name,
+                 fmt::join(first_failed->variant->defines, " "),
+                 std::count_if(jobs.begin(), jobs.end(), is_failed_job),
+                 jobs.size(),
+                 first_failed->error);
+}
+
+/// One job per variant of @p file, with the files they read written to @p temp_files.
+auto prepare_eshader_jobs(const fs::path& source_path,
+                          const eshader_file& file,
+                          compile_temp_files& temp_files,
+                          shader_compile_input& input,
+                          std::vector<eshader_variant_job>& jobs) -> bool
+{
+    if(!temp_files.add_path(input.source) || !temp_files.add_path(input.varying) ||
+       !write_compile_input(input.source, make_eshader_source_text(file, source_path)) ||
+       !write_compile_input(input.varying, make_eshader_varying_text(file)))
+    {
+        return false;
+    }
+    jobs.resize(file.variants.size());
+    for(std::size_t i = 0; i < jobs.size(); ++i)
+    {
+        jobs[i].variant = &file.variants[i];
+        if(!temp_files.add_path(jobs[i].output))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Runs shaderc once per variant, on the current pool.
+ *
+ * @param[out] compiled Every variant's output, filled only when all of them compile: a renderer's compiled file holds
+ *             a source's variants or does not change.
+ */
+auto compile_eshader_variants(const fs::path& source_path,
+                              const eshader_file& file,
+                              const fs::path& temp_dir,
+                              bgfx::RendererType::Enum renderer,
+                              std::vector<compiled_shader_variant>& compiled) -> bool
+{
+    compile_temp_files temp_files(temp_dir);
+    shader_compile_input input;
+    input.name = source_path.stem().string();
+    // The code compiles from a temp folder, so the source's own folder comes first in the include list: what the code
+    // includes relative to itself is there.
+    input.include_dirs = source_path.parent_path().string() + ";" + fs::resolve_protocol("engine:/data/shaders").string();
+    std::vector<eshader_variant_job> jobs;
+    if(!prepare_eshader_jobs(source_path, file, temp_files, input, jobs))
+    {
+        APPLOG_ERROR("Failed compilation of {0}: its temp files cannot be written to {1}.", source_path.string(), temp_dir.string());
+        return false;
+    }
+    poolstl::for_each_par_if(jobs.size() > 1,
+                             jobs.begin(),
+                             jobs.end(),
+                             [&](eshader_variant_job& job)
+                             {
+                                 run_eshader_variant_job(job, input, renderer);
+                             });
+    if(std::any_of(jobs.begin(), jobs.end(), is_failed_job))
+    {
+        log_failed_eshader_variants(source_path, jobs);
+        return false;
+    }
+    const auto varyings = get_eshader_varyings(file);
+    compiled.reserve(jobs.size());
+    for(auto& job : jobs)
+    {
+        compiled.push_back({job.variant->name, std::move(job.bytes), varyings});
+    }
+    return true;
+}
+
+auto compile_eshader_to_file(const fs::path& source_path, const fs::path& output, bgfx::RendererType::Enum renderer) -> bool
+{
+    eshader_file file;
+    std::string error;
+    if(!load_eshader_file(source_path, file, error))
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", source_path.string(), output.filename().string(), error);
+        return false;
+    }
+    std::vector<compiled_shader_variant> compiled;
+    if(!compile_eshader_variants(source_path, file, output.parent_path(), renderer, compiled))
+    {
+        return false;
+    }
+    fs::error_code err;
+    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) -> void
+    {
+        save_to_file_bin(temp_output.string(), compiled);
+    }, err);
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", source_path.string(), output.filename().string(), err.message());
+        return false;
+    }
+    return true;
 }
 
 auto write_minified_file(const fs::path& input_path, const fs::path& output_path) -> bool
@@ -1178,35 +1363,18 @@ template<>
 auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     auto absolute_path = resolve_input_file(key);
-    std::string str_input = absolute_path.string();
-    
-    auto extension = output.extension();
-    auto renderer = gfx::get_renderer_based_on_filename_extension(extension.string());
-    
-    fs::error_code err;
-    // Use atomic_write_file to handle the temporary file creation and atomic rename
-    asset_writer::atomic_write_file(output, [&](const fs::path& temp_output) -> void
+    auto renderer = gfx::get_renderer_based_on_filename_extension(output.extension().string());
+    // Before the source is read: an edit during the compile leaves a manifest the source no longer matches, so it compiles again.
+    const auto manifest = make_manifest<gfx::shader>(absolute_path);
+    if(!compile_eshader_to_file(absolute_path, output, renderer))
     {
-        compile_shader_to_file(
-            absolute_path,
-            temp_output,
-            renderer
-        );
-    }, err);
-    
-    if(err)
-    {
-        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
-            str_input, output.filename().string(), err.message());
         return false;
     }
-
-    if(!write_manifest_file<gfx::shader>(absolute_path, output))
+    if(!write_manifest(output, manifest))
     {
         APPLOG_ERROR("Failed to write manifest for compiled shader: {0}", output.string());
         return false;
     }
-    
     return true;
 }
 

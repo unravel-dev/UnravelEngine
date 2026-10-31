@@ -14,22 +14,22 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
 
     // Load shaders
-    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
+    auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
 
     // Load SSR shader (trace pass)
-    auto fs_ssr_fidelityfx = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_fidelityfx.sc");
+    auto fs_ssr_fidelityfx = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_fidelityfx.eshader");
 
     // Load temporal resolve shader
-    auto fs_ssr_temporal_resolve = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_temporal_resolve.sc");
+    auto fs_ssr_temporal_resolve = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_temporal_resolve.eshader");
 
     // Load composite shader
-    auto fs_ssr_composite = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_composite.sc");
+    auto fs_ssr_composite = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_composite.eshader");
 
     // Load unified blur compute shader for cone tracing
-    auto cs_ssr_blur = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_blur.sc");
+    auto cs_ssr_blur = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_blur.eshader");
 
     // Load spatial denoise compute shader
-    auto cs_ssr_spatial_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_spatial_denoise.sc");
+    auto cs_ssr_spatial_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_spatial_denoise.eshader");
 
     // Create SSR trace program
     fidelityfx_pixel_program_.cache_uniforms();

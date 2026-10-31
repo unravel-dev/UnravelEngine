@@ -1,0 +1,17 @@
+[inputs]
+vec2 v_texcoord0
+vec4 v_color0
+vec4 v_document_position
+vec4 v_edge_distance
+vec4 v_texture_rect
+float v_shape_kind
+
+[code]
+#include "../common.sh"
+#include "clip.sh"
+#include "edge.sh"
+
+void main()
+{
+    gl_FragColor = v_color0 * getShapeCoverage(v_edge_distance, v_shape_kind) * getClipCoverage(v_document_position);
+}

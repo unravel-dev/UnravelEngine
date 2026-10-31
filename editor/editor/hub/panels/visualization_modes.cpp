@@ -16,10 +16,10 @@ namespace
 //
 // Every color below is the literal value the corresponding debug shader writes, so the
 // swatch in the menu matches the pixel on screen. Sources:
-//   engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.sc   (G-Buffer / lighting / GTAO)
-//   engine_data/data/shaders/velocity/fs_velocity_debug.sc     (motion vectors)
-//   engine_data/data/shaders/gi/fs_gi_scene_debug.sc           (GI views)
-//   engine_data/data/shaders/particles/fs_particle_overdraw_debug.sc (particle overdraw)
+//   engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.eshader   (G-Buffer / lighting / GTAO)
+//   engine_data/data/shaders/velocity/fs_velocity_debug.eshader     (motion vectors)
+//   engine_data/data/shaders/gi/fs_gi_scene_debug.eshader           (GI views)
+//   engine_data/data/shaders/particles/fs_particle_overdraw_debug.eshader (particle overdraw)
 // Continuous readouts (roughness, depth, ...) carry no legend; their range is stated in the
 // description instead.
 // -----------------------------------------------------------------------------
@@ -66,8 +66,8 @@ constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
     {{0.85f, 0.15f, 0.10f}, "The min / max EV100 clamps; the metered marker resting on one = held"},
 }};
 
-// GI views: engine_data/data/shaders/gi/fs_gi_scene_debug.sc (the scene views) and
-// engine_data/data/shaders/gi/fs_gi_visualize_screen.sc (the dedicated reflection rays, the screen probe
+// GI views: engine_data/data/shaders/gi/fs_gi_scene_debug.eshader (the scene views) and
+// engine_data/data/shaders/gi/fs_gi_visualize_screen.eshader (the dedicated reflection rays, the screen probe
 // frames). The debug colours of the scene views go through the lit image's tone map, so on screen they
 // read slightly darker than these swatches. A colour the view's label in the viewport names
 // (gi_visualize_pass.cpp get_view_label) leads its row with the label's words.

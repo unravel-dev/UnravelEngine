@@ -128,7 +128,7 @@ auto pick_indirect_lighting_variant(bool gbuffer_has_subsurface, bool is_detaile
     return !gbuffer_has_subsurface && is_program_loaded(without_subsurface) ? without_subsurface : with_subsurface;
 }
 
-/// Where pbr_material::write_instance_constants puts the subsurface color (u_subsurface_color in fs_deferred_geom.sc).
+/// Where pbr_material::write_instance_constants puts the subsurface color (u_subsurface_color in fs_deferred_geom.eshader).
 constexpr size_t subsurface_instance_constant = 1;
 
 /// Turns the subsurface color among a material's instance @p constants black, as a run without subsurface draws it.
@@ -4697,103 +4697,111 @@ auto deferred::init(rtti::context& ctx) -> bool
     // Before any program, this pipeline's and its passes' alike (pipeline::init runs last).
     pre_exposure_sampler_ = std::make_shared<gfx::uniform>("s_pre_exposure", bgfx::UniformType::Sampler);
 
-    auto load_program = [&](const std::string& vs, const std::string& fs)
-    {
-        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/" + vs + ".sc");
-        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/" + fs + ".sc");
+    constexpr auto default_variant = gfx::shader::DEFAULT_VARIANT;
 
-        return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
+    auto load_program = [&](const std::string& vs, const std::string& vs_variant, const std::string& fs, const std::string& fs_variant)
+    {
+        auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/" + vs + ".eshader");
+        auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/" + fs + ".eshader");
+
+        return std::make_unique<gpu_program>(vs_shader, vs_variant, fs_shadfer, fs_variant);
+    };
+
+    const auto load_geom_program = [&](const std::string& vs_variant, const std::string& fs_variant)
+    {
+        return load_program("deferred_geom/vs_deferred_geom", vs_variant, "deferred_geom/fs_deferred_geom", fs_variant);
+    };
+
+    const auto load_velocity_program = [&](const std::string& vs_variant)
+    {
+        return load_program("velocity/vs_velocity", vs_variant, "velocity/fs_velocity", default_variant);
+    };
+
+    const auto load_screen_program = [&](const std::string& vs, const std::string& fs, const std::string& fs_variant = gfx::shader::DEFAULT_VARIANT)
+    {
+        return load_program(vs, default_variant, fs, fs_variant);
     };
 
     geom_program_.cache_uniforms();
-    geom_program_.program = load_program("deferred_geom/vs_deferred_geom", "deferred_geom/fs_deferred_geom");
+    geom_program_.program = load_geom_program(default_variant, default_variant);
 
     geom_program_skinned_.cache_uniforms();
-    geom_program_skinned_.program = load_program("deferred_geom/vs_deferred_geom_skinned", "deferred_geom/fs_deferred_geom");
+    geom_program_skinned_.program = load_geom_program("skinned", default_variant);
 
     geom_program_instanced_.cache_uniforms();
-    geom_program_instanced_.program = load_program("deferred_geom/vs_deferred_geom_instanced", "deferred_geom/fs_deferred_geom");
+    geom_program_instanced_.program = load_geom_program("instanced", default_variant);
 
     geom_program_instanced_material_.cache_uniforms();
-    geom_program_instanced_material_.program = load_program("deferred_geom/vs_deferred_geom_instanced_material",
-                                                            "deferred_geom/fs_deferred_geom_instance_material");
+    geom_program_instanced_material_.program = load_geom_program("instanced_material", "instance_material");
 
     geom_program_skinned_instanced_.cache_uniforms();
-    geom_program_skinned_instanced_.program =
-        load_program("deferred_geom/vs_deferred_geom_skinned_instanced", "deferred_geom/fs_deferred_geom");
+    geom_program_skinned_instanced_.program = load_geom_program("skinned_instanced", default_variant);
 
     geom_program_skinned_instanced_material_.cache_uniforms();
-    geom_program_skinned_instanced_material_.program =
-        load_program("deferred_geom/vs_deferred_geom_skinned_instanced_material",
-                     "deferred_geom/fs_deferred_geom_instance_material");
+    geom_program_skinned_instanced_material_.program = load_geom_program("skinned_instanced_material", "instance_material");
 
     geom_program_skinned_baked_instanced_.cache_uniforms();
-    geom_program_skinned_baked_instanced_.program =
-        load_program("deferred_geom/vs_deferred_geom_skinned_baked_instanced", "deferred_geom/fs_deferred_geom");
+    geom_program_skinned_baked_instanced_.program = load_geom_program("skinned_baked_instanced", default_variant);
 
 
     card_capture_program_.cache_uniforms();
-    card_capture_program_.program =
-        load_program("deferred_geom/vs_deferred_geom_card_capture", "deferred_geom/fs_deferred_geom_card_capture");
+    card_capture_program_.program = load_geom_program("card_capture", "card_capture");
 
     velocity_program_.cache_uniforms();
-    velocity_program_.program = load_program("velocity/vs_velocity", "velocity/fs_velocity");
+    velocity_program_.program = load_velocity_program(default_variant);
 
     velocity_program_skinned_.cache_uniforms();
-    velocity_program_skinned_.program = load_program("velocity/vs_velocity_skinned", "velocity/fs_velocity");
+    velocity_program_skinned_.program = load_velocity_program("skinned");
 
     velocity_program_instanced_.cache_uniforms();
-    velocity_program_instanced_.program = load_program("velocity/vs_velocity_instanced", "velocity/fs_velocity");
+    velocity_program_instanced_.program = load_velocity_program("instanced");
 
     velocity_program_skinned_instanced_.cache_uniforms();
-    velocity_program_skinned_instanced_.program =
-        load_program("velocity/vs_velocity_skinned_instanced", "velocity/fs_velocity");
+    velocity_program_skinned_instanced_.program = load_velocity_program("skinned_instanced");
 
     velocity_program_skinned_baked_instanced_.cache_uniforms();
-    velocity_program_skinned_baked_instanced_.program =
-        load_program("velocity/vs_velocity_skinned_baked_instanced", "velocity/fs_velocity");
+    velocity_program_skinned_baked_instanced_.program = load_velocity_program("skinned_baked_instanced");
 
     velocity_camera_program_.cache_uniforms();
-    velocity_camera_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_camera");
+    velocity_camera_program_.program = load_screen_program("vs_clip_quad", "velocity/fs_velocity_camera");
 
     velocity_debug_program_.cache_uniforms();
-    velocity_debug_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_debug");
+    velocity_debug_program_.program = load_screen_program("vs_clip_quad", "velocity/fs_velocity_debug");
 
     particle_overdraw_debug_program_.cache_uniforms();
-    particle_overdraw_debug_program_.program = load_program("vs_clip_quad", "particles/fs_particle_overdraw_debug");
+    particle_overdraw_debug_program_.program = load_screen_program("vs_clip_quad", "particles/fs_particle_overdraw_debug");
 
     exposure_debug_program_.cache_uniforms();
-    exposure_debug_program_.program = load_program("vs_clip_quad", "exposure/fs_exposure_debug");
+    exposure_debug_program_.program = load_screen_program("vs_clip_quad", "exposure/fs_exposure_debug");
 
     sphere_ref_probe_program_.cache_uniforms();
-    sphere_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");
+    sphere_ref_probe_program_.program = load_screen_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");
 
     box_ref_probe_program_.cache_uniforms();
-    box_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_box_reflection_probe");
+    box_ref_probe_program_.program = load_screen_program("vs_clip_quad_ex", "reflection_probe/fs_box_reflection_probe");
 
     indirect_lighting_program_.cache_uniforms();
-    indirect_lighting_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light");
+    indirect_lighting_program_.program = load_screen_program("vs_clip_quad", "fs_deferred_indirect_light");
 
     indirect_lighting_probe_program_.cache_uniforms();
-    indirect_lighting_probe_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light_probe");
+    indirect_lighting_probe_program_.program = load_screen_program("vs_clip_quad", "fs_deferred_indirect_light", "probe");
 
-    const auto load_no_screen_inputs_variants = [&](indirect_lighting_no_screen_inputs_variants& variants, const std::string& fs)
+    const auto load_no_screen_inputs_variants = [&](indirect_lighting_no_screen_inputs_variants& variants, const std::string& name)
     {
         const auto load_variant = [&](indirect_lighting_program& variant, const char* suffix)
         {
             variant.cache_uniforms();
-            variant.program = load_program("vs_clip_quad", fs + suffix);
+            variant.program = load_screen_program("vs_clip_quad", "fs_deferred_indirect_light", name + suffix);
         };
         load_variant(variants.base, "");
         load_variant(variants.no_subsurface, "_no_subsurface");
         load_variant(variants.low_detail, "_low_detail");
         load_variant(variants.no_subsurface_low_detail, "_no_subsurface_low_detail");
     };
-    load_no_screen_inputs_variants(indirect_lighting_no_screen_inputs_, "fs_deferred_indirect_light_no_screen_inputs");
-    load_no_screen_inputs_variants(indirect_lighting_probe_no_screen_inputs_,
-                                   "fs_deferred_indirect_light_probe_no_screen_inputs");
+    load_no_screen_inputs_variants(indirect_lighting_no_screen_inputs_, "no_screen_inputs");
+    load_no_screen_inputs_variants(indirect_lighting_probe_no_screen_inputs_, "probe_no_screen_inputs");
 
-    auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.sc");
+    auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.eshader");
     if(cs_irradiance)
     {
         irradiance_compute_program_.cache_uniforms();
@@ -4801,7 +4809,7 @@ auto deferred::init(rtti::context& ctx) -> bool
     }
 
     debug_visualization_program_.cache_uniforms();
-    debug_visualization_program_.program = load_program("vs_clip_quad", "gbuffer/fs_gbuffer_visualize");
+    debug_visualization_program_.program = load_screen_program("vs_clip_quad", "gbuffer/fs_gbuffer_visualize");
 
     // Color lighting.
 
@@ -4827,62 +4835,64 @@ auto deferred::init(rtti::context& ctx) -> bool
     cache_light_uniforms(cache_light_uniforms, color_lighting_no_shadow_);
     cache_light_uniforms(cache_light_uniforms, color_lighting_);
     cache_light_uniforms(cache_light_uniforms, color_lighting_pcf_tent_);
-    // Each light program with its variants (light_program_variants).
-    const auto load_light_program = [&](light_program_variants& variants, const std::string& name)
+    // Each light program with its variants (light_program_variants). A shadow filter starts its variants' names; without
+    // shadows there is none.
+    const auto load_light_program = [&](light_program_variants& variants, const std::string& fs, const std::string& shadow_filter)
     {
-        variants.full.program = load_program("vs_clip_quad", name);
-        variants.no_contact.program = load_program("vs_clip_quad", name + "_no_contact");
-        variants.no_contact_no_subsurface.program = load_program("vs_clip_quad", name + "_no_contact_no_subsurface");
+        const auto prefix = shadow_filter.empty() ? std::string{} : shadow_filter + "_";
+        variants.full.program = load_screen_program("vs_clip_quad", fs, shadow_filter.empty() ? default_variant : shadow_filter);
+        variants.no_contact.program = load_screen_program("vs_clip_quad", fs, prefix + "no_contact");
+        variants.no_contact_no_subsurface.program = load_screen_program("vs_clip_quad", fs, prefix + "no_contact_no_subsurface");
     };
 
     // clang-format off
-    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::spot)], "fs_deferred_spot_light");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light_hard");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light_pcf");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light_pcss");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light_vsm");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light_esm");
+    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::spot)], "fs_deferred_spot_light", "");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light", "hard");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light", "pcf");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light", "pcss");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light", "vsm");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light", "esm");
 
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light_hard_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light_pcf_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light_pcss_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light_vsm_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light_esm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light", "hard_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light", "pcf_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light", "pcss_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light", "vsm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light", "esm_linear");
 
-    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::point)], "fs_deferred_point_light");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_point_light_hard");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light_pcf");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light_pcss");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light_vsm");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light_esm");
+    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::point)], "fs_deferred_point_light", "");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_point_light", "hard");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light", "pcf");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light", "pcss");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light", "vsm");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light", "esm");
 
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_point_light_hard_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light_pcf_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light_pcss_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light_vsm_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light_esm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_point_light", "hard_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light", "pcf_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light", "pcss_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light", "vsm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light", "esm_linear");
 
-    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::directional)], "fs_deferred_directional_light");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light_hard");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light_pcf");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light_pcss");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light_vsm");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light_esm");
+    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::directional)], "fs_deferred_directional_light", "");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light", "hard");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light", "pcf");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light", "pcss");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light", "vsm");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light", "esm");
 
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light_hard_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light_pcf_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light_pcss_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light_vsm_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light_esm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light", "hard_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light", "pcf_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light", "pcss_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light", "vsm_linear");
+    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light", "esm_linear");
 
     // Linear spot and point maps keep the point-tap PCF and have no tent sizes; point lights never reach the 7x7.
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_spot_light_pcf_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_spot_light_pcf_tent7");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_point_light_pcf_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light_pcf_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light_pcf_tent7");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light_pcf_linear_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light_pcf_linear_tent7");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_spot_light", "pcf_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_spot_light", "pcf_tent7");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_point_light", "pcf_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light", "pcf_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light", "pcf_tent7");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light", "pcf_linear_tent3");
+    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light", "pcf_linear_tent7");
     // clang-format on
 
     ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");

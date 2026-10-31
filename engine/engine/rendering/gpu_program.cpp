@@ -1,11 +1,41 @@
 #include "gpu_program.h"
 #include <algorithm>
+#include <logging/logging.h>
 
 namespace unravel
 {
-gpu_program::gpu_program(asset_handle<gfx::shader> compute_shader)
+namespace
 {
-    attach_shader(std::move(compute_shader));
+/// The names @p shader answers to, sorted, for an error message.
+auto list_variant_names(const gfx::shader& shader) -> std::string
+{
+    std::vector<std::string> names = {gfx::shader::DEFAULT_VARIANT};
+    for(const auto& variant : shader.variants)
+    {
+        names.push_back(variant.first);
+    }
+    std::sort(names.begin(), names.end());
+    return fmt::format("{}", fmt::join(names, ", "));
+}
+} // namespace
+
+auto describe_varying_mismatches(const gfx::shader& vertex, const gfx::shader& fragment) -> std::string
+{
+    std::vector<std::string> mismatches;
+    for(const auto& [name, declaration] : fragment.varyings)
+    {
+        const auto written = vertex.varyings.find(name);
+        if(written != vertex.varyings.end() && written->second != declaration)
+        {
+            mismatches.push_back(fmt::format("{} is {} in the vertex shader and {} in the fragment shader", name, written->second, declaration));
+        }
+    }
+    return fmt::format("{}", fmt::join(mismatches, ", "));
+}
+
+gpu_program::gpu_program(asset_handle<gfx::shader> compute_shader, std::string variant)
+{
+    attach_shader(std::move(compute_shader), std::move(variant));
     populate();
 }
 
@@ -16,8 +46,19 @@ gpu_program::gpu_program(asset_handle<gfx::shader> vertex_shader, asset_handle<g
     populate();
 }
 
-void gpu_program::attach_shader(asset_handle<gfx::shader> shader)
+gpu_program::gpu_program(asset_handle<gfx::shader> vertex_shader,
+                         std::string vertex_variant,
+                         asset_handle<gfx::shader> fragment_shader,
+                         std::string fragment_variant)
 {
+    attach_shader(std::move(vertex_shader), std::move(vertex_variant));
+    attach_shader(std::move(fragment_shader), std::move(fragment_variant));
+    populate();
+}
+
+void gpu_program::attach_shader(asset_handle<gfx::shader> shader, std::string variant)
+{
+    variants_.emplace_back(std::move(variant));
     if(!shader)
     {
         shaders_.push_back(shader);
@@ -27,39 +68,92 @@ void gpu_program::attach_shader(asset_handle<gfx::shader> shader)
     shaders_.emplace_back(std::move(shader));
 }
 
-void gpu_program::populate()
+auto gpu_program::find_refusal(const shader_assets& assets, const selected_shaders& selected) const -> std::string
 {
-    bool all_valid = std::all_of(std::begin(shaders_),
-                                 std::end(shaders_),
-                                 [](auto& shader)
-                                 {
-                                     return shader && shader.get()->is_valid();
-                                 });
-
-    if(all_valid)
+    for(std::size_t i = 0; i < shaders_.size(); ++i)
     {
-        if(program_)
+        if(selected[i] == nullptr && !asset_handle<gfx::shader>::is_empty(assets[i]))
         {
-            program_.reset();
-        }
-        if(shaders_.size() == 1)
-        {
-            const auto& compute_shader = shaders_[0];
-            program_ = std::make_shared<gfx::program>(*compute_shader.get());
-        }
-        else if(shaders_.size() == 2)
-        {
-            const auto& vertex_shader = shaders_[0];
-            const auto& fragment_shader = shaders_[1];
-            program_ = std::make_shared<gfx::program>(*vertex_shader.get(), *fragment_shader.get());
-        }
-
-        for(std::size_t i = 0; i < shaders_.size(); ++i)
-        {
-            const auto& shader = shaders_[i];
-            shaders_cached_[i] = shader.get();
+            return fmt::format("Shader {0} has no variant named {1}. It has: {2}.", shaders_[i].id(), variants_[i], list_variant_names(*assets[i]));
         }
     }
+    if(shaders_.size() != 2 || selected[0] == nullptr || selected[1] == nullptr)
+    {
+        return {};
+    }
+    // bgfx checks only the names, and D3D12 does not survive one name with two types: the pipeline state fails to create.
+    const auto mismatches = describe_varying_mismatches(*selected[0], *selected[1]);
+    if(mismatches.empty())
+    {
+        return {};
+    }
+    return fmt::format("Shaders {0} and {1} cannot make a program, since both stages must declare a varying the same way: {2}.",
+                       describe_shader(0),
+                       describe_shader(1),
+                       mismatches);
+}
+
+auto gpu_program::describe_shader(std::size_t index) const -> std::string
+{
+    return variants_[index] == gfx::shader::DEFAULT_VARIANT ? shaders_[index].id() : shaders_[index].id() + "#" + variants_[index];
+}
+
+void gpu_program::create_program(const selected_shaders& selected)
+{
+    program_.reset();
+    if(shaders_.size() == 1)
+    {
+        program_ = std::make_shared<gfx::program>(*selected[0]);
+    }
+    else if(shaders_.size() == 2)
+    {
+        program_ = std::make_shared<gfx::program>(*selected[0], *selected[1]);
+        if(!program_->is_valid())
+        {
+            // bgfx only traces this in debug builds, and a pass whose program is invalid silently draws nothing.
+            APPLOG_ERROR("Shaders {0} and {1} do not make a valid program. The vertex shader's outputs and the fragment "
+                         "shader's inputs must list the same names, and a sampler both declare must have one dimension.",
+                         describe_shader(0),
+                         describe_shader(1));
+        }
+    }
+}
+
+void gpu_program::populate()
+{
+    // The assets are held for the whole rebuild: a reload on another thread can replace them, and the variants live in them.
+    shader_assets assets{nullptr, nullptr};
+    selected_shaders selected{nullptr, nullptr};
+    for(std::size_t i = 0; i < shaders_.size(); ++i)
+    {
+        if(!shaders_[i])
+        {
+            return;
+        }
+        assets[i] = shaders_[i].get();
+        selected[i] = assets[i]->find_variant(variants_[i]);
+    }
+    const auto refusal = find_refusal(assets, selected);
+    if(!refusal.empty())
+    {
+        APPLOG_ERROR("{0}", refusal);
+        // An empty program rather than none: not every caller checks begin() before asking for the handle. The cached
+        // assets keep begin() from trying again, and logging again, until a reload changes one of them.
+        program_ = std::make_shared<gfx::program>();
+        shaders_cached_ = assets;
+        return;
+    }
+    // A shader that failed to load: begin() tries again every frame, until a reload brings it.
+    const auto is_drawable = [](const gfx::shader* shader)
+    {
+        return shader != nullptr && shader->is_valid();
+    };
+    if(!std::all_of(selected.begin(), selected.begin() + shaders_.size(), is_drawable))
+    {
+        return;
+    }
+    create_program(selected);
+    shaders_cached_ = assets;
 }
 
 void gpu_program::set_texture(uint8_t stage,

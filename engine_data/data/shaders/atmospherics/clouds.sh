@@ -5,8 +5,8 @@
 // is sampled inside dynamic loops, and implicit-gradient reads would force the HLSL compiler
 // to unroll them (X3511).
 
-// Shared cloud model for the volumetric pre-pass (fs_cloud.sc), the flat single-sample path
-// (fs_sky.sc) and the cloud shadow map (fs_cloud_shadow.sc). Every pass must shape and light
+// Shared cloud model for the volumetric pre-pass (fs_cloud.eshader), the flat single-sample path
+// (fs_sky.eshader) and the cloud shadow map (fs_cloud_shadow.eshader). Every pass must shape and light
 // a cloud sample the same way so the modes agree with each other and with the shadows they
 // cast; everything that is not geometry-specific lives here.
 //

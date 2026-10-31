@@ -13,10 +13,10 @@ auto blit_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
 
     // 2) Load a fullscreen‐quad vertex shader and a simple blit fragment shader
-    //    vs_clip_quad.sc is assumed to output a full‐screen triangle/quad.
-    //    fs_blit.sc should sample a 2D texture “s_input” and output it unchanged.
-    auto vs_fullscreen = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_blit = am.get_asset<gfx::shader>("engine:/data/shaders/fs_blit.sc");
+    //    vs_clip_quad.eshader is assumed to output a full‐screen triangle/quad.
+    //    fs_blit.eshader should sample a 2D texture “s_input” and output it unchanged.
+    auto vs_fullscreen = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_blit = am.get_asset<gfx::shader>("engine:/data/shaders/fs_blit.eshader");
 
     // 3) Create our GPU program
     blit_program_.cache_uniforms();

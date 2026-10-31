@@ -27,9 +27,9 @@ using gi_pass::has_view_size;
 
 /// The pixels per reflection tile side (gi_reflection_common.sh GI_REFLECTION_TILE_PIXELS).
 constexpr uint32_t reflection_tile_pixels = 8;
-/// Trace texels per surface cache feedback tile side (cs_gi_reflection_feedback.sc GI_FEEDBACK_TILE).
+/// Trace texels per surface cache feedback tile side (cs_gi_reflection_feedback.eshader GI_FEEDBACK_TILE).
 constexpr uint32_t feedback_tile_texels = 16;
-/// The stage cs_gi_reflection_temporal.sc declares the GPU pre-exposure at (PRE_EXPOSURE_STAGE). The screen trace
+/// The stage cs_gi_reflection_temporal.eshader declares the GPU pre-exposure at (PRE_EXPOSURE_STAGE). The screen trace
 /// takes pre_exposure.sh's default, the distance-field stage reads it from the environment SH (s_gi_env_sh).
 constexpr uint8_t temporal_pre_exposure_stage = 7;
 } // namespace
@@ -88,7 +88,7 @@ auto gi_reflection_pass::init(rtti::context& ctx) -> bool
     uniforms_.cache_uniforms();
     const auto load = [&](const char* name) -> gpu_program::ptr
     {
-        auto shader = am.get_asset<gfx::shader>(std::string("engine:/data/shaders/gi/") + name + ".sc");
+        auto shader = am.get_asset<gfx::shader>(std::string("engine:/data/shaders/gi/") + name + ".eshader");
         return std::make_shared<gpu_program>(shader);
     };
     screen_program_ = load("cs_gi_reflection_screen");

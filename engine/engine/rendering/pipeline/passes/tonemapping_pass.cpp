@@ -42,7 +42,7 @@ auto compute_white_balance_lms(float temperature, float tint) -> math::vec3
 
 constexpr const char* lut_key = "TONEMAPPING_LUT";
 
-/// The tone curve and colour grading a tonemapping LUT holds: the uniforms of fs_tonemapping_lut.sc.
+/// The tone curve and colour grading a tonemapping LUT holds: the uniforms of fs_tonemapping_lut.eshader.
 struct lut_grading
 {
     std::array<float, 4> tonemapping{};
@@ -94,9 +94,9 @@ auto tonemapping_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_atmospherics = am.get_asset<gfx::shader>("engine:/data/shaders/tonemapping/fs_tonemapping.sc");
-    auto fs_lut = am.get_asset<gfx::shader>("engine:/data/shaders/tonemapping/fs_tonemapping_lut.sc");
+    auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_atmospherics = am.get_asset<gfx::shader>("engine:/data/shaders/tonemapping/fs_tonemapping.eshader");
+    auto fs_lut = am.get_asset<gfx::shader>("engine:/data/shaders/tonemapping/fs_tonemapping_lut.eshader");
 
     tonemapping_program_.cache_uniforms();
     tonemapping_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_atmospherics);

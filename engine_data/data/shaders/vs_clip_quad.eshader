@@ -1,0 +1,15 @@
+[inputs]
+vec3 a_position
+vec2 a_texcoord0
+
+[outputs]
+vec2 v_texcoord0
+
+[code]
+#include "common.sh"
+
+void main()
+{
+	gl_Position = vec4( a_position.xyz, 1.0f );
+	v_texcoord0 = a_texcoord0;;
+}

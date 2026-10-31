@@ -370,11 +370,11 @@ private:
         gfx::program::uniform_ptr s_fog_volume;
         gfx::program::uniform_ptr u_pre_exposure;
         std::unique_ptr<gpu_program> program;
-        /// The same composite with the froxel column in front of the analytic fog (fs_fog_volumetric.sc).
+        /// The same composite with the froxel column in front of the analytic fog (fs_fog.eshader#volumetric).
         std::unique_ptr<gpu_program> volumetric_program;
     } fog_program_;
 
-    /// The froxel lighting and integration dispatches (cs_fog_lighting.sc, cs_fog_integrate.sc).
+    /// The froxel lighting and integration dispatches (cs_fog_lighting.eshader, cs_fog_integrate.eshader).
     struct volumetric_programs : uniforms_cache
     {
         void cache_uniforms();
@@ -403,7 +403,7 @@ private:
         gfx::program::uniform_ptr u_shadow_bias_params;
         std::unique_ptr<gpu_program> lighting;
         std::unique_ptr<gpu_program> integrate;
-        /// The point and spot lights per cluster of froxels, ahead of the lighting (cs_fog_cull.sc).
+        /// The point and spot lights per cluster of froxels, ahead of the lighting (cs_fog_cull.eshader).
         std::unique_ptr<gpu_program> cull;
     } volumetric_;
 };

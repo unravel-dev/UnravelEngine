@@ -1,0 +1,50 @@
+[variants]
+default                                SM_NOOP
+esm                                    SM_OMNI SM_ESM
+esm_linear                             SM_OMNI SM_ESM SM_LINEAR
+esm_linear_no_contact                  SM_OMNI SM_ESM SM_LINEAR PBR_CONTACT_SHADOWS=0
+esm_linear_no_contact_no_subsurface    SM_OMNI SM_ESM SM_LINEAR PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+esm_no_contact                         SM_OMNI SM_ESM PBR_CONTACT_SHADOWS=0
+esm_no_contact_no_subsurface           SM_OMNI SM_ESM PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+hard                                   SM_OMNI SM_HARD
+hard_linear                            SM_OMNI SM_HARD SM_LINEAR
+hard_linear_no_contact                 SM_OMNI SM_HARD SM_LINEAR PBR_CONTACT_SHADOWS=0
+hard_linear_no_contact_no_subsurface   SM_OMNI SM_HARD SM_LINEAR PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+hard_no_contact                        SM_OMNI SM_HARD PBR_CONTACT_SHADOWS=0
+hard_no_contact_no_subsurface          SM_OMNI SM_HARD PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+no_contact                             SM_NOOP PBR_CONTACT_SHADOWS=0
+no_contact_no_subsurface               SM_NOOP PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+pcf                                    SM_OMNI SM_PCF
+pcf_linear                             SM_OMNI SM_PCF SM_LINEAR
+pcf_linear_no_contact                  SM_OMNI SM_PCF SM_LINEAR PBR_CONTACT_SHADOWS=0
+pcf_linear_no_contact_no_subsurface    SM_OMNI SM_PCF SM_LINEAR PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+pcf_no_contact                         SM_OMNI SM_PCF PBR_CONTACT_SHADOWS=0
+pcf_no_contact_no_subsurface           SM_OMNI SM_PCF PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+pcf_tent3                              SM_OMNI SM_PCF PCF_TENT_SIZE=3
+pcf_tent3_no_contact                   SM_OMNI SM_PCF PCF_TENT_SIZE=3 PBR_CONTACT_SHADOWS=0
+pcf_tent3_no_contact_no_subsurface     SM_OMNI SM_PCF PCF_TENT_SIZE=3 PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+pcss                                   SM_OMNI SM_PCSS
+pcss_linear                            SM_OMNI SM_PCSS SM_LINEAR
+pcss_linear_no_contact                 SM_OMNI SM_PCSS SM_LINEAR PBR_CONTACT_SHADOWS=0
+pcss_linear_no_contact_no_subsurface   SM_OMNI SM_PCSS SM_LINEAR PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+pcss_no_contact                        SM_OMNI SM_PCSS PBR_CONTACT_SHADOWS=0
+pcss_no_contact_no_subsurface          SM_OMNI SM_PCSS PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+vsm                                    SM_OMNI SM_VSM
+vsm_linear                             SM_OMNI SM_VSM SM_LINEAR
+vsm_linear_no_contact                  SM_OMNI SM_VSM SM_LINEAR PBR_CONTACT_SHADOWS=0
+vsm_linear_no_contact_no_subsurface    SM_OMNI SM_VSM SM_LINEAR PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+vsm_no_contact                         SM_OMNI SM_VSM PBR_CONTACT_SHADOWS=0
+vsm_no_contact_no_subsurface           SM_OMNI SM_VSM PBR_CONTACT_SHADOWS=0 PBR_SUBSURFACE=0
+
+[inputs]
+vec2 v_texcoord0
+
+[code]
+#define POINT_LIGHT 1
+
+#include "fs_pbr_lighting.sh"
+
+void main()
+{
+    gl_FragColor = pbr_light(v_texcoord0, gl_FragCoord.xy);
+}

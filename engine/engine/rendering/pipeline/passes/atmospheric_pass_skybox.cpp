@@ -11,8 +11,8 @@ bool atmospheric_pass_skybox::init(rtti::context& ctx)
     auto& am = ctx.get_cached<asset_manager>();
 
     // 2) Load skybox shaders
-    auto vs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/vs_skybox.sc");
-    auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_skybox.sc");
+    auto vs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/vs_skybox.eshader");
+    auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_skybox.eshader");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(vs_sky, fs_sky);
 

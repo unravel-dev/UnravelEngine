@@ -13,7 +13,7 @@
  * (weight 1 / (1 + GI_TEMPORAL_INVALID_CURRENT_WEIGHT N)).
  *
  * The AO is carried as (unit bent normal, visibility) and stored packed (GiPackShortRangeAO). The includer declares
- * s_gi_depth, s_gi_normal, s_gi_short_range_ao (this frame's search, cs_gi_short_range_ao.sc) and
+ * s_gi_depth, s_gi_normal, s_gi_short_range_ao (this frame's search, cs_gi_short_range_ao.eshader) and
  * s_gi_short_range_ao_history (last frame's accumulation) as uint samplers, and includes gi_history.sh.
  */
 

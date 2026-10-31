@@ -272,7 +272,7 @@ protected:
 
 public:
     /// Linear base color, linear subsurface color, emissive premultiplied by its intensity, surface data: what
-    /// fs_deferred_geom.sc reads as u_base_color, u_subsurface_color, u_emissive_color and u_surface_data.
+    /// fs_deferred_geom.eshader reads as u_base_color, u_subsurface_color, u_emissive_color and u_surface_data.
     auto write_instance_constants(math::vec4* out) const -> uint32_t override;
 
     /**

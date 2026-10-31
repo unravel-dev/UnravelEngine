@@ -2,8 +2,8 @@
 #define TONEMAPPING_LUT_SH_HEADER_GUARD
 
 /*
- * The table the tone curve, its colour grading and the display encoding are baked into (fs_tonemapping_lut.sc
- * writes it, fs_tonemapping.sc reads it): a TONEMAPPING_LUT_SIZE^3 cube stored as TONEMAPPING_LUT_SIZE slices side
+ * The table the tone curve, its colour grading and the display encoding are baked into (fs_tonemapping_lut.eshader
+ * writes it, fs_tonemapping.eshader reads it): a TONEMAPPING_LUT_SIZE^3 cube stored as TONEMAPPING_LUT_SIZE slices side
  * by side, red along x inside a slice, green along y, blue across the slices.
  *
  * Each axis maps linear post-exposure colour through a shaper: entry 0 is exactly 0, so black stays black, and

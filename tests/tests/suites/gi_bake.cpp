@@ -2822,7 +2822,7 @@ void test_clipmap_partial_cadence_is_staggered()
 /**
  * @brief The compose DISPATCH must produce the same voxels as the CPU composer.
  *
- * Transcription of cs_gi_clipmap_compose.sc, in the same style as
+ * Transcription of cs_gi_clipmap_compose.eshader, in the same style as
  * `test_cache_shader_transcription_matches_cpu`: the shader cannot be run here, so its algorithm is
  * reimplemented against the same data and the two are compared byte for byte.
  *

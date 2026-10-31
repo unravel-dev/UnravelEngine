@@ -91,7 +91,8 @@ inline auto get_suported_dependencies_formats<unravel::ui_tree>() -> const std::
 template<>
 inline auto get_suported_formats<gfx::shader>() -> const std::vector<std::string>&
 {
-    static std::vector<std::string> formats = {".sc"};
+    // Deliberately not ".shader" - is_format matches by substring, and that extension would claim ".sh" headers.
+    static std::vector<std::string> formats = {".eshader"};
     return formats;
 }
 
@@ -447,7 +448,7 @@ inline auto is_embedded_key(const std::string& key) noexcept -> bool
 /**
  * @brief Source path a compiled artifact was built from: drops the ".asset" suffix and the renderer
  * extension a shader variant appends after it ("a.001_b.png.asset" -> "a.001_b.png",
- * "x.sc.asset.dxbc" -> "x.sc"). Every '.' of the source name is kept, which
+ * "x.eshader.asset.dxbc" -> "x.eshader"). Every '.' of the source name is kept, which
  * fs::reduce_trailing_extensions cannot do: it cut "a.001_b.png.asset" down to "a.001_b". A path
  * without the compiled suffix is reduced the old way.
  */
@@ -682,7 +683,7 @@ inline auto is_binary(const std::string& ex) -> bool
     }
     if(is_format<gfx::shader>(ex))
     {
-        // .sc shader files are text-based
+        // .eshader files are text-based
         return false;
     }
     if(is_format<unravel::material>(ex))

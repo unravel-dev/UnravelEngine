@@ -55,7 +55,7 @@ public:
     /**
      * @brief The coverage: R8, one texel per coverage_downsample^3 voxels, levels stacked along Z like the
      *        distance; 0 where only two-sided meshes lie near the voxel, 1 elsewhere. The compose writes it with the
-     *        distance (cs_gi_clipmap_compose.sc); the global SDF march reads it (gi/sdf_clipmap.sh
+     *        distance (cs_gi_clipmap_compose.eshader); the global SDF march reads it (gi/sdf_clipmap.sh
      *        SdfSampleClipmapCoverage).
      */
     auto get_coverage_texture() const -> const gfx::texture::ptr&
@@ -70,7 +70,7 @@ public:
      * @brief The coarse mip of every level: R8, one texel per mip_factor^3 voxels, levels stacked along Z like the
      *        distance, each texel the distance from its centre to the level's own surfaces over mip_factor times the
      *        level's encode range. Built from each level right after it composes (gi_clipmap_compose_pass,
-     *        cs_gi_clipmap_mip.sc); the global SDF march steps through empty space by it (gi/sdf_clipmap.sh
+     *        cs_gi_clipmap_mip.eshader); the global SDF march steps through empty space by it (gi/sdf_clipmap.sh
      *        SdfSampleClipmapMip). Zero (the most negative distance, no skip) until built.
      */
     auto get_mip_texture() const -> const gfx::texture::ptr&

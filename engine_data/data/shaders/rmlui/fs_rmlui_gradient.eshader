@@ -1,0 +1,14 @@
+[inputs]
+vec2 v_texcoord0
+vec4 v_color0
+vec4 v_document_position
+
+[code]
+#include "../common.sh"
+#include "clip.sh"
+#include "gradient.sh"
+
+void main()
+{
+    gl_FragColor = v_color0 * getGradientColor(v_texcoord0) * getClipCoverage(v_document_position);
+}

@@ -2,8 +2,8 @@
 #define FOG_LIGHTS_SH_HEADER_GUARD
 
 /*
- * The point and spot lights the volumetric fog scatters (fog_pass), shared by the light culling (cs_fog_cull.sc) and
- * the froxel lighting (cs_fog_lighting.sc). The grid splits into clusters of FOG_CLUSTER_COLUMNS x FOG_CLUSTER_COLUMNS
+ * The point and spot lights the volumetric fog scatters (fog_pass), shared by the light culling (cs_fog_cull.eshader) and
+ * the froxel lighting (cs_fog_lighting.eshader). The grid splits into clusters of FOG_CLUSTER_COLUMNS x FOG_CLUSTER_COLUMNS
  * froxels by FOG_CLUSTER_SLICES slices; the culling writes, per cluster, a mask of the lights whose range reaches
  * into it, and the lighting reads only those. Includers include fog_volume.sh (u_fog_grid) first.
  */

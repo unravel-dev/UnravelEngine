@@ -29,8 +29,9 @@ public:
      * @brief Constructor to create a program from a compute shader asset.
      *
      * @param compute_shader The compute shader asset.
+     * @param variant The compute shader's variant, as its .eshader lists it.
      */
-    gpu_program(asset_handle<gfx::shader> compute_shader);
+    gpu_program(asset_handle<gfx::shader> compute_shader, std::string variant = gfx::shader::DEFAULT_VARIANT);
 
     /**
      * @brief Constructor to create a program from vertex and fragment shader assets.
@@ -39,6 +40,19 @@ public:
      * @param fragment_shader The fragment shader asset.
      */
     gpu_program(asset_handle<gfx::shader> vertex_shader, asset_handle<gfx::shader> fragment_shader);
+
+    /**
+     * @brief Constructor to create a program from variants of vertex and fragment shader assets.
+     *
+     * @param vertex_shader The vertex shader asset.
+     * @param vertex_variant The vertex shader's variant, as its .eshader lists it.
+     * @param fragment_shader The fragment shader asset.
+     * @param fragment_variant The fragment shader's variant, as its .eshader lists it.
+     */
+    gpu_program(asset_handle<gfx::shader> vertex_shader,
+                std::string vertex_variant,
+                asset_handle<gfx::shader> fragment_shader,
+                std::string fragment_variant = gfx::shader::DEFAULT_VARIANT);
 
     /**
      * @brief Begins usage of the program. Checks validity of attached shaders and
@@ -160,15 +174,45 @@ public:
      * @brief Attaches a shader to the GPU program.
      *
      * @param shader The shader to attach.
+     * @param variant The variant to use.
      */
-    void attach_shader(asset_handle<gfx::shader> shader);
+    void attach_shader(asset_handle<gfx::shader> shader, std::string variant = gfx::shader::DEFAULT_VARIANT);
 
 private:
+    using shader_assets = std::array<gfx::shader::ptr, 2>;
+    using selected_shaders = std::array<const gfx::shader*, 2>;
+
+    /**
+     * @brief Why the attached shaders can never make a program, for an error message. Empty when they can, and for a
+     *        shader that failed to load, which a reload may still bring.
+     *
+     * @param assets The attached shaders' assets.
+     * @param selected The variant of each that the program uses; null where the asset does not have it.
+     */
+    auto find_refusal(const shader_assets& assets, const selected_shaders& selected) const -> std::string;
+
+    /**
+     * @brief The attached shader for an error message: its key, and its variant when it uses a named one.
+     */
+    auto describe_shader(std::size_t index) const -> std::string;
+
+    /**
+     * @brief Replaces the program with one of the selected shaders, and reports a pair bgfx refuses.
+     */
+    void create_program(const selected_shaders& selected);
+
     std::vector<asset_handle<gfx::shader>> shaders_; ///< Shaders that created this program.
-    std::array<gfx::shader::ptr, 2> shaders_cached_{nullptr, nullptr};      ///< Cached shaders.
+    std::vector<std::string> variants_;              ///< The variant used of each shader.
+    shader_assets shaders_cached_{nullptr, nullptr}; ///< Cached shaders.
     std::shared_ptr<gfx::program> program_;          ///< The GPU program.
     bool repopulated_ = false;
 };
+
+/**
+ * @brief The varyings a vertex and a fragment shader both declare, but not the same way, for an error message: each with
+ *        the two declarations. Empty when they agree.
+ */
+auto describe_varying_mismatches(const gfx::shader& vertex, const gfx::shader& fragment) -> std::string;
 
 /**
  * @brief Structure for caching uniforms.

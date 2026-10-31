@@ -929,15 +929,14 @@ auto picking_manager::init(rtti::context& ctx) -> bool
         0 | BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
             BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
-    auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_picking_id.sc");
-    auto vs_skinned = am.get_asset<gfx::shader>("editor:/data/shaders/vs_picking_id_skinned.sc");
-    auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_picking_id.sc");
+    auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_picking_id.eshader");
+    auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_picking_id.eshader");
 
     program_ = std::make_unique<gpu_program>(vs, fs);
-    program_skinned_ = std::make_unique<gpu_program>(vs_skinned, fs);
+    program_skinned_ = std::make_unique<gpu_program>(vs, "skinned", fs);
 
-    auto vs_gizmos = am.get_asset<gfx::shader>("editor:/data/shaders/vs_picking_debugdraw_fill_texture.sc");
-    auto fs_gizmos = am.get_asset<gfx::shader>("editor:/data/shaders/fs_picking_debugdraw_fill_texture.sc");
+    auto vs_gizmos = am.get_asset<gfx::shader>("editor:/data/shaders/vs_picking_debugdraw_fill_texture.eshader");
+    auto fs_gizmos = am.get_asset<gfx::shader>("editor:/data/shaders/fs_picking_debugdraw_fill_texture.eshader");
     program_gizmos_ = std::make_unique<gpu_program>(vs_gizmos, fs_gizmos);
 
     return true;

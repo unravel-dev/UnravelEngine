@@ -120,7 +120,7 @@ public:
         pre_exposure_state view_exposure{};
     };
 
-    /// The debug views of fs_gi_scene_debug.sc: the scene views, which show the cards at the global distance
+    /// The debug views of fs_gi_scene_debug.eshader: the scene views, which show the cards at the global distance
     /// field's hits, and the card atlas, coverage and object grid views.
     enum class debug_mode : int
     {
@@ -406,7 +406,7 @@ private:
     void resample_lighting();
     void build_light_tiles();
     void bind_sdf_instances(const surface_cache_system& gi_scene) const;
-    /// The texture a debug mode reads per card sample at stage 13 (fs_gi_scene_debug.sc s_gi_debug_values).
+    /// The texture a debug mode reads per card sample at stage 13 (fs_gi_scene_debug.eshader s_gi_debug_values).
     auto get_debug_values(debug_mode mode) const -> const gfx::texture::ptr&;
     void dispatch_direct(const lighting_inputs& inputs, uint32_t first, uint32_t count);
     void dispatch_radiosity(const lighting_inputs& inputs, uint32_t first, uint32_t count);

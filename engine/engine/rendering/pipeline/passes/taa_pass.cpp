@@ -21,8 +21,8 @@ constexpr std::uint32_t k_taa_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLE
 auto taa_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs = am.get_asset<gfx::shader>("engine:/data/shaders/taa/fs_taa.sc");
+    auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs = am.get_asset<gfx::shader>("engine:/data/shaders/taa/fs_taa.eshader");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(vs, fs);
     return program_.program->is_valid();
@@ -44,7 +44,7 @@ auto taa_pass::create_or_update_temp_fb(gfx::render_view& rview,
                                  .format = reference_color->get_texture(0)->info.format,
                                  .flags = BGFX_TEXTURE_RT};
     // Attachment 0 is the displayed resolve (sharpened), attachment 1 the history resolve (never
-    // sharpened): the sharpen must stay out of the history feedback loop (fs_taa.sc). The history's
+    // sharpened): the sharpen must stay out of the history feedback loop (fs_taa.eshader). The history's
     // alpha is the mover memory that keeps pixels a moving object touched out of the still path.
     const auto& resolve = rview.tex_acquire("TAA_TEMP", desc);
     const auto& history = rview.tex_acquire("TAA_TEMP_HISTORY", desc);
@@ -85,7 +85,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     pass.bind(temp_fbo.get());
     // Every pixel is drawn below: a clear instead of a load spares a tile-based GPU reading the old contents.
     pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
-    // The output lives on the unjittered pixel grid: fs_taa.sc reconstructs positions through the unjittered
+    // The output lives on the unjittered pixel grid: fs_taa.eshader reconstructs positions through the unjittered
     // projection and resamples the current frame around the unjittered centre with the jitter below.
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
 

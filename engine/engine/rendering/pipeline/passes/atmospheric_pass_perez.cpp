@@ -212,11 +212,11 @@ atmospheric_pass_perez::~atmospheric_pass_perez()
 auto atmospheric_pass_perez::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
-    auto vs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/vs_sky.sc");
-    auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_sky.sc");
-    auto fs_cloud = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud.sc");
-    auto fs_cloud_shadow = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud_shadow.sc");
-    auto fs_cloud_composite = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud_composite.sc");
+    auto vs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/vs_sky.eshader");
+    auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_sky.eshader");
+    auto fs_cloud = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud.eshader");
+    auto fs_cloud_shadow = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud_shadow.eshader");
+    auto fs_cloud_composite = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_cloud_composite.eshader");
 
     atmospheric_program_.cache_uniforms();
     atmospheric_program_.program = std::make_unique<gpu_program>(vs_sky, fs_sky);
@@ -312,7 +312,7 @@ auto atmospheric_pass_perez::make_cloud_uniforms(const run_params& params,
                                                  float exposition,
                                                  float hour) -> cloud_uniform_block
 {
-    // Layout shared with clouds.sh / fs_cloud.sc / fs_sky.sc / fs_cloud_shadow.sc.
+    // Layout shared with clouds.sh / fs_cloud.eshader / fs_sky.eshader / fs_cloud_shadow.eshader.
     cloud_uniform_block uniforms{};
     uniforms.exposition[0] = 0.02f;
     uniforms.exposition[1] = 3.0f;
@@ -819,7 +819,7 @@ auto compute_perez_sun_weight(float sun_altitude) -> float
 
 namespace
 {
-/// cs_irradiance_sh.sc num_samples: the bake's fixed Hammersley set.
+/// cs_irradiance_sh.eshader num_samples: the bake's fixed Hammersley set.
 constexpr int k_perez_bake_samples = 64;
 /// Below this the luminance tables have collapsed (night); a solved exposition would only
 /// amplify their residual, so the fixed conversion takes over.

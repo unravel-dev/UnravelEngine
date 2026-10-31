@@ -13,10 +13,10 @@ auto fxaa_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    // Load your FXAA shaders (compiled from vs_fxaa.sc / fs_fxaa.sc).
+    // Load your FXAA shaders (compiled from vs_clip_quad.eshader / fs_fxaa.eshader).
     // Adjust these paths to where your shaders actually reside.
-    auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    auto fs_fxaa = am.get_asset<gfx::shader>("engine:/data/shaders/fxaa/fs_fxaa.sc");
+    auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fs_fxaa = am.get_asset<gfx::shader>("engine:/data/shaders/fxaa/fs_fxaa.eshader");
 
     // Cache uniforms before the program is created (GL >= 400 contract).
     fxaa_program_.cache_uniforms();

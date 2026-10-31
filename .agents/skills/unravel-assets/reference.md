@@ -7,7 +7,7 @@
 | Texture | `.png`, `.jpg`, etc. | `engine/core/graphics/texture.h` |
 | Mesh | `.fbx`, `.gltf`, etc. | importers in `impl/importers/` |
 | Material | `.material` | `engine/engine/rendering/material.h` |
-| Shader | `.sc` | compiled to `engine_data/compiled/shaders/` |
+| Shader | `.eshader` | compiled to `engine_data/compiled/shaders/` |
 | Animation | clips | `engine/engine/animation/animation.h` |
 | Prefab | scene template | `engine/engine/ecs/prefab.h` |
 | UI document | `.rml`, `.rcss` | `engine/engine/ui/` |

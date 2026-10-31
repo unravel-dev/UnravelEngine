@@ -1,0 +1,95 @@
+[variants]
+default
+skinned                   SKINNED
+instanced                 INSTANCED
+skinned_instanced         SKINNED_INSTANCED
+skinned_baked_instanced   SKINNED_BAKED_INSTANCED
+
+[inputs]
+vec3 a_position
+#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
+vec4 a_weight
+vec4 a_indices
+#endif
+#if INSTANCED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
+vec4 i_data0
+#endif
+#if INSTANCED || SKINNED_BAKED_INSTANCED
+vec4 i_data1
+vec4 i_data2
+vec4 i_data3
+vec4 i_data4
+vec4 i_data5
+vec4 i_data6
+#endif
+#if INSTANCED
+vec4 i_data7
+#endif
+
+[outputs]
+vec4 v_curr_pos
+vec4 v_prev_pos
+vec4 v_prev_static_pos
+
+[code]
+#include "../common.sh"
+#if SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
+#include "../skinning_palette.sh"
+#endif
+
+#if !(INSTANCED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED)
+// Previous-frame counterpart of u_world, or skinning palette (see gfx::set_prev_world_transform).
+uniform mat4 u_prev_world[BGFX_CONFIG_MAX_BONES];
+#endif
+// Previous frame's view-projection, jitter removed (camera::get_prev_view_projection_unjittered).
+uniform mat4 u_prev_view_proj;
+
+void main()
+{
+    // The current pose MUST go through the same math as vs_deferred_geom.eshader's variant of this name: the EQUAL depth
+    // test against the G-buffer's raster depends on identical position math.
+#if SKINNED
+    // u_world is already the pre-multiplied (bind-inverse x world) palette.
+    mat4 model = a_weight.x * u_world[int(a_indices.x)] +
+                 a_weight.y * u_world[int(a_indices.y)] +
+                 a_weight.z * u_world[int(a_indices.z)] +
+                 a_weight.w * u_world[int(a_indices.w)];
+
+    mat4 prev_model = a_weight.x * u_prev_world[int(a_indices.x)] +
+                      a_weight.y * u_prev_world[int(a_indices.y)] +
+                      a_weight.z * u_prev_world[int(a_indices.z)] +
+                      a_weight.w * u_prev_world[int(a_indices.w)];
+#elif SKINNED_INSTANCED
+    // i_data0.x is the first row of the current palette, i_data0.y the first row of the previous one.
+    mat4 model = skin_palette_matrix(i_data0.x, a_indices, a_weight);
+    mat4 prev_model = skin_palette_matrix(i_data0.y, a_indices, a_weight);
+#elif SKINNED_BAKED_INSTANCED
+    // i_data0..2 are the current world matrix rows and i_data3.x the row of the current frame; i_data4..6 and i_data3.y
+    // are the previous frame's.
+    mat4 model = baked_skin_matrix(i_data0, i_data1, i_data2, i_data3.x, a_indices, a_weight);
+    mat4 prev_model = baked_skin_matrix(i_data4, i_data5, i_data6, i_data3.y, a_indices, a_weight);
+#elif INSTANCED
+    // The LOD parameter is packed in i_data3.w, so the homogeneous 1.0 is restored.
+    vec4 matrix_row3 = vec4(i_data3.xyz, 1.0);
+    mat4 model = mtxFromCols(i_data0, i_data1, i_data2, matrix_row3);
+
+    // Previous world matrix rides i_data4..7 (the [3][3] slot is never read).
+    mat4 prev_model = mtxFromCols(i_data4, i_data5, i_data6, vec4(i_data7.xyz, 1.0));
+#else
+    mat4 model = u_world[0];
+    mat4 prev_model = u_prev_world[0];
+#endif
+
+    vec4 wpos = mul(model, vec4(a_position, 1.0));
+    vec4 prev_wpos = mul(prev_model, vec4(a_position, 1.0));
+
+    // Rasterize with the SAME jittered view-projection as the G-buffer pass so the EQUAL
+    // depth test holds; the velocity itself uses the unjittered previous matrix.
+    gl_Position = mul(u_viewProj, wpos);
+    v_curr_pos = gl_Position;
+    v_prev_pos = mul(u_prev_view_proj, prev_wpos);
+    // The CURRENT world position through the previous view-projection: the camera-only
+    // reference for the object-motion split, computed with the same matrices as v_prev_pos
+    // so the split never depends on matrix consistency with any OTHER pass.
+    v_prev_static_pos = mul(u_prev_view_proj, wpos);
+}
