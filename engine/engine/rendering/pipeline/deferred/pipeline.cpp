@@ -115,6 +115,19 @@ auto pick_light_variant(const light& l, bool gbuffer_has_subsurface, const Varia
     return is_subsurface_free ? variants.no_contact_no_subsurface : variants.no_contact;
 }
 
+/// The leanest of the indirect pass's @p variants (deferred::indirect_lighting_no_screen_inputs_variants) that draws this
+/// run's image: without the subsurface read when the G-buffer holds no subsurface color, and with less detail when the
+/// limits leave it out. A variant that did not load falls back to the fuller one.
+template<typename Variants>
+auto pick_indirect_lighting_variant(bool gbuffer_has_subsurface, bool is_detailed, const Variants& variants) -> const auto&
+{
+    const auto& with_subsurface = !is_detailed && is_program_loaded(variants.low_detail) ? variants.low_detail : variants.base;
+    const auto& without_subsurface = !is_detailed && is_program_loaded(variants.no_subsurface_low_detail)
+                                         ? variants.no_subsurface_low_detail
+                                         : variants.no_subsurface;
+    return !gbuffer_has_subsurface && is_program_loaded(without_subsurface) ? without_subsurface : with_subsurface;
+}
+
 /// Where pbr_material::write_instance_constants puts the subsurface color (u_subsurface_color in fs_deferred_geom.sc).
 constexpr size_t subsurface_instance_constant = 1;
 
@@ -1293,7 +1306,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     run_ssil_pass(camera, rview, params, gi_active);
 
     // Indirect lighting after SSIL so it can use the result.
-    target = run_indirect_lighting_pass(camera, rview, irradiance, build_reflection_probes, dt);
+    target = run_indirect_lighting_pass(camera, rview, irradiance, build_reflection_probes, params.limits, dt);
 
     if(stages & pipeline_steps::atmospheric)
     {
@@ -3147,6 +3160,7 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
                                           gfx::render_view& rview,
                                           const irradiance_pass_result& irradiance_result,
                                           bool apply_reflection,
+                                          const feature_limits& limits,
                                           delta_t dt) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Indirect Lighting Pass");
@@ -3182,17 +3196,12 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     const bool has_screen_inputs = indirect_diffuse_tex || traced_layer != defaults.black_texture() ||
                                    screen_ao.texture != defaults.white_texture();
     const auto& full_program = samples_probe_inline ? indirect_lighting_probe_program_ : indirect_lighting_program_;
-    const auto& lean_program = samples_probe_inline ? indirect_lighting_probe_no_screen_inputs_program_
-                                                    : indirect_lighting_no_screen_inputs_program_;
-    const auto& subsurface_free_program = samples_probe_inline
-                                              ? indirect_lighting_probe_no_screen_inputs_no_subsurface_program_
-                                              : indirect_lighting_no_screen_inputs_no_subsurface_program_;
-    const bool uses_lean_program = !has_screen_inputs && ANONYMOUS::is_program_loaded(lean_program);
-    const bool uses_subsurface_free_program =
-        uses_lean_program && !gbuffer_has_subsurface_ && ANONYMOUS::is_program_loaded(subsurface_free_program);
-    const auto& iprogram = uses_subsurface_free_program ? subsurface_free_program
-                           : uses_lean_program          ? lean_program
-                                                        : full_program;
+    const auto& lean_variants =
+        samples_probe_inline ? indirect_lighting_probe_no_screen_inputs_ : indirect_lighting_no_screen_inputs_;
+    const auto& iprogram =
+        !has_screen_inputs && ANONYMOUS::is_program_loaded(lean_variants.base)
+            ? ANONYMOUS::pick_indirect_lighting_variant(gbuffer_has_subsurface_, limits.detailed_indirect_lighting, lean_variants)
+            : full_program;
     iprogram.program->begin();
 
     float light_data[4] = {irradiance_result.global_color.x, irradiance_result.global_color.y, irradiance_result.global_color.z, irradiance_result.global_intensity};
@@ -4768,21 +4777,21 @@ auto deferred::init(rtti::context& ctx) -> bool
     indirect_lighting_probe_program_.cache_uniforms();
     indirect_lighting_probe_program_.program = load_program("vs_clip_quad", "fs_deferred_indirect_light_probe");
 
-    indirect_lighting_no_screen_inputs_program_.cache_uniforms();
-    indirect_lighting_no_screen_inputs_program_.program =
-        load_program("vs_clip_quad", "fs_deferred_indirect_light_no_screen_inputs");
-
-    indirect_lighting_probe_no_screen_inputs_program_.cache_uniforms();
-    indirect_lighting_probe_no_screen_inputs_program_.program =
-        load_program("vs_clip_quad", "fs_deferred_indirect_light_probe_no_screen_inputs");
-
-    indirect_lighting_no_screen_inputs_no_subsurface_program_.cache_uniforms();
-    indirect_lighting_no_screen_inputs_no_subsurface_program_.program =
-        load_program("vs_clip_quad", "fs_deferred_indirect_light_no_screen_inputs_no_subsurface");
-
-    indirect_lighting_probe_no_screen_inputs_no_subsurface_program_.cache_uniforms();
-    indirect_lighting_probe_no_screen_inputs_no_subsurface_program_.program =
-        load_program("vs_clip_quad", "fs_deferred_indirect_light_probe_no_screen_inputs_no_subsurface");
+    const auto load_no_screen_inputs_variants = [&](indirect_lighting_no_screen_inputs_variants& variants, const std::string& fs)
+    {
+        const auto load_variant = [&](indirect_lighting_program& variant, const char* suffix)
+        {
+            variant.cache_uniforms();
+            variant.program = load_program("vs_clip_quad", fs + suffix);
+        };
+        load_variant(variants.base, "");
+        load_variant(variants.no_subsurface, "_no_subsurface");
+        load_variant(variants.low_detail, "_low_detail");
+        load_variant(variants.no_subsurface_low_detail, "_no_subsurface_low_detail");
+    };
+    load_no_screen_inputs_variants(indirect_lighting_no_screen_inputs_, "fs_deferred_indirect_light_no_screen_inputs");
+    load_no_screen_inputs_variants(indirect_lighting_probe_no_screen_inputs_,
+                                   "fs_deferred_indirect_light_probe_no_screen_inputs");
 
     auto cs_irradiance = am.get_asset<gfx::shader>("engine:/data/shaders/irradiance/cs_irradiance_sh.sc");
     if(cs_irradiance)

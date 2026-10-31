@@ -54,6 +54,10 @@ struct feature_limits
     /// Volumetric clouds: off, a sky that asks for them renders flat clouds (one sample of the same layer in the sky
     /// pass) instead of the half-resolution raymarch.
     bool volumetric_clouds{true};
+    /// The finest detail of the indirect lighting: off, a view without screen space AO, GI, SSIL or traced reflections
+    /// reads two of the environment's three SH bands and skips background pixels, in a cheaper program. A view with any
+    /// of those keeps the full program.
+    bool detailed_indirect_lighting{true};
 
     friend auto operator==(const feature_limits& lhs, const feature_limits& rhs) -> bool = default;
 };

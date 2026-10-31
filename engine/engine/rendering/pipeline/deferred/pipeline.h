@@ -137,6 +137,7 @@ public:
                                     gfx::render_view& rview,
                                     const irradiance_pass_result& irradiance,
                                     bool apply_reflection,
+                                    const feature_limits& limits,
                                     delta_t dt) -> gfx::frame_buffer::ptr;
 
     /**
@@ -725,14 +726,21 @@ private:
     /// probe layer.
     indirect_lighting_program indirect_lighting_probe_program_;
 
-    /// The two programs above for a view whose screen-space AO, GI / SSIL estimate and traced reflections are all
-    /// the default textures (PBR_INDIRECT_SCREEN_INPUTS 0): the same image without three fetches per pixel.
-    indirect_lighting_program indirect_lighting_no_screen_inputs_program_;
-    indirect_lighting_program indirect_lighting_probe_no_screen_inputs_program_;
-    /// Those two without the read of the subsurface attachment (PBR_SUBSURFACE 0), for a run whose G-buffer holds no
-    /// subsurface color (gbuffer_has_subsurface_).
-    indirect_lighting_program indirect_lighting_no_screen_inputs_no_subsurface_program_;
-    indirect_lighting_program indirect_lighting_probe_no_screen_inputs_no_subsurface_program_;
+    /// Each of the two programs above for a view whose screen-space AO, GI / SSIL estimate and traced reflections are
+    /// all the default textures (PBR_INDIRECT_SCREEN_INPUTS 0): the same image for less per pixel.
+    struct indirect_lighting_no_screen_inputs_variants
+    {
+        indirect_lighting_program base;
+        /// Without the read of the subsurface attachment (PBR_SUBSURFACE 0), for a run whose G-buffer holds no
+        /// subsurface color (gbuffer_has_subsurface_).
+        indirect_lighting_program no_subsurface;
+        /// Those two with less detail (PBR_INDIRECT_DETAIL 0), for a run whose limits leave it out
+        /// (feature_limits::detailed_indirect_lighting).
+        indirect_lighting_program low_detail;
+        indirect_lighting_program no_subsurface_low_detail;
+    };
+    indirect_lighting_no_screen_inputs_variants indirect_lighting_no_screen_inputs_;
+    indirect_lighting_no_screen_inputs_variants indirect_lighting_probe_no_screen_inputs_;
 
     /// The view's only reflection probe when the indirect pass samples it itself; no cubemap otherwise. Drawing
     /// a single probe into the layer first costs a full-screen pass that reads the G-buffer, and a layer the

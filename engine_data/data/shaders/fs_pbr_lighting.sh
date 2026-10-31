@@ -1161,8 +1161,17 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
     GBufferDataNormalMetalRoughness normal_metal_roughness = DecodeGBufferNormalMetalRoughnessTexel(gbuf_texel, s_tex1);
     vec3 N = normalize(normal_metal_roughness.world_normal);
+    // Ahead of any branch: its derivatives read the other pixels of the 2x2 quad.
     float filtered_roughness = GeometricSpecularAA(N, normal_metal_roughness.roughness);
     GBufferDataDepth gbuffer_depth = DecodeGBufferDepthTexel(gbuf_texel, s_tex4);
+#if !PBR_INDIRECT_DETAIL
+    // Behind the last surface there is nothing to light: the sky, where a scene has one, draws there afterward. Only
+    // with the detail limited: this branch moves a few foliage pixels beside the sky, where the full image must hold.
+    if(gbuffer_depth.depth >= 1.0)
+    {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+#endif
     GBufferData data = ConstructGBuffer(DecodeGBufferColorAndAOTexel(gbuf_texel, s_tex0),
                                         normal_metal_roughness,
                                         DecodeGBufferEmissiveTexel(gbuf_texel, s_tex2),
@@ -1187,6 +1196,8 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     probe_texel.w *= u_probe_sample.w;
     probe_texel.xyz *= probe_texel.w;
 #else
+    // By level, as the limited programs read it inside a branch, where derivatives do not hold. The layer has the target's
+    // size, so level 0 is the level they would have picked.
     vec4 probe_texel = texture2DLod(s_probe_layer, texcoord0, 0.0);
 #endif
     vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(probe_texel, u_probe_layer_params), environment_specular);

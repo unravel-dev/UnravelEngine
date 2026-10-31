@@ -227,9 +227,9 @@ void set_platform_starting_values(target_platform platform, settings& resolved)
     particles.max_lighting = std::min(particles.max_lighting, ps_soa::particle_lighting::volumetric);
     // The effects a phone's GPU cannot afford at frame rate: global illumination and screen space indirect
     // lighting cost hundreds of milliseconds there, the other screen space effects and temporal AA's extra
-    // passes several, contact shadows and subsurface keep code that holds registers in every light program, and
-    // volumetric clouds raymarch every sky pixel (flat ones cost next to nothing). The render scale stays the
-    // project's.
+    // passes several, contact shadows and subsurface keep code that holds registers in every light program,
+    // volumetric clouds raymarch every sky pixel (flat ones cost next to nothing), and the indirect lighting's
+    // finest detail runs on every lit pixel. The render scale stays the project's.
     auto& limits = resolved.graphics.limits;
     limits.global_illumination = false;
     limits.screen_space_reflections = false;
@@ -242,6 +242,7 @@ void set_platform_starting_values(target_platform platform, settings& resolved)
     limits.contact_shadows = false;
     limits.subsurface = false;
     limits.volumetric_clouds = false;
+    limits.detailed_indirect_lighting = false;
 }
 
 auto load_profile(const fs::path& folder,

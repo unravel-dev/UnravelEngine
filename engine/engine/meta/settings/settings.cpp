@@ -518,6 +518,13 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"pretty_name", "Volumetric Clouds"},
             entt::attribute{"tooltip", "Allow volumetric clouds. When off, skies that ask for them render flat clouds, "
                                        "without the raymarch."},
+        })
+        .data<&feature_limits::detailed_indirect_lighting>("detailed_indirect_lighting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "detailed_indirect_lighting"},
+            entt::attribute{"pretty_name", "Detailed Indirect Lighting"},
+            entt::attribute{"tooltip", "Allow the finest detail of the indirect lighting. When off, views without screen "
+                                       "space effects read less of the environment's lighting, at a lower cost per pixel."},
         });
 }
 
@@ -535,6 +542,7 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
     try_save(ar, ser20::make_nvp("subsurface", obj.subsurface));
     try_save(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
+    try_save(ar, ser20::make_nvp("detailed_indirect_lighting", obj.detailed_indirect_lighting));
 }
 
 LOAD_INLINE(feature_limits)
@@ -551,6 +559,7 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
     try_load(ar, ser20::make_nvp("subsurface", obj.subsurface));
     try_load(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
+    try_load(ar, ser20::make_nvp("detailed_indirect_lighting", obj.detailed_indirect_lighting));
 }
 
 REFLECT_INLINE(settings::graphics_settings)

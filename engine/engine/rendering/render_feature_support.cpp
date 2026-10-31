@@ -459,6 +459,7 @@ auto intersect_feature_limits(const feature_limits& lhs, const feature_limits& r
     limits.contact_shadows = lhs.contact_shadows && rhs.contact_shadows;
     limits.subsurface = lhs.subsurface && rhs.subsurface;
     limits.volumetric_clouds = lhs.volumetric_clouds && rhs.volumetric_clouds;
+    limits.detailed_indirect_lighting = lhs.detailed_indirect_lighting && rhs.detailed_indirect_lighting;
     return limits;
 }
 

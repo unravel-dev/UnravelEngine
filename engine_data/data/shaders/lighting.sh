@@ -1027,6 +1027,13 @@ vec3 eval_radiance_sh_lobe(sampler2D coeff_tex, vec3 dir, float roughness)
     return max(eval_irradiance_sh_scaled(coeff_tex, dir, sh_lobe_band_scale(roughness)), vec3_splat(0.0));
 }
 
+// 0 in the "_low_detail" indirect programs, which the pipeline picks when the run's limits leave the detail out
+// (feature_limits::detailed_indirect_lighting): eval_sh_cone_and_lobe stops at the first two SH bands, and pbr_indirect
+// (fs_pbr_lighting.sh) skips the background.
+#ifndef PBR_INDIRECT_DETAIL
+#define PBR_INDIRECT_DETAIL 1
+#endif
+
 /// The two environment SH terms of the indirect lighting.
 struct SHIndirectTerms
 {
@@ -1058,6 +1065,7 @@ SHIndirectTerms eval_sh_cone_and_lobe(sampler2D coeff_tex, vec3 axis, float visi
     c = texelFetch(coeff_tex, ivec2(3, 0), 0).rgb;
     terms.irradiance += c * (cone.y * 0.488603 * axis.x);
     terms.radiance += c * (lobe.y * 0.488603 * dir.x);
+#if PBR_INDIRECT_DETAIL
     c = texelFetch(coeff_tex, ivec2(4, 0), 0).rgb;
     terms.irradiance += c * (cone.z * 1.092548 * axis.x * axis.z);
     terms.radiance += c * (lobe.z * 1.092548 * dir.x * dir.z);
@@ -1073,6 +1081,7 @@ SHIndirectTerms eval_sh_cone_and_lobe(sampler2D coeff_tex, vec3 axis, float visi
     c = texelFetch(coeff_tex, ivec2(8, 0), 0).rgb;
     terms.irradiance += c * (cone.z * 0.546274 * (axis.x * axis.x - axis.y * axis.y));
     terms.radiance += c * (lobe.z * 0.546274 * (dir.x * dir.x - dir.y * dir.y));
+#endif
     terms.irradiance = max(terms.irradiance, vec3_splat(0.0));
     terms.radiance = max(terms.radiance, vec3_splat(0.0));
     return terms;
