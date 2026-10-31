@@ -1197,7 +1197,8 @@ void script_system::on_frame_late_update(rtti::context& ctx, const frame_times& 
             auto& scn = ec.get_scene();
             auto& registry = *scn.registry;
     
-            if(play.is_simulation_running() && play.frames_running() > 0 && times.scaled > delta_t::zero() &&
+            // Gated like Update, not on game time: scale 0 stops the game, not its frames, and scripts draw here.
+            if(play.is_simulation_running() && play.frames_running() > 0 && !play.is_simulation_paused() &&
                cache_.late_update_invoker.valid())
             {
                 APP_SCOPE_PERF("Script/System Late Update Managed");
