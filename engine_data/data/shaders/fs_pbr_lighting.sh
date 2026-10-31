@@ -67,8 +67,8 @@ GBufferDataSubsurface DecodeLightingSubsurfaceTexel(ivec2 texel)
 
 #if PBR_INDIRECT
 // 0 in the programs for a view without screen-space AO, a GI or SSIL estimate and traced reflections: their
-// samplers hold the default textures then (deferred::run_indirect_lighting_pass), and pbr_indirect takes the values
-// those hold instead of fetching them per pixel.
+// samplers hold the default textures then (deferred::run_indirect_lighting_pass), and pbr_indirect is written for the
+// values those hold, without their fetches and the choices they drive.
 #ifndef PBR_INDIRECT_SCREEN_INPUTS
 #define PBR_INDIRECT_SCREEN_INPUTS 1
 #endif
@@ -1060,6 +1060,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 }
 
 #if PBR_INDIRECT
+#if PBR_INDIRECT_SCREEN_INPUTS
 // Separate indirect lighting + emissive pass (rendered once as a fullscreen quad, not per-light)
 vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
 {
@@ -1089,12 +1090,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // Direct light takes none.
     // Sky pixels read no occlusion and no GI: the GI gather leaves them unwritten (selected, not multiplied away).
     bool is_surface = data.depth < 1.0;
-#if PBR_INDIRECT_SCREEN_INPUTS
     vec4 screen_ao_sample = is_surface ? texture2D(s_screen_ao, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
-#else
-    // The white default: full visibility.
-    vec4 screen_ao_sample = is_surface ? vec4_splat(1.0) : vec4(0.5, 0.5, 0.5, 1.0);
-#endif
     float material_ao = data.ambient_occlusion;
     float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao_intensity);
     float visibility = material_ao * screen_ao;
@@ -1122,12 +1118,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     SHIndirectTerms environment = eval_sh_cone_and_lobe(s_irradiance, diffuse_axis, visibility, dominant_dir, indirect_filtered_roughness);
     vec3 ambient_sh = environment.irradiance * bounce_gain * (RECIP_PI * pre_exposure_from_gpu(pre_exposure_gpu));
     bool gi_is_ssil = u_indirect_params.y > 0.5;
-#if PBR_INDIRECT_SCREEN_INPUTS
     vec4 gi_sample = gi_is_ssil || is_surface ? texture2D(s_ssil, texcoord0) : vec4_splat(0.0);
-#else
-    // The transparent default: no estimate.
-    vec4 gi_sample = vec4_splat(0.0);
-#endif
     float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (is_surface ? 1.0 : 0.0);
     float gi_served = saturate(u_indirect_params.x) * gi_coverage;
     vec3 gi_diffuse = gi_is_ssil ? gi_sample.rgb : gi_sample.rgb * u_indirect_params.w;
@@ -1151,12 +1142,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec4 probe_texel = texture2D(s_probe_layer, texcoord0);
 #endif
     vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(probe_texel, u_probe_layer_params), environment_specular);
-#if PBR_INDIRECT_SCREEN_INPUTS
     vec4 traced_texel = texture2D(s_tex5, texcoord0);
-#else
-    // The opaque black default, the traced clear: no traced radiance, the whole pixel left to the probe layer.
-    vec4 traced_texel = vec4(0.0, 0.0, 0.0, 1.0);
-#endif
     vec3 indirect_specular = ComposeIndirectSpecular(traced_texel, probe_layer, specular_occlusion);
 
     // The subsurface colour joins the diffuse lobe for indirect light (black without one), as the surface cache's
@@ -1165,6 +1151,52 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 indirect_lighting = StandardShadingIndirect(indirect_diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, V, N);
     return vec4(indirect_lighting + data.emissive_color * pre_exposure_from_gpu(pre_exposure_gpu), 1.0f);
 }
+#else
+// The pass above with the default screen inputs' values folded in, the same image for less: the visibility is the
+// material AO alone, its cone's axis is N, no GI estimate replaces the environment SH, and no trace covers the probe
+// layer.
+vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
+{
+    vec4 pre_exposure_gpu = u_pre_exposure_gpu;
+    ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
+    GBufferDataNormalMetalRoughness normal_metal_roughness = DecodeGBufferNormalMetalRoughnessTexel(gbuf_texel, s_tex1);
+    vec3 N = normalize(normal_metal_roughness.world_normal);
+    float filtered_roughness = GeometricSpecularAA(N, normal_metal_roughness.roughness);
+    GBufferDataDepth gbuffer_depth = DecodeGBufferDepthTexel(gbuf_texel, s_tex4);
+    GBufferData data = ConstructGBuffer(DecodeGBufferColorAndAOTexel(gbuf_texel, s_tex0),
+                                        normal_metal_roughness,
+                                        DecodeGBufferEmissiveTexel(gbuf_texel, s_tex2),
+                                        DecodeLightingSubsurfaceTexel(gbuf_texel),
+                                        gbuffer_depth);
+    // The pass covers the G-buffer texel for texel, so the interpolated coordinate is the texel's centre.
+    vec3 clip = clipTransform(vec3(texcoord0 * 2.0 - 1.0, data.depth));
+    vec3 world_offset = clipToWorld(u_invViewProjRelative, clip);
+    vec3 V = normalize(-world_offset);
+    float visibility = data.ambient_occlusion;
+    vec3 bounce_gain = MultiBounceAOGain(visibility, data.diffuse_color);
+    vec3 dominant_dir = normalize(GetSpecularDominantDir(N, reflect(-V, N), filtered_roughness));
+    SHIndirectTerms environment = eval_sh_cone_and_lobe(s_irradiance, N, visibility, dominant_dir, filtered_roughness);
+    vec3 indirect_diffuse = environment.irradiance * bounce_gain * (RECIP_PI * pre_exposure_from_gpu(pre_exposure_gpu));
+    float occlusion = SpecularOcclusionGTSO(s_specular_occlusion, N, visibility, dominant_dir, filtered_roughness);
+    vec3 environment_specular = environment.radiance * pre_exposure_from_gpu(pre_exposure_gpu);
+#if PROBE_LAYER_INLINE
+    // What the layer would hold for one probe over its clear: rgb premultiplied by the coverage.
+    vec3 world_position = u_camera_position.xyz + world_offset;
+    vec4 probe_texel = SampleSphereProbe(s_probe_cube, world_position, reflect(-V, N), data.roughness, u_probe_sphere,
+                                         u_probe_sample.x, u_probe_sample.y * pre_exposure_gpu.x, u_probe_sample.z);
+    probe_texel.w *= u_probe_sample.w;
+    probe_texel.xyz *= probe_texel.w;
+#else
+    vec4 probe_texel = texture2DLod(s_probe_layer, texcoord0, 0.0);
+#endif
+    vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(probe_texel, u_probe_layer_params), environment_specular);
+    vec3 indirect_specular = probe_layer * (occlusion * MultiBounceAOGain(occlusion, data.specular_color));
+    // As in the full pass: the subsurface colour joins the diffuse lobe (black without one).
+    vec3 indirect_diffuse_color = data.diffuse_color + data.subsurface_color;
+    vec3 indirect_lighting = StandardShadingIndirect(indirect_diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, filtered_roughness, V, N);
+    return vec4(indirect_lighting + data.emissive_color * pre_exposure_from_gpu(pre_exposure_gpu), 1.0);
+}
+#endif
 #endif
 
 #endif // __PBRLIGHTING_SH__
