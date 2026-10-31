@@ -11,6 +11,7 @@ $output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_p
 
 #include "../common.sh"
 #include "../skinning_palette.sh"
+#include "normal_basis.sh"
 
 void main()
 {
@@ -22,10 +23,10 @@ void main()
 	vec4 tangent = a_tangent * 2.0 - 1.0;
 	vec4 bitangent = a_bitangent * 2.0 - 1.0;
 
-	mat3 modelIT = calculateInverseTranspose(model);
-	vec3 wnormal = normalize(mul(modelIT, normal.xyz));
-	vec3 wtangent = normalize(mul(modelIT, tangent.xyz));
-	vec3 wbitangent = normalize(mul(modelIT, bitangent.xyz));
+	mat3 basis = get_upper_3x3(model);
+	vec3 wnormal = normalize(mul(compute_normal_matrix(basis), normal.xyz));
+	vec3 wtangent = normalize(mul(basis, tangent.xyz));
+	vec3 wbitangent = normalize(mul(basis, bitangent.xyz));
 
 	v_wpos = wpos.xyz;
 	v_pos = gl_Position.xyz / gl_Position.w;

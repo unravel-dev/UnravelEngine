@@ -2,6 +2,7 @@ $input a_position, a_normal, a_tangent, a_bitangent, a_texcoord0
 $output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_params
 
 #include "../common.sh"
+#include "normal_basis.sh"
 
 uniform vec4 u_lod_params;
 
@@ -23,11 +24,10 @@ void main()
 	vec4 tangent = a_tangent * 2.0 - 1.0;
 	vec4 bitangent = a_bitangent * 2.0 - 1.0;
 
-    mat3 modelIT = calculateInverseTranspose(u_world[0]);
-	
-	vec3 wnormal = normalize(mul(modelIT, normal.xyz ));
-	vec3 wtangent = normalize(mul(modelIT, tangent.xyz ));
-	vec3 wbitangent = normalize(mul(modelIT, bitangent.xyz ));
+    mat3 basis = get_upper_3x3(u_world[0]);
+    vec3 wnormal = normalize(mul(compute_normal_matrix(basis), normal.xyz));
+    vec3 wtangent = normalize(mul(basis, tangent.xyz));
+    vec3 wbitangent = normalize(mul(basis, bitangent.xyz));
 	
 	v_wpos = wpos.xyz;
 	v_pos = gl_Position.xyz/gl_Position.w;
