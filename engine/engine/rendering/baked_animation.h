@@ -51,6 +51,8 @@ public:
     /// Rows of a submesh without bones.
     static constexpr uint32_t INVALID_ROW = skinning_palette_rows::INVALID_ROW;
 
+    /// The id baked_animation_store::create returned for it: no other bake of the session has it.
+    auto get_id() const -> uint32_t;
     auto get_mesh() const -> const asset_handle<mesh>&;
     auto get_frames_per_second() const -> float;
     auto get_clip_count() const -> uint32_t;
@@ -82,6 +84,7 @@ private:
         float length = 0.0f;
     };
 
+    uint32_t id_ = 0;
     asset_handle<mesh> mesh_;
     float frames_per_second_ = 0.0f;
     baked_animation_retarget retarget_ = baked_animation_retarget::copy;

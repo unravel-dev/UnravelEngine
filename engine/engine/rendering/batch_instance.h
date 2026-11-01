@@ -383,36 +383,4 @@ private:
     container_type instances_;
 };
 
-// Utility functions
-
-/**
- * @brief Pack batch instance data into GPU vertex format
- * @param instance The batch instance to pack
- * @return GPU-friendly vertex data
- */
-auto pack_instance_data(const batch_instance& instance) -> instance_vertex_data;
-
-/**
- * @brief Unpack GPU vertex data back to transform matrix and LOD params
- * @param vertex_data The GPU vertex data to unpack
- * @param out_transform Output matrix to store the unpacked transform
- * @param out_lod_params Output vector to store the unpacked LOD parameters
- */
-void unpack_instance_data(const instance_vertex_data& vertex_data, 
-                         math::mat4& out_transform, 
-                         math::vec3& out_lod_params);
-
-/**
- * @brief Pack multiple instances into GPU vertex data
- * @param instances Vector of batch instances
- * @return Vector of GPU vertex data
- */
-auto pack_instances_bulk(const std::vector<batch_instance>& instances) -> std::vector<instance_vertex_data>;
-
-/**
- * @brief Validate that instance data is properly aligned and sized
- * @return True if the structures have correct size and alignment
- */
-auto validate_instance_data_layout() -> bool;
-
 } // namespace unravel

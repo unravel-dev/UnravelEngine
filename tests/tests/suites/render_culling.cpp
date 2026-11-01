@@ -28,12 +28,15 @@
 #include "../tests.h"
 
 #include <engine/rendering/batch_collector.h>
+#include <engine/rendering/camera.h>
 #include <engine/rendering/light.h>
+#include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/shadow.h>
 
 #include <math/math.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -538,6 +541,65 @@ void test_material_collector_sorts_and_counts()
     check(collector.get_stats().draw_calls_saved == 1, "three instances in two batches save one draw call");
 }
 
+void test_screen_radius_perspective_shrinks_with_distance()
+{
+    const math::mat4 input_projection = math::perspectiveZO(math::radians(60.0f), 1.0f, 0.1f, 1000.0f);
+    const math::vec3 input_view_origin(0.0f);
+    const float input_radius = 2.0f;
+    const float input_distance = 50.0f;
+    const float actual = compute_bounds_screen_radius_squared(math::vec3(0.0f, 0.0f, input_distance),
+                                                              input_radius,
+                                                              input_view_origin,
+                                                              input_projection);
+    const float screen_multiple = 0.5f * std::max(std::abs(input_projection[0][0]), std::abs(input_projection[1][1]));
+    const float expected = math::square(screen_multiple * input_radius) / (input_distance * input_distance);
+    check(actual == expected, "a perspective screen radius divides by the squared distance");
+}
+
+void test_screen_radius_orthographic_ignores_distance()
+{
+    const float input_ortho_size = 10.0f;
+    const math::mat4 input_projection =
+        math::orthoZO(-input_ortho_size, input_ortho_size, -input_ortho_size, input_ortho_size, 0.1f, 1000.0f);
+    const math::vec3 input_view_origin(0.0f);
+    const float input_radius = 1.0f;
+    const float actual_near = compute_bounds_screen_radius_squared(math::vec3(0.0f, 0.0f, 5.0f), input_radius, input_view_origin, input_projection);
+    const float actual_far = compute_bounds_screen_radius_squared(math::vec3(0.0f, 0.0f, 500.0f), input_radius, input_view_origin, input_projection);
+    check(actual_near == actual_far, "an orthographic screen radius does not depend on the distance");
+    // A radius of 1 under a half height of 10 is a twentieth of the view height.
+    check_near(std::sqrt(actual_far), 0.05f, 0.0001f, "an orthographic screen radius is its share of the view height");
+}
+
+void test_orthographic_projection_stays_finite_without_viewport()
+{
+    camera input_camera;
+    input_camera.set_projection_mode(projection_mode::orthographic);
+    const math::mat4 actual = input_camera.get_projection().get_matrix();
+    check(std::isfinite(actual[0][0]) && std::isfinite(actual[1][1]) && std::isfinite(actual[3][0]) && std::isfinite(actual[3][1]),
+          "an orthographic camera without a viewport has a finite projection");
+}
+
+void test_model_lod_slots_draw_their_own_mesh_whole()
+{
+    model input_single;
+    input_single.set_lods({asset_handle<mesh>{}});
+    check(input_single.resolve_lod(2).mesh_lod == 2, "one slot: the model LOD is the mesh's own");
+    model input_slots;
+    input_slots.set_lods({asset_handle<mesh>{}, asset_handle<mesh>{}, asset_handle<mesh>{}});
+    check(input_slots.resolve_lod(2).mesh_lod == 0, "several slots: each mesh draws at its level 0");
+}
+
+void test_mesh_lod_getters_agree_past_the_last_level()
+{
+    const mesh input_mesh;
+    constexpr uint32_t INPUT_LOD_PAST_THE_LAST = 7;
+    check(&input_mesh.get_submeshes(INPUT_LOD_PAST_THE_LAST) == &input_mesh.get_submeshes(0), "the submeshes fall back to the base level");
+    check(&input_mesh.get_skinned_submeshes_indices(0, INPUT_LOD_PAST_THE_LAST) == &input_mesh.get_skinned_submeshes_indices(0, 0),
+          "the skinned indices fall back to the base level");
+    check(&input_mesh.get_non_skinned_submeshes_indices(0, INPUT_LOD_PAST_THE_LAST) == &input_mesh.get_non_skinned_submeshes_indices(0, 0),
+          "the non-skinned indices fall back to the base level");
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------------
@@ -559,6 +621,11 @@ auto run_render_culling_suite(rtti::context& /*ctx*/) -> int
     test_collector_grows_past_its_initial_index();
     test_collector_drops_prepared_list_on_new_key();
     test_material_collector_sorts_and_counts();
+    test_screen_radius_perspective_shrinks_with_distance();
+    test_screen_radius_orthographic_ignores_distance();
+    test_orthographic_projection_stays_finite_without_viewport();
+    test_model_lod_slots_draw_their_own_mesh_whole();
+    test_mesh_lod_getters_agree_past_the_last_level();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

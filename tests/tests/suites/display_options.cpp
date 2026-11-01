@@ -12,7 +12,8 @@
  *   - options saved and loaded back; a file with only some fields keeps the rest; a missing or broken
  *     file loads nothing;
  *   - display modes listed once each, from the smallest; the closest mode by size, then by refresh rate;
- *   - a window's size: the default when none was chosen, at most the display's free area.
+ *   - a window's size: the default when none was chosen, at most the display's free area;
+ *   - a run's window options reach the saved ones, except what the command line set.
  * Everything lives in a temp folder.
  */
 
@@ -168,6 +169,39 @@ void test_windowed_sizes()
     check(fit_windowed_size({1920, 1080}, {}) == usize32_t{1920, 1080}, "an unknown free area keeps the size");
 }
 
+void test_run_window_options()
+{
+    std::printf("test_run_window_options\n");
+    display_options saved;
+    saved.mode = window_mode::windowed;
+    saved.size = {1280, 720};
+    saved.display = 0;
+    display_options current = saved;
+    current.size = {800, 600};
+    current.refresh_rate = 144;
+    current.display = 1;
+    window_option_sources from_command_line;
+    from_command_line.is_size_from_command_line = true;
+    from_command_line.is_display_from_command_line = true;
+    check(!keep_run_window_options(saved, current, from_command_line) && saved.size == usize32_t{1280, 720} &&
+              saved.refresh_rate == 0 && saved.display == 0,
+          "a size and display from the command line stay out of the saved options");
+    window_option_sources display_from_command_line;
+    display_from_command_line.is_display_from_command_line = true;
+    check(keep_run_window_options(saved, current, display_from_command_line) && saved.size == usize32_t{800, 600} &&
+              saved.refresh_rate == 144 && saved.display == 0,
+          "a window resized on a display from the command line keeps its size only");
+    check(keep_run_window_options(saved, current, {}) && saved.display == 1, "a window the player moves keeps its display");
+    check(!keep_run_window_options(saved, current, {}), "options already saved change nothing");
+    current.mode = window_mode::exclusive_fullscreen;
+    window_option_sources mode_from_command_line;
+    mode_from_command_line.is_mode_from_command_line = true;
+    check(!keep_run_window_options(saved, current, mode_from_command_line) && saved.mode == window_mode::windowed,
+          "a window mode from the command line stays out of the saved options");
+    check(keep_run_window_options(saved, current, {}) && saved.mode == window_mode::exclusive_fullscreen,
+          "a window mode a script chose reaches the saved options");
+}
+
 } // namespace
 
 auto run_display_options_suite(rtti::context& /*ctx*/) -> int
@@ -183,6 +217,7 @@ auto run_display_options_suite(rtti::context& /*ctx*/) -> int
     test_saved_options(temp);
     test_display_modes();
     test_windowed_sizes();
+    test_run_window_options();
     fs::remove_all(temp, ec);
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

@@ -437,21 +437,13 @@ void shadow_atlas_allocator::free_square(shadow_atlas_tile square)
             {parent_x, std::uint16_t(parent_y + square.size), square.size},
             {std::uint16_t(parent_x + square.size), std::uint16_t(parent_y + square.size), square.size},
         };
-        std::vector<std::vector<shadow_atlas_tile>::iterator> found;
-        for(const auto& sibling : siblings)
-        {
-            if(sibling == square)
-            {
-                continue;
-            }
-            const auto it = find_free_square(sibling);
-            if(it == free_squares_.end())
-            {
-                break;
-            }
-            found.push_back(it);
-        }
-        if(found.size() != 3)
+        const bool are_siblings_free = std::all_of(std::begin(siblings),
+                                                   std::end(siblings),
+                                                   [&](const shadow_atlas_tile& sibling)
+                                                   {
+                                                       return sibling == square || find_free_square(sibling) != free_squares_.end();
+                                                   });
+        if(!are_siblings_free)
         {
             break;
         }

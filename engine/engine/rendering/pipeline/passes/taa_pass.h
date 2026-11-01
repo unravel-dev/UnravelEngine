@@ -34,14 +34,13 @@ public:
         /// Unsharp on the displayed resolve only - never written to the history; keep low.
         float sharpen = 0.5f;
         float depth_reject_scale = 1.0f;
-        /// Standard deviations for RGB variance clip (typical 1.0–1.75).
+        /// Standard deviations for RGB variance clip (typical 1.0-1.75).
         float variance_clip_scale = 1.35f;
     };
 
     struct run_params
     {
         gfx::frame_buffer::ptr input;
-        gfx::frame_buffer::ptr output;
         const camera* cam = nullptr;
         gfx::frame_buffer::ptr g_buffer;
         /// Previous frame's depth (PREV_DEPTH snapshot) for disocclusion rejection.

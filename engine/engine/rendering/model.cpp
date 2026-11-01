@@ -22,6 +22,21 @@ namespace unravel
 namespace
 {
 
+/// Screen size (fraction of the view height, as a diameter) below which a model is culled.
+constexpr float MIN_VISIBLE_SCREEN_SIZE = 0.005f;
+/// lod_data::percent of a screen radius: a radius of half the view height is 100%.
+constexpr float PERCENT_PER_SCREEN_RADIUS = 200.0f;
+/// The radius (fraction of the view height) of one lod_data::percent.
+constexpr float SCREEN_RADIUS_PER_PERCENT = 0.005f;
+/// Default screen size limits: LOD 0, LOD 1, and the factor every further level applies to the one before.
+constexpr float LOD0_SCREEN_SIZE = 1.0f;
+constexpr float LOD1_SCREEN_SIZE = 0.3f;
+constexpr float LOD_SCREEN_SIZE_FALLOFF = 0.5f;
+/// Below this, projection[2][3] is 0: clip w does not grow with distance, the projection is orthographic.
+constexpr float MIN_PERSPECTIVE_W_SCALE = 0.000001f;
+/// Keeps the division finite for bounds at the camera, (1cm)^2.
+constexpr float MIN_VIEW_DISTANCE_SQUARED = 0.0001f;
+
 /**
  * Looks up the cached world-space AABB for a submesh instance from the retained proxies.
  * Returns nullptr when no cached data is available (legacy assets, stale poses, etc.).
@@ -70,29 +85,46 @@ auto is_submesh_visible_cached(const math::frustum& frustum,
            math::volume_query::outside;
 }
 
-auto compute_bounds_screen_radius_squared(const math::vec3& origin,
-                                                float radius,
-                                                const math::vec3& view_origin,
-                                                const math::mat4& projection) -> float
-{
-    const float screen_multiple = 0.5f * std::max(std::abs(projection[0][0]), std::abs(projection[1][1]));
-    float projection_w_scale = std::abs(projection[2][3]);
-    if(projection_w_scale < 0.000001f)
-    {
-        projection_w_scale = 1.0f;
-    }
-    const float dist_sqr = glm::length2(origin - view_origin) * projection_w_scale;
-    // Guard against division by zero only. Clamping to 1.0 froze the projected size of anything closer than
-    // 1 world unit (= 1m here), making close-up geometry - especially small individual
-    // submeshes - report a tiny screen radius and drop to coarser LODs while filling
-    // the screen.
-    constexpr float min_dist_sqr = 0.0001f; // (1cm)^2
-    return math::square(screen_multiple * radius) / std::max(min_dist_sqr, dist_sqr);
-}
-
 auto compute_bounds_screen_radius_squared(const math::vec3& origin, float radius, const camera& view) -> float
 {
-    return compute_bounds_screen_radius_squared(origin, radius, view.get_position(), view.get_projection().get_matrix());
+    return unravel::compute_bounds_screen_radius_squared(origin, radius, view.get_position(), view.get_projection().get_matrix());
+}
+
+/// The coarsest level whose screen size limit still contains @p screen_radius_squared, walking from the last of
+/// @p lod_count levels. The level @p sticky_lod widens its limit by @p hysteresis and every other level narrows it, so
+/// a size near a limit stays on the level it is on.
+auto select_lod_by_screen_size(const std::vector<float>& screen_sizes,
+                               uint32_t lod_count,
+                               float screen_radius_squared,
+                               uint32_t sticky_lod,
+                               float hysteresis) -> std::size_t
+{
+    for(std::int32_t lod_index = static_cast<std::int32_t>(lod_count) - 1; lod_index >= 0; --lod_index)
+    {
+        const auto index = static_cast<size_t>(lod_index);
+        const float adjusted_size = screen_sizes[index] * (sticky_lod == index ? 1.0f + hysteresis : 1.0f - hysteresis);
+        if(math::square(adjusted_size * 0.5f) >= screen_radius_squared)
+        {
+            return index;
+        }
+    }
+    return 0;
+}
+
+/// The LOD of one placed submesh instance: from its cached world bounds, else from its matrix.
+auto calculate_submesh_instance_lod(const model& owner,
+                                    const mesh& m,
+                                    uint32_t submesh_index,
+                                    uint32_t base_lod,
+                                    const math::mat4& world,
+                                    size_t instance,
+                                    const camera& view,
+                                    const model_submit_extras& extras) -> uint32_t
+{
+    const auto* cached_bounds = get_cached_submesh_bounds(extras, submesh_index, instance, false);
+    return cached_bounds != nullptr
+               ? owner.calculate_submesh_lod_from_world_bounds(m, submesh_index, base_lod, *cached_bounds, view)
+               : owner.calculate_submesh_lod(m, submesh_index, base_lod, world, view);
 }
 
 auto compute_submesh_world_bounds_sphere(const mesh::submesh& sm, const math::mat4& world_matrix) -> math::bsphere
@@ -147,12 +179,24 @@ auto compute_screen_rect_from_sphere(const camera& cam, const math::vec3& world_
 }
 }
 
+auto compute_bounds_screen_radius_squared(const math::vec3& origin,
+                                          float radius,
+                                          const math::vec3& view_origin,
+                                          const math::mat4& projection) -> float
+{
+    const float screen_multiple = 0.5f * std::max(std::abs(projection[0][0]), std::abs(projection[1][1]));
+    const float projection_w_scale = std::abs(projection[2][3]);
+    if(projection_w_scale < MIN_PERSPECTIVE_W_SCALE)
+    {
+        return math::square(screen_multiple * radius);
+    }
+    const float distance_squared = glm::length2(origin - view_origin) * projection_w_scale;
+    return math::square(screen_multiple * radius) / std::max(MIN_VIEW_DISTANCE_SQUARED, distance_squared);
+}
+
 void lod_data::calculate_screen_rect(const camera& cam)
 {
-    const auto& viewport_size = cam.get_viewport_size();
-    const auto& viewport_pos = cam.get_viewport_pos();
-  
-    float screen_radius = percent * 0.005f;
+    float screen_radius = percent * SCREEN_RADIUS_PER_PERCENT;
     rect = compute_screen_rect_from_sphere(cam, center, screen_radius);
 }
 
@@ -255,6 +299,11 @@ auto model::is_default_materials_pending() const -> bool
     return default_materials_pending_;
 }
 
+
+auto model::resolve_lod(uint32_t model_lod) const -> resolved_lod
+{
+    return {get_lod(model_lod), mesh_lods_.size() == 1 ? model_lod : 0u};
+}
 
 auto model::get_lods() const -> const std::vector<asset_handle<mesh>>&
 {
@@ -441,6 +490,14 @@ auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, c
         return lod_count;
     };
 
+    // The levels this view last drew may be gone: another model was set, or the mesh was reloaded with fewer levels.
+    if(data.current_lod_index != 0 || data.target_lod_index != 0)
+    {
+        const uint32_t last_lod = resolve_lod_count() - 1;
+        data.current_lod_index = std::min(data.current_lod_index, last_lod);
+        data.target_lod_index = std::min(data.target_lod_index, last_lod);
+    }
+
     // Unpopulated bounds mean the mesh has not been loaded/measured yet - nothing to size.
     if(!world_bounds.is_populated())
     {
@@ -453,11 +510,10 @@ auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, c
     const float screen_radius_squared = compute_bounds_screen_radius_squared(bsphere.position, bsphere.radius, cam);
 
     const float screen_radius = std::sqrt(std::max(0.0f, screen_radius_squared));
-    data.percent = math::clamp(screen_radius * 200.0f, 0.0f, 100.0f);
+    data.percent = math::clamp(screen_radius * PERCENT_PER_SCREEN_RADIUS, 0.0f, 100.0f);
     data.center = bsphere.position;
 
-    const float lod_screen_size_min = 0.005f;
-    const float cull_threshold_squared = math::square(lod_screen_size_min * 0.5f);
+    const float cull_threshold_squared = math::square(MIN_VISIBLE_SCREEN_SIZE * 0.5f);
     const bool is_visible = cull_threshold_squared <= screen_radius_squared;
     if(!is_visible)
     {
@@ -473,39 +529,8 @@ auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, c
     // the third test reads the value that resolution stored.
     else if(lod_screen_sizes_.size() > 1 && resolve_lod_count() > 1 && lod_screen_sizes_.size() >= lod_count)
     {
-        // Use current LOD for hysteresis (what's being displayed, accounting for transitions)
-        const uint32_t prev_lod = data.current_lod_index;
-        const float hysteresis = lod_hysteresis_;
-        
-        for(std::int32_t lod_index = static_cast<std::int32_t>(lod_count) - 1; lod_index >= 0; --lod_index)
-        {
-            const auto index = static_cast<size_t>(lod_index);
-            float screen_size = lod_screen_sizes_[index];
-            float screen_size_squared = math::square(screen_size * 0.5f);
-            
-            // Apply hysteresis to create a "sticky" dead zone around the current LOD
-            // This prevents rapid switching at LOD boundaries
-            if(prev_lod == index)
-            {
-                // Currently at this LOD - INCREASE threshold to make it easier to stay
-                // (larger threshold = condition more likely to be true)
-                float adjusted_size = screen_size * (1.0f + hysteresis);
-                screen_size_squared = math::square(adjusted_size * 0.5f);
-            }
-            else
-            {
-                // Different from current LOD - DECREASE threshold to resist change
-                // (smaller threshold = condition less likely to be true)
-                float adjusted_size = screen_size * (1.0f - hysteresis);
-                screen_size_squared = math::square(adjusted_size * 0.5f);
-            }
-            
-            if(screen_size_squared >= screen_radius_squared)
-            {
-                lod = static_cast<std::size_t>(lod_index);
-                break;
-            }
-        }
+        // The current LOD (what is being displayed, accounting for transitions) holds on to its place.
+        lod = select_lod_by_screen_size(lod_screen_sizes_, lod_count, screen_radius_squared, data.current_lod_index, lod_hysteresis_);
     }
 
     // Every path above leaves lod below the count, so with no bias the clamp is an identity and
@@ -673,18 +698,7 @@ auto model::compute_lod_index(const math::bbox& world_bounds, const camera& cam,
     const math::bsphere bsphere{world_bounds.get_center(), glm::length(world_bounds.get_extents())};
     const float screen_radius_squared = compute_bounds_screen_radius_squared(bsphere.position, bsphere.radius, cam);
 
-    std::size_t lod = 0;
-    for(std::int32_t lod_index = static_cast<std::int32_t>(lod_count) - 1; lod_index >= 0; --lod_index)
-    {
-        const auto index = static_cast<size_t>(lod_index);
-        const float screen_size = lod_screen_sizes_[index];
-        const float screen_size_squared = math::square(screen_size * 0.5f);
-        if(screen_size_squared >= screen_radius_squared)
-        {
-            lod = index;
-            break;
-        }
-    }
+    const std::size_t lod = select_lod_by_screen_size(lod_screen_sizes_, lod_count, screen_radius_squared, 0, 0.0f);
 
     float biased_lod = static_cast<float>(lod) + lod_selection_bias_ + extra_bias;
     biased_lod = math::clamp(biased_lod, 0.0f, static_cast<float>(lod_count - 1));
@@ -704,15 +718,15 @@ void model::recalulate_lod_screen_size_limits(uint32_t lod_count)
     {
         if(i == 0)
         {
-            lod_screen_sizes_[i] = 1.0f;
+            lod_screen_sizes_[i] = LOD0_SCREEN_SIZE;
         }
         else if(i == 1)
         {
-            lod_screen_sizes_[i] = 0.3f;
+            lod_screen_sizes_[i] = LOD1_SCREEN_SIZE;
         }
         else
         {
-            lod_screen_sizes_[i] = lod_screen_sizes_[i - 1] * 0.5f;
+            lod_screen_sizes_[i] = lod_screen_sizes_[i - 1] * LOD_SCREEN_SIZE_FALLOFF;
         }
     }
 }
@@ -747,16 +761,6 @@ void model::set_lod_selection_bias(float bias)
     lod_selection_bias_ = bias;
 }
 
-auto model::get_lod_hysteresis() const -> float
-{
-    return lod_hysteresis_;
-}
-
-void model::set_lod_hysteresis(float hysteresis)
-{
-    lod_hysteresis_ = hysteresis;
-}
-
 auto model::get_lod_transition_time() const -> seconds_t
 {
     return lod_transition_time_;
@@ -767,54 +771,25 @@ void model::set_lod_transition_time(seconds_t time)
     lod_transition_time_ = time;
 }
 
-auto model::get_lod_screen_size_min() const -> float
-{
-    return 0.01f;
-}
-
-void model::set_lod_screen_size_min(float /*value*/)
-{
-    // Deprecated - hysteresis is now used instead
-}
-
-auto model::get_lod_auto_screen_size_power_base() const -> float
-{
-    return 0.5f;
-}
-
-void model::set_lod_auto_screen_size_power_base(float /*value*/)
-{
-    // Deprecated - fixed thresholds are now used
-}
-
-auto model::get_lod_screen_sizes() const -> const std::vector<float>&
-{
-    return lod_screen_sizes_;
-}
-
-void model::set_lod_screen_sizes(const std::vector<float>& sizes)
-{
-    lod_screen_sizes_ = sizes;
-}
-
 
 void model::submit(const math::mat4& world_transform,
                    const submesh_pose_mat4& submesh_transforms,
                    const pose_mat4& bone_transforms,
                    const std::vector<pose_mat4>& skinning_transforms,
-                   unsigned int lod,
+                   unsigned int model_lod,
                    const submit_callbacks& callbacks,
                    const math::frustum* frustum,
                    const camera* view,
                    const model_submit_extras& extras) const
 {
-    const auto& lod_mesh = get_lod(lod);
-    if(!lod_mesh)
+    const resolved_lod resolved = resolve_lod(model_lod);
+    if(!resolved.mesh_asset)
     {
         return;
     }
 
-    auto mesh = lod_mesh.get();
+    auto mesh = resolved.mesh_asset.get();
+    const uint32_t lod = resolved.mesh_lod;
 
     auto skinned_submeshes_count = mesh->get_skinned_submeshes_count(lod);
     auto non_skinned_submeshes_count = mesh->get_non_skinned_submeshes_count(lod);
@@ -871,13 +846,8 @@ void model::submit(const math::mat4& world_transform,
                 {
                     return {base_sm, lod};
                 }
-                // Prefer the cached world AABB (no matrix decomposition); fall back to the
-                // local bbox + world matrix path when no cached data exists.
-                const auto* cached_bounds = get_cached_submesh_bounds(extras, submesh_index, instance, false);
                 const uint32_t effective_lod =
-                    cached_bounds != nullptr
-                        ? calculate_submesh_lod_from_world_bounds(*mesh, submesh_index, lod, *cached_bounds, *view)
-                        : calculate_submesh_lod(*mesh, submesh_index, lod, world, *view);
+                    calculate_submesh_instance_lod(*this, *mesh, submesh_index, lod, world, instance, *view, extras);
                 if(effective_lod == lod)
                 {
                     return {base_sm, lod};
@@ -1041,19 +1011,20 @@ void model::submit(const math::mat4& world_transform,
 void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                                       const submesh_pose_mat4& submesh_transforms,
                                       const std::vector<pose_mat4>& skinning_transforms,
-                                      unsigned int lod,
+                                      unsigned int model_lod,
                                       const submit_vertex_pulling_callbacks& callbacks,
                                       const math::frustum* frustum,
                                       const camera* view,
                                       const model_submit_extras& extras) const
 {
-    const auto& lod_mesh = get_lod(lod);
-    if(!lod_mesh)
+    const resolved_lod resolved = resolve_lod(model_lod);
+    if(!resolved.mesh_asset)
     {
         return;
     }
 
-    auto mesh = lod_mesh.get();
+    auto mesh = resolved.mesh_asset.get();
+    const uint32_t lod = resolved.mesh_lod;
 
     auto vb = mesh->get_hardware_vb();
     auto ib = mesh->get_hardware_ib(lod);
@@ -1166,20 +1137,10 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
                         {
                             continue;
                         }
-                        uint32_t effective_lod = lod;
-                        if(per_submesh_lod)
-                        {
-                            const auto* cached_bounds =
-                                get_cached_submesh_bounds(extras, static_cast<uint32_t>(index), j, false);
-                            effective_lod =
-                                cached_bounds != nullptr
-                                    ? calculate_submesh_lod_from_world_bounds(*mesh,
-                                                                              static_cast<uint32_t>(index),
-                                                                              lod,
-                                                                              *cached_bounds,
-                                                                              *view)
-                                    : calculate_submesh_lod(*mesh, static_cast<uint32_t>(index), lod, *transform, *view);
-                        }
+                        const uint32_t effective_lod =
+                            per_submesh_lod
+                                ? calculate_submesh_instance_lod(*this, *mesh, static_cast<uint32_t>(index), lod, *transform, j, *view, extras)
+                                : lod;
                         gfx::set_world_transform(*transform);
                         bind_and_submit(static_cast<uint32_t>(index), effective_lod);
                     }
@@ -1282,13 +1243,32 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
 
 void model::resize_materials(const asset_handle<mesh>& mesh)
 {
-    const auto m = mesh.get();
-    auto submeshes = m->get_data_groups_count();
-    if(materials_.size() != submeshes)
-    {
-        materials_.resize(submeshes, default_material());
-    }
+    resize_material_slots(mesh.get()->get_data_groups_count());
+}
+
+void model::resize_material_slots(size_t slot_count)
+{
+    materials_.resize(slot_count, default_material());
     sync_material_instances();
+}
+
+void model::fit_materials_to_mesh()
+{
+    if(mesh_lods_.empty() || !mesh_lods_.front())
+    {
+        return;
+    }
+    const size_t slot_count = mesh_lods_.front().visit(
+        [](mesh* loaded) -> size_t
+        {
+            return loaded != nullptr ? loaded->get_data_groups_count() : 0;
+        });
+    // Grows only: a mesh with fewer groups (still loading, failed, or mid-reimport) must not lose saved materials. Drawing
+    // reads the slots by data group, so slots past the mesh's groups are kept and saved, and only wait for its groups.
+    if(slot_count > materials_.size())
+    {
+        resize_material_slots(slot_count);
+    }
 }
 
 auto model::default_material() -> asset_handle<material>&
@@ -1303,26 +1283,28 @@ auto model::fallback_material() -> asset_handle<material>&
     return asset;
 }
 
-void model::submit_for_batching(batch_collector& collector,
+auto model::submit_for_batching(batch_collector& collector,
                                 const math::mat4& world_transform,
                                 const submesh_pose_mat4& submesh_transforms,
-                                uint32_t lod_index,
+                                uint32_t model_lod,
                                 float lod_param,
                                 const math::frustum* frustum,
                                 const camera* view,
-                                const model_submit_extras& extras) const
+                                const model_submit_extras& extras) const -> bool
 {
-    const auto& mesh_asset = get_lod(lod_index);
-    if(!mesh_asset)
+    bool is_collected = false;
+    const resolved_lod resolved = resolve_lod(model_lod);
+    if(!resolved.mesh_asset)
     {
-        return;
+        return is_collected;
     }
 
-    auto mesh = mesh_asset.get();
+    auto mesh = resolved.mesh_asset.get();
     if(!mesh)
     {
-        return;
+        return is_collected;
     }
+    const uint32_t lod_index = resolved.mesh_lod;
 
     const bool cull_submeshes = frustum != nullptr && mesh->get_submeshes_count(lod_index) > 1;
     // The batch key already includes lod_index, so mixed per-submesh LODs land in distinct
@@ -1375,20 +1357,10 @@ void model::submit_for_batching(batch_collector& collector,
                         continue;
                     }
 
-                    uint32_t effective_lod = lod_index;
-                    if(per_submesh_lod)
-                    {
-                        const auto* cached_bounds =
-                            get_cached_submesh_bounds(extras, submesh_index, instance_idx, false);
-                        effective_lod =
-                            cached_bounds != nullptr
-                                ? calculate_submesh_lod_from_world_bounds(*mesh,
-                                                                          submesh_index,
-                                                                          lod_index,
-                                                                          *cached_bounds,
-                                                                          *view)
-                                : calculate_submesh_lod(*mesh, submesh_index, lod_index, *transform_ptr, *view);
-                    }
+                    const uint32_t effective_lod =
+                        per_submesh_lod
+                            ? calculate_submesh_instance_lod(*this, *mesh, submesh_index, lod_index, *transform_ptr, instance_idx, *view, extras)
+                            : lod_index;
 
                     batch_key key(mesh, group_material, effective_lod, submesh_index);
                     if (!key.is_valid())
@@ -1409,6 +1381,7 @@ void model::submit_for_batching(batch_collector& collector,
 
                     // Collect for batching
                     collector.collect_renderable(key, instance);
+                    is_collected = true;
                 }
             }
             else
@@ -1439,9 +1412,11 @@ void model::submit_for_batching(batch_collector& collector,
 
                 // Collect for batching
                 collector.collect_renderable(key, instance);
+                is_collected = true;
             }
         }
     }
+    return is_collected;
 }
 
 auto shadow_reach::can_reach_view(const math::bbox& world_bounds) const -> bool
@@ -1497,22 +1472,23 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
                                                 const shadow_reach& reach,
                                                 const math::mat4& world_transform,
                                                 const submesh_pose_mat4& submesh_transforms,
-                                                uint32_t lod_index,
+                                                uint32_t model_lod,
                                                 float lod_param,
                                                 const math::frustum* frustums,
                                                 bool nested_cascades,
                                                 const model_submit_extras& extras) const -> bool
 {
-    const auto& mesh_asset = get_lod(lod_index);
-    if(!mesh_asset)
+    const resolved_lod resolved = resolve_lod(model_lod);
+    if(!resolved.mesh_asset)
     {
         return false;
     }
-    auto mesh = mesh_asset.get();
+    auto mesh = resolved.mesh_asset.get();
     if(!mesh)
     {
         return false;
     }
+    const uint32_t lod_index = resolved.mesh_lod;
 
     bool collected_any = false;
     auto collect_into_cascades =
@@ -1719,18 +1695,19 @@ auto model::submit_for_skinned_batching(batch_collector& collector,
                                         const submesh_pose_mat4& submesh_transforms,
                                         hpp::span<const uint32_t> palette_rows,
                                         hpp::span<const uint32_t> prev_palette_rows,
-                                        uint32_t lod_index,
+                                        uint32_t model_lod,
                                         float lod_param,
                                         const math::frustum* frustum,
                                         const camera* view,
                                         const model_submit_extras& extras) const -> bool
 {
-    const auto& mesh_asset = get_lod(lod_index);
-    auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
+    const resolved_lod resolved = resolve_lod(model_lod);
+    auto mesh = resolved.mesh_asset ? resolved.mesh_asset.get() : nullptr;
     if(!mesh)
     {
         return false;
     }
+    const uint32_t lod_index = resolved.mesh_lod;
     bool collected_any = false;
     const auto data_group_count = mesh->get_data_groups_count();
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
@@ -1775,17 +1752,18 @@ auto model::submit_for_skinned_shadow_batching_cascaded(std::vector<shadow_batch
                                                         const math::mat4& world_transform,
                                                         const submesh_pose_mat4& submesh_transforms,
                                                         hpp::span<const uint32_t> palette_rows,
-                                                        uint32_t lod_index,
+                                                        uint32_t model_lod,
                                                         const math::frustum* frustums,
                                                         bool nested_cascades,
                                                         const model_submit_extras& extras) const -> bool
 {
-    const auto& mesh_asset = get_lod(lod_index);
-    auto mesh = mesh_asset ? mesh_asset.get() : nullptr;
+    const resolved_lod resolved = resolve_lod(model_lod);
+    auto mesh = resolved.mesh_asset ? resolved.mesh_asset.get() : nullptr;
     if(!mesh)
     {
         return false;
     }
+    const uint32_t lod_index = resolved.mesh_lod;
     bool collected_any = false;
     const auto data_group_count = mesh->get_data_groups_count();
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)

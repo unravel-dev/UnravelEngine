@@ -1,4 +1,5 @@
 #include "buffer_clear.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 
@@ -13,12 +14,6 @@ namespace
 constexpr uint32_t CLEAR_GROUP_SIZE = 64;
 /// The cleared buffer's stage (cs_clear_uints.eshader).
 constexpr uint8_t CLEAR_BUFFER_STAGE = 0;
-
-/// The groups that clear @p count uints.
-auto get_clear_groups(uint32_t count) -> uint32_t
-{
-    return (count + CLEAR_GROUP_SIZE - 1u) / CLEAR_GROUP_SIZE;
-}
 } // namespace
 
 void buffer_clear::clear_program::cache_uniforms()
@@ -51,17 +46,21 @@ auto buffer_clear::is_ready() const -> bool
     return program_.program != nullptr && program_.program->is_valid();
 }
 
+auto buffer_clear::begin() const -> bool
+{
+    return begin_program(program_.program);
+}
+
 void buffer_clear::dispatch(uint16_t view_id, bgfx::DynamicIndexBufferHandle buffer, uint32_t first, uint32_t count) const
 {
-    if(!is_ready() || !bgfx::isValid(buffer) || count == 0u)
+    if(!begin_program(program_.program) || !bgfx::isValid(buffer) || count == 0u)
     {
         return;
     }
-    program_.program->begin();
     bgfx::setBuffer(CLEAR_BUFFER_STAGE, buffer, bgfx::Access::Write);
     // u_clear_uints: the range's first uint and its length; the shader skips the threads past the range's end.
     gfx::set_uniform(program_.u_clear_uints, math::vec4(float(first), float(count), 0.0f, 0.0f));
-    gfx::dispatch(view_id, program_.program->native_handle(), get_clear_groups(count), 1, 1);
+    gfx::dispatch(view_id, program_.program->native_handle(), compute_group_count(count, CLEAR_GROUP_SIZE), 1, 1);
     program_.program->end();
 }
 

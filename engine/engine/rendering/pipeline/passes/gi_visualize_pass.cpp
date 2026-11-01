@@ -3,11 +3,13 @@
 #include "gi_gather_pass.h"
 #include "gi_pass_common.h"
 #include "gi_reflection_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/default_textures.h>
+#include <engine/rendering/gi/gi_hash.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 
 #include <graphics/graphics.h>
@@ -198,13 +200,7 @@ auto get_cluster_hash(const gi_card& card, uint32_t index) -> uint32_t
                                       card.extent.y,
                                       card.extent.z,
                                       float(index)};
-    uint32_t hash = 2166136261u;
-    const auto* bytes = reinterpret_cast<const uint8_t*>(key.data());
-    for(size_t i = 0; i < sizeof(key); ++i)
-    {
-        hash = (hash ^ bytes[i]) * 16777619u;
-    }
-    return hash;
+    return gi_hash::fnv1a_32(key.data(), sizeof(key));
 }
 
 auto get_surfel_instance_layout() -> const bgfx::VertexLayout&
@@ -539,7 +535,7 @@ void gi_visualize_pass::release_card_generation(surface_cache_system& gi_scene)
 void gi_visualize_pass::draw_card_generation(const world_params& params, const gfx::frame_buffer::ptr& target)
 {
     APP_SCOPE_PERF("GI/Visualize Card Generation");
-    if(params.gi_scene == nullptr || !surfel_program_.program || !surfel_program_.program->is_valid())
+    if(params.gi_scene == nullptr || !begin_program(surfel_program_.program))
     {
         return;
     }
@@ -623,9 +619,8 @@ void gi_visualize_pass::draw_card_generation_clusters(const world_params& params
             draw_surfels(params, buffers, range, source.local_to_world, view_id);
         }
         const auto& rays = buffers.cluster_rays[card.index_in_mesh];
-        if(rays.count > 0 && primitive_program_.program && primitive_program_.program->is_valid())
+        if(rays.count > 0 && begin_program(primitive_program_.program))
         {
-            primitive_program_.program->begin();
             gfx::set_uniform(primitive_program_.u_gi_visualize_primitive,
                              math::vec4(params.pre_exposure.value, 0.0f, 0.0f, 0.0f));
             params.pre_exposure.bind();
@@ -713,7 +708,6 @@ void gi_visualize_pass::draw_surfels(const world_params& params,
         return;
     }
     auto& program = surfel_program_;
-    program.program->begin();
     gfx::set_uniform(program.u_gi_visualize_surfel,
                      math::vec4(surfel_radius * params.settings.card_generation_surfel_scale, 0.0f, 0.0f, 0.0f));
     gfx::set_uniform(program.u_gi_visualize_primitive, math::vec4(params.pre_exposure.value, 0.0f, 0.0f, 0.0f));
@@ -825,12 +819,11 @@ void gi_visualize_pass::print_radiance_cache_stats(const overlay_params& params,
 {
     auto& program = rc_stats_program_;
     const auto* radiance_cache = params.gather->get_radiance_cache();
-    if(params.print == nullptr || radiance_cache == nullptr || !program.program || !program.program->is_valid())
+    if(params.print == nullptr || radiance_cache == nullptr || !begin_program(program.program))
     {
         return;
     }
     gfx::render_pass pass("GI/Visualize Radiance Cache Stats");
-    program.program->begin();
     radiance_cache->bind_counters(rc_stats_counters_stage);
     params.print->bind(rc_stats_print_stage, params.scene_depth->get_size());
     gfx::set_uniform(program.u_gi_rc_stats,
@@ -843,13 +836,11 @@ void gi_visualize_pass::print_probe_counts(const overlay_params& params)
 {
     auto& program = counts_program_;
     const auto& placement = params.gather->get_probe_placement();
-    if(params.print == nullptr || placement.render_frame != gfx::get_render_frame() || !program.program ||
-       !program.program->is_valid())
+    if(params.print == nullptr || placement.render_frame != gfx::get_render_frame() || !begin_program(program.program))
     {
         return;
     }
     gfx::render_pass pass("GI/Visualize Probe Counts");
-    program.program->begin();
     params.gather->bind_adaptive_state(counts_adaptive_stage);
     params.print->bind(counts_print_stage, params.scene_depth->get_size());
     const float lattice_probes = placement.probes[0] * placement.probes[1];
@@ -887,8 +878,8 @@ void gi_visualize_pass::draw_reflection_trace(const overlay_params& params, uint
     const bool is_traced = trace != nullptr && trace->history.has_advanced_on(frame);
     const uint32_t downsample = std::max(trace != nullptr ? trace->downsample : 1u, 1u);
     const auto trace_size = gi_reflection_pass::get_trace_size(size, downsample);
-    if(!is_cursor_in_view || !is_traced || !ray || !hit || !radiance || !tiles || !program.program ||
-       !program.program->is_valid() || !gi_pass::has_view_size(ray, trace_size))
+    if(!is_cursor_in_view || !is_traced || !ray || !hit || !radiance || !tiles || !begin_program(program.program) ||
+       !gi_pass::has_view_size(ray, trace_size))
     {
         return;
     }
@@ -901,7 +892,6 @@ void gi_visualize_pass::draw_reflection_trace(const overlay_params& params, uint
     }
     gfx::render_pass pass("GI/Visualize Reflection Trace");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
-    program.program->begin();
     gfx::set_texture(program.s_gi_reflection_ray, 0, ray);
     gfx::set_texture(program.s_gi_reflection_hit, 1, hit);
     gfx::set_texture(program.s_gi_reflection_radiance, 2, radiance);
@@ -931,8 +921,7 @@ void gi_visualize_pass::draw_probe_placement(const overlay_params& params)
 {
     auto& program = placement_program_;
     const auto& placement = params.gather->get_probe_placement();
-    if(!placement.records || placement.render_frame != gfx::get_render_frame() || !program.program ||
-       !program.program->is_valid())
+    if(!placement.records || placement.render_frame != gfx::get_render_frame() || !begin_program(program.program))
     {
         return;
     }
@@ -941,7 +930,6 @@ void gi_visualize_pass::draw_probe_placement(const overlay_params& params)
     gfx::render_pass pass("GI/Screen Probe Placement");
     pass.bind(params.output.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
-    program.program->begin();
     gfx::set_texture(program.s_gi_probe_records, 0, placement.records);
     gfx::set_texture(program.s_scene_depth, lines_depth_stage, params.scene_depth);
     gfx::set_uniform(program.u_gi_frame, placement.frame.data());
@@ -962,7 +950,7 @@ void gi_visualize_pass::draw_lines(const overlay_params& params,
                                    bool is_raw_color)
 {
     auto& program = lines_program_;
-    if(!program.program || !program.program->is_valid())
+    if(!begin_program(program.program))
     {
         return;
     }
@@ -970,7 +958,6 @@ void gi_visualize_pass::draw_lines(const overlay_params& params,
     pass.bind(params.output.get());
     // Over the resolved image: the unjittered projection.
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
-    program.program->begin();
     bgfx::setBuffer(lines_buffer_stage, lines, bgfx::Access::Read);
     gfx::set_texture(program.s_scene_depth, lines_depth_stage, params.scene_depth);
     gfx::set_uniform(program.u_gi_visualize_lines,
@@ -1007,7 +994,7 @@ void gi_visualize_pass::draw_radiosity_probes(const world_params& params, const 
     APP_SCOPE_PERF("GI/Visualize Radiosity Probes");
     auto& program = probe_program_;
     const auto* surface_cache = params.surface_cache;
-    if(!program.program || !program.program->is_valid() || !surface_cache->has_lighting())
+    if(!begin_program(program.program) || !surface_cache->has_lighting())
     {
         return;
     }
@@ -1023,7 +1010,6 @@ void gi_visualize_pass::draw_radiosity_probes(const world_params& params, const 
     gfx::render_pass pass("GI/Radiosity Probes");
     pass.bind(target.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-    program.program->begin();
     bind_probe_program(params,
                        math::vec4(probe_mode_radiosity,
                                   params.settings.radiosity_probe_radius,
@@ -1042,7 +1028,7 @@ void gi_visualize_pass::draw_radiance_cache_probes(const world_params& params,
 {
     APP_SCOPE_PERF("GI/Visualize Radiance Cache");
     auto& program = probe_program_;
-    if(!program.program || !program.program->is_valid() || params.radiance_cache == nullptr)
+    if(!begin_program(program.program) || params.radiance_cache == nullptr)
     {
         return;
     }
@@ -1061,7 +1047,6 @@ void gi_visualize_pass::draw_radiance_cache_probes(const world_params& params,
     gfx::render_pass pass("GI/Radiance Cache Probes");
     pass.bind(target.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-    program.program->begin();
     bind_probe_program(params,
                        math::vec4(probe_mode_radiance_cache,
                                   radiance_cache_radius_cells * params.settings.radiance_cache_radius_scale,
@@ -1163,7 +1148,7 @@ void gi_visualize_pass::draw_primitives(const world_params& params,
                                         uint16_t view_id)
 {
     auto& program = primitive_program_;
-    if(vertices.empty() || !program.program || !program.program->is_valid())
+    if(vertices.empty() || !begin_program(program.program))
     {
         return;
     }
@@ -1183,7 +1168,6 @@ void gi_visualize_pass::draw_primitives(const world_params& params,
         bgfx::TransientVertexBuffer buffer;
         bgfx::allocTransientVertexBuffer(&buffer, count, layout);
         std::memcpy(buffer.data, vertices.data() + first, size_t(count) * sizeof(primitive_vertex));
-        program.program->begin();
         const math::vec4 scale(params.pre_exposure.value, 0.0f, 0.0f, 0.0f);
         gfx::set_uniform(program.u_gi_visualize_primitive, scale);
         params.pre_exposure.bind();
@@ -1217,7 +1201,7 @@ void gi_visualize_pass::draw_screen_view(const run_params& params, view mode, co
 {
     auto& program = screen_program_;
     const auto& gbuffer = params.rview->fbo_find("GBUFFER");
-    if(!program.program || !program.program->is_valid() || !gbuffer)
+    if(!begin_program(program.program) || !gbuffer)
     {
         return;
     }
@@ -1245,7 +1229,6 @@ void gi_visualize_pass::draw_screen_view(const run_params& params, view mode, co
         bgfx::setViewScissor(pass.id, x, y, width, height);
     }
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-    program.program->begin();
     gfx::set_texture(program.s_gbuffer0, 0, gbuffer->get_texture(0));
     gfx::set_texture(program.s_gbuffer1, 1, gbuffer->get_texture(1));
     gfx::set_texture(program.s_gbuffer_depth, 2, gbuffer->get_texture(4));

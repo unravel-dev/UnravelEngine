@@ -238,6 +238,7 @@ public:
 
     auto run_debug(const debug_params& params) -> bool;
 
+    /// Every program is built right now, without picking up reloaded shaders: an init() result, not a frame's gate.
     auto is_ready() const -> bool;
 
     /// The atlases exist: created by the first update with a user.
@@ -404,8 +405,9 @@ private:
     /// Resamples the lighting of reallocated cards' previous pages into the capture-sized resample targets,
     /// before the copy overwrites the physical atlases.
     void resample_lighting();
+    /// The gate of a frame's work (gpu_program::begin): whether every program can run, picking up reloaded shaders.
+    auto begin_programs() -> bool;
     void build_light_tiles();
-    void bind_sdf_instances(const surface_cache_system& gi_scene) const;
     /// The texture a debug mode reads per card sample at stage 13 (fs_gi_scene_debug.eshader s_gi_debug_values).
     auto get_debug_values(debug_mode mode) const -> const gfx::texture::ptr&;
     void dispatch_direct(const lighting_inputs& inputs, uint32_t first, uint32_t count);
@@ -445,6 +447,8 @@ private:
     gfx::texture::ptr resample_direct_;
     gfx::texture::ptr resample_indirect_;
     bool is_lit_ = false;
+    ///< A device limit cut the radiosity layout (reported once).
+    bool has_warned_radiosity_layout_ = false;
     ///< Scale of the global-SDF hits' card sampling bias (u_gi_object_grid_params.y; 1 = this layout's voxels).
     float card_bias_scale_ = 1.0f;
     /// This frame's experiment toggles (surface_cache_system::get_experiment_flags).

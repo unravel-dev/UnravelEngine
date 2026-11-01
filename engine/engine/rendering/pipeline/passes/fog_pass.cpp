@@ -1,4 +1,5 @@
 #include "fog_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/default_textures.h>
@@ -138,9 +139,9 @@ struct cluster_counts
 
 auto get_cluster_counts(const fog_pass::volumetric_grid& grid) -> cluster_counts
 {
-    return {(grid.width + CLUSTER_COLUMNS - 1u) / CLUSTER_COLUMNS,
-            (grid.height + CLUSTER_COLUMNS - 1u) / CLUSTER_COLUMNS,
-            (grid.depth + CLUSTER_SLICES - 1u) / CLUSTER_SLICES};
+    return {compute_group_count(grid.width, CLUSTER_COLUMNS),
+            compute_group_count(grid.height, CLUSTER_COLUMNS),
+            compute_group_count(grid.depth, CLUSTER_SLICES)};
 }
 
 /**
@@ -296,11 +297,6 @@ auto pack_light_shadows(const std::vector<fog_pass::local_light>& lights) -> std
         }
     }
     return packed;
-}
-
-auto get_group_count(std::uint32_t items, std::uint32_t group_size) -> std::uint32_t
-{
-    return (items + group_size - 1u) / group_size;
 }
 } // namespace
 
@@ -587,20 +583,28 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
     auto& state = rview.data().get_or_emplace<volumetric_view_state>(volumetric_view_state::view_key);
     const bool is_same_layout =
         state.grid == grid && state.range == range && state.slice_distribution == slice_distribution;
-    const bool has_history = state.has_history && is_same_layout && !params.is_camera_cut;
-    const std::uint32_t current = has_history ? 1u - state.current : 0u;
+    const bool can_reuse_history = state.has_history && is_same_layout && !params.is_camera_cut;
+    const std::uint32_t current = can_reuse_history ? 1u - state.current : 0u;
     const gfx::texture_desc desc{.size = usize32_t(grid.width, grid.height),
                                  .format = bgfx::TextureFormat::RGBA16F,
                                  .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_UVW_CLAMP,
                                  .depth = std::uint16_t(grid.depth),
                                  .kind = gfx::texture_kind::tex_3d};
-    const gfx::texture::ptr history = rview.tex_acquire(LIT_VOLUME_KEYS[1u - current], desc);
+    // A history the view rebuilt, after it was collected while the view stayed idle, holds nothing to reuse.
+    bool is_history_rebuilt = false;
+    const gfx::texture::ptr history = rview.tex_acquire(LIT_VOLUME_KEYS[1u - current],
+                                                        desc,
+                                                        [&is_history_rebuilt](const gfx::texture::ptr&)
+                                                        {
+                                                            is_history_rebuilt = true;
+                                                        });
     const gfx::texture::ptr lit = rview.tex_acquire(LIT_VOLUME_KEYS[current], desc);
     const gfx::texture::ptr integrated = rview.tex_acquire(INTEGRATED_VOLUME_KEY, desc);
     if(!history || !lit || !integrated)
     {
         return {};
     }
+    const bool has_history = can_reuse_history && !is_history_rebuilt;
     if(!has_history)
     {
         state = {};
@@ -635,7 +639,6 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
     if(!lights.empty())
     {
         gfx::render_pass pass("Fog/Light Culling");
-        volumetric_.cull->begin();
         bgfx::setBuffer(CULL_MASKS_STAGE, light_masks, bgfx::Access::Write);
         gfx::set_uniform(volumetric_.u_fog_light_info, light_info);
         gfx::set_uniform(volumetric_.u_fog_lights, packed_lights.data(), std::uint16_t(packed_lights.size()));
@@ -644,14 +647,13 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         bind_uniforms(shader);
         gfx::dispatch(pass.id,
                        volumetric_.cull->native_handle(),
-                       get_group_count(clusters.x, CULL_GROUP_SIZE),
-                       get_group_count(clusters.y, CULL_GROUP_SIZE),
-                       get_group_count(clusters.z, CULL_GROUP_SIZE));
+                       compute_group_count(clusters.x, CULL_GROUP_SIZE),
+                       compute_group_count(clusters.y, CULL_GROUP_SIZE),
+                       compute_group_count(clusters.z, CULL_GROUP_SIZE));
         volumetric_.cull->end();
     }
     {
         gfx::render_pass pass("Fog/Froxel Lighting");
-        volumetric_.lighting->begin();
         gfx::set_image_3d(LIGHTING_OUTPUT_STAGE, lit->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         gfx::set_texture(volumetric_.s_fog_history, LIGHTING_HISTORY_STAGE, history);
         gfx::set_texture(volumetric_.s_fog_environment, LIGHTING_ENVIRONMENT_STAGE, params.environment);
@@ -714,14 +716,13 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         bind_uniforms(shader);
         gfx::dispatch(pass.id,
                        volumetric_.lighting->native_handle(),
-                       get_group_count(grid.width, LIGHTING_GROUP_SIZE),
-                       get_group_count(grid.height, LIGHTING_GROUP_SIZE),
-                       get_group_count(grid.depth, LIGHTING_GROUP_SIZE));
+                       compute_group_count(grid.width, LIGHTING_GROUP_SIZE),
+                       compute_group_count(grid.height, LIGHTING_GROUP_SIZE),
+                       compute_group_count(grid.depth, LIGHTING_GROUP_SIZE));
         volumetric_.lighting->end();
     }
     {
         gfx::render_pass pass("Fog/Froxel Integration");
-        volumetric_.integrate->begin();
         gfx::set_image_3d(INTEGRATE_OUTPUT_STAGE, integrated->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         gfx::set_texture(volumetric_.s_fog_lit, INTEGRATE_LIT_STAGE, lit);
         gfx::set_uniform(volumetric_.u_fog_grid, grid_uniform);
@@ -729,8 +730,8 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
         bind_uniforms(shader);
         gfx::dispatch(pass.id,
                        volumetric_.integrate->native_handle(),
-                       get_group_count(grid.width, INTEGRATE_GROUP_SIZE),
-                       get_group_count(grid.height, INTEGRATE_GROUP_SIZE),
+                       compute_group_count(grid.width, INTEGRATE_GROUP_SIZE),
+                       compute_group_count(grid.height, INTEGRATE_GROUP_SIZE),
                        1);
         volumetric_.integrate->end();
     }
@@ -752,14 +753,13 @@ auto fog_pass::run(const camera& camera, gfx::render_view& rview, const run_para
     shader.volume_info = math::vec4(float(volumes.size()), 0.0f, 0.0f, 0.0f);
     shader.volumes = pack_fog_volumes(volumes, camera.get_position());
     if(!shader.is_enabled() || !params.target || !params.depth || !params.environment ||
-       !fog_program_.program || !fog_program_.program->is_valid())
+       !begin_program(fog_program_.program))
     {
         release_volumetric(rview);
         return {};
     }
-    const bool has_volumetric_programs = volumetric_.lighting && volumetric_.lighting->is_valid() && volumetric_.integrate &&
-                                         volumetric_.integrate->is_valid() && volumetric_.cull && volumetric_.cull->is_valid() &&
-                                         fog_program_.volumetric_program && fog_program_.volumetric_program->is_valid();
+    const bool has_volumetric_programs = begin_program(volumetric_.lighting) && begin_program(volumetric_.integrate) &&
+                                         begin_program(volumetric_.cull) && begin_program(fog_program_.volumetric_program);
     if(params.config.volumetric && params.allows_volumetric && has_volumetric_programs && is_volumetric_supported())
     {
         shader.volume_texture = run_volumetric(camera, rview, params, shader);
@@ -778,7 +778,6 @@ auto fog_pass::run(const camera& camera, gfx::render_view& rview, const run_para
     // Camera-relative: the shader reconstructs each pixel's offset from the camera, which keeps its precision far
     // from the world origin.
     pass.set_view_proj(camera.get_view_relative(), camera.get_projection());
-    program.begin();
     gfx::set_texture(fog_program_.s_fog_depth, FOG_DEPTH_STAGE, params.depth);
     // The SH is read with texelFetch: the sampler flags do not matter.
     gfx::set_texture(fog_program_.s_fog_environment, FOG_ENVIRONMENT_STAGE, params.environment);

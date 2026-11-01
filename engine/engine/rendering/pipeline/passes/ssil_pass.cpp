@@ -1,4 +1,5 @@
 #include "ssil_pass.h"
+#include "pass_helpers.h"
 #include <algorithm>
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -9,6 +10,19 @@
 
 namespace unravel
 {
+namespace
+{
+/// Compute group edge of the spatial denoise and of the downsample.
+constexpr uint32_t SSIL_DENOISE_GROUP_SIZE = 8;
+
+/// Which ping-pong history a render view reads next.
+struct history_state
+{
+    static constexpr const char* view_key = "SSIL_HISTORY_STATE";
+
+    bool reads_a = true;
+};
+} // namespace
 
 auto ssil_pass::init(rtti::context& ctx) -> bool
 {
@@ -55,15 +69,7 @@ auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
                                          .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                   extra_flags});
 
-    auto& fbo = rview.fbo_acquire(name);
-    if(gfx::needs_recreate(fbo, {tex}))
-    {
-        fbo.reset();
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({tex});
-    }
-
-    return fbo;
+    return acquire_frame_buffer(rview, name, {tex});
 }
 
 auto ssil_pass::create_or_update_ssil_tex(gfx::render_view& rview,
@@ -90,20 +96,12 @@ auto ssil_pass::create_or_update_ssil_fb_mrt(gfx::render_view& rview,
     auto color_tex = create_or_update_ssil_tex(rview, color_tex_name, reference, res, extra_flags);
     auto moments_tex = create_or_update_ssil_tex(rview, moments_tex_name, reference, res, extra_flags);
 
-    auto& fbo = rview.fbo_acquire(fbo_name);
-    if(gfx::needs_recreate(fbo, {color_tex, moments_tex}))
-    {
-        fbo.reset();
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({color_tex, moments_tex});
-    }
-
-    return fbo;
+    return acquire_frame_buffer(rview, fbo_name, {color_tex, moments_tex});
 }
 
 auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
-    if(!params.g_buffer || !trace_program_.is_valid())
+    if(!params.g_buffer || !begin_program(trace_program_.program))
     {
         return nullptr;
     }
@@ -122,12 +120,8 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
 
     bool moments_valid = false;
     gfx::texture::ptr moments_tex_for_denoise;
-    if(params.settings.enable_temporal_accumulation && temporal_program_.is_valid())
+    if(params.settings.enable_temporal_accumulation && begin_program(temporal_program_.program))
     {
-        // Use a SEPARATE output variable -- aliasing `result_fb` as both the input
-        // (`ssil_input`) and the output (`out_result_fb`) caused the temporal pass to
-        // silently rebind `s_ssil_curr` to the empty history framebuffer when it wrote
-        // back to its out parameter, making the running mean converge to zero (black).
         gfx::frame_buffer::ptr temporal_result_fb;
         moments_valid = run_temporal_resolve(rview,
                                              result_fb,
@@ -145,7 +139,7 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
         release_history_resources(rview);
     }
 
-    if(params.settings.enable_spatial_denoise && denoise_program_.is_valid())
+    if(params.settings.enable_spatial_denoise && begin_program(denoise_program_.program))
     {
         // The temporal pass produces per-pixel luminance moments (E[L], E[L^2]); the
         // denoiser uses them for true spatiotemporal variance. Only valid when the
@@ -165,7 +159,7 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
     // result directly (skipping the intermediate trace-res upsample) and this single
     // pass reconstructs all the way to full -- one less bilateral resample, sharper.
     const bool reduced_res = params.settings.resolution != trace_resolution::full;
-    if(reduced_res && upsample_program_.is_valid())
+    if(reduced_res && begin_program(upsample_program_.program))
     {
         result_fb = run_upsample(rview, result_fb, params.g_buffer, params.cam, params.settings);
     }
@@ -189,23 +183,20 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     pass.bind(ssil_curr_fb.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
 
-    trace_program_.program->begin();
-
     gfx::set_texture(trace_program_.s_color, 0, params.direct_lighting);
     gfx::set_texture(trace_program_.s_normal, 1, params.g_buffer->get_texture(1));
     gfx::set_texture(trace_program_.s_hiz, 2, params.hiz_buffer);
     gfx::set_texture(trace_program_.s_emissive, 3, params.g_buffer->get_texture(2));
     gfx::set_texture(trace_program_.s_albedo, 4, params.g_buffer->get_texture(0));
 
+    // The slot stays bound with multi bounce off; u_multi_bounce = 0 keeps the shader from reading it.
     bool multi_bounce_active = params.settings.enable_multi_bounce && params.prev_ssil && trace_program_.s_prev_ssil;
-    if(multi_bounce_active)
-    {
-        gfx::set_texture(trace_program_.s_prev_ssil, 5, params.prev_ssil);
-    }
+    gfx::set_texture(trace_program_.s_prev_ssil,
+                     5,
+                     multi_bounce_active ? params.prev_ssil : default_textures::get().black_texture());
 
-    // Environment SH for the per-ray miss fallback. Null on the first frame (the SH is
-    // computed later in the indirect pass and persists for the next frame), so bind black
-    // and signal the shader to disable the fallback (env_intensity = 0) until it exists.
+    // Environment SH for the per-ray miss fallback (the irradiance pass runs before SSIL). Null when the view has none,
+    // so bind black and signal the shader to disable the fallback (env_intensity = 0).
     const bool env_fallback_active = static_cast<bool>(params.irradiance_sh);
     gfx::set_texture(trace_program_.s_irradiance, 6,
                      env_fallback_active ? params.irradiance_sh : default_textures::get().black_texture());
@@ -237,18 +228,13 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     gfx::set_uniform(trace_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
     pre_exposure_.bind();
 
-    // u_ssil_resolution: xy = full G-buffer size, zw = PER-AXIS (full / trace) scale.
-    // Per-axis is required: at odd full-res W with even full-res H (e.g. 1233 x 900)
-    // the X and Y ratios disagree (2.00162 vs 2.0) and applying a scalar across both
-    // axes shifts the bottom-row gbuffer fetch ~0.7 pixels off, producing an out-of-
-    // frustum view-space ray origin and a visible noise band at the viewport bottom.
-    // SSIL hid this under its smooth hemisphere kernel; SSR exposed it sharply.
+    // u_ssil_resolution: xy = full G-buffer size, zw = per-axis (full / trace) scale.
     const auto gbuf_sz = params.g_buffer->get_size();
-    const auto trace_sz = ssil_curr_fb->get_size();
+    const auto trace_scale = compute_trace_scale(gbuf_sz, ssil_curr_fb->get_size());
     const float ssil_resolution[4] = {static_cast<float>(gbuf_sz.width),
                                       static_cast<float>(gbuf_sz.height),
-                                      static_cast<float>(gbuf_sz.width) / static_cast<float>(trace_sz.width),
-                                      static_cast<float>(gbuf_sz.height) / static_cast<float>(trace_sz.height)};
+                                      trace_scale.x,
+                                      trace_scale.y};
     gfx::set_uniform(trace_program_.u_ssil_resolution, ssil_resolution);
 
     uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
@@ -300,7 +286,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         // the mixed half-res tier falls back to propagated spatial variance.
         full_passes = std::max(full_passes, 1);
     }
-    const bool mixed = downsample_program_.is_valid() && upsample_program_.is_valid() &&
+    const bool mixed = begin_program(downsample_program_.program) && begin_program(upsample_program_.program) &&
                        (num_passes - full_passes) > 0;
     if(!mixed)
     {
@@ -311,8 +297,8 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     auto fb_a = create_or_update_ssil_fb(rview, "SSIL_DENOISED_A", ssil_curr, trace_resolution::full, BGFX_TEXTURE_COMPUTE_WRITE);
     auto fb_b = create_or_update_ssil_fb(rview, "SSIL_DENOISED_B", ssil_curr, trace_resolution::full, BGFX_TEXTURE_COMPUTE_WRITE);
     auto sz = fb_a->get_size();
-    uint32_t gx = (sz.width + 7) / 8;
-    uint32_t gy = (sz.height + 7) / 8;
+    uint32_t gx = compute_group_count(sz.width, SSIL_DENOISE_GROUP_SIZE);
+    uint32_t gy = compute_group_count(sz.height, SSIL_DENOISE_GROUP_SIZE);
 
     // Variance ping-pong (SVGF). Single-channel R16F, compute-written and sampled. The
     // first pass integrates variance in-shader; each subsequent pass refilters the prior
@@ -347,8 +333,6 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         // normal into view space (u_view).
         pass.set_view_proj(cam->get_view(), cam->get_projection());
 
-        denoise_program_.program->begin();
-
         gfx::set_texture(denoise_program_.s_ssil_input, 0, in_tex);
         bgfx::setImage(1, out_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
         gfx::set_texture(denoise_program_.s_normal, 2, g_buffer->get_texture(1));
@@ -381,10 +365,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 
     // Trace-pixel doubling chain (1, 2, 4, 8, ...). Both tiers express their dilation in
     // their own pixel space, so the half-res tier converts the same trace-pixel step into
-    // its half-res step. This keeps the wavelet pyramid contiguous across the tier change;
-    // computing the half-tier step from scratch as `1 << (j + 1)` introduced a one-octave
-    // gap when full_passes == 1 (full ended at step 1, half started at step 4 in trace
-    // pixels, skipping step 2) -- visible as an SVGF "missing band" artefact.
+    // its half-res step. This keeps the wavelet pyramid contiguous across the tier change.
     const int half_divisor = static_cast<int>(get_divisor(trace_resolution::half));
     for(int i = 0; i < full_passes; ++i)
     {
@@ -413,8 +394,8 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
     auto half_a = create_or_update_ssil_fb(rview, "SSIL_DENOISED_HALF_A", ssil_curr, trace_resolution::half, BGFX_TEXTURE_COMPUTE_WRITE);
     auto half_b = create_or_update_ssil_fb(rview, "SSIL_DENOISED_HALF_B", ssil_curr, trace_resolution::half, BGFX_TEXTURE_COMPUTE_WRITE);
     auto half_sz = half_a->get_size();
-    uint32_t hgx = (half_sz.width + 7) / 8;
-    uint32_t hgy = (half_sz.height + 7) / 8;
+    uint32_t hgx = compute_group_count(half_sz.width, SSIL_DENOISE_GROUP_SIZE);
+    uint32_t hgy = compute_group_count(half_sz.height, SSIL_DENOISE_GROUP_SIZE);
     auto var_ha = make_variance_tex("SSIL_VARIANCE_HALF_A", half_sz);
     auto var_hb = make_variance_tex("SSIL_VARIANCE_HALF_B", half_sz);
     const bool has_downsampled_variance = full_passes > 0;
@@ -426,7 +407,6 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::render_pass ds_pass("Spatial Denoise/Downsample Pass");
         ds_pass.set_view_proj(cam->get_view(), cam->get_projection());
 
-        downsample_program_.program->begin();
         gfx::set_texture(downsample_program_.s_ssil_input, 0, src_tex);
         bgfx::setImage(1, half_a->get_texture()->native_handle(), 0, bgfx::Access::Write);
         gfx::set_texture(downsample_program_.s_normal, 2, g_buffer->get_texture(1));
@@ -454,9 +434,8 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         const bool first_half_pass = !has_downsampled_variance && j == 0;
         // Continue the trace-pixel power-of-two chain across the tier boundary, then
         // express it in the half-res tier's own pixel space. With full_passes = 1 this
-        // gives trace_step (1, 2, 4, ...) -> half_step (1, 1, 2, 4, ...) -- no missing
-        // octave -- where the old `1 << (j + 1)` started at half_step 2 and skipped a
-        // band of the wavelet pyramid.
+        // gives trace_step (1, 2, 4, ...) -> half_step (1, 1, 2, 4, ...), with no missing
+        // octave.
         const int trace_step = 1 << (full_passes + j);
         const int capped_trace_step = std::min(trace_step, max_step);
         const int half_step = std::max(1, capped_trace_step / half_divisor);
@@ -497,7 +476,6 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         up_pass.bind(out_fb.get());
         up_pass.set_view_proj(cam->get_view(), cam->get_projection());
 
-        upsample_program_.program->begin();
         gfx::set_texture(upsample_program_.s_ssil_input, 0, half_result_fb->get_texture());
         gfx::set_texture(upsample_program_.s_normal, 1, g_buffer->get_texture(1));
         gfx::set_texture(upsample_program_.s_depth, 2, g_buffer->get_texture(4));
@@ -524,14 +502,8 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 }
 
 auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
-                                     // ssil_input is taken by VALUE (shared_ptr copy) on
-                                     // purpose: a previous version took it by const ref and
-                                     // aliased the same caller variable as out_result_fb,
-                                     // so writing to the out param mutated the input and
-                                     // bound s_ssil_curr to the empty history fb instead
-                                     // of the trace output -- the running mean converged
-                                     // to zero (black SSIL). Passing by value gives us a
-                                     // local copy immune to caller mutations.
+                                     // By value: the caller's variable may also be out_result_fb,
+                                     // which this function writes before it binds the input.
                                      gfx::frame_buffer::ptr ssil_input,
                                      const gfx::frame_buffer::ptr& g_buffer,
                                      const gfx::texture::ptr& prev_depth,
@@ -544,13 +516,12 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     APP_SCOPE_PERF("Rendering/SSIL/Temporal Resolve Pass");
 
     // Ping-pong history. Two persistent MRT framebuffers (colour + moments) alternate
-    // read/write each frame, so the temporal shader writes DIRECTLY into next frame's
-    // history texture -- no blit. The previous "TEMP + 2 blits" pattern did two full-
-    // bandwidth copies per frame (colour + moments) for no semantic reason; this saves
-    // ~10 MB of bandwidth/frame at 1080p and ~40 MB at 4K. Parity comes from the bgfx
-    // render frame counter (monotonic across frames, stable within a frame).
-    const uint32_t frame = gfx::get_render_frame();
-    const bool read_is_a = (frame & 1u) == 0u;
+    // read/write on each run of the view, so the temporal shader writes DIRECTLY into the
+    // next run's history texture, with no blit. The parity is the view's own: a view that
+    // skips frames or runs twice in one still reads what its last run wrote.
+    auto& history = rview.data().get_or_emplace<history_state>(history_state::view_key);
+    const bool read_is_a = history.reads_a;
+    history.reads_a = !read_is_a;
 
     const char* read_color_name = read_is_a ? "SSIL_HISTORY_A_COLOR" : "SSIL_HISTORY_B_COLOR";
     const char* read_moments_name = read_is_a ? "SSIL_HISTORY_A_MOMENTS" : "SSIL_HISTORY_B_MOMENTS";
@@ -573,20 +544,18 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
                                                  ssil_input, trace_resolution::full);
     auto write_moments = rview.tex_find(write_moments_name);
 
-    // The temporal result is plumbed back to the caller via the out parameters: no longer
-    // aliased under "SSIL_HISTORY_TEMP" / "SSIL_MOMENTS_TEMP" because no external pass
-    // looks those up directly (the indirect-lighting consumer samples "SSIL" via the
-    // texture ptr returned from run()).
+    // The temporal result goes back to the caller through the out parameters; the
+    // indirect-lighting consumer samples the texture run() returns.
     out_result_fb = write_fb;
     out_moments_tex = write_moments;
 
     const auto gbuf_sz = g_buffer->get_size();
-    const auto temporal_sz = ssil_input->get_size();
+    const auto temporal_scale = compute_trace_scale(gbuf_sz, ssil_input->get_size());
     const float temporal_resolution[4] = {
         static_cast<float>(gbuf_sz.width),
         static_cast<float>(gbuf_sz.height),
-        static_cast<float>(gbuf_sz.width) / static_cast<float>(temporal_sz.width),
-        static_cast<float>(gbuf_sz.height) / static_cast<float>(temporal_sz.height)};
+        temporal_scale.x,
+        temporal_scale.y};
 
     // The velocity buffer arrives explicitly from the pipeline; a valid texture IS the
     // enable. Depth stands in as an inert placeholder so the sampler slot is always bound.
@@ -623,8 +592,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         pre_exposure_.bind();
 
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
-        // prev misaligns a still camera's reprojection by the jitter delta every frame
-        // (every temporal consumer now shares this chain).
+        // prev misaligns a still camera's reprojection by the jitter delta every frame.
         auto prev_vp = cam->get_prev_view_projection_unjittered();
         gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
     };
@@ -640,7 +608,6 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         init_pass.bind(write_fb.get());
         init_pass.set_view_proj(cam->get_view(), cam->get_projection());
 
-        temporal_program_.program->begin();
         bind_common(0.0f, g_buffer->get_texture(4));
 
         auto topology = gfx::clip_quad(1.0f);
@@ -657,7 +624,6 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     pass.bind(write_fb.get());
     pass.set_view_proj(cam->get_view(), cam->get_projection());
 
-    temporal_program_.program->begin();
     bind_common(settings.enable_temporal_accumulation ? 1.0f : 0.0f, prev_depth);
 
     auto topology = gfx::clip_quad(1.0f);
@@ -687,8 +653,6 @@ auto ssil_pass::run_upsample(gfx::render_view& rview,
     // Required so the shader's computeViewSpacePosition (u_invProj/u_view) is valid
     // for the linear-depth edge-stopping weight.
     pass.set_view_proj(cam->get_view(), cam->get_projection());
-
-    upsample_program_.program->begin();
 
     gfx::set_texture(upsample_program_.s_ssil_input, 0, ssil_input->get_texture());
     gfx::set_texture(upsample_program_.s_normal, 1, g_buffer->get_texture(1));

@@ -63,9 +63,7 @@ LOAD(camera)
     try_load(ar, ser20::make_nvp("aspect_locked", obj.aspect_locked_));
     try_load(ar, ser20::make_nvp("frustum_locked", obj.frustum_locked_));
 
-    obj.view_dirty_ = true;
     obj.projection_dirty_ = true;
-    obj.aspect_dirty_ = true;
     obj.frustum_dirty_ = true;
 }
 LOAD_INSTANTIATE(camera, ser20::iarchive_associative_t);

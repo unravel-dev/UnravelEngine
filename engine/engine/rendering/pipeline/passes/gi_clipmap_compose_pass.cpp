@@ -1,6 +1,7 @@
 #include "gi_clipmap_compose_pass.h"
 
 #include "gi_pass_common.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -47,10 +48,15 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     return compose_program_.is_valid();
 }
 
+auto gi_clipmap_compose_pass::begin() -> bool
+{
+    return begin_program(compose_program_.program);
+}
+
 auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& params) -> bool
 {
     APP_SCOPE_PERF("Rendering/GI/Clipmap Compose");
-    if(!compose_program_.is_valid())
+    if(!begin())
     {
         // Loudly, once: the CPU composer takes over, which costs main-thread time whenever a level re-snaps.
         if(!invalid_warning_emitted_)
@@ -259,7 +265,7 @@ void gi_clipmap_compose_pass::build_level_mip(const global_sdf_clipmap_gpu& clip
 {
     const auto& mip = clipmap_gpu.get_mip_texture();
     const auto& scratch = clipmap_gpu.get_mip_scratch();
-    if(!mip_program_.is_valid() || !mip || !scratch)
+    if(!begin_program(mip_program_.program) || !mip || !scratch)
     {
         return;
     }
@@ -272,7 +278,6 @@ void gi_clipmap_compose_pass::build_level_mip(const global_sdf_clipmap_gpu& clip
         const bool writes_slab = (step % 2u) == 0u;
         const auto& source = writes_slab ? scratch : mip;
         const auto& destination = writes_slab ? mip : scratch;
-        mip_program_.program->begin();
         gfx::set_texture(mip_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
         gfx::set_texture(mip_program_.s_clipmap_mip_prev, 1, source);
         gfx::set_image_3d(2, destination->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
@@ -296,25 +301,14 @@ void gi_clipmap_compose_pass::dispatch_compose_bricks(gfx::render_pass& pass,
     const auto& lvl = clipmap.get_level(level);
     const auto& clipmap_settings = clipmap.get_settings();
     const uint32_t resolution = clipmap_settings.resolution;
-    const auto& instances = surface_cache.get_instances();
-    auto& atlas = surface_cache.get_atlas();
-    compose_program_.program->begin();
-    gfx::set_texture(compose_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
+    surface_cache.bind_sdf_instances(compose_program_.s_sdf_atlas,
+                                     compose_program_.u_sdf_grid_params,
+                                     compose_program_.u_sdf_params);
     // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
     // stage 4. Writing the level in place is what avoids a staging copy and the per-level
     // update_texture_3d the CPU path pays.
     gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
     gfx::set_image_3d(6, clipmap_gpu.get_coverage_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
-    const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
-                                 float(atlas.get_atlas_voxel_dim()),
-                                 float(instances.size()),
-                                 0.0f};
-    gfx::set_uniform(compose_program_.u_sdf_params, sdf_params);
-    gfx::set_uniform(compose_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
     gfx::set_uniform(compose_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     // The reach is what the CPU composer seeds `nearest` with, and it must be the same value:
     // it is simultaneously the cheap-reject bound and the saturated output, so a mismatch

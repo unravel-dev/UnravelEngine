@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gpu_resource_utils.h>
 
 #include <logging/logging.h>
 
@@ -16,25 +17,17 @@ namespace
 
 namespace ANONYMOUS
 {
+/// The longest atlas axis in voxels the 3D texture may take.
+constexpr uint32_t max_atlas_voxel_dim = 2048u;
+/// The largest indirection offset a field header carries: it is stored as a float, exact up to 2^24 (gi/sdf_common.sh
+/// reads the header as vec4).
+constexpr uint32_t max_indirection_offset = 1u << 24u;
+
 /// Voxels along one atlas axis for a given brick count, border included.
 auto compute_atlas_voxel_dim(uint32_t atlas_brick_dim) -> uint32_t
 {
     return atlas_brick_dim * mesh_sdf::brick_stride;
 }
-/// Layout of the header buffer: a flat array of vec4, which is what BUFFER_RO(_, vec4, _)
-/// expects on every backend (a typed Buffer<float4> on D3D, a StructuredBuffer elsewhere).
-auto get_vec4_buffer_layout() -> const bgfx::VertexLayout&
-{
-    static const bgfx::VertexLayout layout = []()
-    {
-        bgfx::VertexLayout decl;
-        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
-        return decl;
-    }();
-    return layout;
-}
-
-
 } // namespace ANONYMOUS
 
 } // namespace
@@ -48,12 +41,13 @@ auto sdf_atlas::init(const settings& settings) -> bool
     settings_.max_atlas_brick_dim = std::max(settings_.max_atlas_brick_dim, brick_dim);
     brick_dim_ = brick_dim;
     const uint32_t voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(brick_dim);
-    if(voxel_dim > 2048u)
+    if(voxel_dim > ANONYMOUS::max_atlas_voxel_dim)
     {
         APPLOG_ERROR("[SurfaceCache] Atlas brick dimension {} needs a {}^3 texture, which exceeds the "
-                     "2048 limit. Reduce it.",
+                     "{} limit. Reduce it.",
                      brick_dim,
-                     voxel_dim);
+                     voxel_dim,
+                     ANONYMOUS::max_atlas_voxel_dim);
         return false;
     }
     // Hardware trilinear (the default filter) is safe here precisely because of the brick
@@ -108,6 +102,7 @@ void sdf_atlas::shutdown()
     fields_.clear();
     free_field_indices_.clear();
     free_brick_slots_.clear();
+    free_indirection_ranges_.clear();
     next_brick_slot_ = 0;
     total_brick_slots_ = 0;
     brick_dim_ = 0;
@@ -134,7 +129,7 @@ auto sdf_atlas::grow() -> bool
         std::max(brick_dim_ + 1u, uint32_t(std::ceil(float(brick_dim_) * growth_per_axis)));
     const uint32_t new_dim = std::min(requested, settings_.max_atlas_brick_dim);
     const uint32_t new_voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(new_dim);
-    if(new_voxel_dim > 2048u)
+    if(new_voxel_dim > ANONYMOUS::max_atlas_voxel_dim)
     {
         return false;
     }
@@ -179,6 +174,7 @@ auto sdf_atlas::grow() -> bool
     rejected_mesh_count_ = 0;
     rejected_brick_total_ = 0;
     next_rejection_report_ = 1;
+    refused_brick_count_ = 0;
     // Anything that cached a refusal against the generation must retry: there is room now.
     ++release_generation_;
     APPLOG_INFO("[SurfaceCache] SDF atlas grown from {}^3 to {}^3 bricks ({} -> {} MB, {} slots). "
@@ -228,8 +224,8 @@ void sdf_atlas::flush_pending_bricks()
         return;
     }
     // Sorted so contiguous slots sit together. Duplicate slots cannot occur within one frame:
-    // a field acquired this frame is never swept this frame, so its slots cannot be freed and
-    // re-allocated before this flush runs.
+    // a field uploaded this frame is released neither by the sweep, which keeps what this frame
+    // asked for, nor by a promotion, which moves a level only on its frame's first request.
     std::sort(pending_bricks_.begin(),
               pending_bricks_.end(),
               [](const pending_brick& a, const pending_brick& b) { return a.slot < b.slot; });
@@ -350,6 +346,10 @@ auto sdf_atlas::allocate_indirection(uint32_t count) -> uint32_t
         return offset;
     }
     const uint32_t offset = uint32_t(indirection_data_.size());
+    if(offset > ANONYMOUS::max_indirection_offset)
+    {
+        return invalid_index;
+    }
     indirection_data_.resize(size_t(offset) + count, 0u);
     mark_indirection_dirty(offset, count);
     return offset;
@@ -411,6 +411,7 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
             // TOTAL, which no individual line carries.
             ++rejected_mesh_count_;
             rejected_brick_total_ += surface_bricks;
+            refused_brick_count_ += surface_bricks;
             if(rejected_brick_total_ >= next_rejection_report_)
             {
                 // Doubling, so a scene that overruns by thousands of meshes reports a handful of
@@ -448,6 +449,20 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
     // Copy the indirection table, rewriting surface entries from mesh-local brick indices to
     // absolute atlas slots. Empty entries carry a distance, not an index, and pass through.
     const uint32_t indirection_offset = allocate_indirection(brick_count);
+    if(indirection_offset == invalid_index)
+    {
+        // Not a shortage of bricks, so it stays out of the refusal tally: a larger atlas would not help.
+        free_brick_slots_.insert(free_brick_slots_.end(), slots.begin(), slots.end());
+        if(!has_reported_indirection_limit_)
+        {
+            has_reported_indirection_limit_ = true;
+            APPLOG_ERROR("[SurfaceCache] The SDF indirection table holds {} entries, past the {} its headers can "
+                         "address. Fields beyond it do not contribute to global illumination until others are released.",
+                         indirection_data_.size(),
+                         ANONYMOUS::max_indirection_offset);
+        }
+        return invalid_index;
+    }
     for(uint32_t i = 0; i < brick_count; ++i)
     {
         const uint32_t entry = sdf.indirection[i];
@@ -537,10 +552,10 @@ void sdf_atlas::release(uint32_t header_index)
     float* header = header_data_.data() + size_t(header_index) * 4u * header_vec4_count;
     std::fill(header, header + 4u * header_vec4_count, 0.0f);
     headers_dirty_ = true;
-    // The refusal tally describes a MOMENT, not the session. Freeing bricks changes what will fit,
+    // The report's tally describes a MOMENT, not the session. Freeing bricks changes what will fit,
     // so a total accumulated before that says nothing about what is short now -- and leaving the
     // doubling schedule where it was would silence the report right through the next genuine
-    // shortfall, which is when it is worth reading.
+    // shortfall, which is when it is worth reading. The caller's count stays (take_refused_brick_count).
     rejected_mesh_count_ = 0;
     rejected_brick_total_ = 0;
     next_rejection_report_ = 1;
@@ -562,7 +577,7 @@ void sdf_atlas::ensure_buffer_capacity()
         // buffer once per mesh.
         header_capacity_vec4_ = required_headers + required_headers / 2u + 64u;
         header_buffer_ = bgfx::createDynamicVertexBuffer(header_capacity_vec4_,
-                                                         ANONYMOUS::get_vec4_buffer_layout(),
+                                                         gpu_resource::get_vec4_layout(),
                                                          BGFX_BUFFER_COMPUTE_READ);
         headers_dirty_ = true;
     }

@@ -34,8 +34,9 @@ auto manual_target_ratio(const eviction_settings& s) -> double
 /// a floor of 64 MiB so very small budgets (or simulated debug budgets) keep a usable cushion.
 auto safety_margin_for(std::uint64_t hard_limit_bytes) -> std::uint64_t
 {
-    constexpr std::uint64_t k_floor = std::uint64_t(64) * 1024 * 1024;
-    return std::max(k_floor, hard_limit_bytes / 50);
+    constexpr std::uint64_t MIN_SAFETY_MARGIN_BYTES = std::uint64_t(64) * 1024 * 1024;
+    constexpr std::uint64_t HARD_LIMIT_PER_MARGIN = 50;
+    return std::max(MIN_SAFETY_MARGIN_BYTES, hard_limit_bytes / HARD_LIMIT_PER_MARGIN);
 }
 
 /// Build the @ref gfx::eviction::budget_state for this frame.
@@ -51,9 +52,15 @@ auto build_budget(const eviction_settings& settings, std::uint64_t gpu_max)
     gfx::eviction::budget_state b;
     if(settings.auto_budget && gpu_max > 0)
     {
+        const auto soft_budget = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * settings.budget_fraction);
+        if(soft_budget == 0)
+        {
+            return b; // No budget to hold to, as with a manual budget of 0.
+        }
         b.hard_limit_bytes = gpu_max;
-        b.soft_budget_bytes = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * settings.budget_fraction);
-        b.target_bytes = static_cast<std::uint64_t>(static_cast<double>(gpu_max) * settings.target_fraction);
+        b.soft_budget_bytes = soft_budget;
+        // The eviction policy assumes target <= soft (see manual_target_ratio).
+        b.target_bytes = std::min(soft_budget, static_cast<std::uint64_t>(static_cast<double>(gpu_max) * settings.target_fraction));
     }
     else
     {
@@ -107,7 +114,8 @@ void update_eviction(const eviction_settings& settings)
     // Publish the budget so reclaim_for and tooling see the same numbers.
     ev::set_budget(budget, used);
 
-    if(!settings.enabled || used <= budget.soft_budget_bytes)
+    // A zero hard limit is no budget at all, not a budget of nothing: evicting to it would drop everything every frame.
+    if(!settings.enabled || budget.hard_limit_bytes == 0 || used <= budget.soft_budget_bytes)
     {
         return;
     }

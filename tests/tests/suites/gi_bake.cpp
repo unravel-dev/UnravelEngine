@@ -5927,7 +5927,7 @@ void test_gi_scene_refresh_recaptures_the_oldest_pages()
     }
     bool are_all_refreshes = true;
     bool is_within_budget = true;
-    bool resamples_its_own_card = true;
+    bool keeps_its_lighting = true;
     bool is_oldest_first = true;
     size_t most_in_a_frame = 0;
     uint32_t frames = 0;
@@ -5946,10 +5946,7 @@ void test_gi_scene_refresh_recaptures_the_oldest_pages()
         for(const auto& cap : captures)
         {
             texels += uint64_t(cap.size.x) * cap.size.y;
-            const auto& resample = scene.get_resample_table();
-            const size_t entry = size_t(std::max(cap.resample_card, 0)) * gi_scene::card_stride + 4u;
-            resamples_its_own_card = resamples_its_own_card && cap.resample_card >= 0 && entry < resample.size() &&
-                                     resample[entry] == scene.get_card_table()[cap.card_index * gi_scene::card_stride + 4u];
+            keeps_its_lighting = keeps_its_lighting && cap.keeps_lighting && cap.resample_card < 0;
             const page_key key{cap.atlas_offset.x, cap.atlas_offset.y};
             captured.push_back(key);
             auto it = refreshes.find(key);
@@ -5990,7 +5987,7 @@ void test_gi_scene_refresh_recaptures_the_oldest_pages()
     check(is_within_budget, "within the refresh's share of the page and texel budgets");
     check(never == 0u, "every resident page is captured again");
     check(is_oldest_first, "the longest-uncaptured first");
-    check(resamples_its_own_card, "a refreshed page resamples its own card's allocation");
+    check(keeps_its_lighting, "a refreshed page keeps its lighting where it is, with nothing to resample");
     check(scene.get_tables_revision() == revision, "and the tables stay as they are");
     // Fraction 0 turns the refresh off: no pages and no texels.
     gi_scene::settings no_refresh;

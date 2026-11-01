@@ -3562,7 +3562,7 @@ void Programs::init(rtti::context& ctx)
     m_packDepthInstanced[DepthImpl::Linear][PackDepth::RGBA] = loadPackDepth("linear_instanced", "linear");
     m_packDepthInstanced[DepthImpl::Linear][PackDepth::VSM]  = loadPackDepth("linear_instanced", "vsm_linear");
 
-    // Pack depth cutout (alpha test — matches lit material clip semantics).
+    // Pack depth cutout (alpha test - matches lit material clip semantics).
     m_packDepthCutout[DepthImpl::InvZ][PackDepth::RGBA] = loadPackDepth("cutout", "cutout");
     m_packDepthCutout[DepthImpl::InvZ][PackDepth::VSM]  = loadPackDepth("cutout", "vsm_cutout");
 

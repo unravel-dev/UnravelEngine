@@ -1,5 +1,6 @@
 #include "model_system.h"
 #include <engine/ecs/components/transform_component.h>
+#include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 
 #include <engine/ecs/ecs.h>
@@ -11,6 +12,9 @@
 #include <logging/logging.h>
 
 #include <concurrency/parallel.h>
+
+#include <algorithm>
+#include <vector>
 
 namespace unravel
 {
@@ -34,6 +38,19 @@ void process_armatures(scene& scn, bool recreate_armature)
 
 namespace
 {
+/// Frames a view can go unrendered before a model forgets its LOD state there (2 seconds at 60 fps).
+constexpr uint64_t STALE_LOD_DATA_FRAMES = 120;
+
+auto is_in_any_view(const std::vector<math::frustum>& view_frustums, const math::bbox& bounds) -> bool
+{
+    return std::any_of(view_frustums.begin(),
+                       view_frustums.end(),
+                       [&](const math::frustum& frustum)
+                       {
+                           return frustum.test_aabb(bounds);
+                       });
+}
+
 /// Destroys the node entities only a previous mesh of each model used.
 void destroy_stale_armature_entities(scene& scn)
 {
@@ -117,6 +134,13 @@ void model_system::on_frame_before_render(scene& scn, const frame_times& times)
     {
         view.get<transform_component>(entity).resolve_shared_ancestors();
     }
+    // The cameras that render this frame. Their frustums resolve lazily, so copied here for the tasks to read.
+    std::vector<math::frustum> view_frustums;
+    scn.registry->view<camera_component, active_component>().each(
+        [&](auto /*camera_entity*/, auto&& camera_comp, auto&& /*active*/)
+        {
+            view_frustums.emplace_back(camera_comp.get_camera().get_frustum());
+        });
     // Each task works with one model's hierarchy and only reads the ancestors resolved above.
     // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
     // poolstl re-walks it once per chunk (see for_each_entity_par).
@@ -130,8 +154,7 @@ void model_system::on_frame_before_render(scene& scn, const frame_times& times)
 
                       auto& model_comp = view.get<model_component>(entity);
 
-                      // Cleanup stale per-view LOD data (views not accessed for 2 seconds at 60fps)
-                      model_comp.cleanup_stale_lod_data(frame, 120);
+                      model_comp.cleanup_stale_lod_data(frame, STALE_LOD_DATA_FRAMES);
 
                       // The overrides set since the last frame reach the materials this model draws with. Here,
                       // in the model's own task, so the passes below only read them.
@@ -156,19 +179,25 @@ void model_system::on_frame_before_render(scene& scn, const frame_times& times)
                                                        is_moved);
 
                       // Refresh pose-derived render data (submesh/bone poses, cached proxy
-                      // bounds, skinning palettes) before world bounds are computed. This is
-                      // change-driven, not visibility-driven: update_armature early-outs when
-                      // no armature transform changed, so idle models cost a bit-scan, while
-                      // culled-but-still-animating models keep their bounds fresh so they can
-                      // re-enter the frustum correctly. (Skipping animation work for culled
-                      // models is the animation system's job via its renderer-based culling
-                      // mode, which freezes the transforms and thus also skips this refresh.)
-                      const bool is_pose_changed = model_comp.update_armature();
+                      // bounds, skinning palettes) before world bounds are computed.
+                      // update_armature early-outs when no armature transform changed, and when
+                      // no view used the model recently (its gate); the world bounds then come
+                      // from the conservative culling box.
+                      bool is_pose_changed = model_comp.update_armature();
+                      model_comp.update_world_bounds(transform_comp.get_transform_global());
+                      // That box says a model that moved while gated is back in a camera's view: draw it in
+                      // its current pose this frame, not the one it left the view with. Once per entry, and
+                      // never for a model that did not move, so an undrawn crowd keeps the gate's saving.
+                      if(model_comp.track_stale_pose(is_moved) &&
+                         model_comp.take_stale_view_entry(is_in_any_view(view_frustums, model_comp.get_world_bounds())))
+                      {
+                          model_comp.mark_pose_dirty();
+                          is_pose_changed = model_comp.update_armature() || is_pose_changed;
+                          model_comp.update_world_bounds(transform_comp.get_transform_global());
+                      }
                       // Node/bone animation moves submeshes without touching the owner
                       // transform; a refresh that changed the pose is motion evidence.
                       model_comp.mark_motion(is_pose_changed);
-
-                      model_comp.update_world_bounds(transform_comp.get_transform_global());
 
                       // When each aspect of the model last changed, for every system that keeps
                       // what it rendered (render_interest).

@@ -48,10 +48,9 @@ public:
      */
     auto run(gfx::render_view& rview, const run_params& params) -> bool;
 
-    auto is_valid() const -> bool
-    {
-        return compose_program_.is_valid();
-    }
+    /// Whether the GPU can compose this frame (gpu_program::begin), which also picks up a reloaded shader; the CPU
+    /// composer stands in otherwise.
+    auto begin() -> bool;
 
 private:
     struct compose_program : uniforms_cache

@@ -295,6 +295,26 @@ auto fit_windowed_size(const usize32_t& requested, const usize32_t& available) -
     return {std::min(size.width, available.width), std::min(size.height, available.height)};
 }
 
+auto keep_run_window_options(display_options& saved, const display_options& current, const window_option_sources& sources)
+    -> bool
+{
+    bool has_changed = false;
+    if(!sources.is_mode_from_command_line)
+    {
+        has_changed = update_option(saved.mode, current.mode) || has_changed;
+    }
+    if(!sources.is_size_from_command_line)
+    {
+        has_changed = update_option(saved.size, current.size) || has_changed;
+        has_changed = update_option(saved.refresh_rate, current.refresh_rate) || has_changed;
+    }
+    if(!sources.is_display_from_command_line)
+    {
+        has_changed = update_option(saved.display, current.display) || has_changed;
+    }
+    return has_changed;
+}
+
 display_manager::display_manager(rtti::context& ctx, cmd_line::parser& parser)
 {
     parser.set_optional<std::string>("",
@@ -336,6 +356,9 @@ auto display_manager::create_main_window(rtti::context& ctx, const cmd_line::par
     {
         options_.mode = window_mode::windowed;
         options_.size = {width, height};
+        window_sources_.is_mode_from_command_line = true;
+        window_sources_.is_size_from_command_line = true;
+        window_sources_.is_display_from_command_line = true;
         rend.create_window(title, x, y, width, height, os::window::resizable | (is_maximized ? os::window::maximized : 0u));
         return rend.get_main_window() != nullptr;
     }
@@ -389,6 +412,8 @@ void display_manager::set_window(rtti::context& ctx, window_mode mode, const usi
     {
         return;
     }
+    window_sources_.is_mode_from_command_line = false;
+    window_sources_.is_size_from_command_line = false;
     const bool is_unchanged = mode == options_.mode && size == options_.size && refresh_rate == options_.refresh_rate;
     if(!is_unchanged)
     {
@@ -407,6 +432,7 @@ void display_manager::set_display(rtti::context& ctx, int display)
     {
         return;
     }
+    window_sources_.is_display_from_command_line = false;
     options_.display = resolve_display(display);
     if(options_.display != main_window->get_window().get_display_index())
     {
@@ -470,11 +496,8 @@ void display_manager::remember_window(const os::window& window)
     options_.size = {size.w, size.h};
     options_.display = window.get_display_index();
     // A window the command line asked for leaves the saved options alone.
-    const bool is_saved_window = saved_options_.mode == window_mode::windowed;
-    if(is_saved_window && (saved_options_.size != options_.size || saved_options_.display != options_.display))
+    if(saved_options_.mode == window_mode::windowed && keep_run_window_options(saved_options_, options_, window_sources_))
     {
-        saved_options_.size = options_.size;
-        saved_options_.display = options_.display;
         has_unsaved_window_ = true;
     }
 }
@@ -532,20 +555,28 @@ void display_manager::load_saved_options()
 void display_manager::apply_command_line(const cmd_line::parser& parser)
 {
     std::string text;
-    if(parser.try_get(WINDOW_MODE_OPTION, text) && !text.empty() && !parse_window_mode(text, options_.mode))
+    if(parser.try_get(WINDOW_MODE_OPTION, text) && !text.empty())
     {
-        APPLOG_WARNING("--{} {} is not windowed, borderless or exclusive.", WINDOW_MODE_OPTION, text);
+        window_sources_.is_mode_from_command_line = parse_window_mode(text, options_.mode);
+        if(!window_sources_.is_mode_from_command_line)
+        {
+            APPLOG_WARNING("--{} {} is not windowed, borderless or exclusive.", WINDOW_MODE_OPTION, text);
+        }
     }
     text.clear();
-    if(parser.try_get(RESOLUTION_OPTION, text) && !text.empty() &&
-       !parse_resolution(text, options_.size, options_.refresh_rate))
+    if(parser.try_get(RESOLUTION_OPTION, text) && !text.empty())
     {
-        APPLOG_WARNING("--{} {} is not WIDTHxHEIGHT or WIDTHxHEIGHT@HZ.", RESOLUTION_OPTION, text);
+        window_sources_.is_size_from_command_line = parse_resolution(text, options_.size, options_.refresh_rate);
+        if(!window_sources_.is_size_from_command_line)
+        {
+            APPLOG_WARNING("--{} {} is not WIDTHxHEIGHT or WIDTHxHEIGHT@HZ.", RESOLUTION_OPTION, text);
+        }
     }
     int display = NO_DISPLAY;
     if(parser.try_get(DISPLAY_OPTION, display) && display != NO_DISPLAY)
     {
         options_.display = display;
+        window_sources_.is_display_from_command_line = true;
     }
     bool is_vsync_off = false;
     if(parser.try_get("novsync", is_vsync_off) && is_vsync_off)
@@ -561,16 +592,11 @@ void display_manager::apply_command_line(const cmd_line::parser& parser)
 
 void display_manager::keep_window_options()
 {
-    const bool is_kept = saved_options_.mode == options_.mode && saved_options_.display == options_.display &&
-                         saved_options_.size == options_.size && saved_options_.refresh_rate == options_.refresh_rate;
-    if(is_kept && !has_unsaved_window_)
+    const bool has_new_window = keep_run_window_options(saved_options_, options_, window_sources_);
+    if(!has_new_window && !has_unsaved_window_)
     {
         return;
     }
-    saved_options_.mode = options_.mode;
-    saved_options_.display = options_.display;
-    saved_options_.size = options_.size;
-    saved_options_.refresh_rate = options_.refresh_rate;
     has_unsaved_window_ = false;
     save();
 }

@@ -137,6 +137,11 @@ auto get_reach(const math::bbox& bounds, const math::mat4& transform) -> float
 }
 } // namespace
 
+auto baked_animation::get_id() const -> uint32_t
+{
+    return id_;
+}
+
 auto baked_animation::get_mesh() const -> const asset_handle<mesh>&
 {
     return mesh_;
@@ -261,6 +266,7 @@ auto baked_animation_store::create(const asset_handle<mesh>& render_mesh,
     baked->rows_per_frame_ = rows_per_frame;
     baked->radius_ = get_reach(source->get_bounds(), math::mat4(1.0f));
     const uint32_t id = next_id_++;
+    baked->id_ = id;
     animations_.emplace(id, std::move(baked));
     return id;
 }

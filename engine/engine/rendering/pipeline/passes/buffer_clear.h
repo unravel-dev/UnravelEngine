@@ -29,8 +29,11 @@ public:
     /// Releases the clear program; an owner that outlives the renderer calls it before the renderer shuts down.
     void release();
 
-    /// Whether the clear program can dispatch.
+    /// Whether the clear program loaded, for init() results.
     auto is_ready() const -> bool;
+
+    /// Whether the clear program can dispatch this frame (gpu_program::begin), which also picks up a reloaded shader.
+    auto begin() const -> bool;
 
     /**
      * @brief Dispatches the clear into view @p view_id: zeroes @p count uints of @p buffer from @p first and keeps the

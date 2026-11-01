@@ -247,18 +247,26 @@ struct pose_transform
 };
 
 /**
+ * @brief The radius of a sphere on screen, as a fraction of the view height, squared. Under a perspective projection it
+ * shrinks with the distance from @p view_origin; under an orthographic one the distance does not matter.
+ */
+auto compute_bounds_screen_radius_squared(const math::vec3& origin,
+                                          float radius,
+                                          const math::vec3& view_origin,
+                                          const math::mat4& projection) -> float;
+
+/**
  * @struct model_submit_extras
  * @brief Optional retained render data consumed by the model submit paths.
  *
- * All members are optional; default-constructed extras reproduce the legacy behavior.
+ * All members are optional.
  */
 struct model_submit_extras
 {
     /// Cached world-space per-submesh bounds (owned by model_component and refreshed with the
     /// pose data). When available, per-submesh frustum culling and per-submesh LOD selection
     /// use cheap AABB tests against these bounds - including skinned submeshes, whose bounds
-    /// track the animated pose. Submeshes without cached bounds fall back to the legacy
-    /// OBB classification (large meshes) or are conservatively drawn.
+    /// track the animated pose. Submeshes without cached bounds are conservatively drawn.
     const submesh_render_proxies* proxies{nullptr};
 
     /// True when submitting into a shadow pass. Instances flagged as not casting shadows
@@ -361,6 +369,21 @@ public:
      * reference on the link every model of that mesh shares.
      */
     auto get_lod(uint32_t lod) const -> const asset_handle<mesh>&;
+
+    /// What a model LOD draws: a mesh, and a level inside it.
+    struct resolved_lod
+    {
+        /// As get_lod returns it: an empty handle without one, and a reference into the model.
+        const asset_handle<mesh>& mesh_asset;
+        /// One slot: the mesh's own LODs are the model's, so this is the model LOD. Several slots: each LOD is a whole mesh
+        /// of its own, drawn at its level 0.
+        uint32_t mesh_lod;
+    };
+
+    /**
+     * @brief Resolves model LOD @p model_lod to the mesh and the level inside it that it draws.
+     */
+    auto resolve_lod(uint32_t model_lod) const -> resolved_lod;
 
     /**
      * @brief Sets the LOD (Level of Detail) mesh for the specified level.
@@ -504,18 +527,6 @@ public:
     void set_lod_selection_bias(float bias);
 
     /**
-     * @brief Gets the LOD hysteresis factor used to prevent rapid LOD switching.
-     * @return The hysteresis factor (percentage units for percent-based, dimensionless for screen-radius).
-     */
-    auto get_lod_hysteresis() const -> float;
-
-    /**
-     * @brief Sets the LOD hysteresis factor.
-     * @param hysteresis The hysteresis factor to prevent ping-ponging between LOD levels.
-     */
-    void set_lod_hysteresis(float hysteresis);
-
-    /**
      * @brief Gets the LOD transition time in seconds.
      * @return The transition duration (0 = instant switch, >0 = smooth dithered crossfade).
      */
@@ -598,7 +609,7 @@ public:
      * visibility culling.
      *
      * Used by passes that need a distance-appropriate LOD but do not track per-camera
-     * LOD state (e.g. shadow rendering, which previously always used LOD 0).
+     * LOD state (e.g. shadow rendering).
      *
      * @param world_bounds Pose-aware world-space bounds of the model (see
      *                     model_component::get_world_bounds).
@@ -612,44 +623,7 @@ public:
 
 
     /**
-     * @brief Gets the minimum screen size used by the screen-radius-squared LOD and culling method.
-     * @return Minimum screen size.
-     */
-    auto get_lod_screen_size_min() const -> float;
-
-    /**
-     * @brief Sets the minimum screen size used by the screen-radius-squared LOD and culling method.
-     * @param value Minimum screen size.
-     */
-    void set_lod_screen_size_min(float value);
-
-    /**
-     * @brief Gets the auto LOD screen size power base (used for generating a screen-size table).
-     * @return Power base.
-     */
-    auto get_lod_auto_screen_size_power_base() const -> float;
-
-    /**
-     * @brief Sets the auto LOD screen size power base (used for generating a screen-size table).
-     * @param value Power base.
-     */
-    void set_lod_auto_screen_size_power_base(float value);
-
-    /**
-     * @brief Gets the per-LOD screen size table used by the screen-radius-squared method.
-     * @return Screen size table.
-     */
-    auto get_lod_screen_sizes() const -> const std::vector<float>&;
-
-    /**
-     * @brief Sets the per-LOD screen size table used by the screen-radius-squared method.
-     * @param sizes Screen size table.
-     */
-    void set_lod_screen_sizes(const std::vector<float>& sizes);
-
-    /**
-     * @brief Recalculates the screen-size LOD thresholds for the provided LOD count.
-     * This is a separate mechanism from the percent-based LOD limits and is used by calculate_lod_data_screen_size.
+     * @brief Recalculates the screen-size LOD thresholds for the provided LOD count (see calculate_lod_data).
      * @param lod_count Number of LOD levels to calculate thresholds for.
      */
     void recalulate_lod_screen_size_limits(uint32_t lod_count);
@@ -687,19 +661,19 @@ public:
      * @param submesh_transforms The submesh transforms (many-to-many mapping).
      * @param bone_transforms The bone transforms for skinned models.
      * @param skinning_transforms The skinning matrices per submesh.
-     * @param lod The level of detail to render.
+     * @param model_lod The model LOD to render (resolve_lod).
      * @param callbacks The submit callbacks.
      * @param frustum Optional view frustum for per-submesh culling on large meshes.
      * @param view Optional camera enabling per-submesh LOD selection. When supplied together
      *             with @p frustum and the mesh has enough submeshes to warrant per-submesh
-     *             work, distant submeshes may pick a cheaper LOD than @p lod via
+     *             work, distant submeshes may pick a cheaper LOD than @p model_lod via
      *             @ref calculate_submesh_lod. Only affects non-skinned submeshes.
      */
     void submit(const math::mat4& world_transform,
                 const submesh_pose_mat4& submesh_transforms,
                 const pose_mat4& bone_transforms,
                 const std::vector<pose_mat4>& skinning_transforms,
-                unsigned int lod,
+                unsigned int model_lod,
                 const submit_callbacks& callbacks,
                 const math::frustum* frustum = nullptr,
                 const camera* view = nullptr,
@@ -765,7 +739,7 @@ public:
      * @param world_transform The world transform of the model.
      * @param submesh_transforms The submesh transforms (many-to-many mapping).
      * @param skinning_transforms The per-submesh skinning matrices.
-     * @param lod The level of detail to render.
+     * @param model_lod The model LOD to render (resolve_lod).
      * @param callbacks The vertex-pulling submit callbacks.
      * @param frustum Optional view frustum for per-submesh culling on large meshes.
      * @param view Optional camera enabling per-submesh LOD selection. Same semantics as
@@ -774,7 +748,7 @@ public:
     void submit_for_vertex_pulling(const math::mat4& world_transform,
                                    const submesh_pose_mat4& submesh_transforms,
                                    const std::vector<pose_mat4>& skinning_transforms,
-                                   unsigned int lod,
+                                   unsigned int model_lod,
                                    const submit_vertex_pulling_callbacks& callbacks,
                                    const math::frustum* frustum = nullptr,
                                    const camera* view = nullptr,
@@ -785,23 +759,24 @@ public:
      * @param collector The batch collector to add this model to.
      * @param world_transform The world transform of the model.
      * @param submesh_transforms The submesh transforms (many-to-many mapping).
-     * @param lod_index The level of detail to use.
+     * @param model_lod The model LOD to use (resolve_lod).
      * @param lod_param The LOD transition parameter (for smooth LOD transitions).
      * @param frustum Optional view frustum for per-submesh culling on large meshes.
      * @param view Optional camera enabling per-submesh LOD selection. When supplied and the
      *             mesh has many submeshes, each submesh may be collected under a batch key
-     *             with a per-submesh LOD >= @p lod_index. The batching layer already keys on
+     *             with a per-submesh LOD >= @p model_lod. The batching layer already keys on
      *             LOD, so mixed-LOD submeshes for the same model land in the correct batches
      *             automatically.
+     * @return True when a submesh was collected.
      */
-    void submit_for_batching(batch_collector& collector,
-                            const math::mat4& world_transform,
-                            const submesh_pose_mat4& submesh_transforms,
-                            uint32_t lod_index,
-                            float lod_param = 0.0f,
-                            const math::frustum* frustum = nullptr,
-                            const camera* view = nullptr,
-                            const model_submit_extras& extras = {}) const;
+    auto submit_for_batching(batch_collector& collector,
+                             const math::mat4& world_transform,
+                             const submesh_pose_mat4& submesh_transforms,
+                             uint32_t model_lod,
+                             float lod_param = 0.0f,
+                             const math::frustum* frustum = nullptr,
+                             const camera* view = nullptr,
+                             const model_submit_extras& extras = {}) const -> bool;
 
 
     /**
@@ -822,7 +797,7 @@ public:
                                              const shadow_reach& reach,
                                              const math::mat4& world_transform,
                                              const submesh_pose_mat4& submesh_transforms,
-                                             uint32_t lod_index,
+                                             uint32_t model_lod,
                                              float lod_param,
                                              const math::frustum* frustums,
                                              bool nested_cascades,
@@ -842,7 +817,7 @@ public:
                                      const submesh_pose_mat4& submesh_transforms,
                                      hpp::span<const uint32_t> palette_rows,
                                      hpp::span<const uint32_t> prev_palette_rows,
-                                     uint32_t lod_index,
+                                     uint32_t model_lod,
                                      float lod_param,
                                      const math::frustum* frustum,
                                      const camera* view,
@@ -861,13 +836,19 @@ public:
                                                      const math::mat4& world_transform,
                                                      const submesh_pose_mat4& submesh_transforms,
                                                      hpp::span<const uint32_t> palette_rows,
-                                                     uint32_t lod_index,
+                                                     uint32_t model_lod,
                                                      const math::frustum* frustums,
                                                      bool nested_cascades,
                                                      const model_submit_extras& extras) const -> bool;
 
     /// An empty palette list: submit() draws only a model's non-skinned submeshes with it (the skinned ones are batched).
     static auto get_empty_skinning() -> const std::vector<pose_mat4>&;
+
+    /// Gives the model at least one slot per material of LOD 0's mesh, keeping each slot's material by index; a new slot
+    /// takes the default material. Never removes a slot, so a saved list survives a mesh that is unavailable (loading,
+    /// failed, not compiled) or that a reimport left with fewer materials. Never waits. Not thread safe for one model, as
+    /// update_material_instances.
+    void fit_materials_to_mesh();
 
     /// The change keys of the materials the slots draw with (each slot's resolved material instance when it has
     /// overrides, else its shared material; material::add_change_keys), summed per render_change aspect: an edit or a
@@ -899,6 +880,9 @@ private:
      * @param mesh The mesh to use for resizing the materials.
      */
     void resize_materials(const asset_handle<mesh>& mesh);
+
+    /// Gives the model @p slot_count slots, a new one taking the default material, with their material instances.
+    void resize_material_slots(size_t slot_count);
 
     /// Gives every shared material a material instance and points each instance at its slot's shared material.
     void sync_material_instances();
@@ -964,7 +948,7 @@ private:
     uint32_t lod_override_level_{0};
     /// Bias value added to calculated LOD index (positive = less detailed, negative = more detailed).
     float lod_selection_bias_{0.0f};
-    /// Hysteresis factor to prevent rapid LOD switching (percentage units for percent-based, dimensionless for screen-radius).
+    /// Hysteresis factor to prevent rapid LOD switching, as a fraction of a LOD's screen size limit.
     float lod_hysteresis_{0.02f};
     /// LOD transition duration in seconds (0 = instant switching, >0 = smooth dithered crossfade).
     seconds_t lod_transition_time_{0.0f};

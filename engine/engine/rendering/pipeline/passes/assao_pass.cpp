@@ -1,27 +1,34 @@
 #include "assao_pass.h"
+#include "pass_helpers.h"
 #include "graphics/graphics.h"
 #include <engine/assets/asset_manager.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <algorithm>
+#include <array>
 #include <string>
 
 namespace unravel
 {
 
-#define SAMPLER_POINT_CLAMP  (BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP)
-#define SAMPLER_POINT_MIRROR (BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_MIRROR)
-#define SAMPLER_LINEAR_CLAMP (BGFX_SAMPLER_UVW_CLAMP)
+namespace
+{
+constexpr uint32_t SAMPLER_POINT_CLAMP = BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP;
+constexpr uint32_t SAMPLER_POINT_MIRROR = BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_MIRROR;
+constexpr uint32_t SAMPLER_LINEAR_CLAMP = BGFX_SAMPLER_UVW_CLAMP;
 
-#define SSAO_DEPTH_MIP_LEVELS 4
+constexpr uint8_t SSAO_DEPTH_MIP_LEVELS = 4;
+constexpr int32_t MAX_BLUR_PASS_COUNT = 6;
+/// Threads per group along each axis of the compute passes.
+constexpr uint32_t GROUP_SIZE = 8;
 
-void vec2Set(float* _v, float _x, float _y)
+void set_vec2(float* _v, float _x, float _y)
 {
     _v[0] = _x;
     _v[1] = _y;
 }
 
-void vec4Set(float* _v, float _x, float _y, float _z, float _w)
+void set_vec4(float* _v, float _x, float _y, float _z, float _w)
 {
     _v[0] = _x;
     _v[1] = _y;
@@ -29,27 +36,25 @@ void vec4Set(float* _v, float _x, float _y, float _z, float _w)
     _v[3] = _w;
 }
 
-void vec4iSet(int32_t* _v, int32_t _x, int32_t _y, int32_t _z, int32_t _w)
+void set_vec4i(int32_t* _v, int32_t _x, int32_t _y, int32_t _z, int32_t _w)
 {
     _v[0] = _x;
     _v[1] = _y;
     _v[2] = _z;
     _v[3] = _w;
 }
-
-static const int32_t cMaxBlurPassCount = 6;
+} // namespace
 
 auto assao_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto loadProgram = [&](const std::string& cs, const std::string& variant = gfx::shader::DEFAULT_VARIANT)
+    auto load_program = [&](gpu_program::ptr& program,
+                            const std::string& cs,
+                            const std::string& variant = gfx::shader::DEFAULT_VARIANT)
     {
         auto cs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/assao/" + cs + ".eshader");
-
-        auto prog = std::make_shared<gpu_program>(cs_shader, variant);
-        m_programs.emplace_back(prog);
-        return prog->native_handle();
+        program = std::make_shared<gpu_program>(cs_shader, variant);
     };
 
     // Create uniforms
@@ -57,11 +62,8 @@ auto assao_pass::init(rtti::context& ctx) -> bool
     m_uniforms.init();
 
     // Create texture sampler uniforms (used when we bind textures)
-    s_normal = bgfx::createUniform("s_normal", bgfx::UniformType::Sampler); // Normal gbuffer
-    s_depth = bgfx::createUniform("s_depth", bgfx::UniformType::Sampler);   // Depth gbuffer
-
     // clang-format off
-    s_ao                         = bgfx::createUniform("s_ao", bgfx::UniformType::Sampler);
+    s_normalmapSource            = bgfx::createUniform("s_normalmapSource", bgfx::UniformType::Sampler);
     s_blurInput                  = bgfx::createUniform("s_blurInput", bgfx::UniformType::Sampler);
     s_finalSSAO                  = bgfx::createUniform("s_finalSSAO", bgfx::UniformType::Sampler);
     s_depthSource                = bgfx::createUniform("s_depthSource", bgfx::UniformType::Sampler);
@@ -73,51 +75,88 @@ auto assao_pass::init(rtti::context& ctx) -> bool
     // Create program from shaders.
 
     // clang-format off
-    m_prepareDepthsProgram               = loadProgram("cs_assao_prepare_depths");
-    m_prepareDepthsAndNormalsProgram     = loadProgram("cs_assao_prepare_depths_and_normals");
-    m_prepareDepthsHalfProgram           = loadProgram("cs_assao_prepare_depths_half");
-    m_prepareDepthsAndNormalsHalfProgram = loadProgram("cs_assao_prepare_depths_and_normals_half");
-    m_prepareDepthMipProgram             = loadProgram("cs_assao_prepare_depth_mip");
-    m_generateQ0Program                  = loadProgram("cs_assao_generate");
-    m_generateQ1Program                  = loadProgram("cs_assao_generate", "q1");
-    m_generateQ2Program                  = loadProgram("cs_assao_generate", "q2");
-    m_generateQ3Program                  = loadProgram("cs_assao_generate", "q3");
-    m_generateQ3BaseProgram              = loadProgram("cs_assao_generate", "q3base");
-    m_generateQ0ProgramRgba16f           = loadProgram("cs_assao_generate", "q0_normal_rgba16f");
-    m_generateQ1ProgramRgba16f           = loadProgram("cs_assao_generate", "q1_normal_rgba16f");
-    m_generateQ2ProgramRgba16f           = loadProgram("cs_assao_generate", "q2_normal_rgba16f");
-    m_generateQ3ProgramRgba16f           = loadProgram("cs_assao_generate", "q3_normal_rgba16f");
-    m_generateQ3BaseProgramRgba16f       = loadProgram("cs_assao_generate", "q3base_normal_rgba16f");
-    m_smartBlurProgram                   = loadProgram("cs_assao_smart_blur");
-    m_smartBlurWideProgram               = loadProgram("cs_assao_smart_blur_wide");
-    m_nonSmartBlurProgram                = loadProgram("cs_assao_non_smart_blur");
-    m_applyProgram                       = loadProgram("cs_assao_apply");
-    m_nonSmartApplyProgram               = loadProgram("cs_assao_non_smart_apply");
-    m_nonSmartHalfApplyProgram           = loadProgram("cs_assao_non_smart_half_apply");
-    m_generateImportanceMapProgram       = loadProgram("cs_assao_generate_importance_map");
-    m_postprocessImportanceMapAProgram   = loadProgram("cs_assao_postprocess_importance_map_a");
-    m_postprocessImportanceMapBProgram   = loadProgram("cs_assao_postprocess_importance_map_b");
-    m_loadCounterClearProgram            = loadProgram("cs_assao_load_counter_clear");
+    load_program(m_prepareDepthsProgram,               "cs_assao_prepare_depths");
+    load_program(m_prepareDepthsAndNormalsProgram,     "cs_assao_prepare_depths_and_normals");
+    load_program(m_prepareDepthsHalfProgram,           "cs_assao_prepare_depths_half");
+    load_program(m_prepareDepthsAndNormalsHalfProgram, "cs_assao_prepare_depths_and_normals_half");
+    load_program(m_prepareDepthMipProgram,             "cs_assao_prepare_depth_mip");
+    load_program(m_generateQ0Program,                  "cs_assao_generate");
+    load_program(m_generateQ1Program,                  "cs_assao_generate", "q1");
+    load_program(m_generateQ2Program,                  "cs_assao_generate", "q2");
+    load_program(m_generateQ3Program,                  "cs_assao_generate", "q3");
+    load_program(m_generateQ3BaseProgram,              "cs_assao_generate", "q3base");
+    load_program(m_generateQ0GBufferProgram,           "cs_assao_generate", "q0_gbuffer_normals");
+    load_program(m_generateQ1GBufferProgram,           "cs_assao_generate", "q1_gbuffer_normals");
+    load_program(m_generateQ2GBufferProgram,           "cs_assao_generate", "q2_gbuffer_normals");
+    load_program(m_generateQ3GBufferProgram,           "cs_assao_generate", "q3_gbuffer_normals");
+    load_program(m_generateQ3BaseGBufferProgram,       "cs_assao_generate", "q3base_gbuffer_normals");
+    load_program(m_smartBlurProgram,                   "cs_assao_smart_blur");
+    load_program(m_smartBlurWideProgram,               "cs_assao_smart_blur_wide");
+    load_program(m_nonSmartBlurProgram,                "cs_assao_non_smart_blur");
+    load_program(m_applyProgram,                       "cs_assao_apply");
+    load_program(m_nonSmartApplyProgram,               "cs_assao_non_smart_apply");
+    load_program(m_nonSmartHalfApplyProgram,           "cs_assao_non_smart_half_apply");
+    load_program(m_generateImportanceMapProgram,       "cs_assao_generate_importance_map");
+    load_program(m_postprocessImportanceMapAProgram,   "cs_assao_postprocess_importance_map_a");
+    load_program(m_postprocessImportanceMapBProgram,   "cs_assao_postprocess_importance_map_b");
+    load_program(m_loadCounterClearProgram,            "cs_assao_load_counter_clear");
     // clang-format on
 
     m_loadCounter = bgfx::createDynamicIndexBuffer(1, BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
 
-    return true;
+    return has_programs();
+}
+
+auto assao_pass::get_programs() const -> std::array<gpu_program*, PROGRAM_COUNT>
+{
+    return {m_prepareDepthsProgram.get(),
+            m_prepareDepthsAndNormalsProgram.get(),
+            m_prepareDepthsHalfProgram.get(),
+            m_prepareDepthsAndNormalsHalfProgram.get(),
+            m_prepareDepthMipProgram.get(),
+            m_generateQ0Program.get(),
+            m_generateQ1Program.get(),
+            m_generateQ2Program.get(),
+            m_generateQ3Program.get(),
+            m_generateQ3BaseProgram.get(),
+            m_generateQ0GBufferProgram.get(),
+            m_generateQ1GBufferProgram.get(),
+            m_generateQ2GBufferProgram.get(),
+            m_generateQ3GBufferProgram.get(),
+            m_generateQ3BaseGBufferProgram.get(),
+            m_smartBlurProgram.get(),
+            m_smartBlurWideProgram.get(),
+            m_nonSmartBlurProgram.get(),
+            m_applyProgram.get(),
+            m_nonSmartApplyProgram.get(),
+            m_nonSmartHalfApplyProgram.get(),
+            m_generateImportanceMapProgram.get(),
+            m_postprocessImportanceMapAProgram.get(),
+            m_postprocessImportanceMapBProgram.get(),
+            m_loadCounterClearProgram.get()};
 }
 
 auto assao_pass::has_programs() const -> bool
 {
-    return !m_programs.empty() && std::all_of(m_programs.begin(),
-                                               m_programs.end(),
-                                               [](const gpu_program::ptr& program)
-                                               {
-                                                   return program && program->is_valid();
-                                               });
+    const auto programs = get_programs();
+    return std::all_of(programs.begin(),
+                       programs.end(),
+                       [](const gpu_program* program)
+                       {
+                           return program != nullptr && program->is_valid();
+                       });
+}
+
+auto assao_pass::begin_programs() -> bool
+{
+    const auto programs = get_programs();
+    return std::all_of(programs.begin(), programs.end(), begin_program<gpu_program*>);
 }
 
 void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_params& params)
 {
-    if(!has_programs())
+    // The depth constants and the view-space reconstruction of the shaders assume a perspective projection.
+    if(!begin_programs() || cam.get_projection_mode() != projection_mode::perspective)
     {
         release_resources(rview);
         return;
@@ -129,22 +168,21 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
     const int32_t height = static_cast<int32_t>(size.height);
 
     dimensions dims;
-    const int32_t border = 0;
-    dims.size[0] = width + 2 * border;
-    dims.size[1] = height + 2 * border;
+    dims.size[0] = width;
+    dims.size[1] = height;
     dims.halfSize[0] = (dims.size[0] + 1) / 2;
     dims.halfSize[1] = (dims.size[1] + 1) / 2;
     dims.quarterSize[0] = (dims.halfSize[0] + 1) / 2;
     dims.quarterSize[1] = (dims.halfSize[1] + 1) / 2;
-    vec4iSet(dims.fullResOutScissorRect, border, border, width + border, height + border);
-    vec4iSet(dims.halfResOutScissorRect,
+    set_vec4i(dims.fullResOutScissorRect, 0, 0, width, height);
+    set_vec4i(dims.halfResOutScissorRect,
              dims.fullResOutScissorRect[0] / 2,
              dims.fullResOutScissorRect[1] / 2,
              (dims.fullResOutScissorRect[2] + 1) / 2,
              (dims.fullResOutScissorRect[3] + 1) / 2);
     const int32_t blurEnlarge =
-        cMaxBlurPassCount + bx::max(0, cMaxBlurPassCount - 2);
-    vec4iSet(dims.halfResOutScissorRect,
+        MAX_BLUR_PASS_COUNT + bx::max(0, MAX_BLUR_PASS_COUNT - 2);
+    set_vec4i(dims.halfResOutScissorRect,
              bx::max(0, dims.halfResOutScissorRect[0] - blurEnlarge),
              bx::max(0, dims.halfResOutScissorRect[1] - blurEnlarge),
              bx::min(dims.halfSize[0], dims.halfResOutScissorRect[2] + blurEnlarge),
@@ -158,24 +196,8 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
     float n = cam.get_near_clip();
     float f = cam.get_far_clip();
 
-    if(cam.get_projection_mode() == projection_mode::perspective)
-    {
-        auto fovy = cam.get_fov();
-        bx::mtxProj(projMtx, fovy, float(dims.size[0]) / float(dims.size[1]), n, f, false);
-    }
-    else
-    {
-        float zoom = cam.get_zoom_factor();
-        const frect_t rect = {-(float(dims.size[0]) / 2.0f) * zoom,
-                              (float(dims.size[1]) / 2.0f) * zoom,
-                              (float(dims.size[0]) / 2.0f) * zoom,
-                              -(float(dims.size[1]) / 2.0f) * zoom};
+    bx::mtxProj(projMtx, cam.get_fov(), float(dims.size[0]) / float(dims.size[1]), n, f, false);
 
-        bx::mtxOrtho(projMtx, rect.left, rect.right, rect.bottom, rect.top, n, f, 0, false);
-    }
-
-    // ASSAO passes
-#if USE_ASSAO == 0
     const auto& halfDepths0 = rview.tex_get("ASSAO_HALF_DEPTH_0");
     const auto& halfDepths1 = rview.tex_get("ASSAO_HALF_DEPTH_1");
     const auto& halfDepths2 = rview.tex_get("ASSAO_HALF_DEPTH_2");
@@ -191,8 +213,8 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
     update_uniforms(0, viewMtx, projMtx, dims);
 
-    gfx::render_pass pass("ASSAO/Pass");
-    auto view = pass.id;
+    gfx::render_pass assao_render_pass("ASSAO/Pass");
+    auto view = assao_render_pass.id;
 
     {
         bgfx::setTexture(0, s_depthSource, params.depth->native_handle(), SAMPLER_POINT_CLAMP);
@@ -214,10 +236,11 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             }
 
             gfx::dispatch(view,
-                           m_settings.generate_normals ? m_prepareDepthsAndNormalsHalfProgram
-                                                       : m_prepareDepthsHalfProgram,
-                           (dims.halfSize[0] + 7) / 8,
-                           (dims.halfSize[1] + 7) / 8);
+                           (m_settings.generate_normals ? m_prepareDepthsAndNormalsHalfProgram
+                                                        : m_prepareDepthsHalfProgram)
+                               ->native_handle(),
+                           compute_group_count(dims.halfSize[0], GROUP_SIZE),
+                           compute_group_count(dims.halfSize[1], GROUP_SIZE));
         }
         else
         {
@@ -227,9 +250,10 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             bgfx::setImage(4, halfDepths3->native_handle(), 0, bgfx::Access::Write);
 
             gfx::dispatch(view,
-                           m_settings.generate_normals ? m_prepareDepthsAndNormalsProgram : m_prepareDepthsProgram,
-                           (dims.halfSize[0] + 7) / 8,
-                           (dims.halfSize[1] + 7) / 8);
+                           (m_settings.generate_normals ? m_prepareDepthsAndNormalsProgram : m_prepareDepthsProgram)
+                               ->native_handle(),
+                           compute_group_count(dims.halfSize[0], GROUP_SIZE),
+                           compute_group_count(dims.halfSize[1], GROUP_SIZE));
         }
     }
 
@@ -239,7 +263,9 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
         uint16_t mipWidth = (uint16_t)dims.halfSize[0];
         uint16_t mipHeight = (uint16_t)dims.halfSize[1];
 
-        for(uint8_t i = 1; i < SSAO_DEPTH_MIP_LEVELS; i++)
+        // A tiny target has fewer mips than the generate pass could read; its sampler clamps to the last one.
+        const uint8_t mip_levels = std::min<uint8_t>(SSAO_DEPTH_MIP_LEVELS, halfDepths0->info.numMips);
+        for(uint8_t i = 1; i < mip_levels; i++)
         {
             mipWidth = (uint16_t)bx::max(1, mipWidth >> 1);
             mipHeight = (uint16_t)bx::max(1, mipHeight >> 1);
@@ -257,7 +283,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             float rect[4] = {0.0f, 0.0f, (float)mipWidth, (float)mipHeight};
             bgfx::setUniform(u_rect, rect);
 
-            gfx::dispatch(view, m_prepareDepthMipProgram, (mipWidth + 7) / 8, (mipHeight + 7) / 8);
+            gfx::dispatch(view, m_prepareDepthMipProgram->native_handle(), compute_group_count(mipWidth, GROUP_SIZE), compute_group_count(mipHeight, GROUP_SIZE));
         }
     }
 
@@ -271,18 +297,16 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
         if(ssaoPass == 1 && m_settings.quality_level == 3)
         {
-            gfx::render_pass pass(fmt::format("ASSAO/Importance Map Pass {}", ssaoPass).c_str());
-            view = pass.id;
+            gfx::render_pass importance_render_pass(fmt::format("ASSAO/Importance Map Pass {}", ssaoPass).c_str());
+            view = importance_render_pass.id;
         }
 
         bool adaptiveBasePass = (ssaoPass == 0);
 
-        BX_UNUSED(adaptiveBasePass);
-
         int32_t passCount = 4;
 
-        int32_t halfResNumX = (dims.halfResOutScissorRect[2] - dims.halfResOutScissorRect[0] + 7) / 8;
-        int32_t halfResNumY = (dims.halfResOutScissorRect[3] - dims.halfResOutScissorRect[1] + 7) / 8;
+        const uint32_t halfResNumX = compute_group_count(dims.halfResOutScissorRect[2] - dims.halfResOutScissorRect[0], GROUP_SIZE);
+        const uint32_t halfResNumY = compute_group_count(dims.halfResOutScissorRect[3] - dims.halfResOutScissorRect[1], GROUP_SIZE);
         float halfResRect[4] = {(float)dims.halfResOutScissorRect[0],
                                 (float)dims.halfResOutScissorRect[1],
                                 (float)dims.halfResOutScissorRect[2],
@@ -296,7 +320,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             }
 
             int32_t blurPasses = m_settings.blur_pass_count;
-            blurPasses = bx::min(blurPasses, cMaxBlurPassCount);
+            blurPasses = bx::min(blurPasses, MAX_BLUR_PASS_COUNT);
 
             if(m_settings.quality_level == 3)
             {
@@ -339,14 +363,10 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                                  s_viewspaceDepthSourceMirror,
                                  halfDepthsArr[pass]->native_handle(),
                                  SAMPLER_POINT_MIRROR);
-                if(m_settings.generate_normals)
-                {
-                    bgfx::setImage(2, normals->native_handle(), 0, bgfx::Access::Read);
-                }
-                else
-                {
-                    bgfx::setImage(2, params.normal->native_handle(), 0, bgfx::Access::Read);
-                }
+                bgfx::setTexture(2,
+                                 s_normalmapSource,
+                                 m_settings.generate_normals ? normals->native_handle() : params.normal->native_handle(),
+                                 SAMPLER_POINT_CLAMP);
 
                 if(!adaptiveBasePass && (m_settings.quality_level == 3))
                 {
@@ -355,30 +375,25 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                     bgfx::setImage(5, finalResults->native_handle(), 0, bgfx::Access::Read);
                 }
 
-                bgfx::ProgramHandle programsNormal[5] = {m_generateQ0Program,
-                                                         m_generateQ1Program,
-                                                         m_generateQ2Program,
-                                                         m_generateQ3Program,
-                                                         m_generateQ3BaseProgram};
-
-                bgfx::ProgramHandle programsRgba16f[5] = {m_generateQ0ProgramRgba16f,
-                                                          m_generateQ1ProgramRgba16f,
-                                                          m_generateQ2ProgramRgba16f,
-                                                          m_generateQ3ProgramRgba16f,
-                                                          m_generateQ3BaseProgramRgba16f};
-
-                bgfx::ProgramHandle* programs = programsNormal;
-
-                if(!m_settings.generate_normals)
-                {
-                    programs = programsRgba16f;
-                }
+                // G-buffer normals are octahedral; the generated ones are unorm xyz.
+                const gpu_program* generated_normals_programs[5] = {m_generateQ0Program.get(),
+                                                                    m_generateQ1Program.get(),
+                                                                    m_generateQ2Program.get(),
+                                                                    m_generateQ3Program.get(),
+                                                                    m_generateQ3BaseProgram.get()};
+                const gpu_program* gbuffer_normals_programs[5] = {m_generateQ0GBufferProgram.get(),
+                                                                  m_generateQ1GBufferProgram.get(),
+                                                                  m_generateQ2GBufferProgram.get(),
+                                                                  m_generateQ3GBufferProgram.get(),
+                                                                  m_generateQ3BaseGBufferProgram.get()};
+                const gpu_program* const* programs =
+                    m_settings.generate_normals ? generated_normals_programs : gbuffer_normals_programs;
 
                 int32_t programIndex = bx::max(0, (!adaptiveBasePass) ? (m_settings.quality_level) : (4));
 
                 m_uniforms.m_layer = blurPasses == 0 ? (float)pass : 0.0f;
                 m_uniforms.submit();
-                gfx::dispatch(view, programs[programIndex], halfResNumX, halfResNumY);
+                gfx::dispatch(view, programs[programIndex]->native_handle(), halfResNumX, halfResNumY);
             }
 
             // Blur
@@ -388,9 +403,6 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
                 for(int32_t i = 0; i < blurPasses; i++)
                 {
-                    bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
-                    bgfx::touch(view);
-
                     m_uniforms.m_layer = ((i == (blurPasses - 1)) ? (float)pass : 0.0f);
                     m_uniforms.submit();
 
@@ -409,18 +421,18 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                     {
                         if(wideBlursRemaining > 0)
                         {
-                            gfx::dispatch(view, m_smartBlurWideProgram, halfResNumX, halfResNumY);
+                            gfx::dispatch(view, m_smartBlurWideProgram->native_handle(), halfResNumX, halfResNumY);
                             wideBlursRemaining--;
                         }
                         else
                         {
-                            gfx::dispatch(view, m_smartBlurProgram, halfResNumX, halfResNumY);
+                            gfx::dispatch(view, m_smartBlurProgram->native_handle(), halfResNumX, halfResNumY);
                         }
                     }
                     else
                     {
                         gfx::dispatch(view,
-                                       m_nonSmartBlurProgram,
+                                       m_nonSmartBlurProgram->native_handle(),
                                        halfResNumX,
                                        halfResNumY); // just for quality level 0 (and -1)
                     }
@@ -438,29 +450,29 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             bgfx::setImage(0, importanceMap->native_handle(), 0, bgfx::Access::Write);
             bgfx::setTexture(1, s_finalSSAO, finalResults->native_handle(), SAMPLER_POINT_CLAMP);
             gfx::dispatch(view,
-                           m_generateImportanceMapProgram,
-                           (dims.quarterSize[0] + 7) / 8,
-                           (dims.quarterSize[1] + 7) / 8);
+                           m_generateImportanceMapProgram->native_handle(),
+                           compute_group_count(dims.quarterSize[0], GROUP_SIZE),
+                           compute_group_count(dims.quarterSize[1], GROUP_SIZE));
 
             m_uniforms.submit();
             bgfx::setImage(0, importanceMapPong->native_handle(), 0, bgfx::Access::Write);
             bgfx::setTexture(1, s_importanceMap, importanceMap->native_handle());
             gfx::dispatch(view,
-                           m_postprocessImportanceMapAProgram,
-                           (dims.quarterSize[0] + 7) / 8,
-                           (dims.quarterSize[1] + 7) / 8);
+                           m_postprocessImportanceMapAProgram->native_handle(),
+                           compute_group_count(dims.quarterSize[0], GROUP_SIZE),
+                           compute_group_count(dims.quarterSize[1], GROUP_SIZE));
 
             bgfx::setBuffer(0, m_loadCounter, bgfx::Access::ReadWrite);
-            gfx::dispatch(view, m_loadCounterClearProgram, 1, 1);
+            gfx::dispatch(view, m_loadCounterClearProgram->native_handle(), 1, 1);
 
             m_uniforms.submit();
             bgfx::setImage(0, importanceMap->native_handle(), 0, bgfx::Access::Write);
             bgfx::setTexture(1, s_importanceMap, importanceMapPong->native_handle());
             bgfx::setBuffer(2, m_loadCounter, bgfx::Access::ReadWrite);
             gfx::dispatch(view,
-                           m_postprocessImportanceMapBProgram,
-                           (dims.quarterSize[0] + 7) / 8,
-                           (dims.quarterSize[1] + 7) / 8);
+                           m_postprocessImportanceMapBProgram->native_handle(),
+                           compute_group_count(dims.quarterSize[0], GROUP_SIZE),
+                           compute_group_count(dims.quarterSize[1], GROUP_SIZE));
         }
     }
 
@@ -477,20 +489,16 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
                          (float)dims.fullResOutScissorRect[3]};
         bgfx::setUniform(u_rect, rect);
 
-        bgfx::ProgramHandle program;
+        const gpu_program* program = m_applyProgram.get();
         if(m_settings.quality_level < 0)
-            program = m_nonSmartHalfApplyProgram;
+            program = m_nonSmartHalfApplyProgram.get();
         else if(m_settings.quality_level == 0)
-            program = m_nonSmartApplyProgram;
-        else
-            program = m_applyProgram;
+            program = m_nonSmartApplyProgram.get();
         gfx::dispatch(view,
-                       program,
-                       (dims.fullResOutScissorRect[2] - dims.fullResOutScissorRect[0] + 7) / 8,
-                       (dims.fullResOutScissorRect[3] - dims.fullResOutScissorRect[1] + 7) / 8);
+                       program->native_handle(),
+                       compute_group_count(dims.fullResOutScissorRect[2] - dims.fullResOutScissorRect[0], GROUP_SIZE),
+                       compute_group_count(dims.fullResOutScissorRect[3] - dims.fullResOutScissorRect[1], GROUP_SIZE));
     }
-
-#endif
 
     bgfx::discard();
 }
@@ -508,9 +516,7 @@ auto assao_pass::shutdown() -> int32_t
 
     bgfx::destroy(u_rect);
 
-    bgfx::destroy(s_normal);
-    bgfx::destroy(s_depth);
-    bgfx::destroy(s_ao);
+    bgfx::destroy(s_normalmapSource);
     bgfx::destroy(s_blurInput);
     bgfx::destroy(s_finalSSAO);
     bgfx::destroy(s_depthSource);
@@ -520,7 +526,31 @@ auto assao_pass::shutdown() -> int32_t
 
     bgfx::destroy(m_loadCounter);
 
-    m_programs.clear();
+    m_prepareDepthsProgram.reset();
+    m_prepareDepthsAndNormalsProgram.reset();
+    m_prepareDepthsHalfProgram.reset();
+    m_prepareDepthsAndNormalsHalfProgram.reset();
+    m_prepareDepthMipProgram.reset();
+    m_generateQ0Program.reset();
+    m_generateQ1Program.reset();
+    m_generateQ2Program.reset();
+    m_generateQ3Program.reset();
+    m_generateQ3BaseProgram.reset();
+    m_generateQ0GBufferProgram.reset();
+    m_generateQ1GBufferProgram.reset();
+    m_generateQ2GBufferProgram.reset();
+    m_generateQ3GBufferProgram.reset();
+    m_generateQ3BaseGBufferProgram.reset();
+    m_smartBlurProgram.reset();
+    m_smartBlurWideProgram.reset();
+    m_nonSmartBlurProgram.reset();
+    m_applyProgram.reset();
+    m_nonSmartApplyProgram.reset();
+    m_nonSmartHalfApplyProgram.reset();
+    m_generateImportanceMapProgram.reset();
+    m_postprocessImportanceMapAProgram.reset();
+    m_postprocessImportanceMapBProgram.reset();
+    m_loadCounterClearProgram.reset();
 
     return 0;
 }
@@ -574,13 +604,13 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
 
 void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* proj, const dimensions& dims)
 {
-    vec2Set(m_uniforms.m_viewportPixelSize, 1.0f / (float)dims.size[0], 1.0f / (float)dims.size[1]);
-    vec2Set(m_uniforms.m_halfViewportPixelSize, 1.0f / (float)dims.halfSize[0], 1.0f / (float)dims.halfSize[1]);
+    set_vec2(m_uniforms.m_viewportPixelSize, 1.0f / (float)dims.size[0], 1.0f / (float)dims.size[1]);
+    set_vec2(m_uniforms.m_halfViewportPixelSize, 1.0f / (float)dims.halfSize[0], 1.0f / (float)dims.halfSize[1]);
 
-    vec2Set(m_uniforms.m_viewport2xPixelSize,
+    set_vec2(m_uniforms.m_viewport2xPixelSize,
             m_uniforms.m_viewportPixelSize[0] * 2.0f,
             m_uniforms.m_viewportPixelSize[1] * 2.0f);
-    vec2Set(m_uniforms.m_viewport2xPixelSize_x_025,
+    set_vec2(m_uniforms.m_viewport2xPixelSize_x_025,
             m_uniforms.m_viewport2xPixelSize[0] * 0.25f,
             m_uniforms.m_viewport2xPixelSize[1] * 0.25f);
 
@@ -595,7 +625,7 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
         depthLinearizeAdd = -depthLinearizeAdd;
     }
 
-    vec2Set(m_uniforms.m_depthUnpackConsts, depthLinearizeMul, depthLinearizeAdd);
+    set_vec2(m_uniforms.m_depthUnpackConsts, depthLinearizeMul, depthLinearizeAdd);
 
     float tanHalfFOVY = 1.0f / proj[1 * 4 + 1]; // = tan(vertical fov / 2)
     float tanHalfFOVX = 1.0F / proj[0];         // = tanHalfFOVY * aspect
@@ -604,13 +634,13 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
     // (OpenGL and OpenGL ES), so view-space y grows with the texel row there.
     if(bgfx::getCaps()->originBottomLeft)
     {
-        vec2Set(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * 2.0f);
-        vec2Set(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * -1.0f);
+        set_vec2(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * 2.0f);
+        set_vec2(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * -1.0f);
     }
     else
     {
-        vec2Set(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * -2.0f);
-        vec2Set(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * 1.0f);
+        set_vec2(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * -2.0f);
+        set_vec2(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * 1.0f);
     }
 
     m_uniforms.m_effectRadius = bx::clamp(m_settings.radius, 0.0f, 100000.0f);
@@ -656,22 +686,22 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
 
     if(bgfx::getCaps()->originBottomLeft)
     {
-        vec2Set(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), 1.0f - (float)(_pass / 2));
-        vec2Set(m_uniforms.m_perPassFullResUVOffset,
+        set_vec2(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), 1.0f - (float)(_pass / 2));
+        set_vec2(m_uniforms.m_perPassFullResUVOffset,
                 ((_pass % 2) - 0.0f) / dims.size[0],
                 (1.0f - ((_pass / 2) - 0.0f)) / dims.size[1]);
     }
     else
     {
-        vec2Set(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), (float)(_pass / 2));
-        vec2Set(m_uniforms.m_perPassFullResUVOffset,
+        set_vec2(m_uniforms.m_perPassFullResCoordOffset, (float)(_pass % 2), (float)(_pass / 2));
+        set_vec2(m_uniforms.m_perPassFullResUVOffset,
                 ((_pass % 2) - 0.0f) / dims.size[0],
                 ((_pass / 2) - 0.0f) / dims.size[1]);
     }
 
     m_uniforms.m_invSharpness = bx::clamp(1.0f - m_settings.sharpness, 0.0f, 1.0f);
     m_uniforms.m_passIndex = (float)_pass;
-    vec2Set(m_uniforms.m_quarterResPixelSize, 1.0f / (float)dims.quarterSize[0], 1.0f / (float)dims.quarterSize[1]);
+    set_vec2(m_uniforms.m_quarterResPixelSize, 1.0f / (float)dims.quarterSize[0], 1.0f / (float)dims.quarterSize[1]);
 
     float additionalAngleOffset =
         m_settings.temporal_supersampling_angle_offset; // per-frame sample rotation for temporal supersampling
@@ -695,7 +725,7 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
         float scale = 1.0f + (a - 1.5f + (b - (subPassCount - 1.0f) * 0.5f) / (float)subPassCount) * 0.07f;
         scale *= additionalRadiusScale;
 
-        vec4Set(m_uniforms.m_patternRotScaleMatrices[subPass], scale * ca, scale * -sa, -scale * sa, -scale * ca);
+        set_vec4(m_uniforms.m_patternRotScaleMatrices[subPass], scale * ca, scale * -sa, -scale * sa, -scale * ca);
     }
 
     m_uniforms.m_normalsUnpackMul = 2.0f;

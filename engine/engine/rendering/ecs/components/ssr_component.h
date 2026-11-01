@@ -40,12 +40,6 @@ public:
         r.screen_edge_fade = std::lerp(r.screen_edge_fade, f.screen_edge_fade, contribution);
         r.resolution = contribution >= 0.5f ? f.resolution : r.resolution;
 
-        r.enable_cone_tracing = contribution >= 0.5f ? f.enable_cone_tracing : r.enable_cone_tracing;
-        r.cone_tracing.cone_angle_bias = std::lerp(r.cone_tracing.cone_angle_bias, f.cone_tracing.cone_angle_bias, contribution);
-        r.cone_tracing.max_mip_level = contribution >= 0.5f ? f.cone_tracing.max_mip_level : r.cone_tracing.max_mip_level;
-        r.cone_tracing.blur_base_sigma = std::lerp(r.cone_tracing.blur_base_sigma, f.cone_tracing.blur_base_sigma, contribution);
-        r.cone_tracing.roughness_multiplier = std::lerp(r.cone_tracing.roughness_multiplier, f.cone_tracing.roughness_multiplier, contribution);
-
         r.enable_temporal_accumulation = contribution >= 0.5f ? f.enable_temporal_accumulation : r.enable_temporal_accumulation;
         r.temporal.history_strength = std::lerp(r.temporal.history_strength, f.temporal.history_strength, contribution);
         r.temporal.depth_threshold = std::lerp(r.temporal.depth_threshold, f.temporal.depth_threshold, contribution);

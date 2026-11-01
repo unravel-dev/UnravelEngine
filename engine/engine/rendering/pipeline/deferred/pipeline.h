@@ -10,6 +10,7 @@
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/batch_collector.h>
 #include <engine/rendering/instanced_mesh_source.h>
+#include <hpp/optional.hpp>
 
 #include <graphics/utils/font/font_manager.h>
 #include <graphics/utils/font/text_buffer_manager.h>
@@ -126,12 +127,10 @@ public:
                                   const feature_limits& limits,
                                   delta_t dt) -> gfx::frame_buffer::ptr;
 
-    /// The sky's irradiance SH (run_irradiance_pass): its texture and the flat ambient colour.
+    /// The sky's irradiance SH (run_irradiance_pass): its texture.
     struct irradiance_pass_result
     {
         gfx::texture::ptr irradiance_tex;
-        math::vec3 global_color = {1.0f, 1.0f, 1.0f};
-        float global_intensity = 0.0f;
     };
     auto run_indirect_lighting_pass(const camera& camera,
                                     gfx::render_view& rview,
@@ -168,8 +167,7 @@ public:
                                scene& scn,
                                const camera& camera,
                                gfx::render_view& rview,
-                               const feature_limits& limits,
-                               delta_t dt) -> gfx::frame_buffer::ptr;
+                               const feature_limits& limits) -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the height fog (fog_pass) over the lit scene in @p target, the colour-only light buffer,
@@ -203,7 +201,6 @@ public:
     auto run_taa_pass(const camera& camera,
                       gfx::render_view& rview,
                       const gfx::frame_buffer::ptr& input,
-                      const gfx::frame_buffer::ptr& output,
                       const run_params& rparams,
                       const gfx::texture::ptr& particle_reactive) -> gfx::frame_buffer::ptr;
 
@@ -319,7 +316,10 @@ public:
     /// Rasterizes this frame's card captures, one orthographic view per page.
     void capture_gi_cards(const camera& camera, const surface_cache_system& gi_scene);
 
-    /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off.
+    /// Whether a gi_component asks this run for GI while the surface cache runs.
+    auto is_gi_requested(const run_params& rparams) -> bool;
+    /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off, also for a camera of
+    /// another scene than the one the frame's GI describes (surface_cache_system::is_world_scene).
     auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
 
     /// The GI scene for a camera run that asks for GI: instance residency (shared by every camera, refreshed once per
@@ -368,17 +368,14 @@ public:
                        const feature_limits& limits,
                        layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
-    /// Lists this run's instanced sources, mesh particle emitters and scripted instance draws (camera runs only: a probe capture
-    /// would keep one moment of their motion): the ones the G-buffer draws and the ones casting shadows. Keeps the
+    /// Lists a camera run's instanced sources, mesh particle emitters and scripted instance draws: the ones the G-buffer
+    /// draws and the ones casting shadows. The run's probe captures draw none (a capture would keep one moment of their
+    /// motion), but render the local lights' shadow maps, which the camera reuses, with these casters. Keeps the
     /// emitters in view simulating (renderer-based culling).
-    void gather_instance_sources(scene& scn, const camera& camera, bool is_camera_run, layer_mask render_mask);
+    void gather_instance_sources(scene& scn, const camera& camera, layer_mask render_mask);
 
     /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
-    auto run_hiz_pass(const camera& camera,
-                      gfx::render_view& rview,
-                      const run_params& params,
-                      const usize32_t& viewport_size,
-                      delta_t dt) -> bool;
+    auto run_hiz_pass(gfx::render_view& rview, const run_params& params, const usize32_t& viewport_size) -> bool;
 
 private:
     struct ref_probe_program : uniforms_cache
@@ -668,7 +665,6 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_light_data, "u_light_data", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_inv_view_proj_relative, "u_invViewProjRelative", bgfx::UniformType::Mat4);
 
@@ -693,7 +689,6 @@ private:
             cache_uniform(program.get(), u_probe_sample, "u_probe_sample", bgfx::UniformType::Vec4);
         }
         gfx::program::uniform_ptr u_pre_exposure;
-        gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
         gfx::program::uniform_ptr u_inv_view_proj_relative;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
@@ -800,7 +795,29 @@ private:
 
     } debug_visualization_program_;
 
-    auto run_irradiance_pass(scene& scn, gfx::render_view& rview) -> irradiance_pass_result;
+    /// The sky's irradiance SH: baked by compute, or a flat ambient written from the CPU on a device without it.
+    auto run_irradiance_pass(scene& scn, gfx::render_view& rview, const feature_limits& limits) -> irradiance_pass_result;
+
+    /// What the sky passes of a frame read from the scene, for one scene and one set of limits.
+    struct skylight_frame_params
+    {
+        uint64_t frame{~0ULL};
+        const entt::registry* registry{};
+        feature_limits limits;
+        /// The strongest enabled sun's luminous intensity.
+        float sun_intensity{};
+        /// The scene has a skylight in effect, and it renders a skybox rather than the Perez sky.
+        bool has_skylight{};
+        bool is_skybox{};
+        atmospheric_pass_perez::run_params perez;
+        atmospheric_pass_skybox::run_params skybox;
+    };
+    /// The sky parameters of this frame: one walk over the scene's skylights and suns, however many runs of the frame
+    /// read them (a camera and its probe faces).
+    auto get_skylight_params(scene& scn, const feature_limits& limits) -> const skylight_frame_params&;
+
+    /// Whether this run's camera cut since last frame: decided once per run.
+    auto has_camera_cut(const camera& camera) -> bool;
 
     /// The light's shadowed program; PCF lights get the tent size their PCF offset asks for
     /// (get_pcf_tent_slot).
@@ -918,8 +935,9 @@ private:
     /// re-read every frame from the cached handles - which is a walk over a handful of
     /// entries instead of over every model in the scene.
     shadow::shadow_map_models_t shadow_dynamic_casters_;
-    /// The scene's shadow_caster_revision both lists were built from, and the layer mask they
-    /// were filtered with; either changing retires them.
+    /// The registry and shadow_caster_revision both lists were built from, and the layer mask they
+    /// were filtered with; any of them changing retires them.
+    const entt::registry* shadow_casters_registry_{};
     uint64_t shadow_casters_revision_{~0ULL};
     layer_mask shadow_casters_mask_{};
     /// Render frame the mover bounds / LOD were last refreshed in: build_shadows can run
@@ -927,7 +945,7 @@ private:
     uint64_t shadow_casters_frame_{~0ULL};
     /// The subset of the two lists reaching into the range of the local light being generated.
     shadow::shadow_map_models_t shadow_light_casters_;
-    /// This run's instanced sources the camera sees, and the ones casting shadows (gather_instance_sources).
+    /// The camera run's instanced sources the camera sees, and the ones casting shadows (gather_instance_sources).
     std::vector<const instanced_mesh_source*> instance_sources_;
     shadow::shadow_map_models_t instance_source_casters_;
     /// The G-buffer collected source instances this run: the instanced submits run whatever the batching setting.
@@ -1024,6 +1042,12 @@ private:
     bool is_camera_run_{false};
     /// The layers this run draws.
     layer_mask render_mask_{layer_reserved::everything_layer};
+    /// The scene this run draws.
+    const scene* run_scene_{};
+    /// has_camera_cut's answer for this run.
+    hpp::optional<bool> camera_cut_;
+    /// See get_skylight_params.
+    skylight_frame_params skylight_params_;
     /// The GI reflections wrote RBUFFER and PBUFFER in this run (run_gi_pass), so RBUFFER needs no clear.
     bool gi_reflections_written_{false};
     /// RBUFFER was cleared in this run, for SSR to composite into or as the GI reflections' fallback.

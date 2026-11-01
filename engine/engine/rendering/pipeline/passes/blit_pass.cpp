@@ -1,5 +1,5 @@
-// blit_pass.cpp
 #include "blit_pass.h"
+#include "pass_helpers.h"
 #include <engine/assets/asset_manager.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
@@ -9,44 +9,15 @@ namespace unravel
 
 auto blit_pass::init(rtti::context& ctx) -> bool
 {
-    // 1) Retrieve the asset manager (holds shader assets)
     auto& am = ctx.get_cached<asset_manager>();
 
-    // 2) Load a fullscreen‐quad vertex shader and a simple blit fragment shader
-    //    vs_clip_quad.eshader is assumed to output a full‐screen triangle/quad.
-    //    fs_blit.eshader should sample a 2D texture “s_input” and output it unchanged.
     auto vs_fullscreen = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
     auto fs_blit = am.get_asset<gfx::shader>("engine:/data/shaders/fs_blit.eshader");
 
-    // 3) Create our GPU program
     blit_program_.cache_uniforms();
     blit_program_.program = std::make_unique<gpu_program>(vs_fullscreen, fs_blit);
 
-    return true;
-}
-
-auto blit_pass::create_or_update_output_fb(gfx::render_view& rview,
-                                           const gfx::frame_buffer::ptr& input,
-                                           const gfx::frame_buffer::ptr& output)
-    -> gfx::frame_buffer::ptr
-{
-    if(output)
-    {
-        return output;
-    }
-    auto input_sz = input->get_size();
-    auto input_tex = input->get_texture();
-    auto input_format = input_tex->info.format;
-    const auto& output_tex =
-        rview.tex_acquire("BLIT_OUTPUT", {.size = input_sz, .format = input_format, .flags = BGFX_TEXTURE_RT});
-    auto& output_fbo = rview.fbo_acquire("BLIT_OUTPUT");
-    if(gfx::needs_recreate(output_fbo, {output_tex}))
-    {
-        output_fbo.reset();
-        output_fbo = std::make_shared<gfx::frame_buffer>();
-        output_fbo->populate({output_tex});
-    }
-    return output_fbo;
+    return blit_program_.program->is_valid();
 }
 
 auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
@@ -56,9 +27,9 @@ auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
     {
         return nullptr;
     }
-    auto actual_output = create_or_update_output_fb(rview, input_fb, params.output);
+    auto actual_output =
+        get_output_frame_buffer(rview, "BLIT_OUTPUT", input_fb, params.output, input_fb->get_texture()->info.format);
 
-    // 3) Begin a named render pass for clarity/debug (optional)
     gfx::render_pass pass("Blit/Pass");
     pass.bind(actual_output.get());
     // Without blending every pixel is drawn below: a clear instead of a load spares a tile-based GPU
@@ -68,17 +39,16 @@ auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
         pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
     }
 
-    // 4) Bind our GPU program and set the source texture
-    blit_program_.program->begin();
+    if(!blit_program_.program->begin())
+    {
+        bgfx::discard();
+        return actual_output;
+    }
     gfx::set_texture(blit_program_.s_input, 0, input_fb->get_texture());
 
-    // 5) Draw a fullscreen quad. The helper `gfx::clip_quad()` returns
-    //    the appropriate “topology” for a single‐triangle fullscreen quad,
-    //    taking care of originBottomLeft if needed.
-    //    (We pass 1.0f as the depth—meaning no depth test is used.)
     auto topology = gfx::clip_quad(1.0f);
 
-    // 6) Configure render state: write RGB + A, no depth, no blending.
+    // Render state: write RGB + A, no depth.
     uint64_t state = topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
     if(params.alpha_blend)
     {
@@ -86,15 +56,12 @@ auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
     }
     bgfx::setState(state);
 
-    // 7) Submit to the current view (render_pass::bind will have set the view ID)
     bgfx::submit(pass.id, blit_program_.program->native_handle());
 
-    // 8) Reset to default state (optional but good practice)
     bgfx::setState(BGFX_STATE_DEFAULT);
 
     blit_program_.program->end();
 
-    // 9) Unbind/discard any transient state (optional).
     bgfx::discard();
 
     return actual_output;

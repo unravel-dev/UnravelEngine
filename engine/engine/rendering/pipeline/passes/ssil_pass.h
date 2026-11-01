@@ -104,7 +104,7 @@ public:
         gfx::texture::ptr prev_depth;
         gfx::texture::ptr prev_ssil;
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid
-        /// texture IS the enable; null = legacy matrix reprojection.
+        /// texture IS the enable; null = matrix reprojection.
         gfx::texture::ptr velocity;
         /// Environment SH coefficients (9x3 R32F); sampled per ray as the miss fallback so
         /// the trace integrates the environment where it escapes on-screen geometry. May be
@@ -205,7 +205,7 @@ private:
         gfx::program::uniform_ptr u_ssil_params2;
         /// x = distance-scaled hit-acceptance thickness (see ssil_settings::thickness).
         gfx::program::uniform_ptr u_ssil_params3;
-        /// xy = G-buffer (full) width/height; z = 1 when tracing at half resolution (UV from gl_FragCoord).
+        /// xy = G-buffer (full) width/height; zw = per-axis full / trace scale.
         gfx::program::uniform_ptr u_ssil_resolution;
         gfx::program::uniform_ptr s_color;
         gfx::program::uniform_ptr s_normal;
@@ -289,7 +289,7 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;
-        /// x = normal-dot validity threshold (e.g. 0.85). yzw reserved.
+        /// x = normal-dot validity threshold (e.g. 0.85), y = the velocity buffer is bound. zw reserved.
         gfx::program::uniform_ptr u_temporal_params2;
         gfx::program::uniform_ptr u_temporal_resolution;
         gfx::program::uniform_ptr u_prev_view_proj;

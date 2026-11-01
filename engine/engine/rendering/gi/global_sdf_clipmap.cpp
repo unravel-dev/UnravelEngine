@@ -4,6 +4,7 @@
 
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/gi_hash.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
@@ -119,16 +120,16 @@ auto global_sdf_clipmap::compute_instance_entry_hash(const global_sdf_instance& 
     // Placement AND identity. A pure move changes no count and no membership, so hashing
     // either alone would miss it entirely -- the object would go on occluding and lighting
     // from where it used to be, with nothing downstream able to recover.
-    uint64_t entry = 0xcbf29ce484222325ull;
+    uint64_t entry = gi_hash::FNV64_OFFSET_BASIS;
     const auto* words = reinterpret_cast<const uint32_t*>(&instance.world_to_local);
     constexpr size_t word_count = sizeof(instance.world_to_local) / sizeof(uint32_t);
     for(size_t i = 0; i < word_count; ++i)
     {
-        entry = (entry ^ uint64_t(words[i])) * 0x100000001b3ull;
+        entry = (entry ^ uint64_t(words[i])) * gi_hash::FNV64_PRIME;
     }
-    entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
-    entry = (entry ^ reinterpret_cast<uintptr_t>(instance.coarse_sdf)) * 0x100000001b3ull;
-    entry = (entry ^ uint64_t(instance.flags)) * 0x100000001b3ull;
+    entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * gi_hash::FNV64_PRIME;
+    entry = (entry ^ reinterpret_cast<uintptr_t>(instance.coarse_sdf)) * gi_hash::FNV64_PRIME;
+    entry = (entry ^ uint64_t(instance.flags)) * gi_hash::FNV64_PRIME;
     return entry;
 }
 
@@ -146,6 +147,7 @@ void global_sdf_clipmap::refresh_instance_entry_hashes(const std::vector<global_
         return;
     }
     instance_entry_hashes_.resize(instances.size());
+    instance_entry_sampleable_.resize(instances.size());
     for(size_t i = 0; i < instances.size(); ++i)
     {
         const auto& instance = instances[i];
@@ -155,7 +157,6 @@ void global_sdf_clipmap::refresh_instance_entry_hashes(const std::vector<global_
         // costs the brick count times four times the instance count, every frame.
         const bool sampleable = instance.sdf != nullptr && instance.sdf->is_sampleable();
         instance_entry_hashes_[i] = sampleable ? compute_instance_entry_hash(instance) : 0ull;
-        instance_entry_sampleable_.resize(instances.size());
         instance_entry_sampleable_[i] = sampleable ? 1u : 0u;
     }
     instance_entry_hash_revision_ = instances_revision;
@@ -232,24 +233,47 @@ void global_sdf_clipmap::merge_overlapping_boxes(std::vector<voxel_box>& boxes)
     {
         return int64_t(size.x) * size.y * size.z;
     };
-    bool merged = true;
-    while(merged)
+    const auto try_merge = [&](size_t into, size_t from) -> bool
     {
-        merged = false;
-        for(size_t i = 0; i < boxes.size() && !merged; ++i)
+        const math::ivec3 box_min = math::min(boxes[into].min, boxes[from].min);
+        const math::ivec3 box_max = math::max(boxes[into].min + boxes[into].size, boxes[from].min + boxes[from].size);
+        if(volume(box_max - box_min) > volume(boxes[into].size) + volume(boxes[from].size))
         {
-            for(size_t j = i + 1; j < boxes.size() && !merged; ++j)
-            {
-                const math::ivec3 box_min = math::min(boxes[i].min, boxes[j].min);
-                const math::ivec3 box_max = math::max(boxes[i].min + boxes[i].size, boxes[j].min + boxes[j].size);
-                if(volume(box_max - box_min) <= volume(boxes[i].size) + volume(boxes[j].size))
-                {
-                    boxes[i] = {box_min, box_max - box_min};
-                    boxes.erase(boxes.begin() + std::ptrdiff_t(j));
-                    merged = true;
-                }
-            }
+            return false;
         }
+        boxes[into] = {box_min, box_max - box_min};
+        boxes.erase(boxes.begin() + std::ptrdiff_t(from));
+        return true;
+    };
+    // Pairs of boxes that did not change stay unmergeable, so after a merge only the grown box is tested again: first
+    // against the boxes before it, then the boxes after it.
+    size_t i = 0;
+    size_t j = 1;
+    while(i < boxes.size())
+    {
+        if(j >= boxes.size())
+        {
+            ++i;
+            j = i + 1;
+            continue;
+        }
+        if(!try_merge(i, j))
+        {
+            ++j;
+            continue;
+        }
+        size_t earlier = 0;
+        while(earlier < i)
+        {
+            if(try_merge(earlier, i))
+            {
+                i = earlier;
+                earlier = 0;
+                continue;
+            }
+            ++earlier;
+        }
+        j = i + 1;
     }
 }
 
@@ -1002,38 +1026,23 @@ auto global_sdf_clipmap::sample_ex(const math::vec3& world_position, float& out_
     const float coarse = sample_level(index + 1u, world_position);
     if(coarse >= outside_distance)
     {
+        // The next level should always cover here -- it is larger and shares a centre -- so this
+        // only fires if snapping has pushed it off. Keeping the fine value is both conservative
+        // and the better answer; blending toward the give-up value would not be.
         return fine;
     }
     // The reported size follows the blend for the same reason it is reported at all: inside the
     // band the value is a mixture of two levels, so anything scaled to "a voxel" has to be scaled
     // to the same mixture or it jumps at the boundary.
     out_voxel_size = math::mix(out_voxel_size, levels_[index + 1u].voxel_size, blend);
+    // Convex combination of two conservative under-estimates, so the result under-estimates too.
     return math::mix(fine, coarse, blend);
 }
 
 auto global_sdf_clipmap::sample(const math::vec3& world_position) const -> float
 {
-    float blend = 0.0f;
-    const uint32_t index = find_level(world_position, blend);
-    if(index >= level_count)
-    {
-        return outside_distance;
-    }
-    const float fine = sample_level(index, world_position);
-    if(blend <= 0.0f)
-    {
-        return fine;
-    }
-    const float coarse = sample_level(index + 1u, world_position);
-    if(coarse >= outside_distance)
-    {
-        // The next level should always cover here -- it is larger and shares a centre -- so this
-        // only fires if snapping has pushed it off. Keeping the fine value is both conservative
-        // and the better answer; blending toward the give-up value would not be.
-        return fine;
-    }
-    // Convex combination of two conservative under-estimates, so the result under-estimates too.
-    return math::mix(fine, coarse, blend);
+    float voxel_size = 0.0f;
+    return sample_ex(world_position, voxel_size);
 }
 
 

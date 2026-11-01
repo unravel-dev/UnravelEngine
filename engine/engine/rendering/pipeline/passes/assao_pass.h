@@ -4,6 +4,9 @@
 #include <engine/rendering/gpu_program.h>
 #include <graphics/render_view.h>
 
+#include <array>
+#include <cstddef>
+
 namespace unravel
 {
 
@@ -139,12 +142,12 @@ public:
     }
 
     auto init(rtti::context& ctx) -> bool;
-    /// Runs the pass; without its compute programs (a device without compute) it releases its targets instead,
-    /// so the lighting reads no AO rather than a map nothing wrote.
+    /// Runs the pass; without its compute programs (a device without compute) or under an orthographic camera it
+    /// releases its targets instead, so the lighting reads no AO rather than a map nothing wrote or a wrong one.
     void run(const camera& camera, gfx::render_view& rview, const run_params& params);
     auto shutdown() -> int32_t;
     void release_resources(gfx::render_view& rview);
-    /// Whether every compute program of the pass was built.
+    /// Whether every compute program of the pass was built, as of the last run.
     auto has_programs() const -> bool;
 
     /// The full-resolution AO this view's last run produced (RGBA8, the visibility in every
@@ -161,6 +164,12 @@ private:
         int32_t fullResOutScissorRect[4]{};
         int32_t halfResOutScissorRect[4]{};
     };
+    /// The compute programs below.
+    static constexpr std::size_t PROGRAM_COUNT = 25;
+    /// Every program, null before init.
+    auto get_programs() const -> std::array<gpu_program*, PROGRAM_COUNT>;
+    /// The gate of a frame's work (gpu_program::begin): whether every program can run, picking up reloaded shaders.
+    auto begin_programs() -> bool;
     void create_or_update_frame_buffers(gfx::render_view& rview, const dimensions& dims);
     void update_uniforms(int32_t _pass, const float* view, const float* proj, const dimensions& dims);
 
@@ -214,41 +223,38 @@ private:
 
     // Resource handles
 
-    bgfx::ProgramHandle m_prepareDepthsProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_prepareDepthsAndNormalsProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_prepareDepthsHalfProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_prepareDepthsAndNormalsHalfProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_prepareDepthMipProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ0Program{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ1Program{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ2Program{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ3Program{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ3BaseProgram{bgfx::kInvalidHandle};
+    gpu_program::ptr m_prepareDepthsProgram;
+    gpu_program::ptr m_prepareDepthsAndNormalsProgram;
+    gpu_program::ptr m_prepareDepthsHalfProgram;
+    gpu_program::ptr m_prepareDepthsAndNormalsHalfProgram;
+    gpu_program::ptr m_prepareDepthMipProgram;
+    gpu_program::ptr m_generateQ0Program;
+    gpu_program::ptr m_generateQ1Program;
+    gpu_program::ptr m_generateQ2Program;
+    gpu_program::ptr m_generateQ3Program;
+    gpu_program::ptr m_generateQ3BaseProgram;
+    gpu_program::ptr m_generateQ0GBufferProgram;
+    gpu_program::ptr m_generateQ1GBufferProgram;
+    gpu_program::ptr m_generateQ2GBufferProgram;
+    gpu_program::ptr m_generateQ3GBufferProgram;
+    gpu_program::ptr m_generateQ3BaseGBufferProgram;
 
-    bgfx::ProgramHandle m_generateQ0ProgramRgba16f{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ1ProgramRgba16f{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ2ProgramRgba16f{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ3ProgramRgba16f{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateQ3BaseProgramRgba16f{bgfx::kInvalidHandle};
-
-    bgfx::ProgramHandle m_smartBlurProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_smartBlurWideProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_nonSmartBlurProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_applyProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_nonSmartApplyProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_nonSmartHalfApplyProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_generateImportanceMapProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_postprocessImportanceMapAProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_postprocessImportanceMapBProgram{bgfx::kInvalidHandle};
-    bgfx::ProgramHandle m_loadCounterClearProgram{bgfx::kInvalidHandle};
+    gpu_program::ptr m_smartBlurProgram;
+    gpu_program::ptr m_smartBlurWideProgram;
+    gpu_program::ptr m_nonSmartBlurProgram;
+    gpu_program::ptr m_applyProgram;
+    gpu_program::ptr m_nonSmartApplyProgram;
+    gpu_program::ptr m_nonSmartHalfApplyProgram;
+    gpu_program::ptr m_generateImportanceMapProgram;
+    gpu_program::ptr m_postprocessImportanceMapAProgram;
+    gpu_program::ptr m_postprocessImportanceMapBProgram;
+    gpu_program::ptr m_loadCounterClearProgram;
 
     // Shader uniforms
     bgfx::UniformHandle u_rect{bgfx::kInvalidHandle};
 
     // Uniforms to identify texture samples
-    bgfx::UniformHandle s_normal{bgfx::kInvalidHandle};
-    bgfx::UniformHandle s_depth{bgfx::kInvalidHandle};
-    bgfx::UniformHandle s_ao{bgfx::kInvalidHandle};
+    bgfx::UniformHandle s_normalmapSource{bgfx::kInvalidHandle};
     bgfx::UniformHandle s_blurInput{bgfx::kInvalidHandle};
     bgfx::UniformHandle s_finalSSAO{bgfx::kInvalidHandle};
     bgfx::UniformHandle s_depthSource{bgfx::kInvalidHandle};
@@ -260,7 +266,5 @@ private:
 
     settings m_settings{};
     uniforms m_uniforms{};
-
-    std::vector<gpu_program::ptr> m_programs;
 };
 } // namespace unravel

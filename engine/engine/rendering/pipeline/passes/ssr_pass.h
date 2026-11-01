@@ -20,20 +20,19 @@ public:
     /// Hi-Z traced SSR settings
     struct fidelityfx_ssr_settings
     {
-        /// Cone tracing parameters
+        /// Cone tracing parameters. The pass does not trace cones: saved settings keep these values and their layout.
         struct cone_tracing_settings
         {
             float cone_angle_bias = 0.05f;                  ///< Controls cone growth rate (0.1 - 0.5)
             int max_mip_level = 6;                          ///< Number of blur mip levels - 1
             float blur_base_sigma = 1.0f;                   ///< Base blur sigma for mip generation (CPU-side only)
-            float roughness_multiplier = 2.0f;             ///< Multiplier for roughness-based blur (higher = more blur for rough surfaces)
         };
 
         /// Temporal accumulation parameters
         struct temporal_settings
         {
-            float history_strength     = 0.9f;   // 0 … 1  (was blend_factor)
-            float depth_threshold      = 0.01f;  // clip-space 0 … ~0.03
+            float history_strength     = 0.9f;   // 0 - 1
+            float depth_threshold      = 0.01f;  // clip-space 0 - ~0.03
             float motion_scale_pixels = 120.0f;   // Motion scale in pixels
             float normal_dot_threshold = 0.95f;   // Normal dot threshold for motion detection
             int max_accum_frames = 8;        // Maximum accumulation frames
@@ -47,22 +46,19 @@ public:
         /// (reflections of the camera's own position - occluded space with no color).
         /// 0 = no fade, 0.1 fades only the last ~37 degrees, 1 fades across the whole
         /// toward-camera hemisphere. Toward-camera hits OUTSIDE the cone composite at full
-        /// confidence now: the backface rejection already guarantees their stored color is
-        /// the face the ray sees (the old meters-scaled dot collapsed every toward-camera
-        /// ray to this value as a floor - mirrors ghosted their foreground reflections).
+        /// confidence: the backface rejection already guarantees their stored color is the
+        /// face the ray sees.
         float facing_reflections_fading = 0.1f;
         float roughness_depth_tolerance = 1.0f;         ///< Additional depth tolerance for rough surfaces
         /// Border band, as a fraction of the screen, over which reflections sourced near
         /// the frame edge fade toward the fallback layer - softening the transition where
         /// rays leave the screen. Hits deeper than the band composite at full strength.
-        /// (Replaces the fade_in_start/fade_in_end pair, whose two values were fed as
-        /// per-axis widths by accident; legacy scenes load fade_in_start into this.)
         float screen_edge_fade = 0.1f;
-        /// Trace resolution divisor. SSR is runtime-capped at `half` because sub-half
-        /// tracing breaks Hi-Z traversal, temporal clamp and the spatial denoiser.
+        /// Trace resolution divisor. The pass caps it at `half` because sub-half tracing
+        /// breaks Hi-Z traversal, temporal clamp and the spatial denoiser.
         trace_resolution resolution = trace_resolution::full;
         // Cone tracing parameters
-        bool enable_cone_tracing = false;                 ///< Enable cone tracing for glossy reflections
+        bool enable_cone_tracing = false;                 ///< Not read by the pass, see cone_tracing_settings
         cone_tracing_settings cone_tracing;             ///< Cone tracing specific settings
         
 
@@ -73,9 +69,9 @@ public:
         /// Spatial denoise parameters (a-trous wavelet filter between trace and temporal resolve)
         struct spatial_denoise_settings
         {
-            float depth_sigma = 0.02f;      ///< Depth edge-stopping threshold (0.005 strict – 0.05 loose)
-            float normal_power = 64.0f;     ///< Normal edge-stopping exponent (16 loose – 128 strict)
-            float luma_sigma = 1.0f;        ///< Luminance edge-stopping threshold (0.3 sharp – 2.0 smooth)
+            float depth_sigma = 0.02f;      ///< Depth edge-stopping threshold (0.005 strict - 0.05 loose)
+            float normal_power = 64.0f;     ///< Normal edge-stopping exponent (16 loose - 128 strict)
+            float luma_sigma = 1.0f;        ///< Luminance edge-stopping threshold (0.3 sharp - 2.0 smooth)
             int passes = 3;                 ///< Number of a-trous filter passes (step = 1, 2, 4, ... 1<<i)
         };
 
@@ -91,12 +87,12 @@ public:
 
     struct run_params
     {
-        gfx::frame_buffer::ptr output;       ///< Optional output buffer
+        gfx::frame_buffer::ptr output;       ///< The traced reflection buffer the composite blends into
         gfx::frame_buffer::ptr g_buffer;     ///< G-buffer containing normals
         gfx::texture::ptr hiz_buffer;        ///< Hi-Z buffer texture
         gfx::texture::ptr previous_frame;    ///< Previous frame color for reflection sampling
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid
-        /// texture IS the enable; null = legacy matrix reprojection.
+        /// texture IS the enable; null = matrix reprojection.
         gfx::texture::ptr velocity;
         /// True while the velocity pass drew ANY mover within one accumulation window.
         /// This is the CONTENT-LAG guard, not a ghost-rejection guard: the trace samples
@@ -118,23 +114,18 @@ public:
     /// Must be called once (after bgfx::init() and after `asset_manager` is registered in context).
     auto init(rtti::context& ctx) -> bool;
 
-    /// Executes the SSR pass. Returns the actual output framebuffer.
+    /// Executes the SSR pipeline (trace, optional spatial denoise, temporal resolve, composite). Returns the actual
+    /// output framebuffer.
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
     /// Releases all GPU resources owned by this pass from the render_view.
     void release_resources(gfx::render_view& rview);
 
-    /// Executes the Hi-Z traced SSR pass. Returns the actual output framebuffer.
-    auto run_fidelityfx(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
-
-    /// Executes the three-pass SSR pipeline (trace, temporal resolve, composite)
-    auto run_fidelityfx_three_pass(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
-
     /// Executes the SSR trace pass only. Returns SSR current frame buffer.
     auto run_ssr_trace(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
     /// Executes the temporal resolve pass. Returns updated SSR history buffer.
-    /// @param velocity This frame's velocity buffer; null = legacy matrix reprojection.
+    /// @param velocity This frame's velocity buffer; null = matrix reprojection.
     /// @param curr_hit_t The trace's mean hit-distance target (SSR_CURR attachment 1) -
     ///        always the TRACE's own output, even when the colour input was spatially
     ///        denoised: hit distance carries validation data, not an image to filter.
@@ -149,18 +140,10 @@ public:
                               const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr;
 
     /// Executes the composite pass. Returns final blended output.
-    auto run_composite(gfx::render_view& rview,
-                      const gfx::frame_buffer::ptr& ssr_history,
-                      const gfx::frame_buffer::ptr& ssr_curr,
-                      const gfx::frame_buffer::ptr& probe_buffer,
-                      const gfx::frame_buffer::ptr& g_buffer,
-                      const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
-
-    /// Generates blurred color buffer with mip chain for cone tracing
-    auto generate_blurred_color_buffer(gfx::render_view& rview, 
-                                     const gfx::texture::ptr& input_color,
-                                     const gfx::frame_buffer::ptr& g_buffer,
-                                     const fidelityfx_ssr_settings& settings) -> gfx::texture::ptr;
+    auto run_composite(const gfx::frame_buffer::ptr& ssr_history,
+                       const gfx::frame_buffer::ptr& ssr_curr,
+                       const gfx::frame_buffer::ptr& g_buffer,
+                       const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
 
     /// Executes spatial denoise on SSR result before temporal resolve
     auto run_spatial_denoise(gfx::render_view& rview,
@@ -169,12 +152,6 @@ public:
                              const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr;
 
 private:
-    /// Creates or updates the output framebuffer using the render_view
-    auto create_or_update_output_fb(gfx::render_view& rview,
-                                   const gfx::frame_buffer::ptr& reference,
-                                   const gfx::frame_buffer::ptr& output)
-        -> gfx::frame_buffer::ptr;
-
     /// Creates or updates the SSR current framebuffer at the given trace resolution.
     auto create_or_update_ssr_curr_fb(gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& reference,
@@ -204,13 +181,12 @@ private:
         gfx::program::uniform_ptr u_ssr_params;      // x: max_steps, y: depth_tolerance, z: max_rays, w: brightness
         gfx::program::uniform_ptr u_hiz_params;      // x: hiz_width, y: hiz_height, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_fade_params;     // x: screen_edge_fade, y: unused, z: roughness_depth_tolerance, w: facing_reflections_fading
-        gfx::program::uniform_ptr u_cone_params;     // x: cone_angle_bias, y: max_mip_level, z: unused, w: unused
+        gfx::program::uniform_ptr u_ssr_frame_params; // x: frame number for temporal jitter
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
         gfx::program::uniform_ptr s_color;           // Input color texture
         gfx::program::uniform_ptr s_normal;          // Normal buffer
         gfx::program::uniform_ptr s_depth;           // Depth buffer
         gfx::program::uniform_ptr s_hiz;             // Hi-Z buffer
-        gfx::program::uniform_ptr s_color_blurred;   // Pre-blurred color buffer with mip chain
         gfx::program::uniform_ptr u_pre_exposure;    // View pre-exposure (pre_exposure.sh)
 
         void cache_uniforms()
@@ -219,13 +195,12 @@ private:
             cache_uniform(program.get(), u_ssr_params, "u_ssr_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_hiz_params, "u_hiz_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_fade_params, "u_fade_params", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_cone_params, "u_cone_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_ssr_frame_params, "u_ssr_frame_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
             cache_uniform(program.get(), s_color, "s_color", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_color_blurred, "s_color_blurred", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
         
@@ -240,7 +215,7 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;  // x: enable_temporal, y: history_strength, z: depth_threshold, w: unused
-        gfx::program::uniform_ptr u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: unused
+        gfx::program::uniform_ptr u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: velocity bound
         gfx::program::uniform_ptr u_fade_params;      // x: content-lag release ceiling, y: unused, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
         gfx::program::uniform_ptr s_ssr_curr;         // Current frame SSR result
@@ -299,26 +274,6 @@ private:
             return program && program->is_valid();
         }
     } composite_program_;
-
-    // Unified blur compute program for cone tracing
-    struct blur_compute_program : uniforms_cache
-    {
-        gpu_program::ptr program;
-        gfx::program::uniform_ptr u_blur_params;
-        gfx::program::uniform_ptr s_normal;  // Normal buffer for roughness sampling
-        
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_blur_params, "u_blur_params", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
-        }
-        
-        auto is_valid() const -> bool
-        {
-            return program && program->is_valid();
-        }
-    };
-    blur_compute_program blur_compute_program_;
 
     // Spatial denoise compute program for edge-preserving a-trous wavelet filtering
     struct spatial_denoise_compute_program : uniforms_cache

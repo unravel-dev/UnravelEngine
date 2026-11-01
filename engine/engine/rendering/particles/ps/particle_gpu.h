@@ -247,7 +247,6 @@ private:
     bgfx::UniformHandle u_draw_ = BGFX_INVALID_HANDLE;
     /// The turbulence noise volume's sampler: the cull pass places particles with their turbulence.
     bgfx::UniformHandle u_noise_ = BGFX_INVALID_HANDLE;
-    bgfx::VertexLayout vec4_layout_;
     bgfx::VertexLayout quad_layout_;
     bgfx::VertexBufferHandle quad_vertices_ = BGFX_INVALID_HANDLE;
     bgfx::IndexBufferHandle quad_indices_ = BGFX_INVALID_HANDLE;

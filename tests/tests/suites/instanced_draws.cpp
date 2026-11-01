@@ -64,7 +64,7 @@ auto make_settings() -> instanced_draw_list::draw_settings
     am.unload_asset<mesh>(MESH_KEY);
     am.unload_asset<material>(MATERIAL_KEY);
     auto cube = std::make_shared<mesh>();
-    cube->create_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1, mesh_create_origin::center, false);
+    cube->create_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1, false);
     instanced_draw_list::draw_settings settings;
     settings.render_mesh = am.get_asset_from_instance<mesh>(MESH_KEY, cube);
     settings.render_material = am.get_asset_from_instance<material>(MATERIAL_KEY, std::make_shared<pbr_material>());
@@ -205,18 +205,22 @@ void test_non_finite_positions(const instanced_draw_list::draw_settings& setting
 {
     instanced_draw_list list;
     const float not_a_number = std::numeric_limits<float>::quiet_NaN();
+    math::mat4 infinite_height = make_transform(1.0f, 1.0f, 1.0f);
+    infinite_height[3].y = std::numeric_limits<float>::infinity();
     const std::vector<math::mat4> transforms{make_transform(not_a_number, 1.0f, 1.0f),
+                                             infinite_height,
                                              make_transform(1.0f, 1.0f, 1.0f),
                                              make_transform(1e30f, -1e30f, 1.0f)};
     list.add(settings, transforms, {});
     const auto& clusters = list.get_clusters();
-    check(clusters.size() == 3u, "a non-finite and a far position make clusters of their own");
+    check(clusters.size() == 3u, "non-finite positions on any axis and a far position make clusters of their own");
     bool holds_valid = false;
     for(const auto& cluster : clusters)
     {
         const auto& bounds = cluster.get_mesh_bounds();
         holds_valid = holds_valid || (bounds.contains_point(math::vec3(1.0f, 0.5f, 1.0f)) &&
-                                      std::isfinite(bounds.min.x) && std::isfinite(bounds.max.x));
+                                      std::isfinite(bounds.min.x) && std::isfinite(bounds.max.x) &&
+                                      std::isfinite(bounds.min.y) && std::isfinite(bounds.max.y));
     }
     check(holds_valid, "the finite instance's cluster keeps finite bounds");
 }

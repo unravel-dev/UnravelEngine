@@ -122,7 +122,7 @@ public:
         math::uvec2 atlas_offset{0u};
         math::uvec2 size{0u};
         ///< The card's previous allocation in the resample table (get_resample_table), whose lighting the page
-        ///< inherits, or -1 when the card was not resident.
+        ///< inherits, or -1 when it inherits none: the card was not resident, or the page keeps its own lighting.
         int32_t resample_card = -1;
         ///< A refresh of the page in place: it keeps its lighting texel for texel rather than resampling it, so the
         ///< direct lighting, which a clean page does not relight, stays exact.
@@ -241,6 +241,10 @@ public:
     static constexpr uint32_t sub_allocation_res_level = 7;
     /// float4s per card record, page-table entry and instance record in the packed tables.
     static constexpr uint32_t card_stride = 6;
+    /// The cards' lit pages in one update at most, over all lighting contexts: their records share one table, whose
+    /// index the card lighting's tile words carry in 16 bits (see gi_tile_records.sh). Each context has an equal share,
+    /// so none starves another. Pages past its share stay due for the next update.
+    static constexpr uint32_t max_lit_pages_per_update = 65536u;
     static constexpr uint32_t page_stride = 1;
     static constexpr uint32_t instance_stride = 1;
 
@@ -382,7 +386,6 @@ public:
         return card_table_;
     }
 
-    /// Per virtual page: (atlas bias x, y in texels, res level x, y); res level 0 = unmapped.
     /**
      * @brief Per page-table entry, in get_page_table's order: x = the frames since its direct lighting was last
      *        updated, y = since its indirect lighting was (counted against the surface cache's update frame), for the
@@ -415,6 +418,7 @@ public:
                               const math::frustum& view_frustum,
                               std::vector<visualized_card>& out) const;
 
+    /// Per virtual page: (atlas bias x, y in texels, res level x, y); res level 0 = unmapped.
     auto get_page_table() const -> const std::vector<math::vec4>&
     {
         return page_table_;
@@ -698,8 +702,8 @@ private:
     /// update(): the packed card, page and instance tables and the resident page list.
     void build_tables(const std::vector<source>& sources, uint32_t instance_count);
     /// update(): resident pages captured again, oldest first, within the refresh's share of the capture budget. A
-    /// refreshed page keeps its lighting: its card is its own resample source.
-    void refresh_captures(const std::vector<source>& sources, capture_packer& packer);
+    /// refreshed page keeps its lighting where it is (capture::keeps_lighting).
+    void refresh_captures(capture_packer& packer);
     /// schedule_lighting(): every resident page's tiles, speed and bucket per lighting context, across the pool; a
     /// direct-lit page that is not dirty takes k_skip_bucket.
     void compute_page_priorities(const std::vector<viewer>& viewers);
@@ -759,9 +763,8 @@ private:
     bool are_hi_res_pages_enabled_ = true;
     ///< This frame's active sources (collect_active), per source.
     std::vector<uint8_t> is_source_active_;
-    ///< refresh_captures() scratch: the resident pages it may capture, and each refreshed card's resample entry.
+    ///< refresh_captures() scratch: the resident pages it may capture.
     std::vector<uint32_t> refresh_candidates_;
-    std::vector<std::pair<uint32_t, int32_t>> refresh_resamples_;
     ///< schedule_lighting() scratch, per resident page: tiles, and bucket per lighting context.
     std::vector<uint32_t> page_tiles_;
     std::array<std::vector<uint32_t>, lighting_context_count> page_buckets_;

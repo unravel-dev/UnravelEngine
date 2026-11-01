@@ -3,6 +3,7 @@
 #include "gi_object_grid.h"
 
 #include "gi_pass_common.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -14,6 +15,7 @@
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/render_feature_support.h>
 
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <logging/logging.h>
@@ -35,6 +37,8 @@ constexpr uint32_t light_page_stride = 4;
 constexpr uint32_t tile_words_per_vec4 = 4;
 constexpr uint32_t tile_word_page_scale = 256;
 constexpr uint32_t tile_word_column_scale = 16;
+/// A float holds every integer up to 2^24, so a word stays exact for every page the lighting schedules.
+static_assert(uint64_t(gi_scene::max_lit_pages_per_update) * tile_word_page_scale <= (uint64_t(1) << 24u));
 /// The brightest a radiosity ray's radiance may be (its largest channel), in pre-exposed units: brighter rays are
 /// scaled down to it.
 constexpr float radiosity_max_ray_intensity = 40.0f;
@@ -109,6 +113,16 @@ constexpr auto final_atlas_format = bgfx::TextureFormat::RGBA16F;
 auto get_store_frame_index() -> float
 {
     return gi_pass::get_frame_index(gfx::get_render_frame());
+}
+
+/// @p layout with fewer rays per probe when its trace atlas, a hemisphere per probe of a surface cache atlas of
+/// @p atlas_size, would pass the device's largest texture.
+auto fit_radiosity_layout(gi_pass::radiosity_layout layout, uint32_t atlas_size) -> gi_pass::radiosity_layout
+{
+    const uint32_t probe_atlas_size = std::max(atlas_size / layout.probe_spacing, 1u);
+    const uint32_t max_hemisphere = std::max(gfx::get_device_caps().max_texture_size / probe_atlas_size, 1u);
+    layout.hemisphere_resolution = std::min(layout.hemisphere_resolution, max_hemisphere);
+    return layout;
 }
 
 auto make_atlas(uint32_t size, bgfx::TextureFormat::Enum format) -> gfx::texture::ptr
@@ -386,6 +400,13 @@ auto gi_surface_cache::is_ready() const -> bool
            valid(radiosity_integrate_program_.get()) && valid(debug_program_.get());
 }
 
+auto gi_surface_cache::begin_programs() -> bool
+{
+    return begin_program(copy_program_) && begin_program(resample_program_) && begin_program(lighting_program_) &&
+           begin_program(radiosity_trace_program_) && begin_program(radiosity_sh_program_) &&
+           begin_program(radiosity_integrate_program_) && begin_program(debug_program_);
+}
+
 void gi_surface_cache::create_targets()
 {
     const auto& s = scene_.get_settings();
@@ -452,7 +473,7 @@ void gi_surface_cache::ensure_radiosity_targets(const gi_pass::radiosity_layout&
 auto gi_surface_cache::get_feedback() -> gi_surface_cache_feedback*
 {
     const bool can_feed_back = get_render_feature_support().is_available(render_feature::gi_page_feedback);
-    return uses_hi_res_pages_ && can_feed_back && feedback_.is_ready() && has_targets() ? &feedback_ : nullptr;
+    return uses_hi_res_pages_ && can_feed_back && feedback_.begin_programs() && has_targets() ? &feedback_ : nullptr;
 }
 
 auto gi_surface_cache::has_lighting() const -> bool
@@ -589,8 +610,8 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
     std::unordered_map<const void*, std::array<uint64_t, global_sdf_clipmap::level_count>> serials;
     for(const void* key : scheduled_viewers_)
     {
-        const viewer_record& record = viewers_.at(key);
-        if(!record.has_field)
+        const viewer_record& viewer = viewers_.at(key);
+        if(!viewer.has_field)
         {
             continue;
         }
@@ -599,7 +620,7 @@ auto gi_surface_cache::collect_direct_lighting_changes(const surface_cache_syste
         auto& current = serials[key];
         for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
         {
-            const field_level_record& lvl = record.field_levels[level];
+            const field_level_record& lvl = viewer.field_levels[level];
             const uint64_t serial = lvl.compose_serial;
             const uint64_t previous_serial = previous != previous_compose_serials_.end() ? previous->second[level] : 0u;
             current[level] = serial;
@@ -668,14 +689,26 @@ void gi_surface_cache::update(const surface_cache_system& gi_scene,
                               const gi_project_settings& project_settings)
 {
     APP_SCOPE_PERF("GI/Surface Cache Update");
-    if(scene_.apply_settings(make_scene_settings(project_settings)) || !has_targets())
+    const bool has_started_over = scene_.apply_settings(make_scene_settings(project_settings)) || !has_targets();
+    const gi_pass::radiosity_layout wanted_layout =
+        gi_pass::get_radiosity_layout(view_settings.lighting_quality, project_settings.global_illumination_quality);
+    const gi_pass::radiosity_layout layout = fit_radiosity_layout(wanted_layout, scene_.get_settings().atlas_size);
+    if(layout != wanted_layout && !has_warned_radiosity_layout_)
+    {
+        has_warned_radiosity_layout_ = true;
+        APPLOG_WARNING("[GI] Radiosity probes of {0} x {0} rays pass this device's largest texture, so they trace "
+                       "{1} x {1} rays.",
+                       wanted_layout.hemisphere_resolution,
+                       layout.hemisphere_resolution);
+    }
+    if(has_started_over)
     {
         // The first update, or the scene started over: new, unlit atlases at the current sizes.
+        radiosity_layout_ = layout;
         create_targets();
         is_lit_ = false;
     }
-    ensure_radiosity_targets(
-        gi_pass::get_radiosity_layout(view_settings.lighting_quality, project_settings.global_illumination_quality));
+    ensure_radiosity_targets(layout);
     const auto& gi_sources = gi_scene.get_gi_sources();
     experiment_flags_ = gi_scene.get_experiment_flags();
     card_bias_scale_ = (experiment_flags_ & experiment_fixed_card_tolerance) != 0u
@@ -732,12 +765,6 @@ void gi_surface_cache::update(const surface_cache_system& gi_scene,
     scene_.set_card_residency_without_group_gate((experiment_flags_ & experiment_card_residency_without_group_gate) != 0u);
     scene_.set_view_settings(view_settings);
     const std::vector<gi_scene::viewer> viewers = schedule_viewers(frame);
-    if(viewers.empty())
-    {
-        // Nothing updates: the stats must not repeat the last update's counts.
-        scene_.clear_stats();
-        return;
-    }
     scene_.update(sources_, uint32_t(gi_scene.get_instances().size()), viewers);
     scene_.invalidate_direct_lighting(collect_direct_lighting_changes(gi_scene));
     scene_.schedule_lighting(viewers);
@@ -816,10 +843,9 @@ void gi_surface_cache::build_copy_tiles()
     {
         const auto& cap = captures[page];
         const int32_t resample_card = resamples ? cap.resample_card : -1;
-        const bool keeps_lighting = cap.keeps_lighting && resample_card >= 0;
-        // A page refreshed in place keeps its lighting where it is (cs_gi_card_copy.eshader): only reallocations
-        // resample.
-        has_resample_ = has_resample_ || (resample_card >= 0 && !keeps_lighting);
+        // A page refreshed in place keeps its lighting where it is (cs_gi_card_copy.eshader), the experiment or not:
+        // only reallocations resample.
+        has_resample_ = has_resample_ || resample_card >= 0;
         // The card's world axes (the card table's rows 1-3, gi_surface_cache.sh GiLoadCard): the copy stores
         // normals in them.
         const size_t card_row = size_t(cap.card_index) * gi_scene::card_stride;
@@ -833,7 +859,7 @@ void gi_surface_cache::build_copy_tiles()
         table.push_back(cap.card_uv_rect);
         table.emplace_back(0.0f, 0.0f, float(cap.size.x), float(cap.size.y));
         table.emplace_back(float(resample_card), axis_x.x, axis_x.y, axis_x.z);
-        table.emplace_back(axis_y, keeps_lighting ? 1.0f : 0.0f);
+        table.emplace_back(axis_y, cap.keeps_lighting ? 1.0f : 0.0f);
         table.emplace_back(axis_z, 0.0f);
         append_tile_words(words, page, cap.size);
     }
@@ -961,7 +987,7 @@ auto gi_surface_cache::compute_capture_view(const gi_scene::capture& cap) const 
 
 void gi_surface_cache::copy_captures()
 {
-    if(copy_tile_count_ == 0 || !is_ready() || !has_targets())
+    if(copy_tile_count_ == 0 || !begin_programs() || !has_targets())
     {
         return;
     }
@@ -971,7 +997,6 @@ void gi_surface_cache::copy_captures()
         resample_lighting();
     }
     gfx::render_pass pass("GI/Card Copy");
-    copy_program_->begin();
     bind_atlas_image(0, albedo_atlas_, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
     bind_atlas_image(1, normal_atlas_, bgfx::Access::Write, normal_atlas_format);
     bind_atlas_image(2, emissive_atlas_, bgfx::Access::Write, lighting_atlas_format);
@@ -999,7 +1024,6 @@ void gi_surface_cache::copy_captures()
 void gi_surface_cache::resample_lighting()
 {
     gfx::render_pass pass("GI/Card Lighting Resample");
-    resample_program_->begin();
     bind_atlas_image(0, resample_direct_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     bind_atlas_image(1, resample_indirect_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     gfx::set_texture(uniforms_.s_gi_card_direct, 3, direct_atlas_);
@@ -1020,28 +1044,11 @@ void gi_surface_cache::resample_lighting()
     resample_program_->end();
 }
 
-void gi_surface_cache::bind_sdf_instances(const surface_cache_system& gi_scene) const
-{
-    auto& atlas = const_cast<surface_cache_system&>(gi_scene).get_atlas();
-    gfx::set_texture(uniforms_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(3, gi_scene.get_instance_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(12, gi_scene.get_grid_buffer(), bgfx::Access::Read);
-    gfx::set_uniform(uniforms_.u_sdf_grid_params, gi_scene.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
-    const math::vec4 sdf_params(float(atlas.get_atlas_brick_dim()),
-                                float(atlas.get_atlas_voxel_dim()),
-                                float(gi_scene.get_instances().size()),
-                                0.0f);
-    gfx::set_uniform(uniforms_.u_sdf_params, sdf_params);
-}
-
 void gi_surface_cache::dispatch_direct(const lighting_inputs& inputs, uint32_t first, uint32_t count)
 {
     const auto& clipmap_gpu = inputs.view_cache->get_clipmap_gpu();
     const auto& light_buffer = inputs.gi_scene->get_light_buffer();
     gfx::render_pass pass("GI/Card Direct Lighting");
-    lighting_program_->begin();
     bind_atlas_image(0, direct_atlas_, bgfx::Access::Write, lighting_atlas_format);
     bind_atlas_image(1, final_atlas_, bgfx::Access::Write, final_atlas_format);
     gfx::set_texture(uniforms_.s_gi_card_albedo, 11, albedo_atlas_);
@@ -1099,7 +1106,6 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
     const uint32_t filter_groups_per_tile = gi_pass::divide_round_up(probes_per_tile, probes_per_filter_group);
     {
         gfx::render_pass pass("GI/Radiosity Trace");
-        radiosity_trace_program_->begin();
         bind_atlas_image(0, radiosity_trace_atlas_, bgfx::Access::Write, lighting_atlas_format);
         gfx::set_texture(uniforms_.s_gi_card_depth, 1, depth_atlas_);
         gfx::set_texture(uniforms_.s_gi_card_normal, 2, normal_atlas_);
@@ -1122,7 +1128,6 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
     }
     {
         gfx::render_pass pass("GI/Radiosity Filter SH");
-        radiosity_sh_program_->begin();
         bind_atlas_image(0, radiosity_sh_r_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         bind_atlas_image(1, radiosity_sh_g_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         bind_atlas_image(2, radiosity_sh_b_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -1139,7 +1144,6 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
     }
     {
         gfx::render_pass pass("GI/Radiosity Integrate");
-        radiosity_integrate_program_->begin();
         bind_atlas_image(0, indirect_atlas_, bgfx::Access::ReadWrite, lighting_atlas_format);
         bind_atlas_image(1, final_atlas_, bgfx::Access::Write, final_atlas_format);
         bind_atlas_image(2, radiosity_frames_, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32F);
@@ -1169,7 +1173,7 @@ void gi_surface_cache::light(const lighting_inputs& inputs, const void* viewer_k
         return;
     }
     const auto viewer = uint32_t(scheduled - scheduled_viewers_.begin());
-    if(!is_ready() || !has_targets() || inputs.gi_scene == nullptr || inputs.view_cache == nullptr ||
+    if(!begin_programs() || !has_targets() || inputs.gi_scene == nullptr || inputs.view_cache == nullptr ||
        !inputs.view_cache->get_clipmap_gpu().is_valid() || inputs.object_grid == nullptr ||
        !inputs.object_grid->has_grid())
     {
@@ -1216,7 +1220,7 @@ auto gi_surface_cache::get_debug_values(debug_mode mode) const -> const gfx::tex
 auto gi_surface_cache::run_debug(const debug_params& params) -> bool
 {
     APP_SCOPE_PERF("GI/Surface Cache Debug");
-    if(!is_ready() || !has_targets() || params.output == nullptr || params.cam == nullptr || params.gi_scene == nullptr ||
+    if(!begin_programs() || !has_targets() || params.output == nullptr || params.cam == nullptr || params.gi_scene == nullptr ||
        params.object_grid == nullptr)
     {
         return false;
@@ -1240,8 +1244,7 @@ auto gi_surface_cache::run_debug(const debug_params& params) -> bool
         bgfx::setViewScissor(pass.id, x, y, width, height);
     }
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-    debug_program_->begin();
-    bind_sdf_instances(gi_scene);
+    gi_scene.bind_sdf_instances(uniforms_.s_sdf_atlas, uniforms_.u_sdf_grid_params, uniforms_.u_sdf_params);
     if(params.view_cache != nullptr && params.view_cache->get_clipmap_gpu().is_valid())
     {
         const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();

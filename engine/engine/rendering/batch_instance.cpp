@@ -251,56 +251,7 @@ auto batch_instance_collection::get_gpu_memory_size() const -> size_t
     return instances_.size() * sizeof(instance_vertex_data);
 }
 
-// Utility functions
-
-auto pack_instance_data(const batch_instance& instance) -> instance_vertex_data
-{
-    return instance_vertex_data(instance);
-}
-
-void unpack_instance_data(const instance_vertex_data& vertex_data, 
-                         math::mat4& out_transform, 
-                         math::vec3& out_lod_params)
-{
-    // Direct matrix copy
-    out_transform = vertex_data.world_matrix;
-    
-    // Extract LOD parameter from matrix[3][3] and restore homogeneous coordinate
-    out_lod_params.x = vertex_data.get_lod_param();
-    out_transform[3][3] = 1.0f; // Restore homogeneous coordinate
-    
-    // Set default values for other LOD parameters
-    out_lod_params.y = -1.0f;
-    out_lod_params.z = 0.0f;
-}
-
-auto pack_instances_bulk(const std::vector<batch_instance>& instances) -> std::vector<instance_vertex_data>
-{
-    std::vector<instance_vertex_data> vertex_data;
-    vertex_data.reserve(instances.size());
-    
-    for (const auto& instance : instances)
-    {
-        vertex_data.emplace_back(instance);
-    }
-    
-    return vertex_data;
-}
-
-auto validate_instance_data_layout() -> bool
-{
-    // Verify structure sizes and alignment
-    static_assert(sizeof(instance_vertex_data) == sizeof(math::mat4), 
-                  "instance_vertex_data must be exactly one mat4");
-    
-    static_assert(alignof(instance_vertex_data) >= alignof(math::mat4),
-                  "instance_vertex_data must be properly aligned for mat4");
-    
-    // Runtime checks
-    bool size_check = sizeof(instance_vertex_data) == 64; // 4 * 16 bytes (mat4)
-    bool alignment_check = (sizeof(instance_vertex_data) % 16) == 0;
-    
-    return size_check && alignment_check;
-}
+static_assert(sizeof(instance_vertex_data) == sizeof(math::mat4), "instance_vertex_data must be exactly one mat4");
+static_assert(alignof(instance_vertex_data) >= alignof(math::mat4), "instance_vertex_data must be properly aligned for mat4");
 
 } // namespace unravel

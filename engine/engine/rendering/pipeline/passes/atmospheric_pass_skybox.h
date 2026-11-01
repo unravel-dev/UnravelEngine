@@ -26,7 +26,7 @@ public:
     bool init(rtti::context& ctx);
 
     // Run after geometry
-    void run(gfx::frame_buffer::ptr target, const camera& cam, gfx::render_view& rview, delta_t dt, const run_params& params);
+    void run(gfx::frame_buffer::ptr target, const camera& cam, gfx::render_view& rview, const run_params& params);
 
 private:
     struct skybox_program : uniforms_cache

@@ -1863,8 +1863,12 @@ void particle_emitter_component::refresh_render_mesh()
     {
         mesh_node_transforms_.clear();
     }
-    const auto& bounds = source->get_bounds();
-    mesh_radius_ = math::max(math::length(bounds.min), math::length(bounds.max));
+    // The farthest corner of the bounds from the origin.
+    mesh_radius_ = 0.0f;
+    for(const auto& corner : source->get_bounds().get_corners())
+    {
+        mesh_radius_ = math::max(mesh_radius_, math::length(corner));
+    }
     render_mesh_source_ = source.get();
     is_render_mesh_dirty_ = false;
     // This frame's instances were laid out for the previous mesh's submeshes.

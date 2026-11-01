@@ -45,7 +45,10 @@ public:
 
     /// Loads the readback copy and the table clear; false, with a warning, when either failed to load.
     auto init(rtti::context& ctx) -> bool;
+    /// Whether the programs loaded, for init() results.
     auto is_ready() const -> bool;
+    /// Whether the feedback can run this frame (gpu_program::begin), which also picks up reloaded shaders.
+    auto begin_programs() const -> bool;
 
     /// Starts this frame's feedback in view @p view_id, before the feedback pass: a new window, its table cleared, when
     /// the card indices are no longer the window's (@p card_index_revision, gi_scene::get_card_index_revision).

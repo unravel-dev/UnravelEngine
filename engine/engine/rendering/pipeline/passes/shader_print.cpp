@@ -1,4 +1,5 @@
 #include "shader_print.h"
+#include "pass_helpers.h"
 #include "shader_print_font.h"
 
 #include <engine/assets/asset_manager.h>
@@ -114,7 +115,7 @@ void shader_print::draw(const gfx::frame_buffer::ptr& output)
     auto& program = draw_program_;
     const uint32_t frame = gfx::get_render_frame();
     const bool has_prints = has_bound_ && bound_frame_ == frame && has_cleared_ && cleared_frame_ == frame;
-    if(!has_prints || !output || !program.program || !program.program->is_valid())
+    if(!has_prints || !output || !begin_program(program.program))
     {
         return;
     }
@@ -124,7 +125,6 @@ void shader_print::draw(const gfx::frame_buffer::ptr& output)
     }
     gfx::render_pass pass("Shader Print");
     pass.bind(output.get());
-    program.program->begin();
     bgfx::setBuffer(draw_buffer_stage, buffer_, bgfx::Access::Read);
     gfx::set_texture(program.s_shader_print_font, draw_font_stage, font_);
     const math::vec4 print(float(view_size_.width), float(view_size_.height), float(max_symbols), 0.0f);

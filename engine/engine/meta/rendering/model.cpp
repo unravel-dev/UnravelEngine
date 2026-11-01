@@ -196,6 +196,8 @@ LOAD(model)
     try_load(ar, ser20::make_nvp("materials", obj.materials_));
     obj.material_instances_ = load_material_instances(ar, obj.material_instances_);
     obj.sync_material_instances();
+    // The saved list may be from before a reimport changed the mesh's material count.
+    obj.fit_materials_to_mesh();
     try_load(ar, ser20::make_nvp("lod_override_enabled", obj.lod_override_enabled_));
     try_load(ar, ser20::make_nvp("lod_override_level", obj.lod_override_level_));
     try_load(ar, ser20::make_nvp("lod_selection_bias", obj.lod_selection_bias_));

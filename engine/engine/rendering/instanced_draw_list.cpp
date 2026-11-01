@@ -44,7 +44,7 @@ auto get_tile(float coordinate) -> uint32_t
 /// The tile of the matrix's position, as a key that orders tiles row by row (z, then x) like their coordinates.
 auto get_tile_key(const math::mat4& transform) -> uint64_t
 {
-    if(!std::isfinite(transform[3].x) || !std::isfinite(transform[3].z))
+    if(!std::isfinite(transform[3].x) || !std::isfinite(transform[3].y) || !std::isfinite(transform[3].z))
     {
         return NON_FINITE_TILE_KEY;
     }
@@ -142,6 +142,8 @@ auto instanced_cluster::get_mesh_shadow_key() const -> uint64_t
     std::size_t key = XXH3_64bits(first, size_t(count_) * stride * sizeof(math::mat4));
     if(item.animation)
     {
+        // Frame numbers mean something within one bake only.
+        utils::hash_combine(key, item.animation->get_id());
         utils::hash_combine(key,
                             XXH3_64bits(owner_->placed_frames_.data() + first_placed,
                                         size_t(count_) * stride * sizeof(instanced_draw_list::baked_frames)));

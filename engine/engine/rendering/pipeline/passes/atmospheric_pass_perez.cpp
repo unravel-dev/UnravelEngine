@@ -1,23 +1,22 @@
 #include "atmospheric_pass_perez.h"
+#include "pass_helpers.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/atmosphere_sky_irradiance.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/perez_luminance.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
+#include <bx/math.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <iterator>
+#include <map>
 
 namespace unravel
 {
 
 namespace
-{
-#ifndef ANONYMOUS
-#define ANONYMOUS anonymous
-#endif
-namespace ANONYMOUS
 {
 // Represents color. Color-space depends on context.
 // In the code below, used to represent color in XYZ, and RGB color-space
@@ -37,14 +36,13 @@ public:
     value_type get_value(float time) const
     {
         auto itUpper = key_map_.upper_bound(time + 1e-6f);
-        auto itLower = itUpper;
-        --itLower;
-
-        if(itLower == key_map_.end())
+        // Before the first key and past the last, the value holds.
+        if(itUpper == key_map_.begin())
         {
             return itUpper->second;
         }
 
+        auto itLower = std::prev(itUpper);
         if(itUpper == key_map_.end())
         {
             return itLower->second;
@@ -200,7 +198,6 @@ float hour_of_day(math::vec3 sun_dir)
     // Return the hour of day
     return hour_of_day;
 }
-}
 } // namespace
 
 atmospheric_pass_perez::~atmospheric_pass_perez()
@@ -266,9 +263,7 @@ auto atmospheric_pass_perez::init(rtti::context& ctx) -> bool
         gfx::screen_pos_vertex::get_layout());
     ib_ = std::make_unique<gfx::index_buffer>(bgfx::copy(indices.data(), sizeof(uint16_t) * k));
 
-    sun_.update(0);
-
-    return true;
+    return atmospheric_program_.program->is_valid();
 }
 
 namespace
@@ -387,8 +382,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     cloud_shadow_result result;
     // Cloud shadows off, nothing renders or reads the map: the lights take no cloud shadow and the sky irradiance no
     // cloud coverage.
-    if(params.cloud_mode == 0 || !params.cloud_shadows || !cloud_shadow_program_.program ||
-       !cloud_shadow_program_.program->is_valid())
+    if(params.cloud_mode == 0 || !params.cloud_shadows || !begin_program(cloud_shadow_program_.program))
     {
         return result;
     }
@@ -418,16 +412,11 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     const auto& tex = rview.tex_acquire(
         cloud_shadow_tex_key,
         {.size = size, .format = bgfx::TextureFormat::R8, .flags = flags, .has_mips = true});
-    auto& fbo = rview.fbo_acquire(cloud_shadow_fbo_key);
-    if(gfx::needs_recreate(fbo, {tex}))
-    {
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({tex});
-    }
+    const auto fbo = acquire_frame_buffer(rview, cloud_shadow_fbo_key, {tex});
 
     irradiance_perez_params perez;
     compute_irradiance_perez_params(params.light_direction, params.turbidity, params.sun_intensity, perez);
-    const float hour = ANONYMOUS::hour_of_day(-params.light_direction);
+    const float hour = hour_of_day(-params.light_direction);
     const cloud_uniform_block uniforms = make_cloud_uniforms(params, camera, perez.exposition, hour);
 
     gfx::render_pass pass("Atmospherics/Cloud Shadow Map");
@@ -435,7 +424,6 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     pass.set_view_proj(camera.get_view_relative(), camera.get_projection());
     pass.clear(BGFX_CLEAR_COLOR, 0xFFFFFFFF, 0.0f, 0);
 
-    cloud_shadow_program_.program->begin();
     gfx::set_uniform(cloud_shadow_program_.u_sunDirection, perez.sun_direction);
     gfx::set_uniform(cloud_shadow_program_.u_cloudParams, uniforms.cloud_params);
     gfx::set_uniform(cloud_shadow_program_.u_cloudParams2, uniforms.cloud_params2);
@@ -568,13 +556,7 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     gfx::frame_buffer::ptr cloud_fbo[2];
     for(int i = 0; i < 2; ++i)
     {
-        auto& fbo = rview.fbo_acquire(cloud_fbo_keys[i]);
-        if(gfx::needs_recreate(fbo, {cloud_tex[i], cloud_aux[i]}))
-        {
-            fbo = std::make_shared<gfx::frame_buffer>();
-            fbo->populate({cloud_tex[i], cloud_aux[i]});
-        }
-        cloud_fbo[i] = fbo;
+        cloud_fbo[i] = acquire_frame_buffer(rview, cloud_fbo_keys[i], {cloud_tex[i], cloud_aux[i]});
     }
     if(recreated)
     {
@@ -588,8 +570,6 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     cloud_pass.bind(cloud_fbo[cur].get());
     cloud_pass.set_view_proj(view, proj);
     cloud_pass.clear(BGFX_CLEAR_COLOR, 0x000000FF, 0.0f, 0);
-
-    cloud_program_.program->begin();
 
     gfx::set_uniform(cloud_program_.u_skyLuminanceXYZ, perez.sky_luminance_xyz);
     gfx::set_uniform(cloud_program_.u_skyLuminance, perez.sky_luminance_rgb);
@@ -671,7 +651,7 @@ void atmospheric_pass_perez::run_cloud_composite(gfx::frame_buffer* surface,
                                                  const cloud_prepass_result& prepass,
                                                  bool is_layer_beyond_geometry)
 {
-    if(!prepass.cloud || !prepass.aux || !cloud_composite_program_.program || !cloud_composite_program_.program->is_valid())
+    if(!prepass.cloud || !prepass.aux || !begin_program(cloud_composite_program_.program))
     {
         return;
     }
@@ -679,7 +659,6 @@ void atmospheric_pass_perez::run_cloud_composite(gfx::frame_buffer* surface,
     pass.bind(surface);
     pass.set_view_proj(camera.get_view_relative(), camera.get_projection());
 
-    cloud_composite_program_.program->begin();
     const float composite[4] = {1.0f / float(prepass.size.width),
                                 1.0f / float(prepass.size.height),
                                 float(prepass.size.width),
@@ -709,7 +688,6 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
                                  gfx::frame_buffer::ptr composite_target,
                                  const camera& camera,
                                  gfx::render_view& rview,
-                                 delta_t dt,
                                  const run_params& params)
 {
     const auto& view = camera.get_view_relative();
@@ -723,7 +701,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     // The visible sky and the clouds are scene lighting: written with the view's pre-exposure.
     perez.exposition *= params.sky_brightness * params.pre_exposure.value;
 
-    const float hour = ANONYMOUS::hour_of_day(-params.light_direction);
+    const float hour = hour_of_day(-params.light_direction);
     const cloud_uniform_block uniforms = make_cloud_uniforms(params, camera, perez.exposition, hour);
 
     // === Pass 1: cloud pre-pass at half resolution with temporal accumulation ===
@@ -731,7 +709,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     const gfx::texture::ptr depth = surface->get_attachment_count() > 1 ? surface->get_texture(1) : gfx::texture::ptr{};
     cloud_prepass_result prepass;
     const bool volumetric = params.cloud_mode == cloud_mode_volumetric;
-    if(volumetric && cloud_program_.program && cloud_program_.program->is_valid())
+    if(volumetric && begin_program(cloud_program_.program))
     {
         if(is_layer_in_view(params, camera))
         {
@@ -754,10 +732,8 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     pass.bind(surface);
     pass.set_view_proj(view, proj);
 
-    if(atmospheric_program_.program->is_valid())
+    if(atmospheric_program_.program->begin())
     {
-        atmospheric_program_.program->begin();
-
         gfx::set_uniform(atmospheric_program_.u_sunLuminance, perez.sun_luminance_rgb);
         gfx::set_uniform(atmospheric_program_.u_skyLuminanceXYZ, perez.sky_luminance_xyz);
         gfx::set_uniform(atmospheric_program_.u_skyLuminance, perez.sky_luminance_rgb);
@@ -820,10 +796,10 @@ auto compute_perez_sun_weight(float sun_altitude) -> float
 namespace
 {
 /// cs_irradiance_sh.eshader num_samples: the bake's fixed Hammersley set.
-constexpr int k_perez_bake_samples = 64;
+constexpr int PEREZ_BAKE_SAMPLES = 64;
 /// Below this the luminance tables have collapsed (night); a solved exposition would only
 /// amplify their residual, so the fixed conversion takes over.
-constexpr float k_perez_min_unit_irradiance = 1e-3f;
+constexpr float PEREZ_MIN_UNIT_IRRADIANCE = 1e-3f;
 
 auto radical_inverse_vdc(uint32_t bits) -> float
 {
@@ -867,10 +843,10 @@ auto compute_perez_horizontal_irradiance(const irradiance_perez_params& perez) -
     float sh1 = 0.0f;
     float sh7 = 0.0f;
     float sh8 = 0.0f;
-    const float d_omega = 2.0f * math::pi<float>() / float(k_perez_bake_samples);
-    for(int i = 0; i < k_perez_bake_samples; ++i)
+    const float d_omega = 2.0f * math::pi<float>() / float(PEREZ_BAKE_SAMPLES);
+    for(int i = 0; i < PEREZ_BAKE_SAMPLES; ++i)
     {
-        const float e_x = float(i) / float(k_perez_bake_samples);
+        const float e_x = float(i) / float(PEREZ_BAKE_SAMPLES);
         const float e_y = radical_inverse_vdc(uint32_t(i));
         const float phi = 2.0f * math::pi<float>() * e_x;
         const float cos_theta = 1.0f - e_y;
@@ -910,14 +886,14 @@ void compute_perez_luminance(const math::vec3& light_direction,
                              math::vec3& out_sky_luminance_rgb,
                              math::vec3& out_sun_luminance_rgb)
 {
-    auto hour = ANONYMOUS::hour_of_day(-light_direction);
-    ANONYMOUS::dynamic_value_controller sun_luminance_dc(ANONYMOUS::sunLuminanceXYZTable);
-    ANONYMOUS::dynamic_value_controller sky_luminance_dc(ANONYMOUS::skyLuminanceXYZTable);
+    auto hour = hour_of_day(-light_direction);
+    dynamic_value_controller sun_luminance_dc(sunLuminanceXYZTable);
+    dynamic_value_controller sky_luminance_dc(skyLuminanceXYZTable);
     auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour);
-    auto sunLuminanceRGB = ANONYMOUS::xyzToRgb(sunLuminanceXYZ);
+    auto sunLuminanceRGB = xyzToRgb(sunLuminanceXYZ);
     out_sun_luminance_rgb = math::vec3(sunLuminanceRGB.x, sunLuminanceRGB.y, sunLuminanceRGB.z);
     auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour);
-    auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
+    auto skyLuminanceRGB = xyzToRgb(skyLuminanceXYZ);
     out_sky_luminance_rgb = math::vec3(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
 }
 
@@ -929,22 +905,22 @@ void compute_irradiance_perez_params(const math::vec3& light_direction,
     math::vec3 sun_dir(-light_direction.x, -light_direction.y, -light_direction.z);
     sun_dir = math::normalize(sun_dir);
 
-    auto hour = ANONYMOUS::hour_of_day(-light_direction);
-    ANONYMOUS::dynamic_value_controller sun_luminance_dc(ANONYMOUS::sunLuminanceXYZTable);
-    ANONYMOUS::dynamic_value_controller sky_luminance_dc(ANONYMOUS::skyLuminanceXYZTable);
+    auto hour = hour_of_day(-light_direction);
+    dynamic_value_controller sun_luminance_dc(sunLuminanceXYZTable);
+    dynamic_value_controller sky_luminance_dc(skyLuminanceXYZTable);
     auto sunLuminanceXYZ = sun_luminance_dc.get_value(hour);
-    auto sunLuminanceRGB = ANONYMOUS::xyzToRgb(sunLuminanceXYZ);
+    auto sunLuminanceRGB = xyzToRgb(sunLuminanceXYZ);
     out.sun_luminance_rgb = math::vec3(sunLuminanceRGB.x, sunLuminanceRGB.y, sunLuminanceRGB.z);
 
     auto skyLuminanceXYZ = sky_luminance_dc.get_value(hour);
     out.sky_luminance_xyz =
         math::vec3(skyLuminanceXYZ.x, skyLuminanceXYZ.y, skyLuminanceXYZ.z);
-    auto skyLuminanceRGB = ANONYMOUS::xyzToRgb(skyLuminanceXYZ);
+    auto skyLuminanceRGB = xyzToRgb(skyLuminanceXYZ);
     out.sky_luminance_rgb = math::vec3(skyLuminanceRGB.x, skyLuminanceRGB.y, skyLuminanceRGB.z);
 
     out.sun_direction = sun_dir;
 
-    ANONYMOUS::compute_perez_coeff(turbidity, &out.perez_coeff[0][0]);
+    compute_perez_coeff(turbidity, &out.perez_coeff[0][0]);
     out.horizontal_irradiance_unit = compute_perez_horizontal_irradiance(out);
 
     // The one shared Perez -> engine conversion (see perez_luminance.h): the sky dome,
@@ -957,7 +933,7 @@ void compute_irradiance_perez_params(const math::vec3& light_direction,
     const float fixed_exposition = compute_perez_exposition(sun_dir.y);
     out.exposition = fixed_exposition;
     out.sun_relative = false;
-    if(sun_intensity > 0.0f && out.horizontal_irradiance_unit > k_perez_min_unit_irradiance)
+    if(sun_intensity > 0.0f && out.horizontal_irradiance_unit > PEREZ_MIN_UNIT_IRRADIANCE)
     {
         const float solved = compute_atmosphere_sky_to_sun_ratio(sun_dir.y) * sun_intensity / out.horizontal_irradiance_unit;
         out.exposition = bx::lerp(fixed_exposition, solved, compute_perez_sun_weight(sun_dir.y));

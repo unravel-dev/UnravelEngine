@@ -3,6 +3,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gpu_resource_utils.h>
 #include <engine/rendering/render_feature_support.h>
 #include <graphics/device_caps.h>
 #include <graphics/graphics.h>
@@ -167,15 +168,7 @@ auto refresh(const std::shared_ptr<gpu_program>& program) -> bool
     return is_valid;
 }
 
-template<typename Handle>
-void destroy_handle(Handle& handle)
-{
-    if(bgfx::isValid(handle))
-    {
-        bgfx::destroy(handle);
-        handle = BGFX_INVALID_HANDLE;
-    }
-}
+using gpu_resource::destroy_handle;
 
 /// Dispatches @p threads threads of @p program in groups of gpu_group_threads. Groups past one dimension's limit
 /// fold into rows: the shader's thread index is gl_GlobalInvocationID.y x (k_max_dispatch_groups x
@@ -191,7 +184,6 @@ void dispatch_threads(bgfx::ViewId view, bgfx::ProgramHandle program, uint32_t t
 
 void particle_gpu::init(rtti::context& ctx)
 {
-    vec4_layout_.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
     quad_layout_.begin()
         .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
@@ -545,7 +537,7 @@ void particle_gpu::ensure_cutout_buffer()
     }
     destroy_handle(cutout_buffer_);
     cutout_buffer_capacity_ = grow_capacity(cutout_buffer_capacity_, required, k_min_cutout_vec4s);
-    cutout_buffer_ = bgfx::createDynamicVertexBuffer(cutout_buffer_capacity_, vec4_layout_, BGFX_BUFFER_COMPUTE_READ);
+    cutout_buffer_ = bgfx::createDynamicVertexBuffer(cutout_buffer_capacity_, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
     cutouts_dirty_ = true;
 }
 
@@ -604,7 +596,7 @@ void particle_gpu::ensure_tables()
     }
     destroy_handle(static_table_);
     destroy_handle(dynamic_table_);
-    static_table_ = bgfx::createDynamicVertexBuffer(rows * static_row_vec4s, vec4_layout_, BGFX_BUFFER_COMPUTE_READ);
+    static_table_ = bgfx::createDynamicVertexBuffer(rows * static_row_vec4s, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
     dynamic_table_ =
         bgfx::createDynamicIndexBuffer(rows * dynamic_row_uints, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
     table_rows_ = rows;
@@ -651,7 +643,7 @@ void particle_gpu::ensure_lut_atlas()
     }
     const uint32_t blocks = grow_capacity(lut_atlas_blocks_, lut_block_count_, k_min_lut_blocks);
     destroy_handle(lut_atlas_);
-    lut_atlas_ = bgfx::createDynamicVertexBuffer(blocks * lut_set_vec4s, vec4_layout_, BGFX_BUFFER_COMPUTE_READ);
+    lut_atlas_ = bgfx::createDynamicVertexBuffer(blocks * lut_set_vec4s, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
     lut_atlas_blocks_ = blocks;
     // A new atlas holds nothing yet: upload every live block.
     dirty_lut_blocks_.clear();

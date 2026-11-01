@@ -114,12 +114,38 @@ void rebuild_submesh_entries(submesh_component& comp,
     }
 }
 
-/// The node entities a rebuild walk binds, and among them those it had to create.
+/// The node entities a rebuild walk binds for @p owner, and among them those it had to create.
 struct armature_walk
 {
+    entt::handle owner;
     std::vector<entt::handle> nodes;
     std::vector<entt::handle> created_nodes;
 };
+
+/// The parent of @p entity in the transform hierarchy, or an empty handle.
+auto get_parent_entity(entt::handle entity) -> entt::handle
+{
+    const auto* transform_comp = entity.try_get<transform_component>();
+    return transform_comp ? transform_comp->get_parent() : entt::handle{};
+}
+
+/// Whether @p owner is the nearest model above @p node. A model placed under a node of @p owner binds the entities below
+/// it itself, whatever their names.
+auto is_node_of_model(entt::handle node, entt::handle owner) -> bool
+{
+    for(auto parent = get_parent_entity(node); parent; parent = get_parent_entity(parent))
+    {
+        if(parent == owner)
+        {
+            return true;
+        }
+        if(parent.any_of<model_component>())
+        {
+            return false;
+        }
+    }
+    return false;
+}
 
 auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
                        const mesh& render_mesh,
@@ -153,10 +179,16 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
 
         walk.nodes.emplace_back(entity_node);
 
+        // The mesh decides what a node is: an entity reused by name stops being what another mesh made it.
+        const bool is_own_node = is_node_of_model(entity_node, walk.owner);
         if(!node->submeshes.empty())
         {
             auto& comp = entity_node.get_or_emplace<submesh_component>();
             rebuild_submesh_entries(comp, node->submeshes, render_mesh);
+        }
+        else if(is_own_node)
+        {
+            entity_node.remove<submesh_component>();
         }
 
         auto query = bind_data.find_bone_by_id(node->name);
@@ -164,6 +196,10 @@ auto process_node_impl(const std::unique_ptr<mesh::armature_node>& node,
         {
             auto& comp = entity_node.get_or_emplace<bone_component>();
             comp.bone_index = query.index;
+        }
+        else if(is_own_node)
+        {
+            entity_node.remove<bone_component>();
         }
 
         // Instead of storing anything in a bone_component,
@@ -216,13 +252,6 @@ auto process_armature(const mesh& render_mesh, entt::handle parent, armature_wal
 auto contains_entity(const std::vector<entt::handle>& entities, entt::handle entity) -> bool
 {
     return std::find(entities.begin(), entities.end(), entity) != entities.end();
-}
-
-/// The parent of @p entity in the transform hierarchy, or an empty handle.
-auto get_parent_entity(entt::handle entity) -> entt::handle
-{
-    const auto* transform_comp = entity.try_get<transform_component>();
-    return transform_comp ? transform_comp->get_parent() : entt::handle{};
 }
 
 /// Whether @p entity and everything under it belongs to @p entities.
@@ -481,6 +510,7 @@ auto model_component::create_armature(bool force, std::vector<entt::handle>* cre
         auto owner = get_owner();
 
         armature_walk walk;
+        walk.owner = owner;
         // The walk appends every node to the reference pose, so it starts over.
         bind_pose_ = {};
         if(process_armature(*mesh, owner, walk, bind_pose_))
@@ -494,9 +524,10 @@ auto model_component::create_armature(bool force, std::vector<entt::handle>* cre
 
             const auto& skin_data = mesh->get_skin_bind_data();
             // Has skinning data?
-            if(skin_data.has_bones())
+            if(skin_data.has_bones() && static_)
             {
                 set_static(false);
+                is_dynamic_for_skinning_ = true;
             }
 
             return true;
@@ -542,6 +573,25 @@ auto model_component::update_armature() -> bool
         true);
 }
 
+auto model_component::track_stale_pose(bool is_moved) noexcept -> bool
+{
+    if(!render_proxies_stale_)
+    {
+        has_moved_while_stale_ = false;
+        is_stale_pose_in_view_ = false;
+        return false;
+    }
+    has_moved_while_stale_ = has_moved_while_stale_ || is_moved;
+    return has_moved_while_stale_;
+}
+
+auto model_component::take_stale_view_entry(bool is_in_view) noexcept -> bool
+{
+    const bool has_entered = is_in_view && !is_stale_pose_in_view_;
+    is_stale_pose_in_view_ = is_in_view;
+    return has_entered;
+}
+
 auto model_component::refresh_armature_pose(const mesh& render_mesh) -> bool
 {
     const auto& armature_entities = get_armature_entities();
@@ -571,72 +621,69 @@ auto model_component::refresh_armature_pose(const mesh& render_mesh) -> bool
     pose_dirty_ = false;
     render_proxies_stale_ = false;
 
-    // Has skinning data?
-    if(skin_data.has_bones())
+    const auto& palettes = render_mesh.get_bone_palettes();
+    // Nothing to skin with, also when a mesh reloaded in place lost its bones: no palette is left to draw with.
+    if(!skin_data.has_bones() || palettes.empty())
     {
-        const auto& palettes = render_mesh.get_bone_palettes();
-        const size_t palette_count = palettes.size();
-        
-        // Early exit if no palettes
-        if(palette_count == 0)
+        is_pose_changed = is_pose_changed || !skinning_pose_.empty();
+        skinning_pose_.clear();
+        return is_pose_changed;
+    }
+
+    const size_t palette_count = palettes.size();
+
+    skinning_pose_.resize(palette_count);
+    
+    // Cache bone transforms reference to avoid repeated lookups
+    const auto& bone_transforms = bone_pose_.transforms;
+    const auto& bones = skin_data.get_bones();
+
+    // Animated world-space bounds per skinned submesh: union of each palette bone's
+    // bind-space bounds transformed by its current world transform. Any vertex skinned
+    // by the palette is a convex combination of per-bone transformed points, so the
+    // enclosing AABB of all bone boxes is a valid conservative bound.
+    render_proxies_.skinned_bounds.assign(render_mesh.get_submeshes_count(0), math::bbox{});
+    const auto& submeshes = render_mesh.get_submeshes(0);
+
+    for(size_t i = 0; i < palette_count; ++i)
+    {
+        const auto& palette = palettes[i];
+        // Apply the bone palette.
+        skinning_pose_[i].transforms = palette.get_skinning_matrices(bone_transforms, skin_data);
+
+        // Palettes map 1:1 to submeshes (bind_skin creates one per submesh, in order);
+        // only skinned submeshes carry meaningful palette bones/bounds.
+        if(i < submeshes.size() && submeshes[i] != nullptr && !submeshes[i]->skinned)
         {
-            return is_pose_changed;
+            continue;
         }
-        
-        skinning_pose_.resize(palette_count);
-        
-        // Cache bone transforms reference to avoid repeated lookups
-        const auto& bone_transforms = bone_pose_.transforms;
-        const auto& bones = skin_data.get_bones();
 
-        // Animated world-space bounds per skinned submesh: union of each palette bone's
-        // bind-space bounds transformed by its current world transform. Any vertex skinned
-        // by the palette is a convex combination of per-bone transformed points, so the
-        // enclosing AABB of all bone boxes is a valid conservative bound.
-        render_proxies_.skinned_bounds.assign(render_mesh.get_submeshes_count(0), math::bbox{});
-        const auto& submeshes = render_mesh.get_submeshes(0);
-
-        for(size_t i = 0; i < palette_count; ++i)
+        math::bbox submesh_bounds{};
+        for(uint32_t bone_index : palette.get_bones())
         {
-            const auto& palette = palettes[i];
-            // Apply the bone palette.
-            skinning_pose_[i].transforms = palette.get_skinning_matrices(bone_transforms, skin_data);
-
-            // Palettes map 1:1 to submeshes (bind_skin creates one per submesh, in order);
-            // only skinned submeshes carry meaningful palette bones/bounds.
-            if(i < submeshes.size() && submeshes[i] != nullptr && !submeshes[i]->skinned)
+            // Unpopulated bounds mean the bone has no weighted vertex influences (e.g.
+            // assimp's zero-weight root joint entry) - it deforms nothing, so skipping
+            // it is exact, not merely conservative. On legacy assets without per-bone
+            // bounds every bone is skipped and the bounds simply stay unpopulated,
+            // which consumers already treat as "no cached data" (draw conservatively).
+            if(bone_index >= bones.size() || bone_index >= bone_transforms.size() ||
+               !bones[bone_index].bounds.is_populated())
             {
                 continue;
             }
 
-            math::bbox submesh_bounds{};
-            for(uint32_t bone_index : palette.get_bones())
-            {
-                // Unpopulated bounds mean the bone has no weighted vertex influences (e.g.
-                // assimp's zero-weight root joint entry) - it deforms nothing, so skipping
-                // it is exact, not merely conservative. On legacy assets without per-bone
-                // bounds every bone is skipped and the bounds simply stay unpopulated,
-                // which consumers already treat as "no cached data" (draw conservatively).
-                if(bone_index >= bones.size() || bone_index >= bone_transforms.size() ||
-                   !bones[bone_index].bounds.is_populated())
-                {
-                    continue;
-                }
+            const auto bone_world_bounds = math::bbox::mul(bones[bone_index].bounds, bone_transforms[bone_index]);
+            submesh_bounds.add_point(bone_world_bounds.min);
+            submesh_bounds.add_point(bone_world_bounds.max);
+        }
 
-                const auto bone_world_bounds = math::bbox::mul(bones[bone_index].bounds, bone_transforms[bone_index]);
-                submesh_bounds.add_point(bone_world_bounds.min);
-                submesh_bounds.add_point(bone_world_bounds.max);
-            }
-
-            if(submesh_bounds.is_populated() && i < render_proxies_.skinned_bounds.size())
-            {
-                render_proxies_.skinned_bounds[i] = submesh_bounds;
-                render_proxies_.animated_bounds.add_point(submesh_bounds.min);
-                render_proxies_.animated_bounds.add_point(submesh_bounds.max);
-            }
+        if(submesh_bounds.is_populated() && i < render_proxies_.skinned_bounds.size())
+        {
+            render_proxies_.skinned_bounds[i] = submesh_bounds;
+            render_proxies_.animated_bounds.add_point(submesh_bounds.min);
+            render_proxies_.animated_bounds.add_point(submesh_bounds.max);
         }
     }
-
     return is_pose_changed;
 }
 
@@ -647,6 +694,7 @@ auto model_component::init_armature(bool force, std::vector<entt::handle>* creat
     {
         // No mesh binds any node: every node the previous mesh bound is stale.
         settle_previous_armature();
+        restore_static_after_skinning();
         return false;
     }
 
@@ -661,6 +709,11 @@ auto model_component::init_armature(bool force, std::vector<entt::handle>* creat
             has_bones = loaded != nullptr && loaded->get_skin_bind_data().has_bones();
         },
         true);
+
+    if(!has_bones)
+    {
+        restore_static_after_skinning();
+    }
 
     bool recreate_armature = force;
     // Built once its node entities exist. The pose is no proof: a model activated after this
@@ -726,6 +779,14 @@ auto model_component::take_stale_armature_entities() -> std::vector<entt::handle
     return stale;
 }
 
+void model_component::restore_static_after_skinning()
+{
+    if(is_dynamic_for_skinning_)
+    {
+        set_static(true);
+    }
+}
+
 void model_component::settle_previous_armature()
 {
     if(!armature_rebuild_pending_)
@@ -781,8 +842,6 @@ void model_component::refresh_world_bounds(const mesh& render_mesh, const math::
                 render_dirty_.set(dirty_ids::render_change);
             }
         });
-
-    world_bounds_transform_ = world_transform;
 
     // Anchor transform for the conservative culling bounds. Root motion baked into bone
     // animation moves the topmost bone, not the owner, so anchoring to it keeps the
@@ -885,11 +944,6 @@ void model_component::refresh_world_bounds(const mesh& render_mesh, const math::
 auto model_component::get_world_bounds() const -> const math::bbox&
 {
     return world_bounds_;
-}
-
-auto model_component::get_world_bounds_transform() const -> const math::transform&
-{
-    return world_bounds_transform_;
 }
 
 auto model_component::get_local_bounds(uint32_t lod_index) const -> const math::bbox&
@@ -1014,6 +1068,11 @@ void model_component::on_create_component(entt::registry& r, entt::entity e)
     component.armature_rebuild_pending_ = false;
     // Nor with its change history: to every system it is a new model.
     component.pending_changes_ = render_change::all;
+    // Nor with the source's motion: its previous matrices are where the source was.
+    component.velocity_initialized_ = false;
+    component.has_motion_ = false;
+    component.prev_submesh_pose_.clear();
+    component.prev_skinning_pose_.clear();
 }
 
 void model_component::on_destroy_component(entt::registry& r, entt::entity e)
@@ -1082,6 +1141,7 @@ void model_component::set_casts_shadow(bool cast_shadow)
 
 void model_component::set_static(bool is_static)
 {
+    is_dynamic_for_skinning_ = false;
     if(static_ == is_static)
     {
         return;
@@ -1129,6 +1189,13 @@ void model_component::set_model(const model& model)
                                            armature_entities_.end());
         set_armature_entities({});
         armature_rebuild_pending_ = true;
+    }
+
+    if(is_mesh_changed)
+    {
+        // The palettes of the old mesh mean nothing to the new one, and a model with any counts as skinned.
+        skinning_pose_.clear();
+        prev_skinning_pose_.clear();
     }
 
     // Different mesh asset - poses/proxies and captured bounds derived from the old one
@@ -1265,6 +1332,8 @@ void model_component::update_change_stamps(uint64_t frame, render_change::mask c
     {
         geometry_key_ = geometry_key;
         changes |= render_change::geometry;
+        // The arriving mesh may have more or fewer materials than the slots the model was saved or made with.
+        model_.fit_materials_to_mesh();
     }
     // A material edit, or a texture loading or reloading, changes only the aspects it touched
     // (get_material_property_traits).

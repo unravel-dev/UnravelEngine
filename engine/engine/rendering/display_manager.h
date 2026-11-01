@@ -88,12 +88,28 @@ ENGINE_EXPORT auto find_closest_display_mode(const std::vector<os::display::mode
 /// available one.
 ENGINE_EXPORT auto fit_windowed_size(const usize32_t& requested, const usize32_t& available) -> usize32_t;
 
+/// Which of a run's window options the command line set: they last that run and never reach the saved options.
+struct window_option_sources
+{
+    bool is_mode_from_command_line{};
+    /// The size and refresh rate.
+    bool is_size_from_command_line{};
+    bool is_display_from_command_line{};
+};
+
+/// Copies the window's mode, size, refresh rate and display from `current` to `saved`, except what the command line set;
+/// true when `saved` changed.
+ENGINE_EXPORT auto keep_run_window_options(display_options& saved,
+                                           const display_options& current,
+                                           const window_option_sources& sources) -> bool;
+
 /**
  * @brief The player's display options: how the main window covers which display, vsync and the frame cap.
  *
  * Loaded from the user's folder before the main window is created and saved there when a script changes them, so
  * the game starts the way the player left it; a window the player resizes or moves keeps its size and display. The
- * command line changes them for one run. Only the player has one: the editor's window is not the game's to change.
+ * command line changes them for one run: a mode, size or display it set stays out of the saved options unless a script
+ * chooses one. Only the player has one: the editor's window is not the game's to change.
  */
 class ENGINE_EXPORT display_manager
 {
@@ -157,6 +173,8 @@ private:
     display_options saved_options_{};
     /// Whether the player resized or moved the window since the last save.
     bool has_unsaved_window_{};
+    /// The window options the command line set and no script has chosen since.
+    window_option_sources window_sources_{};
 };
 
 } // namespace unravel

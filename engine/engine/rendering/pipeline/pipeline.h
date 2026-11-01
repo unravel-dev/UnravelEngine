@@ -371,6 +371,7 @@ public:
      * @param dt The frame's time step: the camera's velocity over it stretches the particles that stretch against
      *        it.
      * @param fog The fog the scene was composited with (fog_pass::run); the particles fog themselves with it.
+     * @param limits The run's limits: lit particles read each light as they render it (limit_light).
      * @return The particles' TAA reactive coverage (R8: the largest coverage x taa_response over each pixel)
      *         when particles drew into it this frame; null otherwise.
      */
@@ -384,6 +385,7 @@ public:
                                    bool wants_reactive,
                                    delta_t dt,
                                    const fog_pass::shader_params& fog,
+                                   const feature_limits& limits,
                                    layer_mask render_mask) -> gfx::texture::ptr;
 
     /// Whether @p entity is on a layer @p render_mask draws (an entity without layers is drawn).

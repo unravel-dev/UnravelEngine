@@ -218,14 +218,20 @@ public:
     void release_material_instance(uint32_t id);
 
 private:
-    /**
-     * @brief Renders particles to the specified framebuffer.
-     * @param output The output framebuffer.
-     * @param camera The camera for rendering.
-     * @param scene The scene containing particles.
-     * @param dt Delta time.
-     */
+    /// Draws the debug callbacks over what the camera entity just rendered.
     void render_debug(entt::handle camera_entity);
+
+    /**
+     * @brief One camera's run: the UI around the pipeline, in order.
+     * @param output The frame buffer to render into; null renders into the pipeline's own output.
+     * @return The frame buffer rendered into.
+     */
+    auto render_camera(const gfx::frame_buffer::ptr& output,
+                       entt::handle camera_ent,
+                       camera_component& camera_comp,
+                       scene& scn,
+                       const frame_times& times,
+                       const view_render_params& view) -> gfx::frame_buffer::ptr;
 
     std::vector<std::function<void(gfx::dd_raii& dd)>> debug_draw_callbacks_;
     instanced_draw_list instanced_draws_;

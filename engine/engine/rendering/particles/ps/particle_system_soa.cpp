@@ -429,7 +429,7 @@ public:
         if(cutout_table != cutout_table_)
         {
             cutout_table_ = cutout_table;
-            static_row_[11].w = cutout_table;
+            static_row_[static_slot_distance].w = cutout_table;
             static_dirty_ = true;
         }
         if(static_dirty_)
@@ -1611,10 +1611,6 @@ public:
                 case particle_primitive::trail:
                     gpu_batches[b].index_count = trail_index_count;
                     gpu_batches[b].first_index = trail_first_index;
-                    break;
-                case particle_primitive::ribbon:
-                    gpu_batches[b].index_count = quad_index_count;
-                    gpu_batches[b].first_index = 0u;
                     break;
                 case particle_primitive::cutout:
                     gpu_batches[b].index_count = cutout_index_count;

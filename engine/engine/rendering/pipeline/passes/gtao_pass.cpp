@@ -1,4 +1,5 @@
 #include "gtao_pass.h"
+#include "pass_helpers.h"
 #include <algorithm>
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -22,6 +23,9 @@ constexpr const char* DATA_STATE = "GTAO_STATE";
 
 /// Mips of view depth the main pass may read (gtao_common.sh GTAO_DEPTH_MIP_LEVELS).
 constexpr uint8_t depth_mip_levels = 5;
+/// The prefilter writes every mip in one dispatch; a chain follows the longest side, and a target shorter than this
+/// has fewer mips than the prefilter's images.
+constexpr uint32_t MIN_TARGET_EXTENT = 1u << (depth_mip_levels - 1u);
 /// Compute group edge for the 8x8 passes.
 constexpr uint32_t group_size = 8;
 /// The prefilter's group covers a 16x16 tile of mip 0.
@@ -45,11 +49,6 @@ struct gtao_state
     bool history_valid = false;
     usize32_t history_size{};
 };
-
-auto group_count(uint32_t size, uint32_t group) -> uint32_t
-{
-    return (size + group - 1u) / group;
-}
 } // namespace
 
 auto gtao_pass::get_slice_count(int32_t quality_level) -> uint32_t
@@ -171,8 +170,8 @@ void gtao_pass::run_prefilter(gfx::render_view& rview,
     }
     gfx::dispatch(pass.id,
                    prefilter_program_.program->native_handle(),
-                   group_count(ctx.ao_size.width, prefilter_tile),
-                   group_count(ctx.ao_size.height, prefilter_tile),
+                   compute_group_count(ctx.ao_size.width, prefilter_tile),
+                   compute_group_count(ctx.ao_size.height, prefilter_tile),
                    1);
 }
 
@@ -190,8 +189,8 @@ auto gtao_pass::run_main(gfx::render_view& rview,
     bgfx::setImage(2, raw->native_handle(), 0, bgfx::Access::Write);
     gfx::dispatch(pass.id,
                    main_program_.program->native_handle(),
-                   group_count(ctx.ao_size.width, group_size),
-                   group_count(ctx.ao_size.height, group_size),
+                   compute_group_count(ctx.ao_size.width, group_size),
+                   compute_group_count(ctx.ao_size.height, group_size),
                    1);
     return raw;
 }
@@ -203,7 +202,7 @@ auto gtao_pass::run_denoise(gfx::render_view& rview,
                             gfx::texture::ptr input) -> gfx::texture::ptr
 {
     const int32_t passes = std::clamp(ctx.config.denoise_passes, 0, 3);
-    if(passes == 0 || !denoise_program_.is_valid())
+    if(passes == 0 || !begin_program(denoise_program_.program))
     {
         rview.tex_remove(TEX_DENOISE_A);
         rview.tex_remove(TEX_DENOISE_B);
@@ -224,8 +223,8 @@ auto gtao_pass::run_denoise(gfx::render_view& rview,
         bgfx::setImage(3, output->native_handle(), 0, bgfx::Access::Write);
         gfx::dispatch(pass.id,
                        denoise_program_.program->native_handle(),
-                       group_count(ctx.ao_size.width, group_size),
-                       group_count(ctx.ao_size.height, group_size),
+                       compute_group_count(ctx.ao_size.width, group_size),
+                       compute_group_count(ctx.ao_size.height, group_size),
                        1);
         input = output;
     }
@@ -239,7 +238,7 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
                              const gfx::texture::ptr& input) -> gfx::texture::ptr
 {
     auto& state = rview.data().get_or_emplace<gtao_state>(DATA_STATE);
-    if(!ctx.config.enable_temporal || ctx.config.temporal_history <= 0.0f || !temporal_program_.is_valid())
+    if(!ctx.config.enable_temporal || ctx.config.temporal_history <= 0.0f || !begin_program(temporal_program_.program))
     {
         release_history(rview);
         return input;
@@ -275,8 +274,8 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
     bgfx::setImage(5, output->native_handle(), 0, bgfx::Access::Write);
     gfx::dispatch(pass.id,
                    temporal_program_.program->native_handle(),
-                   group_count(ctx.ao_size.width, group_size),
-                   group_count(ctx.ao_size.height, group_size),
+                   compute_group_count(ctx.ao_size.width, group_size),
+                   compute_group_count(ctx.ao_size.height, group_size),
                    1);
     state.parity ^= 1u;
     state.history_valid = true;
@@ -300,16 +299,16 @@ auto gtao_pass::run_upsample(gfx::render_view& rview,
     gfx::set_texture(upsample_program_.s_gtao_normal, 4, params.g_buffer->get_texture(1));
     gfx::dispatch(pass.id,
                    upsample_program_.program->native_handle(),
-                   group_count(ctx.full_size.width, group_size),
-                   group_count(ctx.full_size.height, group_size),
+                   compute_group_count(ctx.full_size.width, group_size),
+                   compute_group_count(ctx.full_size.height, group_size),
                    1);
     return output;
 }
 
 auto gtao_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
-    if(!params.g_buffer || !params.cam || !prefilter_program_.is_valid() || !main_program_.is_valid() ||
-       !upsample_program_.is_valid())
+    if(!params.g_buffer || !params.cam || !begin_program(prefilter_program_.program) ||
+       !begin_program(main_program_.program) || !begin_program(upsample_program_.program))
     {
         return nullptr;
     }
@@ -317,6 +316,10 @@ auto gtao_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
     frame_context ctx;
     ctx.full_size = params.g_buffer->get_size();
     ctx.ao_size = compute_trace_size(ctx.full_size, params.config.resolution);
+    if(std::max(ctx.ao_size.width, ctx.ao_size.height) < MIN_TARGET_EXTENT)
+    {
+        return nullptr;
+    }
     ctx.cam = params.cam;
     ctx.config = params.config;
     gfx::render_pass::push_scope("GTAO");

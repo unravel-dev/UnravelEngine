@@ -1,4 +1,5 @@
 #include "tonemapping_pass.h"
+#include "pass_helpers.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/default_textures.h>
 #include <graphics/graphics.h>
@@ -61,6 +62,8 @@ struct lut_state
     static constexpr const char* view_key = "TONEMAPPING_LUT_STATE";
 
     lut_grading grading{};
+    /// The LUT program's revision the LUT was rendered with: a reloaded shader renders it again.
+    std::uint32_t program_revision = 0;
     bool is_valid = false;
 };
 
@@ -104,29 +107,7 @@ auto tonemapping_pass::init(rtti::context& ctx) -> bool
     lut_program_.cache_uniforms();
     lut_program_.program = std::make_unique<gpu_program>(vs_clip_quad_ex, fs_lut);
 
-    return true;
-}
-
-auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
-                                                  const gfx::frame_buffer::ptr& input,
-                                                  const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr
-{
-    if(output)
-    {
-        return output;
-    }
-    auto input_sz = input->get_size();
-    const auto& output_tex = rview.tex_acquire(
-        "TONEMAPPING_OUTPUT",
-        {.size = input_sz, .format = bgfx::TextureFormat::RGBA8, .flags = BGFX_TEXTURE_RT});
-    auto& output_fbo = rview.fbo_acquire("TONEMAPPING_OUTPUT");
-    if(gfx::needs_recreate(output_fbo, {output_tex}))
-    {
-        output_fbo.reset();
-        output_fbo = std::make_shared<gfx::frame_buffer>();
-        output_fbo->populate({output_tex});
-    }
-    return output_fbo;
+    return tonemapping_program_.program->is_valid() && lut_program_.program->is_valid();
 }
 
 auto tonemapping_pass::update_lut(gfx::render_view& rview, const settings& config) -> const gfx::texture::ptr&
@@ -141,20 +122,13 @@ auto tonemapping_pass::update_lut(gfx::render_view& rview, const settings& confi
                                             state.is_valid = false;
                                         });
     const lut_grading grading = make_lut_grading(config);
-    if(state.is_valid && state.grading == grading)
+    const bool can_render = lut_program_.program->begin();
+    const std::uint32_t program_revision = lut_program_.program->get_revision();
+    if(!can_render || (state.is_valid && state.grading == grading && state.program_revision == program_revision))
     {
         return lut;
     }
-    auto& fbo = rview.fbo_acquire(lut_key);
-    if(gfx::needs_recreate(fbo, {lut}))
-    {
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({lut});
-    }
-    if(!lut_program_.program->begin())
-    {
-        return lut;
-    }
+    const auto fbo = acquire_frame_buffer(rview, lut_key, {lut});
     // Ahead of the tonemapping pass's own view, so the table is complete before it is read.
     gfx::render_pass pass("Tonemapping/LUT Pass");
     pass.bind(fbo.get());
@@ -170,6 +144,7 @@ auto tonemapping_pass::update_lut(gfx::render_view& rview, const settings& confi
     bgfx::setState(BGFX_STATE_DEFAULT);
     lut_program_.program->end();
     state.grading = grading;
+    state.program_revision = program_revision;
     state.is_valid = true;
     return lut;
 }
@@ -178,7 +153,7 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 {
     const auto& input = params.input;
     const gfx::texture::ptr lut = update_lut(rview, params.config);
-    auto output = create_or_update_output_fb(rview, params.input, params.output);
+    auto output = get_output_frame_buffer(rview, "TONEMAPPING_OUTPUT", params.input, params.output, bgfx::TextureFormat::RGBA8);
 
     gfx::render_pass pass("Tonemapping/Pass");
     pass.bind(output.get());
@@ -187,7 +162,11 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     const auto output_size = output->get_size();
 
-    tonemapping_program_.program->begin();
+    if(!tonemapping_program_.program->begin())
+    {
+        bgfx::discard();
+        return output;
+    }
 
     const bool apply_output_noise = !params.defer_output_noise;
     // The final linear colour is the scene colour / pre-exposure x the global exposure. The shader
@@ -200,11 +179,8 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     // z = grain amount (slider scaled so 0.1-0.3 is a filmic range and 1.0 is heavy
     // stylized grain), w = animation seed. Deferred to FXAA when that pass follows.
-    const float grain_amount = apply_output_noise ? params.config.grain_intensity * 0.25f : 0.0f;
-    float grading[4] = {params.config.contrast,
-                        params.config.saturation,
-                        grain_amount,
-                        static_cast<float>(gfx::get_render_frame() % 1024u)};
+    const float grain_amount = apply_output_noise ? params.config.grain_intensity * OUTPUT_GRAIN_SCALE : 0.0f;
+    float grading[4] = {params.config.contrast, params.config.saturation, grain_amount, get_output_grain_seed()};
     gfx::set_uniform(tonemapping_program_.u_grading, grading);
 
     float vignette[4] = {params.config.vignette_intensity, params.config.vignette_smoothness, 0.0f, 0.0f};

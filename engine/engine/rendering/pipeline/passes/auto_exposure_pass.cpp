@@ -1,4 +1,5 @@
 #include "auto_exposure_pass.h"
+#include "pass_helpers.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/default_textures.h>
@@ -51,6 +52,10 @@ constexpr std::uint32_t local_point_clamp = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_
 /// The compensation curve LUT and the hash of the keys it was baked from.
 constexpr const char* compensation_curve_key = "AUTO_EXPOSURE_COMPENSATION_CURVE";
 constexpr const char* compensation_curve_key_data = "AUTO_EXPOSURE_COMPENSATION_CURVE_DATA";
+
+/// Threads per group along each axis of the histogram and of the local exposure's downsample and blur.
+constexpr std::uint32_t HISTOGRAM_GROUP_SIZE = 16;
+constexpr std::uint32_t LOCAL_BLUR_GROUP_SIZE = 8;
 
 /// Bilinear, clamped: the metering taps sit on texel corners and average 2x2 blocks.
 constexpr std::uint32_t metering_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
@@ -282,8 +287,6 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
 
     gfx::render_pass pass("Auto Exposure/Histogram");
 
-    histogram_program_.program->begin();
-
     gfx::set_texture(histogram_program_.s_hdr_input, 0, params.input->get_texture(), metering_sampler_flags);
     params.pre_exposure.bind(stages::histogram_pre_exposure);
 
@@ -305,8 +308,8 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
                                     1.0f / float(input_height)};
     gfx::set_uniform(histogram_program_.u_metering_cell, metering_cell);
 
-    const std::uint32_t groups_x = (meter_width + 15) / 16;
-    const std::uint32_t groups_y = (meter_height + 15) / 16;
+    const std::uint32_t groups_x = compute_group_count(meter_width, HISTOGRAM_GROUP_SIZE);
+    const std::uint32_t groups_y = compute_group_count(meter_height, HISTOGRAM_GROUP_SIZE);
     gfx::dispatch(pass.id, histogram_program_.program->native_handle(), groups_x, groups_y, 1);
 
     histogram_program_.program->end();
@@ -404,8 +407,6 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
                bgfx::TextureRegion{.handle = previous_tex->native_handle(), .width = 1, .height = 1},
                bgfx::TextureRegion{.handle = exposure_tex->native_handle(), .width = 1, .height = 1});
 
-    average_program_.program->begin();
-
     bgfx::setBuffer(0, histogram_buffer_, bgfx::Access::ReadWrite);
     bgfx::setImage(1, exposure_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
     bgfx::setImage(2, history_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
@@ -463,9 +464,8 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
     const bool wants_local_exposure =
         config.is_local_exposure_enabled() &&
         get_render_feature_support().is_available(render_feature::local_exposure) &&
-        local_grid_program_.program && local_grid_program_.program->is_valid() &&
-        local_downsample_program_.program && local_downsample_program_.program->is_valid() &&
-        local_blur_program_.program && local_blur_program_.program->is_valid();
+        begin_program(local_grid_program_.program) && begin_program(local_downsample_program_.program) &&
+        begin_program(local_blur_program_.program);
     if(!wants_local_exposure)
     {
         // Neutral settings: drop the buffers so the consumer's "no view" branch is the only
@@ -500,7 +500,6 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
     const float log_range = max_log_lum - min_log_lum;
     {
         gfx::render_pass pass("Auto Exposure/Local Grid");
-        local_grid_program_.program->begin();
         gfx::set_texture(local_grid_program_.s_exposure_log_lum, 0, log_lum_tex, local_point_clamp);
         bgfx::setImage(1, grid_tex->native_handle(), 0, bgfx::Access::Write, local_grid_format);
         const float grid_params[4] = {float(meter_size.width),
@@ -534,11 +533,10 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
     auto& layout = rview.data().get_or_emplace<local_exposure_view>(local_layout_key);
     layout.blurred_uv_scale = {covered_width / float(blur_size.width), covered_height / float(blur_size.height)};
 
-    const std::uint32_t groups_x = (blur_size.width + 7) / 8;
-    const std::uint32_t groups_y = (blur_size.height + 7) / 8;
+    const std::uint32_t groups_x = compute_group_count(blur_size.width, LOCAL_BLUR_GROUP_SIZE);
+    const std::uint32_t groups_y = compute_group_count(blur_size.height, LOCAL_BLUR_GROUP_SIZE);
     {
         gfx::render_pass pass("Auto Exposure/Local Downsample");
-        local_downsample_program_.program->begin();
         gfx::set_texture(local_downsample_program_.s_exposure_log_lum, 0, log_lum_tex, local_point_clamp);
         bgfx::setImage(1, downsampled_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
         const float downsample_params[4] = {float(meter_size.width),
@@ -559,7 +557,6 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
     for(std::uint32_t axis = 0; axis < 2; ++axis)
     {
         gfx::render_pass pass(axis == 0 ? "Auto Exposure/Local Blur X" : "Auto Exposure/Local Blur Y");
-        local_blur_program_.program->begin();
         gfx::set_texture(local_blur_program_.s_local_blur_input, 0, blur_passes[axis].first, local_point_clamp);
         bgfx::setImage(1, blur_passes[axis].second->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
         const float blur_params[4] = {float(blur_size.width), float(blur_size.height), radius, float(axis)};
@@ -574,6 +571,11 @@ void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
     APP_SCOPE_PERF("Rendering/Auto Exposure Pass");
 
     ensure_resources(rview);
+
+    if(!begin_program(histogram_program_.program) || !begin_program(average_program_.program))
+    {
+        return;
+    }
 
     run_histogram(rview, params);
     // Before the average: the average folds the local exposure's mean into AUTO_EXPOSURE.a,

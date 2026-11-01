@@ -1,5 +1,5 @@
-// prefilter_pass.cpp
 #include "prefilter_pass.h"
+#include "pass_helpers.h"
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
 #include <engine/assets/asset_manager.h>
@@ -8,6 +8,11 @@
 #include <graphics/graphics.h>
 namespace unravel
 {
+namespace
+{
+/// Threads per group along each axis of cs_prefilter.eshader.
+constexpr uint32_t PREFILTER_GROUP_SIZE = 8;
+} // namespace
 
 auto prefilter_pass::init(rtti::context& ctx) -> bool
 {
@@ -18,7 +23,7 @@ auto prefilter_pass::init(rtti::context& ctx) -> bool
     return cs_.program->is_valid();
 }
 
-auto prefilter_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
+auto prefilter_pass::run(const run_params& params) -> gfx::texture::ptr
 {
     // The filter needs its compute program and a device that writes RGBA16F cube faces; without either the
     // probe keeps its blitted, unfiltered faces instead of a cubemap nothing wrote.
@@ -28,12 +33,12 @@ auto prefilter_pass::run(gfx::render_view& rview, const run_params& params) -> g
     {
         run_params blit_params = params;
         blit_params.apply_prefilter = false;
-        return run_compute(rview, blit_params);
+        return run_compute(blit_params);
     }
-    return run_compute(rview, params);
+    return run_compute(params);
 }
 
-auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
+auto prefilter_pass::run_compute(const run_params& params) -> gfx::texture::ptr
 {
     // Prepare output cubemap
     const auto& ti = params.output_cube->info;
@@ -105,8 +110,8 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
 
             // Calculate dispatch size for this mip level
             // Process all faces in parallel with Z dimension
-            uint32_t num_groups_x = (dim + 7) / 8;
-            uint32_t num_groups_y = (dim + 7) / 8;
+            uint32_t num_groups_x = compute_group_count(dim, PREFILTER_GROUP_SIZE);
+            uint32_t num_groups_y = compute_group_count(dim, PREFILTER_GROUP_SIZE);
             uint32_t num_groups_z = 1; // All 6 faces handled by workgroup size
 
             // Dispatch compute shader for all faces at once
@@ -117,12 +122,6 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             gfx::render_pass::pop_scope();
             gfx::render_pass::pop_scope();
         }
-        
-        // Add memory barrier to ensure all compute operations are complete
-        // This ensures proper synchronization between mip levels and before texture usage
-        gfx::render_pass barrier_pass("Prefilter/Barrier Pass");
-        // bgfx handles memory barriers automatically between frame boundaries,
-        // but we add explicit synchronization for safety
     }
 
     return params.output_cube_prefiltered;

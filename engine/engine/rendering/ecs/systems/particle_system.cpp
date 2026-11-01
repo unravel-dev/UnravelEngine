@@ -19,7 +19,8 @@ auto particle_system::init(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     // Initialize the soa particle system (large emitter pool for editor/scenes).
-    ps_soa::init(4096 * 4);
+    constexpr uint16_t EMITTER_POOL_SIZE = 4096 * 4;
+    ps_soa::init(EMITTER_POOL_SIZE);
     ps_soa::init_gpu(ctx);
     
 

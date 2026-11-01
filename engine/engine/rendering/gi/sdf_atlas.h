@@ -110,15 +110,21 @@ public:
     }
 
     /**
-     * @brief Bricks refused for want of room since the atlas was created.
+     * @brief Bricks refused for want of room since the last call, which restarts the count.
      *
-     * A scene that has ever refused anything is over budget at the level its fields chose, which
-     * is what tells the caller to place the NEXT ones coarser. Monotonic, so a caller compares it
-     * against its own last reading rather than expecting a reset.
+     * A scene refusing fields is over budget at the level its fields chose, which is what tells
+     * the caller to place the NEXT ones coarser. A release does not restart it: a scene that
+     * overruns the atlas with one release per frame must still be heard. A release does change
+     * what fits, so a caller weighs the reading against @ref get_free_brick_count: refusals that
+     * many free bricks would hold were a matter of timing (a scene change's outgoing fields still
+     * holding their bricks) and retry through @ref get_release_generation. @ref grow restarts it,
+     * since the refusals described the smaller atlas.
      */
-    auto get_rejected_brick_total() const -> uint64_t
+    auto take_refused_brick_count() -> uint64_t
     {
-        return rejected_brick_total_;
+        const uint64_t count = refused_brick_count_;
+        refused_brick_count_ = 0;
+        return count;
     }
 
     /**
@@ -129,8 +135,8 @@ public:
     /**
      * @brief Pushes any pending header / indirection changes to the GPU.
      *
-     * Called once per frame before the tracer runs. The brick atlas is written directly by
-     * @ref upload, so only the two buffers need flushing here.
+     * Called once per frame before the tracer runs: the bricks @ref upload queued go to the atlas
+     * texture, then the header and indirection tables to their buffers.
      */
     void flush();
 
@@ -186,7 +192,7 @@ public:
     auto get_stats() const -> stats;
 
     /**
-     * @brief Bumped every time @ref release returns bricks to the free list.
+     * @brief Bumped every time @ref release returns bricks to the free list and every @ref grow.
      *
      * Lets a caller that was refused for want of room know whether retrying could possibly help.
      * Retrying unconditionally is not viable: a scene that overruns the atlas refuses thousands of
@@ -221,6 +227,7 @@ private:
     /// Slots allocate mostly ascending on a fresh atlas, so the runs are long; a fragmented
     /// free list degrades gracefully toward smaller boxes.
     void flush_pending_bricks();
+    /// The offset of @p count entries, or @ref invalid_index once the table's end is past what a header can address.
     auto allocate_indirection(uint32_t count) -> uint32_t;
     /// Widens the dirty indirection span to cover [offset, offset + count).
     void mark_indirection_dirty(uint32_t offset, uint32_t count);
@@ -238,21 +245,22 @@ private:
     /// uint32 elements.
     bgfx::DynamicIndexBufferHandle indirection_buffer_{bgfx::kInvalidHandle};
 
-    /// Master copies. Both buffers are small (kilobytes per field), so they are re-uploaded
-    /// whole when dirty rather than tracked at sub-range granularity.
+    /// Master copies. The headers are re-uploaded whole when dirty; the indirection table, which
+    /// reaches millions of entries, by its dirty span.
     std::vector<float> header_data_;
     std::vector<uint32_t> indirection_data_;
     /// Running totals for the atlas-full report, so the warning can name the shortfall rather
     /// than repeat itself once per refused mesh.
-    /// 64-bit, and that is not paranoia: in a scene that overruns the atlas these reach billions,
-    /// and as 32-bit values the `total * 2` that schedules the next report would overflow and wrap
-    /// to a small number -- so the condition would be true again immediately and the warning would
-    /// print on EVERY refusal, thousands per frame. A counter that only ever grows needs a type
-    /// that cannot wrap, or the throttle built on it silently becomes the opposite of a throttle.
+    /// Restarted by @ref release and @ref grow. 64-bit, and that is not paranoia: in a scene that
+    /// overruns the atlas these reach billions, and as 32-bit values the `total * 2` that schedules
+    /// the next report would overflow and wrap to a small number -- so the condition would be true
+    /// again immediately and the warning would print on EVERY refusal, thousands per frame.
     uint64_t rejected_mesh_count_ = 0;
     uint64_t rejected_brick_total_ = 0;
     uint64_t next_rejection_report_ = 1;
-    /// Incremented by @ref release. See @ref get_release_generation.
+    /// Bricks refused since the last @ref take_refused_brick_count, or since @ref grow.
+    uint64_t refused_brick_count_ = 0;
+    /// Incremented by @ref release and @ref grow. See @ref get_release_generation.
     uint32_t release_generation_ = 0;
     /// Brick bytes uploaded this frame; reset by @ref flush. See settings::max_upload_bytes_per_frame.
     uint32_t frame_upload_bytes_ = 0;
@@ -265,6 +273,8 @@ private:
     /// The frame's queued bricks and their copied voxels, drained by @ref flush_pending_bricks.
     std::vector<pending_brick> pending_bricks_;
     std::vector<uint8_t> pending_brick_voxels_;
+    /// The indirection table passed what a header can address and refused a field (reported once).
+    bool has_reported_indirection_limit_ = false;
     /// Allocated GPU capacity, in elements (vec4 for headers, uint32 for indirection).
     uint32_t header_capacity_vec4_ = 0;
     uint32_t indirection_capacity_ = 0;

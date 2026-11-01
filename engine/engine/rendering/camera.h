@@ -164,13 +164,6 @@ public:
     auto get_aspect_ratio() const -> float;
 
     /**
-     * @brief Determines if the aspect ratio is currently being updated by the render driver.
-     *
-     * @return true if the aspect ratio is locked, false otherwise.
-     */
-    auto is_aspect_locked() const -> bool;
-
-    /**
      * @brief Checks if the frustum is currently locked.
      *
      * @return true if the frustum is locked, false otherwise.
@@ -429,15 +422,6 @@ public:
                                 math::vec3& major_axis_out) const -> bool;
 
     /**
-     * @brief Converts a screen position into a camera space position at the near plane.
-     *
-     * @param point The screen position.
-     * @param position_out The output camera space position.
-     * @return true if the conversion is successful, false otherwise.
-     */
-    auto viewport_to_camera(const math::vec3& point, math::vec3& position_out) const -> bool;
-
-    /**
      * @brief Transforms a point from world space into screen space.
      *
      * Uses the unjittered projection: screen positions of world points do not follow the TAA
@@ -455,52 +439,6 @@ public:
      * @return The view space depth; negative behind the camera.
      */
     auto world_to_view_depth(const math::vec3& pos) const -> float;
-
-    /**
-     * @brief Estimates the zoom factor based on the specified plane.
-     *
-     * @param plane The reference plane.
-     * @return The estimated zoom factor.
-     */
-    auto estimate_zoom_factor(const math::plane& plane) const -> float;
-
-    /**
-     * @brief Estimates the zoom factor based on the specified position.
-     *
-     * @param position The reference position.
-     * @return The estimated zoom factor.
-     */
-    auto estimate_zoom_factor(const math::vec3& position) const -> float;
-
-    /**
-     * @brief Estimates the zoom factor based on the specified plane, constrained by a maximum value.
-     *
-     * @param plane The reference plane.
-     * @param maximum_value The maximum zoom factor value.
-     * @return The estimated zoom factor.
-     */
-    auto estimate_zoom_factor(const math::plane& plane, float maximum_value) const -> float;
-
-    /**
-     * @brief Estimates the zoom factor based on the specified position, constrained by a maximum value.
-     *
-     * @param position The reference position.
-     * @param maximum_value The maximum zoom factor value.
-     * @return The estimated zoom factor.
-     */
-    auto estimate_zoom_factor(const math::vec3& position, float maximum_value) const -> float;
-
-    /**
-     * @brief Estimates the pick tolerance based on the pixel tolerance and reference position.
-     *
-     * @param pixel_tolerance The pixel tolerance.
-     * @param reference_position The reference position.
-     * @param object_transform The transformation to apply to the object.
-     * @return The estimated pick tolerance.
-     */
-    auto estimate_pick_tolerance(float pixel_tolerance,
-                                 const math::vec3& reference_position,
-                                 const math::transform& object_transform) const -> math::vec3;
 
     /**
      * @brief Sets the camera to look at a specified target.
@@ -615,12 +553,8 @@ protected:
     ipoint32_t viewport_pos_ = {0, 0};
     /// Viewport size
     usize32_t viewport_size_ = {0, 0};
-    /// View matrix dirty ?
-    bool view_dirty_ = true;
     /// Projection matrix dirty ?
     mutable bool projection_dirty_ = true;
-    /// Has the aspect ratio changed?
-    mutable bool aspect_dirty_ = true;
     /// Are the frustum planes dirty ?
     mutable bool frustum_dirty_ = true;
     /// Should the aspect ratio be automatically updated by the render driver?

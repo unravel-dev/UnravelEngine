@@ -98,8 +98,6 @@ private:
         bool is_built = false;
     };
 
-    void bind_sdf_instances(const surface_cache_system& gi_scene) const;
-
     uniforms uniforms_;
     gpu_program::ptr program_;
     gfx::texture::ptr texture_;

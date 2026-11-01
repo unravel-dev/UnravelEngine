@@ -7,10 +7,8 @@ namespace unravel
 
 bool atmospheric_pass_skybox::init(rtti::context& ctx)
 {
-    // 1) Load your cubemap (DDS or whichever format you have)
     auto& am = ctx.get_cached<asset_manager>();
 
-    // 2) Load skybox shaders
     auto vs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/vs_skybox.eshader");
     auto fs_sky = am.get_asset<gfx::shader>("engine:/data/shaders/atmospherics/fs_skybox.eshader");
     program_.cache_uniforms();
@@ -42,7 +40,6 @@ bool atmospheric_pass_skybox::init(rtti::context& ctx)
     };
 
     // Indices for an inside-out cube (36 total).
-    // You can flip the order if you see backfaces incorrectly.
     // clang-format off
     static const uint16_t s_cubeIndices[] = {
         // -Z
@@ -77,12 +74,11 @@ bool atmospheric_pass_skybox::init(rtti::context& ctx)
 void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
                                   const camera& cam,
                                   gfx::render_view& rview,
-                                  delta_t dt,
                                   const run_params& params)
 {
-    if(!program_.program->is_valid())
+    if(!program_.program->begin())
     {
-        return; // Can't do much if data is invalid
+        return;
     }
 
     auto cubemap = params.cubemap.get();
@@ -95,19 +91,15 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
     //    so the skybox doesn't move with the camera.
     pass.set_view_proj(cam.get_view_relative(), cam.get_projection());
 
-    // 3) Begin program, set up the cubemap
-    program_.program->begin();
-
+    // 3) Set up the cubemap
     gfx::set_texture(program_.u_texCube, 0, cubemap);
 
     float sky_brightness_vec[4] = {params.sky_brightness, 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_sky_brightness, sky_brightness_vec);
     params.pre_exposure.bind();
 
-    // 4) The critical part: Use DEPTH_TEST_EQUAL, so we only fill the background
-    uint64_t state =
-        BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-        BGFX_STATE_DEPTH_TEST_LEQUAL; // or CULL_NONE, depending on vertex winding
+    // 4) The critical part: a less-or-equal depth test, so we only fill the background
+    uint64_t state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LEQUAL;
 
     bgfx::setState(state);
 

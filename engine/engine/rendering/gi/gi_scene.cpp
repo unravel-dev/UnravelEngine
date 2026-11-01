@@ -1,6 +1,7 @@
 #include "gi_scene.h"
 
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/gi_hash.h>
 #include <engine/rendering/gi/gi_pass_constants.h>
 
 #include <concurrency/parallel.h>
@@ -231,6 +232,36 @@ void append_card_record(std::vector<math::vec4>& table,
     table.push_back(math::vec4(placed.axis_z, placed.extent.z));
     table.push_back(mip_entry);
     table.push_back(reflection_table);
+}
+
+/// A resident page's box in world axes: its card's frame, the box centre in card space, and its half size.
+struct page_box
+{
+    math::vec3 origin{0.0f};
+    math::vec3 axis_x{0.0f};
+    math::vec3 axis_y{0.0f};
+    math::vec3 axis_z{0.0f};
+    math::vec2 center{0.0f};
+    math::vec3 half{0.0f};
+};
+
+/// The box of @p page in card space: its UV rectangle across the card's face (v runs down -axis_y), full depth.
+auto load_page_box(const std::vector<math::vec4>& card_table, const gi_scene::resident_page& page) -> page_box
+{
+    const size_t base = size_t(page.card_index) * gi_scene::card_stride;
+    const math::vec3 extent(card_table[base + 1].w, card_table[base + 2].w, card_table[base + 3].w);
+    const math::vec2 corner_min((2.0f * page.card_uv_rect.x - 1.0f) * extent.x,
+                                (1.0f - 2.0f * page.card_uv_rect.w) * extent.y);
+    const math::vec2 corner_max((2.0f * page.card_uv_rect.z - 1.0f) * extent.x,
+                                (1.0f - 2.0f * page.card_uv_rect.y) * extent.y);
+    page_box box;
+    box.origin = math::vec3(card_table[base + 0]);
+    box.axis_x = math::vec3(card_table[base + 1]);
+    box.axis_y = math::vec3(card_table[base + 2]);
+    box.axis_z = math::vec3(card_table[base + 3]);
+    box.center = 0.5f * (corner_min + corner_max);
+    box.half = math::vec3(0.5f * (corner_max - corner_min), extent.z);
+    return box;
 }
 
 /// The bin_lookup_ index of a sub-allocated element size (8 to 128 texels per axis).
@@ -737,7 +768,7 @@ void gi_scene::update(const std::vector<source>& sources,
     add_hi_res_requests(viewers);
     allocate_requests(sources, packer);
     build_tables(sources, instance_count);
-    refresh_captures(sources, packer);
+    refresh_captures(packer);
     resample_page_base_ = uint32_t(resample_cards_.size());
     resample_table_ = resample_cards_;
     resample_table_.insert(resample_table_.end(), resample_pages_.begin(), resample_pages_.end());
@@ -780,13 +811,15 @@ auto gi_scene::refresh_placements(const std::vector<source>& sources) -> bool
             entry.material_key = src.material_key;
             entry.material_direct_key = src.material_direct_key;
             ++stats_.material_changes;
+            const auto mark_changed = [&](physical_slot& slot)
+            {
+                slot.captured_frame = 0;
+                slot.has_material_direct_change = slot.has_material_direct_change || is_direct_changed;
+            };
             for(auto& card : entry.card_states)
             {
-                for(auto& slot : card.slots)
-                {
-                    slot.captured_frame = 0;
-                    slot.has_material_direct_change = slot.has_material_direct_change || is_direct_changed;
-                }
+                std::for_each(card.slots.begin(), card.slots.end(), mark_changed);
+                std::for_each(card.hi_res.slots.begin(), card.hi_res.slots.end(), mark_changed);
             }
         }
         is_unique = is_unique && entry.last_seen != frame_;
@@ -930,12 +963,14 @@ void gi_scene::choose_chunk_resolutions(const std::vector<source>& sources,
             entry.has_placed = true;
             chunk.has_moved = true;
             // The cards moved with the placement: their pages' direct lighting is due.
+            const auto mark_direct_dirty = [](physical_slot& slot)
+            {
+                slot.is_direct_dirty = true;
+            };
             for(auto& state : entry.card_states)
             {
-                for(auto& slot : state.slots)
-                {
-                    slot.is_direct_dirty = true;
-                }
+                std::for_each(state.slots.begin(), state.slots.end(), mark_direct_dirty);
+                std::for_each(state.hi_res.slots.begin(), state.hi_res.slots.end(), mark_direct_dirty);
             }
         }
         // The placement's own residency gate: its largest extent must project to the minimum card resolution (one
@@ -1088,6 +1123,12 @@ auto gi_scene::allocate_hi_res_page(const std::vector<source>& sources, const re
     placement& entry = *source_placements_[req.source];
     card_state& state = entry.card_states[req.card];
     if(state.res_level == 0 || req.hi_res_level <= state.res_level)
+    {
+        return 0;
+    }
+    // A locked mip allocated in this update holds its atlas region's previous contents until the copy, so a page
+    // inheriting from it waits for the feedback to ask again.
+    if(state.slots.front().captured_frame == frame_)
     {
         return 0;
     }
@@ -1500,19 +1541,14 @@ void gi_scene::get_visualized_cards(const std::vector<source>& sources,
                                               card.axis_z.x,
                                               card.axis_z.y,
                                               card.axis_z.z};
-            uint32_t hash = 2166136261u;
-            const auto* bytes = reinterpret_cast<const uint8_t*>(key.data());
-            for(size_t i = 0; i < sizeof(key); ++i)
-            {
-                hash = (hash ^ bytes[i]) * 16777619u;
-            }
-            result.hash = (hash ^ (first_card_[s] + c)) * 16777619u;
+            const uint32_t hash = gi_hash::fnv1a_32(key.data(), sizeof(key));
+            result.hash = (hash ^ (first_card_[s] + c)) * gi_hash::FNV32_PRIME;
             out.push_back(result);
         }
     }
 }
 
-void gi_scene::refresh_captures(const std::vector<source>& sources, capture_packer& packer)
+void gi_scene::refresh_captures(capture_packer& packer)
 {
     APP_SCOPE_PERF("GI/Scene Update/Refresh");
     const float fraction = std::clamp(settings_.card_capture_refresh_fraction, 0.0f, 1.0f);
@@ -1546,7 +1582,6 @@ void gi_scene::refresh_captures(const std::vector<source>& sources, capture_pack
                           const uint64_t frame_b = resident_slots_[b]->captured_frame;
                           return frame_a != frame_b ? frame_a < frame_b : a < b;
                       });
-    refresh_resamples_.clear();
     for(size_t k = 0; k < count; ++k)
     {
         const uint32_t i = refresh_candidates_[k];
@@ -1557,26 +1592,6 @@ void gi_scene::refresh_captures(const std::vector<source>& sources, capture_pack
         {
             break;
         }
-        // The page keeps its lighting: its card's own allocation is the resample source.
-        auto resample = std::find_if(refresh_resamples_.begin(),
-                                     refresh_resamples_.end(),
-                                     [&](const std::pair<uint32_t, int32_t>& entry)
-                                     {
-                                         return entry.first == page.card_index;
-                                     });
-        if(resample == refresh_resamples_.end())
-        {
-            const math::uvec2 owner = resident_page_owners_[i];
-            const uint32_t s = active_[owner.x];
-            const source& src = sources[s];
-            placement& entry = *source_placements_[s];
-            const bool is_placed = entry.has_placed && is_same_transform(entry.placed_transform, src.local_to_world);
-            const int32_t index = append_resample_source(entry.card_states[owner.y],
-                                                         is_placed ? entry.placed[owner.y]
-                                                                   : place_card(entry.cards->cards[owner.y],
-                                                                                src.local_to_world));
-            resample = refresh_resamples_.insert(refresh_resamples_.end(), {page.card_index, index});
-        }
         capture cap;
         cap.card_index = page.card_index;
         cap.source_index = active_[resident_page_owners_[i].x];
@@ -1584,7 +1599,6 @@ void gi_scene::refresh_captures(const std::vector<source>& sources, capture_pack
         cap.capture_offset = capture_offset;
         cap.atlas_offset = page.atlas_offset;
         cap.size = page.size;
-        cap.resample_card = resample->second;
         cap.keeps_lighting = true;
         captures_.push_back(cap);
         // A periodic refresh captures the same geometry (its lighting is resampled in place) and the direct lighting
@@ -1616,23 +1630,10 @@ auto gi_scene::compute_lighting_bucket(uint32_t frames_since_update, float speed
 
 auto gi_scene::compute_page_bounds(uint32_t page_index) const -> math::bbox
 {
-    const resident_page& page = resident_pages_[page_index];
-    const size_t base = size_t(page.card_index) * card_stride;
-    const math::vec3 origin(card_table_[base + 0]);
-    const math::vec3 axis_x(card_table_[base + 1]);
-    const math::vec3 axis_y(card_table_[base + 2]);
-    const math::vec3 axis_z(card_table_[base + 3]);
-    const math::vec3 extent(card_table_[base + 1].w, card_table_[base + 2].w, card_table_[base + 3].w);
-    // The page's box in card space: its UV rectangle across the card's face (v runs down -axis_y), full depth.
-    const math::vec2 corner_min((2.0f * page.card_uv_rect.x - 1.0f) * extent.x,
-                                (1.0f - 2.0f * page.card_uv_rect.w) * extent.y);
-    const math::vec2 corner_max((2.0f * page.card_uv_rect.z - 1.0f) * extent.x,
-                                (1.0f - 2.0f * page.card_uv_rect.y) * extent.y);
-    const math::vec2 center = 0.5f * (corner_min + corner_max);
-    const math::vec3 half(0.5f * (corner_max - corner_min), extent.z);
-    const math::vec3 world_center = origin + axis_x * center.x + axis_y * center.y;
+    const page_box box = load_page_box(card_table_, resident_pages_[page_index]);
+    const math::vec3 world_center = box.origin + box.axis_x * box.center.x + box.axis_y * box.center.y;
     const math::vec3 world_half =
-        math::abs(axis_x) * half.x + math::abs(axis_y) * half.y + math::abs(axis_z) * half.z;
+        math::abs(box.axis_x) * box.half.x + math::abs(box.axis_y) * box.half.y + math::abs(box.axis_z) * box.half.z;
     return math::bbox(world_center - world_half, world_center + world_half);
 }
 
@@ -1735,19 +1736,13 @@ void gi_scene::compute_page_speeds(const std::vector<viewer>& viewers)
         [&](uint32_t i)
         {
             const resident_page& page = resident_pages_[i];
-            const size_t base = size_t(page.card_index) * card_stride;
-            const math::vec3 origin(card_table_[base + 0]);
-            const math::vec3 axis_x(card_table_[base + 1]);
-            const math::vec3 axis_y(card_table_[base + 2]);
-            const math::vec3 axis_z(card_table_[base + 3]);
-            const math::vec3 extent(card_table_[base + 1].w, card_table_[base + 2].w, card_table_[base + 3].w);
-            // The page's box in card space: its UV rectangle across the card's face (v runs down -axis_y), full depth.
-            const math::vec2 corner_min((2.0f * page.card_uv_rect.x - 1.0f) * extent.x,
-                                        (1.0f - 2.0f * page.card_uv_rect.w) * extent.y);
-            const math::vec2 corner_max((2.0f * page.card_uv_rect.z - 1.0f) * extent.x,
-                                        (1.0f - 2.0f * page.card_uv_rect.y) * extent.y);
-            const math::vec3 center(0.5f * (corner_min + corner_max), 0.0f);
-            const math::vec3 half(0.5f * (corner_max - corner_min), extent.z);
+            const page_box box = load_page_box(card_table_, page);
+            const math::vec3 origin = box.origin;
+            const math::vec3 axis_x = box.axis_x;
+            const math::vec3 axis_y = box.axis_y;
+            const math::vec3 axis_z = box.axis_z;
+            const math::vec3 center(box.center, 0.0f);
+            const math::vec3 half = box.half;
             const math::vec3 world_center = origin + axis_x * center.x + axis_y * center.y;
             float distance = std::numeric_limits<float>::max();
             uint32_t nearest_viewer = 0;
@@ -1819,6 +1814,7 @@ void gi_scene::schedule_lighting(const std::vector<viewer>& viewers)
     const std::array<uint32_t, lighting_context_count> budgets{
         compute_lighting_tile_budget(atlas_size, get_lighting_update_factor(lighting_direct)),
         compute_lighting_tile_budget(atlas_size, get_lighting_update_factor(lighting_radiosity))};
+    constexpr uint32_t max_lit_pages_per_context = max_lit_pages_per_update / lighting_context_count;
     for(uint32_t context = 0; context < lighting_context_count; ++context)
     {
         const auto& buckets = page_buckets_[context];
@@ -1857,7 +1853,8 @@ void gi_scene::schedule_lighting(const std::vector<viewer>& viewers)
         uint32_t allocated = 0;
         for(uint32_t i = 0; i < page_count; ++i)
         {
-            bool admit = buckets[i] != k_skip_bucket && buckets[i] <= cut_bucket;
+            // The share comes first: a page past it spends none of the budget.
+            bool admit = lit.size() < max_lit_pages_per_context && buckets[i] != k_skip_bucket && buckets[i] <= cut_bucket;
             if(admit && buckets[i] == cut_bucket)
             {
                 admit = cut_allocated + page_tiles_[i] <= cut_tiles;

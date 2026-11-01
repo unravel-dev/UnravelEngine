@@ -1,4 +1,3 @@
-// blit_pass.h
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
@@ -22,23 +21,16 @@ public:
         bool alpha_blend = false;
     };
 
-           /// Must be called once (after bgfx::init() and after `asset_manager` is registered in context).
+    /// Must be called once (after bgfx::init() and after `asset_manager` is registered in context).
     auto init(rtti::context& ctx) -> bool;
 
-           /// Executes the blit: copies `params.input` → `params.output`. Returns the actual output framebuffer.
+    /// Executes the blit: copies `params.input` -> `params.output`. Returns the actual output framebuffer.
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
 private:
-    /// If `output` is non-null and matches size/format of `input`, returns `output`.
-    /// Otherwise creates (or recreates) a matching framebuffer in `rview` and returns that.
-    auto create_or_update_output_fb(gfx::render_view& rview,
-                                    const gfx::frame_buffer::ptr& input,
-                                    const gfx::frame_buffer::ptr& output)
-        -> gfx::frame_buffer::ptr;
-
     struct blit_program : uniforms_cache
     {
-        /// Cache the “s_input” sampler uniform from the GPU program
+        /// Cache the "s_input" sampler uniform from the GPU program
         void cache_uniforms()
         {
             cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);

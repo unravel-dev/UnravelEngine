@@ -2,6 +2,7 @@
 
 #include "gi_pass_common.h"
 #include "gi_surface_cache_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -577,7 +578,7 @@ void gi_gather_pass::run_visualize_traces(const gi_run_params& params,
                                           const probe_targets& targets,
                                           bool radiance_cache_ready)
 {
-    if(!programs_->trace_visualize || !programs_->trace_visualize->is_valid())
+    if(!begin_program(programs_->trace_visualize))
     {
         return;
     }
@@ -589,7 +590,6 @@ void gi_gather_pass::run_visualize_traces(const gi_run_params& params,
     }
     gfx::render_pass pass("GI/Visualize Traces");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
-    programs_->trace_visualize->begin();
     bind_trace_inputs(params, layout, targets, radiance_cache_ready);
     bgfx::setBuffer(trace_output_stage, visualized_traces_, bgfx::Access::Write);
     const auto& cursor = params.visualize_traces.cursor;

@@ -68,6 +68,11 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
 {
     APP_SCOPE_PERF("Rendering/Bloom Pass");
 
+    if(!downsample_program_.program->begin() || !upsample_program_.program->begin())
+    {
+        return {};
+    }
+
     const auto& input = params.input;
     const auto& config = params.config;
 
@@ -92,8 +97,6 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
         pass.bind(mip0_fbo.get());
         pass.set_view_proj({}, {});
         pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
-
-        downsample_program_.program->begin();
 
         float pixel_size[4] = {1.0f / float(viewport_size.width),
                                1.0f / float(viewport_size.height),
@@ -146,8 +149,6 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
         pass.set_view_proj({}, {});
         pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
-        downsample_program_.program->begin();
-
         float pixel_size[4] = {1.0f / float(src_w), 1.0f / float(src_h), 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
@@ -174,7 +175,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
     // keeps its own downsampled content as the recursion base and total energy stays
     // at scene level while the halo widens.
     //
-    // LEGACY mode (threshold > 0): only thresholded highlights entered the pyramid;
+    // THRESHOLD mode (threshold > 0): only thresholded highlights entered the pyramid;
     // MIP_0 is cleared so the additive accumulation is purely the multi-scale bloom.
     const bool scatter_mode = config.threshold <= 0.0f;
     if(!scatter_mode)
@@ -187,7 +188,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
     }
 
     // Upsample from smallest mip back to MIP_0: lerp-blend in scatter mode,
-    // additive accumulation in legacy mode.
+    // additive accumulation in threshold mode.
     for(int i = 0; i < mip_count - 1; ++i)
     {
         int src_idx = mip_count - 1 - i;
@@ -205,8 +206,6 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
         pass.bind(fbo.get());
         pass.set_view_proj({}, {});
 
-        upsample_program_.program->begin();
-
         float pixel_size[4] = {1.0f / float(out_w), 1.0f / float(out_h), 0.0f, 0.0f};
         gfx::set_uniform(upsample_program_.u_pixel_size, pixel_size);
 
@@ -220,7 +219,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
         // Scatter mode: per-hop lerp factor (mip alpha modulates it); the shader emits
         // premultiplied (rgb * s, s) and ONE/INV_SRC_ALPHA blending realizes
         // dst = mix(dst, src, s) exactly -- including s == 0, which the mode flag in
-        // .y keeps on the premultiplied path (an identity hop, not the legacy output).
+        // .y keeps on the premultiplied path (an identity hop, not the additive output).
         const float hop_scatter =
             scatter_mode ? math::clamp(config.scatter * mip_tint.value.w, 0.0f, 1.0f) : 0.0f;
         float upsample_params[4] = {hop_scatter, scatter_mode ? 1.0f : 0.0f, 0.0f, 0.0f};

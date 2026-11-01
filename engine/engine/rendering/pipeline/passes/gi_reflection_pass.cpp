@@ -2,6 +2,7 @@
 
 #include "gi_pass_common.h"
 #include "gi_surface_cache_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -238,7 +239,7 @@ void gi_reflection_pass::run_feedback(const run_params& params, const frame_targ
 {
     const auto& gather = *params.gather;
     auto* feedback = gather.surface_cache_feedback;
-    if(feedback == nullptr || !feedback_program_ || !feedback_program_->is_valid())
+    if(feedback == nullptr || !begin_program(feedback_program_))
     {
         return;
     }
@@ -246,7 +247,6 @@ void gi_reflection_pass::run_feedback(const run_params& params, const frame_targ
     gfx::render_pass pass("GI/Reflections Feedback");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     feedback->begin_frame(pass.id, gather.gi_surface_cache->get_card_index_revision());
-    feedback_program_->begin();
     gfx::set_texture(uniforms_.s_gi_reflection_ray, 0, targets.ray);
     gfx::set_texture(uniforms_.s_gi_reflection_hit, 1, targets.hit);
     gfx::set_texture(uniforms_.s_gi_depth, 2, gather.g_buffer->get_texture(4));

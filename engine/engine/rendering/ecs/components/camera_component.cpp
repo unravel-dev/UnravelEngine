@@ -9,8 +9,7 @@ camera_component::camera_component()
 
 void camera_component::update(const math::transform& t)
 {
-    // Previous-frame matrices live in the ONE promoted TAA pair (camera::set_aa_data,
-    // frame-stamped at the render site); the old before-move snapshot chain is retired.
+    // Previous-frame matrices are recorded at the render site (camera::record_current_matrices).
     pipeline_camera_.get_camera().look_at(t.get_position(), t.get_position() + t.z_unit_axis(), t.y_unit_axis());
     // Per-view resource lifetime: every render_view access stamps the entry, so any
     // target the pipeline stopped touching (a feature turned off, a debug path gone

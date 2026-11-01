@@ -1,4 +1,5 @@
 #include "ssr_pass.h"
+#include "pass_helpers.h"
 #include <algorithm>
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -8,6 +9,20 @@
 
 namespace unravel
 {
+namespace
+{
+/// Compute group edge of the spatial denoise.
+constexpr uint32_t SSR_DENOISE_GROUP_SIZE = 8;
+/// Frames of the trace's temporal jitter before it repeats.
+constexpr uint32_t TRACE_FRAME_INDEX_PERIOD = 4;
+
+/// The trace resolution the settings ask for, capped at half: tracing below it breaks Hi-Z traversal, the temporal
+/// clamp and the spatial denoiser.
+auto get_capped_trace_resolution(trace_resolution requested) -> trace_resolution
+{
+    return get_divisor(requested) > get_divisor(trace_resolution::half) ? trace_resolution::half : requested;
+}
+} // namespace
 
 auto ssr_pass::init(rtti::context& ctx) -> bool
 {
@@ -25,9 +40,6 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     // Load composite shader
     auto fs_ssr_composite = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_composite.eshader");
 
-    // Load unified blur compute shader for cone tracing
-    auto cs_ssr_blur = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_blur.eshader");
-
     // Load spatial denoise compute shader
     auto cs_ssr_spatial_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_spatial_denoise.eshader");
 
@@ -43,48 +55,15 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     composite_program_.cache_uniforms();
     composite_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_composite);
 
-    // Create unified blur compute program for cone tracing
-    blur_compute_program_.cache_uniforms();
-    blur_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_blur);
-
     // Create spatial denoise compute program
     spatial_denoise_compute_program_.cache_uniforms();
     spatial_denoise_compute_program_.program = std::make_unique<gpu_program>(cs_ssr_spatial_denoise);
 
     // Validate all programs
     bool all_valid = fidelityfx_pixel_program_.is_valid() && temporal_resolve_program_.is_valid() &&
-                     composite_program_.is_valid() && blur_compute_program_.is_valid() &&
-                     spatial_denoise_compute_program_.is_valid();
+                     composite_program_.is_valid() && spatial_denoise_compute_program_.is_valid();
 
     return all_valid;
-}
-
-auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
-                                          const gfx::frame_buffer::ptr& reference,
-                                          const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr
-{
-    // If the caller provided an output framebuffer, just return it.
-    if(output)
-    {
-        return output;
-    }
-
-    // Otherwise, use the render_view to get or create the SSR output framebuffer
-    const auto& ssr_output_tex = rview.tex_acquire("SSR_OUTPUT",
-                                                   {.size = reference->get_size(),
-                                                    .format = bgfx::TextureFormat::RGBA16F,
-                                                    .flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
-                                                             BGFX_SAMPLER_V_CLAMP});
-
-    auto& ssr_output_fbo = rview.fbo_acquire("SSR_OUTPUT");
-    if(gfx::needs_recreate(ssr_output_fbo, {ssr_output_tex}))
-    {
-        ssr_output_fbo.reset();
-        ssr_output_fbo = std::make_shared<gfx::frame_buffer>();
-        ssr_output_fbo->populate({ssr_output_tex});
-    }
-
-    return ssr_output_fbo;
 }
 
 auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
@@ -104,15 +83,7 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
     distance_desc.format = bgfx::TextureFormat::R16F;
     const auto& ssr_curr_t_tex = rview.tex_acquire("SSR_CURR_T", distance_desc);
 
-    auto& ssr_curr_fbo = rview.fbo_acquire("SSR_CURR");
-    if(gfx::needs_recreate(ssr_curr_fbo, {ssr_curr_tex, ssr_curr_t_tex}))
-    {
-        ssr_curr_fbo.reset();
-        ssr_curr_fbo = std::make_shared<gfx::frame_buffer>();
-        ssr_curr_fbo->populate({ssr_curr_tex, ssr_curr_t_tex});
-    }
-
-    return ssr_curr_fbo;
+    return acquire_frame_buffer(rview, "SSR_CURR", {ssr_curr_tex, ssr_curr_t_tex});
 }
 
 auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
@@ -148,110 +119,7 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
     distance_desc.format = bgfx::TextureFormat::R16F;
     const auto& temp_t_tex = rview.tex_acquire("SSR_HISTORY_T_TEMP", distance_desc);
 
-    auto& temp_fbo = rview.fbo_acquire("SSR_HISTORY_TEMP");
-    if(gfx::needs_recreate(temp_fbo, {temp_tex, temp_t_tex}))
-    {
-        temp_fbo.reset();
-        temp_fbo = std::make_shared<gfx::frame_buffer>();
-        temp_fbo->populate({temp_tex, temp_t_tex});
-    }
-
-    return temp_fbo;
-}
-
-auto ssr_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
-{
-    // Ensure we have valid input
-    if(!params.g_buffer)
-    {
-        return nullptr;
-    }
-
-    pre_exposure_ = params.pre_exposure;
-
-    // Dispatch to appropriate implementation based on settings
-    return run_fidelityfx(rview, params);
-}
-
-auto ssr_pass::run_fidelityfx(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
-{
-    // Use the new three-pass pipeline by default
-    return run_fidelityfx_three_pass(rview, params);
-}
-
-
-auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
-                                             const gfx::texture::ptr& input_color,
-                                             const gfx::frame_buffer::ptr& g_buffer,
-                                             const fidelityfx_ssr_settings& settings) -> gfx::texture::ptr
-{
-    APP_SCOPE_PERF("Rendering/SSR/Blur Color Pass");
-    // Early validation
-    if(!input_color)
-    {
-        return nullptr;
-    }
-
-    if(!blur_compute_program_.program || !blur_compute_program_.program->is_valid())
-    {
-        return input_color; // Fallback to input texture
-    }
-
-    auto input_size = input_color->get_size();
-
-    // Get or create blurred color texture with mip chain
-    const auto& blurred_tex = rview.tex_acquire("SSR_BLURRED_COLOR",
-                                                {.size = input_size,
-                                                 .format = bgfx::TextureFormat::RGBA16F,
-                                                 .flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-                                                          BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT,
-                                                 .has_mips = true});
-
-    const uint32_t num_mips = settings.cone_tracing.max_mip_level + 1;
-    gfx::render_pass pass("Blur Compute Pass");
-
-    // Process each mip level using unified blur shader
-    for(int mip = 0; mip < num_mips; ++mip)
-    {
-        // Calculate mip size
-        int mip_width = (input_size.width >> mip) > 1 ? (input_size.width >> mip) : 1;
-        int mip_height = (input_size.height >> mip) > 1 ? (input_size.height >> mip) : 1;
-
-        // Calculate sigma based on mip level and base sigma
-        float sigma = settings.cone_tracing.blur_base_sigma; // * (1.0f + float(mip));
-
-        // Use unified blur compute shader
-        blur_compute_program_.program->begin();
-
-        // Set blur parameters: mip_level, sigma, base_width, base_height
-        if(mip == 0)
-        {
-            // Bind input color texture as read-only image
-            bgfx::setImage(1, input_color->native_handle(), 0, bgfx::Access::Read);
-        }
-        else
-        {
-            // Bind previous mip level as input read-only image
-            bgfx::setImage(1, blurred_tex->native_handle(), mip - 1, bgfx::Access::Read);
-        }
-
-        float blur_params[4] = {float(mip), sigma, 0.0f, 0.0f};
-        gfx::set_uniform(blur_compute_program_.u_blur_params, blur_params);
-
-        // Bind output image (current mip level of blurred texture)
-        bgfx::setImage(0, blurred_tex->native_handle(), mip, bgfx::Access::Write);
-
-        gfx::set_texture(blur_compute_program_.s_normal, 2, g_buffer->get_texture(1));
-
-        // Dispatch compute shader
-        uint32_t num_groups_x = (mip_width + 7) / 8;
-        uint32_t num_groups_y = (mip_height + 7) / 8;
-        gfx::dispatch(pass.id, blur_compute_program_.program->native_handle(), num_groups_x, num_groups_y, 1);
-
-        blur_compute_program_.program->end();
-    }
-
-    return blurred_tex;
+    return acquire_frame_buffer(rview, "SSR_HISTORY_TEMP", {temp_tex, temp_t_tex});
 }
 
 auto ssr_pass::create_or_update_ssr_denoise_fb(gfx::render_view& rview,
@@ -265,15 +133,7 @@ auto ssr_pass::create_or_update_ssr_denoise_fb(gfx::render_view& rview,
                                                   .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT |
                                                            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP});
 
-    auto& denoised_fbo = rview.fbo_acquire(name);
-    if(gfx::needs_recreate(denoised_fbo, {denoised_tex}))
-    {
-        denoised_fbo.reset();
-        denoised_fbo = std::make_shared<gfx::frame_buffer>();
-        denoised_fbo->populate({denoised_tex});
-    }
-
-    return denoised_fbo;
+    return acquire_frame_buffer(rview, name, {denoised_tex});
 }
 
 auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
@@ -281,7 +141,7 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
                                    const gfx::frame_buffer::ptr& g_buffer,
                                    const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr
 {
-    if(!spatial_denoise_compute_program_.is_valid())
+    if(!begin_program(spatial_denoise_compute_program_.program))
     {
         return ssr_curr;
     }
@@ -296,8 +156,8 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
     auto fb_a = create_or_update_ssr_denoise_fb(rview, "SSR_DENOISED_A", ssr_curr, trace_resolution::full);
     auto fb_b = create_or_update_ssr_denoise_fb(rview, "SSR_DENOISED_B", ssr_curr, trace_resolution::full);
     auto sz = fb_a->get_size();
-    const uint32_t gx = (sz.width + 7) / 8;
-    const uint32_t gy = (sz.height + 7) / 8;
+    const uint32_t gx = compute_group_count(sz.width, SSR_DENOISE_GROUP_SIZE);
+    const uint32_t gy = compute_group_count(sz.height, SSR_DENOISE_GROUP_SIZE);
 
     auto src_tex = ssr_curr->get_texture();
     gfx::frame_buffer::ptr dst_fb = fb_a;
@@ -305,8 +165,6 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
     for(int i = 0; i < num_passes; ++i)
     {
         gfx::render_pass pass(fmt::format("Spatial Denoise Pass {}", i).c_str());
-
-        spatial_denoise_compute_program_.program->begin();
 
         gfx::set_texture(spatial_denoise_compute_program_.s_ssr_input, 0, src_tex);
         bgfx::setImage(1, dst_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
@@ -333,8 +191,16 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
     return (dst_fb == fb_a) ? fb_b : fb_a;
 }
 
-auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
+auto ssr_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
+    // Ensure we have valid input
+    if(!params.g_buffer || !params.output)
+    {
+        return nullptr;
+    }
+
+    pre_exposure_ = params.pre_exposure;
+
     gfx::render_pass::push_scope("SSR");
     // Pass 1: SSR Trace - generates SSR_CURR
     auto ssr_curr_fb = run_ssr_trace(rview, params);
@@ -369,36 +235,24 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
                                                params.velocity_movers_recent,
                                                params.cam,
                                                params.settings.fidelityfx);
-    if(!ssr_history_fb)
-    {
-        gfx::render_pass::pop_scope();
-        return ssr_curr_fb; // Fallback to current frame
-    }
+    // No history this frame (just allocated, or no temporal program): the composite shows the temporal's input, the
+    // image a resolve with accumulation off would have written.
+    const auto& composite_color_fb = ssr_history_fb ? ssr_history_fb : temporal_input_fb;
 
-    // Pass 3: Composite - blends SSR_HIST + SSR_CURR + probe, writes to output
-    auto composite_fb =
-        run_composite(rview, ssr_history_fb, ssr_curr_fb, params.output, params.g_buffer, params.output);
+    // Pass 3: Composite - blends the resolved color by SSR_CURR's confidence into the output
+    auto composite_fb = run_composite(composite_color_fb, ssr_curr_fb, params.g_buffer, params.output);
     gfx::render_pass::pop_scope();
     return composite_fb;
 }
 
 auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
-    // SSR caps at half resolution: sub-half breaks Hi-Z, temporal clamp and the denoiser.
-    const auto trace_res = params.settings.fidelityfx.resolution;
+    if(!begin_program(fidelityfx_pixel_program_.program))
+    {
+        return nullptr;
+    }
+    const auto trace_res = get_capped_trace_resolution(params.settings.fidelityfx.resolution);
     auto ssr_curr_fbo = create_or_update_ssr_curr_fb(rview, params.g_buffer, trace_res);
-
-    // Generate blurred color buffer for cone tracing if enabled
-    gfx::texture::ptr blurred_color_buffer = nullptr;
-    if(params.settings.fidelityfx.enable_cone_tracing && params.previous_frame)
-    {
-        blurred_color_buffer =
-            generate_blurred_color_buffer(rview, params.previous_frame, params.g_buffer, params.settings.fidelityfx);
-    }
-    else
-    {
-        rview.tex_remove("SSR_BLURRED_COLOR");
-    }
 
     // ============================================================================
     // SSR Trace Pass
@@ -409,18 +263,11 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     pass.bind(ssr_curr_fbo.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
 
-    // Bind SSR trace program
-    fidelityfx_pixel_program_.program->begin();
-
     // Set input textures
     gfx::set_texture(fidelityfx_pixel_program_.s_color, 0, params.previous_frame);
     gfx::set_texture(fidelityfx_pixel_program_.s_normal, 1, params.g_buffer->get_texture(1));
     gfx::set_texture(fidelityfx_pixel_program_.s_depth, 2, params.g_buffer->get_texture(4));
     gfx::set_texture(fidelityfx_pixel_program_.s_hiz, 3, params.hiz_buffer);
-
-    // Set blurred color buffer for cone tracing (fallback to previous frame if not available)
-    auto cone_tracing_texture = blurred_color_buffer ? blurred_color_buffer : params.previous_frame;
-    gfx::set_texture(fidelityfx_pixel_program_.s_color_blurred, 4, cone_tracing_texture);
 
     // Set SSR parameters (max_steps, depth_tolerance, max_rays, brightness)
     float ssr_params[4] = {float(params.settings.fidelityfx.max_steps),
@@ -431,21 +278,9 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     gfx::set_uniform(fidelityfx_pixel_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
     pre_exposure_.bind();
 
-            
-    // Resolution scale MUST be per-axis. Computing a single scalar (e.g. full_w / half_w)
-    // and applying it to both axes silently breaks any case where the X and Y ratios
-    // disagree, which is exactly what happens at odd full-res W with even full-res H:
-    // e.g. (1233, 900) -> half (616, 450) gives X=2.00162 but Y=2.0. Reusing the X scale
-    // on the Y axis shifts the bottom half-res row's gbuffer fetch ~0.7 full-res pixels
-    // off, producing a garbage out-of-frustum ray origin and a visible noise band along
-    // the bottom of the viewport at odd widths.
-    auto ssr_size = ssr_curr_fbo->get_size();
-    auto g_buffer_size = params.g_buffer->get_size();
-    const float ssr_scale_x = float(g_buffer_size.width) / float(ssr_size.width);
-    const float ssr_scale_y = float(g_buffer_size.height) / float(ssr_size.height);
+    const auto ssr_scale = compute_trace_scale(params.g_buffer->get_size(), ssr_curr_fbo->get_size());
     // u_hiz_params layout: (hiz_width, hiz_height, scale_x, scale_y).
-    // num_mips was previously stored in .z but is unused by the shader.
-    float hiz_params[4] = {0.0f, 0.0f, ssr_scale_x, ssr_scale_y};
+    float hiz_params[4] = {0.0f, 0.0f, ssr_scale.x, ssr_scale.y};
     if(params.hiz_buffer)
     {
         hiz_params[0] = float(params.hiz_buffer->info.width);
@@ -460,18 +295,12 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
                             params.settings.fidelityfx.facing_reflections_fading};
     gfx::set_uniform(fidelityfx_pixel_program_.u_fade_params, fade_params);
 
-    // Set cone tracing parameters (cone_angle_bias, max_mip_level, frame_number, enable_cone_tracing)
-    float cone_params[4] = {
-        params.settings.fidelityfx.cone_tracing.cone_angle_bias,
-        float(params.settings.fidelityfx.cone_tracing.max_mip_level),
-        float(gfx::get_render_frame() % 4),                                 // frame number for temporal jitter
-        float(params.settings.fidelityfx.enable_cone_tracing ? 1.0f : 0.0f) // enable flag
-    };
-    gfx::set_uniform(fidelityfx_pixel_program_.u_cone_params, cone_params);
+    // x = frame number for temporal jitter.
+    float frame_params[4] = {float(gfx::get_render_frame() % TRACE_FRAME_INDEX_PERIOD), 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(fidelityfx_pixel_program_.u_ssr_frame_params, frame_params);
 
     // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered prev
-    // misaligns a still camera's reprojection by the jitter delta every frame (the GI
-    // reflection chain's measured lesson; every temporal consumer now shares this chain).
+    // misaligns a still camera's reprojection by the jitter delta every frame.
     auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(fidelityfx_pixel_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
@@ -500,7 +329,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
                                     const camera* cam,
                                     const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr
 {
-    if(!temporal_resolve_program_.is_valid())
+    if(!begin_program(temporal_resolve_program_.program))
     {
         return nullptr;
     }
@@ -534,9 +363,6 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::render_pass pass("Temporal Resolve Pass");
     pass.bind(temp_fbo.get());
     pass.set_view_proj(cam->get_view(), cam->get_projection());
-
-    // Bind temporal resolve program
-    temporal_resolve_program_.program->begin();
 
     // Set input textures
     gfx::set_texture(temporal_resolve_program_.s_ssr_curr, 0, ssr_curr->get_texture());
@@ -574,11 +400,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::set_uniform(temporal_resolve_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
     pre_exposure_.bind();
 
-    // Per-axis scale; see ssr trace pass for why scalar scale is wrong at odd full-res W.
-    auto history_size = history_tex->get_size();
-    auto g_buffer_size = g_buffer->get_size();
-    const float ssr_scale_x = float(g_buffer_size.width) / float(history_size.width);
-    const float ssr_scale_y = float(g_buffer_size.height) / float(history_size.height);
+    const auto ssr_scale = compute_trace_scale(g_buffer->get_size(), history_tex->get_size());
 
     // x = the CONTENT-LAG release ceiling: the trace samples PREV_SCENE_HDR, so a moving
     // emitter's radiance sweeps every glossy surface one frame late while geometry at the
@@ -587,11 +409,11 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // a shallow window is the CORRECT window for radiance that changes every frame.
     // y unused; zw = the resolution scale.
     const float release_ceiling = velocity_movers_recent ? 0.125f : 1.0f;
-    float fade_params[4] = {release_ceiling, 0.0f, ssr_scale_x, ssr_scale_y};
+    float fade_params[4] = {release_ceiling, 0.0f, ssr_scale.x, ssr_scale.y};
     gfx::set_uniform(temporal_resolve_program_.u_fade_params, fade_params);
 
-    // The TAA-unjittered previous pair (see the trace-side comment); keeps the legacy
-    // camera-pixel path jitter-aligned with the velocity buffer's convention.
+    // The TAA-unjittered previous pair (see the trace-side comment); keeps the camera-only
+    // reprojection jitter-aligned with the velocity buffer's convention.
     auto prev_view_proj = cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(temporal_resolve_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
@@ -619,20 +441,15 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     return temp_fbo;
 }
 
-auto ssr_pass::run_composite(gfx::render_view& rview,
-                             const gfx::frame_buffer::ptr& ssr_history,
+auto ssr_pass::run_composite(const gfx::frame_buffer::ptr& ssr_history,
                              const gfx::frame_buffer::ptr& ssr_curr,
-                             const gfx::frame_buffer::ptr& probe_buffer,
                              const gfx::frame_buffer::ptr& g_buffer,
                              const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr
 {
-    if(!composite_program_.is_valid())
+    if(!begin_program(composite_program_.program))
     {
         return nullptr;
     }
-
-    // Get or create output framebuffer using render_view
-    auto actual_output = create_or_update_output_fb(rview, g_buffer, output);
 
     // ============================================================================
     // Composite Pass
@@ -640,10 +457,7 @@ auto ssr_pass::run_composite(gfx::render_view& rview,
     APP_SCOPE_PERF("Rendering/SSR/Composite Pass");
 
     gfx::render_pass pass("Composite Pass");
-    pass.bind(actual_output.get());
-
-    // Bind composite program
-    composite_program_.program->begin();
+    pass.bind(output.get());
 
     // Set input textures
     gfx::set_texture(composite_program_.s_ssr_history, 0, ssr_history->get_texture());
@@ -667,19 +481,16 @@ auto ssr_pass::run_composite(gfx::render_view& rview,
     composite_program_.program->end();
     bgfx::discard();
 
-    return actual_output;
+    return output;
 }
 
 void ssr_pass::release_resources(gfx::render_view& rview)
 {
-    rview.fbo_remove("SSR_OUTPUT");
-    rview.tex_remove("SSR_OUTPUT");
     rview.fbo_remove("SSR_CURR");
     rview.tex_remove("SSR_CURR");
     rview.tex_remove("SSR_HISTORY");
     rview.fbo_remove("SSR_HISTORY_TEMP");
     rview.tex_remove("SSR_HISTORY_TEMP");
-    rview.tex_remove("SSR_BLURRED_COLOR");
     rview.fbo_remove("SSR_DENOISED_A");
     rview.tex_remove("SSR_DENOISED_A");
     rview.fbo_remove("SSR_DENOISED_B");

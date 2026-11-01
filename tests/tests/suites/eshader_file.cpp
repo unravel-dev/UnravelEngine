@@ -635,8 +635,8 @@ void test_mistyped_define_is_found(unravel::asset_manager& am, const fs::path& r
     check(pairs == std::vector<std::string>{"default = skinned"}, "a define nothing reads shows as an identical variant, and a real one does not");
 }
 
-/// None of these shaders exist, so nothing reaches a device. A pair with an empty shader is retried each frame until a
-/// reload brings it.
+/// None of these shaders exist, so nothing reaches a device. A pair with an empty shader is neither built nor refused:
+/// the revision counts both, and holding at 0 is what leaves begin() retrying until a reload brings the shader.
 void test_failed_loads_are_retried(unravel::asset_manager& am)
 {
     std::printf("test_failed_loads_are_retried\n");
@@ -646,9 +646,9 @@ void test_failed_loads_are_retried(unravel::asset_manager& am)
         return am.get_asset<gfx::shader>(get_key(name), unravel::load_flags::standard, unravel::load_mode::deferred);
     };
     unravel::gpu_program plain(get_deferred("vs_no_such_shader.eshader"), get_deferred("fs_no_such_shader.eshader"));
-    check(!plain.begin() && plain.was_repopulated(), "a pair that failed to load tries again each frame");
+    check(!plain.begin() && !plain.begin() && plain.get_revision() == 0u, "a pair that failed to load tries again each frame");
     unravel::gpu_program named(get_deferred("vs_no_such_shader.eshader"), "skinned", get_deferred("fs_no_such_shader.eshader"));
-    check(!named.begin() && named.was_repopulated(), "a shader that failed to load is not refused for a variant it does not have yet");
+    check(!named.begin() && named.get_revision() == 0u, "a shader that failed to load is not refused for a variant it does not have yet");
 }
 
 void test_shipped_shaders_compile(unravel::asset_manager& am, const fs::path& root)

@@ -45,18 +45,15 @@ auto reflection_probe_component::compute_projected_sphere_rect(irect32_t& rect,
     }
     else if(probe_.type == probe_type::box)
     {
-        float w2 = math::pow(scale.x * probe_.box_data.extents.x * 2.0f, 2.0f);
-        float h2 = math::pow(scale.y * probe_.box_data.extents.y * 2.0f, 2.0f);
-        float l2 = math::pow(scale.z * probe_.box_data.extents.z * 2.0f, 2.0f);
-        float d2 = w2 + h2 + l2;
-        float d = math::sqrt(d2);
+        // The extents are half sizes, and the influence reaches the transition distance past them.
+        const math::vec3 reach = math::abs(scale) * probe_.box_data.extents + probe_.box_data.transition_distance;
 
         return math::compute_projected_sphere_rect(rect.left,
                                                    rect.right,
                                                    rect.top,
                                                    rect.bottom,
                                                    position,
-                                                   d,
+                                                   math::length(reach),
                                                    view_origin,
                                                    view,
                                                    proj);

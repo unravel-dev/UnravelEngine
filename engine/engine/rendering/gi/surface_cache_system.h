@@ -10,6 +10,7 @@
 // For material::sptr, which is a nested typedef and so needs the complete type.
 #include <engine/rendering/material.h>
 #include <engine/rendering/gpu_light_buffer.h>
+#include <engine/rendering/gpu_program.h>
 
 #include <context/context.hpp>
 #include <hpp/uuid.hpp>
@@ -116,9 +117,22 @@ public:
         return clipmap_instances_;
     }
 
-    auto get_atlas() -> sdf_atlas&
+    auto get_atlas() const -> const sdf_atlas&
     {
         return atlas_;
+    }
+
+    /// Binds what a tracer of the placed fields reads (gi/sdf_common.sh): the brick atlas at stage 0, its header and
+    /// indirection tables at 1 and 2, the instance list at 3, the cull grid at 12, and their uniforms.
+    void bind_sdf_instances(const gfx::program::uniform_ptr& s_sdf_atlas,
+                            const gfx::program::uniform_ptr& u_sdf_grid_params,
+                            const gfx::program::uniform_ptr& u_sdf_params) const;
+
+    /// @p scn is the scene this frame's world state describes. update_world serves one scene per frame: a pass of
+    /// another scene must not read the buffers.
+    auto is_world_scene(const scene& scn) const -> bool
+    {
+        return world_scene_ == &scn;
     }
 
     auto get_light_buffer() const -> const gpu_light_buffer&
@@ -272,6 +286,10 @@ private:
         uint64_t last_used_frame = 0;
         ///< One-time "this field is a phantom" diagnostic fired; see acquire_field.
         bool thickness_warned = false;
+        ///< The finest level this frame's requests wanted so far (acquire_field). No request yet: the maximum.
+        uint32_t finest_wanted_mip = std::numeric_limits<uint32_t>::max();
+        ///< World frame the record first held a field. No field yet: the maximum.
+        uint64_t first_placed_frame = std::numeric_limits<uint64_t>::max();
         ///< Atlas release generation at the last upload attempt, or @ref never_attempted.
         ///
         ///< A refusal for want of room is retried only once the atlas has actually freed something,
@@ -281,12 +299,6 @@ private:
         uint32_t attempt_generation = never_attempted;
     };
 
-    /**
-     * @brief Returns the header index for a mesh, uploading its field on first use.
-     *
-     * Also marks the record as used this frame, which is what keeps it out of the sweep at the end
-     * of @ref update_world.
-     */
     /// What a submesh got from the atlas: a header index, and which level of its chain is behind
     /// it. @ref sdf_atlas::invalid_index means no field this frame.
     struct acquired_field
@@ -302,6 +314,12 @@ private:
     /// beside it when it is finer.
     auto complete_acquired_field(mesh_residency& record, const mesh& m, uint32_t submesh_index) -> acquired_field;
 
+    /**
+     * @brief Returns the header index for a mesh, uploading its field on first use.
+     *
+     * Also marks the record as used this frame, which is what keeps it out of the sweep at the end
+     * of @ref update_world.
+     */
     auto acquire_field(const hpp::uuid& mesh_uid,
                        const mesh& m,
                        uint32_t submesh_index,
@@ -333,7 +351,8 @@ private:
     /// Drops every field to a coarser level once the atlas has run out, and re-places them.
     void apply_atlas_pressure();
 
-    ///< Level every field STARTS its residency walk at, raised when the atlas runs out.
+    ///< Level every field STARTS its residency walk at, raised when the atlas runs out and back to 0 when the sweep
+    ///< releases every field it was raised for (release_unused_fields).
     ///
     ///< Without it the walk is greedy and first-come-first-served: while the atlas has room every
     ///< field takes its finest level, so the first arrivals spend the whole atlas and the fallback
@@ -341,9 +360,6 @@ private:
     ///< level. Biasing the START of the walk is what turns "the last ones lose" into "everyone is
     ///< a little coarser".
     uint32_t global_mip_bias_ = 0;
-    ///< Rejected-brick total at the last bias decision, so a bump happens once per overrun rather
-    ///< than once per refused mesh.
-    uint64_t acknowledged_rejected_bricks_ = 0;
 
     /**
      * @brief Releases every field nothing referenced this frame.
@@ -530,6 +546,10 @@ private:
     /// Frame the world state was last rebuilt in, so several cameras in one frame share one
     /// rebuild. Starts at a value no frame counter produces, so the first call always runs.
     uint64_t world_frame_ = std::numeric_limits<uint64_t>::max();
+    /// The scene of that rebuild; compared only, never read through.
+    const scene* world_scene_ = nullptr;
+    /// A second scene in one frame was reported (update_world).
+    bool has_warned_second_scene_ = false;
 };
 
 } // namespace unravel

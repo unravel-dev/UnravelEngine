@@ -114,9 +114,6 @@ private:
     /// Entries per axis of the tone curve's table (TONEMAPPING_LUT_SIZE in tonemapping_lut.sh).
     static constexpr std::uint32_t lut_size = 52;
 
-    auto create_or_update_output_fb(gfx::render_view& rview,
-                                    const gfx::frame_buffer::ptr& input,
-                                    const gfx::frame_buffer::ptr& output) -> gfx::frame_buffer::ptr;
     /// The view's table of the colour grading, tone curve and display encoding of @p config, rendered again only
     /// when they changed (fs_tonemapping_lut.eshader).
     auto update_lut(gfx::render_view& rview, const settings& config) -> const gfx::texture::ptr&;

@@ -1,14 +1,14 @@
 [variants]
 default                 ASSAO_QUALITY=0 ASSAO_ADAPTIVE_BASE=false
-q0_normal_rgba16f       ASSAO_QUALITY=0 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_MAP_RGBA16f
+q0_gbuffer_normals      ASSAO_QUALITY=0 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_OCTAHEDRON
 q1                      ASSAO_QUALITY=1 ASSAO_ADAPTIVE_BASE=false
-q1_normal_rgba16f       ASSAO_QUALITY=1 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_MAP_RGBA16f
+q1_gbuffer_normals      ASSAO_QUALITY=1 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_OCTAHEDRON
 q2                      ASSAO_QUALITY=2 ASSAO_ADAPTIVE_BASE=false
-q2_normal_rgba16f       ASSAO_QUALITY=2 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_MAP_RGBA16f
+q2_gbuffer_normals      ASSAO_QUALITY=2 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_OCTAHEDRON
 q3                      ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=false
-q3_normal_rgba16f       ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_MAP_RGBA16f
+q3_gbuffer_normals      ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=false SSAO_NORMAL_OCTAHEDRON
 q3base                  ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=true
-q3base_normal_rgba16f   ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=true SSAO_NORMAL_MAP_RGBA16f
+q3base_gbuffer_normals  ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=true SSAO_NORMAL_OCTAHEDRON
 
 [code]
 /*
@@ -80,11 +80,7 @@ CONST(uint g_numTaps[5]) = { 3, 5, 12, 0, 0 };
 
 SAMPLER2D(s_viewspaceDepthSource,  0);
 SAMPLER2D(s_viewspaceDepthSourceMirror,  1);
-#ifdef SSAO_NORMAL_MAP_RGBA16f
-IMAGE2D_RO(s_normalmapSource, rgba16f, 2);
-#else
-IMAGE2D_RO(s_normalmapSource, rgba8, 2);
-#endif
+SAMPLER2D(s_normalmapSource, 2);
 BUFFER_RO(s_loadCounter, uint, 3);
 SAMPLER2D(s_importanceMap,  4);
 IMAGE2D_ARRAY_RO(s_baseSSAO, rg8, 5);
@@ -147,7 +143,7 @@ vec4 CalculateEdges( const float centerZ, const float leftZ, const float rightZ,
 
 vec3 DecodeNormal( vec3 encodedNormal )
 {
-#ifdef SSAO_NORMAL_MAP_RGBA16f
+#ifdef SSAO_NORMAL_OCTAHEDRON
     vec3 normal = decodeNormalOctahedron(encodedNormal.xy);
 #else
     vec3 normal = encodedNormal * u_normalsUnpackMul.xxx + u_normalsUnpackAdd.xxx;
@@ -167,7 +163,7 @@ vec3 DecodeNormal( vec3 encodedNormal )
 
 vec3 LoadNormal( ivec2 pos, ivec2 offset )
 {
-    vec3 encodedNormal = imageLoad(s_normalmapSource, pos + offset ).xyz;
+    vec3 encodedNormal = texelFetch(s_normalmapSource, pos + offset, 0).xyz;
     return DecodeNormal( encodedNormal );
 }
 

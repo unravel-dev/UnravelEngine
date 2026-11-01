@@ -343,6 +343,22 @@ void test_weight_past_the_vertices_is_skipped()
     check(are_corners_skinned_to_their_rows(data), "the other weights still skin their vertices");
 }
 
+void test_skinning_matrices_keep_nothing_of_another_palette()
+{
+    skin_bind_data input_bind_data;
+    input_bind_data.add_bone(skin_bind_data::bone_influence{});
+    const std::vector<math::mat4> input_nodes = {math::translate(math::mat4(1.0f), math::vec3(1.0f, 2.0f, 3.0f))};
+    bone_palette input_valid_palette(4);
+    input_valid_palette.assign_bones(std::vector<uint32_t>{0});
+    check(input_valid_palette.get_skinning_matrices(input_nodes, input_bind_data).front() == input_nodes.front(),
+          "a bone with a node takes its matrix");
+    constexpr uint32_t INPUT_BONE_WITHOUT_NODE = 7;
+    bone_palette input_skipped_palette(4);
+    input_skipped_palette.assign_bones(std::vector<uint32_t>{INPUT_BONE_WITHOUT_NODE});
+    check(input_skipped_palette.get_skinning_matrices(input_nodes, input_bind_data).front() == math::mat4(1.0f),
+          "a bone without a node is identity, not the matrix the thread's previous palette left");
+}
+
 auto run_mesh_skinning_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
@@ -353,6 +369,7 @@ auto run_mesh_skinning_suite(rtti::context& /*ctx*/) -> int
     test_corner_past_the_vertices_is_refused();
     test_weight_past_the_vertices_is_skipped();
     test_weights_are_normalized();
+    test_skinning_matrices_keep_nothing_of_another_palette();
     std::printf("  %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

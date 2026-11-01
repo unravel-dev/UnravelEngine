@@ -12,6 +12,13 @@ namespace unravel
 {
 /**
  * @brief Class representing a GPU program.
+ *
+ * The internal program is never null, and every method is safe while it cannot run: a shader that failed to build
+ * leaves an empty program whose native_handle() is invalid.
+ *
+ * begin() is the one gate for a frame's work: a pass calls it before binding anything, and skips its draw or dispatch
+ * when it returns false. It also rebuilds the program from reloaded shaders, so work gated on is_valid() instead would
+ * never pick up a shader fixed after a failed start. is_valid() only reports the state, for init() results.
  */
 class gpu_program
 {
@@ -58,7 +65,7 @@ public:
      * @brief Begins usage of the program. Checks validity of attached shaders and
      * recreates the internal program if necessary.
      *
-     * @return true if the program begins successfully, false otherwise.
+     * @return true if the program can run, false if the work that needs it must be skipped.
      */
     auto begin() -> bool;
 
@@ -142,7 +149,7 @@ public:
     /**
      * @brief Retrieves the native handle of the internal shader program.
      *
-     * @return The native handle of the program.
+     * @return The native handle of the program; an invalid handle when the program cannot run.
      */
     auto native_handle() const -> gfx::program::handle_type_t;
 
@@ -154,16 +161,17 @@ public:
     auto get_shaders() const -> const std::vector<asset_handle<gfx::shader>>&;
 
     /**
-     * @brief Checks if the GPU program is valid.
+     * @brief Checks if the GPU program is valid, without picking up reloaded shaders (see begin()).
      *
      * @return true if the program is valid, false otherwise.
      */
     auto is_valid() const -> bool;
 
     /**
-     * @brief True when begin() just rebuilt the program after a shader asset reload.
+     * @brief Counts the rebuilds of the internal program. Work cached from the program's output, per view for instance,
+     *        holds only while this stays the same.
      */
-    auto was_repopulated() const -> bool;
+    auto get_revision() const -> std::uint32_t;
 
     /**
      * @brief Populates the GPU program.
@@ -204,8 +212,8 @@ private:
     std::vector<asset_handle<gfx::shader>> shaders_; ///< Shaders that created this program.
     std::vector<std::string> variants_;              ///< The variant used of each shader.
     shader_assets shaders_cached_{nullptr, nullptr}; ///< Cached shaders.
-    std::shared_ptr<gfx::program> program_;          ///< The GPU program.
-    bool repopulated_ = false;
+    std::shared_ptr<gfx::program> program_ = std::make_shared<gfx::program>(); ///< The GPU program, never null.
+    std::uint32_t revision_ = 0;                     ///< Rebuilds of the program.
 };
 
 /**

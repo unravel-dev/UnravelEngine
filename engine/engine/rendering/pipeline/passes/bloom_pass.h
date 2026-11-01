@@ -23,14 +23,14 @@ public:
         /// runs before bloom, so scatter intensity is a small global lift
         /// (~0.15 EV at the default) on top of the locked exposure; treat it as
         /// part of the look, not as energy-neutral.
-        /// > 0 selects the LEGACY mode: only pixels above this post-exposure
-        /// luminance enter the pyramid (existing scenes keep their look).
+        /// > 0 selects the THRESHOLD mode: only pixels above this post-exposure
+        /// luminance enter the pyramid.
         float threshold = 0.0f;
         float soft_knee = 0.5f;
         float clamp = 100.0f;
         /// Bloom strength: the pyramid is added as `scene + pyramid * intensity`.
         /// Scatter mode: 0.1-0.3 is a typical filmic glow (the pyramid carries
-        /// scene-level energy). Legacy mode: additive multiplier as before.
+        /// scene-level energy). Threshold mode: additive multiplier.
         float intensity = 0.15f;
         /// Scatter mode only: per-hop lerp factor of the upsample recursion.
         /// Higher pushes energy toward the wider mips (bigger, softer halo).
@@ -38,7 +38,7 @@ public:
         int mip_count = 8;
 
         // Per-mip tint (RGB) and weight (alpha). Tints 1..5 are applied during the
-        // upsample cascade (indexed by SOURCE mip). Legacy mode: alpha is that band's
+        // upsample cascade (indexed by SOURCE mip). Threshold mode: alpha is that band's
         // additive weight (0 = band disabled). Scatter mode: alpha scales the hop's
         // lerp factor; 0 makes the hop an identity, truncating the WIDER bands above it.
         // mip0_tint is applied where the tonemapper adds the assembled pyramid (the

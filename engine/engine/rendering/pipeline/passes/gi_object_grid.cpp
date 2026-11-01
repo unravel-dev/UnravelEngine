@@ -96,22 +96,6 @@ void gi_object_grid::bind(uint8_t stage, float card_bias_scale) const
     gfx::set_uniform(uniforms_.u_gi_object_grid_params, get_params(card_bias_scale));
 }
 
-void gi_object_grid::bind_sdf_instances(const surface_cache_system& gi_scene) const
-{
-    auto& atlas = const_cast<surface_cache_system&>(gi_scene).get_atlas();
-    gfx::set_texture(uniforms_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(3, gi_scene.get_instance_buffer(), bgfx::Access::Read);
-    bgfx::setBuffer(12, gi_scene.get_grid_buffer(), bgfx::Access::Read);
-    gfx::set_uniform(uniforms_.u_sdf_grid_params, gi_scene.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
-    const math::vec4 sdf_params(float(atlas.get_atlas_brick_dim()),
-                                float(atlas.get_atlas_voxel_dim()),
-                                float(gi_scene.get_instances().size()),
-                                0.0f);
-    gfx::set_uniform(uniforms_.u_sdf_params, sdf_params);
-}
-
 void gi_object_grid::update(const surface_cache_system& gi_scene, const surface_cache_view& view_cache)
 {
     if(!is_ready() || !view_cache.get_clipmap_gpu().is_valid())
@@ -120,11 +104,12 @@ void gi_object_grid::update(const surface_cache_system& gi_scene, const surface_
     }
     const auto& clipmap = view_cache.get_clipmap();
     const uint32_t resolution = view_cache.get_clipmap_gpu().get_resolution() / object_grid_downsample;
-    if(gi_scene.get_instances().size() >= size_t(gi::GI_OBJECT_GRID_MAX_ID) && !has_warned_ids_)
+    // A cell stores index + 1 with 0 for empty, so the ids name exactly GI_OBJECT_GRID_MAX_ID instances.
+    if(gi_scene.get_instances().size() > size_t(gi::GI_OBJECT_GRID_MAX_ID) && !has_warned_ids_)
     {
         APPLOG_WARNING("[GI] {} GI instances: the object grid names {} at most; hits on the others read no cards.",
                        gi_scene.get_instances().size(),
-                       gi::GI_OBJECT_GRID_MAX_ID - 1);
+                       gi::GI_OBJECT_GRID_MAX_ID);
         has_warned_ids_ = true;
     }
     if(resolution != resolution_ || !texture_)
@@ -226,7 +211,7 @@ void gi_object_grid::update(const surface_cache_system& gi_scene, const surface_
         const float voxel_extent = 0.5f * lvl.voxel_size;
         const float reach = object_grid_diagonal * 0.5f * cell_size + object_grid_range_voxel_extents * voxel_extent;
         program_->begin();
-        bind_sdf_instances(gi_scene);
+        gi_scene.bind_sdf_instances(uniforms_.s_sdf_atlas, uniforms_.u_sdf_grid_params, uniforms_.u_sdf_params);
         // The level just composed: cells far from every surface skip their instance walk.
         const auto& clipmap_gpu = view_cache.get_clipmap_gpu();
         gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());

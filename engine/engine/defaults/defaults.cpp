@@ -758,55 +758,55 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
     {
         const auto id = "engine:/embedded/cube";
         auto instance = std::make_shared<mesh>();
-        instance->create_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1, mesh_create_origin::center);
+        instance->create_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/cube_rounded";
         auto instance = std::make_shared<mesh>();
-        instance->create_rounded_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1, mesh_create_origin::center);
+        instance->create_rounded_cube(gfx::mesh_vertex::get_layout(), 1.0f, 1.0f, 1.0f, 1, 1, 1);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/sphere";
         auto instance = std::make_shared<mesh>();
-        instance->create_sphere(gfx::mesh_vertex::get_layout(), 0.5f, 20, 20, mesh_create_origin::center);
+        instance->create_sphere(gfx::mesh_vertex::get_layout(), 0.5f, 20, 20);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/plane";
         auto instance = std::make_shared<mesh>();
-        instance->create_plane(gfx::mesh_vertex::get_layout(), 10.0f, 10.0f, 1, 1, mesh_create_origin::center);
+        instance->create_plane(gfx::mesh_vertex::get_layout(), 10.0f, 10.0f, 1, 1);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/cylinder";
         auto instance = std::make_shared<mesh>();
-        instance->create_cylinder(gfx::mesh_vertex::get_layout(), 0.5f, 2.0f, 20, 20, mesh_create_origin::center);
+        instance->create_cylinder(gfx::mesh_vertex::get_layout(), 0.5f, 2.0f, 20, 20);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/capsule_2m";
         auto instance = std::make_shared<mesh>();
-        instance->create_capsule(gfx::mesh_vertex::get_layout(), 0.5f, 2.0f, 20, 20, mesh_create_origin::center);
+        instance->create_capsule(gfx::mesh_vertex::get_layout(), 0.5f, 2.0f, 20, 20);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/capsule_1m";
         auto instance = std::make_shared<mesh>();
-        instance->create_capsule(gfx::mesh_vertex::get_layout(), 0.5f, 1.0f, 20, 20, mesh_create_origin::center);
+        instance->create_capsule(gfx::mesh_vertex::get_layout(), 0.5f, 1.0f, 20, 20);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/cone";
         auto instance = std::make_shared<mesh>();
-        instance->create_cone(gfx::mesh_vertex::get_layout(), 0.5f, 0.0f, 2, 20, 20, mesh_create_origin::bottom);
+        instance->create_cone(gfx::mesh_vertex::get_layout(), 0.5f, 2, 20, 20);
         manager.get_asset_from_instance(id, instance);
     }
     {
         const auto id = "engine:/embedded/torus";
         auto instance = std::make_shared<mesh>();
-        instance->create_torus(gfx::mesh_vertex::get_layout(), 1.0f, 0.5f, 20, 20, mesh_create_origin::center);
+        instance->create_torus(gfx::mesh_vertex::get_layout(), 1.0f, 0.5f, 20, 20);
         manager.get_asset_from_instance(id, instance);
     }
     {
@@ -835,7 +835,6 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
                                      25.0f,
                                      25.0f,
                                      4.0f,
-                                     mesh_create_origin::center,
                                      true);
         manager.get_asset_from_instance(id, instance);
     }

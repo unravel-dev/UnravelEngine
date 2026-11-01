@@ -44,13 +44,6 @@ enum class mesh_status
     prepared
 };
 
-enum class mesh_create_origin
-{
-    bottom,
-    center,
-    top
-};
-
 /**
  * @brief Structure describing how a skinned mesh should be bound to any bones
  * that influence its vertices.
@@ -201,40 +194,15 @@ public:
     bone_palette(uint32_t paletteSize);
 
     /**
-     * @brief Gathers the bone/palette information and matrices ready for drawing the skinned mesh.
+     * @brief Gathers the matrices ready for drawing the skinned mesh: one per palette bone, identity for a bone
+     * without a node or bind data.
      *
      * @param node_transforms The node transforms.
      * @param bind_data The skin bind data.
-     * @param compute_inverse_transpose Whether to compute the inverse transpose of the matrices.
-     * @return std::vector<math::transform> The skinning matrices.
+     * @return The skinning matrices, in a per-thread buffer valid until this thread's next call.
      */
-    auto get_skinning_matrices(const std::vector<math::transform>& node_transforms,
-                               const skin_bind_data& bind_data) const -> const std::vector<math::mat4>&;
-
     auto get_skinning_matrices(const std::vector<math::mat4>& node_transforms, const skin_bind_data& bind_data) const
         -> const std::vector<math::mat4>&;
-
-    /**
-     * @brief Determines the relevant "fit" information that can be used to discover if and how the specified
-     * combination of bones will fit into this palette.
-     *
-     * @param input The input bone index map.
-     * @param current_space The current space available in the palette.
-     * @param common_base The common base index.
-     * @param additional_bones The number of additional bones required.
-     */
-    void compute_palette_fit(bone_index_map_t& input,
-                             int32_t& current_space,
-                             int32_t& common_base,
-                             int32_t& additional_bones);
-
-    /**
-     * @brief Assigns the specified bones (and faces) to this bone palette.
-     *
-     * @param bones The bones to assign.
-     * @param faces The faces influenced by these bones.
-     */
-    void assign_bones(bone_index_map_t& bones, std::vector<uint32_t>& faces);
 
     /**
      * @brief Assigns the specified bones to this bone palette.
@@ -274,13 +242,6 @@ public:
     auto get_data_group() const -> uint32_t;
 
     /**
-     * @brief Retrieves the list of faces assigned to this palette.
-     *
-     * @return std::vector<uint32_t>& The list of faces.
-     */
-    auto get_influenced_faces() -> std::vector<uint32_t>&;
-
-    /**
      * @brief Retrieves the indices of the bones referenced by this palette.
      *
      * @return const std::vector<uint32_t>& The list of bone indices.
@@ -301,18 +262,11 @@ public:
      */
     void set_data_group(uint32_t group);
 
-    /**
-     * @brief Clears out the temporary face influences array.
-     */
-    void clear_influenced_faces();
-
 protected:
     ///< Sorted list of bones in this palette.
     bone_index_map_t bones_lut_;
     ///< Main palette of indices that reference the bones outlined in the main skin binding data.
     std::vector<uint32_t> bones_;
-    ///< List of faces assigned to this palette.
-    std::vector<uint32_t> faces_;
     ///< The data group identifier used to separate the mesh data into submeshes relevant tothis bone palette.
     uint32_t data_group_id_;
     ///< The maximum size of the palette.
@@ -598,7 +552,6 @@ public:
      * @return true If the vertex source was successfully set.
      * @return false If setting the vertex source failed.
      */
-    auto set_vertex_source(void* source, uint32_t vertex_count, const bgfx::VertexLayout& source_format) -> bool;
     auto set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const bgfx::VertexLayout& source_format)
         -> bool;
 
@@ -639,7 +592,6 @@ public:
      * @param height The height of the plane.
      * @param width_segments The number of segments along the width.
      * @param height_segments The number of segments along the height.
-     * @param origin The origin of the plane.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the plane was successfully created.
      * @return false If creating the plane failed.
@@ -649,7 +601,6 @@ public:
                       float height,
                       uint32_t width_segments,
                       uint32_t height_segments,
-                      mesh_create_origin origin,
                       bool hardware_copy = true) -> bool;
 
     /**
@@ -677,7 +628,6 @@ public:
                           float half_extent_x,
                           float half_extent_z,
                           float height_scale,
-                          mesh_create_origin origin,
                           bool hardware_copy = true) -> bool;
 
     /**
@@ -690,7 +640,6 @@ public:
      * @param width_segments The number of segments along the width.
      * @param height_segments The number of segments along the height.
      * @param depth_segments The number of segments along the depth.
-     * @param origin The origin of the cube.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the cube was successfully created.
      * @return false If creating the cube failed.
@@ -702,7 +651,6 @@ public:
                      uint32_t width_segments,
                      uint32_t height_segments,
                      uint32_t depth_segments,
-                     mesh_create_origin origin,
                      bool hardware_copy = true) -> bool;
 
     auto create_rounded_cube(const bgfx::VertexLayout& format,
@@ -712,7 +660,6 @@ public:
                     uint32_t width_segments,
                     uint32_t height_segments,
                     uint32_t depth_segments,
-                    mesh_create_origin origin,
                     bool hardware_copy = true) -> bool;
 
     /**
@@ -722,7 +669,6 @@ public:
      * @param radius The radius of the sphere.
      * @param stacks The number of stacks.
      * @param slices The number of slices.
-     * @param origin The origin of the sphere.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the sphere was successfully created.
      * @return false If creating the sphere failed.
@@ -731,7 +677,6 @@ public:
                        float radius,
                        uint32_t stacks,
                        uint32_t slices,
-                       mesh_create_origin origin,
                        bool hardware_copy = true) -> bool;
 
     /**
@@ -742,7 +687,6 @@ public:
      * @param height The height of the cylinder.
      * @param stacks The number of stacks.
      * @param slices The number of slices.
-     * @param origin The origin of the cylinder.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the cylinder was successfully created.
      * @return false If creating the cylinder failed.
@@ -752,7 +696,6 @@ public:
                          float height,
                          uint32_t stacks,
                          uint32_t slices,
-                         mesh_create_origin origin,
                          bool hardware_copy = true) -> bool;
 
     /**
@@ -763,7 +706,6 @@ public:
      * @param height The height of the capsule.
      * @param stacks The number of stacks.
      * @param slices The number of slices.
-     * @param origin The origin of the capsule.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the capsule was successfully created.
      * @return false If creating the capsule failed.
@@ -773,7 +715,6 @@ public:
                         float height,
                         uint32_t stacks,
                         uint32_t slices,
-                        mesh_create_origin origin,
                         bool hardware_copy = true) -> bool;
 
     /**
@@ -781,22 +722,18 @@ public:
      *
      * @param format The vertex format.
      * @param radius The base radius of the cone.
-     * @param radius_tip The tip radius of the cone.
      * @param height The height of the cone.
      * @param stacks The number of stacks.
      * @param slices The number of slices.
-     * @param origin The origin of the cone.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the cone was successfully created.
      * @return false If creating the cone failed.
      */
     auto create_cone(const bgfx::VertexLayout& format,
                      float radius,
-                     float radius_tip,
                      float height,
                      uint32_t stacks,
                      uint32_t slices,
-                     mesh_create_origin origin,
                      bool hardware_copy = true) -> bool;
 
     /**
@@ -807,7 +744,6 @@ public:
      * @param inner_radius The inner radius of the torus.
      * @param bands The number of bands.
      * @param sides The number of sides.
-     * @param origin The origin of the torus.
      * @param hardware_copy Whether to use hardware copy.
      * @return true If the torus was successfully created.
      * @return false If creating the torus failed.
@@ -817,7 +753,6 @@ public:
                       float inner_radius,
                       uint32_t bands,
                       uint32_t sides,
-                      mesh_create_origin origin,
                       bool hardware_copy = true) -> bool;
 
     /**
@@ -1073,28 +1008,6 @@ public:
     auto get_submesh_node_transforms(uint32_t lod_index = 0) const -> std::vector<math::transform>;
 
     /**
-     * @brief Calculates the screen rectangle of the mesh based on its world transform and the camera.
-     * This version uses a conservative approach - if any corners are behind the camera, it returns
-     * the full viewport as the screen rect. Fast but may overestimate coverage.
-     *
-     * @param world The world transform of the mesh.
-     * @param cam The camera.
-     * @return irect32_t The screen rectangle.
-     */
-    auto calculate_screen_rect(const math::transform& world, const camera& cam) const -> irect32_t;
-
-    /**
-     * @brief Calculates the screen rectangle of the mesh with precise near-plane clipping.
-     * This version properly clips edges that cross the near plane for accurate screen coverage.
-     * More accurate but slightly more expensive than calculate_screen_rect.
-     *
-     * @param world The world transform of the mesh.
-     * @param cam The camera.
-     * @return irect32_t The screen rectangle.
-     */
-    auto calculate_screen_rect_precise(const math::transform& world, const camera& cam) const -> irect32_t;
-
-    /**
      * @brief Retrieves information about the submesh of the mesh associated with the specified data group identifier.
      *
      * @param data_group_id The data group identifier.
@@ -1117,9 +1030,10 @@ public:
     auto get_status() const -> mesh_status;
 
     /**
-     * @brief Gets the number of data groups(materials) for this mesh.
+     * @brief Gets the number of material slots this mesh draws with: its highest data group id plus one, because a
+     * slot's index is its data group id, so ids need not be contiguous.
      *
-     * @return size_t The number of data groups.
+     * @return size_t The number of material slots.
      */
     auto get_data_groups_count() const -> size_t;
 
@@ -1196,13 +1110,6 @@ public:
      * @return Number of LODs (including base LOD 0)
      */
     auto get_lod_count() const -> uint32_t;
-
-    /**
-     * @brief Gets submeshes for a specific LOD level.
-     * @param lod_index LOD index (0 = base, 1+ = simplified)
-     * @return Pointer to submesh array, or nullptr if LOD doesn't exist
-     */
-    auto get_lod_submeshes(uint32_t lod_index) const -> const submesh_array_t*;
 
     /**
      * @brief Gets the face count for a specific LOD level.
@@ -1468,6 +1375,9 @@ protected:
 
     ///< Additional LOD levels (LOD 1, 2, 3, ...) with simplified index buffers.
     std::vector<lod_level> lods_;
+    /// The simplified level @p lod_index names; null for the base level. Every getter taking a LOD index reads through
+    /// it, so an index past the last level reads the base level everywhere.
+    auto find_lod_level(uint32_t lod_index) const -> const lod_level*;
     ///< Current LOD count (including base LOD 0).
     uint32_t lod_count_ = 1;
 

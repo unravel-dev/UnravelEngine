@@ -13,8 +13,8 @@ namespace unravel
 
 namespace
 {
-constexpr float k_deferred_dither_alpha = 0.25f;
-constexpr float k_legacy_opaque_cutoff_sentinel = 0.25f;
+constexpr float DEFERRED_DITHER_ALPHA = 0.25f;
+constexpr float LEGACY_OPAQUE_CUTOFF_SENTINEL = 0.25f;
 } // namespace
 
 auto material::clone() const -> material::sptr
@@ -181,7 +181,7 @@ void pbr_material::set_alpha_cutoff(float cutoff)
 
 void pbr_material::sync_surface_alpha_channel()
 {
-    surface_data_.w = alpha_mode_ == alpha_mode::mask ? alpha_cutoff_ : k_deferred_dither_alpha;
+    surface_data_.w = alpha_mode_ == alpha_mode::mask ? alpha_cutoff_ : DEFERRED_DITHER_ALPHA;
 }
 
 auto pbr_material::uses_alpha_cutout() const -> bool
@@ -208,10 +208,10 @@ auto pbr_material::make_shadow_cutout_state() const -> shadow_cutout_state
 
 void pbr_material::infer_alpha_mode_from_legacy_cutoff()
 {
-    if(std::abs(alpha_cutoff_ - k_legacy_opaque_cutoff_sentinel) > 0.001f
-       || std::abs(surface_data_.w - k_legacy_opaque_cutoff_sentinel) > 0.001f)
+    if(std::abs(alpha_cutoff_ - LEGACY_OPAQUE_CUTOFF_SENTINEL) > 0.001f
+       || std::abs(surface_data_.w - LEGACY_OPAQUE_CUTOFF_SENTINEL) > 0.001f)
     {
-        if(std::abs(alpha_cutoff_ - k_legacy_opaque_cutoff_sentinel) <= 0.001f)
+        if(std::abs(alpha_cutoff_ - LEGACY_OPAQUE_CUTOFF_SENTINEL) <= 0.001f)
         {
             alpha_cutoff_ = surface_data_.w;
         }

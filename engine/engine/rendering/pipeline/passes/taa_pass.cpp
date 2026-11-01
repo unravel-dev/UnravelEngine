@@ -1,4 +1,5 @@
 #include "taa_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -15,7 +16,9 @@ namespace unravel
 namespace
 {
 /// Avoid WRAP at RT edges when sampling history / scene color in TAA (reduces border streaks).
-constexpr std::uint32_t k_taa_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+constexpr std::uint32_t TAA_SAMPLER_FLAGS = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+/// The depth stand-in of an unused slot: point sampled, since not every device filters D32F.
+constexpr std::uint32_t TAA_PLACEHOLDER_FLAGS = TAA_SAMPLER_FLAGS | BGFX_SAMPLER_POINT;
 } // namespace
 
 auto taa_pass::init(rtti::context& ctx) -> bool
@@ -48,20 +51,13 @@ auto taa_pass::create_or_update_temp_fb(gfx::render_view& rview,
     // alpha is the mover memory that keeps pixels a moving object touched out of the still path.
     const auto& resolve = rview.tex_acquire("TAA_TEMP", desc);
     const auto& history = rview.tex_acquire("TAA_TEMP_HISTORY", desc);
-    auto& fbo = rview.fbo_acquire("TAA_TEMP");
-    if(gfx::needs_recreate(fbo, {resolve, history}))
-    {
-        fbo.reset();
-        fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({resolve, history});
-    }
-    return fbo;
+    return acquire_frame_buffer(rview, "TAA_TEMP", {resolve, history});
 }
 
 auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
     const auto& input = params.input;
-    if(!program_.program || !program_.program->is_valid() || !input || !params.cam || !params.g_buffer)
+    if(!begin_program(program_.program) || !input || !params.cam || !params.g_buffer)
     {
         return input;
     }
@@ -89,32 +85,28 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     // projection and resamples the current frame around the unjittered centre with the jitter below.
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
 
-    if(!program_.program->begin())
-    {
-        return input;
-    }
-
-    gfx::set_texture(program_.s_curr, 0, input->get_texture(0), k_taa_sampler_flags);
-    gfx::set_texture(program_.s_history, 1, history_tex, k_taa_sampler_flags);
-    gfx::set_texture(program_.s_depth, 2, params.g_buffer->get_texture(4), k_taa_sampler_flags);
+    gfx::set_texture(program_.s_curr, 0, input->get_texture(0), TAA_SAMPLER_FLAGS);
+    gfx::set_texture(program_.s_history, 1, history_tex, TAA_SAMPLER_FLAGS);
+    gfx::set_texture(program_.s_depth, 2, params.g_buffer->get_texture(4), TAA_SAMPLER_FLAGS);
     gfx::set_texture(program_.s_prev_depth,
                      3,
                      params.prev_depth ? params.prev_depth : params.g_buffer->get_texture(4),
-                     k_taa_sampler_flags);
+                     TAA_SAMPLER_FLAGS);
     // Reproject through the velocity buffer when the pipeline passed one; a valid texture
     // IS the enable. The depth texture stands in as an inert placeholder so the sampler
-    // slot is always bound (never read with the flag at 0).
+    // slot is always bound (the flag at 0 keeps the shader from reading it).
     const bool use_velocity = params.velocity != nullptr;
     gfx::set_texture(program_.s_velocity,
                      4,
                      use_velocity ? params.velocity : params.g_buffer->get_texture(4),
-                     k_taa_sampler_flags);
-    // The same placeholder holds the reactive slot when no particle drew this frame.
+                     use_velocity ? TAA_SAMPLER_FLAGS : TAA_PLACEHOLDER_FLAGS);
+    // The same placeholder holds the reactive slot when no particle drew this frame: the shader samples it and weighs
+    // the result by the flag at 0.
     const bool use_reactive = params.reactive != nullptr;
     gfx::set_texture(program_.s_reactive,
                      5,
                      use_reactive ? params.reactive : params.g_buffer->get_texture(4),
-                     k_taa_sampler_flags);
+                     use_reactive ? TAA_SAMPLER_FLAGS : TAA_PLACEHOLDER_FLAGS);
 
     const auto prev_vp = params.cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(program_.u_prev_view_proj, prev_vp.get_matrix());
@@ -145,15 +137,6 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     bgfx::blit(hist_pass.id,
                bgfx::TextureRegion{.handle = history_tex->native_handle()},
                bgfx::TextureRegion{.handle = temp_fbo->get_texture(1)->native_handle()});
-
-    if(params.output)
-    {
-        gfx::render_pass out_pass("TAA/Output Blit");
-        bgfx::blit(out_pass.id,
-                   bgfx::TextureRegion{.handle = params.output->get_texture(0)->native_handle()},
-                   bgfx::TextureRegion{.handle = temp_fbo->get_texture(0)->native_handle()});
-        return params.output;
-    }
 
     return temp_fbo;
 }

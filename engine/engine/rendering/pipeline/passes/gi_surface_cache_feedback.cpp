@@ -1,6 +1,7 @@
 #include "gi_surface_cache_feedback.h"
 
 #include "gi_pass_common.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <graphics/graphics.h>
@@ -79,6 +80,11 @@ auto gi_surface_cache_feedback::is_ready() const -> bool
     return copy_.program && copy_.program->is_valid() && clear_.is_ready();
 }
 
+auto gi_surface_cache_feedback::begin_programs() const -> bool
+{
+    return begin_program(copy_.program) && clear_.begin();
+}
+
 void gi_surface_cache_feedback::ensure_resources()
 {
     if(bgfx::isValid(keys_))
@@ -142,11 +148,10 @@ void gi_surface_cache_feedback::end_frame(uint16_t view_id, uint32_t samples)
         ++stats_.frames;
     }
     // The bgfx readback drains the GPU, so only once per window, and never over one still on its way.
-    if(window_frame_count_ < window_frames || ready_frame_ != 0)
+    if(window_frame_count_ < window_frames || ready_frame_ != 0 || !begin_program(copy_.program))
     {
         return;
     }
-    copy_.program->begin();
     bgfx::setBuffer(0, keys_, bgfx::Access::Read);
     bgfx::setBuffer(1, counts_, bgfx::Access::Read);
     bgfx::setImage(2, table_image_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RG32U);

@@ -31,8 +31,10 @@
 #include <engine/engine.h>
 #include <RmlUi/Core/ElementDocument.h>
 
+#include <graphics/device_caps.h>
 #include <graphics/format.h>
 #include <graphics/graphics.h>
+#include <logging/logging.h>
 #include <graphics/vertex_decl.h>
 
 #include <engine/profiler/profiler.h>
@@ -144,9 +146,12 @@ void create_particle_light_fallbacks(std::shared_ptr<gfx::texture>& no_sky, std:
 }
 
 /// The sky, the strongest directional light (with its shadow when @p use_shadow_maps) and every point / spot
-/// light, as lit particles read them.
-auto gather_particle_lighting(scene& scn, gfx::render_view& rview, float pre_exposure, bool use_shadow_maps)
-    -> particle_scene_lighting
+/// light, as lit particles read them: each light as @p limits render it, so the maps and their reader agree.
+auto gather_particle_lighting(scene& scn,
+                              gfx::render_view& rview,
+                              float pre_exposure,
+                              bool use_shadow_maps,
+                              const feature_limits& limits) -> particle_scene_lighting
 {
     particle_scene_lighting lighting;
     lighting.pre_exposure = pre_exposure;
@@ -162,7 +167,7 @@ auto gather_particle_lighting(scene& scn, gfx::render_view& rview, float pre_exp
             {
                 return;
             }
-            const auto& light = light_comp.get_light();
+            const auto light = limit_light(light_comp.get_light(), limits);
             auto world = transform_comp.get_transform_global();
             world.reset_scale();
             const math::vec3 color = light_comp.get_linear_color() * light.intensity * pre_exposure;
@@ -283,7 +288,6 @@ auto get_normal_texture_uid(const particle_emitter_component& emitter) -> hpp::u
     return normal_texture.uid();
 }
 
-/// How large an emitter's bounds look: their radius as a fraction of the view's height.
 /// Whether every corner of @p bounds is a finite number.
 auto is_finite(const math::bbox& bounds) -> bool
 {
@@ -297,6 +301,7 @@ auto is_finite(const math::bbox& bounds) -> bool
     return true;
 }
 
+/// How large an emitter's bounds look: their radius as a fraction of the view's height.
 auto get_screen_size(const camera& camera, const math::bbox& bounds, const math::vec3& eye) -> float
 {
     const float radius = math::length(bounds.get_extents());
@@ -689,12 +694,13 @@ auto gather_particle_emitters(scene& scn,
             const float distance = math::distance2(bounds.get_center(), eye);
             emitters.push_back(make_particle_draw_key(emitter, distance, significance, particle_count, quality));
         });
-    apply_particle_budget(emitters, quality.max_drawn_particles, stats);
     for(const auto& emitter : emitters)
     {
-        // Renderer-based culling feedback (same as model_component).
+        // Renderer-based culling feedback (same as model_component), before the budget: an emitter the budget leaves
+        // out is still in view and keeps running, so it does not resume stale when it fits again.
         emitter.component->set_last_render_frame(frame);
     }
+    apply_particle_budget(emitters, quality.max_drawn_particles, stats);
     return emitters;
 }
 
@@ -714,32 +720,45 @@ auto pipeline::init(rtti::context& ctx) -> bool
 {
     cache_entity_ = cache_registry_.create();
 
-    prefilter_pass_.init(ctx);
-    blit_pass_.init(ctx);
-    upscale_pass_.init(ctx);
-    atmospheric_pass_perez_.init(ctx);
-    atmospheric_pass_skybox_.init(ctx);
-    auto_exposure_pass_.init(ctx);
-    bloom_pass_.init(ctx);
-    fxaa_pass_.init(ctx);
+    const auto report_pass = [](const char* name, bool is_loaded)
+    {
+        if(!is_loaded)
+        {
+            APPLOG_ERROR("The {} pass did not load its programs. It draws nothing until its shaders load.", name);
+        }
+    };
+    // A compute program cannot load without compute: there the render features report what is off.
+    const bool has_compute = gfx::get_device_caps().has_compute;
+    const auto report_compute_pass = [&](const char* name, bool is_loaded)
+    {
+        report_pass(name, is_loaded || !has_compute);
+    };
+    report_compute_pass("reflection probe prefilter", prefilter_pass_.init(ctx));
+    report_pass("blit", blit_pass_.init(ctx));
+    report_pass("upscale", upscale_pass_.init(ctx));
+    report_pass("Perez sky", atmospheric_pass_perez_.init(ctx));
+    report_pass("skybox", atmospheric_pass_skybox_.init(ctx));
+    report_compute_pass("auto exposure", auto_exposure_pass_.init(ctx));
+    report_pass("bloom", bloom_pass_.init(ctx));
+    report_pass("FXAA", fxaa_pass_.init(ctx));
     // Before the particle programs: they read the fog's uniforms, which it creates.
-    fog_pass_.init(ctx);
-    taa_pass_.init(ctx);
-    tonemapping_pass_.init(ctx);
-    assao_pass_.init(ctx);
-    ssr_pass_.init(ctx);
-    hiz_pass_.init(ctx);
-    ssil_pass_.init(ctx);
-    gtao_pass_.init(ctx);
-    gi_clipmap_compose_pass_.init(ctx);
-    temporal_probe_pass_.init(ctx);
-    gi_gather_pass_.init(ctx);
-    gi_surface_cache_pass_.init(ctx);
-    gi_visualize_pass_.init(ctx);
-    shader_print_.init(ctx);
-    gi_reflection_pass_.init(ctx);
-    scene_history_pass_.init(ctx);
-    particle_half_res_pass_.init(ctx);
+    report_pass("fog", fog_pass_.init(ctx));
+    report_pass("TAA", taa_pass_.init(ctx));
+    report_pass("tonemapping", tonemapping_pass_.init(ctx));
+    report_compute_pass("ASSAO", assao_pass_.init(ctx));
+    report_compute_pass("SSR", ssr_pass_.init(ctx));
+    report_compute_pass("Hi-Z", hiz_pass_.init(ctx));
+    report_compute_pass("SSIL", ssil_pass_.init(ctx));
+    report_compute_pass("GTAO", gtao_pass_.init(ctx));
+    report_compute_pass("GI distance field", gi_clipmap_compose_pass_.init(ctx));
+    report_compute_pass("temporal probe", temporal_probe_pass_.init(ctx));
+    report_compute_pass("GI gather", gi_gather_pass_.init(ctx));
+    report_compute_pass("GI surface cache", gi_surface_cache_pass_.init(ctx));
+    report_compute_pass("GI visualization", gi_visualize_pass_.init(ctx));
+    report_compute_pass("shader print", shader_print_.init(ctx));
+    report_compute_pass("GI reflection", gi_reflection_pass_.init(ctx));
+    report_pass("scene history", scene_history_pass_.init(ctx));
+    report_pass("half-resolution particle", particle_half_res_pass_.init(ctx));
 
     auto& am = ctx.get_cached<asset_manager>();
 
@@ -1410,6 +1429,7 @@ auto pipeline::run_particle_pass(scene& scn,
                                  bool wants_reactive,
                                  delta_t dt,
                                  const fog_pass::shader_params& fog,
+                                 const feature_limits& limits,
                                  layer_mask render_mask) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/Particle Pass");
@@ -1482,7 +1502,7 @@ auto pipeline::run_particle_pass(scene& scn,
                 particle_scene_lighting lighting;
                 if(has_lit_batches && particle_program_lit_->begin() && particle_program_lit_mask_->begin())
                 {
-                    lighting = gather_particle_lighting(scn, rview, pre_exposure_values[0], use_shadow_maps);
+                    lighting = gather_particle_lighting(scn, rview, pre_exposure_values[0], use_shadow_maps, limits);
                     params.lit_program = particle_program_lit_->native_handle();
                     params.lit_mask_program = particle_program_lit_mask_->native_handle();
                     params.bind_lighting = [&](const ps_soa::render_batch& batch)

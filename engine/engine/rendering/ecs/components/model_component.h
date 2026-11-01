@@ -82,7 +82,8 @@ public:
     void set_casts_shadow(bool cast_shadow);
 
     /**
-     * @brief Sets whether the model is static.
+     * @brief Sets whether the model is static. Skinned models are never static: the armature build makes them dynamic
+     * and a mesh without bones gives back what this call asked for.
      * @param is_static True if the model is static, false otherwise.
      */
     void set_static(bool is_static);
@@ -243,7 +244,8 @@ public:
      *    to the root bone, which never depend on fresh proxies. When those bounds enter a
      *    frustum the model is drawn conservatively (stale proxies withheld), which marks it
      *    used and un-gates the full refresh on the next frame - a wrong skip self-heals in
-     *    one frame and can never permanently hide a model.
+     *    one frame and can never permanently hide a model. model_system closes that frame for
+     *    a model that moved while gated (see track_stale_pose).
      *  - Change-driven: visible models early-out when no armature entity transform changed
      *    since the last refresh (dirty_ids::model_pose bit-scan).
      *
@@ -252,6 +254,24 @@ public:
      *         (animation and an IK pass rewriting the same final pose every frame, the same model set again).
      */
     auto update_armature() -> bool;
+
+    /**
+     * @brief Whether the last update_armature skipped the refresh at the visibility gate and the model has moved since
+     * the gate closed, so its pose lags the model by more than an animation frame.
+     *
+     * @param is_moved The model moved this frame, by its own transform or a parent's.
+     * @return True while the caller should watch for the model entering a view (take_stale_view_entry).
+     */
+    auto track_stale_pose(bool is_moved) noexcept -> bool;
+
+    /**
+     * @brief Whether a model that track_stale_pose reports has just entered a view, which a caller answers by forcing a
+     * refresh (mark_pose_dirty, update_armature). True once per entry: a model that stays in view undrawn (render mask,
+     * under its minimum screen size) keeps the visibility gate's saving even while it moves.
+     *
+     * @param is_in_view The conservative world bounds are in a camera's frustum this frame.
+     */
+    auto take_stale_view_entry(bool is_in_view) noexcept -> bool;
 
     /**
      * @brief Forces the next update_armature call to run a full refresh even when no
@@ -274,7 +294,6 @@ public:
      * box that is valid for culling.
      */
     auto get_world_bounds() const -> const math::bbox&;
-    auto get_world_bounds_transform() const -> const math::transform&;
 
     void update_world_bounds(const math::transform& world_transform);
 
@@ -360,7 +379,7 @@ public:
     /**
      * @brief Gets the per-view LOD data for a specific camera/view.
      * Creates a new entry if this is the first access from this view.
-     * @param view_id Unique identifier for the view (typically camera pointer as uintptr_t).
+     * @param cam The camera of the view; null reads a scratch entry no view keeps.
      * @param current_frame Current render frame number for tracking access.
      * @return Reference to the LOD data for this view.
      */
@@ -387,6 +406,9 @@ private:
     /// again become stale.
     void settle_previous_armature();
 
+    /// Gives back the static flag create_armature took for a skinned mesh, once the mesh has no bones.
+    void restore_static_after_skinning();
+
     /**
      * @brief Rebuilds the armature name-to-index cache.
      * Called automatically when armature entities are set.
@@ -402,6 +424,9 @@ private:
      * @brief Indicates if the model is static.
      */
     bool static_ = true;
+
+    /// static_ is false only because the mesh is skinned; set_static clears this as the caller's own choice.
+    bool is_dynamic_for_skinning_ = false;
 
     /**
      * @brief Indicates if the model casts shadows.
@@ -470,11 +495,6 @@ private:
     math::bbox world_bounds_;
 
     /**
-     * @brief World bounds transform which was used.
-     */
-    math::transform world_bounds_transform_;
-
-    /**
      * @brief Tight pose bounds (world pose union) captured in owner-local space at the last
      * full pose refresh. Visible-but-idle frames (proxies valid, nothing moved) re-anchor
      * this to the owner's current world transform so culling stays tight for free.
@@ -510,6 +530,12 @@ private:
      * conservative per-submesh behavior until the next full refresh clears this.
      */
     bool render_proxies_stale_{false};
+
+    /// The model moved since the visibility gate closed (track_stale_pose).
+    bool has_moved_while_stale_{false};
+
+    /// The gated model was in a view when last asked (take_stale_view_entry).
+    bool is_stale_pose_in_view_{false};
 
     /**
      * @brief Last frame this model was rendered.

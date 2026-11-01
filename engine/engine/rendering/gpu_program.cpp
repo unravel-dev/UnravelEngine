@@ -59,12 +59,6 @@ gpu_program::gpu_program(asset_handle<gfx::shader> vertex_shader,
 void gpu_program::attach_shader(asset_handle<gfx::shader> shader, std::string variant)
 {
     variants_.emplace_back(std::move(variant));
-    if(!shader)
-    {
-        shaders_.push_back(shader);
-        return;
-    }
-
     shaders_.emplace_back(std::move(shader));
 }
 
@@ -100,7 +94,9 @@ auto gpu_program::describe_shader(std::size_t index) const -> std::string
 
 void gpu_program::create_program(const selected_shaders& selected)
 {
-    program_.reset();
+    // An empty program first: the old one goes before bgfx is asked for its replacement.
+    program_ = std::make_shared<gfx::program>();
+    ++revision_;
     if(shaders_.size() == 1)
     {
         program_ = std::make_shared<gfx::program>(*selected[0]);
@@ -137,9 +133,9 @@ void gpu_program::populate()
     if(!refusal.empty())
     {
         APPLOG_ERROR("{0}", refusal);
-        // An empty program rather than none: not every caller checks begin() before asking for the handle. The cached
-        // assets keep begin() from trying again, and logging again, until a reload changes one of them.
+        // The cached assets keep begin() from trying again, and logging again, until a reload changes one of them.
         program_ = std::make_shared<gfx::program>();
+        ++revision_;
         shaders_cached_ = assets;
         return;
     }
@@ -210,44 +206,25 @@ auto gpu_program::get_shaders() const -> const std::vector<asset_handle<gfx::sha
 
 auto gpu_program::is_valid() const -> bool
 {
-    return program_ && program_->is_valid();
+    return program_->is_valid();
 }
 
 auto gpu_program::begin() -> bool
 {
-    bool repopulate = false;
     for(std::size_t i = 0; i < shaders_.size(); ++i)
     {
-        auto shader_ptr = shaders_[i];
-        if(!shader_ptr)
+        if(shaders_[i] && shaders_cached_[i] != shaders_[i].get())
         {
-            continue;
-        }
-
-        if(shaders_cached_[i] != shader_ptr.get())
-        {
-            repopulate = true;
+            populate();
             break;
         }
     }
-
-
-    if(repopulate)
-    {
-        populate();
-        repopulated_ = true;
-    }
-    else
-    {
-        repopulated_ = false;
-    }
-
     return is_valid();
 }
 
-auto gpu_program::was_repopulated() const -> bool
+auto gpu_program::get_revision() const -> std::uint32_t
 {
-    return repopulated_;
+    return revision_;
 }
 
 void gpu_program::end()

@@ -1,6 +1,8 @@
 #include "surface_cache_system.h"
 
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/gi_hash.h>
+#include <engine/rendering/gpu_resource_utils.h>
 
 #include <algorithm>
 #include <cmath>
@@ -36,18 +38,6 @@ constexpr uint32_t instance_grid_resolution = 16u;
 /// in every cell it crosses.
 constexpr float instance_grid_max_cell_size = 6.0f;
 
-/// Layout of the instance buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
-auto get_vec4_buffer_layout() -> const bgfx::VertexLayout&
-{
-    static const bgfx::VertexLayout layout = []()
-    {
-        bgfx::VertexLayout decl;
-        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
-        return decl;
-    }();
-    return layout;
-}
-
 /// Writes row @p row of an affine transform as a vec4. glm stores column-major with
 /// m[column][row], so a row is gathered across columns.
 void write_affine_row(float* dst, const ::math::mat4& m, int row)
@@ -58,9 +48,6 @@ void write_affine_row(float* dst, const ::math::mat4& m, int row)
     dst[3] = m[3][row];
 }
 
-/// FNV-1a over the placement identities in order (surface_cache_system::get_instance_order_hash).
-constexpr uint64_t instance_order_hash_seed = 1469598103934665603ull;
-constexpr uint64_t instance_order_hash_prime = 1099511628211ull;
 /// Largest enclosure, relative to the emitter (largest extent over largest extent), that still counts as the emitter's
 /// own housing (clear_enclosed_emissive_light_sources). Sponza's lamp glass is 6-8x its bulb; a room or a building
 /// section around an emitter is two orders of magnitude larger and must not count.
@@ -179,6 +166,9 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
     // the atlas independently.
     const field_key key{mesh_uid, submesh_index};
     auto& record = residency_[key];
+    // The placements of earlier requests this frame hold this record's header and describe its level, and the frame's
+    // brick uploads are still queued, so a record's level moves only on its frame's first request.
+    const bool is_first_request = record.last_used_frame != world_frame_;
     // Stamped before any early return, including the failures. The sweep releases whatever was not
     // asked for this frame, and a mesh that is present but currently unuploadable is still asked
     // for -- forgetting to stamp it would make the sweep drop the record and lose the fact that it
@@ -188,6 +178,16 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
     {
         return {};
     }
+    // The finest level any placement asks for, where a request later in a frame counts from the next frame on.
+    const uint32_t finest_wanted = math::min(wanted_mip, record.finest_wanted_mip);
+    record.finest_wanted_mip = is_first_request ? wanted_mip : finest_wanted;
+    const uint32_t mip_count = m.get_sdf_mip_count(submesh_index);
+    // Starts at the scene-wide bias, not at 0. See global_mip_bias_: choosing the finest level
+    // that happens to fit is greedy, and greedy means the first arrivals spend the whole atlas.
+    // The coarser of what distance asks for and what atlas pressure imposes. Neither may be
+    // overridden by the other: a near placement still cannot have a level the atlas cannot hold.
+    const uint32_t requested = math::max(finest_wanted, global_mip_bias_);
+    const uint32_t first_mip = math::min(requested, mip_count > 0 ? mip_count - 1 : 0);
     if(record.header_index != sdf_atlas::invalid_index)
     {
         // Already resident, but perhaps at a level chosen when this was further away or when the
@@ -196,9 +196,9 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
         // demotion, which is a far worse trade than one placement staying coarse a little longer.
         // The margin is also the hysteresis that stops a placement on a band edge from being
         // released and re-uploaded every frame.
-        if(wanted_mip < record.resident_mip)
+        if(is_first_request && first_mip < record.resident_mip)
         {
-            const auto& finer = m.get_sdf(submesh_index, wanted_mip);
+            const auto& finer = m.get_sdf(submesh_index, first_mip);
             const uint32_t headroom = atlas_.get_atlas_brick_dim() * atlas_.get_atlas_brick_dim();
             if(finer.is_valid() && atlas_.has_upload_budget(finer) &&
                finer.get_surface_brick_count() + headroom <= atlas_.get_free_brick_count())
@@ -247,7 +247,7 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
     // inside the renderer's staging scratch is not refused - it must retry next frame, so it
     // must NOT consume the generation stamp below (that stamp would silence the retry until
     // something unrelated released bricks).
-    if(!atlas_.has_upload_budget(sdf))
+    if(!atlas_.has_upload_budget(m.get_sdf(submesh_index, first_mip)))
     {
         return {};
     }
@@ -270,13 +270,6 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
     //
     // Checked against free slots BEFORE committing, because a refused upload is not free: it burns
     // the generation stamp and the submesh then waits for an unrelated release to retry.
-    const uint32_t mip_count = m.get_sdf_mip_count(submesh_index);
-    // Starts at the scene-wide bias, not at 0. See global_mip_bias_: choosing the finest level
-    // that happens to fit is greedy, and greedy means the first arrivals spend the whole atlas.
-    // The coarser of what distance asks for and what atlas pressure imposes. Neither may be
-    // overridden by the other: a near placement still cannot have a level the atlas cannot hold.
-    const uint32_t requested = math::max(wanted_mip, global_mip_bias_);
-    const uint32_t first_mip = math::min(requested, mip_count > 0 ? mip_count - 1 : 0);
     for(uint32_t mip = first_mip; mip < mip_count; ++mip)
     {
         const auto& level = m.get_sdf(submesh_index, mip);
@@ -296,6 +289,7 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
         if(record.header_index != sdf_atlas::invalid_index)
         {
             record.resident_mip = mip;
+            record.first_placed_frame = math::min(record.first_placed_frame, world_frame_);
             // Residency moved: a level fingerprint hashes the sdf pointer, which the packed
             // instance bytes do not carry.
             ++content_revision_;
@@ -349,12 +343,15 @@ auto surface_cache_system::complete_acquired_field(mesh_residency& record, const
 void surface_cache_system::apply_atlas_pressure()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Apply Atlas Pressure");
-    const uint64_t rejected = atlas_.get_rejected_brick_total();
-    if(rejected <= acknowledged_rejected_bricks_)
+    // Refusals of the last walk, read after its sweep. What the free bricks would hold is only a matter of timing: on a
+    // scene change the outgoing fields held their bricks through the walk, and the refused meshes retry now that the
+    // release generation moved. More than that is short whatever was released, down to one release per frame. Without a
+    // release a refusal always exceeds the free bricks, since the field asked for more than they hold.
+    const uint64_t refused = atlas_.take_refused_brick_count();
+    if(refused <= atlas_.get_free_brick_count())
     {
         return;
     }
-    acknowledged_rejected_bricks_ = rejected;
     // MEMORY FIRST, RESOLUTION SECOND. A bigger atlas costs VRAM; a coarser field costs the
     // quality of every occluder in the scene. So the brick atlas grows first, and degradation is
     // the last resort rather than the first response.
@@ -362,7 +359,6 @@ void surface_cache_system::apply_atlas_pressure()
     {
         // grow() drops everything resident, because a slot index means a different position in a
         // differently sized atlas, and it resets its own refusal counters with them.
-        acknowledged_rejected_bricks_ = 0;
         residency_.clear();
         ++content_revision_;
         return;
@@ -402,16 +398,20 @@ void surface_cache_system::apply_atlas_pressure()
 void surface_cache_system::release_unused_fields()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Release Unused Fields");
+    bool has_released = false;
+    bool has_older_field = false;
     for(auto it = residency_.begin(); it != residency_.end();)
     {
         if(it->second.last_used_frame == world_frame_)
         {
+            has_older_field = has_older_field || it->second.first_placed_frame < world_frame_;
             ++it;
             continue;
         }
         if(it->second.header_index != sdf_atlas::invalid_index)
         {
             // Residency moved (see the matching bump in acquire_field).
+            has_released = true;
             ++content_revision_;
             atlas_.release(it->second.header_index);
         }
@@ -421,6 +421,15 @@ void surface_cache_system::release_unused_fields()
             atlas_.release(it->second.coarse_header_index);
         }
         it = residency_.erase(it);
+    }
+    // Nothing the bias was learned from is left: the fields in the atlas are the first frame's of another set of
+    // meshes, which starts over at the finest levels as a new session does and promotes what it already placed. A set
+    // that still overruns the atlas raises the bias again.
+    if(has_released && !has_older_field && global_mip_bias_ > 0u)
+    {
+        global_mip_bias_ = 0u;
+        APPLOG_INFO("[SurfaceCache] Every field of the previous scene was released, so the fields return to their "
+                    "finest levels.");
     }
 }
 
@@ -447,7 +456,7 @@ auto mix_float(uint64_t hash, float value) -> uint64_t
 {
     uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
-    return (hash ^ uint64_t(bits)) * 0x100000001b3ull;
+    return (hash ^ uint64_t(bits)) * gi_hash::FNV64_PRIME;
 }
 
 auto mix_vec3(uint64_t hash, const math::vec3& v) -> uint64_t
@@ -458,7 +467,7 @@ auto mix_vec3(uint64_t hash, const math::vec3& v) -> uint64_t
 /// FNV-1a over a placement's sixteen matrix floats, the start of its pose cache key.
 auto hash_matrix(const math::mat4& m) -> uint64_t
 {
-    uint64_t hash = 0xcbf29ce484222325ull;
+    uint64_t hash = gi_hash::FNV64_OFFSET_BASIS;
     for(int column = 0; column < 4; ++column)
     {
         for(int row = 0; row < 4; ++row)
@@ -503,7 +512,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     inst.coarse_header_index =
         field.coarse_header_index != sdf_atlas::invalid_index ? field.coarse_header_index : field.header_index;
     // Chained, unlike the content fingerprints: it must change when the same placements arrive in another order.
-    instance_order_hash_ = (instance_order_hash_ ^ identity) * ANONYMOUS::instance_order_hash_prime;
+    instance_order_hash_ = (instance_order_hash_ ^ identity) * gi_hash::FNV64_PRIME;
     // POSE CACHE: the inverse, the smallest scale axis and the transformed bounds are pure
     // functions of the transform and the field's local bounds, and a static placement
     // presents the same pair every frame - the tracker keys placements by identity, so it
@@ -746,7 +755,7 @@ void surface_cache_system::upload_instances()
     // FNV chain, whose dependent multiplies would cost the main thread real time every frame
     // just to decide to skip an upload. FNV-1a over 64-bit lanes keeps the same "any byte
     // flips it" property at an eighth of the rounds.
-    uint64_t fingerprint = 1469598103934665603ull;
+    uint64_t fingerprint = gi_hash::FNV64_OFFSET_BASIS;
     {
         const auto* bytes = reinterpret_cast<const uint8_t*>(instance_data_.data());
         const size_t total = instance_data_.size() * sizeof(float);
@@ -755,11 +764,11 @@ void surface_cache_system::upload_instances()
         {
             uint64_t lane;
             std::memcpy(&lane, bytes + i, sizeof(lane));
-            fingerprint = (fingerprint ^ lane) * 1099511628211ull;
+            fingerprint = (fingerprint ^ lane) * gi_hash::FNV64_PRIME;
         }
         for(; i < total; ++i)
         {
-            fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ull;
+            fingerprint = (fingerprint ^ bytes[i]) * gi_hash::FNV64_PRIME;
         }
     }
     const uint32_t required_vec4 = math::max(uint32_t(instance_data_.size() / 4u), 1u);
@@ -774,7 +783,7 @@ void surface_cache_system::upload_instances()
         // buffer every frame.
         instance_buffer_capacity_ = required_vec4 + required_vec4 / 2u + 64u;
         instance_buffer_ = bgfx::createDynamicVertexBuffer(instance_buffer_capacity_,
-                                                           ANONYMOUS::get_vec4_buffer_layout(),
+                                                           gpu_resource::get_vec4_layout(),
                                                            BGFX_BUFFER_COMPUTE_READ);
         recreated = true;
     }
@@ -972,6 +981,23 @@ void surface_cache_system::walk_scene(scene& scn)
         });
 }
 
+void surface_cache_system::bind_sdf_instances(const gfx::program::uniform_ptr& s_sdf_atlas,
+                                              const gfx::program::uniform_ptr& u_sdf_grid_params,
+                                              const gfx::program::uniform_ptr& u_sdf_params) const
+{
+    gfx::set_texture(s_sdf_atlas, 0, atlas_.get_atlas_texture());
+    bgfx::setBuffer(1, atlas_.get_header_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(2, atlas_.get_indirection_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(3, instance_buffer_, bgfx::Access::Read);
+    bgfx::setBuffer(12, grid_buffer_, bgfx::Access::Read);
+    gfx::set_uniform(u_sdf_grid_params, get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
+    const math::vec4 sdf_params(float(atlas_.get_atlas_brick_dim()),
+                                float(atlas_.get_atlas_voxel_dim()),
+                                float(instances_.size()),
+                                0.0f);
+    gfx::set_uniform(u_sdf_params, sdf_params);
+}
+
 void surface_cache_system::update_global_lighting_state(scene& scn)
 {
     float sun = 0.0f;
@@ -1012,13 +1038,21 @@ void surface_cache_system::update_world(scene& scn)
         return;
     }
     // Once per frame, however many cameras ask. All of this is a function of the scene, so a second
-    // camera would rebuild an identical instance list and re-upload an identical grid.
+    // camera would rebuild an identical instance list and re-upload an identical grid. The buffers hold one world per
+    // frame (an update reaches every view of the frame), so the first scene asking is the one they describe.
     const uint64_t frame = uint64_t(gfx::get_render_frame());
     if(world_frame_ == frame)
     {
+        if(world_scene_ != &scn && !has_warned_second_scene_)
+        {
+            has_warned_second_scene_ = true;
+            APPLOG_WARNING("[SurfaceCache] Two scenes asked for global illumination in one frame. The GI describes the "
+                           "first scene only, so the cameras of the second one render without it.");
+        }
         return;
     }
     world_frame_ = frame;
+    world_scene_ = &scn;
     // Before anything is placed: if the atlas ran out since the last frame, drop the whole scene a
     // level first. Doing it here rather than inside the walk is the point -- the walk sees one
     // field at a time and cannot know the scene overruns until it already has.
@@ -1040,7 +1074,7 @@ void surface_cache_system::update_world(scene& scn)
     gi_sources_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
-    instance_order_hash_ = ANONYMOUS::instance_order_hash_seed;
+    instance_order_hash_ = gi_hash::FNV64_OFFSET_BASIS;
     if(!is_enabled())
     {
         return;

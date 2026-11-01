@@ -4,7 +4,6 @@
 #include <graphics/graphics.h>
 
 #include <algorithm>
-#include <limits>
 
 namespace unravel
 {
@@ -33,9 +32,9 @@ void camera::set_viewport_size(const usize32_t& viewport_size)
     }
 }
 
-void camera::set_viewport_pos(const ipoint32_t& viewportPos)
+void camera::set_viewport_pos(const ipoint32_t& viewport_pos)
 {
-    viewport_pos_ = viewportPos;
+    viewport_pos_ = viewport_pos;
 }
 
 auto camera::get_viewport_size() const -> const usize32_t&
@@ -80,16 +79,16 @@ auto camera::get_ortho_size() const -> float
     return ortho_size_;
 }
 
-void camera::set_fov(float fFOVY)
+void camera::set_fov(float fov_degrees)
 {
     // Skip if no-op
-    if(math::equal(fFOVY, fov_, math::epsilon<float>()))
+    if(math::equal(fov_degrees, fov_, math::epsilon<float>()))
     {
         return;
     }
 
     // Update projection matrix and view frustum
-    fov_ = fFOVY;
+    fov_ = fov_degrees;
 
     touch();
 }
@@ -163,25 +162,24 @@ auto camera::get_local_bounding_box() -> math::bbox
 
     float spread = far_clip_ - near_clip_;
     math::vec3 center = {0.0f, 0.0f, (far_clip_ + near_clip_) * 0.5f};
-    float orthographicSize = get_ortho_size();
-    math::vec3 size = {orthographicSize * 2.0f * aspect_ratio_, orthographicSize * 2.0f, spread};
+    float ortho_size = get_ortho_size();
+    math::vec3 size = {ortho_size * 2.0f * aspect_ratio_, ortho_size * 2.0f, spread};
     return math::bbox(center - (size / 2.0f), center + (size / 2.0f));
 }
 
-void camera::set_aspect_ratio(float aspect, bool bLocked /* = false */)
+void camera::set_aspect_ratio(float aspect, bool is_locked /* = false */)
 {
     // Is this a no-op?
     if(math::equal(aspect, aspect_ratio_, math::epsilon<float>()))
     {
-        aspect_locked_ = bLocked;
+        aspect_locked_ = is_locked;
         return;
 
     } // End if aspect is the same
 
     // Update camera properties
     aspect_ratio_ = aspect;
-    aspect_locked_ = bLocked;
-    aspect_dirty_ = true;
+    aspect_locked_ = is_locked;
     frustum_dirty_ = true;
     projection_dirty_ = true;
 }
@@ -189,11 +187,6 @@ void camera::set_aspect_ratio(float aspect, bool bLocked /* = false */)
 auto camera::get_aspect_ratio() const -> float
 {
     return aspect_ratio_;
-}
-
-auto camera::is_aspect_locked() const -> bool
-{
-    return (get_projection_mode() == projection_mode::orthographic || aspect_locked_);
 }
 
 auto camera::is_frustum_locked() const -> bool
@@ -225,31 +218,21 @@ auto camera::get_projection() const -> const math::transform&
             projection_ = projection;
             // Matrix has been updated
             projection_dirty_ = false;
-            aspect_dirty_ = false;
 
         } // End if projection matrix needs updating
-        else if(aspect_dirty_)
-        {
-            // Just alter the aspect ratio
-            math::mat4 projection = projection_;
-            projection[0][0] = projection[1][1] / aspect_ratio_;
-            projection_ = projection;
-            // Matrix has been updated
-            aspect_dirty_ = false;
-
-        } // End if only aspect ratio changed
 
     } // End if perspective
     else if(get_projection_mode() == projection_mode::orthographic)
     {
-        if(projection_dirty_ || aspect_dirty_)
+        if(projection_dirty_)
         {
             // Generate the updated orthographic projection matrix
-            float zoom = get_zoom_factor();
-            const frect_t rect = {-float(viewport_size_.width) / 2.0f,
-                                  float(viewport_size_.height) / 2.0f,
-                                  float(viewport_size_.width) / 2.0f,
-                                  -float(viewport_size_.height) / 2.0f};
+            const bool has_viewport = viewport_size_.width > 0 && viewport_size_.height > 0;
+            // An empty viewport has no pixels to measure: the half size and the last aspect ratio make the same volume.
+            float zoom = has_viewport ? get_zoom_factor() : 1.0f;
+            const float half_width = has_viewport ? float(viewport_size_.width) / 2.0f : ortho_size_ * aspect_ratio_;
+            const float half_height = has_viewport ? float(viewport_size_.height) / 2.0f : ortho_size_;
+            const frect_t rect = {-half_width, half_height, half_width, -half_height};
             static const auto ortho_ =
                 gfx::is_homogeneous_depth() ? math::orthoNO<float> : math::orthoZO<float>;
 
@@ -259,12 +242,12 @@ auto camera::get_projection() const -> const math::transform&
                                            rect.top * zoom,
                                            get_near_clip(),
                                            get_far_clip());
-            projection[2][0] += aa_data_.z;
-            projection[2][1] += aa_data_.w;
+            // w is 1 here, so the jitter's NDC offset is a translation: a shear would scale it with view depth.
+            projection[3][0] += aa_data_.z;
+            projection[3][1] += aa_data_.w;
             projection_ = projection;
             // Matrix has been updated
             projection_dirty_ = false;
-            aspect_dirty_ = false;
 
         } // End if projection matrix needs updating
 
@@ -277,11 +260,12 @@ auto camera::get_projection() const -> const math::transform&
 
 auto camera::get_projection_unjittered() const -> math::transform
 {
-    // The jitter lives additively in the [2][0]/[2][1] shear terms (see get_projection),
-    // so subtracting it back out reconstructs the pixel-center-aligned projection exactly.
+    // The jitter is additive in the terms get_projection puts it in, so subtracting it back out reconstructs the
+    // pixel-center-aligned projection exactly.
     math::mat4 projection = get_projection().get_matrix();
-    projection[2][0] -= aa_data_.z;
-    projection[2][1] -= aa_data_.w;
+    const int jitter_column = get_projection_mode() == projection_mode::orthographic ? 3 : 2;
+    projection[jitter_column][0] -= aa_data_.z;
+    projection[jitter_column][1] -= aa_data_.w;
     return math::transform(projection);
 }
 
@@ -370,18 +354,18 @@ auto camera::get_view_projection_relative() const -> math::transform
 }
 
 
-void camera::look_at(const math::vec3& vEye, const math::vec3& vAt)
+void camera::look_at(const math::vec3& eye, const math::vec3& at)
 {
-    look_at(vEye, vAt, math::vec3(0.0f, 1.0f, 0.0f));
+    look_at(eye, at, math::vec3(0.0f, 1.0f, 0.0f));
 }
 
-void camera::look_at(const math::vec3& vEye, const math::vec3& vAt, const math::vec3& vUp)
+void camera::look_at(const math::vec3& eye, const math::vec3& at, const math::vec3& up)
 {
-    view_ = math::lookAt(vEye, vAt, vUp);
+    view_ = math::lookAt(eye, at, up);
     view_inverse_ = math::inverse(view_);
 
 
-    view_relative_ = math::lookAt(math::vec3(0.0f, 0.0f, 0.0f), vAt - vEye, vUp);
+    view_relative_ = math::lookAt(math::vec3(0.0f, 0.0f, 0.0f), at - eye, up);
     view_inverse_relative_ = math::inverse(view_relative_);
 
     touch();
@@ -408,6 +392,9 @@ auto camera::z_unit_axis() const -> math::vec3
 
 auto camera::get_frustum() const -> const math::frustum&
 {
+    // A locked frustum does not read the projection below, but the threads this call prepares the camera for do.
+    get_projection();
+
     // Recalculate frustum if necessary
     if(frustum_dirty_ && !frustum_locked_)
     {
@@ -458,40 +445,40 @@ auto camera::get_clipping_volume() const -> const math::frustum&
     return clipping_volume_;
 }
 
-auto camera::classify_aabb(const math::bbox& AABB) const -> math::volume_query
+auto camera::classify_aabb(const math::bbox& bounds) const -> math::volume_query
 {
     // Recompute the frustum as necessary.
     const math::frustum& f = get_frustum();
 
     // Request that frustum classifies
-    return f.classify_aabb(AABB);
+    return f.classify_aabb(bounds);
 }
 
-auto camera::test_aabb(const math::bbox& AABB) const -> bool
+auto camera::test_aabb(const math::bbox& bounds) const -> bool
 {
     // Recompute the frustum as necessary.
     const math::frustum& f = get_frustum();
 
     // Request that frustum classifies
-    return f.test_aabb(AABB);
+    return f.test_aabb(bounds);
 }
 
-auto camera::classify_obb(const math::bbox& AABB, const math::transform& t) const -> math::volume_query
+auto camera::classify_obb(const math::bbox& bounds, const math::transform& t) const -> math::volume_query
 {
     // Recompute the frustum as necessary.
     const math::frustum& f = get_frustum();
 
     // Request that frustum classifies
-    return f.classify_obb(AABB, t);
+    return f.classify_obb(bounds, t);
 }
 
-auto camera::test_obb(const math::bbox& AABB, const math::transform& t) const -> bool
+auto camera::test_obb(const math::bbox& bounds, const math::transform& t) const -> bool
 {
     // Recompute the frustum as necessary.
     const math::frustum& f = get_frustum();
 
     // Request that frustum classifies
-    return f.test_obb(AABB, t);
+    return f.test_obb(bounds, t);
 }
 
 auto camera::test_billboard(float size, const math::transform& t) const -> bool
@@ -500,7 +487,7 @@ auto camera::test_billboard(float size, const math::transform& t) const -> bool
     const math::frustum& f = get_frustum();
 
     auto center = t.get_position();
-    // 2) Build our test‐sphere
+    // 2) Build our test-sphere
     float radius = size * glm::root_two<float>();
     math::bsphere sphere{center, radius};
 
@@ -626,9 +613,9 @@ auto camera::viewport_to_world(const math::vec2& point, const math::plane& pl, m
     // then we can't possibly intersect (perspective rule only)
     if(get_projection_mode() == projection_mode::perspective)
     {
-        int nSign1 = (distance > 0) ? 1 : (distance < 0) ? -1 : 0;
-        int nSign2 = (proj_ray_length > 0) ? 1 : (proj_ray_length < 0) ? -1 : 0;
-        if(nSign1 == nSign2)
+        int distance_sign = (distance > 0) ? 1 : (distance < 0) ? -1 : 0;
+        int length_sign = (proj_ray_length > 0) ? 1 : (proj_ray_length < 0) ? -1 : 0;
+        if(distance_sign == length_sign)
         {
             return false;
         }
@@ -675,16 +662,16 @@ auto camera::project_to_quad(const math::vec2& viewport_point,
 }
 
 auto camera::viewport_to_major_axis(const math::vec2& point,
-                                    const math::vec3& Origin,
+                                    const math::vec3& origin,
                                     math::vec3& world_pos,
                                     math::vec3& major_axis) const -> bool
 {
-    return viewport_to_major_axis(point, Origin, z_unit_axis(), world_pos, major_axis);
+    return viewport_to_major_axis(point, origin, z_unit_axis(), world_pos, major_axis);
 }
 
 auto camera::viewport_to_major_axis(const math::vec2& point,
-                                    const math::vec3& Origin,
-                                    const math::vec3& Normal,
+                                    const math::vec3& origin,
+                                    const math::vec3& normal,
                                     math::vec3& world_pos,
                                     math::vec3& major_axis) const -> bool
 {
@@ -692,9 +679,9 @@ auto camera::viewport_to_major_axis(const math::vec2& point,
     major_axis = math::vec3(1, 0, 0); // YZ
 
     // Get absolute normal vector
-    float x = math::abs<float>(Normal.x);
-    float y = math::abs<float>(Normal.y);
-    float z = math::abs<float>(Normal.z);
+    float x = math::abs<float>(normal.x);
+    float y = math::abs<float>(normal.y);
+    float z = math::abs<float>(normal.z);
 
     // If all the components are effectively equal, select one plane
     if(math::abs<float>(x - y) < math::epsilon<float>() && math::abs<float>(x - z) < math::epsilon<float>())
@@ -721,108 +708,9 @@ auto camera::viewport_to_major_axis(const math::vec2& point,
 
     // Generate the intersection plane based on this information
     // and pass through to the standard viewportToWorld method
-    math::plane p = math::plane::from_point_normal(Origin, major_axis);
+    math::plane p = math::plane::from_point_normal(origin, major_axis);
     return viewport_to_world(point, p, world_pos, false);
 }
-
-auto camera::viewport_to_camera(const math::vec3& point, math::vec3& camera_pos) const -> bool
-{
-    // Ensure that we have an up-to-date projection and view matrix
-    auto& mtx_proj = get_projection();
-
-    // Transform the pick position from screen space into camera space
-    camera_pos.x = (((2.0f * (point.x - viewport_pos_.x)) / float(viewport_size_.width)) - 1) / mtx_proj[0][0];
-    camera_pos.y = -(((2.0f * (point.y - viewport_pos_.y)) / float(viewport_size_.height)) - 1) / mtx_proj[1][1];
-    camera_pos.z = get_near_clip();
-
-    // Success!
-    return true;
-}
-
-auto camera::estimate_zoom_factor(const math::plane& pl) const -> float
-{
-    // Just return the actual zoom factor if this is orthographic
-    if(get_projection_mode() == projection_mode::orthographic)
-    {
-        return get_zoom_factor();
-    }
-
-    math::vec3 world;
-    // Otherwise, estimate is based on the distance from the grid plane.
-    viewport_to_world(math::vec2(float(viewport_size_.width) / 2.0f, float(viewport_size_.height) / 2.0f),
-                      pl,
-                      world,
-                      false);
-
-    // Perform full position based estimation
-    return estimate_zoom_factor(world);
-}
-
-//-----------------------------------------------------------------------------
-// Name : estimateZoomFactor ()
-/// <summary>
-/// Given the current viewport type and projection mode, estimate the "zoom"
-/// factor that can be used for scaling various operations relative to the
-/// "scale" of an object as it appears in the viewport at the specified
-/// position.
-/// </summary>
-//-----------------------------------------------------------------------------
-auto camera::estimate_zoom_factor(const math::vec3& world_pos) const -> float
-{
-    return estimate_zoom_factor(world_pos, std::numeric_limits<float>::max());
-}
-
-auto camera::estimate_zoom_factor(const math::plane& pl, float max_val) const -> float
-{
-    // Just return the actual zoom factor if this is orthographic
-    if(get_projection_mode() == projection_mode::orthographic)
-    {
-        float factor = get_zoom_factor();
-        return math::min(max_val, factor);
-
-    } // End if orthographic
-    // Otherwise, estimate is based on the distance from the grid plane.
-    math::vec3 world;
-    viewport_to_world(math::vec2(float(viewport_size_.width) / 2.0f, float(viewport_size_.height) / 2.0f),
-                      pl,
-                      world,
-                      false);
-
-    // Perform full position based estimation
-    return estimate_zoom_factor(world, max_val);
-}
-
-auto camera::estimate_zoom_factor(const math::vec3& world_pos, float max_val) const -> float
-{
-    // Just return the actual zoom factor if this is orthographic
-    if(get_projection_mode() == projection_mode::orthographic)
-    {
-        float factor = get_zoom_factor();
-        return math::min(max_val, factor);
-
-    } // End if orthographic
-
-    // New Zoom factor is based on the distance to this position
-    // along the camera's look vector.
-    math::vec3 view_pos = get_view().transform_coord(world_pos);
-    float distance = view_pos.z / (float(viewport_size_.height) * (45.0f / get_fov()));
-    return std::min<float>(max_val, distance);
-}
-
-auto camera::estimate_pick_tolerance(float wire_tolerance,
-                                     const math::vec3& pos,
-                                     const math::transform& object_transform) const -> math::vec3
-{
-    // Scale tolerance based on estimated world space zoom factor.
-    math::vec3 v = object_transform.transform_coord(pos);
-    wire_tolerance *= estimate_zoom_factor(v);
-
-    // Convert into object space tolerance.
-    math::vec3 object_wire_tolerance;
-    const math::vec3& vAxisScale = object_transform.get_scale();
-    return object_wire_tolerance / vAxisScale;
-}
-
 
 void camera::set_aa_data(const usize32_t& viewport_size,
                          std::uint32_t temporal_frame_index,
@@ -855,6 +743,9 @@ void camera::set_aa_data(const usize32_t& viewport_size,
     }
 
     projection_dirty_ = true;
+    // Resolved here, on the thread that renders: pool threads read the projection through get_projection() during the
+    // run, and the frustum may be clean or locked, so nothing else has to rebuild it before they start.
+    get_projection();
 }
 
 void camera::record_current_matrices()
@@ -901,7 +792,6 @@ void camera::touch()
 {
     // All modifications require projection matrix and
     // frustum to be updated.
-    view_dirty_ = true;
     projection_dirty_ = true;
     frustum_dirty_ = true;
 }
@@ -919,7 +809,6 @@ auto camera::get_face_camera(uint32_t face, const math::transform& transform) ->
     math::vec3 X(1, 0, 0);
     math::vec3 Y(0, 1, 0);
     math::vec3 Z(0, 0, 1);
-    math::vec3 Zero(0, 0, 0);
     math::transform t;
     // Generate the correct view matrix for the frustum
 

@@ -1,4 +1,5 @@
 #include "upscale_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <graphics/graphics.h>
@@ -7,14 +8,6 @@
 
 namespace unravel
 {
-namespace
-{
-/// The film grain uniform takes a quarter of the tonemapping settings' amount, as the tone curve's does.
-constexpr float UPSCALE_GRAIN_SCALE = 0.25f;
-/// The grain's per-frame seed cycles through this many frames.
-constexpr std::uint32_t UPSCALE_GRAIN_SEED_PERIOD = 1024;
-} // namespace
-
 
 auto upscale_pass::init(rtti::context& ctx) -> bool
 {
@@ -46,16 +39,13 @@ void upscale_pass::run(const run_params& params)
                                          float(input_size.height),
                                          1.0f / float(input_size.width),
                                          1.0f / float(input_size.height)};
-    const float output_noise[4] = {params.grain_intensity * UPSCALE_GRAIN_SCALE,
-                                   float(gfx::get_render_frame() % UPSCALE_GRAIN_SEED_PERIOD),
-                                   params.dithering ? 1.0f : 0.0f,
-                                   0.0f};
+    const auto output_noise = make_output_noise(params.grain_intensity, params.dithering);
     gfx::set_texture(upscale_program_.s_input,
                      0,
                      params.input->get_texture(),
                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIP_POINT);
     gfx::set_uniform(upscale_program_.u_upscale_input_size, input_size_uniform);
-    gfx::set_uniform(upscale_program_.u_output_noise, output_noise);
+    gfx::set_uniform(upscale_program_.u_output_noise, output_noise.data());
     bgfx::setState(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
     bgfx::submit(pass.id, upscale_program_.program->native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);

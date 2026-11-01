@@ -72,12 +72,12 @@ auto safe_parse_float(hpp::string_view const& s, float def = 0.0f) -> float
         }
     }
 
-    // 3) neither worked → default
+    // 3) neither worked -> default
     return def;
 }
 
 // -------------------------------------------------
-// 1) super‐fast color parser
+// 1) super-fast color parser
 // -------------------------------------------------
 // clang-format off
 static constexpr std::pair<hpp::string_view, uint32_t> k_named_colors[] = {
@@ -147,7 +147,7 @@ auto parse_color(hpp::string_view s) -> uint32_t
         uint8_t b = nib(p[4]) << 4 | nib(p[5]);
         uint8_t a = (s.size() == 9) ? (nib(p[6]) << 4 | nib(p[7])) : 0xFFu;
 
-        // construct via your color struct…
+        // construct via your color struct...
         math::color col(r, g, b, a);
         return static_cast<uint32_t>(col);
     }
@@ -205,7 +205,7 @@ auto parse_rich_segments(const hpp::string_view& in, const text_style& main_styl
         size_t close = in.find('>', open + 1);
         if(close == hpp::string_view::npos)
         {
-            // No closing '>' → treat this '<' as literal
+            // No closing '>' -> treat this '<' as literal
             out.push_back({.text=hpp::string_view(in.data() + open, 1), .state=open_tags.back().first});
             pos = open + 1;
             text_start = pos;
@@ -230,7 +230,7 @@ auto parse_rich_segments(const hpp::string_view& in, const text_style& main_styl
 
         if(inner.empty())
         {
-            // "<>" → literal
+            // "<>" -> literal
             out.push_back({.text = hpp::string_view(in.data() + open, 2), .state = open_tags.back().first});
             continue;
         }
@@ -276,7 +276,7 @@ auto parse_rich_segments(const hpp::string_view& in, const text_style& main_styl
         }
         else if(key == "alpha" || key == "opacity")
         {
-            // parse as float 0.0–1.0, defaulting to 1
+            // parse as float 0.0-1.0, defaulting to 1
             float f = safe_parse_float(val, 1.0f);
             f = math::clamp(f, 0.0f, 1.0f);
             ns.style.opacity *= f;
@@ -386,7 +386,7 @@ auto parse_rich_segments(const hpp::string_view& in, const text_style& main_styl
         }
         else
         {
-            // unrecognized → emit literally
+            // unrecognized -> emit literally
             out.push_back(
                 {.text = hpp::string_view(in.data() + open, close - open + 1), .state = open_tags.back().first});
             continue;
@@ -448,10 +448,10 @@ struct linebreak_ctx
 // -------------------------------------------------
 // context passed into set_linebreaks
 
-// — your callback from before —
+// - your callback from before -
 auto get_next_char_frag(const void* ctx_void,
                         size_t /*len*/,
-                        size_t* ip // in/out byte‐offset into the whole virtual stream
+                        size_t* ip // in/out byte-offset into the whole virtual stream
                         ) -> utf32_t
 {
     auto const* ctx = static_cast<const linebreak_ctx*>(ctx_void);
@@ -507,7 +507,7 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
     ctx.offsets = &cache.offsets;
     ctx.total_len = cache.offsets.back();
 
-    // 2) allocate global break‐map
+    // 2) allocate global break-map
     cache.lb.resize(ctx.total_len);
 
     if(type == text_component::overflow_type::grapheme)
@@ -523,7 +523,7 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
                    cache.lb.data(),
                    get_next_char_frag);
 
-    // 4) If grapheme‐mode, also fill grapheme map
+    // 4) If grapheme-mode, also fill grapheme map
     if(type == text_component::overflow_type::grapheme)
     {
         set_graphemebreaks(&ctx, ctx.total_len, cache.wb.data(), get_next_char_frag);
@@ -549,7 +549,7 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
 
             while(idx < n)
             {
-                // decode one code‐unit
+                // decode one code-unit
                 unsigned char b0 = s[idx];
                 size_t cp_len = (b0 < 0x80 ? 1 : (b0 < 0xE0 ? 2 : (b0 < 0xF0 ? 3 : 4)));
                 if(idx + cp_len > n)
@@ -594,7 +594,7 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
 
             if(!found_lb && !found_wb)
             {
-                // no more breaks → emit the tail
+                // no more breaks -> emit the tail
                 frag_len = n - start;
                 brk = break_type::nobreak;
 
@@ -644,9 +644,9 @@ auto tokenize_fragments_and_measure(const segment_list& segments,
 }
 
 // --------------------------------------------------------------------
-//  A) Given the raw total height (n·line_h), subtract off the extra
+//  A) Given the raw total height (n*line_h), subtract off the extra
 //     leading above the capline and the extra descent below the baseline.
-//     That gives you the distance from capline…baseline.
+//     That gives you the distance from capline...baseline.
 // --------------------------------------------------------------------
 auto compute_typographic_height(float total_h, float above_capline, float below_baseline, uint32_t alignment) -> float
 {
@@ -689,7 +689,7 @@ void merge_into_line(segment_list& line, const word_frag& f)
 }
 
 // -------------------------------------------------
-// 4) scale + wrap, store per‐line width
+// 4) scale + wrap, store per-line width
 // -------------------------------------------------
 
 auto wrap_fragments(const fragment_list& frags, float max_width_px, scratch_cache& cache) -> text_layout
@@ -720,7 +720,7 @@ auto wrap_fragments(const fragment_list& frags, float max_width_px, scratch_cach
         }
     }
 
-    // --- Greedy line‐fitting of atoms ---
+    // --- Greedy line-fitting of atoms ---
     text_layout lines;
     lines.reserve(atoms.size());
 
@@ -773,7 +773,7 @@ auto wrap_fragments(const fragment_list& frags, float max_width_px, scratch_cach
 }
 // -------------------------------------------------
 // 5) top-level API: one tokenize + one measure + O(log N) cheap wraps
-//    reuses the last “good” layout instead of recomputing
+//    reuses the last "good" layout instead of recomputing
 // -------------------------------------------------
 auto wrap_lines(text_component::overflow_type type,
                 uint32_t alignment,
@@ -795,7 +795,7 @@ auto wrap_lines(text_component::overflow_type type,
     text_layout best_layout = wrap_fragments(frags, bound_w_px, cache);
     uint32_t best = base_size;
 
-    // c) binary search…
+    // c) binary search...
     uint32_t lo = base_size + 1, hi = auto_size_range.max;
     while(lo <= hi)
     {
@@ -1014,7 +1014,7 @@ auto text_component::get_scaled_font() const -> const scaled_font&
 auto text_component::get_builder() const -> text_buffer_builder&
 {
     bool dirty = text_dirty_ || scaled_font_dirty_;
-    // nothing to do if clean or font isn’t ready
+    // nothing to do if clean or font isn't ready
     if(!dirty || !get_scaled_font().is_valid())
     {
         return *builder_;
@@ -1053,7 +1053,7 @@ auto text_component::get_builder() const -> text_buffer_builder&
         //    this will:
         //      * tokenize & base-measure at auto_size_range_.min
         //      * binary-search the best size in [min..max]
-        //      * return a text_layout with each line’s .width already set
+        //      * return a text_layout with each line's .width already set
         layout = wrap_lines(overflow_type_,
                             alignment,
                             segments,

@@ -120,13 +120,6 @@ struct submesh_render_proxies
     {
         return instance_bounds_union.is_populated();
     }
-
-    /// True when any cached bounds exist that can diverge from the static mesh box
-    /// (node-driven submesh placements or skinned pose bounds).
-    auto has_pose_bounds() const -> bool
-    {
-        return has_instance_bounds() || has_animated_bounds();
-    }
 };
 
 } // namespace unravel

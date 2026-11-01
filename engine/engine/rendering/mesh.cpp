@@ -165,6 +165,14 @@ void create_mesh(const bgfx::VertexLayout& format,
 
 }
 
+/// The submesh indices of a data group, empty for a group without any.
+auto find_group_submesh_indices(const mesh::submesh_array_map_t& indices_by_group, uint32_t data_group_id)
+    -> const mesh::submesh_array_indices_t&
+{
+    static const mesh::submesh_array_indices_t empty;
+    const auto it = indices_by_group.find(data_group_id);
+    return it != indices_by_group.end() ? it->second : empty;
+}
 } // namespace
 
 mesh::mesh() : hardware_vb_(std::make_shared<gfx::vertex_buffer>()), hardware_ib_(std::make_shared<gfx::index_buffer>())
@@ -331,8 +339,6 @@ auto mesh::prepare_mesh(const bgfx::VertexLayout& format) -> bool
     return true;
 }
 
-// #define SET_VERTICES_WHEN_SETTING_PRIMITIVES 1
-
 auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const bgfx::VertexLayout& source_format)
     -> bool
 {
@@ -418,19 +424,8 @@ auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const
         preparation_data_.compute_binormals = true;
     }
 
-#ifdef SET_VERTICES_WHEN_SETTING_PRIMITIVES
-    // Allocate the vertex records for the new vertex buffer
-    preparation_data_.vertex_records.clear();
-    preparation_data_.vertex_records.resize(vertex_count);
-
-    // Fill with 0xFFFFFFFF initially to indicate that no vertex
-    // originally in this location has yet been inserted into the
-    // final vertex list.
-    memset(preparation_data_.vertex_records.data(), 0xFF, vertex_count * sizeof(uint32_t));
-#else
     preparation_data_.vertex_data = std::move(source);
     preparation_data_.vertex_count = vertex_count;
-#endif
     // Success!
     return true;
 }
@@ -474,143 +469,9 @@ auto mesh::set_primitives(triangle_array_t&& triangles) -> bool
 
     } // End if not preparing
 
-#ifdef SET_VERTICES_WHEN_SETTING_PRIMITIVES
-
-    preparation_data_.triangle_count = 0;
-    preparation_data_.triangle_data.clear();
-
-    // Determine the correct offset to any relevant elements in the vertex
-    bool has_position = vertex_format_.has(bgfx::Attrib::Position);
-    bool has_normal = vertex_format_.has(bgfx::Attrib::Normal);
-    uint16_t vertex_stride = vertex_format_.getStride();
-
-    // During the construction process we test to see if any specified
-    // vertex normal contains invalid data. If the original source vertex
-    // data did not contain a normal, we can optimize and skip this step.
-    bool source_has_normals = preparation_data_.source_format.has(bgfx::Attrib::Normal);
-    bool source_has_binormal = preparation_data_.source_format.has(bgfx::Attrib::Bitangent);
-    bool source_has_tangent = preparation_data_.source_format.has(bgfx::Attrib::Tangent);
-
-    // In addition, we also record which of the required components each
-    // vertex actually contained based on the following information.
-    uint8_t vertex_flags = 0;
-    if(source_has_normals)
-    {
-        vertex_flags |= preparation_data::source_contains_normal;
-    }
-    if(source_has_binormal)
-    {
-        vertex_flags |= preparation_data::source_contains_binormal;
-    }
-    if(source_has_tangent)
-    {
-        vertex_flags |= preparation_data::source_contains_tangent;
-    }
-
-    // Loop through the specified faces and process them.
-    uint8_t* src_vertices_ptr = preparation_data_.vertex_source;
-
-    for(const auto& src_tri : triangles)
-    {
-        // Retrieve vertex positions (if there are any) so that we can perform
-        // degenerate testing.
-        if(preparation_data_.check_for_degenerates)
-        {
-            if(has_position)
-            {
-                math::vec3 v1;
-                float vf1[4];
-                bgfx::vertexUnpack(vf1, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, src_tri.indices[0]);
-                math::vec3 v2;
-                float vf2[4];
-                bgfx::vertexUnpack(vf2, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, src_tri.indices[1]);
-                math::vec3 v3;
-                float vf3[4];
-                bgfx::vertexUnpack(vf3, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, src_tri.indices[2]);
-                std::memcpy(&v1[0], vf1, 3 * sizeof(float));
-                std::memcpy(&v2[0], vf2, 3 * sizeof(float));
-                std::memcpy(&v3[0], vf3, 3 * sizeof(float));
-
-                // Skip triangle if it is degenerate.
-                if(math::all(math::equal(v1, v2, math::epsilon<float>())) ||
-                   math::all(math::equal(v1, v3, math::epsilon<float>())) ||
-                   math::all(math::equal(v2, v3, math::epsilon<float>())))
-                {
-                    continue;
-                }
-            } // End if has position.
-        }
-        // Prepare a triangle structure ready for population
-        preparation_data_.triangle_count++;
-        preparation_data_.triangle_data.resize(preparation_data_.triangle_count);
-        triangle& triangle_data = preparation_data_.triangle_data[preparation_data_.triangle_count - 1];
-
-        // Set triangle's submesh information.
-        triangle_data.data_group_id = src_tri.data_group_id;
-
-        // For each index in the face
-        for(uint32_t j = 0; j < 3; ++j)
-        {
-            // Extract the original index from the specified index buffer
-            uint32_t orig_index = src_tri.indices[j];
-
-            // Retrieve the vertex record for the original vertex
-            uint32_t index = preparation_data_.vertex_records[orig_index];
-
-            // Have we inserted this vertex into the vertex buffer previously?
-            if(index == 0xFFFFFFFF)
-            {
-                // Vertex does not yet exist in the vertex buffer we are preparing
-                // so copy the vertex in and record the index mapping for this vertex.
-                index = preparation_data_.vertex_count++;
-                preparation_data_.vertex_records[orig_index] = index;
-
-                // Resize the output vertex buffer ready to hold this new data.
-                size_t initial_size = preparation_data_.vertex_data.size();
-                preparation_data_.vertex_data.resize(initial_size + vertex_stride);
-
-                // Copy the data in.
-                uint8_t* src_ptr = src_vertices_ptr + (orig_index * vertex_stride);
-                uint8_t* dst_ptr = &preparation_data_.vertex_data[initial_size];
-                std::memcpy(dst_ptr, src_ptr, vertex_stride);
-
-                // Also record other pertenant details about this vertex.
-                preparation_data_.vertex_flags.push_back(vertex_flags);
-
-                // Clear any invalid normals (completely messes up HDR if ANY NaNs make
-                // it this far)
-                // if(has_normal && source_has_normals)
-                // {
-                //     float fnorm[4];
-                //     bgfx::vertexUnpack(fnorm, bgfx::Attrib::Normal, vertex_format_, dst_ptr);
-                //     if(std::isnan(fnorm[0]) || std::isnan(fnorm[1]) || std::isnan(fnorm[2]))
-                //     {
-                //         bgfx::vertexPack(fnorm, true, bgfx::Attrib::Normal, vertex_format_, dst_ptr);
-                //     }
-                // } // End if have normal
-
-                // Grow the size of the bounding box
-                if(has_position)
-                {
-                    float fpos[4];
-                    bgfx::vertexUnpack(fpos, bgfx::Attrib::Position, vertex_format_, dst_ptr);
-                    bbox_.add_point(math::vec3(fpos[0], fpos[1], fpos[2]));
-                }
-
-            } // End if vertex not recorded in this buffer yet
-
-            // Copy the index in
-            triangle_data.indices[j] = index;
-
-        } // Next Index
-
-    } // Next Face
-
-#else
     preparation_data_.triangle_count = triangles.size();
     preparation_data_.triangle_data = std::move(triangles);
 
-#endif
 
     // Success!
     return true;
@@ -706,7 +567,6 @@ auto mesh::create_plane(const bgfx::VertexLayout& format,
                         float height,
                         uint32_t width_segments,
                         uint32_t height_segments,
-                        mesh_create_origin origin,
                         bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
@@ -757,10 +617,8 @@ auto mesh::create_heightfield(const bgfx::VertexLayout& format,
                               float half_extent_x,
                               float half_extent_z,
                               float height_scale,
-                              mesh_create_origin origin,
                               bool hardware_copy) -> bool
 {
-    (void)origin;
     const uint32_t sx = segments_x;
     const uint32_t sz = segments_z;
     if(sx < 1u || sz < 1u)
@@ -819,7 +677,6 @@ auto mesh::create_cube(const bgfx::VertexLayout& format,
                        uint32_t width_segments,
                        uint32_t height_segments,
                        uint32_t depth_segments,
-                       mesh_create_origin origin,
                        bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
@@ -843,7 +700,6 @@ auto mesh::create_rounded_cube(const bgfx::VertexLayout& format,
     uint32_t width_segments,
     uint32_t height_segments,
     uint32_t depth_segments,
-    mesh_create_origin origin,
     bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
@@ -863,7 +719,6 @@ auto mesh::create_sphere(const bgfx::VertexLayout& format,
                          float radius,
                          uint32_t stacks,
                          uint32_t slices,
-                         mesh_create_origin origin,
                          bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
@@ -884,7 +739,6 @@ auto mesh::create_cylinder(const bgfx::VertexLayout& format,
                            float height,
                            uint32_t stacks,
                            uint32_t slices,
-                           mesh_create_origin origin,
                            bool hardware_copy /* = true */) -> bool
 {
     // Clear out old data.
@@ -909,7 +763,6 @@ auto mesh::create_capsule(const bgfx::VertexLayout& format,
                           float height,
                           uint32_t stacks,
                           uint32_t slices,
-                          mesh_create_origin origin,
                           bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
@@ -927,18 +780,16 @@ auto mesh::create_capsule(const bgfx::VertexLayout& format,
 
 auto mesh::create_cone(const bgfx::VertexLayout& format,
                        float radius,
-                       float radius_tip,
                        float height,
                        uint32_t stacks,
                        uint32_t slices,
-                       mesh_create_origin origin,
                        bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
 
     using namespace generator;
-    capped_cone_mesh_t cone(radius, 1.0, static_cast<int>(stacks), static_cast<int>(slices));
+    capped_cone_mesh_t cone(radius, height * 0.5, static_cast<int>(slices), static_cast<int>(stacks));
     math::quat rot(math::vec3(math::radians(-90.0f), 0.f, 0.0f));
     auto mesh = rotate_mesh(cone, rot);
 
@@ -952,7 +803,6 @@ auto mesh::create_torus(const bgfx::VertexLayout& format,
                         float inner_radius,
                         uint32_t bands,
                         uint32_t sides,
-                        mesh_create_origin origin,
                         bool hardware_copy /* = true */) -> bool
 {
     // We are in the process of preparing.
@@ -1694,220 +1544,20 @@ auto mesh::get_submesh_node_transforms(uint32_t lod_index) const -> std::vector<
     return transforms;
 }
 
-auto mesh::calculate_screen_rect_precise(const math::transform& world, const camera& cam) const -> irect32_t
+auto mesh::find_lod_level(uint32_t lod_index) const -> const lod_level*
 {
-    auto bounds = math::bbox::mul(get_bounds(), world);
-    math::vec3 cen = bounds.get_center();
-    math::vec3 ext = bounds.get_extents();
-    
-    const auto view_proj = cam.get_view_projection();
-    const auto& viewport_size = cam.get_viewport_size();
-    const auto& viewport_pos = cam.get_viewport_pos();
-    const float near_plane_epsilon = 0.001f;
-    
-    std::array<math::vec3, 8> corners = {{
-        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z - ext.z),
-        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z - ext.z),
-        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z + ext.z),
-        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z + ext.z),
-        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z - ext.z),
-        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z - ext.z),
-        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z + ext.z),
-        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z + ext.z),
-    }};
-    
-    // Bounding box edges (pairs of corner indices)
-    constexpr std::array<std::pair<int, int>, 12> edges = {{
-        {0, 1}, {2, 3}, {4, 5}, {6, 7},  // X-aligned edges
-        {0, 2}, {1, 3}, {4, 6}, {5, 7},  // Z-aligned edges
-        {0, 4}, {1, 5}, {2, 6}, {3, 7}   // Y-aligned edges
-    }};
-    
-    math::vec2 min = math::vec2(std::numeric_limits<float>::max());
-    math::vec2 max = math::vec2(std::numeric_limits<float>::lowest());
-    bool has_valid_point = false;
-    
-    // Project corners and clip edges
-    std::array<math::vec4, 8> clip_coords;
-    std::array<bool, 8> is_visible;
-    
-    for(int i = 0; i < 8; ++i)
-    {
-        clip_coords[i] = view_proj * math::vec4{corners[i].x, corners[i].y, corners[i].z, 1.0f};
-        is_visible[i] = clip_coords[i].w > near_plane_epsilon;
-        
-        if(is_visible[i])
-        {
-            const float recip_w = 1.0f / clip_coords[i].w;
-            const float ndc_x = clip_coords[i].x * recip_w;
-            const float ndc_y = clip_coords[i].y * recip_w;
-            
-            math::vec2 screen_point;
-            screen_point.x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
-            screen_point.y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
-            
-            min = math::min(min, screen_point);
-            max = math::max(max, screen_point);
-            has_valid_point = true;
-        }
-    }
-    
-    // Clip edges that cross the near plane
-    for(const auto& edge : edges)
-    {
-        const int idx0 = edge.first;
-        const int idx1 = edge.second;
-        
-        const bool v0_visible = is_visible[idx0];
-        const bool v1_visible = is_visible[idx1];
-        
-        if(v0_visible == v1_visible)
-        {
-            continue;
-        }
-        
-        const math::vec4& clip0 = clip_coords[idx0];
-        const math::vec4& clip1 = clip_coords[idx1];
-        
-        const float w0 = clip0.w;
-        const float w1 = clip1.w;
-        
-        const float t = (near_plane_epsilon - w0) / (w1 - w0);
-        
-        if(t >= 0.0f && t <= 1.0f)
-        {
-            const math::vec4 clipped_clip = clip0 + t * (clip1 - clip0);
-            
-            const float recip_w = 1.0f / clipped_clip.w;
-            const float ndc_x = clipped_clip.x * recip_w;
-            const float ndc_y = clipped_clip.y * recip_w;
-            
-            math::vec2 screen_point;
-            screen_point.x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
-            screen_point.y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
-            
-            min = math::min(min, screen_point);
-            max = math::max(max, screen_point);
-            has_valid_point = true;
-        }
-    }
-    
-    if(!has_valid_point)
-    {
-        min = math::vec2(float(viewport_pos.x), float(viewport_pos.y));
-        max = math::vec2(float(viewport_pos.x + viewport_size.width), float(viewport_pos.y + viewport_size.height));
-    }
-    
-    return irect32_t(irect32_t::value_type(min.x),
-                     irect32_t::value_type(min.y),
-                     irect32_t::value_type(max.x),
-                     irect32_t::value_type(max.y));
-}
-
-auto mesh::calculate_screen_rect(const math::transform& world, const camera& cam) const -> irect32_t
-{
-    auto bounds = math::bbox::mul(get_bounds(), world);
-    math::vec3 cen = bounds.get_center();
-    math::vec3 ext = bounds.get_extents();
-    
-    const auto view_proj = cam.get_view_projection();
-    const auto& viewport_size = cam.get_viewport_size();
-    const auto& viewport_pos = cam.get_viewport_pos();
-    
-    std::array<math::vec3, 8> corners = {{
-        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z - ext.z),
-        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z - ext.z),
-        math::vec3(cen.x - ext.x, cen.y - ext.y, cen.z + ext.z),
-        math::vec3(cen.x + ext.x, cen.y - ext.y, cen.z + ext.z),
-        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z - ext.z),
-        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z - ext.z),
-        math::vec3(cen.x - ext.x, cen.y + ext.y, cen.z + ext.z),
-        math::vec3(cen.x + ext.x, cen.y + ext.y, cen.z + ext.z),
-    }};
-    
-    math::vec2 min = math::vec2(std::numeric_limits<float>::max());
-    math::vec2 max = math::vec2(std::numeric_limits<float>::lowest());
-    int valid_count = 0;
-    int behind_count = 0;
-    
-    for(const auto& corner : corners)
-    {
-        math::vec4 clip = view_proj * math::vec4{corner.x, corner.y, corner.z, 1.0f};
-        
-        // Check if point is behind or very close to the camera (near plane)
-        if(clip.w <= 0.001f)
-        {
-            behind_count++;
-            continue;
-        }
-        
-        // Project to normalized device coordinates
-        const float recip_w = 1.0f / clip.w;
-        const float ndc_x = clip.x * recip_w;
-        const float ndc_y = clip.y * recip_w;
-        
-        // Transform to screen space
-        math::vec2 screen_point;
-        screen_point.x = ((ndc_x * 0.5f) + 0.5f) * float(viewport_size.width) + float(viewport_pos.x);
-        screen_point.y = ((ndc_y * -0.5f) + 0.5f) * float(viewport_size.height) + float(viewport_pos.y);
-        
-        min = math::min(min, screen_point);
-        max = math::max(max, screen_point);
-        valid_count++;
-    }
-    
-    // If some points are behind camera, the bounds cross the near plane
-    // This means the object extends beyond the viewport edges - clamp to full screen
-    if(behind_count > 0 && valid_count > 0)
-    {
-        min.x = float(viewport_pos.x);
-        min.y = float(viewport_pos.y);
-        max.x = float(viewport_pos.x + viewport_size.width);
-        max.y = float(viewport_pos.y + viewport_size.height);
-    }
-    else if(valid_count == 0)
-    {
-        // All points behind camera - object encompasses the entire screen
-        min = math::vec2(float(viewport_pos.x), float(viewport_pos.y));
-        max = math::vec2(float(viewport_pos.x + viewport_size.width), float(viewport_pos.y + viewport_size.height));
-    }
-    
-    return irect32_t(irect32_t::value_type(min.x),
-                     irect32_t::value_type(min.y),
-                     irect32_t::value_type(max.x),
-                     irect32_t::value_type(max.y));
+    return lod_index > 0 && lod_index <= lods_.size() ? &lods_[lod_index - 1] : nullptr;
 }
 
 auto mesh::get_submeshes(uint32_t lod_index) const -> const submesh_array_t&
 {
-    if(lod_index == 0)
-    {
-        return mesh_submeshes_;
-    }
-
-    if(lod_index > 0 && lod_index <= lods_.size())
-    {
-        return lods_[lod_index - 1].submeshes_;
-    }
-
-    // Invalid LOD index, return base
-    return mesh_submeshes_;
+    const auto* level = find_lod_level(lod_index);
+    return level != nullptr ? level->submeshes_ : mesh_submeshes_;
 }
 
 auto mesh::get_submeshes_count(uint32_t lod_index) const -> size_t
 {
-    if(lod_index == 0)
-    {
-        return mesh_submeshes_.size();
-    }
-
-    if(lod_index > 0 && lod_index <= lods_.size())
-    {
-        return lods_[lod_index - 1].submeshes_.size();
-    }
-
-    // Invalid LOD index, return base
-    return mesh_submeshes_.size();
+    return get_submeshes(lod_index).size();
 }
 
 auto mesh::get_submesh(uint32_t submesh_index, uint32_t lod_index) const -> const submesh*
@@ -1959,21 +1609,6 @@ auto mesh::find_submesh_index_by_stable_id(uint32_t stable_id, uint32_t lod_inde
 auto mesh::get_lod_count() const -> uint32_t
 {
     return lod_count_;
-}
-
-auto mesh::get_lod_submeshes(uint32_t lod_index) const -> const submesh_array_t*
-{
-    if(lod_index == 0)
-    {
-        return &mesh_submeshes_;
-    }
-
-    if(lod_index > 0 && lod_index <= lods_.size())
-    {
-        return &lods_[lod_index - 1].submeshes_;
-    }
-
-    return nullptr;
 }
 
 auto mesh::get_lod_face_count(uint32_t lod_index) const -> uint32_t
@@ -2898,19 +2533,22 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
     // Restore each LOD level
     for(const auto& lod_data : data.lods)
     {
+        // A level without indices has nothing to draw and no index buffer to bind.
+        if(lod_data.index_data.empty() || lod_data.face_count == 0)
+        {
+            continue;
+        }
+
         mesh::lod_level lod;
         lod.face_count_ = lod_data.face_count;
         lod.simplification_error_ = lod_data.simplification_error;
 
         // Copy index buffer, sized by the face count every reader of it uses.
-        if(!lod_data.index_data.empty())
-        {
-            const size_t index_count = size_t(lod.face_count_) * 3;
-            lod.system_ib_ = allocate_indices(index_count, lod.system_ib_backing_);
-            std::memcpy(lod.system_ib_,
-                        lod_data.index_data.data(),
-                        std::min(index_count, lod_data.index_data.size()) * sizeof(uint32_t));
-        }
+        const size_t index_count = size_t(lod.face_count_) * 3;
+        lod.system_ib_ = allocate_indices(index_count, lod.system_ib_backing_);
+        std::memcpy(lod.system_ib_,
+                    lod_data.index_data.data(),
+                    std::min(index_count, lod_data.index_data.size()) * sizeof(uint32_t));
 
         // Copy submeshes and build cached indices maps
         for(size_t i = 0; i < lod_data.submeshes.size(); ++i)
@@ -2931,7 +2569,7 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
         }
 
         // Build hardware buffer for this LOD if needed
-        if(hardware_mesh_ && lod.system_ib_ && lod.face_count_ > 0)
+        if(hardware_mesh_)
         {
             // Same compute-read flag as base LOD so any LOD can be used as a
             // read-only buffer inside shaders (e.g. vertex pulling). It shares the LOD's indices, as build_ib does.
@@ -2962,31 +2600,9 @@ auto mesh::get_skinned_submeshes_count(uint32_t lod_index) const -> size_t
 
 auto mesh::get_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index) const -> const submesh_array_indices_t&
 {
-    // For base LOD (lod_index == 0), use cached map for performance
-    if(lod_index == 0 || lods_.empty())
-    {
-        auto it = skinned_submesh_indices_.find(data_group_id);
-        if(it != skinned_submesh_indices_.end())
-        {
-            return it->second;
-        }
-        static const submesh_array_indices_t empty;
-        return empty;
-    }
-
-    // For LOD levels, use cached map
-    if(lod_index > 0 && lod_index <= lods_.size())
-    {
-        const auto& lod = lods_[lod_index - 1];
-        auto it = lod.skinned_submesh_indices_.find(data_group_id);
-        if(it != lod.skinned_submesh_indices_.end())
-        {
-            return it->second;
-        }
-    }
-
-    static const submesh_array_indices_t empty;
-    return empty;
+    const auto* level = find_lod_level(lod_index);
+    return find_group_submesh_indices(level != nullptr ? level->skinned_submesh_indices_ : skinned_submesh_indices_,
+                                      data_group_id);
 }
 
 auto mesh::get_non_skinned_submeshes_count(uint32_t lod_index) const -> size_t
@@ -3005,31 +2621,9 @@ auto mesh::get_non_skinned_submeshes_count(uint32_t lod_index) const -> size_t
 
 auto mesh::get_non_skinned_submeshes_indices(uint32_t data_group_id, uint32_t lod_index) const -> const submesh_array_indices_t&
 {
-    // For base LOD (lod_index == 0), use cached map for performance
-    if(lod_index == 0 || lods_.empty())
-    {
-        auto it = non_skinned_submesh_indices_.find(data_group_id);
-        if(it != non_skinned_submesh_indices_.end())
-        {
-            return it->second;
-        }
-        static const submesh_array_indices_t empty;
-        return empty;
-    }
-
-    // For LOD levels, use cached map
-    if(lod_index > 0 && lod_index <= lods_.size())
-    {
-        const auto& lod = lods_[lod_index - 1];
-        auto it = lod.non_skinned_submesh_indices_.find(data_group_id);
-        if(it != lod.non_skinned_submesh_indices_.end())
-        {
-            return it->second;
-        }
-    }
-
-    static const submesh_array_indices_t empty;
-    return empty;
+    const auto* level = find_lod_level(lod_index);
+    return find_group_submesh_indices(level != nullptr ? level->non_skinned_submesh_indices_ : non_skinned_submesh_indices_,
+                                      data_group_id);
 }
 
 auto mesh::get_bounds() const -> const math::bbox&
@@ -3046,7 +2640,7 @@ auto mesh::get_data_groups_count() const -> size_t
 {
     if(prepare_status_ == mesh_status::prepared)
     {
-        return data_groups_.size();
+        return data_groups_.empty() ? 0 : size_t(data_groups_.rbegin()->first) + 1;
     }
     if(prepare_status_ == mesh_status::preparing)
     {
@@ -4096,105 +3690,25 @@ bone_palette::bone_palette(uint32_t palette_size)
 {
 }
 
-auto bone_palette::get_skinning_matrices(const std::vector<math::transform>& node_transforms,
-                                         const skin_bind_data& bind_data) const -> const std::vector<math::mat4>&
-{
-    // Retrieve the main list of bones from the skin bind data that will
-    // be referenced by the palette's bone index list.
-    const auto& bind_list = bind_data.get_bones();
-
-    // Compute transformation matrix for each bone in the palette
-    const size_t bones_size = bones_.size();
-    const size_t count = std::min(bones_size, node_transforms.size());
-    
-    thread_local static std::vector<math::mat4> skinning_transforms_;
-    skinning_transforms_.resize(bones_size, math::identity<math::mat4>());
-    
-    // Optimize: cache bind list size check
-    const size_t bind_list_size = bind_list.size();
-    
-    for(size_t i = 0; i < count; ++i)
-    {
-        const auto bone = bones_[i];
-        
-        // Bounds check to avoid out-of-range access
-        if(bone >= node_transforms.size() || bone >= bind_list_size)
-        {
-            continue;
-        }
-        
-        const auto& bone_transform = node_transforms[bone];
-        const auto& bone_data = bind_list[bone];
-        
-        // Direct matrix multiplication - cache the bind pose matrix
-        const auto& bind_pose_matrix = bone_data.bind_pose_transform.get_matrix();
-        skinning_transforms_[i] = bone_transform.get_matrix() * bind_pose_matrix;
-    }
-
-    return skinning_transforms_;
-}
-
 auto bone_palette::get_skinning_matrices(const std::vector<math::mat4>& node_transforms,
                                          const skin_bind_data& bind_data) const -> const std::vector<math::mat4>&
 {
-    // Retrieve the main list of bones from the skin bind data that will
-    // be referenced by the palette's bone index list.
     const auto& bind_list = bind_data.get_bones();
-
-    // Compute transformation matrix for each bone in the palette
     const size_t bones_size = bones_.size();
-    const size_t count = std::min(bones_size, node_transforms.size());
-    
-    thread_local static std::vector<math::mat4> skinning_transforms_;
-    skinning_transforms_.resize(bones_size, math::identity<math::mat4>());
-
-    // Optimize: cache bind list size check
-    const size_t bind_list_size = bind_list.size();
-    
-    for(size_t i = 0; i < count; ++i)
+    // Shared by every palette this thread evaluates: each entry is written below, so none keeps another model's bone.
+    thread_local static std::vector<math::mat4> skinning_transforms;
+    skinning_transforms.resize(bones_size);
+    for(size_t i = 0; i < bones_size; ++i)
     {
         const auto bone = bones_[i];
-        
-        // Bounds check to avoid out-of-range access
-        if(bone >= node_transforms.size() || bone >= bind_list_size)
+        if(bone >= node_transforms.size() || bone >= bind_list.size())
         {
+            skinning_transforms[i] = math::identity<math::mat4>();
             continue;
         }
-        
-        const auto& bone_transform = node_transforms[bone];
-        const auto& bone_data = bind_list[bone];
-        
-        // Direct matrix multiplication - cache the bind pose matrix
-        const auto& bind_pose_matrix = bone_data.bind_pose_transform.get_matrix();
-        skinning_transforms_[i] = bone_transform * bind_pose_matrix;
+        skinning_transforms[i] = node_transforms[bone] * bind_list[bone].bind_pose_transform.get_matrix();
     }
-
-    return skinning_transforms_;
-}
-
-void bone_palette::assign_bones(bone_index_map_t& bones, std::vector<uint32_t>& faces)
-{
-    bone_index_map_t::iterator it_bone, it_bone2;
-
-    // Iterate through newly specified input bones and add any unique ones to the
-    // palette.
-    for(it_bone = bones.begin(); it_bone != bones.end(); ++it_bone)
-    {
-        it_bone2 = bones_lut_.find(it_bone->first);
-        if(it_bone2 == bones_lut_.end())
-        {
-            bones_lut_[it_bone->first] = static_cast<uint32_t>(bones_.size());
-            bones_.push_back(it_bone->first);
-
-        } // End if not already added
-
-    } // Next Bone
-
-    // Merge the new face list with ours.
-    // faces_.insert(faces_.end(), faces.begin(), faces.end());
-
-    faces_.resize(faces_.size() + faces.size());
-    std::memcpy(faces_.data(), faces.data(), faces.size() * sizeof(uint32_t));
+    return skinning_transforms;
 }
 
 void bone_palette::assign_bones(const std::vector<uint32_t>& bones)
@@ -4216,43 +3730,6 @@ void bone_palette::assign_bones(const std::vector<uint32_t>& bones)
             bones_.push_back(bones[i]);
 
         } // End if not already added
-
-    } // Next Bone
-}
-
-void bone_palette::compute_palette_fit(bone_index_map_t& input,
-                                       int32_t& current_space,
-                                       int32_t& common_bones,
-                                       int32_t& additional_bones)
-{
-    // Reset values
-    current_space = static_cast<int32_t>(maximum_size_ - static_cast<uint32_t>(bones_.size()));
-    common_bones = 0;
-    additional_bones = 0;
-
-    // Early out if possible
-    if(bones_.size() == 0)
-    {
-        additional_bones = static_cast<int32_t>(input.size());
-        return;
-
-    } // End if no bones stored
-    else if(input.size() == 0)
-    {
-        return;
-
-    } // End if no bones input
-
-    // Iterate through newly specified input bones and see how many
-    // indices it has in common with our existing set.
-    bone_index_map_t::iterator it_bone, it_bone2;
-    for(it_bone = input.begin(); it_bone != input.end(); ++it_bone)
-    {
-        it_bone2 = bones_lut_.find(it_bone->first);
-        if(it_bone2 != bones_lut_.end())
-            common_bones++;
-        else
-            additional_bones++;
 
     } // Next Bone
 }
@@ -4288,16 +3765,6 @@ void bone_palette::set_maximum_blend_index(int nIndex)
 auto bone_palette::get_maximum_size() const -> uint32_t
 {
     return maximum_size_;
-}
-
-auto bone_palette::get_influenced_faces() -> std::vector<uint32_t>&
-{
-    return faces_;
-}
-
-void bone_palette::clear_influenced_faces()
-{
-    faces_.clear();
 }
 
 auto bone_palette::get_bones() const -> const std::vector<uint32_t>&

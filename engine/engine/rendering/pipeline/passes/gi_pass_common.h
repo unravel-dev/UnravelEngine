@@ -6,6 +6,7 @@
 #include <engine/rendering/gi/gi_settings.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/gpu_resource_utils.h>
 
 #include <graphics/graphics.h>
 #include <graphics/render_view.h>
@@ -272,17 +273,8 @@ inline auto make_settings_uniform(const gi_settings& settings, bool is_being_edi
             get_max_roughness_to_trace(settings.reflections),
             get_full_res_jitter_width(settings.diffuse.quality)};
 }
-/// The layout of the vec4 tables the GI passes upload as buffers (a vertex buffer is read as vec4 by the shaders).
-inline auto get_vec4_layout() -> const bgfx::VertexLayout&
-{
-    static const bgfx::VertexLayout layout = []()
-    {
-        bgfx::VertexLayout decl;
-        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
-        return decl;
-    }();
-    return layout;
-}
+/// The layout of the vec4 tables the GI passes upload as buffers.
+using gpu_resource::get_vec4_layout;
 
 /// Uploads a vec4 table, growing the buffer when needed; an empty table keeps one zero element.
 inline void upload_vec4_table(bgfx::DynamicVertexBufferHandle& buffer, const std::vector<math::vec4>& data)
@@ -493,16 +485,7 @@ inline auto make_uint_buffer(uint32_t count) -> bgfx::DynamicIndexBufferHandle
     return bgfx::createDynamicIndexBuffer(count, BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
 }
 
-/// Destroys a bgfx handle when it is valid and invalidates it.
-template<typename Handle>
-void destroy_handle(Handle& handle)
-{
-    if(bgfx::isValid(handle))
-    {
-        bgfx::destroy(handle);
-        handle = {bgfx::kInvalidHandle};
-    }
-}
+using gpu_resource::destroy_handle;
 
 /// A full-resolution RGBA16F scratch texture of the render view for a frame's transient results: the reflections'
 /// resolve writes it and their temporal reads it. Nothing reads it across frames.

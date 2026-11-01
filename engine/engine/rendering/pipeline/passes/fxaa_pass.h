@@ -31,10 +31,6 @@ public:
     void release_resources(gfx::render_view& rview);
 
 private:
-    auto create_or_update_output_fb(gfx::render_view& rview,
-                                   const gfx::frame_buffer::ptr& input,
-                                   const gfx::frame_buffer::ptr& output)
-        -> gfx::frame_buffer::ptr;
     // Encapsulate the GPU program + any uniforms we might need.
     struct fxaa_program : uniforms_cache
     {

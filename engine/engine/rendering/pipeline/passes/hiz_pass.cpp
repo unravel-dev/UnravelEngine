@@ -1,4 +1,5 @@
 #include "hiz_pass.h"
+#include "pass_helpers.h"
 #include <engine/assets/asset_manager.h>
 #include <algorithm>
 #include <graphics/graphics.h>
@@ -8,6 +9,11 @@
 
 namespace unravel
 {
+namespace
+{
+/// Threads per group along each axis of the Hi-Z compute shaders.
+constexpr uint32_t HIZ_GROUP_SIZE = 8;
+} // namespace
 
 auto hiz_pass::init(rtti::context& ctx) -> bool
 {
@@ -39,7 +45,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
     // Validate input parameters
     const auto& depth_buffer = params.depth_buffer;
     const auto& output_hiz = params.output_hiz;
-    if (!depth_buffer || !output_hiz || !params.cam)
+    if (!depth_buffer || !output_hiz)
     {
         return;
     }
@@ -71,8 +77,8 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_uniform(hiz_generate_.u_hiz_params, hiz_params);
 
         // Dispatch compute shader with 8x8 thread groups
-        uint32_t num_groups_x = (hiz_width + 7) / 8;
-        uint32_t num_groups_y = (hiz_height + 7) / 8;
+        uint32_t num_groups_x = compute_group_count(hiz_width, HIZ_GROUP_SIZE);
+        uint32_t num_groups_y = compute_group_count(hiz_height, HIZ_GROUP_SIZE);
         gfx::dispatch(pass.id, hiz_generate_.program->native_handle(), num_groups_x, num_groups_y, 1);
 
         hiz_generate_.program->end();
@@ -107,18 +113,14 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
             gfx::set_uniform(hiz_downsample_.u_hiz_params, hiz_params);
 
             // Dispatch compute shader with 8x8 thread groups
-            uint32_t num_groups_x = (current_mip_width + 7) / 8;
-            uint32_t num_groups_y = (current_mip_height + 7) / 8;
+            uint32_t num_groups_x = compute_group_count(current_mip_width, HIZ_GROUP_SIZE);
+            uint32_t num_groups_y = compute_group_count(current_mip_height, HIZ_GROUP_SIZE);
             gfx::dispatch(pass.id, hiz_downsample_.program->native_handle(), num_groups_x, num_groups_y, 1);
         }
 
         // End the program once after all dispatches
         hiz_downsample_.program->end();
     }
-
-    // Memory barrier to ensure all compute operations are complete
-    // This is handled automatically by bgfx between frame boundaries,
-    // but we add it for safety if the Hi-Z buffer is used immediately
 }
 
 } // namespace unravel

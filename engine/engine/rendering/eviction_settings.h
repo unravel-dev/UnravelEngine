@@ -33,7 +33,7 @@ struct eviction_settings
 /// Per-frame eviction driver. Must run on the graphics API (render) thread. Builds a
 /// gfx::eviction::budget_state from the GPU memory stats (or the manual budget when no GPU budget
 /// is reported), publishes it via gfx::eviction::set_budget so reclaim_for and tooling see the
-/// same watermarks, and—when enabled and over budget—evicts down to the target. A no-op when the
+/// same watermarks, and-when enabled and over budget-evicts down to the target. A no-op when the
 /// backend does not support eviction.
 ENGINE_EXPORT void update_eviction(const eviction_settings& settings);
 

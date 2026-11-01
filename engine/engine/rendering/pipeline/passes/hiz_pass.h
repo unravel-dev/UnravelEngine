@@ -18,7 +18,6 @@ public:
     {
         gfx::texture::ptr depth_buffer;   ///< Source depth buffer
         gfx::texture::ptr output_hiz;     ///< Output Hi-Z texture (must be R32F or R16F format with mips)
-        const camera* cam{};              ///< Camera for near/far plane information
     };
 
     /// Must be called once (after bgfx::init() and after `asset_manager` is registered in context).

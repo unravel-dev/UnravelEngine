@@ -1,4 +1,5 @@
 #include "temporal_probe_pass.h"
+#include "pass_helpers.h"
 
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
@@ -120,7 +121,7 @@ void temporal_probe_pass::run(const run_params& params)
         }
         discard_pending_readback_ = false;
     }
-    if(!armed_ || readback_pending_ || !program_.is_valid() || !params.color || !params.depth ||
+    if(!armed_ || readback_pending_ || !begin_program(program_.program) || !params.color || !params.depth ||
        params.cam == nullptr)
     {
         return;
@@ -133,9 +134,10 @@ void temporal_probe_pass::run(const run_params& params)
     }
     if(!sums_ || width != width_ || height != height_)
     {
-        // A resize mid-measurement restarts it: the sums describe other pixels.
+        // A resize mid-measurement restarts it: the sums and the captured marks describe other pixels.
         allocate(width, height);
         frames_done_ = 0;
+        marks_pending_.clear();
     }
     APP_SCOPE_PERF("Instruments/Temporal Probe");
     dispatch_frame(params);
@@ -202,7 +204,6 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
     const uint32_t luma_read = 1u - luma_write_;
     gfx::render_pass pass("Instruments/Temporal Probe");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-    program_.program->begin();
     gfx::set_texture(program_.s_color, 0, params.color, point_clamp);
     // Unbound inputs are substituted with this frame's depth and switched off by the lanes below.
     gfx::set_texture(program_.s_velocity, 1, params.velocity ? params.velocity : params.depth, point_clamp);
@@ -225,8 +226,8 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
     gfx::set_uniform(program_.u_probe_params2, probe_params2);
     gfx::dispatch(pass.id,
                    program_.program->native_handle(),
-                   (uint32_t(width_) + compute_group - 1u) / compute_group,
-                   (uint32_t(height_) + compute_group - 1u) / compute_group,
+                   compute_group_count(width_, compute_group),
+                   compute_group_count(height_, compute_group),
                    1);
     program_.program->end();
     luma_write_ = luma_read;

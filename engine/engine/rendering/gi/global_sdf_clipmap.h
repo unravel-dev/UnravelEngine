@@ -118,10 +118,11 @@ public:
         /// above all -- with a cascade nothing composes. The runtime opts in wherever the compose
         /// program loaded, which is also what makes the GI's resolution affordable.
         bool compose_on_gpu = false;
-        ///< Levels recomposed per update, at most. Composition touches every voxel of a level,
-        ///< so recomposing all of them in the frame the camera crosses a voxel boundary would
-        ///< hitch. Levels are considered finest first, which is also the order they go stale in
-        ///< (level 0 has the smallest voxels, so its origin re-snaps most often).
+        ///< Levels recomposed IN FULL per update, at most: partial recomposes and a level's first
+        ///< composition stay outside it. Composition touches every voxel of a level, so
+        ///< recomposing all of them in the frame the camera crosses a voxel boundary would hitch.
+        ///< The levels that waited longest go first, finest first on a tie: level 0 has the
+        ///< smallest voxels and re-snaps most often, so finest-first alone would starve the others.
         uint32_t max_levels_per_update = 1;
         ///< Scale of the smallest object the GPU's GI cascade composition keeps (cs_gi_clipmap_compose.eshader,
         ///< SdfGiCascadeKeepsInstance): 1 / the scene detail. It is part of every level's fingerprint, so a
