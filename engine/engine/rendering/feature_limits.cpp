@@ -15,6 +15,8 @@ auto limit_light(const light& source, const feature_limits& limits) -> light
     {
         limited.shadow_params.type = sm_impl::pcf;
     }
+    limited.directional_shadow_params.num_splits = static_cast<uint8_t>(
+        std::min(int(limited.directional_shadow_params.num_splits), limits.max_shadow_cascades));
     if(!limits.contact_shadows)
     {
         limited.contact_shadow.enabled = false;

@@ -16,16 +16,6 @@ namespace rendering
 
 namespace
 {
-auto get_default_format() -> bgfx::TextureFormat::Enum
-{
-    return bgfx::TextureFormat::RGBA8;
-}
-
-auto get_default_hdr_format() -> bgfx::TextureFormat::Enum
-{
-    return bgfx::TextureFormat::RGBA16F;
-}
-
 auto get_default_depth_format() -> bgfx::TextureFormat::Enum
 {
     return bgfx::TextureFormat::D32F;
@@ -70,7 +60,8 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
         "GBUFFER_0",
         {.size = render_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT | BGFX_TEXTURE_SRGB});
     const auto& tex1 = rview.tex_acquire("GBUFFER_1", {.size = render_size, .format = format, .flags = BGFX_TEXTURE_RT});
-    const auto& tex2 = rview.tex_acquire("GBUFFER_2", {.size = render_size, .format = format, .flags = BGFX_TEXTURE_RT});
+    const auto& tex2 =
+        rview.tex_acquire("GBUFFER_2", {.size = render_size, .format = get_light_target_format(params), .flags = BGFX_TEXTURE_RT});
     const auto& tex3 = rview.tex_acquire(
         "GBUFFER_3",
         {.size = render_size, .format = get_default_format(), .flags = BGFX_TEXTURE_RT});
@@ -111,8 +102,8 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
                                const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
 {
     const auto& depth = create_or_resize_d_buffer(rview, render_size, params);
-    const auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
-    const auto& tex = rview.tex_acquire("LBUFFER", {.size = render_size, .format = format, .flags = BGFX_TEXTURE_RT});
+    const auto& tex = rview.tex_acquire("LBUFFER",
+                                        {.size = render_size, .format = get_light_target_format(params), .flags = BGFX_TEXTURE_RT});
 
     auto& fbo_depth = rview.fbo_acquire("LBUFFER_DEPTH");
     if(gfx::needs_recreate(fbo_depth, {tex, depth}))

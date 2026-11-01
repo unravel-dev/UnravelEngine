@@ -10,7 +10,7 @@
  *     the effects a limit turns off (global illumination, SSR, SSIL, both ambient occlusion passes, bloom),
  *     gives a view asking for temporal AA FXAA under an FXAA limit and no AA under none, and records the
  *     limits for the passes that read them;
- *   - limit_light caps a light's shadow map resolution, filters PCSS with PCF without soft shadows and
+ *   - limit_light caps a light's shadow map resolution and cascades, filters PCSS with PCF without soft shadows and
  *     drops contact shadows without them, and leaves an allowed light as it is;
  *   - the graphics settings' render scale and limits round trip through a settings document;
  *   - get_render_size scales a view's size from MIN_RENDER_SCALE, keeps it at 1, for a scale that is not a
@@ -148,6 +148,12 @@ void test_limited_lights()
     const auto kept = limit_light(source, limits);
     limits_check(kept.shadow_params.resolution == sm_resolution::low && kept.shadow_params.type == sm_impl::hard,
                  "a smaller shadow map and hard shadows are kept");
+    source.directional_shadow_params.num_splits = 3;
+    limits_check(limit_light(source, feature_limits{}).directional_shadow_params.num_splits == 3, "the default limits keep a light's cascades");
+    limits.max_shadow_cascades = 2;
+    limits_check(limit_light(source, limits).directional_shadow_params.num_splits == 2, "more cascades than allowed are capped");
+    limits.max_shadow_cascades = 4;
+    limits_check(limit_light(source, limits).directional_shadow_params.num_splits == 3, "fewer cascades than allowed are kept");
 }
 
 void test_settings_round_trip()
@@ -162,6 +168,10 @@ void test_settings_round_trip()
     saved.graphics.limits.subsurface = false;
     saved.graphics.limits.volumetric_clouds = false;
     saved.graphics.limits.detailed_indirect_lighting = false;
+    saved.graphics.limits.full_precision_light_targets = false;
+    saved.graphics.limits.max_bloom_mips = 5;
+    saved.graphics.limits.per_frame_exposure_metering = false;
+    saved.graphics.limits.max_shadow_cascades = 2;
     const auto document = serialization::save_to_document(saved, LIMITS_DOCUMENT_ROOT);
     settings loaded;
     limits_check(serialization::load_from_document(document, LIMITS_DOCUMENT_ROOT, loaded), "a settings document loads");

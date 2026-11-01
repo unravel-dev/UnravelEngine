@@ -80,6 +80,8 @@ public:
     {
         gfx::frame_buffer::ptr input;
         settings config{};
+        /// The format of the pyramid.
+        bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA16F;
         gfx::texture::ptr exposure_texture;
         /// The view's scene-color pre-exposure: the input carries it.
         pre_exposure_state pre_exposure{};
@@ -118,7 +120,8 @@ private:
 
     auto create_or_resize_mip_chain(gfx::render_view& rview,
                                     const usize32_t& viewport_size,
-                                    int mip_count) -> void;
+                                    int mip_count,
+                                    bgfx::TextureFormat::Enum format) -> void;
     auto get_mip_fbo(gfx::render_view& rview, int mip_index) -> const gfx::frame_buffer::ptr&;
 
     struct downsample_program : uniforms_cache

@@ -37,6 +37,7 @@
 #include <hpp/optional.hpp>
 
 #include <graphics/index_buffer.h>
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 
@@ -98,6 +99,33 @@ inline auto make_cloud_shadow_uniforms(const atmospheric_pass_perez::cloud_shado
 inline auto wants_hdr_buffers(const pipeline::run_params& params) -> bool
 {
     return static_cast<bool>(params.fill_hdr_params) || params.force_hdr_buffers;
+}
+
+inline auto get_default_format() -> bgfx::TextureFormat::Enum
+{
+    return bgfx::TextureFormat::RGBA8;
+}
+
+inline auto get_default_hdr_format() -> bgfx::TextureFormat::Enum
+{
+    return bgfx::TextureFormat::RGBA16F;
+}
+
+// The format of the targets that hold light: the emissive, the light buffer and bloom. RG11B10F is half the size of
+// RGBA16F, and what tile-based GPUs compress where they store RGBA16F raw. It has no alpha and no negative values, and
+// temporal AA, SSR, SSIL, GI and probe captures read or copy the light buffer as RGBA16F, so they keep that.
+inline auto get_light_target_format(const pipeline::run_params& params) -> bgfx::TextureFormat::Enum
+{
+    if(!wants_hdr_buffers(params))
+    {
+        return get_default_format();
+    }
+    const bool can_use_compact_format = !params.limits.full_precision_light_targets &&
+                                        params.run_type == pipeline::pipeline_run_type::camera &&
+                                        !params.fill_taa_params && !params.fill_ssr_params && !params.fill_ssil_params &&
+                                        !params.fill_gi_params &&
+                                        gfx::get_device_caps().can_render_to(bgfx::TextureFormat::RG11B10F);
+    return can_use_compact_format ? bgfx::TextureFormat::RG11B10F : get_default_hdr_format();
 }
 
 inline auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::texture::ptr&

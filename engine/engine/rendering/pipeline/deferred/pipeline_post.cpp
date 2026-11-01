@@ -408,6 +408,7 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
     params.delta_time = dt.count();
     params.camera_cut = has_camera_cut(camera);
     params.pre_exposure = get_pre_exposure(rview);
+    params.metering_interval = rparams.limits.per_frame_exposure_metering ? 1u : auto_exposure_pass::limited_metering_interval;
     rparams.fill_auto_exposure_params(params);
     auto_exposure_pass_.run(rview, params);
 }
@@ -424,6 +425,8 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
     bloom_pass::run_params params;
     params.input = input;
     rparams.fill_bloom_params(params);
+    params.config.mip_count = std::min(params.config.mip_count, rparams.limits.max_bloom_mips);
+    params.format = get_light_target_format(rparams);
     params.pre_exposure = get_pre_exposure(rview);
 
     if(rparams.fill_auto_exposure_params)

@@ -28,7 +28,8 @@ auto bloom_pass::init(rtti::context& ctx) -> bool
 
 auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
                                             const usize32_t& viewport_size,
-                                            int mip_count) -> void
+                                            int mip_count,
+                                            bgfx::TextureFormat::Enum format) -> void
 {
     const uint64_t flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 
@@ -43,7 +44,7 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
 
         auto tex_name = "BLOOM_MIP_" + std::to_string(i);
         const auto& tex =
-            rview.tex_acquire(tex_name, {.size = {w, h}, .format = bgfx::TextureFormat::RGBA16F, .flags = flags});
+            rview.tex_acquire(tex_name, {.size = {w, h}, .format = format, .flags = flags});
 
         auto fbo_name = "BLOOM_MIP_FBO_" + std::to_string(i);
         auto& fbo = rview.fbo_acquire(fbo_name);
@@ -79,7 +80,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> compo
     int mip_count = math::clamp(config.mip_count, 2, max_mip_count);
     const auto viewport_size = input->get_size();
 
-    create_or_resize_mip_chain(rview, viewport_size, mip_count);
+    create_or_resize_mip_chain(rview, viewport_size, mip_count, params.format);
 
     // Every downsample draw binds it: only the first pass reads it, but the program declares
     // the sampler, and D3D11 flags an empty slot on each draw of the pyramid.

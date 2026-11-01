@@ -58,13 +58,25 @@ struct feature_limits
     /// reads two of the environment's three SH bands and skips background pixels, in a cheaper program. A view with any
     /// of those keeps the full program.
     bool detailed_indirect_lighting{true};
+    /// Full precision for the targets that hold light: off, a view without temporal AA, SSR, SSIL or GI keeps its
+    /// emissive, light buffer and bloom in RG11B10F. That is half the size of RGBA16F and what tile-based GPUs
+    /// compress where they store RGBA16F raw, at the cost of a slight tint in dark gradients.
+    bool full_precision_light_targets{true};
+    /// The most mips bloom's pyramid may use: each one is two render passes, and fewer make the glow tighter.
+    int max_bloom_mips{10};
+    /// Auto exposure metered every frame: off, a view runs its histogram and local exposure every few frames
+    /// (auto_exposure_pass) and keeps adapting every frame from the last histogram.
+    bool per_frame_exposure_metering{true};
+    /// The most cascades a directional light may split its shadow map into. Fewer cascades cover the same distance
+    /// with less resolution, and every caster draws into fewer of them.
+    int max_shadow_cascades{4};
 
     friend auto operator==(const feature_limits& lhs, const feature_limits& rhs) -> bool = default;
 };
 
 /**
  * @brief The light as `limits` let it render: its shadow map no larger than the limit, soft shadows (PCSS,
- * VSM, ESM) filtered with PCF without soft shadows, and no contact shadows without them.
+ * VSM, ESM) filtered with PCF without soft shadows, no contact shadows without them, and no more cascades than allowed.
  *
  * The shadow pass and the lighting pass must both render the limited light, so the maps and the program
  * reading them agree.

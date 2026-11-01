@@ -157,7 +157,13 @@ public:
         bool camera_cut = false;
         /// The view's pre-exposure this frame; the input carries it and metering removes it.
         pre_exposure_state pre_exposure{};
+        /// Run the histogram and local exposure every this many frames; the exposure adapts every frame from the last
+        /// histogram. A camera cut snaps at the next one.
+        std::uint32_t metering_interval = 1;
     };
+
+    /// The metering interval of a view under feature_limits::per_frame_exposure_metering.
+    static constexpr std::uint32_t limited_metering_interval = 4;
 
     auto init(rtti::context& ctx) -> bool;
     auto shutdown() -> int32_t;
@@ -259,7 +265,9 @@ private:
     /// The blurred log luminance: the metering grid reduced to 1/32 of the view, then a
     /// separable Gaussian whose diameter is local_blurred_kernel_percent of the view width.
     void run_local_exposure_blur(gfx::render_view& rview, const settings& config, const usize32_t& meter_size);
-    void run_average(gfx::render_view& rview, const run_params& params);
+    /// @param is_metered The histogram ran this frame.
+    /// @param empties_bins The next run fills the histogram: this average leaves it empty.
+    void run_average(gfx::render_view& rview, const run_params& params, bool is_metered, bool empties_bins);
     /// The view's compensation curve LUT: 2^curve at compensation_curve_samples EV100 values,
     /// rebaked when the keys change. Null when the curve is empty.
     static auto update_compensation_curve(gfx::render_view& rview, const settings& config) -> gfx::texture::ptr;

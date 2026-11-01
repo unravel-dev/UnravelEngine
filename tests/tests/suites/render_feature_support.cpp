@@ -250,10 +250,18 @@ void test_limits_intersection()
     feature_limits device;
     device.global_illumination = false;
     device.max_shadow_resolution = sm_resolution::medium;
+    project.full_precision_light_targets = false;
+    device.per_frame_exposure_metering = false;
+    project.max_bloom_mips = 5;
+    device.max_bloom_mips = 7;
+    project.max_shadow_cascades = 3;
+    device.max_shadow_cascades = 2;
     const auto limits = intersect_feature_limits(project, device);
     check(!limits.bloom && !limits.global_illumination, "a feature either side turns off stays off");
+    check(!limits.full_precision_light_targets && !limits.per_frame_exposure_metering, "so does full precision and per frame metering");
     check(limits.max_anti_aliasing == anti_aliasing_limit::fxaa, "the lower anti-aliasing cap wins");
     check(limits.max_shadow_resolution == sm_resolution::medium, "the lower shadow resolution wins");
+    check(limits.max_bloom_mips == 5 && limits.max_shadow_cascades == 2, "the lower bloom mip and cascade caps win");
     check(limits.screen_space_reflections && limits.soft_shadows, "a feature both allow stays on");
 }
 

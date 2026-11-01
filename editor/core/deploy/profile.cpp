@@ -87,6 +87,8 @@ constexpr const char* PROFILE_SETTINGS_FILE_NAME = "settings.cfg";
 constexpr const char* PROFILE_DEPLOY_FILE_NAME = "deploy.cfg";
 /// The most a new Android profile lets a texture keep by default.
 constexpr auto ANDROID_DEFAULT_MAX_TEXTURE_SIZE = texture_importer_meta::texture_size::size_1024;
+/// The most mips a new Android profile lets bloom use.
+constexpr int ANDROID_MAX_BLOOM_MIPS = 5;
 
 /// profile.cfg: what a profile is, apart from its overrides.
 struct profile_header
@@ -229,7 +231,8 @@ void set_platform_starting_values(target_platform platform, settings& resolved)
     // lighting cost hundreds of milliseconds there, the other screen space effects and temporal AA's extra
     // passes several, contact shadows and subsurface keep code that holds registers in every light program,
     // volumetric clouds raymarch every sky pixel (flat ones cost next to nothing), and the indirect lighting's
-    // finest detail runs on every lit pixel. The render scale stays the project's.
+    // finest detail runs on every lit pixel. RGBA16F targets are stored raw where RG11B10F compresses, each bloom
+    // mip is two render passes, and exposure need not meter every frame. The render scale stays the project's.
     auto& limits = resolved.graphics.limits;
     limits.global_illumination = false;
     limits.screen_space_reflections = false;
@@ -243,6 +246,9 @@ void set_platform_starting_values(target_platform platform, settings& resolved)
     limits.subsurface = false;
     limits.volumetric_clouds = false;
     limits.detailed_indirect_lighting = false;
+    limits.full_precision_light_targets = false;
+    limits.max_bloom_mips = std::min(limits.max_bloom_mips, ANDROID_MAX_BLOOM_MIPS);
+    limits.per_frame_exposure_metering = false;
 }
 
 auto load_profile(const fs::path& folder,

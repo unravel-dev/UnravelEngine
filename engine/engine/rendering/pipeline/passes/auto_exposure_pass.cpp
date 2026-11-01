@@ -27,6 +27,8 @@ struct metering_state
     bool force_snap{false};
     /// Next texel of the exposure history ring.
     std::uint32_t history_index{0};
+    /// Frames until the next histogram; 0 meters this frame.
+    std::uint32_t frames_until_metering{0};
 };
 constexpr const char* exposure_key = "AUTO_EXPOSURE";
 constexpr const char* history_key = "AUTO_EXPOSURE_HISTORY";
@@ -360,7 +362,7 @@ auto auto_exposure_pass::update_compensation_curve(gfx::render_view& rview, cons
     return curve_tex;
 }
 
-void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& params)
+void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& params, bool is_metered, bool empties_bins)
 {
     auto exposure_tex = rview.tex_get(exposure_key);
     auto history_tex = rview.tex_get(history_key);
@@ -374,6 +376,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
 
     float effective_dt = params.delta_time;
     float force_target = 0.0f;
+    float keep_bins = empties_bins ? 0.0f : 1.0f;
     auto& state = rview.data().get_or_emplace<metering_state>(metering_state::view_key);
     if(!histogram_bins_valid_)
     {
@@ -385,13 +388,16 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
         // exposure) and leave any pending snap for the next, clean dispatch.
         histogram_bins_valid_ = true;
         effective_dt = 0.0f;
+        keep_bins = 0.0f;
+        state.frames_until_metering = 0;
     }
     else
     {
-        const bool snap_requested = state.force_snap;
-        state.force_snap = false;
-        // Force the target on camera cuts and when min >= max makes the range a fixed exposure.
-        if(snap_requested || params.camera_cut || config.min_ev >= config.max_ev)
+        // A snap (run marks camera cuts as one) waits for a metering: until then the bins hold what the view saw before it.
+        const bool snap_requested = is_metered && state.force_snap;
+        state.force_snap = state.force_snap && !is_metered;
+        // Force the target on a snap and when min >= max makes the range a fixed exposure.
+        if(snap_requested || config.min_ev >= config.max_ev)
         {
             force_target = 1.0f;
         }
@@ -442,7 +448,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
     const float samples = float(compensation_curve_samples);
     const float lut_scale = (samples - 1.0f) / (samples * (compensation_curve_max_ev - compensation_curve_min_ev));
     const float lut_bias = 0.5f / samples - compensation_curve_min_ev * lut_scale;
-    const float params5[4] = {lut_scale, lut_bias, 0.0f, 0.0f};
+    const float params5[4] = {lut_scale, lut_bias, keep_bins, 0.0f};
     gfx::set_uniform(average_program_.u_average_params5, params5);
     gfx::set_texture(average_program_.s_compensation_curve,
                      4,
@@ -577,11 +583,20 @@ void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
         return;
     }
 
-    run_histogram(rview, params);
-    // Before the average: the average folds the local exposure's mean into AUTO_EXPOSURE.a,
-    // which the next frame's pre-exposure then carries.
-    run_local_exposure(rview, params);
-    run_average(rview, params);
+    auto& state = rview.data().get_or_emplace<metering_state>(metering_state::view_key);
+    state.force_snap = state.force_snap || params.camera_cut;
+    const bool is_metered = state.frames_until_metering == 0;
+    if(is_metered)
+    {
+        state.frames_until_metering = std::max(params.metering_interval, 1u);
+        run_histogram(rview, params);
+        // Before the average: the average folds the local exposure's mean into AUTO_EXPOSURE.a,
+        // which the next frame's pre-exposure then carries.
+        run_local_exposure(rview, params);
+    }
+    --state.frames_until_metering;
+    // The exposure adapts every frame from the last histogram; the last average before the next one empties the bins.
+    run_average(rview, params, is_metered, state.frames_until_metering == 0);
 }
 
 void auto_exposure_pass::update_gpu_pre_exposure(gfx::render_view& rview,

@@ -460,6 +460,10 @@ auto intersect_feature_limits(const feature_limits& lhs, const feature_limits& r
     limits.subsurface = lhs.subsurface && rhs.subsurface;
     limits.volumetric_clouds = lhs.volumetric_clouds && rhs.volumetric_clouds;
     limits.detailed_indirect_lighting = lhs.detailed_indirect_lighting && rhs.detailed_indirect_lighting;
+    limits.full_precision_light_targets = lhs.full_precision_light_targets && rhs.full_precision_light_targets;
+    limits.max_bloom_mips = std::min(lhs.max_bloom_mips, rhs.max_bloom_mips);
+    limits.per_frame_exposure_metering = lhs.per_frame_exposure_metering && rhs.per_frame_exposure_metering;
+    limits.max_shadow_cascades = std::min(lhs.max_shadow_cascades, rhs.max_shadow_cascades);
     return limits;
 }
 

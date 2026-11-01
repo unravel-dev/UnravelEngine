@@ -68,6 +68,8 @@ uniform vec4 u_average_params5;
 // EV100 -> compensation curve LUT u (u = EV100 * scale + bias).
 #define u_curve_lut_scale    u_average_params5.x
 #define u_curve_lut_bias     u_average_params5.y
+// Nonzero: the bins stay for the next frames' averages, until the view meters again.
+#define u_keep_bins          u_average_params5.z
 
 #define HISTOGRAM_BINS 256u
 #define FIRST_LUMINANCE_BIN 1.0
@@ -106,14 +108,17 @@ void main()
     float cumulative = 0.0;
     float weighted_sum = 0.0;
     float weight_sum = 0.0;
-    // The bins are consumed and zeroed in one pass, so the average local exposure - which needs
+    // The bins are consumed and zeroed (unless they stay) in one pass, so the average local exposure - which needs
     // them again, after the adapted exposure is known - keeps its own copy.
     float bin_weights[HISTOGRAM_BINS];
     for (uint bin = 0u; bin < HISTOGRAM_BINS; ++bin)
     {
         float bin_weight = float(s_histogram[bin]);
         bin_weights[bin] = bin_weight;
-        s_histogram[bin] = 0u;
+        if (u_keep_bins == 0.0)
+        {
+            s_histogram[bin] = 0u;
+        }
 
         float display_share = 0.0;
         if (bin > 0u)

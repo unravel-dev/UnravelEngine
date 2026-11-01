@@ -310,6 +310,10 @@ void test_profile_files(const fs::path& root)
               android.settings.is_overridden("graphics/limits/subsurface") &&
               android.settings.is_overridden("graphics/limits/volumetric_clouds") &&
               android.settings.is_overridden("graphics/limits/detailed_indirect_lighting") &&
+              android.settings.is_overridden("graphics/limits/full_precision_light_targets") &&
+              android.settings.is_overridden("graphics/limits/max_bloom_mips") &&
+              android.settings.is_overridden("graphics/limits/per_frame_exposure_metering") &&
+              !android.settings.is_overridden("graphics/limits/max_shadow_cascades") &&
               !android.settings.is_overridden("graphics/render_scale"),
           "and with the effects a phone cannot afford limited, at the project's render scale");
     check(deployment::make_profile("Desktop", target_platform::desktop, base).settings.is_empty(), "a new Desktop profile overrides nothing");

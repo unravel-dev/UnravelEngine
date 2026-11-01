@@ -525,6 +525,39 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"pretty_name", "Detailed Indirect Lighting"},
             entt::attribute{"tooltip", "Allow the finest detail of the indirect lighting. When off, views without screen "
                                        "space effects read less of the environment's lighting, at a lower cost per pixel."},
+        })
+        .data<&feature_limits::full_precision_light_targets>("full_precision_light_targets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "full_precision_light_targets"},
+            entt::attribute{"pretty_name", "Full Precision Light Targets"},
+            entt::attribute{"tooltip", "Keep the emissive, the light buffer and bloom in RGBA16F. When off, views without "
+                                       "temporal AA, SSR, SSIL or GI use RG11B10F: half the size, and what tile-based "
+                                       "GPUs compress, with a slight tint in dark gradients."},
+        })
+        .data<&feature_limits::max_bloom_mips>("max_bloom_mips"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_bloom_mips"},
+            entt::attribute{"pretty_name", "Max Bloom Mips"},
+            entt::attribute{"tooltip", "The most mips bloom may use. Each one is two render passes; fewer make the glow "
+                                       "tighter."},
+            entt::attribute{"min", 2},
+            entt::attribute{"max", 10},
+        })
+        .data<&feature_limits::per_frame_exposure_metering>("per_frame_exposure_metering"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "per_frame_exposure_metering"},
+            entt::attribute{"pretty_name", "Per Frame Exposure Metering"},
+            entt::attribute{"tooltip", "Meter auto exposure every frame. When off, views meter every few frames and keep "
+                                       "adapting every frame from the last measurement."},
+        })
+        .data<&feature_limits::max_shadow_cascades>("max_shadow_cascades"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_shadow_cascades"},
+            entt::attribute{"pretty_name", "Max Shadow Cascades"},
+            entt::attribute{"tooltip", "The most cascades a directional light may use. Fewer cover the same distance with "
+                                       "less resolution."},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 4},
         });
 }
 
@@ -543,6 +576,10 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("subsurface", obj.subsurface));
     try_save(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
     try_save(ar, ser20::make_nvp("detailed_indirect_lighting", obj.detailed_indirect_lighting));
+    try_save(ar, ser20::make_nvp("full_precision_light_targets", obj.full_precision_light_targets));
+    try_save(ar, ser20::make_nvp("max_bloom_mips", obj.max_bloom_mips));
+    try_save(ar, ser20::make_nvp("per_frame_exposure_metering", obj.per_frame_exposure_metering));
+    try_save(ar, ser20::make_nvp("max_shadow_cascades", obj.max_shadow_cascades));
 }
 
 LOAD_INLINE(feature_limits)
@@ -560,6 +597,10 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("subsurface", obj.subsurface));
     try_load(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
     try_load(ar, ser20::make_nvp("detailed_indirect_lighting", obj.detailed_indirect_lighting));
+    try_load(ar, ser20::make_nvp("full_precision_light_targets", obj.full_precision_light_targets));
+    try_load(ar, ser20::make_nvp("max_bloom_mips", obj.max_bloom_mips));
+    try_load(ar, ser20::make_nvp("per_frame_exposure_metering", obj.per_frame_exposure_metering));
+    try_load(ar, ser20::make_nvp("max_shadow_cascades", obj.max_shadow_cascades));
 }
 
 REFLECT_INLINE(settings::graphics_settings)
