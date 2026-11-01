@@ -1,3 +1,9 @@
+[variants]
+default
+// window: for the passes that can draw to the window. bgfx turns the projection of such a view when it
+// pre-rotates the swap chain (Android), and this quad turns with it. Everywhere else it is the identity.
+window     WINDOW_TARGET
+
 [inputs]
 vec3 a_position
 vec2 a_texcoord0
@@ -10,6 +16,10 @@ vec2 v_texcoord0
 
 void main()
 {
+#if WINDOW_TARGET
+	gl_Position = mul( u_proj, vec4( a_position.xyz, 1.0f ) );
+#else
 	gl_Position = vec4( a_position.xyz, 1.0f );
+#endif
 	v_texcoord0 = a_texcoord0;;
 }

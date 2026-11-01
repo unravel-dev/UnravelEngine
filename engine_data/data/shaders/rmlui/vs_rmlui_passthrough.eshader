@@ -11,5 +11,7 @@ vec2 v_texcoord0
 void main()
 {
     v_texcoord0 = a_texcoord0;
-    gl_Position = vec4(a_position, 0.0, 1.0);
+    // The projection is the identity in every pass drawing with this one, until bgfx turns it for a pre-rotated
+    // swap chain (Android): the layers composite into the window here.
+    gl_Position = mul(u_proj, vec4(a_position, 0.0, 1.0));
 }

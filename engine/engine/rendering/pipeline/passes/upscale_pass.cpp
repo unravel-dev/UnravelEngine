@@ -17,7 +17,7 @@ auto upscale_pass::init(rtti::context& ctx) -> bool
     auto fs_upscale_depth = am.get_asset<gfx::shader>("engine:/data/shaders/fs_upscale_depth.eshader");
     // Uniforms are cached before the program is created (GL >= 400 contract).
     upscale_program_.cache_uniforms();
-    upscale_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_upscale);
+    upscale_program_.program = std::make_unique<gpu_program>(vs_clip_quad, "window", fs_upscale);
     depth_program_.cache_uniforms();
     depth_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_upscale_depth);
     return upscale_program_.program->is_valid() && depth_program_.program->is_valid();

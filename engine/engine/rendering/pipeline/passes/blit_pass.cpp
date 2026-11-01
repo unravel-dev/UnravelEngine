@@ -15,7 +15,7 @@ auto blit_pass::init(rtti::context& ctx) -> bool
     auto fs_blit = am.get_asset<gfx::shader>("engine:/data/shaders/fs_blit.eshader");
 
     blit_program_.cache_uniforms();
-    blit_program_.program = std::make_unique<gpu_program>(vs_fullscreen, fs_blit);
+    blit_program_.program = std::make_unique<gpu_program>(vs_fullscreen, "window", fs_blit);
 
     return blit_program_.program->is_valid();
 }
