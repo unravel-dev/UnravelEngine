@@ -648,20 +648,21 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                     dd.encoder.popTransform();
                 });
 
-            if(em.show_icon_gizmos)
+            if(em.show_gizmos)
             {
                 program_gizmos_->begin();
                 dd.encoder.pushProgram(program_gizmos_->native_handle());
 
                 auto& scn = *target_scene;
-                hpp::for_each_type<camera_component,
-                                   light_component,
-                                   reflection_probe_component,
-                                   audio_source_component,
-                                   particle_emitter_component>(
-                    [&](auto tag)
+                hpp::for_each_tuple_type<billboard_components>(
+                    [&](auto index)
                     {
-                        using type_t = typename std::decay_t<decltype(tag)>::type;
+                        using type_t = std::tuple_element_t<decltype(index)::value, billboard_components>;
+
+                        if(!em.billboard_data.is_shown<type_t>())
+                        {
+                            return;
+                        }
 
                         scn.registry->view<type_t>().each(
                             [&](auto e, auto&& comp)
@@ -680,49 +681,6 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                                 dd.encoder.setState(true, true, false, true);
                                 auto& transform_comp = entity.template get<transform_component>();
                                 const auto& world_transform = transform_comp.get_transform_global();
-
-                                if constexpr(std::is_same<type_t, particle_emitter_component>())
-                                {
-                                    if(!em.billboard_data.show_particle_emitter)
-                                    {
-                                        return;
-                                    }
-                                }
-
-                                if constexpr(std::is_same<type_t, audio_source_component>())
-                                {
-                                    if(!em.billboard_data.show_audio_source)
-                                    {
-                                        return;
-                                    }
-                                }
-                                
-                                if constexpr(std::is_same<type_t, reflection_probe_component>())
-                                {
-                                    if(!em.billboard_data.show_reflection_probe)
-                                    {
-                                        return;
-                                    }
-                                }
-                                
-                                
-                                if constexpr(std::is_same<type_t, light_component>())
-                                {
-                                    if(!em.billboard_data.show_light)
-                                    {
-                                        return;
-                                    }
-                                }
-                                
-                                if constexpr(std::is_same<type_t, camera_component>())
-                                {
-                                    if(!em.billboard_data.show_camera)
-                                    {
-                                        return;
-                                    }
-                                }
-                                
-                                
 
                                 auto icon = tm.get_gizmo_icon(entity);
                                 if(icon)

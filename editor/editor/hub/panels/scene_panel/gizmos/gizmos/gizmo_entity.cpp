@@ -68,6 +68,150 @@ void draw_light_source_shape(gfx::dd_raii& dd, const light& light_data, const ma
     dd.encoder.lineTo(vec3_to_bx(center + half_axis));
 }
 
+/// The world bounds of a model, and of its submeshes when asked for, colored by LOD. An early return leaves only
+/// this part, so that the gizmos of the entity's other components still draw.
+void draw_model_bounds(model_component& model_comp,
+                       const gizmos_data& settings,
+                       const camera& cam,
+                       gfx::dd_raii& dd,
+                       dd_2d_raii& dd_2d)
+{
+    const auto& frustum = cam.get_frustum();
+    const auto& model = model_comp.get_model();
+    if(!model.is_valid())
+    {
+        return;
+    }
+
+    // world bounds
+
+    auto& current_lod_data = model_comp.get_lod_data_for_camera(&cam, gfx::get_render_frame());
+
+    current_lod_data.calculate_screen_rect(cam);
+
+
+    //lods - gate on the pose-aware world AABB so the overlay tracks animated geometry.
+    if(frustum.test_aabb(model_comp.get_world_bounds()))
+    {   
+        static constexpr std::array<uint32_t, 5> lod_colors_abgr = {
+            0xff00ff00, // LOD 0: green
+            0xff00ffff, // LOD 1: yellow
+            0xff0080ff, // LOD 2: orange
+            0xff0000ff, // LOD 3: red
+            0xffff00ff, // LOD 4+: magenta
+        };
+        static constexpr std::array<ImU32, 5> lod_colors_im = {
+            IM_COL32(0, 255, 0, 255),
+            IM_COL32(255, 255, 0, 255),
+            IM_COL32(255, 128, 0, 255),
+            IM_COL32(255, 0, 0, 255),
+            IM_COL32(255, 0, 255, 255),
+        };
+
+        const auto color_index = std::min<size_t>(current_lod_data.current_lod_index, lod_colors_abgr.size() - 1);
+
+        auto world_bounds = model_comp.get_world_bounds();
+
+        {
+            DebugDrawEncoderScopePush scope(dd.encoder);
+            dd.encoder.setColor(lod_colors_abgr[color_index]);
+            dd.encoder.setWireframe(true);
+            bx::Aabb aabb;
+            aabb.min = vec3_to_bx(world_bounds.min);
+            aabb.max = vec3_to_bx(world_bounds.max);
+            dd.encoder.draw(aabb);
+        }
+
+        // dd_2d.callbacks.push_back([color_index, rect = current_lod_data.rect]()
+        // {
+        //     const auto label_color = lod_colors_im[color_index];
+
+        //     auto window = ImGui::GetCurrentWindow();
+        //     auto draw_list = window->DrawList;
+        //     if(rect.width() > 0 && rect.height() > 0)
+        //     {
+        
+        //         draw_list->AddRect(ImVec2(rect.left, rect.top), ImVec2(rect.right, rect.bottom), label_color);
+        //         auto draw_aligned_text = [&](ImVec2 pos, float align,const std::string& text)
+        //         {
+        //             auto text_size = ImGui::CalcTextSize(text.c_str());
+        //             pos.x += (rect.width() - text_size.x) * align;
+        //             draw_list->AddText(pos, label_color, text.c_str());
+        //         };
+        //         draw_aligned_text(ImVec2(rect.left, rect.bottom), 0.5f, fmt::format("LOD: {}", current_lod_data.current_lod_index));
+        //     }
+        // });
+
+        // Per-submesh LOD: driven by the same cached world-space AABBs (per-instance and
+        // skinned) and the same selection logic as the render path, so the displayed LOD
+        // is exactly what gets submitted. Boxes/labels are color-coded by LOD.
+        if(settings.show_model_submesh_bounds)
+        {
+           
+            const auto& proxies = model_comp.get_render_proxies();
+            const uint32_t base_lod = current_lod_data.current_lod_index;
+
+            const auto lod = model.get_lod(base_lod);
+            if(!lod)
+            {
+                return;
+            }
+            const auto& mesh = lod.get();
+
+            auto draw_submesh_lod = [&](uint32_t submesh_index, const math::bbox& bounds) -> void
+            {
+                if(!bounds.is_populated() || !frustum.test_aabb(bounds))
+                {
+                    return;
+                }
+
+                const uint32_t effective_lod =
+                    model.calculate_submesh_lod_from_world_bounds(*mesh, submesh_index, base_lod, bounds, cam);
+                const auto color_index = std::min<size_t>(effective_lod, lod_colors_abgr.size() - 1);
+
+                DebugDrawEncoderScopePush scope(dd.encoder);
+                dd.encoder.setColor(lod_colors_abgr[color_index]);
+                dd.encoder.setWireframe(true);
+                bx::Aabb aabb;
+                aabb.min = vec3_to_bx(bounds.min);
+                aabb.max = vec3_to_bx(bounds.max);
+                dd.encoder.draw(aabb);
+
+                // Bounds passed the frustum test, so the center projects in front of
+                // the camera and the viewport position is valid.
+                const auto screen_pos = cam.world_to_viewport(bounds.get_center());
+                const auto label_color = lod_colors_im[color_index];
+                dd_2d.callbacks.push_back(
+                    [screen_pos, effective_lod, label_color]() -> void
+                    {
+                        auto window = ImGui::GetCurrentWindow();
+                        auto draw_list = window->DrawList;
+                        const auto text = fmt::format("LOD: {}", effective_lod);
+                        const auto text_size = ImGui::CalcTextSize(text.c_str());
+                        const ImVec2 pos(screen_pos.x - text_size.x * 0.5f,
+                                         screen_pos.y - text_size.y * 0.5f);
+                        draw_list->AddText(pos, label_color, text.c_str());
+                    });
+            };
+
+            // Both sources can coexist on one model (rigid node-attached submeshes use
+            // instance bounds, skinned submeshes use skinned bounds); unpopulated records
+            // are skipped inside draw_submesh_lod.
+            for(size_t submesh_index = 0; submesh_index < proxies.instance_bounds.size(); ++submesh_index)
+            {
+                for(const auto& bounds : proxies.instance_bounds[submesh_index])
+                {
+                    draw_submesh_lod(static_cast<uint32_t>(submesh_index), bounds);
+                }
+            }
+            for(size_t submesh_index = 0; submesh_index < proxies.skinned_bounds.size(); ++submesh_index)
+            {
+                draw_submesh_lod(static_cast<uint32_t>(submesh_index), proxies.skinned_bounds[submesh_index]);
+            }
+        }
+    }
+}
+
 } // namespace
 
 void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd1, dd_2d_raii& dd_2d)
@@ -280,145 +424,9 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
         dd.encoder.popTransform();
     }
 
-    if(e.all_of<model_component>() && em.gizmos.show_model)
+    if(e.all_of<model_component>() && em.gizmos.show_model_bounds)
     {
-        const auto& frustum = cam.get_frustum();
-        auto& model_comp = e.get<model_component>();
-        const auto& model = model_comp.get_model();
-        if(!model.is_valid())
-        {
-            return;
-        }
-
-        // world bounds
-
-        auto& current_lod_data = model_comp.get_lod_data_for_camera(&cam, gfx::get_render_frame());
-
-        current_lod_data.calculate_screen_rect(cam);
-
-
-        //lods - gate on the pose-aware world AABB so the overlay tracks animated geometry.
-        if(em.gizmos.show_model_bounds && frustum.test_aabb(model_comp.get_world_bounds()))
-        {   
-            static constexpr std::array<uint32_t, 5> lod_colors_abgr = {
-                0xff00ff00, // LOD 0: green
-                0xff00ffff, // LOD 1: yellow
-                0xff0080ff, // LOD 2: orange
-                0xff0000ff, // LOD 3: red
-                0xffff00ff, // LOD 4+: magenta
-            };
-            static constexpr std::array<ImU32, 5> lod_colors_im = {
-                IM_COL32(0, 255, 0, 255),
-                IM_COL32(255, 255, 0, 255),
-                IM_COL32(255, 128, 0, 255),
-                IM_COL32(255, 0, 0, 255),
-                IM_COL32(255, 0, 255, 255),
-            };
-
-            const auto color_index = std::min<size_t>(current_lod_data.current_lod_index, lod_colors_abgr.size() - 1);
-
-            auto world_bounds = model_comp.get_world_bounds();
-
-            {
-                DebugDrawEncoderScopePush scope(dd.encoder);
-                dd.encoder.setColor(lod_colors_abgr[color_index]);
-                dd.encoder.setWireframe(true);
-                bx::Aabb aabb;
-                aabb.min = vec3_to_bx(world_bounds.min);
-                aabb.max = vec3_to_bx(world_bounds.max);
-                dd.encoder.draw(aabb);
-            }
-
-            // dd_2d.callbacks.push_back([color_index, rect = current_lod_data.rect]()
-            // {
-            //     const auto label_color = lod_colors_im[color_index];
-    
-            //     auto window = ImGui::GetCurrentWindow();
-            //     auto draw_list = window->DrawList;
-            //     if(rect.width() > 0 && rect.height() > 0)
-            //     {
-            
-            //         draw_list->AddRect(ImVec2(rect.left, rect.top), ImVec2(rect.right, rect.bottom), label_color);
-            //         auto draw_aligned_text = [&](ImVec2 pos, float align,const std::string& text)
-            //         {
-            //             auto text_size = ImGui::CalcTextSize(text.c_str());
-            //             pos.x += (rect.width() - text_size.x) * align;
-            //             draw_list->AddText(pos, label_color, text.c_str());
-            //         };
-            //         draw_aligned_text(ImVec2(rect.left, rect.bottom), 0.5f, fmt::format("LOD: {}", current_lod_data.current_lod_index));
-            //     }
-            // });
-
-            // Per-submesh LOD: driven by the same cached world-space AABBs (per-instance and
-            // skinned) and the same selection logic as the render path, so the displayed LOD
-            // is exactly what gets submitted. Boxes/labels are color-coded by LOD.
-            if(em.gizmos.show_model_submesh_bounds)
-            {
-               
-                const auto& proxies = model_comp.get_render_proxies();
-                const uint32_t base_lod = current_lod_data.current_lod_index;
-
-                const auto lod = model.get_lod(base_lod);
-                if(!lod)
-                {
-                    return;
-                }
-                const auto& mesh = lod.get();
-
-                auto draw_submesh_lod = [&](uint32_t submesh_index, const math::bbox& bounds) -> void
-                {
-                    if(!bounds.is_populated() || !frustum.test_aabb(bounds))
-                    {
-                        return;
-                    }
-
-                    const uint32_t effective_lod =
-                        model.calculate_submesh_lod_from_world_bounds(*mesh, submesh_index, base_lod, bounds, cam);
-                    const auto color_index = std::min<size_t>(effective_lod, lod_colors_abgr.size() - 1);
-
-                    DebugDrawEncoderScopePush scope(dd.encoder);
-                    dd.encoder.setColor(lod_colors_abgr[color_index]);
-                    dd.encoder.setWireframe(true);
-                    bx::Aabb aabb;
-                    aabb.min = vec3_to_bx(bounds.min);
-                    aabb.max = vec3_to_bx(bounds.max);
-                    dd.encoder.draw(aabb);
-
-                    // Bounds passed the frustum test, so the center projects in front of
-                    // the camera and the viewport position is valid.
-                    const auto screen_pos = cam.world_to_viewport(bounds.get_center());
-                    const auto label_color = lod_colors_im[color_index];
-                    dd_2d.callbacks.push_back(
-                        [screen_pos, effective_lod, label_color]() -> void
-                        {
-                            auto window = ImGui::GetCurrentWindow();
-                            auto draw_list = window->DrawList;
-                            const auto text = fmt::format("LOD: {}", effective_lod);
-                            const auto text_size = ImGui::CalcTextSize(text.c_str());
-                            const ImVec2 pos(screen_pos.x - text_size.x * 0.5f,
-                                             screen_pos.y - text_size.y * 0.5f);
-                            draw_list->AddText(pos, label_color, text.c_str());
-                        });
-                };
-
-                // Both sources can coexist on one model (rigid node-attached submeshes use
-                // instance bounds, skinned submeshes use skinned bounds); unpopulated records
-                // are skipped inside draw_submesh_lod.
-                for(size_t submesh_index = 0; submesh_index < proxies.instance_bounds.size(); ++submesh_index)
-                {
-                    for(const auto& bounds : proxies.instance_bounds[submesh_index])
-                    {
-                        draw_submesh_lod(static_cast<uint32_t>(submesh_index), bounds);
-                    }
-                }
-                for(size_t submesh_index = 0; submesh_index < proxies.skinned_bounds.size(); ++submesh_index)
-                {
-                    draw_submesh_lod(static_cast<uint32_t>(submesh_index), proxies.skinned_bounds[submesh_index]);
-                }
-            }
-        }
-
-        
+        draw_model_bounds(e.get<model_component>(), em.gizmos, cam, dd, dd_2d);
     }
 
     if(e.all_of<text_component>() && em.gizmos.show_text)

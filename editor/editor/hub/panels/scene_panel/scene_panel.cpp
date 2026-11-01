@@ -1650,7 +1650,7 @@ void scene_panel::draw_view_bar(rtti::context& ctx, editing_manager& em, const I
         view_render_scale::draw_toolbar_dropdown(ctx, render_scale_, toolbar_layout_.is_compact);
         panel_toolbar::separator();
         draw_grid_controls(em);
-        draw_gizmos_controls(em);
+        gizmos_menu::draw_toolbar_controls(ctx, em, gizmos_menu_state_, toolbar_popup_max_height_);
         panel_toolbar::separator();
         visualization_menu::draw_toolbar_dropdown(visualize_passes_, visualization_menu_state_);
         draw_inverse_kinematics_dropdown(em);
@@ -1795,69 +1795,6 @@ void scene_panel::draw_grid_controls(editing_manager& em)
     ImGui::SetItemTooltipEx("%s", "Grid is depth aware.");
     ImGui::PopItemWidth();
     panel_toolbar::end_dropdown();
-}
-
-void scene_panel::draw_gizmos_controls(editing_manager& em)
-{
-    if(panel_toolbar::toggle("##gizmos", ICON_MDI_SELECTION_MARKER, em.show_icon_gizmos, "Show / Hide Gizmos"))
-    {
-        em.show_icon_gizmos = !em.show_icon_gizmos;
-    }
-    ImGui::SetNextWindowSizeConstraints({}, {FLT_MAX, toolbar_popup_max_height_});
-    if(!panel_toolbar::begin_dropdown("##gizmos_settings", nullptr, "Gizmos Settings"))
-    {
-        return;
-    }
-    draw_gizmos_settings(em);
-    panel_toolbar::end_dropdown();
-}
-
-void scene_panel::draw_gizmos_settings(editing_manager& em)
-{
-    ImGui::PushItemWidth(SCENE_TOOLBAR_POPUP_KNOB_WIDTH);
-    ImGui::SeparatorText("Billboards");
-    ImGui::KnobSliderScalarT("Opacity", &em.billboard_data.opacity, 0.0f, 1.0f);
-    ImGui::KnobSliderScalarT("Size", &em.billboard_data.size, 0.1f, 1.0f);
-    ImGui::Checkbox("Depth Aware", &em.billboard_data.depth_aware);
-    ImGui::SetItemTooltipEx("%s", "Gizmos are depth aware.");
-    ImGui::Checkbox("Camera", &em.billboard_data.show_camera);
-    ImGui::Checkbox("Light", &em.billboard_data.show_light);
-    ImGui::Checkbox("Reflection Probe", &em.billboard_data.show_reflection_probe);
-    ImGui::Checkbox("Audio Source", &em.billboard_data.show_audio_source);
-    ImGui::Checkbox("Particle Emitter", &em.billboard_data.show_particle_emitter);
-    ImGui::SeparatorText("Selection");
-    ImGui::Checkbox("Selection Outline", &em.gizmos.show_selection_outline);
-    ImGui::Checkbox("Selection Wireframe", &em.gizmos.show_selection_wireframe);
-    ImGui::SetItemTooltipEx("%s", "Draw a vertex-pulling wireframe overlay on top of the selected entity's mesh.");
-    if(em.gizmos.show_selection_wireframe)
-    {
-        ImGui::ColorEdit4("Wireframe Color",
-                          math::value_ptr(em.gizmos.selection_wireframe_color),
-                          ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf |
-                              ImGuiColorEditFlags_NoInputs);
-        ImGui::KnobSliderScalarT("Wireframe Thickness",
-                                 &em.gizmos.selection_wireframe_thickness,
-                                 0.5f,
-                                 5.0f,
-                                 "%.2f px");
-    }
-    ImGui::SeparatorText("Component Gizmos");
-    ImGui::Checkbox("Camera Gizmos", &em.gizmos.show_camera);
-    ImGui::Checkbox("Model Gizmos", &em.gizmos.show_model);
-    ImGui::Checkbox("Light Gizmos", &em.gizmos.show_light);
-    ImGui::Checkbox("Reflection Probe Gizmos", &em.gizmos.show_reflection_probe);
-    ImGui::Checkbox("Volume Gizmos", &em.gizmos.show_volume);
-    ImGui::Checkbox("Text Gizmos", &em.gizmos.show_text);
-    ImGui::Checkbox("Particle Emitter Gizmos", &em.gizmos.show_particle_emitter);
-    ImGui::Checkbox("Component Gizmos", &em.gizmos.show_component_gizmos);
-    ImGui::SeparatorText("Model Details");
-    ImGui::Checkbox("World Bounds & LOD", &em.gizmos.show_model_bounds);
-    ImGui::Checkbox("World Submesh Bounds & LOD", &em.gizmos.show_model_submesh_bounds);
-    ImGui::SeparatorText("Particle Emitter Details");
-    ImGui::Checkbox("Bounds", &em.gizmos.show_particle_emitter_bounds);
-    ImGui::Checkbox("Shape", &em.gizmos.show_particle_emitter_shape);
-    ImGui::Checkbox("Direction", &em.gizmos.show_particle_emitter_direction);
-    ImGui::PopItemWidth();
 }
 
 void scene_panel::set_visualization_mode(int mode)
@@ -2303,6 +2240,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx,
     {
         callback();
     }
+    gizmos_menu::draw_find_markers(ctx, gizmos_menu_state_, camera, pos, pos + size);
 
     draw_list->PopClipRect();
 }

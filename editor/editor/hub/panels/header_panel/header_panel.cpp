@@ -49,8 +49,6 @@ namespace
 constexpr ImU32 HEADER_PLAYING_COLOR = IM_COL32(46, 125, 50, 255);
 constexpr ImU32 HEADER_PAUSED_COLOR = IM_COL32(178, 106, 20, 255);
 constexpr ImU32 HEADER_DEBUGGER_ATTACHED_COLOR = IM_COL32(90, 220, 90, 255);
-// A simulation setting off its default is easy to forget: its value stands out.
-constexpr ImU32 HEADER_CHANGED_VALUE_COLOR = IM_COL32(255, 183, 77, 255);
 constexpr float HEADER_TITLE_SCENE_ALPHA = 0.5f;
 // Sizes are in units of the font size, so the header follows the UI scale of the editor.
 constexpr float HEADER_TITLE_MARGIN = 2.0f;
@@ -835,7 +833,8 @@ void header_panel::draw_preview_profile(rtti::context& ctx)
                                      : "The settings the editor previews: the project settings, or a profile's, as its "
                                        "builds have them.";
     ImGui::BeginDisabled(is_playing);
-    if(panel_toolbar::begin_dropdown("##preview_profile", text.c_str(), tooltip, profile != nullptr ? HEADER_CHANGED_VALUE_COLOR : 0))
+    const ImU32 text_color = profile != nullptr ? imgui_style::get_changed_value_color_u32() : 0;
+    if(panel_toolbar::begin_dropdown("##preview_profile", text.c_str(), tooltip, text_color))
     {
         ImGui::SeparatorText("Run the Editor With");
         if(ImGui::MenuItem(ICON_MDI_COG " Project Settings", nullptr, profile == nullptr))
@@ -928,7 +927,7 @@ void header_panel::draw_time_scale(rtti::context& ctx)
     const float time_scale = sim.get_time_scale();
     const std::string text = fmt::format(ICON_MDI_PLAY_SPEED " {:.2f}x", time_scale);
     const bool is_default = is_time_scale_at(time_scale, HEADER_TIME_SCALE_DEFAULT);
-    const ImU32 text_color = is_default ? 0 : HEADER_CHANGED_VALUE_COLOR;
+    const ImU32 text_color = is_default ? 0 : imgui_style::get_changed_value_color_u32();
     if(!panel_toolbar::begin_dropdown("##time_scale", text.c_str(), "Time scale", text_color, ICON_MDI_PLAY_SPEED " 0.00x"))
     {
         return;

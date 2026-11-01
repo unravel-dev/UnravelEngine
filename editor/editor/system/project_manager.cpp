@@ -247,6 +247,7 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
     load_project_settings();
     load_deploy_settings();
     load_project_editor_settings();
+    ctx.get_cached<editing_manager>().apply_gizmo_setup(project_editor_settings_.gizmos);
 
     ls.begin_module("Profiles");
     load_profiles();

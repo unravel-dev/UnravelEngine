@@ -30,8 +30,6 @@ constexpr float legend_overlay_padding = 8.0f;
 constexpr float legend_overlay_rounding = 4.0f;
 constexpr ImVec4 legend_overlay_bg_color{0.08f, 0.08f, 0.08f, 0.85f};
 constexpr ImVec4 legend_label_color{0.6f, 0.6f, 0.6f, 1.0f};
-/// Tint of the button while a debug view or an overlay is on, so a left-on pass never reads as a bug.
-constexpr ImVec4 active_mode_color{1.0f, 0.75f, 0.2f, 1.0f};
 /// Outline drawn around every swatch: without it a black or near-black entry - which several
 /// views use as a meaningful category - is invisible against the panel background.
 constexpr ImU32 swatch_border_color = IM_COL32(255, 255, 255, 90);
@@ -279,7 +277,7 @@ void visualization_menu::draw_toolbar_dropdown(int& mode, state& menu_state)
     // The active view and the overlays stay spelled out on the bar, whatever the layout. The id is
     // fixed, so the popover stays open while the text follows the picks.
     const std::string text = make_button_text(is_debugging ? active : nullptr, overlay_count);
-    const ImU32 text_color = is_active ? ImGui::ColorConvertFloat4ToU32(active_mode_color) : 0;
+    const ImU32 text_color = is_active ? imgui_style::get_changed_value_color_u32() : 0;
     const char* tooltip = is_active ? "Debug views and overlays - one is on" : "Debug views and overlays";
     const char* dropdown_id = "##debug_view";
     const popover_request request = std::exchange(menu_state.request, popover_request::none);

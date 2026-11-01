@@ -1,5 +1,6 @@
 #pragma once
 #include "editor_actions.h"
+#include "gizmo_settings.h"
 #include "uuid/uuid.h"
 
 #include <base/basetypes.hpp>
@@ -54,39 +55,6 @@ struct editing_manager
     {
         float opacity = 0.75f;
         bool depth_aware {true};
-    };
-
-    struct billboard_gizmos
-    {
-        float opacity = 0.75f;
-        float size = 0.5f;
-        bool depth_aware {false};
-        bool show_camera {true};
-        bool show_light {true};
-        bool show_reflection_probe {true};
-        bool show_audio_source {true};
-        bool show_particle_emitter {true};
-    };
-
-    struct gizmos_data
-    {
-        bool show_selection_outline {true};
-        bool show_selection_wireframe {false};
-        math::vec4 selection_wireframe_color {0.15f, 0.85f, 0.75f, 1.0f};
-        float selection_wireframe_thickness {1.5f};
-        bool show_camera {true};
-        bool show_light {true};
-        bool show_reflection_probe {true};
-        bool show_volume {true};
-        bool show_model {true};
-        bool show_model_bounds {false};
-        bool show_model_submesh_bounds {false};
-        bool show_text {true};
-        bool show_particle_emitter {true};
-        bool show_component_gizmos {true};
-        bool show_particle_emitter_bounds {true};
-        bool show_particle_emitter_shape {true};
-        bool show_particle_emitter_direction {true};
     };
 
     struct inverse_kinematics
@@ -535,14 +503,29 @@ struct editing_manager
     // Returns the active scene based on the current edit mode
     auto get_active_scene(rtti::context& ctx) -> scene*;
 
+    /// The icons and gizmos the Scene view shows now.
+    auto get_gizmo_setup() const -> gizmo_setup
+    {
+        return {show_gizmos, billboard_data, gizmos};
+    }
+
+    /// Makes the Scene view show these icons and gizmos.
+    void apply_gizmo_setup(const gizmo_setup& setup)
+    {
+        show_gizmos = setup.show_gizmos;
+        billboard_data = setup.billboards;
+        gizmos = setup.selection;
+    }
+
     void unload_scenes_scripting(const std::vector<scene*>& scenes);
 
     void on_action_executed(std::shared_ptr<editing_action_t> action);
 
     /// enable editor grid
     bool show_grid = true;
-    /// enable editor icon gizmos
-    bool show_icon_gizmos = true;
+    /// Every icon and gizmo of the Scene view: the master switch over billboard_data and gizmos. The transform
+    /// handles and the grid have controls of their own.
+    bool show_gizmos = true;
     /// enable wireframe selection
     bool wireframe_selection = true;
     /// Automatically flag reflection probes dirty whenever the scene is modified (while not playing).

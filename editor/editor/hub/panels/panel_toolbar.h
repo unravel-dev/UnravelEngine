@@ -258,7 +258,8 @@ auto filter_toggle(const char* id,
 /// its content, then call end_dropdown(). A SetNextWindowSize / SetNextWindowSizeConstraints
 /// right before the call applies to the popup.
 /// </summary>
-/// <param name="text_color">Optional tint of the text, 0 for the default</param>
+/// <param name="text_color">Optional tint of the text, or of the caret when it is alone; 0 for the
+/// default</param>
 /// <param name="width_text">Optional text the width is measured from instead, for a dropdown that
 /// shows a value its popup changes</param>
 //-----------------------------------------------------------------------------

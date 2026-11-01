@@ -80,6 +80,18 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
     const auto& obuffer = rview.fbo_get("OBUFFER_DEPTH");
     auto size = obuffer->get_size();
 
+    if(em.show_grid)
+    {
+        // The scene's depth at the output's size: DEPTH itself, or its copy when the scene renders at another size.
+        draw_grid(camera, rview.fbo_get("OBUFFER"), obuffer->get_texture(1), em.grid_data);
+    }
+
+    // The grid has a toggle of its own; everything after it goes with the master switch.
+    if(!em.show_gizmos)
+    {
+        return;
+    }
+
     bool selection_mask_drawn = false;
 
     if(em.gizmos.show_selection_outline)
@@ -89,22 +101,19 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
         selection_mask_drawn = draw_selection_mask_pass(ctx, camera, selection_mask_);
     }
 
-    if(em.show_grid)
-    {
-        // The scene's depth at the output's size: DEPTH itself, or its copy when the scene renders at another size.
-        draw_grid(camera, rview.fbo_get("OBUFFER"), obuffer->get_texture(1), em.grid_data);
-    }
-
     {
         // Pass 2: Gizmos
         gfx::render_pass pass("Gizmos/Pass");
         pass.bind(obuffer.get());
         pass.set_view_proj(view, proj);
-    
+
         gfx::dd_raii dd(pass.id);
-    
-        ctx.get_cached<physics_system>().draw_system_gizmos(ctx, camera, dd);
-    
+
+        if(em.gizmos.show_component_gizmos)
+        {
+            ctx.get_cached<physics_system>().draw_system_gizmos(ctx, camera, dd);
+        }
+
         draw_selection_gizmos(ctx, camera, dd, dd_2d);
     
         if(selection_mask_drawn)
@@ -453,13 +462,15 @@ void gizmos_renderer::draw_icon_gizmos(rtti::context& ctx, scene& scn, const cam
 {
     auto& em = ctx.get_cached<editing_manager>();
 
-    if(!em.show_icon_gizmos)
-        return;
-
-    hpp::for_each_type<camera_component, light_component, reflection_probe_component, audio_source_component, particle_emitter_component>(
-        [&](auto tag)
+    hpp::for_each_tuple_type<billboard_components>(
+        [&](auto index)
         {
-            using type_t = typename std::decay_t<decltype(tag)>::type;
+            using type_t = std::tuple_element_t<decltype(index)::value, billboard_components>;
+
+            if(!em.billboard_data.is_shown<type_t>())
+            {
+                return;
+            }
 
             scn.registry->view<type_t>().each(
                 [&](auto e, auto&& comp)
