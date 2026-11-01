@@ -4,7 +4,8 @@ using Unravel.Core;
 namespace Unravel.Samples
 {
     /// <summary>
-    /// On-screen controls for touch screens: a stick and up to four face buttons that drive the
+    /// On-screen controls for touch screens: a stick and up to five buttons (the four face buttons and one
+    /// in the corner above the right one) that drive the
     /// <see cref="VirtualGamepad"/>, so a game that reads gamepad-mapped actions plays by touch without
     /// touch code of its own. With the default input settings the left stick moves "Horizontal" and
     /// "Vertical" and the bottom face button (South) is "Jump"; map more actions to gamepad buttons in the
@@ -60,6 +61,9 @@ namespace Unravel.Samples
         [Tooltip("Label of the top face button (North). An empty label hides the button.")]
         public string NorthLabel = "Y";
 
+        [Tooltip("Label of the button in the corner above the right face button, next to the top one (the right shoulder button). An empty label hides the button.")]
+        public string CornerLabel = "";
+
         [Tooltip("Diameter of a button, as a share of the screen's shorter side.")]
         public float ButtonSize = 0.13f;
 
@@ -78,6 +82,9 @@ namespace Unravel.Samples
         private const float KnobDiameter = 0.95f;
         /// <summary>Distance of each face button from the cluster's center, in button diameters.</summary>
         private const float ButtonSpread = 0.85f;
+        /// <summary>The corner button's distance from the cluster's center along each axis, in spreads: right
+        /// above the right button and beside the top one it would overlap them.</summary>
+        private const float CornerOffset = 1.24f;
         /// <summary>A button's zone is a little larger than the button, for a thumb that lands near its edge.</summary>
         private const float ButtonReach = 1.15f;
         /// <summary>Label height, in button diameters.</summary>
@@ -154,6 +161,7 @@ namespace Unravel.Samples
                 MakeButton(GamepadButton.East, new Vector2(1.0f, 0.0f), "button-east"),
                 MakeButton(GamepadButton.West, new Vector2(-1.0f, 0.0f), "button-west"),
                 MakeButton(GamepadButton.North, new Vector2(0.0f, -1.0f), "button-north"),
+                MakeButton(GamepadButton.RightShoulder, new Vector2(CornerOffset, -CornerOffset), "button-corner"),
             };
         }
 
@@ -327,6 +335,8 @@ namespace Unravel.Samples
                     return EastLabel;
                 case GamepadButton.West:
                     return WestLabel;
+                case GamepadButton.RightShoulder:
+                    return CornerLabel;
                 default:
                     return NorthLabel;
             }
