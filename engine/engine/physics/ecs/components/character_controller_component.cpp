@@ -293,7 +293,7 @@ auto character_controller_component::get_interpolate() const noexcept -> bool
     return interpolate_;
 }
 
-auto character_controller_component::get_physics_position() const -> math::vec3
+auto character_controller_component::get_position() const -> math::vec3
 {
     const math::vec3 position = get_owner().get<transform_component>().get_position_global();
     return interpolate_ && motion_.is_tracked && position == motion_.shown ? motion_.step_end : position;

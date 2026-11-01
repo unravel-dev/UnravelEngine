@@ -11,8 +11,8 @@ namespace Unravel.Core
     /// <remarks>
     /// The character moves on fixed physics steps. While <see cref="interpolate"/> is on, its entity's
     /// <c>transform.position</c> reads and shows a position between the last two steps: it moves evenly at any frame
-    /// rate, carries the camera and whatever hangs under it along, and trails <see cref="physicsPosition"/> by at most
-    /// one step. In OnFixedUpdate the two are the same. Writing <c>transform.position</c> or calling <see cref="Warp"/>
+    /// rate, carries the camera and whatever hangs under it along, and trails this component's <see cref="position"/>
+    /// by at most one step. In OnFixedUpdate the two are the same. Writing <c>transform.position</c> or calling <see cref="Warp"/>
     /// teleports at once.
     /// </remarks>
     public class CharacterControllerComponent : Component
@@ -145,11 +145,12 @@ namespace Unravel.Core
 
         /// <summary>
         /// Where the last physics step left the character, as an entity position (without <see cref="center"/>). While
-        /// <see cref="interpolate"/> is on, <c>transform.position</c> trails this by at most one step.
+        /// <see cref="interpolate"/> is on, <c>transform.position</c> trails this by at most one step. To place the
+        /// character, call <see cref="Warp"/>.
         /// </summary>
-        public Vector3 physicsPosition
+        public Vector3 position
         {
-            get { return internal_m2n_cc_get_physics_position(owner); }
+            get { return internal_m2n_cc_get_position(owner); }
         }
 
         /// <summary>
@@ -248,7 +249,7 @@ namespace Unravel.Core
         private static extern void internal_m2n_cc_set_interpolate(Entity eid, bool interpolate);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector3 internal_m2n_cc_get_physics_position(Entity eid);
+        private static extern Vector3 internal_m2n_cc_get_position(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_cc_get_is_grounded(Entity eid);

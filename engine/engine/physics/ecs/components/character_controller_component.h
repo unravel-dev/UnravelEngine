@@ -176,7 +176,7 @@ public:
      * @brief Where the last fixed step left the character (entity position, without the center), or where a teleport
      *        placed it since. The transform trails this while interpolating.
      */
-    auto get_physics_position() const -> math::vec3;
+    auto get_position() const -> math::vec3;
 
     auto get_motion() noexcept -> character_motion&;
 

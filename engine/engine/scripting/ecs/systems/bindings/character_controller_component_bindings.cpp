@@ -260,11 +260,11 @@ void internal_m2n_cc_set_interpolate(entt::entity id, bool interpolate)
     }
 }
 
-auto internal_m2n_cc_get_physics_position(entt::entity id) -> math::vec3
+auto internal_m2n_cc_get_position(entt::entity id) -> math::vec3
 {
     if(auto comp = safe_get_component<character_controller_component>(id))
     {
-        return comp->get_physics_position();
+        return comp->get_position();
     }
     return {};
 }
@@ -351,7 +351,7 @@ void register_character_controller_component_script_bindings()
     reg.add_internal_call("internal_m2n_cc_set_linear_damping", script_internal_call(internal_m2n_cc_set_linear_damping));
     reg.add_internal_call("internal_m2n_cc_get_interpolate", script_internal_call(internal_m2n_cc_get_interpolate));
     reg.add_internal_call("internal_m2n_cc_set_interpolate", script_internal_call(internal_m2n_cc_set_interpolate));
-    reg.add_internal_call("internal_m2n_cc_get_physics_position", script_internal_call(internal_m2n_cc_get_physics_position));
+    reg.add_internal_call("internal_m2n_cc_get_position", script_internal_call(internal_m2n_cc_get_position));
 
     reg.add_internal_call("internal_m2n_cc_get_include_layers", script_internal_call(internal_m2n_cc_get_include_layers));
     reg.add_internal_call("internal_m2n_cc_set_include_layers", script_internal_call(internal_m2n_cc_set_include_layers));

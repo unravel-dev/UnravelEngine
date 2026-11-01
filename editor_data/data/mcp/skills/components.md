@@ -293,8 +293,9 @@ Physics - an entity has one or the other.
   read them to check a jump or a fall.
 - interpolate (on by default) places the entity between its last two physics
   steps every frame, so it moves evenly at any frame rate: its transform trails
-  the script property physicsPosition by at most one step. Writing the position
-  or warping still teleports at once. Turn it off only to read raw steps.
+  the controller's own position (script property) by at most one step. Writing
+  the transform's position or warping still teleports at once. Turn it off only
+  to read raw steps.
 
 ## Animation
 

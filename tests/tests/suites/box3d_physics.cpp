@@ -764,7 +764,7 @@ void test_transform_trails_the_physics_position(rtti::context& ctx, physics_back
     for(int frame = 0; frame < 120; ++frame)
     {
         frames.advance(frame_seconds);
-        const float gap = frames.cc.get_physics_position().x - frames.transform.get_position_global().x;
+        const float gap = frames.cc.get_position().x - frames.transform.get_position_global().x;
         widest_gap = std::max(widest_gap, gap);
         ever_ahead = ever_ahead || gap < -1e-4f;
         frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
@@ -776,7 +776,7 @@ void test_transform_trails_the_physics_position(rtti::context& ctx, physics_back
     {
         frames.advance(frame_seconds);
     }
-    check_near(frames.cc.get_physics_position().x,
+    check_near(frames.cc.get_position().x,
                frames.transform.get_position_global().x,
                1e-4f,
                "a character that stopped shows where it stands");
@@ -888,21 +888,21 @@ void test_teleports_do_not_smear(rtti::context& ctx, physics_backend_type backen
             previous = x;
         }
         check(furthest_step < frame_travel * 2.5f, what + ": no frame lies on the way there");
-        check_near(frames.cc.get_physics_position().z, target.z, 1e-3f, what + ": the body went there too");
+        check_near(frames.cc.get_position().z, target.z, 1e-3f, what + ": the body went there too");
         check(previous > target.x, what + ": the walk goes on from there");
     };
 
     walk_frames(40);
     const math::vec3 written{-6.0f, 1.0f, 3.0f};
     frames.transform.set_position_global(written);
-    check_near(frames.cc.get_physics_position().x, written.x, 1e-3f, "a written position counts at once");
+    check_near(frames.cc.get_position().x, written.x, 1e-3f, "a written position counts at once");
     check_lands_at(written, "a written position");
 
     walk_frames(10);
     const math::vec3 warped{-4.0f, 1.0f, -3.0f};
     fx.backend->warp_character(frames.cc, warped);
     check_near(frames.transform.get_position_global().x, warped.x, 1e-3f, "a warp shows at once");
-    check_near(frames.cc.get_physics_position().x, warped.x, 1e-3f, "a warp counts at once");
+    check_near(frames.cc.get_position().x, warped.x, 1e-3f, "a warp counts at once");
     check_lands_at(warped, "a warp");
 
     // Written on a frame where a script also turns: the sync must carry the teleport, not a stale position.
@@ -934,7 +934,7 @@ void test_a_moving_parent_carries_the_character(rtti::context& ctx, physics_back
         frames.advance(frame_seconds);
     }
     check_near(frames.transform.get_position_global().x, start_x + 2.0f, 1e-3f, "the character goes with its parent");
-    check_near(frames.cc.get_physics_position().x, start_x + 2.0f, 1e-3f, "and its body goes along");
+    check_near(frames.cc.get_position().x, start_x + 2.0f, 1e-3f, "and its body goes along");
 }
 
 void test_a_jump_arc_is_even(rtti::context& ctx, physics_backend_type backend)
@@ -1031,11 +1031,11 @@ void test_interpolation_turns_off_cleanly(rtti::context& ctx, physics_backend_ty
         frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
         frames.advance(frame_seconds);
     }
-    const float truth = frames.cc.get_physics_position().x;
+    const float truth = frames.cc.get_position().x;
     frames.cc.set_interpolate(false);
     frames.advance(frame_seconds);
     check(frames.transform.get_position_global().x >= truth - 1e-4f, "the transform goes back to the physics position");
-    check_near(frames.cc.get_physics_position().x,
+    check_near(frames.cc.get_position().x,
                frames.transform.get_position_global().x,
                1e-4f,
                "and stays there");
