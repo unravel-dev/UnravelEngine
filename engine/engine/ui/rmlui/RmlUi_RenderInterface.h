@@ -394,6 +394,10 @@ private:
         uint32_t num_indices;
         GeometryBufferType buffer_type = GeometryBufferType::Static;
 
+        // Every vertex colour is zero in all four channels, as an element at opacity 0 gets: with premultiplied
+        // alpha it adds nothing and covers nothing, so it is not drawn.
+        bool is_invisible = false;
+
         // Texture coordinate bounds of the vertices. A draw straight into a 3D view keeps its samples
         // inside them, so the neighbours of a sprite in an atlas never blend in.
         Rml::Vector2f tex_coord_min{0.0f, 0.0f};

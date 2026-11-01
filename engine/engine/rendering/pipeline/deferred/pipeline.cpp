@@ -83,6 +83,26 @@ auto create_or_resize_g_buffer(gfx::render_view& rview,
         fbo->populate({tex0, tex1, tex2, tex3, depth});
     }
 
+    if(params.limits.subsurface)
+    {
+        rview.fbo_remove("GBUFFER_NO_SUBSURFACE");
+        return fbo;
+    }
+    // Without subsurface the G-buffer pass leaves the fourth target out: one less to write per pixel. Whatever samples
+    // it still reads black, so it is cleared once, when it is new.
+    auto& draw_fbo = rview.fbo_acquire("GBUFFER_NO_SUBSURFACE");
+    if(gfx::needs_recreate(draw_fbo, {tex0, tex1, tex2, depth}))
+    {
+        draw_fbo.reset();
+        draw_fbo = std::make_shared<gfx::frame_buffer>();
+        draw_fbo->populate({tex0, tex1, tex2, depth});
+        auto subsurface_fbo = std::make_shared<gfx::frame_buffer>();
+        subsurface_fbo->populate({tex3});
+        gfx::render_pass clear_pass("G-Buffer/Clear Subsurface");
+        clear_pass.bind(subsurface_fbo.get());
+        clear_pass.clear(BGFX_CLEAR_COLOR, 0, 1.0f, 0);
+    }
+
     return fbo;
 }
 
@@ -160,7 +180,7 @@ auto create_or_resize_o_buffer(gfx::render_view& rview, const usize32_t& viewpor
     const auto& tex = rview.tex_acquire("OBUFFER",
                                         {.size = viewport_size,
                                          .format = get_default_format(),
-                                         .flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT});
+                                         .flags = BGFX_TEXTURE_RT});
 
     auto& fbo = rview.fbo_acquire("OBUFFER");
     if(gfx::needs_recreate(fbo, {tex}))

@@ -216,7 +216,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     const auto& proj = camera.get_projection();
     const auto& viewport_size = camera.get_viewport_size();
 
-    const auto& gbuffer = rview.fbo_get("GBUFFER");
+    const auto& gbuffer = rview.fbo_get(limits.subsurface ? "GBUFFER" : "GBUFFER_NO_SUBSURFACE");
 
     gfx::render_pass pass("G-Buffer/Pass");
     pass.clear();

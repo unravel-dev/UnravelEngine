@@ -1263,15 +1263,22 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
     const auto proj = camera.get_projection_unjittered();
 
     // Documents drawn straight into the output draw in views of their own: what follows them draws in
-    // a view started after theirs, so the order stays far to near.
-    const auto start_ui_view = [&]() -> bgfx::ViewId
+    // a view started after theirs, so the order stays far to near. Only something to draw starts one: an empty
+    // view is still a render pass, which a tile-based GPU loads and stores for nothing.
+    bgfx::ViewId ui_view_id = 0;
+    bool has_ui_view = false;
+    const auto get_ui_view = [&]() -> bgfx::ViewId
     {
-        gfx::render_pass pass("World UI/Elements Pass");
-        pass.bind(output.get());
-        pass.set_view_proj(view, proj);
-        return pass.id;
+        if(!has_ui_view)
+        {
+            gfx::render_pass pass("World UI/Elements Pass");
+            pass.bind(output.get());
+            pass.set_view_proj(view, proj);
+            ui_view_id = pass.id;
+            has_ui_view = true;
+        }
+        return ui_view_id;
     };
-    bgfx::ViewId ui_view_id = start_ui_view();
 
     struct world_space_ui_entry
     {
@@ -1338,16 +1345,18 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
             if(ui_comp.draws_into_scene())
             {
                 ui.render_world_space_into(ui_comp, output, world_to_clip * ui_comp.get_document_to_world(world_transform));
-                ui_view_id = start_ui_view();
+                has_ui_view = false;
                 continue;
             }
             const auto scale = ui_comp.get_world_space_scale();
             const auto model = world_transform * math::transform::scaling(scale);
+            // Before the draw's state: starting a view submits it.
+            const bgfx::ViewId quad_view = get_ui_view();
             auto topology = gfx::clip_quad(0.0f, 0.5f, 0.5f);
             bgfx::setState(topology | world_ui_state);
             world_quad_program_->set_texture(0, "s_tex", ui_comp.framebuffer.get(), 0);
             gfx::set_world_transform(model);
-            bgfx::submit(ui_view_id, world_quad_program_->native_handle());
+            bgfx::submit(quad_view, world_quad_program_->native_handle());
         }
 
         ui_cache.entries.clear();
@@ -1398,7 +1407,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
         auto& text_comp = *entry.comp;
         auto handle = entry.handle;
         const auto& world_transform = entry.transform_comp->get_transform_global();
-        text_comp.submit(ui_view_id, world_transform, BGFX_STATE_DEPTH_TEST_LESS);
+        text_comp.submit(get_ui_view(), world_transform, BGFX_STATE_DEPTH_TEST_LESS);
     }
 
     text_cache.entries.clear();

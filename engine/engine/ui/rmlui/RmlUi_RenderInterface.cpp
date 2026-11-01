@@ -515,8 +515,11 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
     geometry.indices = indices;
     geometry.tex_coord_min = vertices[0].tex_coord;
     geometry.tex_coord_max = vertices[0].tex_coord;
+    geometry.is_invisible = true;
     for(const Rml::Vertex& vertex : vertices)
     {
+        geometry.is_invisible = geometry.is_invisible && vertex.colour.red == 0 && vertex.colour.green == 0 &&
+                                vertex.colour.blue == 0 && vertex.colour.alpha == 0;
         geometry.tex_coord_min = Rml::Math::Min(geometry.tex_coord_min, vertex.tex_coord);
         geometry.tex_coord_max = Rml::Math::Max(geometry.tex_coord_max, vertex.tex_coord);
     }
@@ -602,6 +605,10 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
 
     // Get geometry using internal handle
     auto& geometry = geometry_manager_.get(internal_handle.idx);
+    if(geometry.is_invisible && texture != TexturePostprocess)
+    {
+        return;
+    }
 
     // Straight into a 3D view the shapes anti-alias themselves: there is a single sample per pixel.
     const bool is_world = is_drawing_to_world_target();
