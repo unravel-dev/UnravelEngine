@@ -1,0 +1,37 @@
+# Rebuilt by the editor from data/
+/compiled/
+/cache/
+/temp/
+
+# Generated script projects, their build output and IDE state
+/*.csproj
+/*.sln
+/bin/
+/obj/
+*.user
+*.suo
+/.vs/
+/.vscode/
+/.idea/
+
+# Each user's editor state: open scene, gizmos, deploy profile, thumbnails, trash
+/editor/
+
+# Deploy output and kept release packs. releases/ cannot be rebuilt: archive it elsewhere.
+/.deploy/
+/releases/
+
+# Signing keys never belong in the repository
+*.keystore
+*.jks
+
+# Left behind by an interrupted save
+*.temp
+
+# Development tools and their output
+/dev/
+
+# Operating systems
+.DS_Store
+Thumbs.db
+desktop.ini

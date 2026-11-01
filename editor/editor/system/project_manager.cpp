@@ -55,33 +55,42 @@ fs::path app_editor_cfg = "app:/editor/editor.cfg";
 fs::path app_project_cfg = "app:/project.cfg";
 fs::path editor_cfg = fs::persistent_path() / "unravel" / "editor.cfg";
 fs::path agents_template_path = "editor:/data/project/AGENTS.template";
-fs::path claude_template_path = "editor:/data/project/CLAUDE.template";
+fs::path engine_rules_template_path = "editor:/data/project/UNRAVEL.template";
+fs::path gitignore_template_path = "editor:/data/project/gitignore.template";
 
+/// Copies a template into a project. The project works without these files, so a failure only warns.
+auto copy_project_template(const fs::path& template_path, const fs::path& destination, fs::copy_options options) -> bool
+{
+    fs::error_code err;
+    fs::copy_file(fs::resolve_protocol(template_path), destination, options, err);
+    if(err)
+    {
+        APPLOG_WARNING("Failed to write {}: {}", destination.string(), err.message());
+        return false;
+    }
+    return true;
+}
+
+/// The agent files of a project, written on every open. The engine owns .agents/UNRAVEL.md and keeps it current; the
+/// user owns the AGENTS.md that points at it, so an existing one is left alone.
 auto seed_project_agent_files(const fs::path& project_path) -> bool
 {
     fs::error_code err;
-    bool agents_ok = false;
-    const fs::path agents_template = fs::resolve_protocol(agents_template_path);
-    // Engine-owned name so a user AGENTS.md is never overwritten.
-    const fs::path agents_dst = project_path / "UNRAVEL-AGENTS.md";
-    if(fs::exists(agents_template, err))
-    {
-        fs::copy_file(agents_template, agents_dst, fs::copy_options::overwrite_existing, err);
-        if(err)
-        {
-            APPLOG_WARNING("Failed to seed UNRAVEL-AGENTS.md into {}: {}", project_path.string(), err.message());
-        }
-        else
-        {
-            agents_ok = true;
-        }
-    }
-    else
-    {
-        APPLOG_WARNING("Agent instructions template missing: {}", agents_template.string());
-    }
+    fs::create_directories(project_path / ".agents", err);
+    // Projects from older engines still hold these rules in their root, under an engine-owned name.
+    fs::remove(project_path / "UNRAVEL-AGENTS.md", err);
+    const bool has_rules = copy_project_template(engine_rules_template_path, project_path / ".agents" / "UNRAVEL.md", fs::copy_options::overwrite_existing);
+    const bool has_agents_file = copy_project_template(agents_template_path, project_path / "AGENTS.md", fs::copy_options::skip_existing);
+    return has_rules && has_agents_file;
+}
 
-    return agents_ok;
+/// Writes what a new project's version control starts from.
+void seed_version_control_files(const fs::path& project_path, project_version_control version_control)
+{
+    if(version_control == project_version_control::git)
+    {
+        copy_project_template(gitignore_template_path, project_path / ".gitignore", fs::copy_options::none);
+    }
 }
 
 } // namespace
@@ -488,7 +497,10 @@ auto project_manager::can_create_project(const fs::path& project_path, std::stri
     return true;
 }
 
-auto project_manager::create_project(rtti::context& ctx, const fs::path& project_path, std::string* error) -> bool
+auto project_manager::create_project(rtti::context& ctx,
+                                     const fs::path& project_path,
+                                     project_version_control version_control,
+                                     std::string* error) -> bool
 {
     auto fail = [&](const std::string& message) -> bool
     {
@@ -512,6 +524,7 @@ auto project_manager::create_project(rtti::context& ctx, const fs::path& project
     {
         return fail(fmt::format("Failed to create project directory {}: {}", project_path.generic_string(), err.message()));
     }
+    seed_version_control_files(project_path, version_control);
 
     // open_project points app:/ at the new folder only after closing the current project; pointing
     // it earlier made that close save the old project's files (its project.cfg, so its guid) here.

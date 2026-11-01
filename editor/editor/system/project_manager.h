@@ -6,6 +6,7 @@
 #include <deploy/project_profiles.h>
 #include <editor/project/project_editor_settings.h>
 #include <editor/project/project_info.h>
+#include <editor/project/project_version_control.h>
 #include <filesystem/syncer.h>
 #include <cmd_line/parser.h>
 
@@ -64,10 +65,14 @@ public:
     /**
      * @brief Creates a project in `project_path` (absolute; missing, or an empty directory) and
      *        opens it.
+     * @param version_control What the project is set up for.
      * @param error When set, receives one sentence saying why the project was not created.
      * @return True when the project was created and opened.
      */
-    auto create_project(rtti::context& ctx, const fs::path& project_path, std::string* error = nullptr) -> bool;
+    auto create_project(rtti::context& ctx,
+                        const fs::path& project_path,
+                        project_version_control version_control,
+                        std::string* error = nullptr) -> bool;
 
     /**
      * @brief Whether create_project would accept `project_path`, without creating anything.
@@ -75,9 +80,9 @@ public:
      */
     auto can_create_project(const fs::path& project_path, std::string* error = nullptr) const -> bool;
 
-    /// Copies editor agent instruction templates into the project root as
-    /// `UNRAVEL-AGENTS.md` (overwrites those files). Returns
-    /// true when `UNRAVEL-AGENTS.md` was written successfully.
+    /// Does what opening a project does for its agent files: overwrites `.agents/UNRAVEL.md` with
+    /// the editor's rules and adds an `AGENTS.md` pointing at it when the project has none.
+    /// Returns true when both files are in place.
     auto regenerate_agent_files() -> bool;
 
     void save_editor_settings();

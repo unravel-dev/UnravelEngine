@@ -5,6 +5,7 @@
 #include <context/context.hpp>
 #include <editor/imgui/image_file_cache.h>
 #include <editor/imgui/integration/imgui.h>
+#include <editor/project/project_version_control.h>
 #include <filesystem/filesystem.h>
 
 #include <string>
@@ -154,6 +155,7 @@ private:
     std::string project_to_remove_{};
     std::string new_project_name_{};
     std::string new_project_directory_{};
+    project_version_control new_project_version_control_{project_version_control::git};
     /// When the entries were read, and the last frame the page was drawn in.
     double refresh_time_{-1.0};
     int last_drawn_frame_{-1};

@@ -3,7 +3,7 @@ name: scripting-api
 title: C# API reference - where it lives and how to read it
 description: The engine's C# API is searchable (scripts_api_search / scripts_api_get) and shipped as readable source under engine:/data/scripts - how to find a type, the four sample components to copy from, and the language rules (lifecycle, Entity is a struct, asset loading, RCSS) that compile errors would otherwise teach you the slow way. Read before writing any script.
 order: 65
-include: editor:/data/project/AGENTS.template
+include: editor:/data/project/UNRAVEL.template
 ---
 # The C# API is readable source, not a black box
 
@@ -165,6 +165,6 @@ Give players the same way out: free it on Escape, take it back on a click.
 
 ---
 
-The rules below ship with every project as `UNRAVEL-AGENTS.md`. They are the same
+The rules below ship with every project as `.agents/UNRAVEL.md`. They are the same
 rules a file-level agent working in the project directory follows, and they are
 authoritative for language and asset semantics.

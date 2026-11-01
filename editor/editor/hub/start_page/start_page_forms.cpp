@@ -13,6 +13,8 @@
 #include <imgui_widgets/utils.h>
 #include <logging/logging.h>
 
+#include <array>
+
 namespace unravel
 {
 namespace widgets = start_page_widgets;
@@ -29,6 +31,8 @@ constexpr float FORMS_VIEW_REMOVE_WIDTH = 56.0f;
 constexpr ImU32 FORMS_VIEW_WARNING_COLOR = IM_COL32(255, 190, 60, 255);
 /// How long the toast of a failed folder delete stays up.
 constexpr int FORMS_VIEW_ERROR_TOAST_MILLISECONDS = 4000;
+/// Indexed by project_version_control.
+constexpr std::array<const char*, 2> FORMS_VIEW_VERSION_CONTROL_LABELS{"None", "Git"};
 
 void draw_form_label(const char* label)
 {
@@ -41,6 +45,29 @@ void draw_form_label(const char* label)
 void draw_form_gap()
 {
     ImGui::Dummy(ImVec2(0.0f, to_pixels(FORMS_VIEW_SECTION_GAP)));
+}
+
+void draw_version_control_field(project_version_control& version_control, float width)
+{
+    draw_form_label("Version Control");
+    widgets::push_field_style();
+    ImGui::SetNextItemWidth(width);
+    const auto selected_index = static_cast<size_t>(version_control);
+    if(ImGui::BeginCombo("##version_control", FORMS_VIEW_VERSION_CONTROL_LABELS[selected_index]))
+    {
+        for(size_t index = 0; index < FORMS_VIEW_VERSION_CONTROL_LABELS.size(); ++index)
+        {
+            if(ImGui::Selectable(FORMS_VIEW_VERSION_CONTROL_LABELS[index], index == selected_index))
+            {
+                version_control = static_cast<project_version_control>(index);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltipEx("%s",
+                            "Git adds a .gitignore file that leaves out what the editor can rebuild, such as compiled "
+                            "assets and caches. It does not create a repository.");
+    widgets::pop_field_style();
 }
 } // namespace
 
@@ -103,15 +130,17 @@ void start_page::draw_create_project_view(rtti::context& ctx)
         widgets::draw_muted_text(preview.c_str(), form_width);
     }
     draw_form_gap();
+    draw_version_control_field(new_project_version_control_, form_width);
+    draw_form_gap();
     if(widgets::draw_button(ICON_MDI_PLUS "  Create Project", widgets::button_kind::primary, 0.0f, is_complete && !is_occupied))
     {
         auto& pm = ctx.get_cached<project_manager>();
         auto& em = ctx.get_cached<editing_manager>();
         const fs::path created_path = fs::path(project_path).make_preferred();
         em.queue_action<untracked_editor_state_action_t>("Create Project",
-                        [&ctx, &pm, created_path]()
+                        [&ctx, &pm, created_path, version_control = new_project_version_control_]()
                         {
-                            pm.create_project(ctx, created_path);
+                            pm.create_project(ctx, created_path, version_control);
                         });
         show_view(view_state::projects);
         return;

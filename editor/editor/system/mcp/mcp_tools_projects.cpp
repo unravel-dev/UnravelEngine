@@ -229,9 +229,10 @@ void register_project_tools(mcp_tool_registry& registry)
          .description =
              "Create a new project directory and open it. The directory must not exist or must be "
              "empty. Seeds a scene from preset (default medium) and writes the project's agent "
-             "instructions. Use project_open for a project that already exists.",
+             "instructions. version_control git (the default) also writes a .gitignore file; it does "
+             "not create a repository. Use project_open for a project that already exists.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded into the new project; default medium"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits in the open project"}},"required":["path"]})json",
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded into the new project; default medium"},"version_control":{"type":"string","enum":["none","git"],"description":"Version control the new project is set up for; default git"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits in the open project"}},"required":["path"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -241,6 +242,8 @@ void register_project_tools(mcp_tool_registry& registry)
              read_string(args, "path", path_arg);
              std::string preset_str = "medium";
              read_string(args, "preset", preset_str);
+             std::string version_control_str = "git";
+             read_string(args, "version_control", version_control_str);
              bool force = false;
              read_bool(args, "force", force);
 
@@ -267,6 +270,12 @@ void register_project_tools(mcp_tool_registry& registry)
                      {
                          return {.text = "Invalid preset (use low|medium|high|showcase)", .is_error = true};
                      }
+                     if(version_control_str != "none" && version_control_str != "git")
+                     {
+                         return {.text = "Invalid version_control (use none|git)", .is_error = true};
+                     }
+                     const auto version_control = version_control_str == "git" ? project_version_control::git
+                                                                               : project_version_control::none;
 
                      auto& pm = ctx.get_cached<project_manager>();
                      std::string create_error;
@@ -279,7 +288,7 @@ void register_project_tools(mcp_tool_registry& registry)
                      {
                          return {.text = error, .is_error = true};
                      }
-                     if(!pm.create_project(ctx, fs::path(path_arg), &create_error))
+                     if(!pm.create_project(ctx, fs::path(path_arg), version_control, &create_error))
                      {
                          return {.text = create_error + " (project_open opens an existing project)",
                                  .is_error = true};

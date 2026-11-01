@@ -284,6 +284,7 @@ void start_page::show_view(view_state view)
     view_ = view;
     new_project_name_.clear();
     new_project_directory_.clear();
+    new_project_version_control_ = project_version_control::git;
     if(view != view_state::remove_project)
     {
         project_to_remove_.clear();

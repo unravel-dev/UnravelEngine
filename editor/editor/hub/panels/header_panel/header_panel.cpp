@@ -378,7 +378,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 {
                     ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success,
                                                        3000,
-                                                       "Regenerated UNRAVEL-AGENTS.md in the project root."));
+                                                       "Regenerated the project's agent files."));
                 }
                 else
                 {
@@ -388,8 +388,8 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 }
             }
             ImGui::SetItemTooltip(
-                "Overwrite UNRAVEL-AGENTS.md in the open project with the editor templates.\n"
-                "Use after updating engine agent guidance, or to restore deleted files.");
+                "Overwrite .agents/UNRAVEL.md in the open project, and add an AGENTS.md if it has none.\n"
+                "Opening a project does the same, so this is only needed to restore deleted files.");
 
             if(ImGui::BeginMenu("Assets"))
             {
