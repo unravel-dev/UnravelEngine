@@ -6,6 +6,7 @@
 
 #include <editor/hub/panels/visualization_modes.h>
 #include <editor/system/mcp_manager.h>
+#include <editor/system/project_manager.h>
 
 #include <editor/editing/editing_manager.h>
 #include <engine/defaults/defaults.h>
@@ -1419,18 +1420,23 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_set_overlays",
          .description =
-             "Show or hide the Scene panel's editor overlays: icon gizmos (camera, light and probe billboards), "
-             "the grid and the selection outline. Omitted keys keep their state; the state is not saved. "
-             "viewport_capture_scene includes them. Returns the resulting state.",
+             "Show or hide the Scene panel's editor overlays for now: gizmos is the master switch over every icon and "
+             "gizmo (billboards, selection gizmos, outline and wireframe); icons false hides only the billboards and "
+             "icons true brings back the ones the project shows; the grid; the selection outline. Omitted keys keep "
+             "their state. None of this is saved: the project keeps what the user set on the Scene panel's toolbar. "
+             "viewport_capture_scene includes them. Returns what is drawn now, so icons and selection_outline read "
+             "false while gizmos is off.",
          .input_schema_json =
-             R"({"type":"object","properties":{"gizmos":{"type":"boolean"},"grid":{"type":"boolean"},"selection_outline":{"type":"boolean"}}})",
+             R"({"type":"object","properties":{"gizmos":{"type":"boolean"},"icons":{"type":"boolean"},"grid":{"type":"boolean"},"selection_outline":{"type":"boolean"}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              bool gizmos = false;
+             bool icons = false;
              bool grid = false;
              bool selection_outline = false;
              const bool set_gizmos = args["gizmos"].get(gizmos) == simdjson::SUCCESS;
+             const bool set_icons = args["icons"].get(icons) == simdjson::SUCCESS;
              const bool set_grid = args["grid"].get(grid) == simdjson::SUCCESS;
              const bool set_selection_outline = args["selection_outline"].get(selection_outline) == simdjson::SUCCESS;
              auto& mcp = ctx.get_cached<mcp_manager>();
@@ -1440,7 +1446,15 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      auto& em = ctx.get_cached<editing_manager>();
                      if(set_gizmos)
                      {
-                         em.show_icon_gizmos = gizmos;
+                         em.show_gizmos = gizmos;
+                     }
+                     if(set_icons && icons)
+                     {
+                         em.billboard_data = ctx.get_cached<project_manager>().get_project_editor_settings().gizmos.billboards;
+                     }
+                     if(set_icons && !icons)
+                     {
+                         em.billboard_data.hide_all();
                      }
                      if(set_grid)
                      {
@@ -1450,10 +1464,11 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      {
                          em.gizmos.show_selection_outline = selection_outline;
                      }
-                     return fmt::format(R"({{"gizmos":{},"grid":{},"selection_outline":{}}})",
-                                        em.show_icon_gizmos,
+                     return fmt::format(R"({{"gizmos":{},"icons":{},"grid":{},"selection_outline":{}}})",
+                                        em.show_gizmos,
+                                        em.show_gizmos && em.billboard_data.is_any_shown(),
                                         em.show_grid,
-                                        em.gizmos.show_selection_outline);
+                                        em.show_gizmos && em.gizmos.show_selection_outline);
                  });
              if(!result)
              {

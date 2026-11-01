@@ -109,6 +109,14 @@ returns no `MenuBar`).
 
 - `scene_panel.cpp` -> `draw_toolbar`: tools bar (left), view bar (right), prefab bar (centered,
   own row, prefab mode only)
+- `scene_panel/gizmos_menu` -> the gizmos split button: `editing_manager::show_gizmos` is the master
+  over every icon and gizmo (not the transform handles, not the grid). The popup is a table of object
+  types against Icons (every object) and Gizmos (the selection); a new gizmo flag is a `ROWS` entry or
+  a detail of one, and gets a line in the serialize of `meta/project/project_editor_settings.cpp`; a new
+  icon type is added to `billboard_components`, `billboard_gizmos::is_shown` and `ROWS`. The settings
+  (`editing/gizmo_settings.h`) live in `editing_manager` while a project is open. A change on the toolbar
+  also goes to the project's settings, saved in `app:/editor/editor.cfg`; `viewport_set_overlays` changes
+  only the live values, so a capture is never saved
 - `game_panel.cpp` -> `draw_toolbar`: one bar on the right. While the game plays it fades out
   and is NOT submitted (an invisible bar would eat the game's clicks); the pointer at the top
   edge or an open dropdown brings it back (`update_toolbar_visibility`). The frame rate stays:

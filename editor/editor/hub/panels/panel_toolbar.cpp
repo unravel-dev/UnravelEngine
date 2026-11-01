@@ -357,7 +357,9 @@ void draw_item(const ImRect& bb, const item_desc& desc, bool is_hovered, bool is
         // Next to a label the caret leans towards it; alone it sits in the middle.
         const float lean = desc.text != nullptr ? to_pixels(BUTTON_PADDING_X) * 0.4f : 0.0f;
         const ImVec2 center(bb.Max.x - caret_width * 0.5f - lean, bb.GetCenter().y);
-        draw_caret(draw_list, center, desc.is_active ? text_color : caret_color);
+        // Alone, the caret is what carries a tint.
+        const bool has_tint = desc.text == nullptr && desc.text_color != 0;
+        draw_caret(draw_list, center, desc.is_active || has_tint ? text_color : caret_color);
     }
 }
 

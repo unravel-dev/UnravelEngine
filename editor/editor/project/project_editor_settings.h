@@ -1,5 +1,6 @@
 #pragma once
 
+#include <editor/editing/gizmo_settings.h>
 #include <engine/assets/asset_handle.h>
 #include <engine/ecs/prefab.h>
 
@@ -26,6 +27,10 @@ struct project_editor_settings
         /// The profile whose settings the editor runs with; empty: the project settings.
         std::string preview_profile;
     } profiles;
+
+    /// The icons and gizmos of the Scene view as the user last set them on its toolbar, given to the editing manager
+    /// when the project opens. What a tool changes for a capture never gets here.
+    gizmo_setup gizmos;
 };
 
 } // namespace unravel

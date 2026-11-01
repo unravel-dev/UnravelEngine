@@ -25,6 +25,14 @@ auto get_muted_text_color_u32() -> ImU32;
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// The color of a toolbar control whose setting is off its default, so that a left-on setting
+/// stands out and never reads as a bug. One definition, so every toolbar says it the same way.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_changed_value_color_u32() -> ImU32;
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// The colors that mark an asset an import writes, such as a model's default material: one
 /// while imports still rewrite it, one once it is edited and imports keep it. The inspector
 /// and the content browser mark it the same way.

@@ -5,6 +5,7 @@
 
 #include "camera_controller.h"
 #include "camera_preview_overlay.h"
+#include "gizmos_menu.h"
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
 #include "../panel_toolbar.h"
@@ -109,8 +110,6 @@ private:
     void draw_coordinate_system_toggle(editing_manager& em);
     void draw_snapping_dropdown(editing_manager& em);
     void draw_grid_controls(editing_manager& em);
-    void draw_gizmos_controls(editing_manager& em);
-    void draw_gizmos_settings(editing_manager& em);
     void draw_inverse_kinematics_dropdown(editing_manager& em);
     void draw_camera_dropdown(rtti::context& ctx);
 
@@ -188,6 +187,7 @@ private:
 
     viewport_stats_overlay::state stats_overlay_state_{};
     visualization_menu::state visualization_menu_state_{};
+    gizmos_menu::state gizmos_menu_state_{};
     camera_preview_overlay::state camera_preview_state_{};
 
     /// Compact drops the text labels; stacked also moves the view bar to a second row.

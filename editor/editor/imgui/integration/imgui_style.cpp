@@ -17,6 +17,7 @@ namespace
 {
 /// How far the panels mute their secondary text.
 constexpr float MUTED_TEXT_ALPHA = 0.55f;
+constexpr ImU32 CHANGED_VALUE_COLOR = IM_COL32(255, 183, 77, 255);
 } // namespace
 
 auto get_muted_text_color() -> ImVec4
@@ -29,6 +30,11 @@ auto get_muted_text_color() -> ImVec4
 auto get_muted_text_color_u32() -> ImU32
 {
     return ImGui::GetColorU32(ImGuiCol_Text, MUTED_TEXT_ALPHA);
+}
+
+auto get_changed_value_color_u32() -> ImU32
+{
+    return CHANGED_VALUE_COLOR;
 }
 
 namespace
