@@ -78,8 +78,8 @@ description: >-
   fit only and scales by the hips' height ratio.
 - An entity with a character controller in play mode is moved through
   `character_controller_component::move`, so root motion collides. The controller
-  moves on physics fixed steps (50 Hz by default), so at 60 Hz frames the entity
-  lags a frame of root motion now and then; probe travel with paused play and
+  moves on physics fixed steps (50 Hz by default) and the entity shows between them,
+  trailing the move by a frame or two; probe travel with paused play and
   `play_skip_frame`, comparing root motion on against the pelvis with it off.
 - Rest-aligned retargeting carries offsets and root motion as LENGTHS through
   scaled frames (`transform_offset`); `transform_normal` keeps the input length

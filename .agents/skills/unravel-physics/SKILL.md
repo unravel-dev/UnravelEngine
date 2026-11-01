@@ -58,6 +58,17 @@ Rigid/static bodies, compound shapes, material properties. Serialized and editab
 
 Kinematic character movement, slope handling, step offset. Separate from raw rigidbody.
 
+Characters show between fixed steps (`interpolate`, on by default; `fixed_step_runner` in
+`physics_system.h`, no backend code). The transform holds the physics position during the
+steps, so `to_physics_cc` / `from_physics_cc` work as before, and a position between the last
+two steps afterwards, so scripts, a follow camera and attached bones all read a smooth motion.
+`place_character` keeps `dirty_ids::physics` as it was: these writes are not teleports, and a
+stale interpolated position must never reach the body. A transform not holding what was last
+written (`character_motion::shown`) was moved by someone else and starts over there. Moves are
+queued and each step takes its share by time (`take_step_move`): frame-sized moves would make
+steps of uneven length, and interpolation would show that as a wobble. Moves made in a fixed
+update go straight to the backend. Rigid bodies are not interpolated.
+
 ## Layer filtering
 
 `layer_mask` + `layer_component` control:

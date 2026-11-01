@@ -17,15 +17,18 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/ecs/scene.h>
+#include <engine/events.h>
 #include <engine/layers/layer_mask.h>
 #include <engine/physics/backend/physics_backend.h>
 #include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
+#include <engine/physics/ecs/systems/physics_system.h>
 #include <engine/physics/physics_types.h>
 
 #include <base/basetypes.hpp>
 #include <logging/logging.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -73,9 +76,11 @@ void check_near(float actual, float expected, float tolerance, const std::string
  */
 struct sim_fixture
 {
-    explicit sim_fixture(rtti::context& c) : ctx(c), registry(*c.get_cached<ecs>().get_scene().registry)
+    explicit sim_fixture(rtti::context& c, physics_backend_type type = physics_backend_type::box3d)
+        : ctx(c)
+        , registry(*c.get_cached<ecs>().get_scene().registry)
     {
-        backend = create_physics_backend(physics_backend_type::box3d);
+        backend = create_physics_backend(type);
         backend->init();
     }
 
@@ -558,6 +563,523 @@ void test_character_controller(rtti::context& ctx)
     check(cc.is_grounded(), "the character lands after the impulse");
 }
 
+// --- characters shown between fixed steps -------------------------------------------------
+
+constexpr float walk_speed = 3.6f;
+constexpr int max_fixed_steps = 3;
+/// A pair of a frame rate and a fixed step that beat against each other, or do not.
+struct frame_timing
+{
+    float frames_per_second;
+    float step_seconds;
+};
+constexpr frame_timing beating_timings[] = {{60.0f, 0.02f},
+                                            {60.0f, 1.0f / 60.0f},
+                                            {144.0f, 0.02f},
+                                            {120.0f, 1.0f / 60.0f},
+                                            {75.0f, 0.02f},
+                                            {45.0f, 0.02f},
+                                            {30.0f, 0.02f}};
+/// Frame time wobbles this much, as a vsynced frame's does.
+constexpr float frame_jitter = 0.03f;
+/// Time a character gets to lock on to the steps before its travel is judged.
+constexpr float lock_seconds = 0.5f;
+
+auto get_jittered_frame_seconds(float frames_per_second, int frame) -> float
+{
+    return (1.0f + frame_jitter * std::sin(float(frame) * 1.7f)) / frames_per_second;
+}
+
+/**
+ * @brief The frame loop physics_system runs: game time goes to the step runner, then a script moves the character.
+ */
+struct character_frames
+{
+    character_frames(sim_fixture& f, entt::handle h, float step)
+        : fx(f)
+        , hero(h)
+        , cc(h.get<character_controller_component>())
+        , transform(h.get<transform_component>())
+        , step_seconds(step)
+    {
+    }
+
+    void advance(float frame_seconds)
+    {
+        runner.advance(fx.ctx, *fx.backend, frame_seconds, step_seconds, max_fixed_steps);
+    }
+
+    void script_moves(const math::vec3& displacement)
+    {
+        cc.get_motion().queued_move += displacement;
+    }
+
+    void settle()
+    {
+        for(int i = 0; i < settle_steps; ++i)
+        {
+            advance(1.0f / 60.0f);
+        }
+    }
+
+    sim_fixture& fx;
+    entt::handle hero;
+    character_controller_component& cc;
+    transform_component& transform;
+    float step_seconds;
+    fixed_step_runner runner;
+};
+
+struct walk_result
+{
+    /// Travel of a frame over what its game time pays for, the extremes after the character locked on.
+    float slowest{1.0f};
+    float fastest{1.0f};
+    float travel{};
+    float expected_travel{};
+};
+
+auto walk_along_x(character_frames& frames, const frame_timing& timing, float seconds, bool turns_every_frame = false)
+    -> walk_result
+{
+    walk_result result;
+    const math::vec3 start = frames.transform.get_position_global();
+    math::vec3 previous = start;
+    float time = 0.0f;
+    float frame_seconds = 1.0f / timing.frames_per_second;
+    for(int frame = 0; time < seconds; ++frame)
+    {
+        frame_seconds = get_jittered_frame_seconds(timing.frames_per_second, frame);
+        time += frame_seconds;
+        frames.advance(frame_seconds);
+        const math::vec3 position = frames.transform.get_position_global();
+        if(time > lock_seconds)
+        {
+            const float ratio = (position.x - previous.x) / (walk_speed * frame_seconds);
+            result.slowest = std::min(result.slowest, ratio);
+            result.fastest = std::max(result.fastest, ratio);
+        }
+        previous = position;
+        frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
+        if(turns_every_frame)
+        {
+            frames.transform.set_rotation_global(
+                math::angleAxis(math::radians(float(frame % 360)), math::vec3{0.0f, 1.0f, 0.0f}));
+        }
+        result.expected_travel += walk_speed * frame_seconds;
+    }
+    result.travel = previous.x - start.x;
+    return result;
+}
+
+void test_character_travel_is_even(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_character_travel_is_even\n");
+    for(const auto& timing : beating_timings)
+    {
+        sim_fixture fx(ctx, backend);
+        fx.spawn_ground();
+        auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+        fx.begin();
+        character_frames frames(fx, hero, timing.step_seconds);
+        frames.settle();
+
+        const auto walk = walk_along_x(frames, timing, 3.0f);
+        const std::string name = std::to_string(int(timing.frames_per_second)) + " fps, step " +
+                                 std::to_string(int(timing.step_seconds * 1000.0f)) + " ms";
+        check(walk.slowest > 0.85f, name + ": no frame falls behind (slowest " + std::to_string(walk.slowest) + ")");
+        check(walk.fastest < 1.15f, name + ": no frame jumps ahead (fastest " + std::to_string(walk.fastest) + ")");
+        check_near(walk.travel, walk.expected_travel, walk_speed * 0.1f, name + ": the walk covers its distance");
+    }
+}
+
+/// What the test above guards against: the same walk with raw steps stalls and takes double steps.
+void test_raw_steps_stall(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_raw_steps_stall\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    auto& cc = hero.get<character_controller_component>();
+    cc.set_interpolate(false);
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    float slowest = 1.0f;
+    float fastest = 1.0f;
+    float previous = frames.transform.get_position_global().x;
+    for(int frame = 0; frame < 180; ++frame)
+    {
+        const float frame_seconds = get_jittered_frame_seconds(60.0f, frame);
+        frames.advance(frame_seconds);
+        const float position = frames.transform.get_position_global().x;
+        if(frame > 30)
+        {
+            const float ratio = (position - previous) / (walk_speed * frame_seconds);
+            slowest = std::min(slowest, ratio);
+            fastest = std::max(fastest, ratio);
+        }
+        previous = position;
+        fx.backend->move_character(cc, {walk_speed * frame_seconds, 0.0f, 0.0f});
+    }
+    check(slowest < 0.2f, "raw steps leave frames without travel");
+    check(fastest > 1.5f, "raw steps put two frames of travel in one");
+}
+
+/**
+ * A script that turns a character every frame dirties its transform, and the backend then places the body where the
+ * transform is. An interpolated position must not get that far: it would pull the body back on every step.
+ */
+void test_turning_does_not_drag_the_body_back(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_turning_does_not_drag_the_body_back\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    const frame_timing timing{60.0f, 0.02f};
+    const auto walk = walk_along_x(frames, timing, 3.0f, true);
+    check_near(walk.travel, walk.expected_travel, walk_speed * 0.1f, "a turning character covers the same distance");
+    check(walk.slowest > 0.85f && walk.fastest < 1.15f, "a turning character travels evenly");
+}
+
+void test_transform_trails_the_physics_position(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_transform_trails_the_physics_position\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    fx.begin();
+    const float step_seconds = 0.02f;
+    character_frames frames(fx, hero, step_seconds);
+    frames.settle();
+
+    const float frame_seconds = 1.0f / 60.0f;
+    float widest_gap = 0.0f;
+    bool ever_ahead = false;
+    for(int frame = 0; frame < 120; ++frame)
+    {
+        frames.advance(frame_seconds);
+        const float gap = frames.cc.get_physics_position().x - frames.transform.get_position_global().x;
+        widest_gap = std::max(widest_gap, gap);
+        ever_ahead = ever_ahead || gap < -1e-4f;
+        frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
+    }
+    check(widest_gap > 0.0f, "the transform trails the physics position while walking");
+    check(widest_gap <= walk_speed * step_seconds * 1.05f, "by at most one fixed step");
+    check(!ever_ahead, "and never runs ahead of it");
+    for(int frame = 0; frame < 30; ++frame)
+    {
+        frames.advance(frame_seconds);
+    }
+    check_near(frames.cc.get_physics_position().x,
+               frames.transform.get_position_global().x,
+               1e-4f,
+               "a character that stopped shows where it stands");
+}
+
+/// A fixed update reads where the character really is, and a move made there belongs to its step.
+struct fixed_update_probe
+{
+    void on_fixed_update(rtti::context& /*ctx*/, delta_t /*step*/)
+    {
+        ++updates;
+        const float gap = std::abs(frames->transform.get_position_global().x - frames->cc.get_motion().step_end.x);
+        widest_gap = std::max(widest_gap, gap);
+    }
+
+    character_frames* frames{};
+    int updates{};
+    float widest_gap{};
+};
+
+void test_a_fixed_update_reads_the_physics_position(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_fixed_update_reads_the_physics_position\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    fixed_update_probe probe;
+    probe.frames = &frames;
+    auto sentinel = std::make_shared<int>(0);
+    ctx.get_cached<events>().on_frame_fixed_update.connect(sentinel, &probe, &fixed_update_probe::on_fixed_update);
+    const float frame_seconds = 1.0f / 60.0f;
+    for(int frame = 0; frame < 60; ++frame)
+    {
+        frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
+        frames.advance(frame_seconds);
+    }
+    sentinel.reset();
+    check(probe.updates > 40, "the fixed update runs");
+    check(probe.widest_gap < 1e-4f, "a fixed update reads the position the last step ended at");
+}
+
+void test_walls_stop_the_shown_position(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_walls_stop_the_shown_position\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    fx.spawn_box("wall", {4.0f, 2.0f, 0.0f}, {1.0f, 4.0f, 4.0f}, rigidbody_type::static_body);
+    auto hero = fx.spawn_character("hero", {0.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    const float wall_contact_x = 3.0f;
+    const float frame_seconds = 1.0f / 60.0f;
+    float furthest = -100.0f;
+    float last = 0.0f;
+    float widest_late_change = 0.0f;
+    for(int frame = 0; frame < 180; ++frame)
+    {
+        frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
+        frames.advance(frame_seconds);
+        const float x = frames.transform.get_position_global().x;
+        furthest = std::max(furthest, x);
+        if(frame > 120)
+        {
+            widest_late_change = std::max(widest_late_change, std::abs(x - last));
+        }
+        last = x;
+    }
+    check_near(furthest, wall_contact_x, settle_tolerance, "the shown position stops at the wall");
+    check(widest_late_change < 0.01f, "and rests there without shaking");
+}
+
+void test_teleports_do_not_smear(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_teleports_do_not_smear\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    const float frame_seconds = 1.0f / 60.0f;
+    const float frame_travel = walk_speed * frame_seconds;
+    const auto walk_frames = [&](int count)
+    {
+        for(int i = 0; i < count; ++i)
+        {
+            frames.script_moves({frame_travel, 0.0f, 0.0f});
+            frames.advance(frame_seconds);
+        }
+    };
+    /// Walks on after a jump to `target`: every frame must start from there, none lies on the way there.
+    const auto check_lands_at = [&](const math::vec3& target, const std::string& what)
+    {
+        float furthest_step = 0.0f;
+        float previous = target.x;
+        for(int i = 0; i < 30; ++i)
+        {
+            frames.script_moves({frame_travel, 0.0f, 0.0f});
+            frames.advance(frame_seconds);
+            const float x = frames.transform.get_position_global().x;
+            furthest_step = std::max(furthest_step, std::abs(x - previous));
+            previous = x;
+        }
+        check(furthest_step < frame_travel * 2.5f, what + ": no frame lies on the way there");
+        check_near(frames.cc.get_physics_position().z, target.z, 1e-3f, what + ": the body went there too");
+        check(previous > target.x, what + ": the walk goes on from there");
+    };
+
+    walk_frames(40);
+    const math::vec3 written{-6.0f, 1.0f, 3.0f};
+    frames.transform.set_position_global(written);
+    check_near(frames.cc.get_physics_position().x, written.x, 1e-3f, "a written position counts at once");
+    check_lands_at(written, "a written position");
+
+    walk_frames(10);
+    const math::vec3 warped{-4.0f, 1.0f, -3.0f};
+    fx.backend->warp_character(frames.cc, warped);
+    check_near(frames.transform.get_position_global().x, warped.x, 1e-3f, "a warp shows at once");
+    check_near(frames.cc.get_physics_position().x, warped.x, 1e-3f, "a warp counts at once");
+    check_lands_at(warped, "a warp");
+
+    // Written on a frame where a script also turns: the sync must carry the teleport, not a stale position.
+    walk_frames(10);
+    const math::vec3 turned{2.0f, 1.0f, 5.0f};
+    frames.transform.set_position_global(turned);
+    frames.transform.set_rotation_global(math::angleAxis(math::radians(30.0f), math::vec3{0.0f, 1.0f, 0.0f}));
+    check_lands_at(turned, "a position written with a turn");
+}
+
+/// A parent that moves carries the character: the character starts over wherever that puts it.
+void test_a_moving_parent_carries_the_character(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_moving_parent_carries_the_character\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto platform = fx.spawn("platform", {0.0f, 0.0f, 0.0f});
+    auto hero = fx.spawn_character("hero", {0.0f, 1.2f, 0.0f});
+    hero.get<transform_component>().set_parent(platform, true);
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    const float frame_seconds = 1.0f / 60.0f;
+    const float start_x = frames.transform.get_position_global().x;
+    platform.get<transform_component>().set_position_global({2.0f, 0.0f, 0.0f});
+    for(int i = 0; i < 10; ++i)
+    {
+        frames.advance(frame_seconds);
+    }
+    check_near(frames.transform.get_position_global().x, start_x + 2.0f, 1e-3f, "the character goes with its parent");
+    check_near(frames.cc.get_physics_position().x, start_x + 2.0f, 1e-3f, "and its body goes along");
+}
+
+void test_a_jump_arc_is_even(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_jump_arc_is_even\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {0.0f, 1.2f, 0.0f});
+    fx.begin();
+    const float step_seconds = 0.02f;
+    character_frames frames(fx, hero, step_seconds);
+    frames.settle();
+
+    const float jump_speed = 5.0f;
+    const float frame_seconds = 1.0f / 60.0f;
+    fx.backend->jump_character(frames.cc, {0.0f, jump_speed, 0.0f});
+    float previous_y = frames.transform.get_position_global().y;
+    float previous_rise = 0.0f;
+    float widest_change = 0.0f;
+    // Well inside the arc, away from the take-off and the landing.
+    for(int frame = 0; frame < 40; ++frame)
+    {
+        frames.advance(frame_seconds);
+        const float y = frames.transform.get_position_global().y;
+        const float rise = y - previous_y;
+        if(frame > 4)
+        {
+            widest_change = std::max(widest_change, std::abs(rise - previous_rise));
+        }
+        previous_y = y;
+        previous_rise = rise;
+    }
+    // Gravity alone changes a frame's rise by 3 mm. Raw steps would change it by a whole frame's rise.
+    check(widest_change < 0.008f, "a frame's rise changes no faster than gravity allows");
+}
+
+void test_a_standing_character_stays_clean(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_standing_character_stays_clean\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {0.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    frames.transform.set_dirty(dirty_ids::render_change, false);
+    for(int frame = 0; frame < 60; ++frame)
+    {
+        frames.advance(1.0f / 60.0f);
+    }
+    check(!frames.transform.is_dirty(dirty_ids::render_change), "standing still touches no transform");
+}
+
+void test_a_slow_frame_rate_builds_no_backlog(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_slow_frame_rate_builds_no_backlog\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    // Ten frames a second: more game time per frame than the steps a frame may run catch up.
+    const float frame_seconds = 0.1f;
+    const float start_x = frames.transform.get_position_global().x;
+    float expected = 0.0f;
+    for(int frame = 0; frame < 30; ++frame)
+    {
+        frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
+        expected += walk_speed * frame_seconds;
+        frames.advance(frame_seconds);
+    }
+    check_near(frames.transform.get_position_global().x - start_x,
+               expected,
+               walk_speed * frame_seconds * 2.0f,
+               "the walk keeps up at a slow frame rate");
+}
+
+void test_interpolation_turns_off_cleanly(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_interpolation_turns_off_cleanly\n");
+    sim_fixture fx(ctx, backend);
+    fx.spawn_ground();
+    auto hero = fx.spawn_character("hero", {-12.0f, 1.2f, 0.0f});
+    fx.begin();
+    character_frames frames(fx, hero, 0.02f);
+    frames.settle();
+
+    const float frame_seconds = 1.0f / 60.0f;
+    for(int frame = 0; frame < 30; ++frame)
+    {
+        frames.script_moves({walk_speed * frame_seconds, 0.0f, 0.0f});
+        frames.advance(frame_seconds);
+    }
+    const float truth = frames.cc.get_physics_position().x;
+    frames.cc.set_interpolate(false);
+    frames.advance(frame_seconds);
+    check(frames.transform.get_position_global().x >= truth - 1e-4f, "the transform goes back to the physics position");
+    check_near(frames.cc.get_physics_position().x,
+               frames.transform.get_position_global().x,
+               1e-4f,
+               "and stays there");
+    check(frames.cc.get_motion().queued_move == math::vec3{0.0f}, "no move is left behind");
+}
+
+void test_moves_are_shared_by_time()
+{
+    std::printf("test_moves_are_shared_by_time\n");
+    character_motion motion;
+    motion.queued_move = {1.0f, 0.0f, 0.0f};
+    motion.add_queued_time(0.05f, 1.0f);
+    const math::vec3 first = motion.take_step_move(0.02f);
+    check_near(first.x, 0.4f, 1e-5f, "a step takes its share of the time the moves span");
+    const math::vec3 second = motion.take_step_move(0.02f);
+    check_near(second.x, 0.4f, 1e-5f, "the next step takes the same");
+    const math::vec3 last = motion.take_step_move(0.02f);
+    check_near(last.x, 0.2f, 1e-5f, "the last one takes what is left");
+    check(motion.queued_move == math::vec3{0.0f} && motion.queued_time == 0.0f, "nothing waits any more");
+
+    motion.add_queued_time(0.05f, 1.0f);
+    check(motion.queued_time == 0.0f, "time only counts for moves that wait");
+
+    motion.queued_move = {1.0f, 0.0f, 0.0f};
+    motion.add_queued_time(5.0f, 0.08f);
+    check_near(motion.queued_time, 0.08f, 1e-6f, "the time moves span has a limit");
+}
+
+void run_character_interpolation_tests(rtti::context& ctx, physics_backend_type backend)
+{
+    test_character_travel_is_even(ctx, backend);
+    test_raw_steps_stall(ctx, backend);
+    test_turning_does_not_drag_the_body_back(ctx, backend);
+    test_transform_trails_the_physics_position(ctx, backend);
+    test_a_fixed_update_reads_the_physics_position(ctx, backend);
+    test_walls_stop_the_shown_position(ctx, backend);
+    test_teleports_do_not_smear(ctx, backend);
+    test_a_moving_parent_carries_the_character(ctx, backend);
+    test_a_jump_arc_is_even(ctx, backend);
+    test_a_standing_character_stays_clean(ctx, backend);
+    test_a_slow_frame_rate_builds_no_backlog(ctx, backend);
+    test_interpolation_turns_off_cleanly(ctx, backend);
+}
+
 /**
  * Box3D recomputes the mass from the shape densities when the motion locks turn a fixed
  * rotation on or off. A character-like body (light capsule, rotation frozen) then weighed
@@ -624,6 +1146,11 @@ auto run_box3d_suite(rtti::context& ctx) -> int
     test_kinematic_pushes_dynamic(ctx);
     test_bodies_come_and_go_during_play(ctx);
     test_character_controller(ctx);
+    test_moves_are_shared_by_time();
+    std::printf("character interpolation: Box3D\n");
+    run_character_interpolation_tests(ctx, physics_backend_type::box3d);
+    std::printf("character interpolation: Bullet\n");
+    run_character_interpolation_tests(ctx, physics_backend_type::bullet);
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

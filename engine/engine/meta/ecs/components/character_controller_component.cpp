@@ -111,6 +111,12 @@ REFLECT(character_controller_component)
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.05f},
         })
+        .data<&character_controller_component::set_interpolate, &character_controller_component::get_interpolate>("interpolate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "interpolate"},
+            entt::attribute{"pretty_name", "Interpolate"},
+            entt::attribute{"tooltip", "Places the character between its last two physics steps every frame, so it moves evenly at any frame rate. It trails its physics position by at most one step."},
+        })
         .data<nullptr, &character_controller_component::is_grounded>("is_grounded"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "is_grounded"},
@@ -141,6 +147,7 @@ SAVE(character_controller_component)
     try_save(ar, ser20::make_nvp("exclude_layers", obj.get_collision_exclude_mask()));
     try_save(ar, ser20::make_nvp("terminal_velocity", obj.get_terminal_velocity()));
     try_save(ar, ser20::make_nvp("linear_damping", obj.get_linear_damping()));
+    try_save(ar, ser20::make_nvp("interpolate", obj.get_interpolate()));
 }
 SAVE_INSTANTIATE(character_controller_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(character_controller_component, ser20::oarchive_binary_t);
@@ -202,6 +209,11 @@ LOAD(character_controller_component)
     if(try_load(ar, ser20::make_nvp("linear_damping", linear_damping)))
     {
         obj.set_linear_damping(linear_damping);
+    }
+    bool interpolate{true};
+    if(try_load(ar, ser20::make_nvp("interpolate", interpolate)))
+    {
+        obj.set_interpolate(interpolate);
     }
 }
 

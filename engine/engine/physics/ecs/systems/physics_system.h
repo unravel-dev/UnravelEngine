@@ -14,6 +14,38 @@ namespace unravel
 {
 
 /**
+ * @class fixed_step_runner
+ * @brief Runs the fixed steps a frame's game time pays for and places characters between them.
+ *
+ * A character moves on fixed steps but is seen every frame, and a follow camera reads its transform: left at the last
+ * step's position it stands still for some frames and takes double steps on others. Through the steps its transform
+ * holds where it really is, which is what the backend syncs; afterwards it is placed between the last step's two
+ * positions, by how far game time has come through the next step. A transform found anywhere else was moved by
+ * someone else (a teleport, a warp, a moving parent): it starts over there, and the backend's sync follows it.
+ */
+class fixed_step_runner
+{
+public:
+    /**
+     * @brief Advances by a frame's game time.
+     * @param frame_seconds The frame's game time, greater than 0.
+     * @param step_seconds Length of a fixed step.
+     * @param max_steps The most steps one frame runs; game time beyond what they catch up is dropped.
+     */
+    void advance(rtti::context& ctx, physics_backend& backend, float frame_seconds, float step_seconds, int max_steps);
+
+    /// Forgets the game time not yet stepped.
+    void reset() noexcept;
+
+    /// Whether the fixed update event is running: a move made there belongs to that step alone.
+    auto is_in_fixed_update() const noexcept -> bool;
+
+private:
+    float elapsed_{};
+    bool is_in_fixed_update_{};
+};
+
+/**
  * @class physics_system
  * @brief Owns fixed-step simulation and dispatches work to the compile-time physics backend.
  */
@@ -103,7 +135,7 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     std::unique_ptr<physics_backend> backend_;
-    float elapsed_{};
+    fixed_step_runner step_runner_;
 };
 
 } // namespace unravel

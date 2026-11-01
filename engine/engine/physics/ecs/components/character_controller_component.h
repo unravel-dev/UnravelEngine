@@ -27,11 +27,52 @@ enum class character_controller_property : uint8_t
 };
 
 /**
+ * @struct character_motion
+ * @brief What fixed_step_runner keeps to show a character between fixed steps. Runtime state, not serialized.
+ */
+struct character_motion
+{
+    /// Moves waiting for a fixed step, and the game time they span.
+    math::vec3 queued_move{};
+    float queued_time{};
+    /// Where the last fixed step began and ended. The end is where the character really is.
+    math::vec3 step_start{};
+    math::vec3 step_end{};
+    /// The position last written to the transform. A transform holding anything else was moved by someone else.
+    math::vec3 shown{};
+    bool is_tracked{false};
+
+    /**
+     * @brief Starts over at a position, as if the character had always stood there. Queued moves stay.
+     */
+    void place_at(const math::vec3& position) noexcept;
+
+    /**
+     * @brief Counts a frame's game time for the moves waiting, up to a limit that keeps a slow frame rate from
+     *        building a backlog.
+     */
+    void add_queued_time(float seconds, float max_seconds) noexcept;
+
+    /**
+     * @brief Takes the share of the queued moves one fixed step covers.
+     *
+     * Moves arrive per frame and steps per fixed time: handing a step all that waits gives it one frame's move, then
+     * two, and a character shown between steps speeds up and slows down with them. A share by time gives every step
+     * of a steady walk the same length.
+     */
+    auto take_step_move(float step_seconds) noexcept -> math::vec3;
+};
+
+/**
  * @class character_controller_component
  * @brief Component for character controller physics with sweep-based movement.
  *
  * Uses a capsule shape internally. Movement is performed via move(displacement)
  * rather than forces/impulses. Mutually exclusive with physics_component.
+ *
+ * With interpolation on (the default) the entity's transform is placed between the last two fixed steps every frame,
+ * so it trails the character's physics position by at most one step and moves evenly at any frame rate. During a
+ * fixed step it holds the physics position. Writing the position or warping teleports at once.
  */
 class character_controller_component : public component_crtp<character_controller_component, owned_component>
 {
@@ -80,8 +121,9 @@ public:
     auto get_collision_mask() const -> layer_mask;
 
     /**
-     * @brief Queue a collision-constrained displacement applied once on the next
-     *        physics step. Not re-applied across fixed-step catch-up.
+     * @brief Queue a collision-constrained displacement. Applied once, spread over the
+     *        fixed steps that cover the frames it was queued in; from a fixed update, in
+     *        that step. Not re-applied across fixed-step catch-up.
      */
     void move(const math::vec3& displacement);
 
@@ -124,6 +166,20 @@ public:
     void set_grounded(bool grounded) noexcept;
     void set_velocity_internal(const math::vec3& vel) noexcept;
 
+    /**
+     * @brief Sets whether the transform is placed between fixed steps every frame.
+     */
+    void set_interpolate(bool interpolate) noexcept;
+    auto get_interpolate() const noexcept -> bool;
+
+    /**
+     * @brief Where the last fixed step left the character (entity position, without the center), or where a teleport
+     *        placed it since. The transform trails this while interpolating.
+     */
+    auto get_physics_position() const -> math::vec3;
+
+    auto get_motion() noexcept -> character_motion&;
+
 private:
     void on_change_shape();
 
@@ -143,6 +199,9 @@ private:
 
     math::vec3 velocity_{};
     bool grounded_{false};
+
+    bool interpolate_{true};
+    character_motion motion_{};
 
     using underlying_t = std::underlying_type_t<character_controller_property>;
     std::bitset<static_cast<underlying_t>(character_controller_property::count)> dirty_properties_;

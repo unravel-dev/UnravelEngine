@@ -8,6 +8,13 @@ namespace Unravel.Core
     /// Provides character controller physics functionality for an entity.
     /// Uses a capsule shape internally with sweep-based movement.
     /// </summary>
+    /// <remarks>
+    /// The character moves on fixed physics steps. While <see cref="interpolate"/> is on, its entity's
+    /// <c>transform.position</c> reads and shows a position between the last two steps: it moves evenly at any frame
+    /// rate, carries the camera and whatever hangs under it along, and trails <see cref="physicsPosition"/> by at most
+    /// one step. In OnFixedUpdate the two are the same. Writing <c>transform.position</c> or calling <see cref="Warp"/>
+    /// teleports at once.
+    /// </remarks>
     public class CharacterControllerComponent : Component
     {
         /// <summary>
@@ -126,6 +133,26 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Whether the entity's transform is placed between the last two physics steps every frame, so the character
+        /// moves evenly at any frame rate. On by default. Off, the transform stays at the last step's position and
+        /// each move is handed whole to the next step.
+        /// </summary>
+        public bool interpolate
+        {
+            get { return internal_m2n_cc_get_interpolate(owner); }
+            set { internal_m2n_cc_set_interpolate(owner, value); }
+        }
+
+        /// <summary>
+        /// Where the last physics step left the character, as an entity position (without <see cref="center"/>). While
+        /// <see cref="interpolate"/> is on, <c>transform.position</c> trails this by at most one step.
+        /// </summary>
+        public Vector3 physicsPosition
+        {
+            get { return internal_m2n_cc_get_physics_position(owner); }
+        }
+
+        /// <summary>
         /// Layers that this character should collide with (include filter).
         /// </summary>
         public LayerMask includeLayers
@@ -153,9 +180,10 @@ namespace Unravel.Core
 
         /// <summary>
         /// Moves the character by a displacement vector. The movement is constrained by collisions.
-        /// Displacement is applied once on the next physics step, not repeated
-        /// across fixed-step catch-up. Prefer Move(velocity * Time.deltaTime) from OnUpdate,
-        /// or Move(velocity * Time.fixedDeltaTime) from OnFixedUpdate.
+        /// The displacement is applied once, spread over the physics steps that cover the frames it was
+        /// queued in; from OnFixedUpdate, in that step. It is not repeated across fixed-step catch-up.
+        /// Prefer Move(velocity * Time.deltaTime) from OnUpdate, or Move(velocity * Time.fixedDeltaTime)
+        /// from OnFixedUpdate.
         /// </summary>
         /// <param name="displacement">The world-space displacement to apply.</param>
         public void Move(Vector3 displacement)
@@ -212,6 +240,15 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_cc_warp(Entity eid, Vector3 position);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_cc_get_interpolate(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_cc_set_interpolate(Entity eid, bool interpolate);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_cc_get_physics_position(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_cc_get_is_grounded(Entity eid);

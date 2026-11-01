@@ -1,6 +1,8 @@
 #include "physics_system.h"
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
+#include <engine/ecs/components/basic_component.h>
+#include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/physics/ecs/components/character_controller_component.h>
@@ -14,6 +16,209 @@
 
 namespace unravel
 {
+namespace
+{
+template<typename Function>
+void for_each_active_character(entt::registry& registry, Function&& function)
+{
+    registry.view<transform_component, character_controller_component, active_component>().each(
+        [&](auto /*entity*/, auto& transform, auto& character, auto& /*active*/)
+        {
+            function(transform, character);
+        });
+}
+
+/**
+ * @brief Places a character without it reading as a teleport: the sync flag the backend tests stays as it was, so a
+ *        script's write still reaches the backend and this one never does.
+ */
+void place_character(transform_component& transform, const math::vec3& position)
+{
+    const bool has_pending_sync = transform.is_dirty(dirty_ids::physics);
+    transform.set_position_global(position);
+    transform.set_dirty(dirty_ids::physics, has_pending_sync);
+}
+
+/// Ends interpolation for a character that turned it off, where the character really is.
+void release_character(transform_component& transform, character_controller_component& character, physics_backend& backend)
+{
+    auto& motion = character.get_motion();
+    if(!motion.is_tracked)
+    {
+        return;
+    }
+    if(transform.get_position_global() == motion.shown)
+    {
+        place_character(transform, motion.step_end);
+    }
+    if(motion.queued_move != math::vec3{0.0f})
+    {
+        backend.move_character(character, motion.queued_move);
+    }
+    motion = {};
+}
+
+void begin_character_frame(entt::registry& registry, physics_backend& backend, float frame_seconds, float max_queued_seconds)
+{
+    for_each_active_character(registry,
+                              [&](transform_component& transform, character_controller_component& character)
+                              {
+                                  if(!character.get_interpolate())
+                                  {
+                                      release_character(transform, character, backend);
+                                      return;
+                                  }
+                                  auto& motion = character.get_motion();
+                                  const math::vec3 position = transform.get_position_global();
+                                  if(!motion.is_tracked || position != motion.shown)
+                                  {
+                                      motion.place_at(position);
+                                  }
+                                  motion.add_queued_time(frame_seconds, max_queued_seconds);
+                              });
+}
+
+void put_characters_at_their_steps(entt::registry& registry)
+{
+    for_each_active_character(registry,
+                              [](transform_component& transform, character_controller_component& character)
+                              {
+                                  const auto& motion = character.get_motion();
+                                  if(character.get_interpolate() && motion.is_tracked)
+                                  {
+                                      place_character(transform, motion.step_end);
+                                  }
+                              });
+}
+
+void hand_moves_to_step(entt::registry& registry, physics_backend& backend, float step_seconds)
+{
+    for_each_active_character(registry,
+                              [&](transform_component& /*transform*/, character_controller_component& character)
+                              {
+                                  auto& motion = character.get_motion();
+                                  if(!character.get_interpolate() || !motion.is_tracked)
+                                  {
+                                      return;
+                                  }
+                                  const math::vec3 move = motion.take_step_move(step_seconds);
+                                  if(move != math::vec3{0.0f})
+                                  {
+                                      backend.move_character(character, move);
+                                  }
+                              });
+}
+
+void note_step_start(entt::registry& registry)
+{
+    for_each_active_character(registry,
+                              [](transform_component& transform, character_controller_component& character)
+                              {
+                                  character.get_motion().step_start = transform.get_position_global();
+                              });
+}
+
+void note_step_end(entt::registry& registry)
+{
+    for_each_active_character(registry,
+                              [](transform_component& transform, character_controller_component& character)
+                              {
+                                  character.get_motion().step_end = transform.get_position_global();
+                              });
+}
+
+/// A contact callback that moved a character teleported it: nothing lies between where it was and where it went.
+void adopt_contact_teleports(entt::registry& registry)
+{
+    for_each_active_character(registry,
+                              [](transform_component& transform, character_controller_component& character)
+                              {
+                                  auto& motion = character.get_motion();
+                                  const math::vec3 position = transform.get_position_global();
+                                  if(position != motion.step_end)
+                                  {
+                                      motion.step_start = position;
+                                      motion.step_end = position;
+                                  }
+                              });
+}
+
+void show_characters(entt::registry& registry, float step_fraction)
+{
+    for_each_active_character(registry,
+                              [&](transform_component& transform, character_controller_component& character)
+                              {
+                                  auto& motion = character.get_motion();
+                                  if(!character.get_interpolate() || !motion.is_tracked)
+                                  {
+                                      return;
+                                  }
+                                  place_character(transform, math::mix(motion.step_start, motion.step_end, step_fraction));
+                                  motion.shown = transform.get_position_global();
+                              });
+}
+} // namespace
+
+void fixed_step_runner::advance(rtti::context& ctx,
+                                physics_backend& backend,
+                                float frame_seconds,
+                                float step_seconds,
+                                int max_steps)
+{
+    auto& ev = ctx.get_cached<events>();
+    auto& registry = *ctx.get_cached<ecs>().get_scene().registry;
+
+    elapsed_ += frame_seconds;
+
+    // Clamp leftover to at most one extra fixed step worth after the max burst.
+    const float max_elapsed = step_seconds * static_cast<float>(max_steps + 1);
+
+    begin_character_frame(registry, backend, frame_seconds, max_elapsed);
+    if(elapsed_ >= step_seconds && max_steps > 0)
+    {
+        put_characters_at_their_steps(registry);
+    }
+
+    int steps = 0;
+    while(elapsed_ >= step_seconds && steps < max_steps)
+    {
+        APP_SCOPE_PERF("Physics/Fixed Update");
+        delta_t step_dt(step_seconds);
+        is_in_fixed_update_ = true;
+        ev.on_frame_fixed_update(ctx, step_dt);
+        is_in_fixed_update_ = false;
+
+        hand_moves_to_step(registry, backend, step_seconds);
+        backend.sync_to_physics(ctx, step_dt);
+        note_step_start(registry);
+        backend.simulate(step_dt);
+        backend.sync_from_physics(ctx);
+        note_step_end(registry);
+        backend.dispatch_contacts(ctx);
+        adopt_contact_teleports(registry);
+
+        elapsed_ -= step_seconds;
+        steps++;
+    }
+
+    if(elapsed_ > max_elapsed)
+    {
+        elapsed_ = max_elapsed;
+    }
+
+    show_characters(registry, math::min(elapsed_ / step_seconds, 1.0f));
+}
+
+void fixed_step_runner::reset() noexcept
+{
+    elapsed_ = 0.0f;
+}
+
+auto fixed_step_runner::is_in_fixed_update() const noexcept -> bool
+{
+    return is_in_fixed_update_;
+}
+
 void physics_system::on_create_component(entt::registry& r, entt::entity e)
 {
     physics_component::on_create_component(r, e);
@@ -96,7 +301,12 @@ void physics_system::on_play_begin(rtti::context& ctx)
     auto& registry = *scn.registry;
 
     registry.ctx().emplace<physics_system*>(this);
-    elapsed_ = 0.0f;
+    step_runner_.reset();
+    registry.view<character_controller_component>().each(
+        [](auto /*entity*/, auto& character)
+        {
+            character.get_motion() = {};
+        });
     backend_->on_play_begin(ctx);
 }
 
@@ -105,7 +315,7 @@ void physics_system::on_play_end(rtti::context& ctx)
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     backend_->on_play_end(ctx);
-    elapsed_ = 0.0f;
+    step_runner_.reset();
 
     auto& ec = ctx.get_cached<ecs>();
     auto& scn = ec.get_scene();
@@ -157,33 +367,7 @@ void physics_system::on_frame_update(rtti::context& ctx, const frame_times& time
         max_subs_steps = ss.physics.max_fixed_steps;
     }
 
-    auto& ev = ctx.get_cached<events>();
-
-    elapsed_ += dt.count();
-
-    // Clamp leftover to at most one extra fixed step worth after the max burst.
-    const float max_elapsed = fixed_time_step * static_cast<float>(max_subs_steps + 1);
-
-    int steps = 0;
-    while(elapsed_ >= fixed_time_step && steps < max_subs_steps)
-    {
-        APP_SCOPE_PERF("Physics/Fixed Update");
-        delta_t step_dt(fixed_time_step);
-        ev.on_frame_fixed_update(ctx, step_dt);
-
-        backend_->sync_to_physics(ctx, step_dt);
-        backend_->simulate(step_dt);
-        backend_->sync_from_physics(ctx);
-        backend_->dispatch_contacts(ctx);
-
-        elapsed_ -= fixed_time_step;
-        steps++;
-    }
-
-    if(elapsed_ > max_elapsed)
-    {
-        elapsed_ = max_elapsed;
-    }
+    step_runner_.advance(ctx, *backend_, dt.count(), fixed_time_step, max_subs_steps);
 }
 
 void physics_system::apply_explosion_force(physics_component& comp,
@@ -261,7 +445,12 @@ void physics_system::on_destroy_cc_component(entt::registry& r, entt::entity e)
 void physics_system::move_character(character_controller_component& comp, const math::vec3& displacement)
 {
     auto& ctx = engine::context();
-    if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+    auto& system = ctx.get_cached<physics_system>();
+    if(comp.get_interpolate() && !system.step_runner_.is_in_fixed_update())
+    {
+        comp.get_motion().queued_move += displacement;
+    }
+    else if(auto* backend = system.get_backend())
     {
         backend->move_character(comp, displacement);
     }
@@ -290,6 +479,10 @@ void physics_system::warp_character(character_controller_component& comp, const 
     auto& ctx = engine::context();
     if(auto* backend = ctx.get_cached<physics_system>().get_backend())
     {
+        // Moves queued before a warp were for where the character was.
+        auto& motion = comp.get_motion();
+        motion.queued_move = math::vec3{0.0f};
+        motion.queued_time = 0.0f;
         backend->warp_character(comp, position);
     }
 }

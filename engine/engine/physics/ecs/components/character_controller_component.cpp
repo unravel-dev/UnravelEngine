@@ -1,4 +1,5 @@
 #include "character_controller_component.h"
+#include <engine/ecs/components/transform_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
 
 namespace unravel
@@ -280,6 +281,58 @@ void character_controller_component::on_change_shape()
 {
     dirty_.set();
     set_property_dirty(character_controller_property::shape, true);
+}
+
+void character_controller_component::set_interpolate(bool interpolate) noexcept
+{
+    interpolate_ = interpolate;
+}
+
+auto character_controller_component::get_interpolate() const noexcept -> bool
+{
+    return interpolate_;
+}
+
+auto character_controller_component::get_physics_position() const -> math::vec3
+{
+    const math::vec3 position = get_owner().get<transform_component>().get_position_global();
+    return interpolate_ && motion_.is_tracked && position == motion_.shown ? motion_.step_end : position;
+}
+
+auto character_controller_component::get_motion() noexcept -> character_motion&
+{
+    return motion_;
+}
+
+void character_motion::place_at(const math::vec3& position) noexcept
+{
+    step_start = position;
+    step_end = position;
+    shown = position;
+    is_tracked = true;
+}
+
+void character_motion::add_queued_time(float seconds, float max_seconds) noexcept
+{
+    if(queued_move != math::vec3{0.0f})
+    {
+        queued_time = math::min(queued_time + seconds, max_seconds);
+    }
+}
+
+auto character_motion::take_step_move(float step_seconds) noexcept -> math::vec3
+{
+    if(queued_time <= step_seconds)
+    {
+        const math::vec3 all = queued_move;
+        queued_move = math::vec3{0.0f};
+        queued_time = 0.0f;
+        return all;
+    }
+    const math::vec3 share = queued_move * (step_seconds / queued_time);
+    queued_move -= share;
+    queued_time -= step_seconds;
+    return share;
 }
 
 } // namespace unravel
