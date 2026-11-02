@@ -365,8 +365,7 @@ void deferred::run_upscale_pass(upscale_pass::run_params params, const run_param
     upscale_pass_.run(params);
 }
 
-auto deferred::update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run)
-    -> pre_exposure_state
+void deferred::update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run)
 {
     auto& state = rview.data().get_or_emplace<pre_exposure_state>(pre_exposure_state::view_key);
     state.previous = state.value;
@@ -389,7 +388,6 @@ auto deferred::update_pre_exposure(gfx::render_view& rview, const run_params& pa
     auto_exposure_pass_.update_gpu_pre_exposure(rview, environment_sh, state.value, auto_exposure_active);
     state.gpu_texture = environment_sh->native_handle();
     state.gpu_sampler = pre_exposure_sampler_->native_handle();
-    return state;
 }
 
 void deferred::run_auto_exposure_pass(gfx::render_view& rview,

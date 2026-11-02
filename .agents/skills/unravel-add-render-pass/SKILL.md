@@ -40,8 +40,8 @@ enum pipeline_steps : uint32_t
 **File:** `engine/engine/rendering/pipeline/deferred/pipeline.cpp`
 
 - Add pass function (e.g. `run_my_pass(...)`)
-- Call from `run_pipeline_impl` at correct stage
-- Guard with `(stages & pipeline_steps::my_pass) != 0u`
+- Call from the step of `run_pipeline_impl` it belongs to (`render_geometry`, `render_lighting`, `render_post_processing`, ...)
+- Guard with `(params.pflags & pipeline_steps::my_pass) != 0u`, or a `run_context` accessor beside the others
 - Set `run_params::pflags` at call sites if editor/game need to toggle
 
 ## Step 4: Shaders (if needed)

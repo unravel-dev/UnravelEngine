@@ -341,7 +341,8 @@ public:
     auto run_gi_reflection_pass(gfx::render_view& rview, const gi_run_params& gather_params) -> bool;
 
     /// GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
-    /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections.
+    /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections, which clear RBUFFER
+    /// when they own the view and could not write it.
     /// @return true when the gather produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
     auto run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
@@ -374,10 +375,56 @@ public:
     /// emitters in view simulating (renderer-based culling).
     void gather_instance_sources(scene& scn, const camera& camera, layer_mask render_mask);
 
-    /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
-    auto run_hiz_pass(gfx::render_view& rview, const run_params& params, const usize32_t& viewport_size) -> bool;
+    /// Builds HIZBUFFER for the passes that march it this frame, or drops it when none does.
+    void run_hiz_pass(gfx::render_view& rview, const run_params& params, const usize32_t& viewport_size);
 
 private:
+    /// What one run of the pipeline renders and where (pipeline.cpp).
+    struct run_context;
+    /// The scene a run has lit (pipeline.cpp).
+    struct lit_scene;
+
+    /// A camera run's stats and instanced sources, ahead of its probe captures.
+    void begin_camera_frame(const run_context& run);
+    /// The reflection probes the camera sees that are due: each face is a run of its own, nested in this one.
+    void capture_reflection_probes(const run_context& run);
+    /// Sets the state this run's passes read; after the nested probe captures, which set it for themselves.
+    void begin_run(const run_context& run);
+    /// What the passes read: the shadow maps, the pre-exposure, the GI scene, the render targets and the camera's jitter.
+    void prepare_passes(const run_context& run);
+    /// The visible models into the G-buffer and the velocity buffer, then the screen-space AO over them.
+    void render_geometry(const run_context& run);
+    /// Decides whether this run has a velocity buffer, and asks the models to record their motion for it.
+    void begin_velocity_recording(const run_params& params);
+    /// The reflections ahead of the lighting: the probe layer, then SSR's traced layer over the Hi-Z pyramid it marches.
+    void render_reflection_layers(const run_context& run);
+    /// Resets the state of the reflection buffers for this run and clears RBUFFER for SSR when it traces this view.
+    void begin_traced_reflections(gfx::render_view& rview, const run_params& params);
+    /// Lights the G-buffer: the cloud shadow and the sky's irradiance they read, direct light, GI or SSIL, indirect light.
+    /// @return The light buffer.
+    auto render_lighting(const run_context& run) -> gfx::frame_buffer::ptr;
+    /// Draws what goes over the lit surfaces in @p color: the sky, the fog, the particles and the GI's world views.
+    auto render_sky_fog_and_particles(const run_context& run, gfx::frame_buffer::ptr color) -> lit_scene;
+    /// run_particle_pass when this run draws particles; @return Their TAA reactive coverage, or null.
+    auto render_particles(const run_context& run,
+                          const gfx::frame_buffer::ptr& target,
+                          const fog_pass::shader_params& fog) -> gfx::texture::ptr;
+    /// A camera run's lit scene into its output: post-processing, overlays, the upscale of a scaled run, and the depth
+    /// next frame reads.
+    void finish_camera_image(const run_context& run, const lit_scene& lit);
+    /// TAA, the scene history next frame reads, auto exposure, bloom, the tone curve and FXAA, into @p output.
+    /// @param is_upscaled The output is upscaled afterwards, which adds the film grain and dither instead.
+    void render_post_processing(const run_context& run,
+                                const lit_scene& lit,
+                                const gfx::frame_buffer::ptr& output,
+                                bool is_upscaled);
+    /// What draws over the finished image: the world-space UI, the debug views and the shaders' printed text; then the
+    /// temporal-stability instrument measures it.
+    /// @param color_depth @p color with the scene's depth attached, which the UI tests against.
+    void render_overlays(const run_context& run,
+                         const gfx::frame_buffer::ptr& color,
+                         const gfx::frame_buffer::ptr& color_depth);
+
     struct ref_probe_program : uniforms_cache
     {
         void cache_uniforms()
@@ -1016,7 +1063,7 @@ private:
     math::vec3 clipmap_camera_{};
     bool has_frozen_clipmap_camera_{false};
     /**
-     * @brief This run's pre-exposure, the scene-color scale. Camera runs with HDR
+     * @brief Updates this run's pre-exposure, the scene-color scale. Camera runs with HDR
      * output use the manual exposure (the CPU's share) times the adapted exposure the last frame
      * left on the GPU (the GPU's share, written here, 1 before the first); probe captures and LDR
      * runs render unscaled. The state is kept
@@ -1025,15 +1072,15 @@ private:
      * or reads scene lighting - never held on this object, which serves every view of its
      * camera (probe captures, thumbnails) in turn.
      */
-    auto update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run) -> pre_exposure_state;
+    void update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run);
     /// The s_pre_exposure sampler (pre_exposure.sh), created before every program (GL uniform order contract).
     gfx::program::uniform_ptr pre_exposure_sampler_;
-    /// Whether this run has a reader of the velocity buffer: TAA, GTAO, SSR, SSIL or GI, the velocity
-    /// debug view, or a temporal measurement in progress.
+    /// Whether this run produces the velocity buffer: a camera run with the velocity_pass step and a reader of the
+    /// buffer, which is TAA, GTAO, SSR, SSIL or GI, the velocity debug view, or a temporal measurement in progress.
     auto is_velocity_wanted(const run_params& params) const -> bool;
-    /// Velocity buffer production is active for the CURRENT run (camera run + velocity_pass
-    /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
-    /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
+    /// Velocity buffer production is active for the CURRENT run (is_velocity_wanted). Set per
+    /// run by begin_velocity_recording; also excludes movers from static-mesh batching so
+    /// their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
     /// is_skinned_batching_active() for the CURRENT run, decided once by the G-buffer pass so the velocity pass draws
     /// the skinned models the same way (EQUAL depth test).

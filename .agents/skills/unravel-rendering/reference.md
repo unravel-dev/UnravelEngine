@@ -6,14 +6,16 @@
 rendering_system
   -> deferred::run_pipeline(scene, camera, render_view, dt, run_params, layer_mask)
     -> run_pipeline_impl(output, ...)
-      -> geometry_pass (G-buffer)
-      -> shadow_pass (if flagged)
-      -> reflection_probe (if flagged)
-      -> lighting / deferred resolve
-      -> atmospheric (if flagged)
-      -> post-process volumes (bloom, TAA, SSIL, etc.)
-      -> particles_pass (if flagged)
-      -> tonemapping / FXAA
+      -> capture_reflection_probes (if flagged; each face is a nested run)
+      -> prepare_passes: shadow maps (if flagged), pre-exposure, GI scene, targets, TAA jitter
+      -> render_geometry: G-buffer, velocity, screen-space AO
+      -> render_reflection_layers: probes, Hi-Z, SSR
+      -> render_lighting: cloud shadow, irradiance, direct, GI, SSIL, indirect
+      -> render_sky_fog_and_particles: sky (if flagged), fog, particles (if flagged)
+      -> finish_camera_image (camera runs; a probe face is blitted instead):
+           render_post_processing: TAA, exposure, bloom, tonemapping, FXAA
+           render_overlays: UI, debug views, shader print
+           upscale (scaled runs), PREV_DEPTH snapshot
 ```
 
 ## Key shader directories

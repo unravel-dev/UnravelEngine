@@ -191,6 +191,10 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
 
 auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
+    if(rparams.run_type != pipeline_run_type::camera)
+    {
+        return false;
+    }
     gfx::texture::ptr result;
     gi_settings gi;
     if(resolve_gi_settings(rparams, gi))
@@ -210,6 +214,11 @@ auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const 
         if(result && params.has_traced_reflections)
         {
             gi_reflections_written_ = run_gi_reflection_pass(rview, params);
+        }
+        // SSR stepped aside for them, so RBUFFER falls back to the traced clear.
+        if(params.has_traced_reflections && !gi_reflections_written_)
+        {
+            clear_traced_reflections(rview);
         }
     }
     else

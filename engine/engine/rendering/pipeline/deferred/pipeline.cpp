@@ -269,6 +269,47 @@ auto acquire_scene_output(gfx::render_view& rview,
     rview.tex_remove("OUTPUT_DEPTH");
     return {color, color_depth, {}};
 }
+
+/// The targets a run's passes share, at the size it renders at.
+void create_or_resize_render_targets(gfx::render_view& rview,
+                                     const usize32_t& render_size,
+                                     const pipeline::run_params& params)
+{
+    create_or_resize_d_buffer(rview, render_size, params);
+    create_or_resize_g_buffer(rview, render_size, params);
+    create_or_resize_l_buffer(rview, render_size, params);
+    create_or_resize_reflection_buffers(rview, render_size, params);
+}
+
+/// What resamples a scaled run's finished scene into its output.
+auto make_upscale_params(const gfx::render_view& rview, const scene_output& scene, const gfx::frame_buffer::ptr& output)
+    -> upscale_pass::run_params
+{
+    upscale_pass::run_params upscale;
+    upscale.input = scene.color;
+    upscale.output = output;
+    upscale.output_depth = scene.output_depth;
+    upscale.input_depth = rview.tex_find("DEPTH");
+    return upscale;
+}
+
+/// Whether a camera run's next frame reads its scene history (PREV_SCENE_HDR): SSR's trace and the GI's far field do.
+auto has_scene_history_reader(const pipeline::run_params& params) -> bool
+{
+    const bool has_ssr = reflection_screen_stack_enabled(params) && params.fill_ssr_params;
+    return has_ssr || params.fill_gi_params;
+}
+
+/**
+ * @brief Whether a camera run's next frame reads its depth (PREV_DEPTH), as the resources it finished with tell.
+ *
+ * The passes that march Hi-Z read it. So do the GI and GTAO, whose temporal accumulations reproject against it and treat
+ * a missing one as "no history", and TAA, whose disocclusion test compares the reprojected depth against it.
+ */
+auto has_prev_depth_reader(const gfx::render_view& rview, const pipeline::run_params& params) -> bool
+{
+    return rview.tex_find("HIZBUFFER") || rview.tex_find("GI_RESOLVE") || rview.tex_find("GTAO") || params.fill_taa_params;
+}
 } // namespace
 
 auto deferred::run_pipeline(scene& scn,
@@ -317,6 +358,50 @@ void deferred::set_debug_view_scale(float scale)
     debug_view_scale_ = scale > 0.0f ? scale : 1.0f;
 }
 
+/// What one run of the pipeline renders and where, which every step of run_pipeline_impl reads.
+struct deferred::run_context
+{
+    const gfx::frame_buffer::ptr& output;
+    scene& scn;
+    const camera& cam;
+    gfx::render_view& rview;
+    delta_t dt;
+    const run_params& params;
+    layer_mask render_mask;
+    /// The size the scene renders at. The camera's viewport keeps the output's size, which the screen helpers, the UI
+    /// and the picking work in.
+    usize32_t render_size;
+
+    auto is_camera_run() const -> bool
+    {
+        return params.run_type == pipeline_run_type::camera;
+    }
+    auto has_shadow_maps() const -> bool
+    {
+        return (params.pflags & pipeline_steps::shadow_pass) != 0u;
+    }
+    auto has_reflection_probes() const -> bool
+    {
+        return (params.pflags & pipeline_steps::reflection_probe) != 0u;
+    }
+    auto has_sky() const -> bool
+    {
+        return (params.pflags & pipeline_steps::atmospheric) != 0u;
+    }
+    auto has_particles() const -> bool
+    {
+        return (params.pflags & pipeline_steps::particles_pass) != 0u;
+    }
+};
+
+/// The scene a run has lit, which its last steps read.
+struct deferred::lit_scene
+{
+    gfx::frame_buffer::ptr color;
+    /// The particles' TAA reactive coverage (run_particle_pass), or null.
+    gfx::texture::ptr particle_reactive;
+};
+
 void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  scene& scn,
                                  const camera& camera,
@@ -326,222 +411,228 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Run Pipeline");
-
-    const pipeline_flags stages = params.pflags;
-    const bool is_camera_run = params.run_type == pipeline_run_type::camera;
-    const bool is_probe_capture = params.run_type == pipeline_run_type::reflection_probe_capture;
-
-    if(is_camera_run)
+    const usize32_t render_size = get_run_render_size(camera.get_viewport_size(), params);
+    const run_context run{output, scn, camera, rview, dt, params, render_mask, render_size};
+    begin_camera_frame(run);
+    capture_reflection_probes(run);
+    begin_run(run);
+    prepare_passes(run);
+    render_geometry(run);
+    render_reflection_layers(run);
+    const gfx::frame_buffer::ptr lighting = render_lighting(run);
+    const lit_scene lit = render_sky_fog_and_particles(run, lighting);
+    if(run.is_camera_run())
     {
-        stats_ = {};
+        finish_camera_image(run, lit);
     }
+    else
+    {
+        blit_to_output(rview, lit.color, output);
+    }
+    finish_run_batches();
+}
 
-    gfx::frame_buffer::ptr target = nullptr;
-
-    const bool build_shadowmaps = (stages & pipeline_steps::shadow_pass) != 0u;
-    const bool build_reflection_probes = (stages & pipeline_steps::reflection_probe) != 0u;
-
+void deferred::begin_camera_frame(const run_context& run)
+{
+    if(!run.is_camera_run())
+    {
+        return;
+    }
+    stats_ = {};
     // Before the probe captures: they are the frame's first views of the local lights, whose shadow maps every later
     // view reuses, so they render them with the camera's instanced casters too.
-    if(is_camera_run)
-    {
-        gather_instance_sources(scn, camera, render_mask);
-    }
+    gather_instance_sources(run.scn, run.cam, run.render_mask);
+}
 
-    if(build_reflection_probes)
+void deferred::capture_reflection_probes(const run_context& run)
+{
+    if(run.has_reflection_probes())
     {
-        build_reflections(scn, camera, dt, params.limits);
+        build_reflections(run.scn, run.cam, run.dt, run.params.limits);
     }
+}
 
-    is_camera_run_ = is_camera_run;
-    render_mask_ = render_mask;
-    run_scene_ = &scn;
+void deferred::begin_run(const run_context& run)
+{
+    is_camera_run_ = run.is_camera_run();
+    render_mask_ = run.render_mask;
+    run_scene_ = &run.scn;
     camera_cut_ = hpp::nullopt;
+}
 
-    if(build_shadowmaps)
+void deferred::prepare_passes(const run_context& run)
+{
+    if(run.has_shadow_maps())
     {
-        build_shadows(scn, camera, dt, params.limits, render_mask);
+        build_shadows(run.scn, run.cam, run.dt, run.params.limits, run.render_mask);
     }
-
-    // Before any pass writes or reads scene lighting (the nested probe captures above rendered
-    // with their own unit pre-exposure). Stored in the render view; the passes read it back.
-    const pre_exposure_state pre_exposure = update_pre_exposure(rview, params, is_camera_run);
-
+    // Before any pass writes or reads scene lighting (the nested probe captures rendered with their own unit
+    // pre-exposure). Stored in the render view; the passes read it back.
+    update_pre_exposure(run.rview, run.params, run.is_camera_run());
     // The GI scene: instance residency and this view's global distance field (gating rationale at the definition).
-    run_gi_scene_passes(scn, camera, rview, params);
+    run_gi_scene_passes(run.scn, run.cam, run.rview, run.params);
+    create_or_resize_render_targets(run.rview, run.render_size, run.params);
+    apply_pipeline_taa_jitter_to_camera(run.cam, run.render_size, run.params);
+}
 
-    // The scene renders at the render size; the camera's viewport keeps the output's size, which the screen
-    // helpers, the UI and the picking work in.
-    const auto& viewport_size = camera.get_viewport_size();
-    const usize32_t render_size = get_run_render_size(viewport_size, params);
-    create_or_resize_d_buffer(rview, render_size, params);
-    create_or_resize_g_buffer(rview, render_size, params);
-    create_or_resize_l_buffer(rview, render_size, params);
-    create_or_resize_reflection_buffers(rview, render_size, params);
+void deferred::render_geometry(const run_context& run)
+{
+    begin_velocity_recording(run.params);
+    const auto visibility_set = collect_visible_models(run.scn, run.cam, run.params, run.render_mask, run.dt);
+    run_g_buffer_pass(visibility_set, run.cam, run.rview, run.params.limits, run.dt);
+    run_velocity_pass(visibility_set, run.cam, run.rview, run.render_size);
+    run_screen_ao_pass(run.cam, run.rview, run.dt, run.params);
+}
 
-    apply_pipeline_taa_jitter_to_camera(camera, render_size, params);
-
-    // Velocity buffer production: camera runs that have a reader (is_velocity_wanted). It is two
-    // passes at the render size, so a run without temporal effects skips it. The velocity_pass step
-    // bit stays the opt-out lever: probe captures build pflags from 0 and never set it, and a
-    // custom caller can clear it. Consumers receive the texture EXPLICITLY through their run
-    // params (this pipeline is the only place that fetches "VELOCITY" from the render view); a
-    // valid texture IS their enable - null falls back to their matrix reprojection. Also excludes
-    // movers from static-mesh batching below so their G-buffer raster matches the velocity pass
-    // for the EQUAL depth test.
-    velocity_run_active_ =
-        is_camera_run && (stages & pipeline_steps::velocity_pass) != 0u && is_velocity_wanted(params);
+void deferred::begin_velocity_recording(const run_params& params)
+{
+    // The velocity buffer is two passes at the render size, so a run without a reader skips it. Consumers receive the
+    // texture EXPLICITLY through their run params (this pipeline is the only place that fetches "VELOCITY" from the
+    // render view); a valid texture IS their enable - null falls back to their matrix reprojection. Also excludes movers
+    // from static-mesh batching so their G-buffer raster matches the velocity pass for the EQUAL depth test.
+    velocity_run_active_ = is_velocity_wanted(params);
     if(velocity_run_active_)
     {
         model_component::request_velocity_recording(gfx::get_render_frame());
     }
+}
 
-    const auto visibility_set = collect_visible_models(scn, camera, params, render_mask, dt);
-
-    run_g_buffer_pass(visibility_set, camera, rview, params.limits, dt);
-
-    run_velocity_pass(visibility_set, camera, rview, render_size);
-
-    run_screen_ao_pass(camera, rview, dt, params);
-
-    // SSR composites into RBUFFER from the traced clear. The GI reflections write every pixel of it
-    // when they run, and without a traced layer the indirect pass reads the clear value from a
-    // constant texture (get_traced_reflection_layer), so only SSR needs the clear.
-    const bool gi_owns_reflections = is_camera_run && gi_reflections_own_view(params);
-    gi_reflections_written_ = false;
-    traced_reflections_cleared_ = false;
-    if(build_reflection_probes && is_ssr_wanted(params))
-    {
-        clear_traced_reflections(rview);
-    }
-    run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, gi_owns_reflections, dt);
-
-    const bool hiz_active = run_hiz_pass(rview, params, render_size);
-
+void deferred::render_reflection_layers(const run_context& run)
+{
+    begin_traced_reflections(run.rview, run.params);
+    run_reflection_probe_pass(run.scn,
+                              run.cam,
+                              run.rview,
+                              run.has_reflection_probes(),
+                              gi_reflections_own_view(run.params),
+                              run.dt);
+    run_hiz_pass(run.rview, run.params, run.render_size);
     // SSR samples last frame's PREV_SCENE_HDR snapshot (post-TAA, scene-referred linear).
     // It must NOT sample the final OBUFFER: that image is tonemapped, sRGB-encoded and has
     // UI composited on it -- display-referred values injected into linear lighting, which
     // auto exposure then meters and re-amplifies (runaway brightening in dark scenes).
-    run_ssr_pass(camera, rview, params);
+    run_ssr_pass(run.cam, run.rview, run.params);
+}
 
-    // Cloud shadow map before any lighting: the directional light and the irradiance bake
-    // read it.
-    run_cloud_shadow_pass(scn, camera, rview, params.limits);
-
-    // The sky's irradiance SH, before GI: the radiance cache, the screen probes and the card radiosity read this
-    // frame's sky on their misses (a view's first frame included), and the indirect pass composites it.
-    const irradiance_pass_result irradiance = run_irradiance_pass(scn, rview, params.limits);
-
-    // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
-    target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, params.limits, dt);
-
-    // GI: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
-    // frame's light buffer is populated, and before the indirect pass, which composites the results.
-    bool gi_active = false;
-    if(is_camera_run)
-    {
-        gi_active = run_gi_pass(camera, rview, params);
-    }
-    if(build_reflection_probes && gi_owns_reflections && !gi_reflections_written_)
+void deferred::begin_traced_reflections(gfx::render_view& rview, const run_params& params)
+{
+    gi_reflections_written_ = false;
+    traced_reflections_cleared_ = false;
+    // SSR composites into RBUFFER from the traced clear. The GI reflections write every pixel of it
+    // when they run, and without a traced layer the indirect pass reads the clear value from a
+    // constant texture (get_traced_reflection_layer), so only SSR needs the clear.
+    if(is_ssr_wanted(params))
     {
         clear_traced_reflections(rview);
     }
+}
 
-    // SSIL pass
-    run_ssil_pass(camera, rview, params, gi_active);
-
+auto deferred::render_lighting(const run_context& run) -> gfx::frame_buffer::ptr
+{
+    const feature_limits& limits = run.params.limits;
+    // Cloud shadow map before any lighting: the directional light and the irradiance bake read it.
+    run_cloud_shadow_pass(run.scn, run.cam, run.rview, limits);
+    // The sky's irradiance SH, before GI: the radiance cache, the screen probes and the card radiosity read this
+    // frame's sky on their misses (a view's first frame included), and the indirect pass composites it.
+    const irradiance_pass_result irradiance = run_irradiance_pass(run.scn, run.rview, limits);
+    // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
+    run_direct_lighting_pass(run.scn, run.cam, run.rview, run.has_shadow_maps(), limits, run.dt);
+    // GI: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
+    // frame's light buffer is populated, and before the indirect pass, which composites the results.
+    const bool gi_active = run_gi_pass(run.cam, run.rview, run.params);
+    run_ssil_pass(run.cam, run.rview, run.params, gi_active);
     // Indirect lighting after SSIL so it can use the result.
-    target = run_indirect_lighting_pass(camera, rview, irradiance, build_reflection_probes, params.limits, dt);
+    return run_indirect_lighting_pass(run.cam, run.rview, irradiance, run.has_reflection_probes(), limits, run.dt);
+}
 
-    if(stages & pipeline_steps::atmospheric)
+auto deferred::render_sky_fog_and_particles(const run_context& run, gfx::frame_buffer::ptr color) -> lit_scene
+{
+    if(run.has_sky())
     {
-        target = run_atmospherics_pass(target, scn, camera, rview, params.limits);
+        color = run_atmospherics_pass(color, run.scn, run.cam, run.rview, run.params.limits);
     }
-
     // Over the sky and the clouds; the particles drawn next fog themselves with the same fog.
-    const fog_pass::shader_params fog = run_fog_pass(scn, camera, rview, target, params, build_shadowmaps);
-
-    gfx::texture::ptr particle_reactive;
-    if(stages & pipeline_steps::particles_pass)
+    const fog_pass::shader_params fog = run_fog_pass(run.scn, run.cam, run.rview, color, run.params, run.has_shadow_maps());
+    gfx::texture::ptr particle_reactive = render_particles(run, color, fog);
+    if(run.is_camera_run())
     {
-        const gfx::texture::ptr hiz_depth = hiz_active ? rview.tex_find("HIZBUFFER") : gfx::texture::ptr{};
-        const bool wants_reactive = static_cast<bool>(params.fill_taa_params);
-        particle_reactive =
-            run_particle_pass(scn, camera, rview, target, pre_exposure, hiz_depth, build_shadowmaps, wants_reactive, dt, fog, params.limits, render_mask);
-    }
-
-    if(is_camera_run)
-    {
-        run_gi_visualize_scene_color(camera, rview, pre_exposure);
+        run_gi_visualize_scene_color(run.cam, run.rview, get_pre_exposure(run.rview));
         release_gi_visualize_card_generation();
     }
+    return {std::move(color), std::move(particle_reactive)};
+}
 
-    if(is_probe_capture)
+auto deferred::render_particles(const run_context& run,
+                                const gfx::frame_buffer::ptr& target,
+                                const fog_pass::shader_params& fog) -> gfx::texture::ptr
+{
+    if(!run.has_particles())
     {
-        blit_to_output(rview, target, output);
-        finish_run_batches();
-        return;
+        return {};
     }
+    const gfx::texture::ptr hiz_depth = run.rview.tex_find("HIZBUFFER");
+    const bool wants_reactive = static_cast<bool>(run.params.fill_taa_params);
+    return run_particle_pass(run.scn,
+                             run.cam,
+                             run.rview,
+                             target,
+                             get_pre_exposure(run.rview),
+                             hiz_depth,
+                             run.has_shadow_maps(),
+                             wants_reactive,
+                             run.dt,
+                             fog,
+                             run.params.limits,
+                             run.render_mask);
+}
 
-    const auto scene = acquire_scene_output(rview, output, viewport_size, render_size, params.needs_output_depth);
+void deferred::finish_camera_image(const run_context& run, const lit_scene& lit)
+{
+    const scene_output scene = acquire_scene_output(run.rview,
+                                                    run.output,
+                                                    run.cam.get_viewport_size(),
+                                                    run.render_size,
+                                                    run.params.needs_output_depth);
+    const bool is_upscaled = scene.color != run.output;
+    render_post_processing(run, lit, scene.color, is_upscaled);
+    render_overlays(run, scene.color, scene.color_depth);
+    if(is_upscaled)
+    {
+        run_upscale_pass(make_upscale_params(run.rview, scene, run.output), run.params);
+    }
+    // After every pass that samples PREV_DEPTH.
+    snapshot_prev_depth(run.rview, run.render_size, has_prev_depth_reader(run.rview, run.params));
+}
 
-    target = run_taa_pass(camera, rview, target, params, particle_reactive);
-
+void deferred::render_post_processing(const run_context& run,
+                                      const lit_scene& lit,
+                                      const gfx::frame_buffer::ptr& output,
+                                      bool is_upscaled)
+{
+    const gfx::frame_buffer::ptr resolved = run_taa_pass(run.cam, run.rview, lit.color, run.params, lit.particle_reactive);
     // Scene-referred history for next frame's SSR trace and GI far-field. Taken after TAA
     // (temporally stable) and before bloom/tonemap/UI (still linear HDR, no display encode,
     // no interface pixels). Only kept while a consumer exists.
-    const bool wants_scene_history =
-        is_camera_run &&
-        ((reflection_screen_stack_enabled(params) && params.fill_ssr_params) || params.fill_gi_params);
-    snapshot_prev_scene_color(rview, target, camera, wants_scene_history);
-
-    run_auto_exposure_pass(rview, camera, target, params, dt);
-
+    snapshot_prev_scene_color(run.rview, resolved, run.cam, has_scene_history_reader(run.params));
+    run_auto_exposure_pass(run.rview, run.cam, resolved, run.params, run.dt);
     // The tonemapper adds the bloom on top of the scene the exposure pass metered, which local exposure measures.
-    const bloom_pass::composite bloom = run_bloom_pass(rview, target, params);
+    const bloom_pass::composite bloom = run_bloom_pass(run.rview, resolved, run.params);
+    const gfx::frame_buffer::ptr tonemapped = run_tonemapping_pass(run.rview, resolved, bloom, output, run.params, is_upscaled);
+    run_fxaa_pass(run.rview, tonemapped, output, run.params, is_upscaled);
+}
 
-    const bool is_upscaled = scene.color != output;
-    target = run_tonemapping_pass(rview, target, bloom, scene.color, params, is_upscaled);
-
-    run_fxaa_pass(rview, target, scene.color, params, is_upscaled);
-
-    if(is_camera_run)
-    {
-        run_ui_pass(scn, camera, rview, scene.color_depth);
-        run_debug_passes(camera, rview, scene.color, params);
-        // Whatever shaders printed this frame (nothing to draw unless one did).
-        shader_print_.draw(scene.color);
-        // The temporal-stability instrument measures the finished image (the lit frame or the active
-        // debug view, before the editor draws its overlays) and must read LAST frame's depth, so it
-        // runs before the depth snapshot below.
-        run_temporal_probe_pass(camera, rview, scene.color);
-    }
-
-    if(is_upscaled)
-    {
-        upscale_pass::run_params upscale;
-        upscale.input = scene.color;
-        upscale.output = output;
-        upscale.output_depth = scene.output_depth;
-        upscale.input_depth = rview.tex_find("DEPTH");
-        run_upscale_pass(std::move(upscale), params);
-    }
-
-    // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
-    //
-    // The GI is a second, independent consumer: its temporal accumulation validates
-    // reprojected history against this depth and treats a missing one as "no history", so the
-    // snapshot cannot be gated on the Hi-Z stack alone.
-    // TAA is a third consumer: its disocclusion test compares the reprojected
-    // expected depth against this snapshot (a null snapshot degrades the test to a
-    // same-frame approximation on frame 0 only).
-    const bool taa_active = static_cast<bool>(params.fill_taa_params);
-    // GTAO is a fourth consumer: its temporal accumulation reprojects against this depth and
-    // treats a missing one as "no history" (raw per-frame noise).
-    const bool gtao_active = static_cast<bool>(rview.tex_find("GTAO"));
-    snapshot_prev_depth(rview, render_size, hiz_active || gi_active || taa_active || gtao_active);
-
-    finish_run_batches();
+void deferred::render_overlays(const run_context& run,
+                               const gfx::frame_buffer::ptr& color,
+                               const gfx::frame_buffer::ptr& color_depth)
+{
+    run_ui_pass(run.scn, run.cam, run.rview, color_depth);
+    run_debug_passes(run.cam, run.rview, color, run.params);
+    // Whatever shaders printed this frame (nothing to draw unless one did).
+    shader_print_.draw(color);
+    // The temporal-stability instrument measures the finished image (the lit frame or the active
+    // debug view, before the editor draws its overlays) and must read LAST frame's depth, so it
+    // runs before the depth snapshot.
+    run_temporal_probe_pass(run.cam, run.rview, color);
 }
 
 void deferred::finish_run_batches()

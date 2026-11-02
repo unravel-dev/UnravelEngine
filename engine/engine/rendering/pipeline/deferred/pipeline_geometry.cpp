@@ -757,6 +757,13 @@ void deferred::submit_source_runs(gfx::render_pass& pass, const camera& camera)
 
 auto deferred::is_velocity_wanted(const run_params& params) const -> bool
 {
+    // The step bit is the opt-out lever: probe captures build pflags from 0 and never set it, and a custom caller can
+    // clear it.
+    const bool is_camera_run = params.run_type == pipeline_run_type::camera;
+    if(!is_camera_run || (params.pflags & pipeline_steps::velocity_pass) == 0u)
+    {
+        return false;
+    }
     const bool has_temporal_effect = params.fill_taa_params || params.fill_gtao_params || params.fill_ssr_params ||
                                      params.fill_ssil_params || params.fill_gi_params;
     return has_temporal_effect || debug_pass_ == debug_pass_velocity || temporal_probe_pass_.is_busy();
@@ -1059,7 +1066,7 @@ void deferred::submit_source_velocity_runs(gfx::render_pass& pass, const math::t
     }
 }
 
-auto deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, const usize32_t& viewport_size) -> bool
+void deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, const usize32_t& viewport_size)
 {
     // The GI's screen traces march this same pyramid, so GI with screen traces on is a producer
     // condition of its own, whether or not the screen-space reflection stack runs.
@@ -1079,7 +1086,7 @@ auto deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, c
         // runs before them, so dropping it here would destroy the next consumer's input before
         // it runs. Its lifetime belongs to the one place that decides whether to produce it,
         // at the end of the frame.
-        return false;
+        return;
     }
 
     create_or_resize_hiz_buffer(rview, viewport_size);
@@ -1089,7 +1096,7 @@ auto deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, c
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     if(!gbuffer)
     {
-        return false;
+        return;
     }
 
     hiz_pass::run_params hp;
@@ -1097,7 +1104,6 @@ auto deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, c
     hp.output_hiz = rview.tex_get("HIZBUFFER");
 
     hiz_pass_.run(rview, hp);
-    return true;
 }
 
 } // namespace rendering
