@@ -23,6 +23,7 @@
  *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
  *     lines, which are the game's or the device system's and the engine lines' text, the player template's
  *     stamp checks, Gradle's command line, the start command with the game's options;
+ *   - the desktop player's stamp checks; text files written byte for byte, or a throw;
  *   - Windows executables: version numbers from version text, the icon group and version resources byte by
  *     byte, icon images per size, and on Windows a copied executable's icon and version replaced and read
  *     back as Windows reads them; the window icon file written beside executables that carry no icon;
@@ -778,6 +779,38 @@ void test_android_template(const fs::path& root)
     write_text(root / "template/symbols/arm64-v8a/libmain.so.sym", "elf");
     fs::remove(root / "template/lib/arm64-v8a/libmain.so", ec);
     check(!deployment::find_android_template(root / "template", "v1", "Release").is_found(), "an incomplete template is refused");
+}
+
+void test_player_version(const fs::path& root)
+{
+    std::printf("test_player_version\n");
+    const auto player = root / "unravel-player.exe";
+    check(!deployment::get_player_version_problem(player, "v1").empty(), "a player without a stamp is refused");
+    write_text(root / "unravel-player.exe.stamp", "engine_version=v1\n");
+    check(deployment::get_player_version_problem(player, "v1").empty(), "a player of the editor's version ships");
+    check(deployment::get_player_version_problem(player, "v2").find("v1") != std::string::npos,
+          "a player of another version is refused, naming its version");
+}
+
+void test_write_text(const fs::path& root)
+{
+    std::printf("test_write_text\n");
+    fs::error_code ec;
+    fs::create_directories(root, ec);
+    const auto file = root / "text.txt";
+    deployment::write_text_or_throw(file, "longer text\n");
+    deployment::write_text_or_throw(file, "a\nb\n");
+    check(read_text(file) == "a\nb\n", "the text replaces the file byte for byte");
+    bool has_thrown = false;
+    try
+    {
+        deployment::write_text_or_throw(root, "a folder cannot take text");
+    }
+    catch(const std::runtime_error&)
+    {
+        has_thrown = true;
+    }
+    check(has_thrown, "a file that cannot be written throws");
 }
 
 auto contains_argument(const std::vector<std::string>& arguments, const std::string& argument) -> bool
@@ -1731,6 +1764,8 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_merged_devices();
         test_wireless_debugging_services();
         test_android_template(temp / "android");
+        test_player_version(temp / "player");
+        test_write_text(temp / "write_text");
         test_gradle_arguments();
         test_android_permissions();
         test_android_icon(temp / "icon");

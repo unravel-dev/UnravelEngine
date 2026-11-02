@@ -28,6 +28,16 @@ endif()
 unravel_set_default_thread_stack(${target_name})
 add_definitions(-DPLAYER_NAME="unravel-player")
 
+# The deploy ships this player with notices naming the editor's engine version, and refuses it when the two differ.
+# Written when the player links, so building the editor alone leaves the older version here.
+if(NOT ANDROID)
+    set(player_stamp ${CMAKE_CURRENT_BINARY_DIR}/player.stamp)
+    file(GENERATE OUTPUT ${player_stamp} CONTENT "engine_version=${GIT_VERSION}\n")
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${player_stamp} $<TARGET_FILE:${target_name}>.stamp
+        VERBATIM)
+endif()
+
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

@@ -1,4 +1,5 @@
 #include "android.h"
+#include "files.h"
 #include "folders.h"
 #include "run_arguments.h"
 
@@ -6,7 +7,6 @@
 #include <array>
 #include <cctype>
 #include <cstdlib>
-#include <fstream>
 #include <map>
 #include <sstream>
 
@@ -72,26 +72,6 @@ constexpr const char* SDL_TAG_PREFIX = "SDL";
 /// The tag of Java's uncaught exceptions.
 constexpr const char* JAVA_CRASH_TAG = "AndroidRuntime";
 constexpr char FATAL_LEVEL = 'F';
-
-auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>
-{
-    std::map<std::string, std::string> values;
-    std::ifstream stream(file);
-    std::string line;
-    while(std::getline(stream, line))
-    {
-        if(!line.empty() && line.back() == '\r')
-        {
-            line.pop_back();
-        }
-        const auto separator = line.find('=');
-        if(separator != std::string::npos)
-        {
-            values[line.substr(0, separator)] = line.substr(separator + 1);
-        }
-    }
-    return values;
-}
 
 auto is_present(const fs::path& path) -> bool
 {

@@ -3,6 +3,7 @@
 #include "deploy_runtime.h"
 #include "deploy_steam.h"
 
+#include <deploy/files.h>
 #include <deploy/folders.h>
 #include <deploy/keys.h>
 #include <deploy/releases.h>
@@ -10,6 +11,7 @@
 #include <editor/system/project_manager.h>
 #include <engine/play_mode.h>
 #include <engine/scripting/ecs/systems/script_system.h>
+#include <version/version.h>
 
 namespace unravel::deployment
 {
@@ -162,6 +164,11 @@ auto get_pending_compile_reason(rtti::context& ctx) -> std::string
     return {};
 }
 
+auto get_player_file() -> fs::path
+{
+    return fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
+}
+
 auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
 {
     std::vector<std::string> problems;
@@ -197,6 +204,10 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     else
     {
         add_problem(problems, get_runtime_problem());
+        if(params.deploy_dependencies)
+        {
+            add_problem(problems, get_player_version_problem(get_player_file(), version::get_full()));
+        }
         // An Android package carries every pack whole, so only desktop deploys patch.
         add_problem(problems, get_patch_problem(params));
         add_problem(problems, get_desktop_icon_problem(params));

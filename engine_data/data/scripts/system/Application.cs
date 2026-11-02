@@ -34,6 +34,18 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// The license notices of everything the game ships with: the engine, its libraries and its
+        /// fonts. Some of these licenses ask that players can read them, so show this text on a credits
+        /// or licenses screen, above all on Android, where players cannot open the game's files. Deploy
+        /// also writes it beside the game on desktop as THIRD_PARTY_NOTICES.txt. Your own game's assets
+        /// and libraries are not in it.
+        /// </summary>
+        public static string thirdPartyNotices
+        {
+            get => internal_m2n_application_get_third_party_notices();
+        }
+
+        /// <summary>
         /// The most frames per second the game runs at; 0 when there is no cap, as on a first start.
         /// Setting 0 or less removes the cap. With <see cref="Screen.vSync"/> on, the display's refresh
         /// rate limits the frames too, so a cap above it changes nothing. Unless
@@ -85,6 +97,9 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern string internal_m2n_application_get_temporary_cache_path();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern string internal_m2n_application_get_third_party_notices();
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern int internal_m2n_application_get_target_frame_rate();

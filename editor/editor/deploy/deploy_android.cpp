@@ -119,16 +119,6 @@ void update_gradle_project(const fs::path& source, const fs::path& destination)
     }
 }
 
-void write_text_or_throw(const fs::path& file, const std::string& text)
-{
-    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
-    stream << text;
-    if(!stream.good())
-    {
-        throw std::runtime_error(fmt::format("Writing {} failed.", file.generic_string()));
-    }
-}
-
 void copy_built_file_or_throw(const fs::path& built, const fs::path& destination)
 {
     fs::error_code ec;

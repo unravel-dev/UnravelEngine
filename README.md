@@ -172,6 +172,15 @@ Please keep pull requests focused and follow the style of the surrounding code.
 [yaml-cpp](https://github.com/jbeder/yaml-cpp),
 [zstd](https://github.com/facebook/zstd)
 
+[THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) holds the licenses of everything a game ships with. The engine
+compiles it in: Deploy writes it beside the game, and scripts read it from `Application.thirdPartyNotices` for a
+credits screen. Add new dependencies to it.
+
+OpenAL Soft and, on Android, Linux, macOS and in MinGW builds, libdwarf are under the LGPL and linked statically. The
+notices name their source and the engine version, so players can relink a game's player from the public engine; ship
+from a commit that is public.
+A closed fork of the engine must give its players what they need to relink it some other way.
+
 ## License
 
 Unravel Engine is released under the [MIT License](LICENSE.txt).

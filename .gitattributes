@@ -4,6 +4,9 @@
 # Patches apply to checkouts with LF line endings: they keep LF on every platform
 *.patch text eol=lf
 
+# Compiled into the engine byte for byte: every platform's players carry the same text with line feeds
+THIRD_PARTY_NOTICES.txt text eol=lf
+
 # Custom for Visual Studio
 *.cs     diff=csharp
 

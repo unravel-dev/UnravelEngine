@@ -10,6 +10,7 @@
 #include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/renderer.h>
 #include <engine/settings/settings.h>
+#include <engine/third_party_notices.h>
 #include <filesystem/filesystem.h>
 #include <seq/seq.h>
 #include <simulation/simulation.h>
@@ -84,6 +85,11 @@ auto internal_m2n_application_get_persistent_data_path() -> std::string
 auto internal_m2n_application_get_temporary_cache_path() -> std::string
 {
     return get_script_folder("cache:/");
+}
+
+auto internal_m2n_application_get_third_party_notices() -> std::string
+{
+    return get_third_party_notices();
 }
 
 auto find_main_window() -> os::window*
@@ -454,6 +460,8 @@ void register_core_runtime_script_bindings()
                               script_internal_call(internal_m2n_application_get_persistent_data_path));
         reg.add_internal_call("internal_m2n_application_get_temporary_cache_path",
                               script_internal_call(internal_m2n_application_get_temporary_cache_path));
+        reg.add_internal_call("internal_m2n_application_get_third_party_notices",
+                              script_internal_call(internal_m2n_application_get_third_party_notices));
         reg.add_internal_call("internal_m2n_application_get_target_frame_rate",
                               script_internal_call(internal_m2n_application_get_target_frame_rate));
         reg.add_internal_call("internal_m2n_application_set_target_frame_rate",

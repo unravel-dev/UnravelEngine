@@ -7,6 +7,7 @@
 #include <string_utils/utils.h>
 
 #include <algorithm>
+#include <fstream>
 #include <stdexcept>
 
 namespace unravel::deployment
@@ -14,6 +15,8 @@ namespace unravel::deployment
 namespace
 {
 constexpr const char* COMPILED_SUFFIX = ".asset";
+/// What the build adds to the player's file name for its stamp.
+constexpr const char* PLAYER_STAMP_SUFFIX = ".stamp";
 
 auto make_copy_error(const char* action, const fs::path& from, const fs::path& to, const fs::error_code& ec) -> std::runtime_error
 {
@@ -205,6 +208,56 @@ void copy_file_or_throw(const fs::path& from, const fs::path& to)
     {
         throw make_copy_error("Copying", from, to, ec);
     }
+}
+
+void write_text_or_throw(const fs::path& file, const std::string& text)
+{
+    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+    stream << text;
+    // Closing flushes, which is where a full disk shows.
+    stream.close();
+    if(!stream)
+    {
+        throw std::runtime_error(fmt::format("Writing {} failed.", file.generic_string()));
+    }
+}
+
+auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>
+{
+    std::map<std::string, std::string> values;
+    std::ifstream stream(file);
+    std::string line;
+    while(std::getline(stream, line))
+    {
+        if(!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        const auto separator = line.find('=');
+        if(separator != std::string::npos)
+        {
+            values[line.substr(0, separator)] = line.substr(separator + 1);
+        }
+    }
+    return values;
+}
+
+auto get_player_version_problem(const fs::path& player, const std::string& engine_version) -> std::string
+{
+    auto stamp_file = player;
+    stamp_file += PLAYER_STAMP_SUFFIX;
+    const auto player_version = read_stamp(stamp_file)["engine_version"];
+    if(player_version.empty())
+    {
+        return "The player beside this editor does not say which engine version built it. Build the game target too.";
+    }
+    if(player_version != engine_version)
+    {
+        return fmt::format("The player beside this editor comes from engine version {}, and the editor is {}. Build the game target too.",
+                           player_version,
+                           engine_version);
+    }
+    return {};
 }
 
 void copy_cooked_or_throw(const cooked_folders& cooked, const fs::path& destination, const compiled_file_filter& is_shipped)

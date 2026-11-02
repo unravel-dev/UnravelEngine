@@ -21,6 +21,9 @@ auto is_inside_project(const fs::path& path) -> bool;
 /// Where the deployed game's executable is.
 auto get_deployed_executable(rtti::context& ctx, const deploy_settings& params) -> fs::path;
 
+/// The player beside the editor, which a desktop deploy ships.
+auto get_player_file() -> fs::path;
+
 /// Why the compiled cache is not ready to deploy yet - assets or scripts still compiling - in one
 /// sentence, or empty when the compiler is idle. Main thread.
 auto get_pending_compile_reason(rtti::context& ctx) -> std::string;

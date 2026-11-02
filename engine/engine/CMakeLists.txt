@@ -4,6 +4,14 @@ set(target_name engine)
 
 add_library(${target_name} ${libsrc} ${shader_files})
 
+# The third-party notices compile into the engine: every player carries them on every platform, packed or not.
+set(notices_file ${CMAKE_CURRENT_SOURCE_DIR}/../../THIRD_PARTY_NOTICES.txt)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${notices_file})
+file(READ ${notices_file} notices_hex HEX)
+string(REGEX REPLACE "(................................)" "\\1\n" notices_lines "${notices_hex}")
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," notices_bytes "${notices_lines}")
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/third_party_notices_text.inc CONTENT "${notices_bytes}")
+
 include(GenerateExportHeader)
 generate_export_header(${target_name})
 
