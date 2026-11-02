@@ -132,6 +132,14 @@ struct ui_system
     void update_ui_documents(rtti::context& ctx, scene& scn);
 
     /**
+     * @brief The screen-space ratio of the 'dp' unit to the 'px' unit, what the web calls the device pixel ratio.
+     *
+     * It is the scale the system asks content to be shown at: the window's display scale, or in the editor the scale
+     * of the phone or the tablet a Game view preset stands for, so that a preset shows what that device shows.
+     */
+    static auto get_screen_dp_ratio(rtti::context& ctx) -> float;
+
+    /**
      * @brief Update a single world-space document (dimensions, density, input). Call from render path, back-to-front.
      * @param ctx Engine context for input
      * @param handle Entity handle with ui_document_component and transform_component

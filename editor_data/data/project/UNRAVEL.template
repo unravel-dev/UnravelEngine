@@ -67,4 +67,4 @@ each time it opens the project, so this project's own rules belong in `AGENTS.md
   - https://mikke89.github.io/RmlUiDoc/pages/rcss/font_effects.html
   - https://mikke89.github.io/RmlUiDoc/pages/rcss/filters.html
 - Color alpha is **0-255**, not 0-1.
-- In `.rcss` files always use **`dp`** (density-independent pixels) instead of `px`.
+- In `.rcss` files measure in **`dp`**, never `px`. A `dp` is the same apparent size on every screen, like a CSS pixel, so `16dp` is readable on a desktop and on a phone. A phone has less room (about 850 x 380 dp held sideways): answer it with `@media (max-height: 500dp)` and `(max-width: 600dp)`, and never scale from a script. The recipe is in the MCP skill `ui`, section "Fitting every screen".

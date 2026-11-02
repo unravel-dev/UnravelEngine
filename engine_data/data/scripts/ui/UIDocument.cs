@@ -279,9 +279,12 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Pixels per dp in this document. Geometry (<see cref="UIElement.rect"/>, screen points)
-        /// is in pixels, RCSS lengths in dp: <c>marker.style.left = screenPoint.x / document.pixelsPerDp</c>
-        /// places an absolutely positioned element of the body at a screen x.
+        /// Pixels per dp in this document, what the web calls the device pixel ratio. A screen-space
+        /// document uses the scale the system asks for: 1 at 100 % display scaling, 1.25 at 125 %,
+        /// Android's density / 160 on a phone (2.81 at 450). Geometry (<see cref="UIElement.rect"/>,
+        /// screen points) is in pixels, RCSS lengths in dp:
+        /// <c>marker.style.left = screenPoint.x / document.pixelsPerDp</c> places an absolutely
+        /// positioned element of the body at a screen x.
         /// </summary>
         public float pixelsPerDp => internal_m2n_ui_document_wrapper_get_dp_ratio(handle, ownerEntity);
 

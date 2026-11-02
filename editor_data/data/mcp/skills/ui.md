@@ -50,8 +50,9 @@ engine:/data/scripts/samples/SampleHudController.cs.
 
 ## RCSS is not CSS
 
-- Sizes in dp (density-independent pixels), never px. vw / vh are the document's
-  width / height - 100vw x 100vh fills a screen-space document.
+- Lengths in dp, never px: a dp is the same apparent size on every screen (see Fitting every
+  screen). vw / vh are the document's width / height - 100vw x 100vh fills a screen-space
+  document.
 - rgba() alpha is 0-255, not 0-1: rgba(30,90,200,160).
 - No "solid" keyword. Only properties RmlUi supports; the full rules are in the
   scripting-api skill.
@@ -63,6 +64,73 @@ engine:/data/scripts/samples/SampleHudController.cs.
   inherited). A click goes to the nearest element that can take focus, so a click
   listener under focus: none never fires; mousedown and mouseup still do. The log
   warns when such a listener is added.
+
+## Fitting every screen
+
+One stylesheet fits desktops, phones and tablets, with no sizing code in a script. It works
+like a web page: a dp is a CSS px.
+
+- A dp is the same apparent size on every screen. A document's pixels per dp are the system's
+  display scale: dpi / 160 on Android, 1.25 on a monitor at 125%. 16dp is readable text
+  everywhere and 44dp is a button a finger can hit, about 7 mm. A phone or tablet resolution
+  preset of the Game panel uses that device's scale, so it shows what the device shows.
+- Phones do not have smaller pixels, they have less room. In dp:
+
+      1920 x 1080 monitor at 100%     1920 x 1080
+      1920 x 1080 monitor at 125%     1536 x 864
+      2048 x 1536 tablet               1195 x 896
+      2400 x 1080 phone at 450 dpi     853 x 384
+
+- So the same sizes stay and the layout answers the room there is, with media queries on width
+  and height. Both compare dp lengths, whatever the pixel count:
+
+      body { font-size: 16dp; }
+      #panel { width: 420dp; }
+
+      /* A phone held sideways is under 500 dp tall. */
+      @media (max-height: 500dp) {
+          #panel { width: 300dp; padding: 8dp; }
+          .long { display: none; }
+      }
+
+      /* A phone held upright is under 600 dp wide. */
+      @media (max-width: 600dp) {
+          #panel { left: 3vw; right: 3vw; width: auto; }
+      }
+
+- A query takes "and" but no comma list; write two blocks for two shapes. Put the narrower rule
+  last, because the later block wins. vw, vh and % are for what follows the screen: side margins
+  and columns that share a strip.
+- About 380 dp is not much height. Design for it: one strip along the top and one row along the
+  bottom leave the game in view. Drop what means nothing on touch, show a switch's state by its
+  colour, shorten labels (<span class="long"> hidden in the phone block), and let a long list
+  scroll inside its panel (overflow-y: auto) with its height in vh.
+- A HUD that must keep its composition on every phone can measure itself in rem and, in the
+  phone block only, take the body's font-size from the screen. Decide how many rem it needs:
+
+      @media (max-height: 500dp) {
+          body { font-size: 3.846vh; }                    /* 100 / 26 rem of height */
+      }
+      @media (max-height: 500dp) and (max-aspect-ratio: 194/100) {
+          body { font-size: 1.978vw; }                    /* narrower: width decides */
+      }
+
+- Never scale from a script. Multiplying a size by Screen.dpi or pixelsPerDp counts the density
+  twice. Screen.dpi is for physical sizes, pixelsPerDp for turning screen points into dp. The one
+  exception is a player's own Interface size option: it multiplies the body's font-size, and that
+  layout is in rem.
+- The touch screen is the one thing a stylesheet cannot find out, and the only thing the script
+  says: <body data-class-touch="touch"> with touch = Input.touchSupported on the model. Use it
+  for what differs by input, such as key hints, never for sizes: a touch laptop has the room of
+  a laptop. A phone or tablet preset reports a touch screen.
+- RCSS has no safe-area value. Side margins in vw clear a camera cutout on either side of a
+  turned phone. Screen.safeArea is for a script that places controls against an edge.
+- A world-space document is measured against its own render target: 1 dp is 1 of its pixels on
+  every device.
+- Check each shape: settings_set {"properties":{"resolution.current":"Phone 16:9"}}, play,
+  ui_query_elements for rects inside the screen and not overlapping, viewport_capture_game.
+  Repeat for "Phone 19.5:9", "Phone 20:9", "Tablet 4:3" and "Free Aspect", and put the
+  project's own preset back.
 
 ## Showing a document
 

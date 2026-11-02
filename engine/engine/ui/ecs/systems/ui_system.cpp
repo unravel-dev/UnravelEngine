@@ -471,27 +471,30 @@ void ui_system::render_world_space_into(ui_document_component& comp,
     }
 }
 
+auto ui_system::get_screen_dp_ratio(rtti::context& ctx) -> float
+{
+    using device_t = rendering_system::game_view_device;
+    if(ctx.has<rendering_system>())
+    {
+        if(const auto& device = ctx.get_cached<rendering_system>().get_game_view_device())
+        {
+            return device->dpi / device_t::BASE_DPI;
+        }
+    }
+    auto* window = ctx.has<renderer>() ? ctx.get_cached<renderer>().get_main_window() : nullptr;
+    return window ? window->get_window().get_display_scale() : 1.0f;
+}
+
 void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_entity, scene& scn, bool& process_input)
 {
     APP_SCOPE_PERF("UI/Update Screen Space");
     auto& camera_comp = camera_entity.get<camera_component>();
-    auto& input = ctx.get_cached<input_system>();
     auto& play = ctx.get_cached<play_mode>();
     bool is_playing = play.is_active();
-    float screen_space_dp_ratio = 1.0f;
+    const float screen_space_dp_ratio = get_screen_dp_ratio(ctx);
     auto viewport = camera_comp.get_viewport_size();
     float screen_space_viewport_width = static_cast<int>(viewport.width);
     float screen_space_viewport_height = static_cast<int>(viewport.height);
-    {
-        auto work_zone = input.manager.get_work_zone();
-        if(work_zone.w > 0 && work_zone.h > 0)
-        {
-            screen_space_dp_ratio =
-                (static_cast<float>(screen_space_viewport_width) / static_cast<float>(work_zone.w) +
-                 static_cast<float>(screen_space_viewport_height) / static_cast<float>(work_zone.h)) *
-                0.5f;
-        }
-    }
     bool hit_found = false;
     scn.registry->view<ui_document_component>().each(
         [&](entt::entity entity, ui_document_component& ui_comp)
@@ -502,6 +505,11 @@ void ui_system::update_screen_space(rtti::context& ctx, entt::handle camera_enti
             }
             auto handle = scn.create_handle(entity);
             update_ui_document_common(handle, ui_comp, is_playing);
+            // Hidden documents too: a script that sizes a document before showing it reads this ratio.
+            if(ui_comp.context)
+            {
+                ui_comp.context->SetDensityIndependentPixelRatio(screen_space_dp_ratio);
+            }
             if(!handle.all_of<active_component>())
             {
                 return;

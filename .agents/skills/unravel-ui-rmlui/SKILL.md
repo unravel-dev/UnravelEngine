@@ -34,6 +34,26 @@ UI documents are assets - follow `unravel-assets` for import/meta. RML + RCSS fi
 
 Documents can render in world space (3D positioned UI). Transform linkage via entity `transform_component`.
 
+## Screen sizes
+
+One stylesheet fits every screen. The recipe for writing one is in the MCP skill
+`editor_data/data/mcp/skills/ui.md`, "Fitting every screen": lengths in `dp`, `@media` on width
+and height for the room there is, a `touch` class only for what differs by input.
+
+- `dp` is density-independent, the same unit as a CSS px or an Android dp.
+  `ui_system::get_screen_dp_ratio` gives a screen-space context the display scale
+  (`get_display_scale`, SDL's pixel density x content scale), which is what RmlUi's own SDL
+  platform feeds. A Game panel device preset gives `dpi / game_view_device::BASE_DPI`, so it
+  matches the device. A world-space context stays at 1: its document is measured against its
+  render target.
+- RmlUi: `@media (max-width: 500dp)` compares context pixels against the computed length, so it
+  works in dp. `resolution` compares the ratio. Queries take `and` but no comma list.
+- The ratio is checked by the suite `ui system lifecycle`. Density on macOS and Wayland, where a
+  window's size is in points, is not tested: the backbuffer is sized from `window.get_size()`.
+- Never scale `dp` from a script. Multiplying by `Screen.dpi` or `pixelsPerDp` counts the density
+  twice, and that is how a HUD comes to cover a phone's whole screen. A player-facing interface
+  size can multiply the body's `font-size`, with the layout in `rem`.
+
 ## UI debugger
 
 Toggle in game panel menu bar:
@@ -54,10 +74,12 @@ Toggle in game panel menu bar:
 - [ ] UI debugger shows correct bounds
 - [ ] Play mode only behavior where appropriate
 - [ ] No conflict with ImGui editor overlay
+- [ ] Fits every shape: phone 16:9, 19.5:9, 20:9, tablet 4:3, desktop (rects inside the screen, no overlaps)
 
 ## Common mistakes
 
 - Confusing editor ImGui with in-game RmlUi
+- Scaling `dp` from a script, or making a layout fit with `body.touch`: a phone is `@media (max-height: 500dp)`
 - Missing RCSS companion file
 - OS events not forwarded to ui_system
 - Document asset path/protocol incorrect

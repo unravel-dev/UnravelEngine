@@ -177,6 +177,9 @@ public:
      */
     struct game_view_device
     {
+        /// The density at which a handheld's display scale is 1 (Android's mdpi).
+        static constexpr float BASE_DPI = 160.0f;
+
         /// Pixels of the game view per inch of the device's screen.
         float dpi{};
         /// Game view pixels covered on each edge (camera cutout, rounded corners).
