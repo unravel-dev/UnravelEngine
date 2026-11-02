@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include <engine/audio/audio_bus.h>
+#include <engine/audio/audio_device_watch.h>
 #include <engine/audio/audio_voice_pool.h>
 #include <engine/audio/volume_fade.h>
 #include <engine/assets/asset_handle.h>
@@ -102,6 +103,13 @@ private:
     void update_fades(rtti::context& ctx, float seconds);
 
     /**
+     * @brief Reopens the audio device after it went away, retrying until one opens. The sources keep
+     * their positions meanwhile, and the voices nobody has heard yet end.
+     * @param seconds Real time since the last frame.
+     */
+    void update_device_connection(float seconds);
+
+    /**
      * @brief Updates the audio system for each frame.
      * @param ctx The context for the update.
      * @param times The frame's times: listeners follow the scaled time, fades the unscaled one.
@@ -148,6 +156,8 @@ private:
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     /// The audio device used for playback.
     std::unique_ptr<audio::device> device_;
+    /// Whether the device went away, and when to try reopening it.
+    audio_device_watch device_watch_;
     /// After the device: the voices release their sources before the device closes.
     audio_voice_pool voices_{max_concurrent_voices};
     float master_volume_ = 1.0f;

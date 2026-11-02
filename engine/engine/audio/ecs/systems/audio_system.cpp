@@ -270,9 +270,33 @@ void audio_system::update_fades(rtti::context& ctx, float seconds)
     voices_.update(seconds);
 }
 
+void audio_system::update_device_connection(float seconds)
+{
+    if(!device_)
+    {
+        return;
+    }
+    // A paused device belongs to an application in the background; it reconnects once that returns.
+    const bool is_connected = device_->is_paused() || device_->is_connected();
+    const auto action = device_watch_.update(is_connected, seconds);
+    if(action.is_newly_lost)
+    {
+        APPLOG_WARNING("The audio device went away. Sound resumes once a device opens.");
+    }
+    if(device_watch_.is_lost())
+    {
+        voices_.release_unheard_voices();
+    }
+    if(action.should_reconnect && device_->reconnect())
+    {
+        APPLOG_INFO("Sound resumed on {}.", device_->get_device_id());
+    }
+}
+
 void audio_system::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Audio/System Update");
+    update_device_connection(times.real.count());
     auto& ev = ctx.get_cached<events>();
 
     auto& ec = ctx.get_cached<ecs>();

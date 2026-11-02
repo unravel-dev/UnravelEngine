@@ -13,7 +13,9 @@
  *   - handles: one owner (copies are empty), release on reset / destruction, harmless after a steal or
  *     after the pool is gone;
  *   - mixer gains reach component voices; finished voices are freed by update; stop_all forgets limits;
- *   - an audio source component takes no voice without a playable clip and loses a stolen one cleanly.
+ *   - an audio source component takes no voice without a playable clip and loses a stolen one cleanly;
+ *   - while nothing mixes, voices nobody heard end instead of waiting, and loops and voices under way wait;
+ *   - a lost device is reported once and the attempts to reopen it back off.
  * The runner has no audio device, so the suite opens OpenAL's silent null backend itself; the rank checks
  * run even when no device can be opened.
  */
@@ -21,6 +23,7 @@
 #include "../tests.h"
 
 #include <engine/assets/asset_handle.h>
+#include <engine/audio/audio_device_watch.h>
 #include <engine/audio/audio_voice_pool.h>
 #include <engine/audio/ecs/components/audio_source_component.h>
 #include <engine/audio/ecs/systems/audio_system.h>
@@ -328,12 +331,72 @@ void test_component_voices(rtti::context& ctx, const std::shared_ptr<audio_clip>
     check(!source.has_source() && pool.get_live_count() == 0, "stop releases the voice");
 }
 
+/// A paused device stands in for a lost one: no backend can be told to disconnect, and in both nothing mixes.
+void test_unheard_voices_end_while_nothing_mixes(audio::device& device, const std::shared_ptr<audio_clip>& clip)
+{
+    std::printf("test_unheard_voices_end_while_nothing_mixes\n");
+    audio_voice_pool pool(8);
+    const auto heard = pool.play(clip, generate_uuid(), one_shot(0));
+    const auto deadline = std::chrono::steady_clock::now() + reap_timeout;
+    while(pool.get_source(heard)->get_playback_position().count() <= 0 && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(reap_poll);
+    }
+    check(pool.get_source(heard)->get_playback_position().count() > 0, "a voice on a running device gets under way");
+    check(device.pause(), "the null backend pauses");
+    const auto unheard = pool.play(clip, generate_uuid(), one_shot(0));
+    check(pool.get_source(unheard)->is_playing(), "a one-shot with nothing mixing it waits as playing");
+    auto unheard_owned = pool.acquire({1.0f, audio_bus::sfx, 0, false});
+    unheard_owned.get_source()->bind(*clip);
+    unheard_owned.get_source()->play();
+    auto unheard_loop = pool.acquire({1.0f, audio_bus::music, 0, true});
+    unheard_loop.get_source()->bind(*clip);
+    unheard_loop.get_source()->play();
+    pool.release_unheard_voices();
+    check(!pool.is_playing(unheard), "a one-shot nobody heard ends");
+    check(!unheard_owned.is_alive(), "a component voice nobody heard ends, and its handle goes empty");
+    check(unheard_loop.is_alive(), "a loop waits for the device");
+    check(pool.is_playing(heard), "a voice under way waits and carries on");
+    check(pool.get_live_count() == 2, "only the unheard voices were freed");
+    pool.stop_all();
+    device.resume();
+}
+
+void test_device_watch_paces_attempts()
+{
+    std::printf("test_device_watch_paces_attempts\n");
+    constexpr float step = 0.25f;
+    constexpr float watched_seconds = 40.0f;
+    audio_device_watch watch;
+    const auto connected = watch.update(true, step);
+    check(!connected.is_newly_lost && !connected.should_reconnect && !watch.is_lost(), "a connected device needs nothing");
+    std::vector<float> attempts;
+    int losses = 0;
+    for(float now = 0.0f; now < watched_seconds; now += step)
+    {
+        const auto action = watch.update(false, step);
+        losses += action.is_newly_lost ? 1 : 0;
+        if(action.should_reconnect)
+        {
+            attempts.push_back(now);
+        }
+    }
+    check(losses == 1 && watch.is_lost(), "the loss is reported once");
+    const std::vector<float> expected{0.0f, 1.0f, 3.0f, 7.0f, 15.0f, 23.0f, 31.0f, 39.0f};
+    check(attempts == expected, "the first attempt comes at once, the waits double and stop growing at the limit");
+    check(!watch.update(true, step).should_reconnect && !watch.is_lost(), "a device that returned ends the loss");
+    const auto lost_again = watch.update(false, step);
+    check(lost_again.is_newly_lost && lost_again.should_reconnect, "the next loss starts over with an attempt at once");
+    check(!watch.update(false, step).should_reconnect, "then it waits again");
+}
+
 auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
 {
     g_checks = 0;
     g_failures = 0;
     test_rank_order();
     test_distance_range();
+    test_device_watch_paces_attempts();
     use_silent_audio_backend();
     std::unique_ptr<audio::device> device;
     try
@@ -357,6 +420,7 @@ auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
         test_set_distance(clip);
         test_update_frees_finished(short_clip);
         test_component_voices(ctx, clip);
+        test_unheard_voices_end_while_nothing_mixes(*device, clip);
         ctx.get_cached<audio_system>().get_voices().stop_all();
     }
     std::printf("audio voice pool: %d checks, %d failures\n", g_checks, g_failures);

@@ -559,6 +559,18 @@ void audio_voice_pool::stop_all()
     limits_.clear();
 }
 
+void audio_voice_pool::release_unheard_voices()
+{
+    for(uint32_t i = 0; i < uint32_t(voices_.size()); ++i)
+    {
+        const auto& v = voices_[i];
+        if(v.source && !v.is_looping && v.source->is_playing() && v.source->get_playback_position().count() <= 0)
+        {
+            release(i);
+        }
+    }
+}
+
 auto audio_voice_pool::get_live_count() const -> std::size_t
 {
     return live_count_;

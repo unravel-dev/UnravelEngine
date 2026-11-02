@@ -21,8 +21,14 @@ description: >-
 
 ## Architecture
 
-- **OpenAL Soft** via `audiopp` dependency (ours; extend it only when the engine cannot do without)
+- **OpenAL Soft** via `audiopp` dependency (ours; extend it only when the engine cannot do without).
+  Linked statically; on Android it plays through Oboe (AAudio), and the build fails without it.
 - `audio_system` owns the device, the mixer (master + bus gains and fades) and the play-mode hooks
+- A lost device (unplugged headphones, on Android any route change): `audio_device_watch` paces
+  `device::reconnect`. Sources wait where they were (`device::holds_sources_on_disconnect`), and
+  `release_unheard_voices` ends the non-looping voices that have not played a sample, which would otherwise
+  all start together when a device returns. No backend can be told to disconnect, so tests pause the device
+  instead; a real unplug is a manual check.
 - `audio_voice_pool` (`audio_system::get_voices()`) owns EVERY live OpenAL source: one-shots
   (`play`, addressed by slot + generation ids) and component voices (`acquire`, held through a
   move-only `audio_voice_handle`; copies are empty). It applies the voice cap

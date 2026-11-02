@@ -203,6 +203,13 @@ public:
     /// Stops every voice and forgets the clip limits (a play session ended).
     void stop_all();
 
+    /**
+     * @brief Ends the non-looping voices that have not played a sample yet, as if they had finished. Nothing
+     * mixes while the device is lost, so they would wait for it and all start together, long after the moment
+     * they were for. Loops and voices already under way wait and carry on.
+     */
+    void release_unheard_voices();
+
     auto get_live_count() const -> std::size_t;
 
 private:
