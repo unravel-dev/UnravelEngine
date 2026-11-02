@@ -293,7 +293,8 @@ auto make_device_caps(const bgfx::Caps& caps) -> device_caps
     result.device_id = caps.deviceId;
     result.has_compute = 0 != (caps.supported & BGFX_CAPS_COMPUTE);
     result.has_draw_indirect = 0 != (caps.supported & BGFX_CAPS_DRAW_INDIRECT);
-    result.has_dispatch_indirect = 0 != (caps.supported & BGFX_CAPS_DISPATCH_INDIRECT);
+    // bgfx has no cap of its own for this: every backend with compute dispatches indirectly.
+    result.has_dispatch_indirect = result.has_compute;
     result.has_image_read_write = 0 != (caps.supported & BGFX_CAPS_IMAGE_RW);
     result.has_blend_independent = 0 != (caps.supported & BGFX_CAPS_BLEND_INDEPENDENT);
     result.has_vertex_storage_buffers = caps.rendererType != bgfx::RendererType::OpenGLES;
