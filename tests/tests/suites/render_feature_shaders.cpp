@@ -116,7 +116,7 @@ auto read_value(const std::string& data, std::size_t& offset) -> T
     return value;
 }
 
-/// The binding stages and storage images of a compiled SPIR-V compute shader (bgfx shader binary 12+).
+/// The binding stages and storage images of a compiled SPIR-V compute shader (bgfx shader binary 14).
 /// A renderer's compiled file: the shaderc binary of each variant.
 auto read_compiled_variants(const fs::path& path) -> std::vector<compiled_shader_variant>
 {
@@ -141,7 +141,7 @@ auto parse_spirv_bindings(const std::string& data) -> shader_bindings
         std::string name = data.substr(offset, name_size);
         offset += name_size;
         const auto type = read_value<std::uint8_t>(data, offset);
-        read_value<std::uint8_t>(data, offset);
+        read_value<std::uint16_t>(data, offset);
         const auto reg_index = read_value<std::uint16_t>(data, offset);
         const auto reg_count = read_value<std::uint16_t>(data, offset);
         read_value<std::uint8_t>(data, offset);

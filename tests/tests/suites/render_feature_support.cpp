@@ -223,6 +223,16 @@ void test_dependency_reason()
     check(reason.find("R32F") != std::string::npos, "no R32F images: SSR carries the format the dependency lacks");
 }
 
+void test_render_target_sample_counts()
+{
+    auto caps = make_desktop_caps();
+    caps.formats[bgfx::TextureFormat::RGBA8] &= ~BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER_MSAA_X16;
+    check(caps.can_render_to(bgfx::TextureFormat::RGBA8), "no 16 samples: a plain target renders");
+    check(caps.can_render_to(bgfx::TextureFormat::RGBA8, 4), "no 16 samples: 4 samples render");
+    check(caps.can_render_to(bgfx::TextureFormat::RGBA8, 8), "no 16 samples: 8 samples render");
+    check(!caps.can_render_to(bgfx::TextureFormat::RGBA8, 16), "no 16 samples: 16 samples do not render");
+}
+
 void test_mask_parsing()
 {
     std::printf("the --gfx-disable names parse into their mask\n");
@@ -290,6 +300,7 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_no_compute();
     test_no_vertex_storage_buffers();
     test_dependency_reason();
+    test_render_target_sample_counts();
     test_mask_parsing();
     test_limits_intersection();
     test_requirement_entries();

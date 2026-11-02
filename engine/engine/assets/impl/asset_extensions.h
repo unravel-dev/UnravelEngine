@@ -342,7 +342,8 @@ inline auto get_format_version<gfx::shader>() -> uint64_t
     //    bgfx refuses to load older binaries, and a shader whose sources did not change keeps
     //    its old binary unless this bumps.
     // 2: bgfx shader binary version 13.
-    return 2;
+    // 3: bgfx shader binary version 14 (16-bit uniform array sizes).
+    return 3;
 }
 
 inline auto get_format_version(const std::string& extension) -> uint64_t

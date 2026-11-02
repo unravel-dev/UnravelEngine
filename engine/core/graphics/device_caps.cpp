@@ -75,6 +75,27 @@ auto get_dimension_caps(texture_dimension dimension) -> std::uint32_t
     }
 }
 
+auto get_render_caps(std::uint8_t samples) -> std::uint32_t
+{
+    if(samples > 8)
+    {
+        return BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER_MSAA_X16;
+    }
+    if(samples > 4)
+    {
+        return BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER_MSAA_X8;
+    }
+    if(samples > 2)
+    {
+        return BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER_MSAA_X4;
+    }
+    if(samples > 1)
+    {
+        return BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER_MSAA_X2;
+    }
+    return BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER;
+}
+
 auto to_lower_ascii(hpp::string_view text) -> std::string
 {
     std::string lower(text);
@@ -228,9 +249,7 @@ auto device_caps::can_read_write_image(bgfx::TextureFormat::Enum format) const -
 
 auto device_caps::can_render_to(bgfx::TextureFormat::Enum format, std::uint8_t samples) const -> bool
 {
-    const std::uint32_t needed =
-        samples > 1 ? BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER_MSAA : BGFX_CAPS_FORMAT_TEXTURE_FRAMEBUFFER;
-    return has_format_caps(format, needed);
+    return has_format_caps(format, get_render_caps(samples));
 }
 
 auto device_caps::can_generate_mips(bgfx::TextureFormat::Enum format) const -> bool

@@ -73,16 +73,17 @@ if(ANDROID)
 endif()
 
 # Fixes to bgfx itself (patches/, applied in file name order by apply_patches.cmake). bgfx.cmake fetches bgfx
-# with FetchContent, and the first FetchContent_Declare of a name wins: this one, with bgfx.cmake's options and
-# a patch step, replaces bgfx.cmake's own. A bgfx from BGFX_DIR or an in-tree checkout is built as it is.
+# with FetchContent, and the first FetchContent_Declare of a name wins: this one, with bgfx.cmake's pin and a
+# patch step, replaces bgfx.cmake's own. A bgfx from BGFX_DIR or an in-tree checkout is built as it is.
 include(FetchContent)
-include(${CMAKE_CURRENT_SOURCE_DIR}/bgfx/cmake/dependencies.cmake)
+file(READ ${CMAKE_CURRENT_SOURCE_DIR}/bgfx/CMakeLists.txt bgfx_cmake_lists)
+if(NOT bgfx_cmake_lists MATCHES "FetchContent_Declare\\([ \t\r\n]*bgfx[ \t\r\n]+[^)]*GIT_TAG[ \t\r\n]+([0-9a-fA-F]+)")
+    message(FATAL_ERROR "Could not find the bgfx commit that bgfx/CMakeLists.txt pins.")
+endif()
 FetchContent_Declare(
-    bgfx_source
+    bgfx
     GIT_REPOSITORY https://github.com/bkaradzic/bgfx.git
-    GIT_TAG ${BGFX_GIT_TAG}
-    GIT_SHALLOW FALSE
-    SOURCE_SUBDIR bgfx-cmake-no-subproject
+    GIT_TAG ${CMAKE_MATCH_1}
     PATCH_COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=<SOURCE_DIR> -DPATCH_DIR=${CMAKE_CURRENT_SOURCE_DIR}/patches
                   -P ${CMAKE_CURRENT_SOURCE_DIR}/apply_patches.cmake
 )
