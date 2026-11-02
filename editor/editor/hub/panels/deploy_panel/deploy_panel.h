@@ -122,6 +122,7 @@ private:
     /// Application Id: the id made from Company and Product shows in the empty field and follows them; a typed
     /// id overrides it, with a button back to the generated one.
     void draw_application_id(rtti::context& ctx);
+    void draw_signing_passwords();
     /// The permissions the game asks for: the named ones, then Other Permissions.
     void draw_android_permissions(rtti::context& ctx);
     /// The device Deploy and Run installs on, as a pick of the devices adb lists. @return True when the pick changed.
@@ -148,6 +149,8 @@ private:
     fs::path deployed_location_;
     /// Whether deploy_jobs_ upload that folder to Steam rather than build it.
     bool is_steam_upload_{};
+    /// The package deploy_jobs_ build when they are a release Android build, which leaves files for stores.
+    fs::path release_package_;
     /// What keeps the project from deploying, checked again a moment after the settings change.
     deployment::problems_cache problems_;
     deploy_content_view content_view_;

@@ -12,9 +12,12 @@ namespace unravel::deployment
 /// loose or inside its pack.
 auto is_previous_deploy(const fs::path& folder) -> bool;
 
-/// Whether `folder` holds nothing but Android packages (.apk), and the data/ an earlier Android deploy
-/// left beside them: what an Android deploy may replace. True for an empty folder; false for data/
-/// without a package, which is a desktop build without its player.
+/// How the name of the native debug symbols a release Android deploy writes beside its package ends.
+constexpr const char* NATIVE_SYMBOLS_FILE_SUFFIX = "-native-debug-symbols.zip";
+
+/// Whether `folder` holds nothing but Android packages (.apk, .aab), their native debug symbols, and the
+/// data/ an earlier Android deploy left beside them: what an Android deploy may replace. True for an empty
+/// folder; false for data/ without a package, which is a desktop build without its player.
 auto is_android_package_folder(const fs::path& folder) -> bool;
 
 /// Whether `path` is `folder` or lies inside it. Canonical paths, so "..", links and letter case cannot

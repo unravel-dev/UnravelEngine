@@ -789,7 +789,8 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "when it is in the project, outside the folders the editor manages: data, compiled, settings, deploy, "
              "editor, releases, profiles, cache, temp); it is created when missing and must be empty or an earlier "
              "deploy, which a deploy updates in place. Each profile builds into a folder named after it in location; "
-             "an Android profile's holds <project>.apk only (the data stays in the editor's build folder). "
+             "an Android profile's holds <project>.apk only (the data stays in the editor's build folder), plus "
+             "<project>.aab and <project>-native-debug-symbols.zip for Google Play after a release build. "
              "include_debug_symbols ships the scripts' .pdb/.xml so managed exceptions name file and line. "
              "pack_assets (default true) writes the compiled assets into data/<engine|app>/content.pak; off ships them "
              "loose. patch_release names a kept release (deploy_keep_release): its packs ship unchanged and "
@@ -1190,7 +1191,9 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "the folder is touched, named in failed_steps. Refuses play mode. It deploys the deploy profile, or the "
              "profile given, which becomes the deploy profile. For an Android profile the last step builds "
              "<project>.apk with Gradle from the editor's Android player; run_after_deploy then installs and starts "
-             "it on android_device, and the game's log goes to the editor log ([Device] lines). Textures the profile "
+             "it on android_device, and the game's log goes to the editor log ([Device] lines). A release build also "
+             "writes <project>.aab and <project>-native-debug-symbols.zip for Google Play and raises the profile's "
+             "android_version_code by one for the next build; only debug packages read run_arguments. Textures the profile "
              "compiles differently from the editor (its formats, its defaults) are cooked first (Cooking Textures) "
              "and kept in the project's cache/profiles/<profile> for its next deploys.",
          .input_schema_json =

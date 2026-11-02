@@ -5,6 +5,7 @@
 #
 # Layout of OUTPUT:
 #   lib/<abi>/libmain.so    the player, stripped
+#   symbols/<abi>/libmain.so.sym  the player's symbol table, which store packages upload beside the game
 #   project/                the Gradle project (game/android)
 #   sdl/java/               SDL's Java sources, from the SDL that libmain.so links
 #   dotnet/native/          the .NET runtime's native libraries (libcoreclr.so, libclrjit.so, ...)
@@ -35,6 +36,18 @@ if(NOT EXISTS "${stripped}" OR "${LIBRARY}" IS_NEWER_THAN "${stripped}")
     endif()
 endif()
 file(COPY "${stripped}" DESTINATION "${OUTPUT}/lib/${ABI}")
+
+# The symbol table alone, without the debug information: function names in the store's crash reports,
+# for every editor package, which does not carry the far larger unstripped library.
+set(symbol_table "${WORK_DIR}/symbols/${ABI}/libmain.so.sym")
+if(NOT EXISTS "${symbol_table}" OR "${LIBRARY}" IS_NEWER_THAN "${symbol_table}")
+    file(MAKE_DIRECTORY "${WORK_DIR}/symbols/${ABI}")
+    execute_process(COMMAND "${STRIP}" --strip-debug --only-keep-debug -o "${symbol_table}" "${LIBRARY}" RESULT_VARIABLE symbols_result)
+    if(NOT symbols_result EQUAL 0)
+        message(FATAL_ERROR "Extracting the symbol table of ${LIBRARY} failed (${symbols_result}).")
+    endif()
+endif()
+file(COPY "${symbol_table}" DESTINATION "${OUTPUT}/symbols/${ABI}")
 
 file(COPY "${GRADLE_PROJECT}/" DESTINATION "${OUTPUT}/project"
      PATTERN "build" EXCLUDE

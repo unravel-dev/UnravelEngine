@@ -17,6 +17,7 @@ public class UnravelActivity extends SDLActivity {
      * The start intent's extra with the game's command line options, separated by whitespace. The
      * editor's Deploy and Run sets it from Run Arguments, as does
      * "adb shell am start -n <application id>/com.unravel.player.UnravelActivity --es arguments '--gfx-stats'".
+     * Only debug packages read it: the activity is exported, so any app on the device can set the extra.
      */
     private static final String ARGUMENTS_EXTRA = "arguments";
 
@@ -34,13 +35,14 @@ public class UnravelActivity extends SDLActivity {
     @Override
     protected String[] getArguments() {
         List<String> options = new ArrayList<>();
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) == 0) {
+            return options.toArray(new String[0]);
+        }
         String arguments = getIntent() != null ? getIntent().getStringExtra(ARGUMENTS_EXTRA) : null;
         if (arguments != null && !arguments.trim().isEmpty()) {
             options.addAll(Arrays.asList(arguments.trim().split("\\s+")));
         }
-        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            options.add(STATS_GESTURE_OPTION);
-        }
+        options.add(STATS_GESTURE_OPTION);
         return options.toArray(new String[0]);
     }
 

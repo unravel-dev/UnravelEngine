@@ -5,6 +5,7 @@
 #include "releases.h"
 
 #include <engine/assets/impl/asset_extensions.h>
+#include <hpp/string_view.hpp>
 #include <string_utils/utils.h>
 
 #include <algorithm>
@@ -39,9 +40,15 @@ auto is_android_package_folder(const fs::path& folder) -> bool
     for(const auto& entry : fs::directory_iterator(folder, ec))
     {
         const auto& path = entry.path();
-        if(entry.is_regular_file(ec) && string_utils::to_lower(path.extension().generic_string()) == ".apk")
+        const auto extension = string_utils::to_lower(path.extension().generic_string());
+        if(entry.is_regular_file(ec) && (extension == ".apk" || extension == ".aab"))
         {
             has_package = true;
+        }
+        else if(const auto name = path.filename().generic_string();
+                entry.is_regular_file(ec) && hpp::string_view(name).ends_with(hpp::string_view(NATIVE_SYMBOLS_FILE_SUFFIX)))
+        {
+            continue;
         }
         else if(entry.is_directory(ec) && path.filename() == DATA_FOLDER && is_previous_deploy(folder))
         {

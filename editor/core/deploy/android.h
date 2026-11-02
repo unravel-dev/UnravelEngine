@@ -39,6 +39,8 @@ struct android_template
     auto get_project_dir() const -> fs::path;
     /// The folder holding libmain.so.
     auto get_player_dir() const -> fs::path;
+    /// The folder holding <abi>/libmain.so.sym, the player's symbol table.
+    auto get_symbols_dir() const -> fs::path;
     auto get_sdl_java_dir() const -> fs::path;
     /// The .NET runtime: native/ and lib/<framework>/.
     auto get_dotnet_dir() const -> fs::path;
@@ -276,6 +278,23 @@ struct android_package_params
     std::string key_alias;
 };
 
+/// The environment variables the Gradle project reads the signing passwords from.
+constexpr const char* KEYSTORE_PASSWORD_VARIABLE = "UNRAVEL_KEYSTORE_PASSWORD";
+constexpr const char* KEY_PASSWORD_VARIABLE = "UNRAVEL_KEY_PASSWORD";
+
+/// Signing passwords typed for this editor session. Never saved, logged or put on a command line.
+struct android_signing_passwords
+{
+    std::string keystore;
+    /// Empty: the key has the keystore's password.
+    std::string key;
+};
+
+/// The "NAME=value" entries that hand typed passwords to Gradle, over any set in this process's environment.
+/// A typed keystore password without a key password also replaces the key password variable, so an older value
+/// in the environment does not sign with the wrong password. Nothing typed: no entries.
+auto make_signing_environment(const android_signing_passwords& passwords) -> std::vector<std::string>;
+
 /// The command line that builds the package: the JDK's java running the project's Gradle wrapper.
 auto make_gradle_arguments(const android_toolchain& tools, const android_package_params& params)
     -> std::vector<std::string>;
@@ -285,6 +304,18 @@ auto make_gradle_local_properties(const fs::path& sdk) -> std::string;
 
 /// The package Gradle writes for a debug or release build of the project in `project_dir`.
 auto get_built_package(const fs::path& project_dir, bool is_release) -> fs::path;
+
+/// The app bundle Gradle writes for a release build of the project in `project_dir`, which stores take.
+auto get_built_bundle(const fs::path& project_dir) -> fs::path;
+
+/// The native debug symbols Gradle writes for a release build of the project in `project_dir`.
+auto get_built_native_symbols(const fs::path& project_dir) -> fs::path;
+
+/// The app bundle a deploy writes beside `package`: the same name with .aab.
+auto get_bundle_path(const fs::path& package) -> fs::path;
+
+/// The native debug symbols a deploy writes beside `package`: <package name>-native-debug-symbols.zip.
+auto get_native_symbols_path(const fs::path& package) -> fs::path;
 
 /// The command line that starts the game's activity on `device`. The game's `run_arguments` go in an
 /// extra of the start intent, which the player's activity hands to the game as its command line.

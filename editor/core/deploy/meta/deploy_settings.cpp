@@ -165,7 +165,8 @@ REFLECT(android_deploy_settings)
             entt::attribute{"pretty_name", "Version Code"},
             entt::attribute{"tooltip",
                             "Android's version number of the game.\n"
-                            "Stores need a larger one for every release they get."},
+                            "Stores need a larger one for every release they get, so each\n"
+                            "release build raises it by one for the next build."},
             entt::attribute{"min", 1},
         })
         .data<&android_deploy_settings::screen_orientation>("screen_orientation"_hs)
@@ -203,7 +204,9 @@ REFLECT(android_deploy_settings)
             entt::attribute{"name", "release"},
             entt::attribute{"pretty_name", "Release Build"},
             entt::attribute{"tooltip",
-                            "Build a release package signed with the keystore below, for stores.\n\n"
+                            "Build a release package signed with the keystore below, for stores.\n"
+                            "Beside the .apk it writes the .aab to upload to Google Play and the\n"
+                            "native debug symbols to upload with it.\n\n"
                             "Off: a debug package, signed with the Android SDK's debug keystore.\n"
                             "It installs on your devices, and stores refuse it."},
         })
@@ -213,8 +216,9 @@ REFLECT(android_deploy_settings)
             entt::attribute{"pretty_name", "Keystore"},
             entt::attribute{"tooltip",
                             "The keystore that signs release packages.\n"
-                            "Its passwords are never saved. The deploy reads them from the\n"
-                            "UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD environment variables."},
+                            "Its passwords are never saved. Type them below for this editor session,\n"
+                            "or set the UNRAVEL_KEYSTORE_PASSWORD and UNRAVEL_KEY_PASSWORD\n"
+                            "environment variables."},
         })
         .data<&android_deploy_settings::key_alias>("key_alias"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -493,8 +497,8 @@ REFLECT(deploy_settings)
                             "--gfx-stats shows the graphics statistics over the game.\n"
                             "--novsync turns off vsync.\n"
                             "--log-here writes the log beside the game, not in the user's data folder.\n\n"
-                            "In Android debug packages a four-finger tap switches the\n"
-                            "graphics statistics on and off."},
+                            "On Android only debug packages read these options, and a four-finger\n"
+                            "tap switches the graphics statistics on and off in them."},
         })
         .data<&deploy_settings::android_device>("android_device"_hs)
         .custom<entt::attributes>(entt::attributes{

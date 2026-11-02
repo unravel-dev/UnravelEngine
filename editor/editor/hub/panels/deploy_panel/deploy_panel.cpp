@@ -17,6 +17,7 @@
 #include <editor/imgui/integration/imgui_style.h>
 #include <editor/imgui/screen_card.h>
 #include <editor/system/project_manager.h>
+#include <logging/logging.h>
 
 #include <filedialog/filedialog.h>
 #include <imgui/imgui.h>
@@ -25,6 +26,7 @@
 #include <imgui_widgets/utils.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <initializer_list>
 
 namespace unravel
@@ -54,6 +56,7 @@ constexpr float DEPLOY_BODY_MAX_HEIGHT = 30.0f;
 constexpr float PROFILE_POPUP_WIDTH = 22.0f;
 // Characters an application id field takes, the terminator included; Android allows far fewer.
 constexpr std::size_t ANDROID_APPLICATION_ID_CAPACITY = 256;
+constexpr std::size_t SIGNING_PASSWORD_CAPACITY = 256;
 /// The icon buttons beside the profile picker: new, rename, delete.
 constexpr float PROFILE_PICKER_BUTTONS = 3.0f;
 // The empty Patch Against Release.
@@ -169,6 +172,61 @@ auto draw_steam_settings(rtti::context& ctx, steam_deploy_settings& steam) -> in
         widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE, widgets::WARNING_COLOR, problem.c_str(), ImGui::GetColorU32(ImGuiCol_Text));
     }
     return result;
+}
+
+/// Stores refuse a version code they already have, so a release build moves the profile to the next one as it
+/// starts. A build that then fails only skips a number, which stores allow.
+void raise_release_version_code(rtti::context& ctx, const deploy_settings& params)
+{
+    if(params.deploy_target != deploy_platform::android || !params.android.release)
+    {
+        return;
+    }
+    auto android = params.android;
+    android.version_code = std::max<std::uint32_t>(1, android.version_code) + 1;
+    const auto raised = ctx.get_cached<project_manager>().set_profile_android(ctx, params.profile, android);
+    if(raised.is_ok())
+    {
+        APPLOG_INFO("Deploy: the next release build of profile {} gets version code {}.", params.profile, android.version_code);
+    }
+    else
+    {
+        APPLOG_WARNING("Deploy: raising the version code of profile {} failed, so raise it by hand before the next "
+                       "release build: {}",
+                       params.profile,
+                       raised.error);
+    }
+}
+
+struct password_field_text
+{
+    const char* label;
+    const char* tooltip;
+};
+
+/// A masked text field; returns whether it changed `password`.
+auto draw_password_field(const password_field_text& text, const char* id, const char* hint, std::string& password) -> bool
+{
+    property_layout layout(text.label, text.tooltip);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    auto buffer = ImGui::CreateInputTextBuffer<SIGNING_PASSWORD_CAPACITY>(password);
+    const bool is_edited = ImGui::InputTextWithHint(id, hint, buffer.data(), buffer.size(), ImGuiInputTextFlags_Password);
+    ImGui::DrawItemActivityOutline();
+    if(is_edited)
+    {
+        password = buffer.data();
+    }
+    return is_edited;
+}
+
+/// Names the files a finished release build of `package` leaves for Google Play.
+void draw_store_files_note(const fs::path& package)
+{
+    widgets::draw_gap(widgets::LINE_GAP);
+    widgets::draw_muted_text(fmt::format("Upload {} to Google Play, and {} as its native debug symbols.",
+                                         deployment::get_bundle_path(package).filename().generic_string(),
+                                         deployment::get_native_symbols_path(package).filename().generic_string())
+                                 .c_str());
 }
 
 /// What the upload's confirmation says it does.
@@ -546,6 +604,9 @@ auto deploy_panel::start_deploy(rtti::context& ctx, const deploy_settings& param
     deploy_jobs_ = deployment::deploy_project(ctx, params);
     deployed_location_ = get_output_location(params);
     is_steam_upload_ = false;
+    const bool is_release = params.deploy_target == deploy_platform::android && params.android.release;
+    release_package_ = is_release ? deployment::get_android_package_path(ctx, params) : fs::path{};
+    raise_release_version_code(ctx, params);
     return true;
 }
 
@@ -558,6 +619,7 @@ auto deploy_panel::run_last_android_build(rtti::context& ctx, const deploy_setti
     deploy_jobs_ = deployment::run_last_android_build(ctx, params);
     deployed_location_ = get_output_location(params);
     is_steam_upload_ = false;
+    release_package_.clear();
     return true;
 }
 
@@ -570,6 +632,7 @@ auto deploy_panel::start_steam_upload(rtti::context& ctx, const deploy_settings&
     deploy_jobs_ = deployment::upload_to_steam(ctx, params);
     deployed_location_ = get_output_location(params);
     is_steam_upload_ = true;
+    release_package_.clear();
     return true;
 }
 
@@ -823,6 +886,12 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
     if(settings_editor_.get().deploy_and_run)
     {
         inspect_deploy_properties(ctx, {"deploy_run_arguments"_hs});
+        const auto& shown = settings_editor_.get();
+        if(shown.deploy_target == deploy_platform::android && shown.android.release)
+        {
+            widgets::draw_muted_text("A release build ignores Run Arguments, so that other apps cannot start the game with "
+                                     "options. Turn off Release Build to use them.");
+        }
     }
     if(settings_editor_.get().deploy_target != deploy_platform::android)
     {
@@ -1237,6 +1306,33 @@ void deploy_panel::draw_application_id(rtti::context& ctx)
     save_android_settings(ctx);
 }
 
+void deploy_panel::draw_signing_passwords()
+{
+    auto passwords = deployment::get_android_signing_passwords();
+    const char* keystore_hint = std::getenv(deployment::KEYSTORE_PASSWORD_VARIABLE) != nullptr
+                                    ? "From the environment variable"
+                                    : "Not saved";
+    bool is_edited = draw_password_field({"Keystore Password",
+                                          "The password of the keystore, for this editor session. It is never saved, and\n"
+                                          "it is forgotten when the project closes. It wins over the\n"
+                                          "UNRAVEL_KEYSTORE_PASSWORD environment variable."},
+                                         "##keystore_password",
+                                         keystore_hint,
+                                         passwords.keystore);
+    is_edited |= draw_password_field({"Key Password",
+                                      "The password of the key, for this editor session. It is never saved, and it is\n"
+                                      "forgotten when the project closes.\n\n"
+                                      "Empty: the key has the same password as the keystore."},
+                                     "##key_password",
+                                     "Same as the keystore",
+                                     passwords.key);
+    if(is_edited)
+    {
+        deployment::set_android_signing_passwords(passwords);
+        problems_.invalidate();
+    }
+}
+
 void deploy_panel::draw_android_permissions(rtti::context& ctx)
 {
     entt::meta_any object = entt::forward_as_meta(settings_editor_.get().android.permissions);
@@ -1287,6 +1383,7 @@ void deploy_panel::draw_android_section(rtti::context& ctx)
     if(android.release)
     {
         inspect_android_properties(ctx, {"keystore"_hs, "key_alias"_hs});
+        draw_signing_passwords();
     }
     ImGui::SeparatorText("Permissions");
     draw_android_permissions(ctx);
@@ -1658,6 +1755,7 @@ void deploy_panel::draw_install_conflict()
     {
         deploy_jobs_ = deployment::replace_android_game();
         is_steam_upload_ = false;
+        release_package_.clear();
     }
     widgets::draw_gap(widgets::LINE_GAP);
 }
@@ -1716,6 +1814,10 @@ void deploy_panel::draw_status(rtti::context& ctx)
     widgets::draw_progress_bar(get_progress(), summary.c_str(), fmt::format("{} of {} steps", done_count, step_count).c_str());
     widgets::draw_gap(widgets::LINE_GAP);
     draw_step_row(deploy_jobs_);
+    if(!is_in_progress && !has_failed && !release_package_.empty())
+    {
+        draw_store_files_note(release_package_);
+    }
 }
 
 /// Close at the left end; Open Folder and Deploy at the right end.

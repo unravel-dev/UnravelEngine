@@ -38,6 +38,11 @@ auto get_generated_android_application_id(rtti::context& ctx, const std::string&
 /// The application id a deploy with these settings uses: the set one, or the generated one.
 auto get_android_application_id(rtti::context& ctx, const deploy_settings& params) -> std::string;
 
+/// The signing passwords typed in the Deploy window. They live in memory only, until the project closes.
+auto get_android_signing_passwords() -> android_signing_passwords;
+void set_android_signing_passwords(const android_signing_passwords& passwords);
+void clear_android_signing_passwords();
+
 /// What keeps these settings from an Android deploy, one sentence each; empty when nothing does.
 auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>;
 
@@ -91,7 +96,8 @@ auto get_device_jobs(const android_package_plan& plan) -> deploy_jobs;
 /// Fails the plan's device steps that did not finish, with `reason`.
 void fail_device_steps(const android_package_plan& plan, const std::string& reason);
 
-/// The package an Android deploy with these settings writes: <project>.apk in the profile's folder.
+/// The package an Android deploy with these settings writes: <project>.apk in the profile's folder. A
+/// release build also writes the store's files beside it: get_bundle_path and get_native_symbols_path.
 auto get_android_package_path(rtti::context& ctx, const deploy_settings& params) -> fs::path;
 /// Whether an earlier Android deploy left its package in the deploy folder.
 auto has_android_package(rtti::context& ctx, const deploy_settings& params) -> bool;

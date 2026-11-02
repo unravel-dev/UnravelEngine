@@ -38,7 +38,6 @@ constexpr const char* TEMPLATE_FOLDER = "binary:/players/";
 /// rebuilds only what changed, and outside the project so its thousands of files stay out of the editor's
 /// watchers.
 constexpr const char* GRADLE_STAGING_FOLDER = "unravel-android";
-constexpr const char* KEYSTORE_PASSWORD_VARIABLE = "UNRAVEL_KEYSTORE_PASSWORD";
 constexpr const char* DEFAULT_VERSION_NAME = "1.0";
 constexpr const char* SESSION_THREAD_NAME = "Android Game Session";
 /// Gradle output lines kept in a failed step's message.
@@ -127,6 +126,16 @@ void write_text_or_throw(const fs::path& file, const std::string& text)
     if(!stream.good())
     {
         throw std::runtime_error(fmt::format("Writing {} failed.", file.generic_string()));
+    }
+}
+
+void copy_built_file_or_throw(const fs::path& built, const fs::path& destination)
+{
+    fs::error_code ec;
+    fs::copy_file(built, destination, fs::copy_options::overwrite_existing, ec);
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("Copying {} to {} failed: {}.", built.generic_string(), destination.generic_string(), ec.message()));
     }
 }
 
@@ -530,6 +539,9 @@ auto get_session() -> game_session&
     return session;
 }
 
+std::mutex signing_mutex;
+android_signing_passwords signing_passwords;
+
 std::mutex tools_mutex;
 std::vector<android_device> listed_devices;
 android_toolchain found_tools;
@@ -802,6 +814,23 @@ auto get_android_application_id(rtti::context& ctx, const deploy_settings& param
                                                  : params.android.application_id;
 }
 
+auto get_android_signing_passwords() -> android_signing_passwords
+{
+    std::lock_guard<std::mutex> lock(signing_mutex);
+    return signing_passwords;
+}
+
+void set_android_signing_passwords(const android_signing_passwords& passwords)
+{
+    std::lock_guard<std::mutex> lock(signing_mutex);
+    signing_passwords = passwords;
+}
+
+void clear_android_signing_passwords()
+{
+    set_android_signing_passwords({});
+}
+
 auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
 {
     std::vector<std::string> problems;
@@ -844,10 +873,10 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
         {
             problems.push_back("A release build needs the key alias of its keystore.");
         }
-        else if(std::getenv(KEYSTORE_PASSWORD_VARIABLE) == nullptr)
+        else if(get_android_signing_passwords().keystore.empty() && std::getenv(KEYSTORE_PASSWORD_VARIABLE) == nullptr)
         {
-            problems.push_back(fmt::format("A release build reads the keystore password from {}. Set it and restart the "
-                                           "editor.",
+            problems.push_back(fmt::format("A release build needs the keystore's password. Type it in Keystore Password "
+                                           "in the Deploy window, or set {} and restart the editor.",
                                            KEYSTORE_PASSWORD_VARIABLE));
         }
     }
@@ -944,8 +973,9 @@ void build_android_package(const android_package_plan& plan)
     fs::create_directories(package.permissions_manifest.parent_path(), ec);
     write_text_or_throw(package.permissions_manifest, make_android_permissions_manifest(package.permissions));
     APPLOG_INFO("Deploy: building the Android package with Gradle in {}.", package.project_dir.generic_string());
+    const auto environment = package.is_release ? make_signing_environment(get_android_signing_passwords()) : std::vector<std::string>{};
     const auto result = subprocess::call(make_gradle_arguments(plan.tools, package),
-                                         {},
+                                         environment,
                                          [](const std::string& line)
                                          {
                                              if(!line.empty())
@@ -963,13 +993,27 @@ void build_android_package(const android_package_plan& plan)
                                              result.retcode,
                                              get_last_lines(result.out_output, GRADLE_ERROR_LINES)));
     }
-    const auto built = get_built_package(package.project_dir, package.is_release);
-    fs::copy_file(built, plan.output, fs::copy_options::overwrite_existing, ec);
-    if(ec)
-    {
-        throw std::runtime_error(fmt::format("Copying {} to {} failed: {}.", built.generic_string(), plan.output.generic_string(), ec.message()));
-    }
+    copy_built_file_or_throw(get_built_package(package.project_dir, package.is_release), plan.output);
     APPLOG_INFO("Deploy: built {} ({} MB).", plan.output.generic_string(), fs::file_size(plan.output, ec) / (1024 * 1024));
+    const auto bundle = get_bundle_path(plan.output);
+    const auto symbols = get_native_symbols_path(plan.output);
+    if(package.is_release)
+    {
+        copy_built_file_or_throw(get_built_bundle(package.project_dir), bundle);
+        copy_built_file_or_throw(get_built_native_symbols(package.project_dir), symbols);
+        APPLOG_INFO("Deploy: built {} ({} MB) with version code {}. Upload it to Google Play, and {} as its native debug "
+                    "symbols.",
+                    bundle.generic_string(),
+                    fs::file_size(bundle, ec) / (1024 * 1024),
+                    package.version_code,
+                    symbols.filename().generic_string());
+    }
+    else
+    {
+        // A debug build leaves no store files of an earlier release beside a package they do not match.
+        fs::remove(bundle, ec);
+        fs::remove(symbols, ec);
+    }
     remove_earlier_data(plan.output.parent_path());
 }
 

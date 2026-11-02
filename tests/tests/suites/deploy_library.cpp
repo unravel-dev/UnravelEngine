@@ -754,6 +754,7 @@ void write_android_template(const fs::path& root, const std::string& version, co
                "engine_version=" + version + "\nconfiguration=" + configuration +
                    "\nabi=arm64-v8a\ndotnet_runtime=10.0.13\nsymbols=/build/bin\n");
     write_text(root / "lib/arm64-v8a/libmain.so", "elf");
+    write_text(root / "symbols/arm64-v8a/libmain.so.sym", "elf");
     write_text(root / "project/gradle/wrapper/gradle-wrapper.jar", "jar");
     write_text(root / "sdl/java/org/libsdl/app/SDLActivity.java", "java");
     write_text(root / "dotnet/native/libcoreclr.so", "elf");
@@ -772,6 +773,9 @@ void test_android_template(const fs::path& root)
     check(!deployment::find_android_template(root / "template", "v2", "Release").is_found(), "another engine version is refused");
     check(!deployment::find_android_template(root / "template", "v1", "Debug").is_found(), "another configuration is refused");
     fs::error_code ec;
+    fs::remove(root / "template/symbols/arm64-v8a/libmain.so.sym", ec);
+    check(!deployment::find_android_template(root / "template", "v1", "Release").is_found(), "a template without its symbol table is refused");
+    write_text(root / "template/symbols/arm64-v8a/libmain.so.sym", "elf");
     fs::remove(root / "template/lib/arm64-v8a/libmain.so", ec);
     check(!deployment::find_android_template(root / "template", "v1", "Release").is_found(), "an incomplete template is refused");
 }
@@ -802,6 +806,9 @@ void test_gradle_arguments()
     auto arguments = deployment::make_gradle_arguments(tools, params);
     check(!arguments.empty() && arguments.front() == tools.java.string(), "Java runs Gradle's wrapper");
     check(contains_argument(arguments, "assembleDebug") && !contains_argument(arguments, "assembleRelease"), "a debug build");
+    check(!contains_argument(arguments, "bundleRelease") && !contains_argument(arguments, "packageNativeDebugSymbols"),
+          "a debug build writes no store files");
+    check(contains_argument(arguments, "-Punravel.symbols=/editor/players/android-arm64/symbols"), "the symbol table's folder is passed");
     check(contains_argument(arguments, "-Punravel.applicationId=com.company.game") &&
               contains_argument(arguments, "-Punravel.versionCode=7") &&
               contains_argument(arguments, "-Punravel.orientation=sensorPortrait") &&
@@ -816,6 +823,31 @@ void test_gradle_arguments()
     check(contains_argument(arguments, "assembleRelease") && contains_argument(arguments, "-Punravel.keystore=/keys/game.jks") &&
               contains_argument(arguments, "-Punravel.keyAlias=game"),
           "a release build names its keystore and key");
+    check(contains_argument(arguments, "bundleRelease") && contains_argument(arguments, "packageNativeDebugSymbols"),
+          "a release build also writes the store's bundle and symbols");
+    check(deployment::get_built_bundle("/p") == fs::path("/p/app/build/outputs/bundle/release/app-release.aab"), "the bundle's place");
+    check(deployment::get_built_native_symbols("/p") == fs::path("/p/app/build/outputs/native-debug-symbols/native-debug-symbols.zip"),
+          "the symbols' place");
+    check(deployment::get_bundle_path("/out/My.Game.apk") == fs::path("/out/My.Game.aab"), "the bundle sits beside the package");
+    check(deployment::get_native_symbols_path("/out/My.Game.apk") == fs::path("/out/My.Game-native-debug-symbols.zip"),
+          "the symbols sit beside the package");
+    check(std::none_of(arguments.begin(),
+                       arguments.end(),
+                       [](const std::string& argument)
+                       {
+                           return argument.find("assword") != std::string::npos;
+                       }),
+          "no password reaches the command line");
+    check(deployment::make_signing_environment({}).empty(), "nothing typed leaves the process's environment as it is");
+    using environment = std::vector<std::string>;
+    check(deployment::make_signing_environment({"store", ""}) ==
+              environment{"UNRAVEL_KEYSTORE_PASSWORD=store", "UNRAVEL_KEY_PASSWORD=store"},
+          "a typed keystore password also replaces the key password");
+    check(deployment::make_signing_environment({"store", "key"}) ==
+              environment{"UNRAVEL_KEYSTORE_PASSWORD=store", "UNRAVEL_KEY_PASSWORD=key"},
+          "both typed passwords are handed over");
+    check(deployment::make_signing_environment({"", "key"}) == environment{"UNRAVEL_KEY_PASSWORD=key"},
+          "a typed key password alone leaves the keystore's to the environment");
     check(deployment::make_gradle_local_properties("C:/Android/Sdk") == "sdk.dir=C\\:/Android/Sdk\n",
           "local.properties escapes the drive colon");
     check(deployment::get_built_package("/p", false) == fs::path("/p/app/build/outputs/apk/debug/app-debug.apk"),
@@ -1603,6 +1635,12 @@ void test_folders(const fs::path& root)
     write_text(android / "Game.apk", "apk");
     write_text(android / "Other.APK", "apk");
     check(deployment::is_android_package_folder(android), "a folder of packages is an Android deploy's");
+    write_text(android / "Game.aab", "aab");
+    write_text(android / "Game-native-debug-symbols.zip", "zip");
+    check(deployment::is_android_package_folder(android), "the store's bundle and symbols belong to an Android deploy");
+    const auto zip_only = root / "zip_only";
+    write_text(zip_only / "Backup.zip", "zip");
+    check(!deployment::is_android_package_folder(zip_only), "any other archive keeps the folder from an Android deploy");
     write_text(android / deployment::DATA_FOLDER / "app" / ex::get_pack_file_name(), "pack");
     check(deployment::is_android_package_folder(android), "the data an earlier Android deploy left beside its package belongs to it");
     check(!deployment::is_android_package_folder(build), "data without a package is a desktop build without its player");

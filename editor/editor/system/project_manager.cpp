@@ -99,6 +99,7 @@ void project_manager::close_project(rtti::context& ctx)
 {
     auto& ui_ev = ctx.get_cached<ui_events>();
     ui_ev.on_close_project.emit(ctx);
+    deployment::clear_android_signing_passwords();
 
     if(has_open_project())
     {

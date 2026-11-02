@@ -17,6 +17,9 @@ fun pathProperty(name: String): File = file(requireProperty(name))
 // unravel.player: the folder holding the template's libmain.so, already stripped.
 val playerLibraryDir: File = pathProperty("unravel.player")
 
+// unravel.symbols: the folder holding <abi>/libmain.so.sym, the player's symbol table.
+val playerSymbolsDir: File = pathProperty("unravel.symbols")
+
 // unravel.sdlJava: SDL's Java sources, which must match the SDL linked into libmain.so.
 val sdlJavaDir: File = pathProperty("unravel.sdlJava")
 
@@ -147,6 +150,14 @@ val stagePlayerContent = tasks.register<StagePlayerContent>("stagePlayerContent"
     deployDir.set(contentDir)
     runtimeManagedDir.set(dotnetRuntimeDir.resolve("lib/" + dotnetTargetFramework))
     runtimeVersion.set(dotnetRuntimeVersion)
+}
+
+// The file Google Play takes beside a bundle to name functions in its crash reports. Gradle's own
+// ndk.debugSymbolLevel would need the NDK, which an editor's users do not have.
+tasks.register<Zip>("packageNativeDebugSymbols") {
+    from(playerSymbolsDir)
+    archiveFileName.set("native-debug-symbols.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("outputs/native-debug-symbols"))
 }
 
 android {

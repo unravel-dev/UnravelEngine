@@ -1,4 +1,5 @@
 #include "android.h"
+#include "folders.h"
 #include "run_arguments.h"
 
 #include <algorithm>
@@ -202,6 +203,11 @@ auto android_template::get_player_dir() const -> fs::path
     return root / "lib" / abi;
 }
 
+auto android_template::get_symbols_dir() const -> fs::path
+{
+    return root / "symbols";
+}
+
 auto android_template::get_sdl_java_dir() const -> fs::path
 {
     return root / "sdl" / "java";
@@ -250,6 +256,7 @@ auto find_android_template(const fs::path& root, const std::string& engine_versi
     }
     const bool is_complete = !found.abi.empty() && !found.dotnet_runtime.empty() &&
                              is_present(found.get_player_dir() / "libmain.so") &&
+                             is_present(found.get_symbols_dir() / found.abi / "libmain.so.sym") &&
                              is_present(found.get_project_dir() / "gradle" / "wrapper" / "gradle-wrapper.jar") &&
                              is_present(found.get_sdl_java_dir()) && is_present(found.get_dotnet_dir() / "native");
     if(!is_complete)
@@ -714,6 +721,21 @@ auto find_android_toolchain(const android_toolchain_search& search) -> android_t
     return tools;
 }
 
+auto make_signing_environment(const android_signing_passwords& passwords) -> std::vector<std::string>
+{
+    std::vector<std::string> environment;
+    if(!passwords.keystore.empty())
+    {
+        environment.push_back(std::string(KEYSTORE_PASSWORD_VARIABLE) + "=" + passwords.keystore);
+    }
+    const auto& key = passwords.key.empty() ? passwords.keystore : passwords.key;
+    if(!key.empty())
+    {
+        environment.push_back(std::string(KEY_PASSWORD_VARIABLE) + "=" + key);
+    }
+    return environment;
+}
+
 auto make_gradle_arguments(const android_toolchain& tools, const android_package_params& params)
     -> std::vector<std::string>
 {
@@ -727,6 +749,7 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
         params.project_dir.string(),
         params.is_release ? "assembleRelease" : "assembleDebug",
         "-Punravel.player=" + player.get_player_dir().generic_string(),
+        "-Punravel.symbols=" + player.get_symbols_dir().generic_string(),
         "-Punravel.sdlJava=" + player.get_sdl_java_dir().generic_string(),
         "-Punravel.dotnet=" + player.get_dotnet_dir().generic_string(),
         "-Punravel.dotnetVersion=" + player.dotnet_runtime,
@@ -739,6 +762,11 @@ auto make_gradle_arguments(const android_toolchain& tools, const android_package
         "-Punravel.icon=" + params.icon_dir.generic_string(),
         "-Punravel.permissions=" + params.permissions_manifest.generic_string(),
     };
+    if(params.is_release)
+    {
+        arguments.push_back("bundleRelease");
+        arguments.push_back("packageNativeDebugSymbols");
+    }
     if(params.is_release && !params.keystore.empty())
     {
         arguments.push_back("-Punravel.keystore=" + params.keystore.generic_string());
@@ -774,6 +802,26 @@ auto get_built_package(const fs::path& project_dir, bool is_release) -> fs::path
         return outputs / "app-release.apk";
     }
     return outputs / ("app-" + suffix + ".apk");
+}
+
+auto get_built_bundle(const fs::path& project_dir) -> fs::path
+{
+    return project_dir / "app" / "build" / "outputs" / "bundle" / "release" / "app-release.aab";
+}
+
+auto get_built_native_symbols(const fs::path& project_dir) -> fs::path
+{
+    return project_dir / "app" / "build" / "outputs" / "native-debug-symbols" / "native-debug-symbols.zip";
+}
+
+auto get_bundle_path(const fs::path& package) -> fs::path
+{
+    return fs::path(package).replace_extension(".aab");
+}
+
+auto get_native_symbols_path(const fs::path& package) -> fs::path
+{
+    return package.parent_path() / (package.stem().string() + NATIVE_SYMBOLS_FILE_SUFFIX);
 }
 
 auto make_start_arguments(const android_toolchain& tools,
