@@ -188,7 +188,7 @@ auto deferred::collect_visible_models(scene& scn,
                                       delta_t dt) -> visibility_set_models_t
 {
     visibility_set_models_t visibility_set;
-    if((rparams.pflags & pipeline_steps::geometry_pass) == 0u)
+    if(!runs_step(rparams, geometry_pass))
     {
         return visibility_set;
     }
@@ -435,7 +435,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     // Instanced sources (mesh particles, scripted instance draws): drawn with the batches whatever the batching setting.
     // A probe capture only keeps the frame's sources for the shadow maps it shares with the camera.
     has_source_instances_ = false;
-    if(is_camera_run_)
+    if(current_run_->is_camera_run())
     {
         for(const auto* source : instance_sources_)
         {
@@ -759,8 +759,7 @@ auto deferred::is_velocity_wanted(const run_params& params) const -> bool
 {
     // The step bit is the opt-out lever: probe captures build pflags from 0 and never set it, and a custom caller can
     // clear it.
-    const bool is_camera_run = params.run_type == pipeline_run_type::camera;
-    if(!is_camera_run || (params.pflags & pipeline_steps::velocity_pass) == 0u)
+    if(!is_camera_run(params) || !runs_step(params, velocity_pass))
     {
         return false;
     }
@@ -1071,14 +1070,16 @@ void deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, c
     // The GI's screen traces march this same pyramid, so GI with screen traces on is a producer
     // condition of its own, whether or not the screen-space reflection stack runs.
     gi_settings gi;
-    const bool gi_wants_hiz = params.run_type == pipeline_run_type::camera && resolve_gi_settings(params, gi) &&
+    const bool gi_wants_hiz = is_camera_run(params) && resolve_gi_settings(params, gi) &&
                               (gi.diffuse.screen_traces || (gi.reflections.enabled && gi.reflections.screen_traces));
     const bool want_hiz =
         ((reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params)) ||
          gi_wants_hiz) &&
         get_render_feature_support().is_available(render_feature::hiz);
+    const auto& gbuffer = rview.fbo_find("GBUFFER");
 
-    if(!want_hiz)
+    // The texture existing is what the run's readers take as built, so no pyramid means no texture.
+    if(!want_hiz || !gbuffer)
     {
         rview.tex_remove("HIZBUFFER");
         // PREV_DEPTH deliberately survives. It is a SHARED history resource with more than one
@@ -1092,12 +1093,6 @@ void deferred::run_hiz_pass(gfx::render_view& rview, const run_params& params, c
     create_or_resize_hiz_buffer(rview, viewport_size);
 
     APP_SCOPE_PERF("Rendering/SSR/Hi-Z Pass");
-
-    const auto& gbuffer = rview.fbo_get("GBUFFER");
-    if(!gbuffer)
-    {
-        return;
-    }
 
     hiz_pass::run_params hp;
     hp.depth_buffer = gbuffer->get_texture(4);

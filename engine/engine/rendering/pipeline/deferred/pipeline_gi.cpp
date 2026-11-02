@@ -79,7 +79,7 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     // The GI scene is world state shared by every camera, refreshed once per camera-driven frame; reflection probe
     // captures skip it. Gated on a gi_component asking for GI: the update rebuilds the instance list of every model and
     // composes clipmap levels, a cost a camera without GI must not pay.
-    if(params.run_type != pipeline_run_type::camera || !is_gi_requested(params))
+    if(!is_camera_run(params) || !is_gi_requested(params))
     {
         return;
     }
@@ -186,12 +186,12 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
         return false;
     }
     rparams.fill_gi_params(gi);
-    return run_scene_ != nullptr && engine::context().get_cached<surface_cache_system>().is_world_scene(*run_scene_);
+    return engine::context().get_cached<surface_cache_system>().is_world_scene(current_run_->scn);
 }
 
 auto deferred::run_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
-    if(rparams.run_type != pipeline_run_type::camera)
+    if(!is_camera_run(rparams))
     {
         return false;
     }

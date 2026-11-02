@@ -365,13 +365,13 @@ void deferred::run_upscale_pass(upscale_pass::run_params params, const run_param
     upscale_pass_.run(params);
 }
 
-void deferred::update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run)
+void deferred::update_pre_exposure(gfx::render_view& rview, const run_params& params)
 {
     auto& state = rview.data().get_or_emplace<pre_exposure_state>(pre_exposure_state::view_key);
     state.previous = state.value;
 
     float value = 1.0f;
-    const bool has_hdr_exposure = is_camera_run && params.fill_hdr_params;
+    const bool has_hdr_exposure = is_camera_run(params) && params.fill_hdr_params;
     const bool auto_exposure_active =
         has_hdr_exposure && reflection_screen_stack_enabled(params) && params.fill_auto_exposure_params != nullptr;
     if(has_hdr_exposure)

@@ -1,5 +1,7 @@
 #include "pipeline_internal.h"
 
+#include <utility>
+
 namespace unravel
 {
 namespace
@@ -161,8 +163,7 @@ void create_or_resize_reflection_buffers(gfx::render_view& rview,
 /// render scale (get_view_render_size); every other run renders at its viewport's size.
 auto get_run_render_size(const usize32_t& viewport_size, const pipeline::run_params& params) -> usize32_t
 {
-    const bool is_camera_run = params.run_type == pipeline::pipeline_run_type::camera;
-    return is_camera_run ? get_view_render_size(viewport_size, params.render_resolution, params.render_scale) : viewport_size;
+    return is_camera_run(params) ? get_view_render_size(viewport_size, params.render_resolution, params.render_scale) : viewport_size;
 }
 
 /// The output's color at the viewport's size; acquire_scene_output attaches the scene's depth to it.
@@ -358,40 +359,26 @@ void deferred::set_debug_view_scale(float scale)
     debug_view_scale_ = scale > 0.0f ? scale : 1.0f;
 }
 
-/// What one run of the pipeline renders and where, which every step of run_pipeline_impl reads.
-struct deferred::run_context
+/// Makes a run the current one for as long as it lasts. A probe capture is a run nested in the camera's, so the
+/// camera's becomes current again when the capture ends.
+struct deferred::run_scope
 {
-    const gfx::frame_buffer::ptr& output;
-    scene& scn;
-    const camera& cam;
-    gfx::render_view& rview;
-    delta_t dt;
-    const run_params& params;
-    layer_mask render_mask;
-    /// The size the scene renders at. The camera's viewport keeps the output's size, which the screen helpers, the UI
-    /// and the picking work in.
-    usize32_t render_size;
+    run_scope(deferred& owner, const run_context& run)
+        : pipeline(owner)
+        , outer_run(std::exchange(owner.current_run_, &run))
+    {
+        pipeline.camera_cut_ = hpp::nullopt;
+    }
+    ~run_scope()
+    {
+        pipeline.current_run_ = outer_run;
+        pipeline.camera_cut_ = hpp::nullopt;
+    }
+    run_scope(const run_scope&) = delete;
+    auto operator=(const run_scope&) -> run_scope& = delete;
 
-    auto is_camera_run() const -> bool
-    {
-        return params.run_type == pipeline_run_type::camera;
-    }
-    auto has_shadow_maps() const -> bool
-    {
-        return (params.pflags & pipeline_steps::shadow_pass) != 0u;
-    }
-    auto has_reflection_probes() const -> bool
-    {
-        return (params.pflags & pipeline_steps::reflection_probe) != 0u;
-    }
-    auto has_sky() const -> bool
-    {
-        return (params.pflags & pipeline_steps::atmospheric) != 0u;
-    }
-    auto has_particles() const -> bool
-    {
-        return (params.pflags & pipeline_steps::particles_pass) != 0u;
-    }
+    deferred& pipeline;
+    const run_context* outer_run;
 };
 
 /// The scene a run has lit, which its last steps read.
@@ -413,9 +400,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     APP_SCOPE_PERF("Rendering/Run Pipeline");
     const usize32_t render_size = get_run_render_size(camera.get_viewport_size(), params);
     const run_context run{output, scn, camera, rview, dt, params, render_mask, render_size};
+    const run_scope scope(*this, run);
     begin_camera_frame(run);
     capture_reflection_probes(run);
-    begin_run(run);
     prepare_passes(run);
     render_geometry(run);
     render_reflection_layers(run);
@@ -446,29 +433,21 @@ void deferred::begin_camera_frame(const run_context& run)
 
 void deferred::capture_reflection_probes(const run_context& run)
 {
-    if(run.has_reflection_probes())
+    if(run.runs_probe_step())
     {
         build_reflections(run.scn, run.cam, run.dt, run.params.limits);
     }
 }
 
-void deferred::begin_run(const run_context& run)
-{
-    is_camera_run_ = run.is_camera_run();
-    render_mask_ = run.render_mask;
-    run_scene_ = &run.scn;
-    camera_cut_ = hpp::nullopt;
-}
-
 void deferred::prepare_passes(const run_context& run)
 {
-    if(run.has_shadow_maps())
+    if(run.runs_shadow_step())
     {
         build_shadows(run.scn, run.cam, run.dt, run.params.limits, run.render_mask);
     }
     // Before any pass writes or reads scene lighting (the nested probe captures rendered with their own unit
     // pre-exposure). Stored in the render view; the passes read it back.
-    update_pre_exposure(run.rview, run.params, run.is_camera_run());
+    update_pre_exposure(run.rview, run.params);
     // The GI scene: instance residency and this view's global distance field (gating rationale at the definition).
     run_gi_scene_passes(run.scn, run.cam, run.rview, run.params);
     create_or_resize_render_targets(run.rview, run.render_size, run.params);
@@ -503,7 +482,7 @@ void deferred::render_reflection_layers(const run_context& run)
     run_reflection_probe_pass(run.scn,
                               run.cam,
                               run.rview,
-                              run.has_reflection_probes(),
+                              run.runs_probe_step(),
                               gi_reflections_own_view(run.params),
                               run.dt);
     run_hiz_pass(run.rview, run.params, run.render_size);
@@ -536,37 +515,37 @@ auto deferred::render_lighting(const run_context& run) -> gfx::frame_buffer::ptr
     // frame's sky on their misses (a view's first frame included), and the indirect pass composites it.
     const irradiance_pass_result irradiance = run_irradiance_pass(run.scn, run.rview, limits);
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
-    run_direct_lighting_pass(run.scn, run.cam, run.rview, run.has_shadow_maps(), limits, run.dt);
+    run_direct_lighting_pass(run.scn, run.cam, run.rview, run.runs_shadow_step(), limits, run.dt);
     // GI: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
     // frame's light buffer is populated, and before the indirect pass, which composites the results.
     const bool gi_active = run_gi_pass(run.cam, run.rview, run.params);
     run_ssil_pass(run.cam, run.rview, run.params, gi_active);
     // Indirect lighting after SSIL so it can use the result.
-    return run_indirect_lighting_pass(run.cam, run.rview, irradiance, run.has_reflection_probes(), limits, run.dt);
+    return run_indirect_lighting_pass(run.cam, run.rview, irradiance, run.runs_probe_step(), limits, run.dt);
 }
 
-auto deferred::render_sky_fog_and_particles(const run_context& run, gfx::frame_buffer::ptr color) -> lit_scene
+auto deferred::render_sky_fog_and_particles(const run_context& run, const gfx::frame_buffer::ptr& color) -> lit_scene
 {
-    if(run.has_sky())
+    if(run.runs_sky_step())
     {
-        color = run_atmospherics_pass(color, run.scn, run.cam, run.rview, run.params.limits);
+        run_atmospherics_pass(color, run.scn, run.cam, run.rview, run.params.limits);
     }
     // Over the sky and the clouds; the particles drawn next fog themselves with the same fog.
-    const fog_pass::shader_params fog = run_fog_pass(run.scn, run.cam, run.rview, color, run.params, run.has_shadow_maps());
+    const fog_pass::shader_params fog = run_fog_pass(run.scn, run.cam, run.rview, color, run.params, run.runs_shadow_step());
     gfx::texture::ptr particle_reactive = render_particles(run, color, fog);
     if(run.is_camera_run())
     {
         run_gi_visualize_scene_color(run.cam, run.rview, get_pre_exposure(run.rview));
         release_gi_visualize_card_generation();
     }
-    return {std::move(color), std::move(particle_reactive)};
+    return {color, std::move(particle_reactive)};
 }
 
 auto deferred::render_particles(const run_context& run,
                                 const gfx::frame_buffer::ptr& target,
                                 const fog_pass::shader_params& fog) -> gfx::texture::ptr
 {
-    if(!run.has_particles())
+    if(!run.runs_particle_step())
     {
         return {};
     }
@@ -578,7 +557,7 @@ auto deferred::render_particles(const run_context& run,
                              target,
                              get_pre_exposure(run.rview),
                              hiz_depth,
-                             run.has_shadow_maps(),
+                             run.runs_shadow_step(),
                              wants_reactive,
                              run.dt,
                              fog,

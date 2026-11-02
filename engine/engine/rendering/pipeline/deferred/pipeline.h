@@ -120,12 +120,12 @@ public:
                         const run_params& rparams);
 
     /// Lights the G-buffer with every enabled light as `limits` limit it (limit_light).
-    auto run_direct_lighting_pass(scene& scn,
+    void run_direct_lighting_pass(scene& scn,
                                   const camera& camera,
                                   gfx::render_view& rview,
                                   bool apply_shadows,
                                   const feature_limits& limits,
-                                  delta_t dt) -> gfx::frame_buffer::ptr;
+                                  delta_t dt);
 
     /// The sky's irradiance SH (run_irradiance_pass): its texture.
     struct irradiance_pass_result
@@ -162,12 +162,12 @@ public:
     auto get_traced_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr;
     auto get_probe_reflection_layer(gfx::render_view& rview) const -> gfx::texture::ptr;
 
-    /// Renders the sky and its clouds into @p input, in the cloud mode @p limits allow (as run_cloud_shadow_pass).
-    auto run_atmospherics_pass(gfx::frame_buffer::ptr input,
+    /// Renders the sky and its clouds into @p target, in the cloud mode @p limits allow (as run_cloud_shadow_pass).
+    void run_atmospherics_pass(const gfx::frame_buffer::ptr& target,
                                scene& scn,
                                const camera& camera,
                                gfx::render_view& rview,
-                               const feature_limits& limits) -> gfx::frame_buffer::ptr;
+                               const feature_limits& limits);
 
     /**
      * @brief Renders the height fog (fog_pass) over the lit scene in @p target, the colour-only light buffer,
@@ -379,8 +379,10 @@ public:
     void run_hiz_pass(gfx::render_view& rview, const run_params& params, const usize32_t& viewport_size);
 
 private:
-    /// What one run of the pipeline renders and where (pipeline.cpp).
+    /// What one run of the pipeline renders and where (pipeline_internal.h).
     struct run_context;
+    /// Makes a run current_run_ for as long as it lasts (pipeline.cpp).
+    struct run_scope;
     /// The scene a run has lit (pipeline.cpp).
     struct lit_scene;
 
@@ -388,8 +390,6 @@ private:
     void begin_camera_frame(const run_context& run);
     /// The reflection probes the camera sees that are due: each face is a run of its own, nested in this one.
     void capture_reflection_probes(const run_context& run);
-    /// Sets the state this run's passes read; after the nested probe captures, which set it for themselves.
-    void begin_run(const run_context& run);
     /// What the passes read: the shadow maps, the pre-exposure, the GI scene, the render targets and the camera's jitter.
     void prepare_passes(const run_context& run);
     /// The visible models into the G-buffer and the velocity buffer, then the screen-space AO over them.
@@ -404,7 +404,7 @@ private:
     /// @return The light buffer.
     auto render_lighting(const run_context& run) -> gfx::frame_buffer::ptr;
     /// Draws what goes over the lit surfaces in @p color: the sky, the fog, the particles and the GI's world views.
-    auto render_sky_fog_and_particles(const run_context& run, gfx::frame_buffer::ptr color) -> lit_scene;
+    auto render_sky_fog_and_particles(const run_context& run, const gfx::frame_buffer::ptr& color) -> lit_scene;
     /// run_particle_pass when this run draws particles; @return Their TAA reactive coverage, or null.
     auto render_particles(const run_context& run,
                           const gfx::frame_buffer::ptr& target,
@@ -1072,7 +1072,7 @@ private:
      * or reads scene lighting - never held on this object, which serves every view of its
      * camera (probe captures, thumbnails) in turn.
      */
-    void update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run);
+    void update_pre_exposure(gfx::render_view& rview, const run_params& params);
     /// The s_pre_exposure sampler (pre_exposure.sh), created before every program (GL uniform order contract).
     gfx::program::uniform_ptr pre_exposure_sampler_;
     /// Whether this run produces the velocity buffer: a camera run with the velocity_pass step and a reader of the
@@ -1085,12 +1085,9 @@ private:
     /// is_skinned_batching_active() for the CURRENT run, decided once by the G-buffer pass so the velocity pass draws
     /// the skinned models the same way (EQUAL depth test).
     bool skinned_batching_run_{false};
-    /// This run draws for a camera (not a probe or a capture): particle lights and mesh particles take part.
-    bool is_camera_run_{false};
-    /// The layers this run draws.
-    layer_mask render_mask_{layer_reserved::everything_layer};
-    /// The scene this run draws.
-    const scene* run_scene_{};
+    /// The run in progress, for what a pass does not take as a parameter: whether particle lights and mesh particles
+    /// take part (camera runs only), the layers it draws and its scene.
+    const run_context* current_run_{};
     /// has_camera_cut's answer for this run.
     hpp::optional<bool> camera_cut_;
     /// See get_skylight_params.

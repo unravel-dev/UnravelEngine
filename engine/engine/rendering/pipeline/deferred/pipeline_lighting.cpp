@@ -624,12 +624,12 @@ auto get_inverse_view_projection_relative(const camera& camera) -> math::mat4
 }
 } // namespace
 
-auto deferred::run_direct_lighting_pass(scene& scn,
+void deferred::run_direct_lighting_pass(scene& scn,
                                         const camera& camera,
                                         gfx::render_view& rview,
                                         bool apply_shadows,
                                         const feature_limits& limits,
-                                        delta_t dt) -> gfx::frame_buffer::ptr
+                                        delta_t dt)
 {
     APP_SCOPE_PERF("Rendering/Direct Lighting Pass");
 
@@ -675,8 +675,6 @@ auto deferred::run_direct_lighting_pass(scene& scn,
     submit_particle_lights(scn, context);
 
     bgfx::discard();
-
-    return lbuffer;
 }
 
 void deferred::submit_light(const light& light,
@@ -822,7 +820,7 @@ void deferred::submit_particle_lights(scene& scn, const light_submit_context& co
 {
     particle_lights_.clear();
     // Probes and captures leave particle lights out, as they do the particles: a passing flash is not baked.
-    if(!is_camera_run_ || context.cam == nullptr)
+    if(!current_run_->is_camera_run() || context.cam == nullptr)
     {
         return;
     }
@@ -831,7 +829,7 @@ void deferred::submit_particle_lights(scene& scn, const light_submit_context& co
         [&](auto e, auto&& emitter, auto&& active)
         {
             if(emitter.is_enabled() && emitter.get_light_count() > 0 && ps_soa::is_valid(emitter.get_emitter_handle()) &&
-               emitter.was_used_last_frame() && is_on_rendered_layer(*scn.registry, e, render_mask_))
+               emitter.was_used_last_frame() && is_on_rendered_layer(*scn.registry, e, current_run_->render_mask))
             {
                 ps_soa::collect_particle_lights(emitter.get_emitter_handle(), particle_lights_);
             }
@@ -1355,11 +1353,11 @@ void deferred::run_cloud_shadow_pass(scene& scn,
     cloud_shadow_ = atmospheric_pass_perez_.run_cloud_shadow_pass(camera, rview, sky.perez);
 }
 
-auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
+void deferred::run_atmospherics_pass(const gfx::frame_buffer::ptr& target,
                                      scene& scn,
                                      const camera& camera,
                                      gfx::render_view& rview,
-                                     const feature_limits& limits) -> gfx::frame_buffer::ptr
+                                     const feature_limits& limits)
 {
     APP_SCOPE_PERF("Rendering/Atmospheric Pass");
 
@@ -1367,7 +1365,7 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 
     if(!sky.has_skylight)
     {
-        return input;
+        return;
     }
     atmospheric_pass_perez::run_params params_perez = sky.perez;
     atmospheric_pass_skybox::run_params params_skybox = sky.skybox;
@@ -1388,12 +1386,10 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
     }
     else
     {
-        // input is the color-only LBUFFER over the same texture: the cloud composite
+        // target is the color-only LBUFFER over the same texture: the cloud composite
         // renders into it because it samples the depth that LBUFFER_DEPTH attaches.
-        atmospheric_pass_perez_.run(lbuffer_depth, input, c, rview, params_perez);
+        atmospheric_pass_perez_.run(lbuffer_depth, target, c, rview, params_perez);
     }
-
-    return input;
 }
 
 namespace

@@ -56,6 +56,19 @@ namespace rendering
 /// The helpers that more than one of the deferred pipeline's files use (pipeline.cpp, pipeline_*.cpp).
 namespace deferred_detail
 {
+/// Whether the run renders for a camera, not a reflection probe capture.
+inline auto is_camera_run(const pipeline::run_params& params) -> bool
+{
+    return params.run_type == pipeline::pipeline_run_type::camera;
+}
+
+/// Whether the run's flags ask for a step. It says nothing about the scene: a run with the shadow step may have no
+/// shadow caster.
+inline auto runs_step(const pipeline::run_params& params, deferred::pipeline_steps step) -> bool
+{
+    return (params.pflags & step) != 0u;
+}
+
 /// Border fade of the cloud shadow map in map space (fraction of the half extent).
 constexpr float cloud_shadow_border_fade = 0.08f;
 /// Slots of deferred::color_lighting_pcf_tent_.
@@ -120,8 +133,7 @@ inline auto get_light_target_format(const pipeline::run_params& params) -> bgfx:
     {
         return get_default_format();
     }
-    const bool can_use_compact_format = !params.limits.full_precision_light_targets &&
-                                        params.run_type == pipeline::pipeline_run_type::camera &&
+    const bool can_use_compact_format = !params.limits.full_precision_light_targets && is_camera_run(params) &&
                                         !params.fill_taa_params && !params.fill_ssr_params && !params.fill_ssil_params &&
                                         !params.fill_gi_params &&
                                         gfx::get_device_caps().can_render_to(bgfx::TextureFormat::RG11B10F);
@@ -153,11 +165,47 @@ inline auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const g
 
 inline auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
 {
-    return params.run_type == pipeline::pipeline_run_type::camera &&
-           (params.pflags & deferred::pipeline_steps::reflection_probe) != 0u;
+    return is_camera_run(params) && runs_step(params, deferred::pipeline_steps::reflection_probe);
 }
 } // namespace deferred_detail
 
 using namespace deferred_detail;
+
+/// What one run of the pipeline renders and where, which its steps take as a parameter and its passes read through
+/// current_run_.
+struct deferred::run_context
+{
+    const gfx::frame_buffer::ptr& output;
+    scene& scn;
+    const camera& cam;
+    gfx::render_view& rview;
+    delta_t dt;
+    const run_params& params;
+    layer_mask render_mask;
+    /// The size the scene renders at. The camera's viewport keeps the output's size, which the screen helpers, the UI
+    /// and the picking work in.
+    usize32_t render_size;
+
+    auto is_camera_run() const -> bool
+    {
+        return deferred_detail::is_camera_run(params);
+    }
+    auto runs_shadow_step() const -> bool
+    {
+        return runs_step(params, shadow_pass);
+    }
+    auto runs_probe_step() const -> bool
+    {
+        return runs_step(params, reflection_probe);
+    }
+    auto runs_sky_step() const -> bool
+    {
+        return runs_step(params, atmospheric);
+    }
+    auto runs_particle_step() const -> bool
+    {
+        return runs_step(params, particles_pass);
+    }
+};
 } // namespace rendering
 } // namespace unravel

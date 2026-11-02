@@ -211,7 +211,7 @@ void deferred::build_shadows(scene& scn,
                                              shadow_dynamic_casters_.begin(),
                                              shadow_dynamic_casters_.end());
                 // A probe's cascades are its own, and a capture does not keep one moment of the sources' motion.
-                if(is_camera_run_)
+                if(current_run_->is_camera_run())
                 {
                     shadow_light_casters_.insert(shadow_light_casters_.end(),
                                                  instance_source_casters_.begin(),
