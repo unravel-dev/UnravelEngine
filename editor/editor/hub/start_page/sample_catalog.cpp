@@ -29,6 +29,27 @@ auto is_same_name(const std::string& lhs, const std::string& rhs) -> bool
 auto get_samples() -> const std::vector<sample_info>&
 {
     static const std::vector<sample_info> samples{
+        {"Barrowlight",
+         "UnravelEngine-Sample-Survivors",
+         "Complete game",
+         "A survivors-style game from the title screen to the final boss: four heroes, weapons that fire on "
+         "their own, an upgrade every level and fifteen minutes against thousands of animated enemies. Shows "
+         "crowds simulated in parallel in C# and drawn as instances, particles, menus for gamepad and touch, "
+         "audio buses and save data.",
+         {"Complete Game", "Crowds", "C# Scripts"},
+         "editor:/samples/sample_survivors.jpg",
+         ICON_MDI_SWORD_CROSS,
+         true},
+        {"2048",
+         "UnravelEngine-Sample-2048",
+         "Casual game",
+         "The sliding tile puzzle on a glowing 3D board: swipe, use the arrow keys or a gamepad to merge tiles "
+         "up to 2048. Shows input actions with swipes, pooled prefabs, tiles animated by coroutines, a HUD "
+         "bound to C#, merge sounds pitched by tile value and a best score saved between sessions.",
+         {"Puzzle", "Mobile", "C# Scripts"},
+         "editor:/samples/sample_2048.jpg",
+         ICON_MDI_NUMERIC_2_BOX,
+         true},
         {"Animation Gallery",
          "UnravelEngine-Sample-Animation",
          "Animation",
