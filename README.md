@@ -29,7 +29,7 @@ with gameplay scripted in C# on CoreCLR. It is in active development and not pro
 - **Animation** - animation controllers, blend spaces, humanoid retargeting and IK.
 - **Physics** - Box3D or Bullet backends.
 - **Particles, UI and audio** - particle system, HTML / CSS game UI (RmlUi) in screen and world
-  space, and 3D audio (OpenAL Soft or miniaudio, chosen with `--audio-backend`).
+  space, and 3D audio (miniaudio).
 - **Editor** - scene editing, prefabs with overrides, asset browser and import pipeline,
   undo / redo, play mode and a profiler.
 - **Deploy** - one-click deploy for the desktop the editor runs on and for Android, with
@@ -178,10 +178,10 @@ compiles it in and leaves out the libraries a build does not link. Scripts read 
 `Application.thirdPartyNotices`, and Deploy writes no file of it, so a game shows it on a credits or licenses screen.
 Add new dependencies to it.
 
-OpenAL Soft and, on Android, Linux, macOS and in MinGW builds, libdwarf are under the LGPL and linked statically. The
-notices name their source and the engine version, so players can relink a game's player from the public engine; ship
-from a commit that is public. A Windows build other than MinGW with `AUDIOPP_WITH_OPENAL=OFF` links neither, and its
-notices carry no LGPL text.
+On Android, Linux, macOS and in MinGW builds, libdwarf is under the LGPL and linked statically. The notices name its
+source and the engine version, so players can relink a game's player from the public engine; ship from a commit that
+is public. OpenAL Soft is under the LGPL too, and the engine builds without it (`deps/audiopp/CMakeLists.txt`), so a
+Windows build other than MinGW links no LGPL library and its notices carry no LGPL text.
 A closed fork of the engine must give its players what they need to relink it some other way.
 
 ## License

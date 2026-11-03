@@ -84,7 +84,7 @@ namespace Unravel.Core
     public static class Audio
     {
         /// <summary>
-        /// Soft cap on concurrent OpenAL voices before stealing begins.
+        /// Soft cap on concurrent voices before stealing begins.
         /// </summary>
         public static int maxVoices => internal_m2n_audio_get_max_voices();
 

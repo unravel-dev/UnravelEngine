@@ -22,10 +22,13 @@ description: >-
 ## Architecture
 
 - `audiopp` (ours; extend it only when the engine cannot do without) plays through a backend chosen when the
-  device opens: `--audio-backend openal|miniaudio`, else the `AUDIOPP_DEFAULT_BACKEND` CMake option, which
-  `deps/audiopp/CMakeLists.txt` sets to miniaudio. The `AUDIOPP_WITH_OPENAL` and `AUDIOPP_WITH_MINIAUDIO` options leave one out of the build. Each backend's code is in
+  device opens: `--audio-backend openal|miniaudio`, else the `AUDIOPP_DEFAULT_BACKEND` CMake option. The
+  `AUDIOPP_WITH_OPENAL` and `AUDIOPP_WITH_MINIAUDIO` options leave one out of the build. Each backend's code is in
   `audiopp/impl/<backend>/`, and the public classes never name one.
-- **OpenAL Soft**: linked statically; on Android it plays through Oboe (AAudio), and the build fails without it.
+- The engine chooses in `deps/audiopp/CMakeLists.txt`, for the editor and every player alike: miniaudio alone, with
+  OpenAL Soft neither built nor linked. The backend is a build choice, not a project setting as physics is.
+- **OpenAL Soft** (LGPL, off in the engine): linked statically where it is built; on Android it plays through Oboe
+  (AAudio), and the build fails without it.
 - **miniaudio**: the single header in `3rdparty/miniaudio`. `ma_sound` reads and resamples, and `voice_node` pans
   and sends: its stereo law, distance gain and filters are measured to match OpenAL Soft's, so a backend change
   does not move the mix. Change one and the parity tests in audiopp's own suite say so.

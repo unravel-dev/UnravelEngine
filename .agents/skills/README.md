@@ -41,7 +41,7 @@ Start non-trivial work with **`unravel-triage`**.
 | `unravel-physics` | Bullet, collisions, character controllers |
 | `unravel-animation` | Skeletal animation, blend spaces |
 | `unravel-ui-rmlui` | In-game RmlUi documents |
-| `unravel-audio` | OpenAL sources, listeners, spatial audio |
+| `unravel-audio` | Audio sources, listeners, spatial audio |
 | `unravel-prefabs` | Prefab assets, nested instances, statement lists / overrides |
 | `unravel-profiler-debug` | GPU timeline, eviction stats, frame debugging |
 | `unravel-materials` | PBR `.mat` / MCP materials |
