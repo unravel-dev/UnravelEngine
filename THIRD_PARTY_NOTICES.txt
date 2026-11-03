@@ -7,16 +7,16 @@ list.
 
 LIBRARIES UNDER THE GNU LESSER GENERAL PUBLIC LICENSE
 
-This game's player is statically linked with OpenAL Soft on every platform, and
-with libdwarf on Android, Linux and macOS and in MinGW builds on Windows. Both
-libraries are free software, covered by the licenses below. You may change them
-and relink the player with your changed copies, change the player for your own
-use, and reverse engineer it to debug such changes.
-
-Everything needed to do so is available, for no more than the cost of copying:
+This game's player is statically linked with these libraries:
 
   OpenAL Soft 1.24.3: https://github.com/kcat/openal-soft/tree/1.24.3
   libdwarf-lite: https://github.com/jeremy-rifkin/libdwarf-lite/tree/5dfb2cd2aacf2bf473e5bfea79e41289f88b3a5f
+
+They are free software, covered by the licenses below. You may change them and
+relink the player with your changed copies, change the player for your own use,
+and reverse engineer it to debug such changes. Everything needed to do so is
+available at the addresses above and here, for no more than the cost of copying:
+
   Unravel Engine, which holds the rest of the player's source:
     https://github.com/unravel-dev/UnravelEngine
   Engine version of this player: @ENGINE_VERSION@

@@ -88,7 +88,7 @@ void write_text_or_throw(const fs::path& file, const std::string& text);
 /// The key=value lines of a stamp the build left beside what it made; empty for a missing file.
 auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>;
 /// Why the desktop player at `player` cannot ship from an editor of `engine_version`, in one sentence, or empty.
-/// A deploy names that version in the game's license notices, so a player of another build would not match them.
+/// A player of another build may not read the data this editor deploys.
 auto get_player_version_problem(const fs::path& player, const std::string& engine_version) -> std::string;
 /// Overlays the cooked variants the filter keeps onto loose compiled files in `destination`; an earlier
 /// folder's variant wins.

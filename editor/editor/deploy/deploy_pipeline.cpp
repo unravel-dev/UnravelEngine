@@ -19,7 +19,6 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/meta/settings/settings.hpp>
-#include <engine/third_party_notices.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <process/process.h>
@@ -45,7 +44,6 @@ constexpr const char* STEP_COOK = "Cooking Prefabs";
 constexpr const char* STEP_COOK_TEXTURES = "Cooking Textures";
 constexpr const char* STEP_DEPENDENCIES = "Dependencies";
 constexpr const char* STEP_SETTINGS = "Project Settings";
-constexpr const char* STEP_THIRD_PARTY_NOTICES = "Third-Party Notices";
 constexpr const char* STEP_PROJECT_DATA = "Project Data";
 constexpr const char* STEP_ENGINE_DATA = "Engine Data";
 constexpr const char* STEP_ANDROID_PACKAGE = "Android Package";
@@ -55,7 +53,6 @@ constexpr const char* COOK_STAGING_PREFIX = "unravel-deploy-cook-";
 constexpr const char* DEPENDENCY_SCANNER = "editor:/tools/dependencies/Dependencies.exe";
 constexpr const char* SETTINGS_FOLDER = "settings";
 constexpr const char* SETTINGS_FILE = "settings.cfg";
-constexpr const char* THIRD_PARTY_NOTICES_FILE = "THIRD_PARTY_NOTICES.txt";
 /// The player's symbols beside it, where its build put them (Windows).
 constexpr const char* PLAYER_SYMBOLS_EXTENSION = ".pdb";
 
@@ -82,8 +79,6 @@ struct deploy_plan
     settings runtime_settings;
     /// The build's data/app/settings folder.
     fs::path settings_folder;
-    /// The license notices: beside the game's executable, or in the data of an Android package.
-    fs::path notices_file;
     protocol_job app;
     protocol_job engine;
     runtime_plan runtime;
@@ -277,7 +272,6 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     plan.version_info = make_version_info(plan.runtime_settings.app, plan.executable);
     plan.dependency_scanner = fs::resolve_protocol(DEPENDENCY_SCANNER);
     plan.settings_folder = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
-    plan.notices_file = (is_android(plan) ? data_params.deploy_location / DATA_FOLDER : plan.output) / THIRD_PARTY_NOTICES_FILE;
     plan.textures = make_texture_cook_plan(get_project_root(),
                                            params,
                                            plan.runtime_settings,
@@ -398,14 +392,6 @@ void deploy_settings_file(const deploy_plan& plan)
     }
 }
 
-/// The license notices of what the game ships with, as a file anyone who has the game can open.
-void deploy_third_party_notices(const deploy_plan& plan)
-{
-    fs::error_code ec;
-    fs::create_directories(plan.notices_file.parent_path(), ec);
-    write_text_or_throw(plan.notices_file, get_third_party_notices());
-}
-
 /// The steps that need nothing but the plan; Project Data waits for Cooking Textures instead.
 auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<deploy_step>
 {
@@ -416,11 +402,6 @@ auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<d
         steps.push_back({STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }});
     }
     steps.push_back({STEP_SETTINGS, [plan]() { deploy_settings_file(*plan); }});
-    // They name the player's engine version, so a deploy that leaves an earlier player in place leaves its notices too.
-    if(plan->params.deploy_dependencies || is_android(*plan))
-    {
-        steps.push_back({STEP_THIRD_PARTY_NOTICES, [plan]() { deploy_third_party_notices(*plan); }});
-    }
     steps.push_back({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }});
     steps.push_back({plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime); }});
     return steps;

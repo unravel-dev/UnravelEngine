@@ -28,8 +28,8 @@ endif()
 unravel_set_default_thread_stack(${target_name})
 add_definitions(-DPLAYER_NAME="unravel-player")
 
-# The deploy ships this player with notices naming the editor's engine version, and refuses it when the two differ.
-# Written when the player links, so building the editor alone leaves the older version here.
+# The deploy refuses a player of another engine version than the editor's, which may not read the data the editor
+# deploys. Written when the player links, so building the editor alone leaves the older version here.
 if(NOT ANDROID)
     set(player_stamp ${CMAKE_CURRENT_BINARY_DIR}/player.stamp)
     file(GENERATE OUTPUT ${player_stamp} CONTENT "engine_version=${GIT_VERSION}\n")

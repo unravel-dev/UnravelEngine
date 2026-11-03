@@ -35,10 +35,9 @@ namespace Unravel.Core
 
         /// <summary>
         /// The license notices of everything the game ships with: the engine, its libraries and its
-        /// fonts. Some of these licenses ask that players can read them, so show this text on a credits
-        /// or licenses screen, above all on Android, where players cannot open the game's files. Deploy
-        /// also writes it beside the game on desktop as THIRD_PARTY_NOTICES.txt. Your own game's assets
-        /// and libraries are not in it.
+        /// fonts. Some of these licenses ask that players can read them, and Deploy writes no file of
+        /// them, so show this text on a credits or licenses screen. It names only the libraries this
+        /// build of the player links. Your own game's assets and libraries are not in it.
         /// </summary>
         public static string thirdPartyNotices
         {
