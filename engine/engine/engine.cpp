@@ -317,7 +317,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<play_mode>();
     ctx.add<threader>();
     ctx.add<renderer>(ctx, parser);
-    ctx.add<audio_system>();
+    ctx.add<audio_system>(parser);
     ctx.add<asset_manager>(ctx);
     ctx.add<ecs>();
     ctx.add<rendering_system>();
@@ -429,7 +429,7 @@ auto engine::init_core(const cmd_line::parser& parser, const std::function<bool(
     }
 
     ls.begin_module("Audio");
-    if(!ls.check(ctx.get_cached<audio_system>().init(ctx)))
+    if(!ls.check(ctx.get_cached<audio_system>().init(ctx, parser)))
     {
         return false;
     }

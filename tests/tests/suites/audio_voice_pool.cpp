@@ -5,7 +5,7 @@
  *   cmake --build <build-dir> --target tests
  *   <build-dir>/bin/unravel-tests --suite "audio voice pool"
  *
- * Every OpenAL source the engine plays lives in audio_voice_pool: entity-less one-shots and the voices
+ * Every source the engine plays lives in audio_voice_pool: entity-less one-shots and the voices
  * audio source components hold through an audio_voice_handle. This pins:
  *   - the voice cap frees non-looping first, then lower priority, then one-shots, then the older voice;
  *   - a one-shot refused by its clip limit frees nothing, and one at its clip's voice limit stops only
@@ -16,8 +16,8 @@
  *   - an audio source component takes no voice without a playable clip and loses a stolen one cleanly;
  *   - while nothing mixes, voices nobody heard end instead of waiting, and loops and voices under way wait;
  *   - a lost device is reported once and the attempts to reopen it back off.
- * The runner has no audio device, so the suite opens OpenAL's silent null backend itself; the rank checks
- * run even when no device can be opened.
+ * The runner has no audio device, so the suite opens the silent null device of each backend this build
+ * has; the rank checks run even when no device can be opened.
  */
 
 #include "../tests.h"
@@ -29,6 +29,7 @@
 #include <engine/audio/ecs/systems/audio_system.h>
 #include <engine/threading/threader.h>
 
+#include <audiopp/backend.h>
 #include <audiopp/device.h>
 #include <audiopp/exception.h>
 #include <audiopp/source.h>
@@ -37,7 +38,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <memory>
 #include <string>
 #include <thread>
@@ -102,16 +102,6 @@ auto one_shot(int priority) -> one_shot_params
     one_shot_params params;
     params.priority = priority;
     return params;
-}
-
-/// The runner has no device: point OpenAL at its silent null backend before the first device opens.
-void use_silent_audio_backend()
-{
-#ifdef _WIN32
-    _putenv_s("ALSOFT_DRIVERS", "null");
-#else
-    setenv("ALSOFT_DRIVERS", "null", 1);
-#endif
 }
 
 void test_rank_order()
@@ -397,31 +387,37 @@ auto run_audio_voice_pool_suite(rtti::context& ctx) -> int
     test_rank_order();
     test_distance_range();
     test_device_watch_paces_attempts();
-    use_silent_audio_backend();
-    std::unique_ptr<audio::device> device;
-    try
+    for(const auto backend : audio::get_available_backends())
     {
-        device = std::make_unique<audio::device>();
-    }
-    catch(const audio::exception& e)
-    {
-        std::printf("  SKIP device checks: %s\n", e.what());
-    }
-    if(device)
-    {
-        std::printf("  device: %s\n", device->get_device_id().c_str());
-        // Sources must be gone before the device closes: every pool below is scoped inside this block.
-        const auto clip = make_clip(long_clip_seconds);
-        const auto short_clip = make_clip(short_clip_seconds);
-        test_cap_frees_lowest_rank(clip);
-        test_refused_one_shot_frees_nothing(clip);
-        test_clip_limit_frees_only_its_own(clip);
-        test_handles();
-        test_set_distance(clip);
-        test_update_frees_finished(short_clip);
-        test_component_voices(ctx, clip);
-        test_unheard_voices_end_while_nothing_mixes(*device, clip);
-        ctx.get_cached<audio_system>().get_voices().stop_all();
+        std::printf("backend: %s\n", audio::get_backend_name(backend));
+        audio::device_config config;
+        config.backend = backend;
+        config.id = audio::null_device_id;
+        std::unique_ptr<audio::device> device;
+        try
+        {
+            device = std::make_unique<audio::device>(config);
+        }
+        catch(const audio::exception& e)
+        {
+            std::printf("  SKIP device checks: %s\n", e.what());
+        }
+        if(device)
+        {
+            std::printf("  device: %s\n", device->get_device_id().c_str());
+            // Sources must be gone before the device closes: every pool below is scoped inside this block.
+            const auto clip = make_clip(long_clip_seconds);
+            const auto short_clip = make_clip(short_clip_seconds);
+            test_cap_frees_lowest_rank(clip);
+            test_refused_one_shot_frees_nothing(clip);
+            test_clip_limit_frees_only_its_own(clip);
+            test_handles();
+            test_set_distance(clip);
+            test_update_frees_finished(short_clip);
+            test_component_voices(ctx, clip);
+            test_unheard_voices_end_while_nothing_mixes(*device, clip);
+            ctx.get_cached<audio_system>().get_voices().stop_all();
+        }
     }
     std::printf("audio voice pool: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

@@ -29,7 +29,7 @@ with gameplay scripted in C# on CoreCLR. It is in active development and not pro
 - **Animation** - animation controllers, blend spaces, humanoid retargeting and IK.
 - **Physics** - Box3D or Bullet backends.
 - **Particles, UI and audio** - particle system, HTML / CSS game UI (RmlUi) in screen and world
-  space, and 3D audio (OpenAL Soft).
+  space, and 3D audio (OpenAL Soft or miniaudio, chosen with `--audio-backend`).
 - **Editor** - scene editing, prefabs with overrides, asset browser and import pipeline,
   undo / redo, play mode and a profiler.
 - **Deploy** - one-click deploy for the desktop the editor runs on and for Android, with
@@ -165,6 +165,7 @@ Please keep pull requests focused and follow the style of the surrounding code.
 [Box3D](https://github.com/erincatto/box3d),
 [Bullet](https://github.com/bulletphysics/bullet3),
 [OpenAL Soft](https://github.com/kcat/openal-soft),
+[miniaudio](https://github.com/mackron/miniaudio),
 [FreeType](https://freetype.org),
 [GLM](https://github.com/g-truc/glm),
 [spdlog](https://github.com/gabime/spdlog),

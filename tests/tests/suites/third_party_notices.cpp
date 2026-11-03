@@ -43,6 +43,12 @@ auto has_text(const std::string& text, const std::string& part) -> bool
     return text.find(part) != std::string::npos;
 }
 
+void test_names_both_audio_backends(const std::string& actual)
+{
+    check(has_text(actual, "miniaudio 0.11.26: Public domain, or MIT No Attribution."), "miniaudio is in the list");
+    check(has_text(actual, "Copyright 2026 David Reid"), "miniaudio's license text is there");
+}
+
 void test_names_the_lgpl_libraries(const std::string& actual)
 {
     const std::string expected_parts[] = {"OpenAL Soft 1.24.3",
@@ -76,6 +82,7 @@ auto run_third_party_notices_suite(rtti::context& /*ctx*/) -> int
     g_failures = 0;
     const auto actual = get_third_party_notices();
     test_names_the_lgpl_libraries(actual);
+    test_names_both_audio_backends(actual);
     test_names_the_engine_version(actual);
     test_is_ascii(actual);
     std::printf("third party notices: %d checks, %d failures\n", g_checks, g_failures);

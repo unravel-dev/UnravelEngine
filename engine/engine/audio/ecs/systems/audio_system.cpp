@@ -17,6 +17,26 @@ namespace unravel
 namespace
 {
 
+constexpr const char* BACKEND_OPTION = "audio-backend";
+
+/// The backend the command line asks for, or the build's default when it asks for none or one this build lacks.
+auto get_requested_backend(const cmd_line::parser& parser) -> audio::backend_type
+{
+    const auto fallback = audio::get_default_backend();
+    std::string name;
+    if(!parser.try_get(BACKEND_OPTION, name) || name.empty())
+    {
+        return fallback;
+    }
+    audio::backend_type requested = fallback;
+    if(!audio::find_backend(name, requested) || !audio::is_backend_available(requested))
+    {
+        APPLOG_WARNING("This build has no audio backend called {}. Using {}.", name, audio::get_backend_name(fallback));
+        return fallback;
+    }
+    return requested;
+}
+
 void on_create_component(entt::registry& r, entt::entity e)
 {
     auto& comp = r.get<audio_source_component>(e);
@@ -49,7 +69,12 @@ void on_destroy_active_component(entt::registry& r, entt::entity e)
 
 } // namespace
 
-auto audio_system::init(rtti::context& ctx) -> bool
+audio_system::audio_system(cmd_line::parser& parser)
+{
+    parser.set_optional<std::string>("", BACKEND_OPTION, "", "Select the audio backend: openal or miniaudio.");
+}
+
+auto audio_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
@@ -80,8 +105,11 @@ auto audio_system::init(rtti::context& ctx) -> bool
             APPLOG_TRACE(s);
         });
 
-    audio::device::print_devices();
-    device_ = std::make_unique<audio::device>();
+    audio::device_config config;
+    config.backend = get_requested_backend(parser);
+    audio::device::print_devices(config.backend);
+    device_ = std::make_unique<audio::device>(config);
+    APPLOG_INFO("Audio plays through {} on {}.", audio::get_backend_name(config.backend), device_->get_device_id());
 
     return true;
 }

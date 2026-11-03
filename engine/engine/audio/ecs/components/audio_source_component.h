@@ -250,7 +250,7 @@ private:
     auto create_source() -> bool;
 
     /**
-     * @brief The voice's OpenAL source, or null when the source holds no live voice.
+     * @brief The voice's source, or null when the source holds no live voice.
      */
     auto get_source() const -> audio::source*;
 

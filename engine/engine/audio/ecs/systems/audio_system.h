@@ -8,6 +8,7 @@
 #include <engine/assets/asset_handle.h>
 #include <audiopp/device.h>
 #include <base/basetypes.hpp>
+#include <cmd_line/parser.h>
 #include <context/context.hpp>
 #include <engine/frame_times.h>
 #include <cstddef>
@@ -27,11 +28,17 @@ public:
     static constexpr std::size_t max_concurrent_voices = 64;
 
     /**
+     * @brief Registers the command line options the audio system reads.
+     */
+    explicit audio_system(cmd_line::parser& parser);
+
+    /**
      * @brief Initializes the audio system with the given context.
      * @param ctx The context to initialize with.
+     * @param parser Chooses the audio backend with --audio-backend, over the build's default.
      * @return True if initialization was successful, false otherwise.
      */
-    auto init(rtti::context& ctx) -> bool;
+    auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
 
     /**
      * @brief Deinitializes the audio system with the given context.

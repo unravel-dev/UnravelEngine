@@ -140,7 +140,7 @@ private:
 };
 
 /**
- * @brief Every OpenAL source the engine plays: entity-less one-shots and the voices audio source
+ * @brief Every source the engine plays: entity-less one-shots and the voices audio source
  * components hold through an audio_voice_handle. A new voice over the cap frees the live voice
  * is_freed_before ranks first. A voice is addressed by an id (slot + generation), so an id of a
  * finished voice is harmless.
