@@ -178,11 +178,11 @@ compiles it in and leaves out the libraries a build does not link. Scripts read 
 `Application.thirdPartyNotices`, and Deploy writes no file of it, so a game shows it on a credits or licenses screen.
 Add new dependencies to it.
 
-On Android, Linux, macOS and in MinGW builds, libdwarf is under the LGPL and linked statically. The notices name its
-source and the engine version, so players can relink a game's player from the public engine; ship from a commit that
-is public. OpenAL Soft is under the LGPL too, and the engine builds without it (`deps/audiopp/CMakeLists.txt`), so a
-Windows build other than MinGW links no LGPL library and its notices carry no LGPL text.
-A closed fork of the engine must give its players what they need to relink it some other way.
+The engine links no library under the LGPL: audiopp builds without OpenAL Soft (`deps/audiopp/CMakeLists.txt`) and
+cpptrace without libdwarf (`deps/3rdparty/cpptrace/CMakeLists.txt`), so the notices carry no LGPL text. A build that
+links either names its source and the engine version, so players can relink the game's player from the public engine;
+ship such a build from a commit that is public. A closed fork must give its players what they need to relink it some
+other way.
 
 ## License
 

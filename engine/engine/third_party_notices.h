@@ -13,7 +13,7 @@ struct linked_libraries
 {
     /// OpenAL Soft, under the LGPL, and Oboe, which it plays through on Android.
     bool has_openal_soft{};
-    /// libdwarf, under the LGPL, which cpptrace reads symbols with on Android, Linux, macOS and MinGW.
+    /// libdwarf, under the LGPL, when cpptrace is set to read symbols with it.
     bool has_libdwarf{};
     bool has_miniaudio{};
 };

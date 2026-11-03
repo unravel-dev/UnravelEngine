@@ -8,7 +8,7 @@
  * The LGPL asks every game to say which libraries it links and where their source is. This pins:
  *   - the text carries the libraries under the LGPL, with their license texts and source addresses;
  *   - a build without them carries no word of the LGPL, and only their own lines and license texts go;
- *   - this binary's text names libdwarf exactly where cpptrace reads symbols with it;
+ *   - this build links no library under the LGPL, and its text names only the libraries it links;
  *   - it names the engine version of this binary instead of the file's placeholder;
  *   - it stays ASCII, as every text in the repository does.
  */
@@ -137,14 +137,9 @@ void test_leaves_out_miniaudio_without_it()
 void test_follows_this_build()
 {
     const auto libraries = get_linked_libraries();
-#if defined(_WIN32) && !defined(__MINGW32__)
-    const bool expected_libdwarf = false;
-#else
-    const bool expected_libdwarf = true;
-#endif
-    check(libraries.has_libdwarf == expected_libdwarf,
-          "the build links libdwarf exactly where cpptrace reads symbols with it");
+    check(!libraries.has_libdwarf, "the build reads symbols with dladdr or dbghelp, not libdwarf");
     const auto actual = get_third_party_notices();
+    check(!has_text(actual, "GNU LESSER GENERAL PUBLIC LICENSE"), "the build links no library under the LGPL");
     check(has_text(actual, "  libdwarf-lite:") == libraries.has_libdwarf,
           "this binary's notices name libdwarf only when it links it");
     check(has_text(actual, "  OpenAL Soft 1.24.3:") == libraries.has_openal_soft,
