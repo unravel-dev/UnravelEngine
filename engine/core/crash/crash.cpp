@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cpptrace/cpptrace.hpp>
+#include <cpptrace/formatting.hpp>
 #include <cstdint>
 #include <cstdlib>
 #include <csignal>
@@ -66,6 +67,14 @@ constexpr std::size_t k_emergency_buf = 16384;
 auto demangle_exception_type(const std::exception& e) -> std::string
 {
     return cpptrace::demangle(typeid(e).name());
+}
+
+/// Writes each frame's address inside its module rather than in memory: it is the same in every run, so a
+/// player that carries no debug information still gets file and line afterwards from the symbols its build kept.
+auto format_trace(const cpptrace::stacktrace& stack_trace) -> std::string
+{
+    const auto formatter = cpptrace::formatter{}.addresses(cpptrace::formatter::address_mode::object);
+    return formatter.format(stack_trace, false);
 }
 
 auto append_cstr(char* dst, std::size_t capacity, std::size_t& used, const char* text) -> void
@@ -186,7 +195,7 @@ auto capture_trace_text(char* buf, std::size_t capacity) noexcept -> std::size_t
         try
         {
             const auto stack_trace = cpptrace::generate_trace(1);
-            const std::string formatted = stack_trace.to_string(false);
+            const std::string formatted = format_trace(stack_trace);
             append_cstr(buf, capacity, used, formatted.c_str());
             append_cstr(buf, capacity, used, "\n");
             return used;
@@ -252,7 +261,7 @@ auto capture_trace_text(char* buf, std::size_t capacity) noexcept -> std::size_t
     try
     {
         const auto stack_trace = cpptrace::generate_trace(1);
-        const std::string formatted = stack_trace.to_string(false);
+        const std::string formatted = format_trace(stack_trace);
         append_cstr(buf, capacity, used, "\nSymbolized stack (best-effort):\n");
         append_cstr(buf, capacity, used, formatted.c_str());
         append_cstr(buf, capacity, used, "\n");
@@ -670,13 +679,12 @@ auto posix_signal_handler(int sig, siginfo_t* info, void* /*ucontext*/) -> void
 auto install_platform_handlers() -> void
 {
 #if UNRAVEL_PLATFORM_WINDOWS
-    // Primary path for real access violations / stack overflow / etc.
+    // Faults on every thread: access violations, stack overflow, illegal instructions. SIGSEGV, SIGILL and SIGFPE
+    // keep their default action: the CRT raises them for faults on the main thread alone, without the exception
+    // record a minidump needs, and with no handler for them it leaves those faults to this filter too.
     SetUnhandledExceptionFilter(unhandled_exception_filter);
-    // CRT-mediated signals (abort, raise, some translated faults).
+    // abort() and console interrupts, which reach the process only as CRT signals.
     std::signal(SIGABRT, +[](int sig) { handle_signal(sig); });
-    std::signal(SIGILL, +[](int sig) { handle_signal(sig); });
-    std::signal(SIGFPE, +[](int sig) { handle_signal(sig); });
-    std::signal(SIGSEGV, +[](int sig) { handle_signal(sig); });
     std::signal(SIGINT, +[](int sig) { handle_signal(sig); });
     std::signal(SIGTERM, +[](int sig) { handle_signal(sig); });
 #ifdef SIGBREAK
