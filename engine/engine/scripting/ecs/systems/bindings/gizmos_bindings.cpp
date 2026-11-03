@@ -35,27 +35,24 @@ void internal_m2n_gizmos_add_ray(const math::color& color,
                                  const math::vec3& direction,
                                  float max_distance)
 {
+    const float direction_length = math::length(direction);
+    if(direction_length <= 0.0f)
+    {
+        return;
+    }
+    // The direction need not be normalized: the ray is max_distance long whatever its length.
+    const math::vec3 end = position + direction * (max_distance / direction_length);
     auto& ctx = engine::context();
     auto& path = ctx.get_cached<rendering_system>();
     path.add_debugdraw_call(
-        [color, position, direction, max_distance](gfx::dd_raii& dd)
+        [color, position, end](gfx::dd_raii& dd)
         {
             DebugDrawEncoderScopePush scope(dd.encoder);
             dd.encoder.setColor(color);
             dd.encoder.setWireframe(true);
-
-            bx::Ray ray;
-            ray.pos.x = position.x;
-            ray.pos.y = position.y;
-            ray.pos.z = position.z;
-
-            ray.dir.x = direction.x;
-            ray.dir.y = direction.y;
-            ray.dir.z = direction.z;
-
             dd.encoder.push();
-            dd.encoder.moveTo(ray.pos);
-            dd.encoder.lineTo(bx::mul(ray.dir, max_distance));
+            dd.encoder.moveTo(position.x, position.y, position.z);
+            dd.encoder.lineTo(end.x, end.y, end.z);
             dd.encoder.pop();
         });
 }

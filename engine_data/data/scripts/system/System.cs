@@ -333,10 +333,10 @@ namespace Unravel.Core
         /// </summary>
         public void SetTypePriority(Type t, int priority)
         {
-            bool needsResort = typePriorities.TryGetValue(t, out int oldPriority) && oldPriority != priority;
             typePriorities[t] = priority;
 
-            if (needsResort && bucketsByType.TryGetValue(t, out var bucket))
+            // A bucket created before any call carries the default priority, which typePriorities does not hold.
+            if (bucketsByType.TryGetValue(t, out var bucket) && bucket.priority != priority)
             {
                 bucket.priority = priority;
                 ResortBuckets();
