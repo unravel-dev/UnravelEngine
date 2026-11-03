@@ -1854,8 +1854,10 @@ void flatten_hierarchy(entt::const_handle obj, std::vector<entity_data<entt::con
     }
 }
 
+/// One root's entities, and what its document states about the content it nests: the content of a
+/// prefab file, and of one element of a scene's "roots".
 template<typename Archive>
-void save_to_archive(Archive& ar, entt::const_handle obj)
+void save_root_content(Archive& ar, entt::const_handle obj)
 {
     bool pushed = push_save_context();
     if(get_save_context().registry == nullptr)
@@ -1884,9 +1886,6 @@ void save_to_archive(Archive& ar, entt::const_handle obj)
 
     try_save(ar, ser20::make_nvp("entities", entities));
 
-    static const std::string version = "1.0.0";
-    try_save(ar, ser20::make_nvp("version", version));
-
     // Written only when the deploy bake has already resolved nested instances, so an
     // ordinary save never claims it. Absent means "not resolved", which is the safe
     // reading for every document written before this existed.
@@ -1903,8 +1902,22 @@ void save_to_archive(Archive& ar, entt::const_handle obj)
     pop_save_context(pushed);
 }
 
+/// A single-root document: a prefab file, and the clipboard, clone and undo copies of a subtree.
 template<typename Archive>
-auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::handle
+void save_to_archive(Archive& ar, entt::const_handle obj)
+{
+    // First, so the layout can be told from the head of the file.
+    const uint32_t version = PREFAB_DOCUMENT_VERSION;
+    try_save(ar, ser20::make_nvp("version", version));
+    save_root_content(ar, obj);
+}
+
+/// Reads one root's entities. A scene in the first layout keeps every root's keys side by side in
+/// one object, told apart only by reading them in file order, so there the root's own "version"
+/// string is read too, to step past it.
+template<typename Archive>
+auto load_from_archive_impl(Archive& ar, entt::registry& registry, bool is_first_scene_layout = false)
+    -> entt::handle
 {
     // The document's statements, before its records: the filter asks "does this document state
     // it" while they load. Only a prefab document carries them; a scene calls this once per
@@ -1922,8 +1935,11 @@ auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::hand
     std::vector<entity_data<entt::handle>> entities;
     try_load(ar, ser20::make_nvp("entities", entities));
 
-    std::string version;
-    try_load(ar, ser20::make_nvp("version", version));
+    if(is_first_scene_layout)
+    {
+        std::string root_version;
+        try_load(ar, ser20::make_nvp("version", root_version));
+    }
 
     bool nesting_resolved = false;
     if(try_load(ar, ser20::make_nvp("nesting_resolved", nesting_resolved)) && nesting_resolved)
@@ -2008,7 +2024,7 @@ void load_from_archive(Archive& ar, entt::handle& obj)
     obj = load_from_archive_start(ar, *obj.registry());
 }
 
-/// One root of a scene file: the root's entities, written as a prefab file holds them.
+/// One root of a scene file: the root's content, as a prefab file holds it without its version.
 template<typename Handle>
 struct scene_root_record
 {
@@ -2022,7 +2038,7 @@ namespace ser20
 {
 SAVE(unravel::scene_root_record<entt::const_handle>)
 {
-    unravel::save_to_archive(ar, obj.root);
+    unravel::save_root_content(ar, obj.root);
 }
 
 LOAD(unravel::scene_root_record<entt::handle>)
@@ -2070,8 +2086,8 @@ void save_to_archive(Archive& ar, const entt::registry& reg)
     }
 
     // First, so the layout can be told from the head of the file.
-    const uint32_t format = SCENE_DOCUMENT_FORMAT;
-    try_save(ar, ser20::make_nvp("format", format));
+    const uint32_t version = SCENE_DOCUMENT_VERSION;
+    try_save(ar, ser20::make_nvp("version", version));
 
     if(get_save_context().nesting_resolved)
     {
@@ -2084,21 +2100,68 @@ void save_to_archive(Archive& ar, const entt::registry& reg)
     pop_save_context(pushed);
 }
 
-void log_unreadable_scene_format(uint32_t format, hpp::string_view key)
+/// Logs why a scene or prefab file was not loaded: a newer engine wrote it in a layout this one does not read.
+void log_unreadable_document(hpp::string_view kind, uint32_t version, uint32_t newest, hpp::string_view key)
 {
-    APPLOG_ERROR("The scene {} is in scene format {}, which a newer engine wrote. This engine ({}) reads scene "
-                 "formats {} to {}, so the scene was not loaded.",
+    APPLOG_ERROR("The {} {} is in {} version {}, which a newer engine wrote. This engine ({}) reads {} {}, so "
+                 "the {} was not loaded.",
+                 kind,
                  key.empty() ? hpp::string_view("file") : key,
-                 format,
+                 kind,
+                 version,
                  version::get_current().to_string(),
-                 FIRST_SCENE_DOCUMENT_FORMAT,
-                 SCENE_DOCUMENT_FORMAT);
+                 kind,
+                 describe_readable_versions(newest),
+                 kind);
+}
+
+auto as_text(const std::vector<uint8_t>& buffer) -> hpp::string_view
+{
+    return {reinterpret_cast<const char*>(buffer.data()), buffer.size()};
+}
+
+/// Whether this build reads a prefab file, logging why not, before anything of it loads.
+auto can_read_prefab_file(const prefab& file, hpp::string_view key) -> bool
+{
+    const auto version = read_document_version(as_text(file.buffer.data));
+    if(is_readable_prefab_version(version))
+    {
+        return true;
+    }
+    log_unreadable_document("prefab", version, PREFAB_DOCUMENT_VERSION, key);
+    return false;
+}
+
+/// The scene layout that holds its roots in a "roots" array.
+constexpr uint32_t ROOTS_SCENE_DOCUMENT_VERSION = 2;
+
+/// The layout of a scene document. The first layout names none but always holds a root count, and
+/// its roots' own "version" strings sit at the same level, so the count is asked about first.
+template<typename Archive>
+auto read_scene_version(Archive& ar) -> uint32_t
+{
+    if constexpr(can_probe_names<Archive>)
+    {
+        if(ar.hasNextName("entities_count"))
+        {
+            return FIRST_DOCUMENT_VERSION;
+        }
+        // The second layout is the roots array, also where a file names no version for it.
+        if(!ar.hasNextName("version"))
+        {
+            return ar.hasNextName("roots") ? ROOTS_SCENE_DOCUMENT_VERSION : std::numeric_limits<uint32_t>::max();
+        }
+    }
+    // A version that is not a number is in no layout this build knows.
+    uint32_t version = std::numeric_limits<uint32_t>::max();
+    try_load(ar, ser20::make_nvp("version", version));
+    return version;
 }
 
 /// The roots of a scene file in the first layout: a root count, then one "entities" key per root
 /// in the same object, told apart only by reading the keys in file order.
 template<typename Archive>
-auto read_first_format_roots(Archive& ar, entt::registry& reg, size_t count) -> std::vector<entt::handle>
+auto read_first_layout_roots(Archive& ar, entt::registry& reg, size_t count) -> std::vector<entt::handle>
 {
     std::vector<entt::handle> roots;
     roots.reserve(count);
@@ -2106,7 +2169,7 @@ auto read_first_format_roots(Archive& ar, entt::registry& reg, size_t count) -> 
     {
         // load_from_archive_impl creates the entities it needs and returns the root, so no
         // scratch entity is handed in: it would be abandoned, one componentless entity per root.
-        roots.push_back(load_from_archive_impl(ar, reg));
+        roots.push_back(load_from_archive_impl(ar, reg, true));
     }
     return roots;
 }
@@ -2131,17 +2194,16 @@ auto read_roots(Archive& ar) -> std::vector<entt::handle>
 template<typename Archive>
 void load_from_archive(Archive& ar, entt::registry& reg)
 {
-    uint32_t format = FIRST_SCENE_DOCUMENT_FORMAT;
-    try_load(ar, ser20::make_nvp("format", format));
-    if(!is_readable_scene_format(format))
+    const uint32_t version = read_scene_version(ar);
+    if(!is_readable_scene_version(version))
     {
-        log_unreadable_scene_format(format, {});
+        log_unreadable_document("scene", version, SCENE_DOCUMENT_VERSION, {});
         return;
     }
 
     // The first layout's count is read before anything else, at the head of the file.
     size_t count = 0;
-    if(format == FIRST_SCENE_DOCUMENT_FORMAT)
+    if(version == FIRST_DOCUMENT_VERSION)
     {
         try_load(ar, ser20::make_nvp("entities_count", count));
     }
@@ -2157,7 +2219,7 @@ void load_from_archive(Archive& ar, entt::registry& reg)
     std::vector<entt::handle> roots;
     {
         APP_SCOPE_PERF("Scene/Load/Read Entities");
-        roots = format == FIRST_SCENE_DOCUMENT_FORMAT ? read_first_format_roots(ar, reg, count) : read_roots(ar);
+        roots = version == FIRST_DOCUMENT_VERSION ? read_first_layout_roots(ar, reg, count) : read_roots(ar);
     }
 
     // A scene from before ids named their document: attributed here, before any instance in
@@ -3220,6 +3282,12 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
     auto prefab = pfb.get();
     const auto& buffer = prefab->buffer.data;
 
+    // A newer layout is not read: what this build made of it would be saved back over it.
+    if(!buffer.empty() && !can_read_prefab_file(*prefab, pfb.id()))
+    {
+        return false;
+    }
+
     // An empty document loads nothing, and must say so: a caller that takes "true" as "the
     // replay ran" goes on to re-derive state from a replay that never happened.
     bool result = !buffer.empty();
@@ -3319,7 +3387,8 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
     auto prefab = pfb.get();
     const auto& buffer = prefab->buffer.data;
 
-    if(!buffer.empty())
+    // A newer layout is not read: what this build made of it would be saved back over it.
+    if(!buffer.empty() && can_read_prefab_file(*prefab, pfb.id()))
     {
         // APPLOG_INFO_PERF(std::chrono::microseconds);
 
@@ -3629,20 +3698,15 @@ void read_scene_into(const std::vector<uint8_t>& buffer, entt::registry& registr
     }
 }
 
-auto as_text(const std::vector<uint8_t>& buffer) -> hpp::string_view
-{
-    return {reinterpret_cast<const char*>(buffer.data()), buffer.size()};
-}
-
 /// Whether this build reads a scene file, logging why not, before anything of the current scene goes.
 auto can_read_scene_file(const scene_prefab& file, hpp::string_view key) -> bool
 {
-    const auto format = read_scene_document_format(as_text(file.buffer.data));
-    if(is_readable_scene_format(format))
+    const auto version = read_document_version(as_text(file.buffer.data));
+    if(is_readable_scene_version(version))
     {
         return true;
     }
-    log_unreadable_scene_format(format, key);
+    log_unreadable_document("scene", version, SCENE_DOCUMENT_VERSION, key);
     return false;
 }
 
@@ -3657,40 +3721,66 @@ auto skip_json_whitespace(hpp::string_view text, size_t position) -> size_t
 }
 } // namespace
 
-auto is_readable_scene_format(uint32_t format) -> bool
+auto describe_readable_versions(uint32_t newest) -> std::string
 {
-    return format >= FIRST_SCENE_DOCUMENT_FORMAT && format <= SCENE_DOCUMENT_FORMAT;
+    if(newest == FIRST_DOCUMENT_VERSION)
+    {
+        return fmt::format("version {}", newest);
+    }
+    return fmt::format("versions {} to {}", FIRST_DOCUMENT_VERSION, newest);
 }
 
-auto read_scene_document_format(hpp::string_view text) -> uint32_t
+auto is_readable_scene_version(uint32_t version) -> bool
 {
-    constexpr hpp::string_view format_key = "\"format\"";
+    return version >= FIRST_DOCUMENT_VERSION && version <= SCENE_DOCUMENT_VERSION;
+}
+
+auto is_readable_prefab_version(uint32_t version) -> bool
+{
+    return version >= FIRST_DOCUMENT_VERSION && version <= PREFAB_DOCUMENT_VERSION;
+}
+
+auto read_document_version(hpp::string_view text) -> uint32_t
+{
+    constexpr hpp::string_view version_key = "\"version\"";
     size_t position = skip_json_whitespace(text, 0);
     if(position >= text.size() || text[position] != '{')
     {
-        return FIRST_SCENE_DOCUMENT_FORMAT;
+        return FIRST_DOCUMENT_VERSION;
     }
     position = skip_json_whitespace(text, position + 1);
-    if(text.substr(position, format_key.size()) != format_key)
+    if(text.substr(position, version_key.size()) != version_key)
     {
-        return FIRST_SCENE_DOCUMENT_FORMAT;
+        return FIRST_DOCUMENT_VERSION;
     }
-    position = skip_json_whitespace(text, position + format_key.size());
+    position = skip_json_whitespace(text, position + version_key.size());
     if(position >= text.size() || text[position] != ':')
     {
-        return FIRST_SCENE_DOCUMENT_FORMAT;
+        return FIRST_DOCUMENT_VERSION;
     }
     position = skip_json_whitespace(text, position + 1);
-    uint32_t format = 0;
-    const auto result = std::from_chars(text.data() + position, text.data() + text.size(), format);
-    // A format this build cannot even read as a number is newer than any it knows.
-    return result.ec == std::errc{} ? format : std::numeric_limits<uint32_t>::max();
+    // The first layout wrote its version as the string "1.0.0", and never first.
+    if(position < text.size() && text[position] == '"')
+    {
+        return FIRST_DOCUMENT_VERSION;
+    }
+    uint32_t version = 0;
+    const auto result = std::from_chars(text.data() + position, text.data() + text.size(), version);
+    // A version this build cannot even read as a number is newer than any it knows.
+    return result.ec == std::errc{} ? version : std::numeric_limits<uint32_t>::max();
 }
 
-auto read_scene_document_format(const asset_handle<scene_prefab>& pfb) -> uint32_t
+auto read_document_version(const asset_handle<scene_prefab>& pfb) -> uint32_t
 {
-    const auto prefab = wait_for_scene_file(pfb);
-    return read_scene_document_format(as_text(prefab->buffer.data));
+    const auto file = wait_for_scene_file(pfb);
+    return read_document_version(as_text(file->buffer.data));
+}
+
+auto read_document_version(const asset_handle<prefab>& pfb) -> uint32_t
+{
+    // copy here to keep it alive
+    const auto file = pfb.get();
+    return read_document_version(as_text(file->buffer.data));
 }
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool

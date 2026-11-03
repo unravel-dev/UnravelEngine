@@ -3,6 +3,7 @@
 #include "mcp_project_paths.h"
 
 #include <editor/editing/editing_manager.h>
+#include <editor/editing/editor_actions.h>
 #include <engine/ecs/prefab.h>
 #include <uuid/uuid.h>
 
@@ -63,6 +64,11 @@ void register_prefab_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
 
+             // Refused before the open prefab is touched, and without the editor's popup.
+             if(const auto problem = editor_actions::find_newer_prefab_problem(target); !problem.empty())
+             {
+                 return {.text = problem, .is_error = true};
+             }
              auto& em = ctx.get_cached<editing_manager>();
              if(em.is_prefab_mode() && em.edited_prefab != target)
              {

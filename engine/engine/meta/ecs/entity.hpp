@@ -443,20 +443,31 @@ auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& regis
 
 void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj);
 
-/// The first scene file layout: one "entities" key per root in a single object, with a root count.
-constexpr uint32_t FIRST_SCENE_DOCUMENT_FORMAT = 1;
-/// The scene file layout this build writes: a "roots" array, one element per root. This build also
-/// reads every older layout. A scene in a newer layout comes from a newer engine and is refused,
-/// since this build would read it as empty and a save would write that back over it.
-constexpr uint32_t SCENE_DOCUMENT_FORMAT = 2;
+/// The first layout of scene and prefab files, which do not say which layout they are in. A scene
+/// in it holds one "entities" key per root in a single object, with a root count.
+constexpr uint32_t FIRST_DOCUMENT_VERSION = 1;
+/// The scene file layout this build writes: a numeric "version" first, then a "roots" array with
+/// one element per root. This build also reads every older layout. A scene in a newer layout comes
+/// from a newer engine and is refused, since this build would read it as empty and a save would
+/// write that back over it.
+constexpr uint32_t SCENE_DOCUMENT_VERSION = 2;
+/// The prefab file layout this build writes: a numeric "version" first, then the root's
+/// entities. A prefab in a newer layout is refused, as a scene is.
+constexpr uint32_t PREFAB_DOCUMENT_VERSION = 1;
 
+/// The versions from the first to @p newest in words, "version 1" or "versions 1 to 2", for messages.
+auto describe_readable_versions(uint32_t newest) -> std::string;
 /// Whether this build reads scene files in the given layout.
-auto is_readable_scene_format(uint32_t format) -> bool;
-/// The layout of a scene file, read from the head of its text: the writer puts "format" first, and
-/// a file that does not start with it is in the first layout.
-auto read_scene_document_format(hpp::string_view text) -> uint32_t;
+auto is_readable_scene_version(uint32_t version) -> bool;
+/// Whether this build reads prefab files in the given layout.
+auto is_readable_prefab_version(uint32_t version) -> bool;
+/// The layout of a scene or prefab file, read from the head of its text: the writers put a numeric
+/// "version" first, and a file that does not start with one is in the first layout.
+auto read_document_version(hpp::string_view text) -> uint32_t;
 /// The layout of a scene asset's file. Waits for the file.
-auto read_scene_document_format(const asset_handle<scene_prefab>& pfb) -> uint32_t;
+auto read_document_version(const asset_handle<scene_prefab>& pfb) -> uint32_t;
+/// The layout of a prefab asset's file. Waits for the file.
+auto read_document_version(const asset_handle<prefab>& pfb) -> uint32_t;
 
 void save_to_stream(std::ostream& stream, const scene& scn);
 void save_to_file(const std::string& absolute_path, const scene& scn);

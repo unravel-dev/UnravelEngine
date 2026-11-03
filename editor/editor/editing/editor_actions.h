@@ -83,6 +83,16 @@ struct editor_actions
     static auto open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool;
 
     /**
+     * @brief Why this editor cannot open a scene file, or empty when it can: a newer engine wrote it
+     * in a layout this one does not read, so it would open empty and a save would write that over it.
+     */
+    static auto find_newer_scene_problem(const asset_handle<scene_prefab>& asset) -> std::string;
+    /**
+     * @brief Why this editor cannot open a prefab file, or empty when it can, for the same reason.
+     */
+    static auto find_newer_prefab_problem(const asset_handle<prefab>& asset) -> std::string;
+
+    /**
      * @brief Opens the Animation Controller editor on a controller asset.
      */
     static void open_animation_controller(rtti::context& ctx, const asset_handle<animation_controller>& asset);

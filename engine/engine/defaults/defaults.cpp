@@ -970,6 +970,10 @@ auto defaults::create_prefab_at(rtti::context& ctx, scene& scn, const std::strin
     auto asset = am.get_asset<prefab>(key);
 
     auto object = scn.instantiate(asset);
+    if(!object)
+    {
+        return object;
+    }
 
     auto& trans_comp = object.get<transform_component>();
     trans_comp.set_position_global(pos);
@@ -986,7 +990,10 @@ auto defaults::create_prefab_at(rtti::context& ctx,
 {
     const auto placement = compute_drop_placement(scn, cam, pos);
     auto object = create_prefab_at(ctx, scn, key, placement.contact);
-    finalize_surface_placement(object, placement, align_to_surface);
+    if(object)
+    {
+        finalize_surface_placement(object, placement, align_to_surface);
+    }
     return object;
 }
 
@@ -1399,6 +1406,11 @@ void defaults::focus_camera_on_3d_scene_for_asset_preview<mesh>(rtti::context& c
 template<>
 void defaults::focus_camera_on_3d_scene_for_asset_preview<prefab>(rtti::context& ctx, const asset_preview_result& result)
 {
+    // A prefab that did not load (broken, or in a layout this build refuses) has nothing to frame.
+    if(!result.object)
+    {
+        return;
+    }
     auto bounds = calc_bounds_sphere_global(result.object);
     if(bounds.radius < 1.0f)
     {

@@ -338,9 +338,9 @@ void start_page::open_project(rtti::context& ctx, const std::string& path)
         message = "This project was last opened with a newer engine version than the one you are running.\n\n"
                   "  Project saved by: " + opened_by + "\n"
                   "  Running engine:   " + running + "\n\n"
-                  "Files the newer engine saved may be in formats this engine cannot read. Scenes in such a "
-                  "format are refused when you open them, but other files could open empty or in part, and "
-                  "saving them would overwrite what the newer engine wrote.\n"
+                  "Files the newer engine saved may be in formats this engine cannot read. Scenes and prefabs "
+                  "in such a format are refused when you open them, but other files could open empty or in "
+                  "part, and saving them would overwrite what the newer engine wrote.\n"
                   "Use the newer engine if you can, or back up the project folder yourself before proceeding.\n\n"
                   "Open the project anyway?";
         cancel_log = "Project open cancelled by user (project from a newer engine).";

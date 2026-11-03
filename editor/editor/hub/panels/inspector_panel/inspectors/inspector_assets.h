@@ -133,6 +133,8 @@ private:
     /// there is no prefab_component to find it by.
     entt::handle inspected_root_{};
     hpp::uuid inspected_uid_{};
+    /// The inspected version did not load: not tried again until the prefab changes.
+    bool inspected_failed_{};
 
 
 };

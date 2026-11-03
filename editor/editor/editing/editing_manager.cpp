@@ -28,6 +28,7 @@
 #include <engine/assets/asset_dependency_graph.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_writer.h>
+#include <editor/editing/editor_actions.h>
 #include <editor/events.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/system/project_manager.h>
@@ -835,7 +836,14 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         return;
     }
 
-    
+    // Asked before anything of the open scene or prefab changes.
+    if(const auto problem = editor_actions::find_newer_prefab_problem(prefab); !problem.empty())
+    {
+        APPLOG_ERROR("{}", problem);
+        ImBox::ShowError("Prefab from a newer engine", problem);
+        return;
+    }
+
     auto on_continue = [this,&ctx, prefab]()
     {
         // Store the prefab we're editing

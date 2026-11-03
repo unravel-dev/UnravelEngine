@@ -1347,8 +1347,8 @@ auto inspector_asset_handle_animation::inspect(rtti::context& ctx,
 auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const asset_handle<prefab>& prefab)
     -> entt::handle
 {
-    const bool cached = inspected_root_ && inspected_root_.valid() && inspected_uid_ == prefab.uid() &&
-                        inspected_version_ == prefab.version();
+    const bool is_same_prefab = inspected_uid_ == prefab.uid() && inspected_version_ == prefab.version();
+    const bool cached = is_same_prefab && (inspected_failed_ || (inspected_root_ && inspected_root_.valid()));
     if(cached)
     {
         return inspected_root_;
@@ -1358,6 +1358,12 @@ auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const 
     inspected_root_ = inspected_scene_.instantiate(prefab, false);
     inspected_uid_ = prefab.uid();
     inspected_version_ = prefab.version();
+    // A prefab that did not load (broken, or in a layout this build refuses) has nothing to inspect.
+    inspected_failed_ = !inspected_root_;
+    if(inspected_failed_)
+    {
+        return inspected_root_;
+    }
 
     // An instance of the prefab that is upstream of it - its edits are saved straight back
     // into the file. The tag keeps it from being synced against that file (which would put a
@@ -1413,6 +1419,13 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
             if(data && open_in_prefab_mode)
             {
                 ImGui::TextWrapped("This prefab is open in prefab mode. Edit it there.");
+            }
+            else if(data && !prefab_entity)
+            {
+                const auto problem = editor_actions::find_newer_prefab_problem(data);
+                ImGui::TextWrapped("%s",
+                                   problem.empty() ? "This prefab could not be loaded. The console says why."
+                                                   : problem.c_str());
             }
             else if(data)
             {

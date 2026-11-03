@@ -15,6 +15,7 @@
 
 #include <engine/ui/style_sheet.h>
 #include <engine/meta/ecs/components/all_components.h>
+#include <engine/meta/ecs/entity.hpp>
 
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
@@ -374,6 +375,11 @@ auto thumbnail_manager::get_thumbnail<gfx::shader>(const asset_handle<gfx::shade
 template<>
 auto thumbnail_manager::get_thumbnail<prefab>(const asset_handle<prefab>& asset) -> gfx::texture::ptr
 {
+    // A prefab in a layout this build refuses shows the plain icon rather than a preview of nothing.
+    if(asset.is_valid() && asset.is_ready() && !is_readable_prefab_version(read_document_version(asset)))
+    {
+        return thumbnails_.prefab.get();
+    }
     delta_t dt(0.016667f * 5.0f);
     int frames = 2;
     auto thumbnail = get_thumbnail_impl(gen_, asset, thumbnails_.transparent, thumbnails_.loading, frames, dt);

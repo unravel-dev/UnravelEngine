@@ -1317,6 +1317,10 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
     {
         cache_scene.unload();
         instance = cache_scene.instantiate(prefab);
+        if(!instance)
+        {
+            return false;
+        }
         instance.emplace<prefab_version_t>(prefab.version());
     }
 

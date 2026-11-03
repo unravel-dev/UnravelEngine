@@ -1898,9 +1898,19 @@ auto count_repeated_keys(const simdjson::dom::element& element) -> size_t
     return repeated;
 }
 
+auto count_occurrences(const std::string& text, const std::string& what) -> size_t
+{
+    size_t count = 0;
+    for(auto position = text.find(what); position != std::string::npos; position = text.find(what, position + 1))
+    {
+        ++count;
+    }
+    return count;
+}
+
 /// The same scene in the first layout, as its writer wrote it: a root count, then the members of
-/// every root side by side in one object.
-auto to_first_scene_format(const std::string& text) -> std::string
+/// every root side by side in one object, each root followed by its "version" string.
+auto to_first_scene_layout(const std::string& text) -> std::string
 {
     simdjson::dom::parser parser;
     simdjson::dom::element doc;
@@ -1913,14 +1923,38 @@ auto to_first_scene_format(const std::string& text) -> std::string
     {
         return {};
     }
-    std::string first_format = "{\"entities_count\":" + std::to_string(roots.size());
+    std::string first_layout = "{\"entities_count\":" + std::to_string(roots.size());
     for(const auto root : roots)
     {
         const std::string members = simdjson::minify(root);
-        first_format += "," + members.substr(1, members.size() - 2);
+        first_layout += "," + members.substr(1, members.size() - 2) + ",\"version\":\"1.0.0\"";
     }
-    first_format += "}";
-    return first_format;
+    first_layout += "}";
+    return first_layout;
+}
+
+/// The same prefab in the first layout: no version at its head, the string "1.0.0" after the entities.
+auto to_first_prefab_layout(const std::string& text) -> std::string
+{
+    static const std::regex head_version(R"re("version"\s*:\s*[0-9]+\s*,)re");
+    auto first_layout = std::regex_replace(text, head_version, "", std::regex_constants::format_first_only);
+    const auto end = first_layout.rfind('}');
+    if(end == std::string::npos)
+    {
+        return {};
+    }
+    first_layout.insert(end, ",\"version\":\"1.0.0\"");
+    return first_layout;
+}
+
+/// The same document with another version at its head.
+auto with_head_version(const std::string& text, uint32_t version) -> std::string
+{
+    static const std::regex head_version(R"re("version"\s*:\s*[0-9]+)re");
+    return std::regex_replace(text,
+                              head_version,
+                              "\"version\": " + std::to_string(version),
+                              std::regex_constants::format_first_only);
 }
 
 auto count_scene_roots(const scene& scn) -> size_t
@@ -1985,8 +2019,8 @@ void test_scene_and_prefab_documents_are_not_interchangeable()
         check_eq(count_scene_roots(dst), size_t{0}, "the single-root reader refuses a scene document");
     }
     {
-        scene dst("dst_first_format_via_registry");
-        std::stringstream in(to_first_scene_format(scene_text));
+        scene dst("dst_first_layout_via_registry");
+        std::stringstream in(to_first_scene_layout(scene_text));
         load_from_stream(in, *dst.registry);
         check_eq(count_scene_roots(dst), size_t{0}, "and one in the first layout");
     }
@@ -2015,12 +2049,13 @@ void test_scene_document_repeats_no_key()
     simdjson::dom::array roots;
     check(!doc["roots"].get_array().get(roots), "it has a roots array");
     check_eq(roots.size(), size_t{3}, "with one element per root");
+    check_eq(count_occurrences(scene_text, "\"version\""), size_t{1}, "the version is written once, for the file");
 
-    check_eq(read_scene_document_format(scene_text), SCENE_DOCUMENT_FORMAT, "its head names the format it is in");
-    check_eq(read_scene_document_format(minify_json(scene_text)), SCENE_DOCUMENT_FORMAT, "also when minified");
-    check_eq(read_scene_document_format(to_first_scene_format(scene_text)),
-             FIRST_SCENE_DOCUMENT_FORMAT,
-             "a file without the format at its head is in the first layout");
+    check_eq(read_document_version(scene_text), SCENE_DOCUMENT_VERSION, "its head names the version it is in");
+    check_eq(read_document_version(minify_json(scene_text)), SCENE_DOCUMENT_VERSION, "also when minified");
+    check_eq(read_document_version(to_first_scene_layout(scene_text)),
+             FIRST_DOCUMENT_VERSION,
+             "a file without a version at its head is in the first layout");
 }
 
 void test_scene_save_is_in_hierarchy_order_and_stable()
@@ -2049,45 +2084,46 @@ void test_scene_save_is_in_hierarchy_order_and_stable()
     check(save_scene_text(reloaded) == saved, "loading and saving again writes the same file");
 }
 
-void test_first_format_scene_still_loads()
+void test_first_layout_scene_still_loads()
 {
     begin_test("a scene in the first layout still loads every root and entity");
 
     scene src("src");
     build_three_root_scene(src);
     const auto saved = save_scene_text(src);
-    const auto first_format = to_first_scene_format(saved);
-    check(!first_format.empty(), "the first-layout copy was made");
+    const auto first_layout = to_first_scene_layout(saved);
+    check(!first_layout.empty(), "the first-layout copy was made");
 
     scene dst("dst");
-    std::stringstream in(first_format);
+    std::stringstream in(first_layout);
     load_from_stream(in, dst);
     check_eq(count_scene_roots(dst), size_t{3}, "every root loads");
     check_eq(count_real_entities(*dst.registry), count_real_entities(*src.registry), "every entity loads");
     check(save_scene_text(dst) == saved, "saved again, it is the scene the current layout writes");
+
+    // A roots array that names no version is read as the layout that brought the array.
+    static const std::regex head_version(R"re("version"\s*:\s*[0-9]+\s*,)re");
+    const auto unversioned = std::regex_replace(saved, head_version, "", std::regex_constants::format_first_only);
+    check(unversioned.find("\"version\"") == std::string::npos, "the unversioned copy names no version");
+    scene roots_only("roots_only");
+    std::stringstream roots_in(unversioned);
+    load_from_stream(roots_in, roots_only);
+    check_eq(count_scene_roots(roots_only), size_t{3}, "a roots array without a version loads every root");
 }
 
-void test_newer_scene_format_is_refused()
+void test_newer_scene_version_is_refused()
 {
-    begin_test("a scene in a newer format is refused, and the open scene stays");
+    begin_test("a scene in a newer version is refused, and the open scene stays");
 
-    check(is_readable_scene_format(FIRST_SCENE_DOCUMENT_FORMAT) && is_readable_scene_format(SCENE_DOCUMENT_FORMAT),
+    check(is_readable_scene_version(FIRST_DOCUMENT_VERSION) && is_readable_scene_version(SCENE_DOCUMENT_VERSION),
           "this build reads the first layout and its own");
-    check(!is_readable_scene_format(SCENE_DOCUMENT_FORMAT + 1) && !is_readable_scene_format(0),
+    check(!is_readable_scene_version(SCENE_DOCUMENT_VERSION + 1) && !is_readable_scene_version(0),
           "and no layout outside them");
 
     scene src("src");
     build_three_root_scene(src);
-    auto newer = save_scene_text(src);
-    const std::string current_head = "\"format\": " + std::to_string(SCENE_DOCUMENT_FORMAT);
-    const auto head = newer.find(current_head);
-    check(head != std::string::npos, "the saved head names the current format");
-    if(head == std::string::npos)
-    {
-        return;
-    }
-    newer.replace(head, current_head.size(), "\"format\": " + std::to_string(SCENE_DOCUMENT_FORMAT + 1));
-    check_eq(read_scene_document_format(newer), SCENE_DOCUMENT_FORMAT + 1, "the head of the newer file is read");
+    const auto newer = with_head_version(save_scene_text(src), SCENE_DOCUMENT_VERSION + 1);
+    check_eq(read_document_version(newer), SCENE_DOCUMENT_VERSION + 1, "the head of the newer file is read");
 
     {
         scene dst("dst");
@@ -2099,10 +2135,49 @@ void test_newer_scene_format_is_refused()
     scene open("open");
     build_sample_tree(open);
     const auto entities_before = count_real_entities(*open.registry);
-    const auto asset = make_scene_asset(minify_json(newer), "test:/newer_format.spfb");
+    const auto asset = make_scene_asset(minify_json(newer), "test:/newer_version.spfb");
     check(!load_from_prefab(asset, open), "loading the newer scene asset reports the refusal");
     check_eq(count_real_entities(*open.registry), entities_before, "the scene that was open is untouched");
-    check_eq(read_scene_document_format(asset), SCENE_DOCUMENT_FORMAT + 1, "the asset's format is read from its file");
+    check_eq(read_document_version(asset), SCENE_DOCUMENT_VERSION + 1, "the asset's version is read from its file");
+}
+
+void test_prefab_document_version()
+{
+    begin_test("a prefab names its version first, older prefabs still load, newer ones are refused");
+
+    scene src("src");
+    auto root = build_sample_tree(src);
+    const auto bytes = serialize_as_prefab(root, "test:/versioned.pfb");
+    const std::string prefab_text(bytes.begin(), bytes.end());
+    check_eq(read_document_version(prefab_text), PREFAB_DOCUMENT_VERSION, "its head names the version it is in");
+    check_eq(count_occurrences(prefab_text, "\"version\""), size_t{1}, "the version is written once");
+    check(is_readable_prefab_version(FIRST_DOCUMENT_VERSION) && is_readable_prefab_version(PREFAB_DOCUMENT_VERSION),
+          "this build reads the first layout and its own");
+    check(!is_readable_prefab_version(PREFAB_DOCUMENT_VERSION + 1), "and no newer one");
+
+    const auto expected_entities = count_real_entities(*src.registry);
+
+    const auto first_layout = minify_json(to_first_prefab_layout(prefab_text));
+    check_eq(read_document_version(first_layout), FIRST_DOCUMENT_VERSION, "a prefab written before versions is in the first layout");
+    {
+        scene dst("dst_first_layout");
+        auto loaded = load_from_prefab(make_prefab_asset(std::vector<uint8_t>(first_layout.begin(), first_layout.end()),
+                                                         "test:/first_layout.pfb"),
+                                       *dst.registry);
+        check(bool(loaded), "a prefab in the first layout loads");
+        check_eq(count_real_entities(*dst.registry), expected_entities, "with every entity");
+    }
+
+    const auto newer = minify_json(with_head_version(prefab_text, PREFAB_DOCUMENT_VERSION + 1));
+    check_eq(read_document_version(newer), PREFAB_DOCUMENT_VERSION + 1, "the head of a newer prefab is read");
+    {
+        scene dst("dst_newer");
+        const auto asset = make_prefab_asset(std::vector<uint8_t>(newer.begin(), newer.end()), "test:/newer.pfb");
+        auto loaded = load_from_prefab(asset, *dst.registry);
+        check(!loaded, "a prefab in a newer version is refused");
+        check_eq(count_real_entities(*dst.registry), size_t{0}, "and nothing of it loads");
+        check_eq(read_document_version(asset), PREFAB_DOCUMENT_VERSION + 1, "the asset's version is read from its file");
+    }
 }
 
 void test_nesting_resolved_marker()
@@ -6007,8 +6082,9 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_scene_and_prefab_documents_are_not_interchangeable();
         test_scene_document_repeats_no_key();
         test_scene_save_is_in_hierarchy_order_and_stable();
-        test_first_format_scene_still_loads();
-        test_newer_scene_format_is_refused();
+        test_first_layout_scene_still_loads();
+        test_newer_scene_version_is_refused();
+        test_prefab_document_version();
         test_nesting_resolved_marker();
         test_prefab_dependency_enumeration();
         test_nested_prefab_instance_keeps_its_link();
