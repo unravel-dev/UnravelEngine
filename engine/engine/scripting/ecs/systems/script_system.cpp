@@ -234,6 +234,22 @@ auto make_frame_update_data(const simulation& sim, delta_t elapsed, const frame_
     return data;
 }
 
+void invoke_play_hook(dotnet::method_invoker<void()>& hook)
+{
+    if(!hook.valid())
+    {
+        return;
+    }
+    try
+    {
+        hook();
+    }
+    catch(const dotnet::exception& e)
+    {
+        script_system::log_exception(e);
+    }
+}
+
 } // namespace
 
 void script_system::log_exception(const dotnet::exception& e, const hpp::source_location& loc)
@@ -603,6 +619,10 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.fixed_update_invoker =
         dotnet::make_method_invoker<void(fixed_update_data)>(cache_.fixed_update_method);
     cache_.late_update_invoker = dotnet::make_method_invoker<void()>(cache_.late_update_method);
+    cache_.begin_play_invoker =
+        dotnet::make_method_invoker<void()>(cache_.update_manager_type.get_method("internal_n2m_begin_play", 0));
+    cache_.end_play_invoker =
+        dotnet::make_method_invoker<void()>(cache_.update_manager_type.get_method("internal_n2m_end_play", 0));
 
     cache_.set_entity_method = cache_.component_type.get_method("internal_n2m_set_entity", 1);
     cache_.on_create_method = cache_.script_component_type.get_method("internal_n2m_on_create", 0);
@@ -948,6 +968,9 @@ void script_system::on_play_begin(rtti::context& ctx)
     registry.on_construct<active_component>().connect<&on_create_active_component>();
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
 
+    // Before any script is created: awaited script code resumes in the frame loop from here on.
+    invoke_play_hook(cache_.begin_play_invoker);
+
     // The play clock starts at zero before any script is created, so OnCreate does not read the
     // previous session's time.
     elapsed_time_ = {};
@@ -973,6 +996,9 @@ void script_system::on_play_end(rtti::context& ctx)
     auto& ec = ctx.get_cached<ecs>();
     auto& scn = ec.get_scene();
     auto& registry = *scn.registry;
+
+    // First, so no awaited script code resumes into the session's teardown.
+    invoke_play_hook(cache_.end_play_invoker);
 
     seq::scope::stop_all("script");
 

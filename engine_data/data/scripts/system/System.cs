@@ -780,7 +780,26 @@ namespace Unravel.Core
             // gcMonitor.CheckAndLog("Update");
 
             CoroutineScheduler.Tick();
+            AwaitableScheduler.Tick();
             EntityPool.ProcessDelayedReleases();
+        }
+
+        /// <summary>
+        /// Native-to-managed play begin, before any script is created: awaited script code resumes
+        /// in the frame loop from now on.
+        /// </summary>
+        public static void internal_n2m_begin_play()
+        {
+            AwaitableScheduler.BeginPlay();
+        }
+
+        /// <summary>
+        /// Native-to-managed play end: drops every pending continuation and wait without running
+        /// script code, and cancels <see cref="Application.exitCancellationToken"/>.
+        /// </summary>
+        public static void internal_n2m_end_play()
+        {
+            AwaitableScheduler.EndPlay();
         }
 
         /// <summary>
@@ -812,6 +831,7 @@ namespace Unravel.Core
             Time.fixedDeltaTime = info.deltaTime;
 
             ScriptManager.InvokeFixedUpdate();
+            AwaitableScheduler.TickFixedUpdate();
         }
 
         /// <summary>
@@ -820,6 +840,7 @@ namespace Unravel.Core
         public static void internal_n2m_late_update()
         {
             ScriptManager.InvokeLateUpdate();
+            AwaitableScheduler.TickEndOfFrame();
         }
     }
 

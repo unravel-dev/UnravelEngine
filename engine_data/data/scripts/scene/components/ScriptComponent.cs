@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 
 namespace Unravel.Core
 {
@@ -60,21 +61,67 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Restores the previously running script when disposed; scopes nest.
+        /// Restores the previously running script, and its synchronization context, when disposed;
+        /// scopes nest. Inside the scope an <c>await</c> comes back to the running script.
         /// </summary>
         internal readonly struct RunningScope : IDisposable
         {
             private readonly ScriptComponent previous;
+            private readonly SynchronizationContext previousContext;
 
             internal RunningScope(ScriptComponent script)
             {
                 previous = running;
+                previousContext = SynchronizationContext.Current;
                 running = script;
+                SynchronizationContext.SetSynchronizationContext(AwaitableScheduler.ContextFor(script));
             }
 
             public void Dispose()
             {
                 running = previous;
+                SynchronizationContext.SetSynchronizationContext(previousContext);
+            }
+        }
+
+        private ScriptSynchronizationContext m_synchronizationContext;
+        private CancellationTokenSource m_destroyCancellation;
+        private bool m_destroyed;
+
+        /// <summary>
+        /// Cancelled when this script is destroyed, before its <see cref="OnDestroy"/>. Pass it to
+        /// awaited calls (<see cref="Awaitable"/> waits, <c>Task.Delay</c>, <c>Task.Run</c>) so they stop
+        /// with the script. The waits of a destroyed script end cancelled even without it.
+        /// </summary>
+        public CancellationToken destroyCancellationToken
+        {
+            get
+            {
+                if (m_destroyed)
+                {
+                    return new CancellationToken(true);
+                }
+                return LazyInitializer.EnsureInitialized(ref m_destroyCancellation).Token;
+            }
+        }
+
+        /// <summary>The context this script's awaited code comes back to.</summary>
+        internal ScriptSynchronizationContext synchronizationContext =>
+            m_synchronizationContext ??= new ScriptSynchronizationContext(this);
+
+        internal bool isDestroyed => m_destroyed;
+
+        /// <summary>Marks the script destroyed, so new waits start cancelled, and cancels its destroy token.</summary>
+        internal void CancelDestroyToken()
+        {
+            m_destroyed = true;
+            try
+            {
+                m_destroyCancellation?.Cancel();
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"A callback registered on the destroy token of {GetType().FullName} failed: {ex}");
             }
         }
         protected string SourceFilePath { get; set; }
@@ -328,7 +375,8 @@ namespace Unravel.Core
 
         /// <summary>
         /// Internal method invoked when the script is destroyed. Calls <see cref="OnDestroy"/> and unsubscribes <see cref="OnUpdate"/> from the update system.
-        /// Also ends the UI event subscriptions this script made, so callbacks cannot pin destroyed scripts.
+        /// Also ends the UI event subscriptions this script made, so callbacks cannot pin destroyed scripts,
+        /// and its async work: its waits end cancelled and what it still has posted is dropped.
         /// </summary>
         private void internal_n2m_on_destroy()
         {
@@ -337,6 +385,7 @@ namespace Unravel.Core
             UIEventManager.UnsubscribeAllForScript(this);
             Screen.ForgetScript(this);
             UIDataModels.ForgetScript(this);
+            AwaitableScheduler.OnScriptDestroyed(this);
             using (Run(this))
             {
                 OnDestroy();

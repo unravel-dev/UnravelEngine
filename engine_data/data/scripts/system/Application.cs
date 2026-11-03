@@ -80,6 +80,13 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Cancelled when play stops (in the player, when the game quits); already cancelled outside
+        /// play. Pass it to awaited work that no script owns, <c>Task.Delay</c> and <c>Task.Run</c> among
+        /// them, so nothing of it outlives the play session.
+        /// </summary>
+        public static System.Threading.CancellationToken exitCancellationToken => AwaitableScheduler.exitToken;
+
+        /// <summary>
         /// Quits the application by stopping playmode.
         /// This will exit the current play session and return to edit mode.
         /// </summary>

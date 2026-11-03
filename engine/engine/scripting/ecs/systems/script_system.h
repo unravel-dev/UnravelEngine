@@ -168,6 +168,9 @@ struct script_system
         dotnet::method_invoker<void(frame_update_data)> update_invoker;
         dotnet::method_invoker<void(fixed_update_data)> fixed_update_invoker;
         dotnet::method_invoker<void()> late_update_invoker;
+        // SystemManager play hooks: awaited script code resumes in the frame loop between them.
+        dotnet::method_invoker<void()> begin_play_invoker;
+        dotnet::method_invoker<void()> end_play_invoker;
 
         // Component / ScriptComponent lifecycle (resolved once per engine domain)
         dotnet::method set_entity_method;
