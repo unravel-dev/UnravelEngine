@@ -22,9 +22,11 @@
 #include "logging/logging.h"
 #include "reflection/reflection.h"
 #include "uuid/uuid.h"
+#include <version/version.h>
 
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <set>
 #include <hpp/string_view.hpp>
 #include <hpp/utility.hpp>
@@ -1942,9 +1944,41 @@ auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::hand
     return result;
 }
 
+/// Whether a document is a scene file, which holds many roots, rather than a single-root document.
+template<typename Archive>
+auto is_scene_document(const Archive& ar) -> bool
+{
+    if constexpr(can_probe_names<Archive>)
+    {
+        return ar.hasNextName("roots") || ar.hasNextName("entities_count");
+    }
+    else
+    {
+        return false;
+    }
+}
+
+/// Refuses a scene file handed to the single-root reader, which would read part of it or none of it.
+template<typename Archive>
+auto refuses_scene_document(const Archive& ar) -> bool
+{
+    if(!is_scene_document(ar))
+    {
+        return false;
+    }
+    APPLOG_ERROR("A scene file was handed to the reader of single-root documents, which would load only "
+                 "part of it. Scene files are read with the scene reader.");
+    return true;
+}
+
 template<typename Archive>
 void load_from_archive_start(Archive& ar, entt::registry& registry, entt::handle& e)
 {
+    if(refuses_scene_document(ar))
+    {
+        e = {};
+        return;
+    }
     bool pushed = push_load_context(registry);
 
     e = load_from_archive_impl(ar, registry);
@@ -1955,6 +1989,10 @@ void load_from_archive_start(Archive& ar, entt::registry& registry, entt::handle
 template<typename Archive>
 auto load_from_archive_start(Archive& ar, entt::registry& registry) -> entt::handle
 {
+    if(refuses_scene_document(ar))
+    {
+        return {};
+    }
     bool pushed = push_load_context(registry);
 
     auto obj = load_from_archive_impl(ar, registry);
@@ -1970,6 +2008,58 @@ void load_from_archive(Archive& ar, entt::handle& obj)
     obj = load_from_archive_start(ar, *obj.registry());
 }
 
+/// One root of a scene file: the root's entities, written as a prefab file holds them.
+template<typename Handle>
+struct scene_root_record
+{
+    Handle root{};
+};
+
+} // namespace
+} // namespace unravel
+
+namespace ser20
+{
+SAVE(unravel::scene_root_record<entt::const_handle>)
+{
+    unravel::save_to_archive(ar, obj.root);
+}
+
+LOAD(unravel::scene_root_record<entt::handle>)
+{
+    obj.root = unravel::load_from_archive_impl(ar, *unravel::get_load_context().reg);
+}
+} // namespace ser20
+
+namespace unravel
+{
+namespace
+{
+
+/// The roots of a registry in hierarchy order, which root_component::order keeps. The storage is
+/// iterated from its last element and only the hierarchy panel sorts it, so writing in storage
+/// order would reverse the roots in every save made without that sort.
+auto collect_roots_in_order(const entt::registry& reg) -> std::vector<scene_root_record<entt::const_handle>>
+{
+    std::vector<std::pair<uint64_t, entt::entity>> ordered;
+    reg.view<root_component, transform_component>().each(
+        [&](entt::entity e, const root_component& root, const transform_component&)
+        {
+            ordered.emplace_back(root.order, e);
+        });
+    std::sort(ordered.begin(), ordered.end());
+    std::vector<scene_root_record<entt::const_handle>> roots;
+    roots.reserve(ordered.size());
+    std::transform(ordered.begin(),
+                   ordered.end(),
+                   std::back_inserter(roots),
+                   [&](const auto& item)
+                   {
+                       return scene_root_record<entt::const_handle>{entt::const_handle(reg, item.second)};
+                   });
+    return roots;
+}
+
 template<typename Archive>
 void save_to_archive(Archive& ar, const entt::registry& reg)
 {
@@ -1979,34 +2069,82 @@ void save_to_archive(Archive& ar, const entt::registry& reg)
         get_save_context().registry = &reg;
     }
 
-    size_t count = 0;
-    reg.view<root_component, transform_component>().each(
-        [&](auto e, auto&& comp1, auto&& comp2)
-        {
-            count++;
-        });
-
-    try_save(ar, ser20::make_nvp("entities_count", count));
+    // First, so the layout can be told from the head of the file.
+    const uint32_t format = SCENE_DOCUMENT_FORMAT;
+    try_save(ar, ser20::make_nvp("format", format));
 
     if(get_save_context().nesting_resolved)
     {
         try_save(ar, ser20::make_nvp("nesting_resolved", true));
     }
 
-    reg.view<root_component, transform_component>().each(
-        [&](auto e, auto&& comp1, auto&& comp2)
-        {
-            save_to_archive(ar, entt::const_handle(reg, e));
-        });
+    const auto roots = collect_roots_in_order(reg);
+    try_save(ar, ser20::make_nvp("roots", roots));
 
     pop_save_context(pushed);
+}
+
+void log_unreadable_scene_format(uint32_t format, hpp::string_view key)
+{
+    APPLOG_ERROR("The scene {} is in scene format {}, which a newer engine wrote. This engine ({}) reads scene "
+                 "formats {} to {}, so the scene was not loaded.",
+                 key.empty() ? hpp::string_view("file") : key,
+                 format,
+                 version::get_current().to_string(),
+                 FIRST_SCENE_DOCUMENT_FORMAT,
+                 SCENE_DOCUMENT_FORMAT);
+}
+
+/// The roots of a scene file in the first layout: a root count, then one "entities" key per root
+/// in the same object, told apart only by reading the keys in file order.
+template<typename Archive>
+auto read_first_format_roots(Archive& ar, entt::registry& reg, size_t count) -> std::vector<entt::handle>
+{
+    std::vector<entt::handle> roots;
+    roots.reserve(count);
+    for(size_t i = 0; i < count; ++i)
+    {
+        // load_from_archive_impl creates the entities it needs and returns the root, so no
+        // scratch entity is handed in: it would be abandoned, one componentless entity per root.
+        roots.push_back(load_from_archive_impl(ar, reg));
+    }
+    return roots;
+}
+
+template<typename Archive>
+auto read_roots(Archive& ar) -> std::vector<entt::handle>
+{
+    std::vector<scene_root_record<entt::handle>> records;
+    try_load(ar, ser20::make_nvp("roots", records));
+    std::vector<entt::handle> roots;
+    roots.reserve(records.size());
+    std::transform(records.begin(),
+                   records.end(),
+                   std::back_inserter(roots),
+                   [](const auto& record)
+                   {
+                       return record.root;
+                   });
+    return roots;
 }
 
 template<typename Archive>
 void load_from_archive(Archive& ar, entt::registry& reg)
 {
+    uint32_t format = FIRST_SCENE_DOCUMENT_FORMAT;
+    try_load(ar, ser20::make_nvp("format", format));
+    if(!is_readable_scene_format(format))
+    {
+        log_unreadable_scene_format(format, {});
+        return;
+    }
+
+    // The first layout's count is read before anything else, at the head of the file.
     size_t count = 0;
-    try_load(ar, ser20::make_nvp("entities_count", count));
+    if(format == FIRST_SCENE_DOCUMENT_FORMAT)
+    {
+        try_load(ar, ser20::make_nvp("entities_count", count));
+    }
 
     bool pushed = push_load_context(reg);
 
@@ -2017,17 +2155,9 @@ void load_from_archive(Archive& ar, entt::registry& reg)
     }
 
     std::vector<entt::handle> roots;
-    roots.reserve(count);
     {
         APP_SCOPE_PERF("Scene/Load/Read Entities");
-        for(size_t i = 0; i < count; ++i)
-        {
-            // No scratch entity. load_from_archive_impl creates the entities it needs and
-            // returns the root; the loaders reassign the handle they are given rather than
-            // filling it in, so one handed in here is simply abandoned - a componentless
-            // entity per root, on every scene load.
-            roots.push_back(load_from_archive_impl(ar, reg));
-        }
+        roots = format == FIRST_SCENE_DOCUMENT_FORMAT ? read_first_format_roots(ar, reg, count) : read_roots(ar);
     }
 
     // A scene from before ids named their document: attributed here, before any instance in
@@ -3498,14 +3628,81 @@ void read_scene_into(const std::vector<uint8_t>& buffer, entt::registry& registr
         APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
     }
 }
+
+auto as_text(const std::vector<uint8_t>& buffer) -> hpp::string_view
+{
+    return {reinterpret_cast<const char*>(buffer.data()), buffer.size()};
+}
+
+/// Whether this build reads a scene file, logging why not, before anything of the current scene goes.
+auto can_read_scene_file(const scene_prefab& file, hpp::string_view key) -> bool
+{
+    const auto format = read_scene_document_format(as_text(file.buffer.data));
+    if(is_readable_scene_format(format))
+    {
+        return true;
+    }
+    log_unreadable_scene_format(format, key);
+    return false;
+}
+
+auto skip_json_whitespace(hpp::string_view text, size_t position) -> size_t
+{
+    while(position < text.size() &&
+          (text[position] == ' ' || text[position] == '\n' || text[position] == '\r' || text[position] == '\t'))
+    {
+        ++position;
+    }
+    return position;
+}
 } // namespace
+
+auto is_readable_scene_format(uint32_t format) -> bool
+{
+    return format >= FIRST_SCENE_DOCUMENT_FORMAT && format <= SCENE_DOCUMENT_FORMAT;
+}
+
+auto read_scene_document_format(hpp::string_view text) -> uint32_t
+{
+    constexpr hpp::string_view format_key = "\"format\"";
+    size_t position = skip_json_whitespace(text, 0);
+    if(position >= text.size() || text[position] != '{')
+    {
+        return FIRST_SCENE_DOCUMENT_FORMAT;
+    }
+    position = skip_json_whitespace(text, position + 1);
+    if(text.substr(position, format_key.size()) != format_key)
+    {
+        return FIRST_SCENE_DOCUMENT_FORMAT;
+    }
+    position = skip_json_whitespace(text, position + format_key.size());
+    if(position >= text.size() || text[position] != ':')
+    {
+        return FIRST_SCENE_DOCUMENT_FORMAT;
+    }
+    position = skip_json_whitespace(text, position + 1);
+    uint32_t format = 0;
+    const auto result = std::from_chars(text.data() + position, text.data() + text.size(), format);
+    // A format this build cannot even read as a number is newer than any it knows.
+    return result.ec == std::errc{} ? format : std::numeric_limits<uint32_t>::max();
+}
+
+auto read_scene_document_format(const asset_handle<scene_prefab>& pfb) -> uint32_t
+{
+    const auto prefab = wait_for_scene_file(pfb);
+    return read_scene_document_format(as_text(prefab->buffer.data));
+}
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
 {
-    // The file is in hand before the current scene goes.
+    // The file is in hand, and known to be readable, before the current scene goes.
     const auto prefab = wait_for_scene_file(pfb);
     if(!prefab->buffer.data.empty())
     {
+        if(!can_read_scene_file(*prefab, pfb.id()))
+        {
+            return false;
+        }
         {
             APP_SCOPE_PERF("Scene/Load/Unload");
             scn.unload_except_persistent();
@@ -3520,6 +3717,10 @@ auto load_from_prefab(const asset_handle<scene_prefab>& pfb, entt::registry& reg
     const auto prefab = wait_for_scene_file(pfb);
     if(!prefab->buffer.data.empty())
     {
+        if(!can_read_scene_file(*prefab, pfb.id()))
+        {
+            return false;
+        }
         read_scene_into(prefab->buffer.data, registry);
     }
     return true;

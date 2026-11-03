@@ -43,13 +43,20 @@ struct project_info
 ///
 /// This models the common upgrade flow: a project was authored against one
 /// engine build and is later opened on a newer build, where on-disk formats
-/// may have evolved in the intervening commits. The inverse direction
-/// (running an older engine against a project saved by a newer one) is rare
-/// enough that we don't warn about it here.
+/// may have evolved in the intervening commits.
 inline auto is_from_older_engine(const version::engine_version& on_disk,
                                  const version::engine_version& running) -> bool
 {
     return on_disk < running;
+}
+
+/// Returns true if `on_disk` is from an engine strictly newer than `running`,
+/// comparing the same four components: files that engine saved may be in
+/// formats the running one cannot read.
+inline auto is_from_newer_engine(const version::engine_version& on_disk,
+                                 const version::engine_version& running) -> bool
+{
+    return running < on_disk;
 }
 
 } // namespace unravel

@@ -233,6 +233,7 @@ void start_page::refresh_projects(project_manager& pm)
             entry.engine_version = engine_version.original.empty() ? engine_version.to_string() : engine_version.original;
         }
         entry.is_engine_older = report.status == project_manager::project_compat::engine_older;
+        entry.is_engine_newer = report.status == project_manager::project_compat::engine_newer;
         fs::error_code error;
         entry.is_missing = !fs::exists(project_path, error);
         entry.modified_label = entry.is_missing ? std::string("Folder not found") : read_project_modified_label(project_path);
@@ -328,6 +329,21 @@ void start_page::open_project(rtti::context& ctx, const std::string& path)
                   "project.cfg inside it.\n\n"
                   "Open this folder as a project?";
         cancel_log = "Project open cancelled by user (no project.cfg).";
+    }
+    else if(report.status == project_manager::project_compat::engine_newer)
+    {
+        const auto& opened_version = report.on_disk.engine_version_opened;
+        const std::string opened_by = opened_version.original.empty() ? opened_version.to_string() : opened_version.original;
+        title = "Project from a newer engine";
+        message = "This project was last opened with a newer engine version than the one you are running.\n\n"
+                  "  Project saved by: " + opened_by + "\n"
+                  "  Running engine:   " + running + "\n\n"
+                  "Files the newer engine saved may be in formats this engine cannot read. Scenes in such a "
+                  "format are refused when you open them, but other files could open empty or in part, and "
+                  "saving them would overwrite what the newer engine wrote.\n"
+                  "Use the newer engine if you can, or back up the project folder yourself before proceeding.\n\n"
+                  "Open the project anyway?";
+        cancel_log = "Project open cancelled by user (project from a newer engine).";
     }
     else
     {

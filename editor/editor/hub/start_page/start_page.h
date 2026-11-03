@@ -68,6 +68,8 @@ private:
         fs::path thumbnail;
         /// Saved by an older engine than the running one: opening it asks first.
         bool is_engine_older{};
+        /// Saved by a newer engine than the running one: opening it asks first.
+        bool is_engine_newer{};
         bool is_missing{};
     };
 

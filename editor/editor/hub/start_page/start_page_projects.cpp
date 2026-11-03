@@ -72,6 +72,7 @@ struct project_meta
     const std::string& engine_version;
     bool is_missing{};
     bool is_engine_older{};
+    bool is_engine_newer{};
 };
 
 auto calc_project_card_info_height() -> float
@@ -112,7 +113,8 @@ auto draw_version_badge(ImDrawList* draw_list, float max_x, float y, const proje
     }
     const ImVec2 size = widgets::calc_pill_size(badge.c_str());
     const ImVec2 pos(max_x - size.x, ImFloor(y + (ImGui::GetFontSize() - size.y) * 0.5f));
-    const ImU32 text_color = meta.is_engine_older ? PROJECTS_VIEW_WARNING_COLOR : widgets::get_muted_color();
+    const ImU32 text_color =
+        meta.is_engine_older || meta.is_engine_newer ? PROJECTS_VIEW_WARNING_COLOR : widgets::get_muted_color();
     widgets::draw_pill(draw_list, pos, badge.c_str(), PROJECTS_VIEW_BADGE_COLOR, text_color);
     return pos.x;
 }
@@ -371,7 +373,7 @@ void start_page::draw_project_card(const project_entry& entry, const ImVec2& siz
     text_y += ImGui::GetFontSize() + to_pixels(PROJECTS_VIEW_LINE_GAP);
     widgets::draw_text_clipped(draw_list, ImVec2(text_x, text_y), max_x, widgets::get_muted_color(), entry.directory.c_str());
     text_y += ImGui::GetFontSize() + to_pixels(PROJECTS_VIEW_META_GAP);
-    draw_project_meta_line(draw_list, ImVec2(text_x, text_y), max_x, {entry.modified_label, entry.engine_version, entry.is_missing, entry.is_engine_older});
+    draw_project_meta_line(draw_list, ImVec2(text_x, text_y), max_x, {entry.modified_label, entry.engine_version, entry.is_missing, entry.is_engine_older, entry.is_engine_newer});
 }
 
 void start_page::draw_project_row(const project_entry& entry, const item_state& state)
@@ -395,7 +397,7 @@ void start_page::draw_project_row(const project_entry& entry, const item_state& 
     const ImVec2 image_min(pos.x + padding, pos.y + padding);
     const ImRect image_rect(image_min, image_min + ImVec2(ImFloor(image_height / PROJECTS_VIEW_IMAGE_ASPECT), image_height));
     draw_project_image(draw_list, entry, image_rect, to_pixels(PROJECTS_VIEW_IMAGE_ROUNDING), ImDrawFlags_RoundCornersAll);
-    const project_meta meta{entry.modified_label, entry.engine_version, entry.is_missing, entry.is_engine_older};
+    const project_meta meta{entry.modified_label, entry.engine_version, entry.is_missing, entry.is_engine_older, entry.is_engine_newer};
     const float line_gap = to_pixels(PROJECTS_VIEW_LINE_GAP);
     const float top = ImFloor(rect.GetCenter().y - ImGui::GetFontSize() - line_gap * 0.5f);
     const float bottom = top + ImGui::GetFontSize() + line_gap;
@@ -428,7 +430,9 @@ void start_page::handle_project_item_input(rtti::context& ctx, const project_ent
         selected_project_ = entry.path;
         ImGui::OpenPopup("##project_context_menu");
     }
-    const char* engine_note = entry.is_engine_older ? "\nLast opened with an older engine: opening it asks first." : "";
+    const char* engine_note = entry.is_engine_older   ? "\nLast opened with an older engine: opening it asks first."
+                              : entry.is_engine_newer ? "\nLast opened with a newer engine: opening it asks first."
+                                                      : "";
     const std::string engine_line = entry.engine_version.empty() ? std::string{} : "\nEngine " + entry.engine_version;
     ImGui::SetItemTooltipEx("%s%s%s", entry.path.c_str(), engine_line.c_str(), engine_note);
 }

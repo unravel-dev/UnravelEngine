@@ -35,15 +35,18 @@ public:
         /// No `project.cfg` found - this is a legacy project. `open_project`
         /// will create one on-the-fly, preserving all existing content.
         no_info_file,
-        /// Project was last opened by the same or a newer engine build than
-        /// the running one. Safe to open (or at worst: the rare case of a
-        /// downgrade, which we don't guard against).
+        /// Project was last opened by the same engine version as the running one.
         ok,
         /// Project was last opened by a strictly older engine build than the
         /// running one, compared across all version components. On-disk
         /// formats may have evolved since, so the UI layer should prompt the
         /// user before committing to an open that re-saves everything.
         engine_older,
+        /// Project was last opened by a strictly newer engine build than the
+        /// running one. Its files may be in formats the running engine cannot
+        /// read: they would open empty or partly, and saving would write that
+        /// over them, so the UI layer should prompt the user before opening.
+        engine_newer,
     };
 
     struct project_compat_report

@@ -58,6 +58,7 @@
 #include <base/platform/config.hpp>
 #include <hpp/string_view.hpp>
 #include <string_utils/utils.h>
+#include <version/version.h>
 #include <array>
 #include <memory>
 #include <set>
@@ -745,6 +746,25 @@ auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& d
     return false;
 }
 
+/// Why this editor cannot open a scene file, or empty when it can: a newer engine wrote it in a
+/// layout this one does not read, so it would open empty and a save would write that over it.
+auto find_scene_open_problem(const asset_handle<scene_prefab>& asset) -> std::string
+{
+    const auto format = read_scene_document_format(asset);
+    if(is_readable_scene_format(format))
+    {
+        return {};
+    }
+    return fmt::format("The scene {} was saved by a newer engine, in scene format {}. This editor ({}) reads "
+                       "scene formats {} to {}.\n\n"
+                       "The scene was not opened, so it cannot be overwritten or damaged. Open it with the engine "
+                       "that saved it, or update this editor.",
+                       asset.id(),
+                       format,
+                       version::get_current().to_string(),
+                       FIRST_SCENE_DOCUMENT_FORMAT,
+                       SCENE_DOCUMENT_FORMAT);
+}
 
 } // namespace
 
@@ -772,6 +792,16 @@ auto editor_actions::load_scene_from_asset(rtti::context& ctx,
                                            const asset_handle<scene_prefab>& asset,
                                            std::string* error) -> bool
 {
+    // Refused before anything of the open scene, its selection or its undo history goes.
+    if(auto problem = find_scene_open_problem(asset); !problem.empty())
+    {
+        APPLOG_ERROR("{}", problem);
+        if(error)
+        {
+            *error = std::move(problem);
+        }
+        return false;
+    }
     auto& em = ctx.get_cached<editing_manager>();
     em.clear();
 
@@ -914,6 +944,13 @@ void editor_actions::open_animation_controller(rtti::context& ctx, const asset_h
 
 auto editor_actions::open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool
 {
+    // Asked before the prompt to save the open scene, which stays open.
+    if(const auto problem = find_scene_open_problem(asset); !problem.empty())
+    {
+        APPLOG_ERROR("{}", problem);
+        ImBox::ShowError("Scene from a newer engine", problem);
+        return false;
+    }
     return prompt_save_scene(ctx,
                              [&ctx, asset]()
                              {

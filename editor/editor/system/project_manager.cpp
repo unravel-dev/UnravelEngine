@@ -216,16 +216,16 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
         //   fresh GUID. This is the backward-compatibility path - opening an
         //   older project simply writes a new `project.cfg` on the spot.
         //
-        // * File present & engine_version_opened >= current engine: the
-        //   project is up to date (or from a newer engine entirely, which we
-        //   don't guard against in this path). Just update `opened` to the
-        //   running engine version.
+        // * File present & engine_version_opened == current engine: the
+        //   project is up to date. Just update `opened` to the running engine
+        //   version.
         //
-        // * File present & engine_version_opened is strictly older than the
-        //   running engine (across all version components): the project was
-        //   authored against an older build and is now being upgraded. We log
-        //   a loud warning but do NOT abort - the UI layer is expected to have
-        //   already shown a confirmation modal via `inspect_project`.
+        // * File present & engine_version_opened differs from the running
+        //   engine (across all version components): the project was authored
+        //   against an older build and is being upgraded, or against a newer
+        //   one whose files this engine may not read. We log a loud warning
+        //   but do NOT abort - the UI layer is expected to have already shown
+        //   a confirmation modal via `inspect_project`.
         //   Headless/CLI opens intentionally proceed so automation is not
         //   blocked by this.
         const bool had_info_file = load_project_info();
@@ -245,6 +245,13 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
             APPLOG_WARNING("Project was last opened with an older engine ({} < {}). "
                            "Proceeding - data loss is possible if the on-disk "
                            "format has diverged.",
+                           project_info_.engine_version_opened.to_string(),
+                           current.to_string());
+        }
+        else if(is_from_newer_engine(project_info_.engine_version_opened, current))
+        {
+            APPLOG_WARNING("Project was last opened with a newer engine ({} > {}). Proceeding - files in "
+                           "formats this engine cannot read are refused when opened.",
                            project_info_.engine_version_opened.to_string(),
                            current.to_string());
         }
@@ -276,7 +283,8 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
         ls.progress(0, 0, "Loading", opened_scene.id());
         scene_loaded = editor_actions::open_scene_from_asset(ctx, opened_scene);
     }
-    if(!scene_loaded && startup_scene)
+    // The same scene again would only fail, or ask, again.
+    if(!scene_loaded && startup_scene && startup_scene.uid() != opened_scene.uid())
     {
         ls.progress(0, 0, "Loading", startup_scene.id());
         scene_loaded = editor_actions::open_scene_from_asset(ctx, startup_scene);
@@ -460,6 +468,10 @@ auto project_manager::inspect_project(const fs::path& project_path) const -> pro
     if(is_from_older_engine(report.on_disk.engine_version_opened, version::get_current()))
     {
         report.status = project_compat::engine_older;
+    }
+    else if(is_from_newer_engine(report.on_disk.engine_version_opened, version::get_current()))
+    {
+        report.status = project_compat::engine_newer;
     }
     else
     {

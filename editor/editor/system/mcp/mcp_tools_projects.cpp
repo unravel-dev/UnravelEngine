@@ -25,12 +25,14 @@ auto compat_to_string(project_manager::project_compat status) -> const char*
             return "ok";
         case project_manager::project_compat::engine_older:
             return "engine_older";
+        case project_manager::project_compat::engine_newer:
+            return "engine_newer";
     }
     return "ok";
 }
 
-/// Why opening a folder needs `upgrade:true`, or empty when it opens as it is. The start page asks
-/// the same two questions before opening such a folder.
+/// Why opening a folder needs `upgrade:true` (or `downgrade:true` for a project of a newer engine), or
+/// empty when it opens as it is. The start page asks the same questions before opening such a folder.
 auto compat_refusal(const fs::path& project_path, const project_manager::project_compat_report& report) -> std::string
 {
     const auto path = project_path.generic_string();
@@ -46,6 +48,11 @@ auto compat_refusal(const fs::path& project_path, const project_manager::project
             return path + " was last opened by engine " + report.on_disk.engine_version_opened.to_string() +
                    ", older than this one; opening may re-save its files in newer formats. Back it up, then pass "
                    "upgrade:true.";
+        case project_manager::project_compat::engine_newer:
+            return path + " was last opened by engine " + report.on_disk.engine_version_opened.to_string() +
+                   ", newer than this one; files it saved may be in formats this engine cannot read, and saving "
+                   "them would overwrite them. Use the newer engine, or back the project up and pass "
+                   "downgrade:true.";
     }
     return {};
 }
@@ -100,10 +107,11 @@ void register_project_tools(mcp_tool_registry& registry)
         {.name = "project_open",
          .description =
              "Open an existing project by path, recent:true, or recent_index. Refuses a folder that is "
-             "not a project or was saved by an older engine unless upgrade:true, and unsaved edits in "
+             "not a project or was saved by an older engine unless upgrade:true, one saved by a newer "
+             "engine unless downgrade:true, and unsaved edits in "
              "the open project unless force:true. Seeds a scene from preset when the project has none.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project folder"},"recent":{"type":"boolean","description":"Open the most recent project"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded when the project has none; default medium"},"upgrade":{"type":"boolean","default":false,"description":"Open a legacy folder without project.cfg, or a project saved by an older engine"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})json",
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project folder"},"recent":{"type":"boolean","description":"Open the most recent project"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded when the project has none; default medium"},"upgrade":{"type":"boolean","default":false,"description":"Open a legacy folder without project.cfg, or a project saved by an older engine"},"downgrade":{"type":"boolean","default":false,"description":"Open a project saved by a newer engine"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -124,6 +132,8 @@ void register_project_tools(mcp_tool_registry& registry)
              read_bool(args, "force", force);
              bool upgrade = false;
              read_bool(args, "upgrade", upgrade);
+             bool downgrade = false;
+             read_bool(args, "downgrade", downgrade);
 
              auto result = mcp.invoke_on_main(
                  [&]() -> tool_result
@@ -179,7 +189,9 @@ void register_project_tools(mcp_tool_registry& registry)
                                  .is_error = true};
                      }
                      const auto report = pm.inspect_project(project_path);
-                     if(const auto refusal = compat_refusal(project_path, report); !refusal.empty() && !upgrade)
+                     const bool accepts_mismatch =
+                         report.status == project_manager::project_compat::engine_newer ? downgrade : upgrade;
+                     if(const auto refusal = compat_refusal(project_path, report); !refusal.empty() && !accepts_mismatch)
                      {
                          return {.text = refusal, .is_error = true};
                      }

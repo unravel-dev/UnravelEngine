@@ -443,6 +443,21 @@ auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& regis
 
 void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj);
 
+/// The first scene file layout: one "entities" key per root in a single object, with a root count.
+constexpr uint32_t FIRST_SCENE_DOCUMENT_FORMAT = 1;
+/// The scene file layout this build writes: a "roots" array, one element per root. This build also
+/// reads every older layout. A scene in a newer layout comes from a newer engine and is refused,
+/// since this build would read it as empty and a save would write that back over it.
+constexpr uint32_t SCENE_DOCUMENT_FORMAT = 2;
+
+/// Whether this build reads scene files in the given layout.
+auto is_readable_scene_format(uint32_t format) -> bool;
+/// The layout of a scene file, read from the head of its text: the writer puts "format" first, and
+/// a file that does not start with it is in the first layout.
+auto read_scene_document_format(hpp::string_view text) -> uint32_t;
+/// The layout of a scene asset's file. Waits for the file.
+auto read_scene_document_format(const asset_handle<scene_prefab>& pfb) -> uint32_t;
+
 void save_to_stream(std::ostream& stream, const scene& scn);
 void save_to_file(const std::string& absolute_path, const scene& scn);
 void save_to_stream_bin(std::ostream& stream, const scene& scn);

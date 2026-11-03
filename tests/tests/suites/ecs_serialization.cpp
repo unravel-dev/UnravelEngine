@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <set>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -1870,74 +1871,238 @@ auto serialize_as_baked_prefab(entt::const_handle root) -> std::vector<uint8_t>
     return std::vector<uint8_t>(str.begin(), str.end());
 }
 
+/// Counts the members of every object in a JSON document that repeat a name used earlier in the
+/// same object: the readers that look a name up keep one of them and drop the rest.
+auto count_repeated_keys(const simdjson::dom::element& element) -> size_t
+{
+    size_t repeated = 0;
+    if(element.is_object())
+    {
+        std::set<std::string_view> names;
+        for(const auto field : element.get_object().value())
+        {
+            if(!names.insert(field.key).second)
+            {
+                ++repeated;
+            }
+            repeated += count_repeated_keys(field.value);
+        }
+    }
+    else if(element.is_array())
+    {
+        for(const auto item : element.get_array().value())
+        {
+            repeated += count_repeated_keys(item);
+        }
+    }
+    return repeated;
+}
+
+/// The same scene in the first layout, as its writer wrote it: a root count, then the members of
+/// every root side by side in one object.
+auto to_first_scene_format(const std::string& text) -> std::string
+{
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    if(parser.parse(text.data(), text.size()).get(doc))
+    {
+        return {};
+    }
+    simdjson::dom::array roots;
+    if(doc["roots"].get_array().get(roots))
+    {
+        return {};
+    }
+    std::string first_format = "{\"entities_count\":" + std::to_string(roots.size());
+    for(const auto root : roots)
+    {
+        const std::string members = simdjson::minify(root);
+        first_format += "," + members.substr(1, members.size() - 2);
+    }
+    first_format += "}";
+    return first_format;
+}
+
+auto count_scene_roots(const scene& scn) -> size_t
+{
+    size_t roots = 0;
+    scn.registry->view<root_component, transform_component>().each([&](auto, auto&&, auto&&) { ++roots; });
+    return roots;
+}
+
+auto save_scene_text(const scene& scn) -> std::string
+{
+    std::stringstream doc;
+    save_to_stream(doc, scn);
+    return doc.str();
+}
+
+/// A scene of three named roots, each a small tree.
+void build_three_root_scene(scene& scn)
+{
+    const char* names[] = {"first_root", "second_root", "third_root"};
+    for(const char* name : names)
+    {
+        build_sample_tree(scn).get<tag_component>().name = name;
+    }
+}
+
+auto make_scene_asset(const std::string& text, const std::string& id) -> asset_handle<scene_prefab>
+{
+    auto data = std::make_shared<scene_prefab>();
+    data->buffer.data.assign(text.begin(), text.end());
+    auto& am = engine::context().get_cached<asset_manager>();
+    am.unload_asset<scene_prefab>(id);
+    return am.get_asset_from_instance<scene_prefab>(id, data);
+}
+
 void test_scene_and_prefab_documents_are_not_interchangeable()
 {
     begin_test("a scene document is not a prefab document");
 
-    // A bake that mistook scenes for prefabs rewrote them through the prefab writer and
-    // lost every root but the first. The two formats look similar enough that nothing
-    // complained: a scene is `entities_count` followed by one `entities` array **per
-    // root**, all at the same level, so reading one as a prefab silently takes the first
-    // array and stops.
+    // A bake that mistook scenes for prefabs once rewrote them through the prefab writer and lost
+    // every root but the first. A scene holds its roots in a "roots" array, a prefab document one
+    // root's "entities": each reader handed the other's file would read part of it, so the
+    // single-root reader refuses a scene file of either layout.
     scene src("src");
-    build_sample_tree(src);
-    auto second = build_sample_tree(src);
-    second.get<tag_component>().name = "second_root";
-    build_sample_tree(src);
+    build_three_root_scene(src);
+    check_eq(count_scene_roots(src), size_t{3}, "the source scene has three roots");
 
-    const size_t expected_roots = 3;
-    size_t roots = 0;
-    src.registry->view<root_component, transform_component>().each([&](auto, auto&&, auto&&) { ++roots; });
-    check_eq(roots, expected_roots, "the source scene has three roots");
+    const auto scene_text = save_scene_text(src);
+    check(scene_text.find("\"roots\"") != std::string::npos, "a scene document holds its roots in an array");
+    check(scene_text.find("entities_count") == std::string::npos, "and writes no root count");
 
-    std::stringstream scene_doc;
-    save_to_stream(scene_doc, src);
-    const auto scene_text = scene_doc.str();
-
-    check(scene_text.find("entities_count") != std::string::npos,
-          "a scene document declares how many roots it holds");
-
-    const auto count_roots_in = [](scene& scn) -> size_t
-    {
-        size_t n = 0;
-        scn.registry->view<root_component, transform_component>().each([&](auto, auto&&, auto&&) { ++n; });
-        return n;
-    };
-
-    // Read through the scene overload: all three roots.
     {
         scene dst("dst");
         std::stringstream in(scene_text);
         load_from_stream(in, dst);
-        check_eq(count_roots_in(dst), expected_roots, "the scene reader recovers every root");
+        check_eq(count_scene_roots(dst), size_t{3}, "the scene reader recovers every root");
     }
-
-    // Read through the *registry* overload: one root, silently.
-    //
-    // These two overloads are one argument apart - `scene&` versus `entt::registry&`, and a
-    // scene is barely more than a registry - but they read different formats.
-    // load_from_stream(stream, scene&) reads a scene document; load_from_stream(stream,
-    // registry&) reads a single-root one, which is what clone_scene_from_stream wants
-    // because it serializes root by root. Handing a scene document to the second silently
-    // keeps only the first root, because a scene repeats "entities" once per root and the
-    // single-root reader takes the first array it finds.
-    //
-    // That is the shape of the bug that rewrote scenes as prefabs during a bake. Pinned so
-    // the asymmetry is on the record: code choosing a reader must key on the asset type,
-    // never guess.
     {
         scene dst("dst_via_registry");
         std::stringstream in(scene_text);
         load_from_stream(in, *dst.registry);
-        check_eq(count_roots_in(dst), 1, "the single-root reader takes only the first root");
+        check_eq(count_scene_roots(dst), size_t{0}, "the single-root reader refuses a scene document");
+    }
+    {
+        scene dst("dst_first_format_via_registry");
+        std::stringstream in(to_first_scene_format(scene_text));
+        load_from_stream(in, *dst.registry);
+        check_eq(count_scene_roots(dst), size_t{0}, "and one in the first layout");
     }
 
-    // A prefab document has no root count at all, which is what made the mix-up silent.
-    auto prefab_doc = serialize_as_prefab(second);
+    scene single("single");
+    auto root = build_sample_tree(single);
+    auto prefab_doc = serialize_as_prefab(root);
     const std::string prefab_text(prefab_doc.begin(), prefab_doc.end());
-    check(prefab_text.find("entities_count") == std::string::npos,
-          "a prefab document carries no root count");
-    check(prefab_text.find("entities") != std::string::npos, "though both use an 'entities' array");
+    check(prefab_text.find("\"roots\"") == std::string::npos && prefab_text.find("entities_count") == std::string::npos,
+          "a prefab document has neither a roots array nor a root count");
+    check(prefab_text.find("entities") != std::string::npos, "it holds one root's entities");
+}
+
+void test_scene_document_repeats_no_key()
+{
+    begin_test("a scene document repeats no key, so any JSON reader sees every root");
+
+    scene src("src");
+    build_three_root_scene(src);
+    const auto scene_text = save_scene_text(src);
+
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    check(!parser.parse(scene_text.data(), scene_text.size()).get(doc), "the scene document parses");
+    check_eq(count_repeated_keys(doc), size_t{0}, "no object in it repeats a key");
+    simdjson::dom::array roots;
+    check(!doc["roots"].get_array().get(roots), "it has a roots array");
+    check_eq(roots.size(), size_t{3}, "with one element per root");
+
+    check_eq(read_scene_document_format(scene_text), SCENE_DOCUMENT_FORMAT, "its head names the format it is in");
+    check_eq(read_scene_document_format(minify_json(scene_text)), SCENE_DOCUMENT_FORMAT, "also when minified");
+    check_eq(read_scene_document_format(to_first_scene_format(scene_text)),
+             FIRST_SCENE_DOCUMENT_FORMAT,
+             "a file without the format at its head is in the first layout");
+}
+
+void test_scene_save_is_in_hierarchy_order_and_stable()
+{
+    begin_test("a scene saves its roots in hierarchy order, and a re-save writes the same file");
+
+    scene src("src");
+    build_three_root_scene(src);
+    const auto saved = save_scene_text(src);
+    const auto first = saved.find("\"first_root\"");
+    const auto second = saved.find("\"second_root\"");
+    const auto third = saved.find("\"third_root\"");
+    check(first != std::string::npos && first < second && second < third, "the roots are in the order they were made");
+
+    // Storage order is not hierarchy order: only the editor's hierarchy panel sorts the storage.
+    src.registry->sort<root_component>(
+        [](const auto& lhs, const auto& rhs)
+        {
+            return lhs.order > rhs.order;
+        });
+    check(save_scene_text(src) == saved, "reversing the root storage does not change the file");
+
+    scene reloaded("reloaded");
+    std::stringstream in(saved);
+    load_from_stream(in, reloaded);
+    check(save_scene_text(reloaded) == saved, "loading and saving again writes the same file");
+}
+
+void test_first_format_scene_still_loads()
+{
+    begin_test("a scene in the first layout still loads every root and entity");
+
+    scene src("src");
+    build_three_root_scene(src);
+    const auto saved = save_scene_text(src);
+    const auto first_format = to_first_scene_format(saved);
+    check(!first_format.empty(), "the first-layout copy was made");
+
+    scene dst("dst");
+    std::stringstream in(first_format);
+    load_from_stream(in, dst);
+    check_eq(count_scene_roots(dst), size_t{3}, "every root loads");
+    check_eq(count_real_entities(*dst.registry), count_real_entities(*src.registry), "every entity loads");
+    check(save_scene_text(dst) == saved, "saved again, it is the scene the current layout writes");
+}
+
+void test_newer_scene_format_is_refused()
+{
+    begin_test("a scene in a newer format is refused, and the open scene stays");
+
+    check(is_readable_scene_format(FIRST_SCENE_DOCUMENT_FORMAT) && is_readable_scene_format(SCENE_DOCUMENT_FORMAT),
+          "this build reads the first layout and its own");
+    check(!is_readable_scene_format(SCENE_DOCUMENT_FORMAT + 1) && !is_readable_scene_format(0),
+          "and no layout outside them");
+
+    scene src("src");
+    build_three_root_scene(src);
+    auto newer = save_scene_text(src);
+    const std::string current_head = "\"format\": " + std::to_string(SCENE_DOCUMENT_FORMAT);
+    const auto head = newer.find(current_head);
+    check(head != std::string::npos, "the saved head names the current format");
+    if(head == std::string::npos)
+    {
+        return;
+    }
+    newer.replace(head, current_head.size(), "\"format\": " + std::to_string(SCENE_DOCUMENT_FORMAT + 1));
+    check_eq(read_scene_document_format(newer), SCENE_DOCUMENT_FORMAT + 1, "the head of the newer file is read");
+
+    {
+        scene dst("dst");
+        std::stringstream in(newer);
+        load_from_stream(in, dst);
+        check_eq(count_scene_roots(dst), size_t{0}, "the stream reader loads nothing of it");
+    }
+
+    scene open("open");
+    build_sample_tree(open);
+    const auto entities_before = count_real_entities(*open.registry);
+    const auto asset = make_scene_asset(minify_json(newer), "test:/newer_format.spfb");
+    check(!load_from_prefab(asset, open), "loading the newer scene asset reports the refusal");
+    check_eq(count_real_entities(*open.registry), entities_before, "the scene that was open is untouched");
+    check_eq(read_scene_document_format(asset), SCENE_DOCUMENT_FORMAT + 1, "the asset's format is read from its file");
 }
 
 void test_nesting_resolved_marker()
@@ -5840,6 +6005,10 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
 
         test_build_order();
         test_scene_and_prefab_documents_are_not_interchangeable();
+        test_scene_document_repeats_no_key();
+        test_scene_save_is_in_hierarchy_order_and_stable();
+        test_first_format_scene_still_loads();
+        test_newer_scene_format_is_refused();
         test_nesting_resolved_marker();
         test_prefab_dependency_enumeration();
         test_nested_prefab_instance_keeps_its_link();
