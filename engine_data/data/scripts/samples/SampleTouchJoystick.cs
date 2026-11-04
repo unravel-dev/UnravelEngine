@@ -16,7 +16,8 @@ namespace Unravel.Samples
     /// UI Document for it when the entity has none; give the entity a UI Document with a copy of that file
     /// to restyle the controls. The stick and the buttons take their fingers through
     /// <see cref="PointerZone"/>s, so dragging the stick neither turns a mouse-look camera nor clicks, and
-    /// the mouse drives them as well: set Show to Always to try them in the editor.
+    /// the mouse drives them as well: set Show to Always to try them in the editor. A script may change the
+    /// labels while playing, to name what a button does at the moment; an empty label hides its button.
     /// </remarks>
     public class SampleTouchJoystick : ScriptComponent
     {
@@ -266,7 +267,7 @@ namespace Unravel.Samples
         {
             var size = new Vector2(Screen.width, Screen.height);
             Rect safe = Screen.safeArea;
-            if (size == screenSize && safe == safeArea)
+            if (size == screenSize && safe == safeArea && !HasLabelChanged())
             {
                 return;
             }
@@ -323,6 +324,19 @@ namespace Unravel.Samples
                 faceButton.shownLabel = faceButton.label;
                 element.text = faceButton.label ?? "";
             }
+        }
+
+        /// <summary>A script changed a label since the last layout: a button shows, hides or reads anew.</summary>
+        private bool HasLabelChanged()
+        {
+            foreach (var faceButton in buttons)
+            {
+                if (faceButton.label != LabelOf(faceButton.button))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private string LabelOf(GamepadButton button)
