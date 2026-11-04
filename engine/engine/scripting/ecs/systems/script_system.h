@@ -183,6 +183,7 @@ struct script_system
         dotnet::method on_sensor_exit_method;
         dotnet::method on_collision_enter_method;
         dotnet::method on_collision_exit_method;
+        dotnet::method on_joint_break_method;
         // ScriptComponent.internal_n2m_on_animation_event(name, string, float, int, layer, weight, clip, clip name)
         dotnet::method on_animation_event_method;
         // ScriptComponent.internal_n2m_invoke(method name, encoded arguments) -> JSON, for tools
@@ -254,6 +255,15 @@ struct script_system
                         contact_end_reason reason);
 
     void on_collision_enter(entt::handle a, entt::handle b, const std::vector<manifold_point>& manifolds);
+
+    /**
+     * @brief Tells the scripts on a broken joint's entity and on its two bodies, each once.
+     */
+    void on_joint_break(entt::handle joint,
+                        entt::handle body_a,
+                        entt::handle body_b,
+                        const math::vec3& force,
+                        const math::vec3& torque);
 
     /**
      * @brief Dispatches a collision exit to both participants.

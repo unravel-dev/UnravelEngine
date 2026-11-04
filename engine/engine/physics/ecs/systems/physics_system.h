@@ -40,6 +40,9 @@ public:
     /// Whether the fixed update event is running: a move made there belongs to that step alone.
     auto is_in_fixed_update() const noexcept -> bool;
 
+    /// How far game time has come through the next fixed step, 0..1: where shown poses sit between the last two.
+    auto get_step_fraction(float step_seconds) const noexcept -> float;
+
 private:
     float elapsed_{};
     bool is_in_fixed_update_{};
@@ -77,8 +80,49 @@ public:
                                       force_mode mode);
 
     static void apply_force(physics_component& comp, const math::vec3& force, force_mode mode);
+    static void apply_force_at_position(physics_component& comp,
+                                        const math::vec3& force,
+                                        const math::vec3& position,
+                                        force_mode mode);
     static void apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode);
     static void clear_kinematic_velocities(physics_component& comp);
+    static void set_body_awake(physics_component& comp, bool awake);
+
+    static void on_create_joint_component(entt::registry& r, entt::entity e);
+    static void on_destroy_joint_component(entt::registry& r, entt::entity e);
+    static void on_create_ragdoll_component(entt::registry& r, entt::entity e);
+    static void on_destroy_ragdoll_component(entt::registry& r, entt::entity e);
+
+    /// World gravity while playing. Outside play it is the project setting, and setting it changes nothing.
+    void set_gravity(const math::vec3& gravity);
+    auto get_gravity() const -> math::vec3;
+
+    /// Pushes dynamic bodies away from a point, by the area each turns to it (Box3D's explosion).
+    void explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask);
+
+    auto shape_cast(const physics_compound_shape& shape,
+                    const math::vec3& origin,
+                    const math::quat& rotation,
+                    const math::vec3& direction,
+                    float max_distance,
+                    int layer_mask,
+                    bool query_sensors) const -> hpp::optional<raycast_hit>;
+
+    auto shape_cast_all(const physics_compound_shape& shape,
+                        const math::vec3& origin,
+                        const math::quat& rotation,
+                        const math::vec3& direction,
+                        float max_distance,
+                        int layer_mask,
+                        bool query_sensors) const -> physics_vector<raycast_hit>;
+
+    auto shape_overlap(const physics_compound_shape& shape,
+                       const math::vec3& origin,
+                       const math::quat& rotation,
+                       int layer_mask,
+                       bool query_sensors) const -> physics_vector<entt::entity>;
+
+    auto get_world_stats() const -> physics_backend::world_stats;
 
     static void on_create_cc_component(entt::registry& r, entt::entity e);
     static void on_destroy_cc_component(entt::registry& r, entt::entity e);

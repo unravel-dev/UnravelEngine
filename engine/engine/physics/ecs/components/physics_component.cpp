@@ -122,6 +122,107 @@ void physics_component::on_change_sensor()
     set_property_dirty(physics_property::sensor, true);
 }
 
+void physics_component::set_gravity_scale(float scale)
+{
+    if(gravity_scale_ == scale)
+    {
+        return;
+    }
+    gravity_scale_ = scale;
+    on_change_gravity();
+}
+
+auto physics_component::get_gravity_scale() const noexcept -> float
+{
+    return gravity_scale_;
+}
+
+void physics_component::set_linear_damping(float damping)
+{
+    damping = math::max(damping, 0.0f);
+    if(linear_damping_ == damping)
+    {
+        return;
+    }
+    linear_damping_ = damping;
+    dirty_.set();
+    set_property_dirty(physics_property::damping, true);
+}
+
+auto physics_component::get_linear_damping() const noexcept -> float
+{
+    return linear_damping_;
+}
+
+void physics_component::set_angular_damping(float damping)
+{
+    damping = math::max(damping, 0.0f);
+    if(angular_damping_ == damping)
+    {
+        return;
+    }
+    angular_damping_ = damping;
+    dirty_.set();
+    set_property_dirty(physics_property::damping, true);
+}
+
+auto physics_component::get_angular_damping() const noexcept -> float
+{
+    return angular_damping_;
+}
+
+void physics_component::set_is_continuous(bool continuous)
+{
+    if(is_continuous_ == continuous)
+    {
+        return;
+    }
+    is_continuous_ = continuous;
+    dirty_.set();
+    set_property_dirty(physics_property::motion, true);
+}
+
+auto physics_component::is_continuous() const noexcept -> bool
+{
+    return is_continuous_;
+}
+
+void physics_component::set_can_sleep(bool can_sleep)
+{
+    if(can_sleep_ == can_sleep)
+    {
+        return;
+    }
+    can_sleep_ = can_sleep;
+    dirty_.set();
+    set_property_dirty(physics_property::motion, true);
+}
+
+auto physics_component::can_sleep() const noexcept -> bool
+{
+    return can_sleep_;
+}
+
+auto physics_component::is_sleeping() const noexcept -> bool
+{
+    return is_sleeping_;
+}
+
+void physics_component::set_sleeping_internal(bool sleeping) noexcept
+{
+    is_sleeping_ = sleeping;
+}
+
+void physics_component::wake_up()
+{
+    physics_system::set_body_awake(*this, true);
+}
+
+void physics_component::put_to_sleep()
+{
+    physics_system::set_body_awake(*this, false);
+}
+
 auto physics_component::get_contact_event_flags() const noexcept -> contact_event_flags
 {
     return contact_events_;
@@ -274,6 +375,21 @@ void physics_component::set_material(const asset_handle<physics_material>& mater
     on_change_material();
 }
 
+void physics_component::set_surface_velocity(const math::vec3& velocity)
+{
+    if(surface_velocity_ == velocity)
+    {
+        return;
+    }
+    surface_velocity_ = velocity;
+    on_change_material();
+}
+
+auto physics_component::get_surface_velocity() const noexcept -> const math::vec3&
+{
+    return surface_velocity_;
+}
+
 void physics_component::on_change_material()
 {
     dirty_.set();
@@ -297,6 +413,11 @@ void physics_component::apply_explosion_force(float explosion_force,
 void physics_component::apply_force(const math::vec3& force, force_mode mode)
 {
     physics_system::apply_force(*this, force, mode);
+}
+
+void physics_component::apply_force_at_position(const math::vec3& force, const math::vec3& position, force_mode mode)
+{
+    physics_system::apply_force_at_position(*this, force, position, mode);
 }
 
 void physics_component::apply_torque(const math::vec3& torque, force_mode mode)

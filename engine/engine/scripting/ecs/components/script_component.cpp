@@ -164,6 +164,35 @@ void script_component::on_collision_exit(entt::handle b,
                  });
 }
 
+void script_component::on_joint_break(entt::handle joint,
+                                      entt::handle body_a,
+                                      entt::handle body_b,
+                                      float force,
+                                      float torque)
+{
+    safe_foreach(script_components_,
+                 [&](auto& script)
+                 {
+                     auto obj = script.pinned->get_object();
+                     try
+                     {
+                         auto method = dotnet::make_method_invoker<void(entt::entity, entt::entity, entt::entity, float, float)>(
+                             engine_script_cache().on_joint_break_method,
+                             false);
+                         method(obj,
+                                joint.entity(),
+                                body_a ? body_a.entity() : entt::entity(entt::null),
+                                body_b ? body_b.entity() : entt::entity(entt::null),
+                                force,
+                                torque);
+                     }
+                     catch(const dotnet::exception& e)
+                     {
+                         script_system::log_exception(e);
+                     }
+                 });
+}
+
 void script_component::enable(script_object& script_obj, bool check_order)
 {
     if(script_obj.is_enabled() || script_obj.is_marked_for_destroy())

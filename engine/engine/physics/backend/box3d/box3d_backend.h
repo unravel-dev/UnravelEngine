@@ -38,8 +38,37 @@ public:
                                float upwards_modifier,
                                force_mode mode) override;
     void apply_force(physics_component& comp, const math::vec3& force, force_mode mode) override;
+    void apply_force_at_position(physics_component& comp,
+                                 const math::vec3& force,
+                                 const math::vec3& position,
+                                 force_mode mode) override;
     void apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode) override;
     void clear_kinematic_velocities(physics_component& comp) override;
+    void set_body_awake(physics_component& comp, bool awake) override;
+
+    void set_gravity(const math::vec3& gravity) override;
+    auto get_gravity() const -> math::vec3 override;
+    void explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask) override;
+
+    auto shape_cast(const physics_compound_shape& shape,
+                    const math::vec3& origin,
+                    const math::quat& rotation,
+                    const math::vec3& direction,
+                    float max_distance,
+                    int layer_mask,
+                    bool query_sensors) -> hpp::optional<raycast_hit> override;
+    auto shape_cast_all(const physics_compound_shape& shape,
+                        const math::vec3& origin,
+                        const math::quat& rotation,
+                        const math::vec3& direction,
+                        float max_distance,
+                        int layer_mask,
+                        bool query_sensors) -> physics_vector<raycast_hit> override;
+    auto shape_overlap(const physics_compound_shape& shape,
+                       const math::vec3& origin,
+                       const math::quat& rotation,
+                       int layer_mask,
+                       bool query_sensors) -> physics_vector<entt::entity> override;
 
     auto ray_cast(const math::vec3& origin,
                   const math::vec3& direction,
@@ -76,6 +105,12 @@ public:
     void on_create_cc_component(entt::registry& r, entt::entity e) override;
     void on_destroy_cc_component(entt::registry& r, entt::entity e) override;
 
+    void on_create_joint_component(entt::registry& r, entt::entity e) override;
+    void on_destroy_joint_component(entt::registry& r, entt::entity e) override;
+
+    void on_create_ragdoll_component(entt::registry& r, entt::entity e) override;
+    void on_destroy_ragdoll_component(entt::registry& r, entt::entity e) override;
+
     void move_character(character_controller_component& comp, const math::vec3& displacement) override;
     void jump_character(character_controller_component& comp, const math::vec3& direction) override;
     void apply_impulse_character(character_controller_component& comp, const math::vec3& impulse) override;
@@ -90,6 +125,8 @@ public:
                     const camera& cam,
                     gfx::dd_raii& dd) override;
 
+    auto get_world_stats() const -> world_stats override;
+
     static void on_create_active_component(entt::registry& r, entt::entity e);
     static void on_destroy_active_component(entt::registry& r, entt::entity e);
 
@@ -102,6 +139,7 @@ public:
     static void on_pre_destroy_entity(entt::registry& r, entt::entity e);
     static void on_destroy_box3d_rigidbody_component(entt::registry& r, entt::entity e);
     static void on_destroy_box3d_cc_component(entt::registry& r, entt::entity e);
+    static void on_destroy_box3d_joint_component(entt::registry& r, entt::entity e);
 };
 
 } // namespace unravel

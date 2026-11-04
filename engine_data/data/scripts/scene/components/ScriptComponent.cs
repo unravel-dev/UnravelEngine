@@ -204,6 +204,14 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Called when a joint breaks: on the joint's own entity and on both bodies it held together.
+        /// </summary>
+        /// <param name="jointBreak">The joint, its bodies and the force that broke it.</param>
+        public virtual void OnJointBreak(JointBreak jointBreak)
+        {
+        }
+
+        /// <summary>
         /// Called when animation playback on this entity (or on a child without scripts of its own)
         /// crosses an event authored on a clip. Runs before <see cref="OnUpdate"/> in the frame the
         /// event was crossed. A public method named exactly like the event is called as well.
@@ -466,6 +474,26 @@ namespace Unravel.Core
             using (Run(this))
             {
                 OnCollisionExit(collision);
+            }
+        }
+
+        /// <summary>
+        /// Internal method invoked when a joint this entity takes part in breaks. Calls <see cref="OnJointBreak"/>.
+        /// </summary>
+        private void internal_n2m_on_joint_break(Entity joint, Entity bodyA, Entity bodyB, float force, float torque)
+        {
+            JointBreak jointBreak = new JointBreak
+            {
+                joint = joint,
+                bodyA = bodyA,
+                bodyB = bodyB,
+                force = force,
+                torque = torque
+            };
+
+            using (Run(this))
+            {
+                OnJointBreak(jointBreak);
             }
         }
 

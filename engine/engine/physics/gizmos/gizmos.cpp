@@ -28,9 +28,15 @@ void draw(DebugDrawEncoder& dde, const physics_sphere_shape& sh)
 //     dde.drawQuad(to_bx(-sh.normal), to_bx(center), 20);
 // }
 
+/// The local Y axis of a shape turned by its Euler angles in degrees.
+auto shape_axis(const math::vec3& rotation) -> math::vec3
+{
+    return math::normalize(math::quat(math::radians(rotation))) * math::vec3{0.0f, 1.0f, 0.0f};
+}
+
 void draw(DebugDrawEncoder& dde, const physics_cylinder_shape& sh)
 {
-    math::vec3 axis{0, 1, 0};
+    const math::vec3 axis = shape_axis(sh.rotation);
     dde.drawCylinder(to_bx(sh.center + axis * -sh.length * 0.5f),
                      to_bx(sh.center + axis * sh.length * 0.5f),
                      sh.radius);
@@ -38,15 +44,20 @@ void draw(DebugDrawEncoder& dde, const physics_cylinder_shape& sh)
 
 void draw(DebugDrawEncoder& dde, const physics_capsule_shape& sh)
 {
-    // auto axis = edyn::coordinate_axis_vector(sh.axis);
-    math::vec3 axis{0, 1, 0};
+    const math::vec3 axis = shape_axis(sh.rotation);
     dde.drawCapsule(to_bx(sh.center + axis * -sh.length * 0.5f), to_bx(sh.center + axis * sh.length * 0.5f), sh.radius);
 }
 
 void draw(DebugDrawEncoder& dde, const physics_box_shape& sh)
 {
-    auto aabb = bx::Aabb{to_bx(sh.center - sh.extends * 0.5f), to_bx(sh.center + sh.extends * 0.5f)};
-    dde.draw(aabb);
+    // An oriented box: the unit cube (-1..1) scaled to half the extents, turned and moved into place.
+    math::transform box;
+    box.set_position(sh.center);
+    box.set_rotation(math::normalize(math::quat(math::radians(sh.rotation))));
+    box.set_scale(sh.extends * 0.5f);
+    bx::Obb obb;
+    std::copy_n(static_cast<const float*>(box), 16, obb.mtx);
+    dde.draw(obb);
 }
 
 void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)

@@ -10,6 +10,8 @@
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/ecs/components/character_controller_component.h>
+#include <engine/physics/ecs/components/joint_component.h>
+#include <engine/physics/ecs/components/ragdoll_component.h>
 #include <engine/physics/ecs/systems/physics_system.h>
 
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -451,6 +453,14 @@ scene::scene(const std::string& tag_name)
     on_construct<character_controller_component>(*registry).connect<&physics_system::on_create_cc_component>();
     on_destroy<character_controller_component>(*registry).connect<&physics_system::on_destroy_cc_component>();
 
+    // Joints and ragdolls find their entity through the owner; a replaced one is made again.
+    on_construct<joint_component>(*registry).connect<&physics_system::on_create_joint_component>();
+    on_update<joint_component>(*registry).connect<&physics_system::on_create_joint_component>();
+    on_destroy<joint_component>(*registry).connect<&physics_system::on_destroy_joint_component>();
+    on_construct<ragdoll_component>(*registry).connect<&physics_system::on_create_ragdoll_component>();
+    on_update<ragdoll_component>(*registry).connect<&physics_system::on_create_ragdoll_component>();
+    on_destroy<ragdoll_component>(*registry).connect<&physics_system::on_destroy_ragdoll_component>();
+
     on_construct<prefab_component>(*registry).connect<&owned_component::on_create_component<prefab_component>>();
     // on_update too: emplace_or_replace / replace / patch on an existing component assign a
     // whole object over the live one, owner handle included, and fire only this signal. Without
@@ -495,6 +505,8 @@ void scene::unload()
     // Same order the single-entity path uses: physics leaves the world before the
     // scripts that might otherwise be called back into, and both before the untyped
     // clear() tears down everything else in whatever order the pools happen to sit in.
+    registry->clear<joint_component>();
+    registry->clear<ragdoll_component>();
     registry->clear<physics_component>();
     registry->clear<character_controller_component>();
     registry->clear<script_component>();

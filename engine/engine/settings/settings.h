@@ -16,6 +16,7 @@
 #include <engine/settings/boot_config.h>
 #include <engine/settings/target_platform.h>
 #include <graphics/texture.h>
+#include <math/math.h>
 
 #include <string>
 #include <vector>
@@ -253,6 +254,13 @@ struct settings
         /// primitives is usually indistinguishable at 4-6, and solver time scales
         /// close to linearly with this.
         int solver_iterations{10};
+
+        /// World gravity in meters per second squared. Scripts change it while playing through Physics.gravity.
+        math::vec3 gravity{0.0f, -9.8f, 0.0f};
+
+        /// Box3D: solver sub-steps per fixed step. More keep stacks and ragdoll joints stiffer at the cost of solve
+        /// time; 4 is Box3D's own recommendation.
+        int sub_steps{4};
 
         friend auto operator==(const physics_settings& lhs, const physics_settings& rhs) -> bool = default;
     } physics;

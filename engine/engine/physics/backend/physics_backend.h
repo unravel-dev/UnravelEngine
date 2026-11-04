@@ -6,7 +6,9 @@
 #include <context/context.hpp>
 
 #include <engine/physics/ecs/components/character_controller_component.h>
+#include <engine/physics/ecs/components/joint_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
+#include <engine/physics/ecs/components/ragdoll_component.h>
 #include <engine/physics/physics_types.h>
 #include <engine/rendering/camera.h>
 #include <graphics/debugdraw.h>
@@ -64,8 +66,52 @@ public:
                                        float upwards_modifier,
                                        force_mode mode) = 0;
     virtual void apply_force(physics_component& comp, const math::vec3& force, force_mode mode) = 0;
+    virtual void apply_force_at_position(physics_component& comp,
+                                         const math::vec3& force,
+                                         const math::vec3& position,
+                                         force_mode mode) = 0;
     virtual void apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode) = 0;
     virtual void clear_kinematic_velocities(physics_component& comp) = 0;
+    /// Wakes a dynamic body, or puts it to sleep.
+    virtual void set_body_awake(physics_component& comp, bool awake) = 0;
+
+    /// World gravity while playing; the project setting seeds it at play start.
+    virtual void set_gravity(const math::vec3& gravity) = 0;
+    virtual auto get_gravity() const -> math::vec3 = 0;
+
+    /**
+     * @brief Pushes every dynamic body within @p radius of @p center away from it, by the area each one turns to it.
+     * @param falloff Distance beyond the radius over which the push fades to nothing.
+     * @param impulse_per_area Newton seconds per square meter facing the center; negative pulls in.
+     */
+    virtual void explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask) = 0;
+
+    /**
+     * @brief Sweeps a box, capsule or sphere and returns the first hit. The shape is placed at @p origin turned by
+     *        @p rotation; its own center and rotation offset it from there.
+     */
+    virtual auto shape_cast(const physics_compound_shape& shape,
+                            const math::vec3& origin,
+                            const math::quat& rotation,
+                            const math::vec3& direction,
+                            float max_distance,
+                            int layer_mask,
+                            bool query_sensors) -> hpp::optional<raycast_hit> = 0;
+
+    virtual auto shape_cast_all(const physics_compound_shape& shape,
+                                const math::vec3& origin,
+                                const math::quat& rotation,
+                                const math::vec3& direction,
+                                float max_distance,
+                                int layer_mask,
+                                bool query_sensors) -> physics_vector<raycast_hit> = 0;
+
+    /// Entities whose shapes touch a box, capsule or sphere placed like a shape cast's start.
+    virtual auto shape_overlap(const physics_compound_shape& shape,
+                               const math::vec3& origin,
+                               const math::quat& rotation,
+                               int layer_mask,
+                               bool query_sensors) -> physics_vector<entt::entity> = 0;
 
     virtual auto ray_cast(const math::vec3& origin,
                           const math::vec3& direction,
@@ -102,6 +148,14 @@ public:
     virtual void on_create_cc_component(entt::registry& r, entt::entity e) = 0;
     virtual void on_destroy_cc_component(entt::registry& r, entt::entity e) = 0;
 
+    /// Joints are made in the next sync, once their bodies exist.
+    virtual void on_create_joint_component(entt::registry& r, entt::entity e) = 0;
+    virtual void on_destroy_joint_component(entt::registry& r, entt::entity e) = 0;
+
+    /// Ragdoll bodies are made in the next sync, from the animated pose physics_system captured.
+    virtual void on_create_ragdoll_component(entt::registry& r, entt::entity e) = 0;
+    virtual void on_destroy_ragdoll_component(entt::registry& r, entt::entity e) = 0;
+
     virtual void move_character(character_controller_component& comp, const math::vec3& displacement) = 0;
     virtual void jump_character(character_controller_component& comp, const math::vec3& direction) = 0;
     virtual void apply_impulse_character(character_controller_component& comp, const math::vec3& impulse) = 0;
@@ -115,6 +169,20 @@ public:
                             character_controller_component& comp,
                             const camera& cam,
                             gfx::dd_raii& dd) = 0;
+
+    /// Counts of what the running world holds, for tools.
+    struct world_stats
+    {
+        int body_count{};
+        int awake_body_count{};
+        int shape_count{};
+        int contact_count{};
+        int joint_count{};
+        int island_count{};
+        /// Milliseconds the last step took.
+        float step_ms{};
+    };
+    virtual auto get_world_stats() const -> world_stats = 0;
 };
 
 /**

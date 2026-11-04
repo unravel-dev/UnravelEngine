@@ -66,6 +66,9 @@ enum class physics_property : uint8_t
     angular_velocity,
     layer,
     contact_events,
+    damping,
+    /// Continuous collision and sleeping.
+    motion,
     count
 };
 

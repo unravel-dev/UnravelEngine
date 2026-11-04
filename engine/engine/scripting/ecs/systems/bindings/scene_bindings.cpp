@@ -537,6 +537,8 @@ int register_componetns = []()
     native_comp_lut::register_native_component<look_at_ik_component>("Unravel.Core.LookAtIKComponent");
     native_comp_lut::register_native_component<foot_ik_component>("Unravel.Core.FootIKComponent");
     native_comp_lut::register_native_component<spring_bone_component>("Unravel.Core.SpringBoneComponent");
+    native_comp_lut::register_native_component<joint_component>("Unravel.Core.JointComponent");
+    native_comp_lut::register_native_component<ragdoll_component>("Unravel.Core.RagdollComponent");
 
     return 0;
 }();

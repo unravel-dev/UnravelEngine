@@ -26,6 +26,8 @@ struct physics_box_shape
 
     math::vec3 center{};
     math::vec3 extends{1.0f, 1.0f, 1.0f};
+    /// Euler angles in degrees, in the body's space.
+    math::vec3 rotation{};
 };
 
 /**
@@ -50,7 +52,10 @@ struct physics_capsule_shape
 
     math::vec3 center{};
     float radius{0.5f};
+    /// Length of the segment between the two sphere centers, along the local Y axis.
     float length{1.0f};
+    /// Euler angles in degrees, in the body's space. Turns the local Y axis the capsule runs along.
+    math::vec3 rotation{};
 };
 
 /**
@@ -63,7 +68,10 @@ struct physics_cylinder_shape
 
     math::vec3 center{};
     float radius{0.5f};
+    /// Height along the local Y axis.
     float length{1.0f};
+    /// Euler angles in degrees, in the body's space.
+    math::vec3 rotation{};
 };
 
 /**
@@ -128,6 +136,38 @@ public:
     void set_is_sensor(bool sensor);
     auto is_sensor() const noexcept -> bool;
 
+    /// Gravity multiplier while Use Gravity is on. 0 floats, negative falls up.
+    void set_gravity_scale(float scale);
+    auto get_gravity_scale() const noexcept -> float;
+
+    /// Share of linear velocity lost per second, roughly. 0 keeps it; large values make the body drift as in water.
+    void set_linear_damping(float damping);
+    auto get_linear_damping() const noexcept -> float;
+
+    /// Share of angular velocity lost per second, roughly.
+    void set_angular_damping(float damping);
+    auto get_angular_damping() const noexcept -> float;
+
+    /**
+     * @brief Continuous collision against other moving bodies, for small fast bodies (a ball in a pinball
+     *        machine). Every dynamic body already sweeps against static geometry.
+     */
+    void set_is_continuous(bool continuous);
+    auto is_continuous() const noexcept -> bool;
+
+    /// Whether the body may fall asleep when it comes to rest. A body that never sleeps costs a solve every step.
+    void set_can_sleep(bool can_sleep);
+    auto can_sleep() const noexcept -> bool;
+
+    /// Whether the simulation put the body to sleep. Kept by the backend after every step.
+    auto is_sleeping() const noexcept -> bool;
+    void set_sleeping_internal(bool sleeping) noexcept;
+
+    /// Wakes a sleeping dynamic body.
+    void wake_up();
+    /// Puts a dynamic body to sleep until something touches it.
+    void put_to_sleep();
+
     /**
      * @brief Raw contact policy. Read once per pair when it enters the contact store.
      */
@@ -164,6 +204,13 @@ public:
     auto get_material() const -> const asset_handle<physics_material>&;
     void set_material(const asset_handle<physics_material>& material);
 
+    /**
+     * @brief Speed of the body's surface along its contacts, in the body's space, without the body moving: a
+     *        conveyor belt carries what lies on it.
+     */
+    void set_surface_velocity(const math::vec3& velocity);
+    auto get_surface_velocity() const noexcept -> const math::vec3&;
+
     void apply_explosion_force(float explosion_force,
                                const math::vec3& explosion_position,
                                float explosion_radius,
@@ -171,6 +218,8 @@ public:
                                force_mode mode = force_mode::force);
 
     void apply_force(const math::vec3& force, force_mode mode = force_mode::force);
+    /// Pushes the body at a world point: off its center of mass the push also turns it.
+    void apply_force_at_position(const math::vec3& force, const math::vec3& position, force_mode mode = force_mode::force);
     void apply_torque(const math::vec3& torque, force_mode mode = force_mode::force);
 
     void set_freeze_rotation(const math::bvec3& xyz);
@@ -211,7 +260,13 @@ private:
     bool is_using_gravity_{};
     bool is_sensor_{};
     bool is_autoscaled_{true};
+    bool is_continuous_{};
+    bool can_sleep_{true};
+    bool is_sleeping_{};
     float mass_{1};
+    float gravity_scale_{1.0f};
+    float linear_damping_{};
+    float angular_damping_{};
 
     contact_event_flags contact_events_{contact_event_flags_default};
 
@@ -220,6 +275,7 @@ private:
 
     math::vec3 velocity_{};
     math::vec3 angular_velocity_{};
+    math::vec3 surface_velocity_{};
 
     math::bvec3 freeze_position_xyz_{};
     math::bvec3 freeze_rotation_xyz_{};

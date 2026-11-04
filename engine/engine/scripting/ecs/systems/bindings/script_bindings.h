@@ -8,6 +8,8 @@ void register_scene_script_bindings();
 void register_entity_script_bindings();
 void register_transform_component_script_bindings();
 void register_physics_component_script_bindings();
+void register_joint_component_script_bindings();
+void register_ragdoll_component_script_bindings();
 void register_character_controller_component_script_bindings();
 void register_animation_component_script_bindings();
 void register_camera_component_script_bindings();

@@ -78,6 +78,14 @@ REFLECT(physics_material)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
         })
+        .data<&physics_material::rolling_resistance>("rolling_resistance"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rolling_resistance"},
+            entt::attribute{"pretty_name", "Rolling Resistance"},
+            entt::attribute{"tooltip", "How quickly rolling spheres and capsules come to rest, 0 to 1. A ball on a carpet stops, one on ice keeps rolling."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+        })
         .data<&physics_material::restitution_combine>("restitution_combine"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "restitution_combine"},
@@ -100,6 +108,7 @@ SAVE(physics_material)
     try_save(ar, ser20::make_nvp("damping", obj.damping));
     try_save(ar, ser20::make_nvp("restitution_combine", obj.restitution_combine));
     try_save(ar, ser20::make_nvp("friction_combine", obj.friction_combine));
+    try_save(ar, ser20::make_nvp("rolling_resistance", obj.rolling_resistance));
     
     // Changes here should be reflected in ex::get_format_version<physics_material>() in asset_extensions.h
 }
@@ -114,6 +123,7 @@ LOAD(physics_material)
     try_load(ar, ser20::make_nvp("damping", obj.damping));
     try_load(ar, ser20::make_nvp("restitution_combine", obj.restitution_combine));
     try_load(ar, ser20::make_nvp("friction_combine", obj.friction_combine));
+    try_load(ar, ser20::make_nvp("rolling_resistance", obj.rolling_resistance));
     
     // Changes here should be reflected in ex::get_format_version<physics_material>() in asset_extensions.h
 }

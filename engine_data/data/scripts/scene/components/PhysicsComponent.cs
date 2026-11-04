@@ -29,10 +29,177 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// Axes a body may not move along or turn about.
+    /// </summary>
+    [Flags]
+    public enum RigidbodyConstraints : byte
+    {
+        /// <summary>The body moves freely.</summary>
+        None = 0,
+        /// <summary>No motion along X.</summary>
+        FreezePositionX = 1 << 0,
+        /// <summary>No motion along Y.</summary>
+        FreezePositionY = 1 << 1,
+        /// <summary>No motion along Z.</summary>
+        FreezePositionZ = 1 << 2,
+        /// <summary>No turning about X.</summary>
+        FreezeRotationX = 1 << 3,
+        /// <summary>No turning about Y.</summary>
+        FreezeRotationY = 1 << 4,
+        /// <summary>No turning about Z.</summary>
+        FreezeRotationZ = 1 << 5,
+        /// <summary>No motion at all.</summary>
+        FreezePosition = FreezePositionX | FreezePositionY | FreezePositionZ,
+        /// <summary>No turning at all.</summary>
+        FreezeRotation = FreezeRotationX | FreezeRotationY | FreezeRotationZ,
+        /// <summary>Neither motion nor turning.</summary>
+        FreezeAll = FreezePosition | FreezeRotation,
+    }
+
+    /// <summary>
     /// Provides physics functionality for an entity.
     /// </summary>
     public class PhysicsComponent : Component
     {
+        /// <summary>
+        /// Multiplies gravity while <see cref="useGravity"/> is on. 0 floats, negative falls up.
+        /// </summary>
+        public float gravityScale
+        {
+            get => internal_m2n_physics_get_gravity_scale(owner);
+            set => internal_m2n_physics_set_gravity_scale(owner, value);
+        }
+
+        /// <summary>
+        /// How fast the body loses speed, per second: 0 keeps it, large values drift as in water.
+        /// </summary>
+        public float linearDamping
+        {
+            get => internal_m2n_physics_get_linear_damping(owner);
+            set => internal_m2n_physics_set_linear_damping(owner, value);
+        }
+
+        /// <summary>
+        /// How fast the body loses spin, per second.
+        /// </summary>
+        public float angularDamping
+        {
+            get => internal_m2n_physics_get_angular_damping(owner);
+            set => internal_m2n_physics_set_angular_damping(owner, value);
+        }
+
+        /// <summary>
+        /// Continuous collision against other moving bodies, for small fast bodies. Dynamic bodies always sweep against
+        /// static geometry.
+        /// </summary>
+        public bool isContinuous
+        {
+            get => internal_m2n_physics_get_is_continuous(owner);
+            set => internal_m2n_physics_set_is_continuous(owner, value);
+        }
+
+        /// <summary>
+        /// Whether the body may fall asleep when it comes to rest. A sleeping body costs nothing.
+        /// </summary>
+        public bool canSleep
+        {
+            get => internal_m2n_physics_get_can_sleep(owner);
+            set => internal_m2n_physics_set_can_sleep(owner, value);
+        }
+
+        /// <summary>
+        /// Whether the simulation put the body to sleep.
+        /// </summary>
+        public bool isSleeping => internal_m2n_physics_is_sleeping(owner);
+
+        /// <summary>
+        /// Speed of the body's surface along its contacts, in the body's space, while the body itself stays put: a
+        /// conveyor belt carries what lies on it.
+        /// </summary>
+        public Vector3 surfaceVelocity
+        {
+            get => internal_m2n_physics_get_surface_velocity(owner);
+            set => internal_m2n_physics_set_surface_velocity(owner, value);
+        }
+
+        /// <summary>
+        /// Axes the body may not move along or turn about.
+        /// </summary>
+        public RigidbodyConstraints constraints
+        {
+            get
+            {
+                Vector3 position = internal_m2n_physics_get_freeze_position(owner);
+                Vector3 rotation = internal_m2n_physics_get_freeze_rotation(owner);
+                RigidbodyConstraints result = RigidbodyConstraints.None;
+                result |= position.x != 0.0f ? RigidbodyConstraints.FreezePositionX : RigidbodyConstraints.None;
+                result |= position.y != 0.0f ? RigidbodyConstraints.FreezePositionY : RigidbodyConstraints.None;
+                result |= position.z != 0.0f ? RigidbodyConstraints.FreezePositionZ : RigidbodyConstraints.None;
+                result |= rotation.x != 0.0f ? RigidbodyConstraints.FreezeRotationX : RigidbodyConstraints.None;
+                result |= rotation.y != 0.0f ? RigidbodyConstraints.FreezeRotationY : RigidbodyConstraints.None;
+                result |= rotation.z != 0.0f ? RigidbodyConstraints.FreezeRotationZ : RigidbodyConstraints.None;
+                return result;
+            }
+            set
+            {
+                internal_m2n_physics_set_freeze_position(owner,
+                    (value & RigidbodyConstraints.FreezePositionX) != 0,
+                    (value & RigidbodyConstraints.FreezePositionY) != 0,
+                    (value & RigidbodyConstraints.FreezePositionZ) != 0);
+                internal_m2n_physics_set_freeze_rotation(owner,
+                    (value & RigidbodyConstraints.FreezeRotationX) != 0,
+                    (value & RigidbodyConstraints.FreezeRotationY) != 0,
+                    (value & RigidbodyConstraints.FreezeRotationZ) != 0);
+            }
+        }
+
+        /// <summary>
+        /// Wakes a sleeping dynamic body.
+        /// </summary>
+        public void WakeUp()
+        {
+            internal_m2n_physics_wake_up(owner);
+        }
+
+        /// <summary>
+        /// Puts a dynamic body to sleep until something touches it.
+        /// </summary>
+        public void Sleep()
+        {
+            internal_m2n_physics_sleep(owner);
+        }
+
+        /// <summary>
+        /// Pushes the body at a world point: off its center of mass the push also turns it. Only a Dynamic body responds.
+        /// </summary>
+        /// <param name="force">The force, impulse or velocity change, by <paramref name="mode"/>.</param>
+        /// <param name="position">The world point it acts at.</param>
+        /// <param name="mode">How the value is read.</param>
+        public void ApplyForceAtPosition(Vector3 force, Vector3 position, ForceMode mode = ForceMode.Force)
+        {
+            internal_m2n_physics_apply_force_at_position(owner, force, position, mode);
+        }
+
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_physics_get_gravity_scale(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_gravity_scale(Entity eid, float value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_physics_get_linear_damping(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_linear_damping(Entity eid, float value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_physics_get_angular_damping(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_angular_damping(Entity eid, float value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_physics_get_is_continuous(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_is_continuous(Entity eid, bool value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_physics_get_can_sleep(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_can_sleep(Entity eid, bool value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_physics_is_sleeping(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_wake_up(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_sleep(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_physics_get_surface_velocity(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_surface_velocity(Entity eid, Vector3 value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_physics_get_freeze_position(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_freeze_position(Entity eid, bool x, bool y, bool z);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_physics_get_freeze_rotation(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_freeze_rotation(Entity eid, bool x, bool y, bool z);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_apply_force_at_position(Entity eid, Vector3 force, Vector3 position, ForceMode mode);
 
         /// <summary>
         /// Layers that this body should collide with (include filter).

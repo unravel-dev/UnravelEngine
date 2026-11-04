@@ -182,6 +182,9 @@ public:
      */
     void on_animation_event(const animation_event_hit& hit);
 
+    /// Tells every script on the entity that a joint it takes part in broke.
+    void on_joint_break(entt::handle joint, entt::handle body_a, entt::handle body_b, float force, float torque);
+
 private:
     void enable(script_object& script_obj, bool check_order);
     void disable(script_object& script_obj, bool check_order);

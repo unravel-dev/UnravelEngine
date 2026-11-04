@@ -6,6 +6,7 @@
 #include <serialization/binary_archive.h>
 #include <serialization/types/array.hpp>
 #include <engine/meta/assets/asset_handle.hpp>
+#include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/meta/input/input.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
@@ -1143,9 +1144,26 @@ REFLECT_INLINE(settings::physics_settings)
             entt::attribute{"pretty_name", "Solver Iterations"},
             entt::attribute{"min", 1},
             entt::attribute{"tooltip",
-                            "Constraint solver iterations per step. Solver time scales close to linearly with "
-                            "this. Lower values settle stacks less crisply; 4-6 is usually indistinguishable "
+                            "Bullet: constraint solver iterations per step. Solver time scales close to linearly "
+                            "with this. Lower values settle stacks less crisply; 4-6 is usually indistinguishable "
                             "for piles of primitives."},
+        })
+        .data<&settings::physics_settings::gravity>("gravity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gravity"},
+            entt::attribute{"pretty_name", "Gravity"},
+            entt::attribute{"tooltip",
+                            "World gravity in meters per second squared. Scripts can change it while playing."},
+        })
+        .data<&settings::physics_settings::sub_steps>("sub_steps"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sub_steps"},
+            entt::attribute{"pretty_name", "Solver Sub Steps"},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 16},
+            entt::attribute{"tooltip",
+                            "Box3D: solver sub-steps per fixed step. More keep stacks and ragdoll joints stiffer "
+                            "and cost solve time. 4 is the recommended value."},
         });
 }
 
@@ -1155,6 +1173,8 @@ SAVE_INLINE(settings::physics_settings)
     try_save(ar, ser20::make_nvp("fixed_timestep", obj.fixed_timestep));
     try_save(ar, ser20::make_nvp("max_fixed_steps", obj.max_fixed_steps));
     try_save(ar, ser20::make_nvp("solver_iterations", obj.solver_iterations));
+    try_save(ar, ser20::make_nvp("gravity", obj.gravity));
+    try_save(ar, ser20::make_nvp("sub_steps", obj.sub_steps));
 }
 
 LOAD_INLINE(settings::physics_settings)
@@ -1163,6 +1183,8 @@ LOAD_INLINE(settings::physics_settings)
     try_load(ar, ser20::make_nvp("fixed_timestep", obj.fixed_timestep));
     try_load(ar, ser20::make_nvp("max_fixed_steps", obj.max_fixed_steps));
     try_load(ar, ser20::make_nvp("solver_iterations", obj.solver_iterations));
+    try_load(ar, ser20::make_nvp("gravity", obj.gravity));
+    try_load(ar, ser20::make_nvp("sub_steps", obj.sub_steps));
 }
 
 REFLECT_INLINE(settings::layer_settings)

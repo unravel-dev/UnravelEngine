@@ -319,7 +319,8 @@ inline auto get_format_version<unravel::animation_controller>() -> uint64_t
 template<>
 inline auto get_format_version<unravel::physics_material>() -> uint64_t
 {
-    return 1;
+    // 2: rolling resistance.
+    return 2;
 }
 
 template<>

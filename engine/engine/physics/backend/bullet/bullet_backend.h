@@ -3,6 +3,9 @@
 
 #include <engine/physics/backend/physics_backend.h>
 
+#include <string>
+#include <unordered_set>
+
 namespace unravel
 {
 
@@ -32,7 +35,45 @@ public:
                                float upwards_modifier,
                                force_mode mode) override;
     void apply_force(physics_component& comp, const math::vec3& force, force_mode mode) override;
+    void apply_force_at_position(physics_component& comp,
+                                 const math::vec3& force,
+                                 const math::vec3& position,
+                                 force_mode mode) override;
     void apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode) override;
+    void set_body_awake(physics_component& comp, bool awake) override;
+
+    void set_gravity(const math::vec3& gravity) override;
+    auto get_gravity() const -> math::vec3 override;
+    void explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask) override;
+
+    /// Spheres only: box and capsule shapes warn once and find nothing.
+    auto shape_cast(const physics_compound_shape& shape,
+                    const math::vec3& origin,
+                    const math::quat& rotation,
+                    const math::vec3& direction,
+                    float max_distance,
+                    int layer_mask,
+                    bool query_sensors) -> hpp::optional<raycast_hit> override;
+    auto shape_cast_all(const physics_compound_shape& shape,
+                        const math::vec3& origin,
+                        const math::quat& rotation,
+                        const math::vec3& direction,
+                        float max_distance,
+                        int layer_mask,
+                        bool query_sensors) -> physics_vector<raycast_hit> override;
+    auto shape_overlap(const physics_compound_shape& shape,
+                       const math::vec3& origin,
+                       const math::quat& rotation,
+                       int layer_mask,
+                       bool query_sensors) -> physics_vector<entt::entity> override;
+
+    /// Joints and ragdolls are Box3D features: the Bullet backend warns once and leaves them out.
+    void on_create_joint_component(entt::registry& r, entt::entity e) override;
+    void on_destroy_joint_component(entt::registry& r, entt::entity e) override;
+    void on_create_ragdoll_component(entt::registry& r, entt::entity e) override;
+    void on_destroy_ragdoll_component(entt::registry& r, entt::entity e) override;
+
+    auto get_world_stats() const -> world_stats override;
     void clear_kinematic_velocities(physics_component& comp) override;
 
     auto ray_cast(const math::vec3& origin,
@@ -96,6 +137,11 @@ public:
     static void on_pre_destroy_entity(entt::registry& r, entt::entity e);
     static void on_destroy_bullet_rigidbody_component(entt::registry& r, entt::entity e);
     static void on_destroy_bullet_cc_component(entt::registry& r, entt::entity e);
+
+private:
+    void warn_unsupported(const char* feature) const;
+
+    mutable std::unordered_set<std::string> warned_;
 };
 
 } // namespace unravel

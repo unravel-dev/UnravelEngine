@@ -32,9 +32,14 @@ struct frame_update_priority
     static constexpr int64_t editing = 1000;
 
     /// Default band: scene systems (transforms, cameras, models, animation,
-    /// probes), physics and audio. Ordering within the band is registration
+    /// probes) and audio. Ordering within the band is registration
     /// order and is deliberately not contractual.
     static constexpr int64_t scene_systems = 0;
+
+    /// Physics fixed steps. After the scene-system band, so kinematic bodies and ragdoll hitboxes follow this frame's
+    /// animation, and the bones a simulating ragdoll writes are not overwritten by it. Before scripts, which see the
+    /// stepped world.
+    static constexpr int64_t physics = -500;
 
     /// Gameplay scripts. Runs AFTER the scene-system band so script code sees a
     /// fully evaluated animation pose: animation_system rewrites every animated

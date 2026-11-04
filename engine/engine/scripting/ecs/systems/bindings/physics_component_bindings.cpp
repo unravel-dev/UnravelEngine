@@ -212,6 +212,178 @@ void internal_m2n_physics_set_use_gravity(entt::entity id, bool use_gravity)
     }
 }
 
+auto internal_m2n_physics_get_gravity_scale(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->get_gravity_scale();
+    }
+    return 1.0f;
+}
+
+void internal_m2n_physics_set_gravity_scale(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_gravity_scale(value);
+    }
+}
+
+auto internal_m2n_physics_get_linear_damping(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->get_linear_damping();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_physics_set_linear_damping(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_linear_damping(value);
+    }
+}
+
+auto internal_m2n_physics_get_angular_damping(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->get_angular_damping();
+    }
+    return 0.0f;
+}
+
+void internal_m2n_physics_set_angular_damping(entt::entity id, float value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_angular_damping(value);
+    }
+}
+
+auto internal_m2n_physics_get_is_continuous(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->is_continuous();
+    }
+    return false;
+}
+
+void internal_m2n_physics_set_is_continuous(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_is_continuous(value);
+    }
+}
+
+auto internal_m2n_physics_get_can_sleep(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->can_sleep();
+    }
+    return true;
+}
+
+void internal_m2n_physics_set_can_sleep(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_can_sleep(value);
+    }
+}
+
+auto internal_m2n_physics_is_sleeping(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->is_sleeping();
+    }
+    return false;
+}
+
+void internal_m2n_physics_wake_up(entt::entity id)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->wake_up();
+    }
+}
+
+void internal_m2n_physics_sleep(entt::entity id)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->put_to_sleep();
+    }
+}
+
+auto internal_m2n_physics_get_surface_velocity(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->get_surface_velocity();
+    }
+    return {};
+}
+
+void internal_m2n_physics_set_surface_velocity(entt::entity id, const math::vec3& value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_surface_velocity(value);
+    }
+}
+
+auto internal_m2n_physics_get_freeze_position(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return math::vec3(comp->get_freeze_position());
+    }
+    return {};
+}
+
+void internal_m2n_physics_set_freeze_position(entt::entity id, bool x, bool y, bool z)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_freeze_position({x, y, z});
+    }
+}
+
+auto internal_m2n_physics_get_freeze_rotation(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return math::vec3(comp->get_freeze_rotation());
+    }
+    return {};
+}
+
+void internal_m2n_physics_set_freeze_rotation(entt::entity id, bool x, bool y, bool z)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_freeze_rotation({x, y, z});
+    }
+}
+
+void internal_m2n_physics_apply_force_at_position(entt::entity id,
+                                                  const math::vec3& force,
+                                                  const math::vec3& position,
+                                                  force_mode mode)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->apply_force_at_position(force, position, mode);
+    }
+}
+
 } // namespace
 
 void register_physics_component_script_bindings()
@@ -261,6 +433,28 @@ void register_physics_component_script_bindings()
                             script_internal_call(internal_m2n_physics_get_use_gravity));
     reg.add_internal_call("internal_m2n_physics_set_use_gravity",
                             script_internal_call(internal_m2n_physics_set_use_gravity));
+#define UNRAVEL_PHYSICS_CALL(name) reg.add_internal_call(#name, script_internal_call(name))
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_gravity_scale);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_gravity_scale);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_linear_damping);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_linear_damping);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_angular_damping);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_angular_damping);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_is_continuous);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_is_continuous);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_can_sleep);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_can_sleep);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_is_sleeping);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_wake_up);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_sleep);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_surface_velocity);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_surface_velocity);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_freeze_position);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_freeze_position);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_freeze_rotation);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_freeze_rotation);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_apply_force_at_position);
+#undef UNRAVEL_PHYSICS_CALL
 }
 
 } // namespace unravel

@@ -7,6 +7,7 @@
 #include <engine/events.h>
 #include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
+#include <engine/physics/ecs/systems/ragdoll_poses.h>
 #include <engine/play_mode.h>
 #include <engine/profiler/profiler.h>
 #include <engine/settings/boot_config.h>
@@ -219,6 +220,11 @@ auto fixed_step_runner::is_in_fixed_update() const noexcept -> bool
     return is_in_fixed_update_;
 }
 
+auto fixed_step_runner::get_step_fraction(float step_seconds) const noexcept -> float
+{
+    return step_seconds > 0.0f ? math::clamp(elapsed_ / step_seconds, 0.0f, 1.0f) : 1.0f;
+}
+
 void physics_system::on_create_component(entt::registry& r, entt::entity e)
 {
     physics_component::on_create_component(r, e);
@@ -267,7 +273,7 @@ auto physics_system::init(rtti::context& ctx) -> bool
     }
 
     auto& ev = ctx.get_cached<events>();
-    ev.on_frame_update.connect(sentinel_, this, &physics_system::on_frame_update);
+    ev.on_frame_update.connect(sentinel_, frame_update_priority::physics, this, &physics_system::on_frame_update);
 
     ev.on_play_begin.connect(sentinel_, 10, this, &physics_system::on_play_begin);
     ev.on_play_end.connect(sentinel_, -10, this, &physics_system::on_play_end);
@@ -308,6 +314,10 @@ void physics_system::on_play_begin(rtti::context& ctx)
             character.get_motion() = {};
         });
     backend_->on_play_begin(ctx);
+    if(ctx.has<settings>())
+    {
+        backend_->set_gravity(ctx.get<settings>().physics.gravity);
+    }
 }
 
 void physics_system::on_play_end(rtti::context& ctx)
@@ -340,21 +350,16 @@ void physics_system::on_frame_update(rtti::context& ctx, const frame_times& time
 
     auto& play = ctx.get_cached<play_mode>();
 
-    if(!play.is_simulation_running() || play.is_simulation_paused())
+    if(!play.is_simulation_running())
     {
         return;
     }
 
     delta_t dt = times.scaled;
     // First sim frame (incl. mid-frame enter_running): do not accumulate a hitch into fixed steps.
-    if(play.frames_running() == 0)
+    if(play.frames_running() == 0 || play.is_simulation_paused())
     {
         dt = {};
-    }
-
-    if(dt <= delta_t::zero())
-    {
-        return;
     }
 
     float fixed_time_step = 1.0f / 50.0f;
@@ -367,7 +372,16 @@ void physics_system::on_frame_update(rtti::context& ctx, const frame_times& time
         max_subs_steps = ss.physics.max_fixed_steps;
     }
 
-    step_runner_.advance(ctx, *backend_, dt.count(), fixed_time_step, max_subs_steps);
+    auto& registry = *ctx.get_cached<ecs>().get_scene().registry;
+    // The animation has posed the bones for this frame: ragdolls read it before the steps and pose the bones after.
+    // A paused or frozen game steps nothing, but the animation still poses the bones every frame, so the ragdolls pose
+    // them again where physics left them.
+    capture_ragdoll_animations(registry, dt.count());
+    if(dt > delta_t::zero())
+    {
+        step_runner_.advance(ctx, *backend_, dt.count(), fixed_time_step, max_subs_steps);
+    }
+    show_ragdolls(registry, step_runner_.get_step_fraction(fixed_time_step), dt.count());
 }
 
 void physics_system::apply_explosion_force(physics_component& comp,
@@ -396,6 +410,158 @@ void physics_system::apply_force(physics_component& comp, const math::vec3& forc
     {
         backend->apply_force(comp, force, mode);
     }
+}
+
+void physics_system::apply_force_at_position(physics_component& comp,
+                                             const math::vec3& force,
+                                             const math::vec3& position,
+                                             force_mode mode)
+{
+    auto& ctx = engine::context();
+    if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+    {
+        backend->apply_force_at_position(comp, force, position, mode);
+    }
+}
+
+void physics_system::set_body_awake(physics_component& comp, bool awake)
+{
+    auto& ctx = engine::context();
+    if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+    {
+        backend->set_body_awake(comp, awake);
+    }
+}
+
+void physics_system::on_create_joint_component(entt::registry& r, entt::entity e)
+{
+    joint_component::on_create_component(r, e);
+    auto& ctx = engine::context();
+    if(ctx.has<physics_system>())
+    {
+        if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+        {
+            backend->on_create_joint_component(r, e);
+        }
+    }
+}
+
+void physics_system::on_destroy_joint_component(entt::registry& r, entt::entity e)
+{
+    joint_component::on_destroy_component(r, e);
+    auto& ctx = engine::context();
+    if(ctx.has<physics_system>())
+    {
+        if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+        {
+            backend->on_destroy_joint_component(r, e);
+        }
+    }
+}
+
+void physics_system::on_create_ragdoll_component(entt::registry& r, entt::entity e)
+{
+    ragdoll_component::on_create_component(r, e);
+    auto& ctx = engine::context();
+    if(ctx.has<physics_system>())
+    {
+        if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+        {
+            backend->on_create_ragdoll_component(r, e);
+        }
+    }
+}
+
+void physics_system::on_destroy_ragdoll_component(entt::registry& r, entt::entity e)
+{
+    ragdoll_component::on_destroy_component(r, e);
+    auto& ctx = engine::context();
+    if(ctx.has<physics_system>())
+    {
+        if(auto* backend = ctx.get_cached<physics_system>().get_backend())
+        {
+            backend->on_destroy_ragdoll_component(r, e);
+        }
+    }
+}
+
+void physics_system::set_gravity(const math::vec3& gravity)
+{
+    if(backend_)
+    {
+        backend_->set_gravity(gravity);
+    }
+}
+
+auto physics_system::get_gravity() const -> math::vec3
+{
+    auto& ctx = engine::context();
+    const bool is_playing = ctx.has<play_mode>() && ctx.get_cached<play_mode>().is_simulation_running();
+    if(backend_ && is_playing)
+    {
+        return backend_->get_gravity();
+    }
+    if(ctx.has<settings>())
+    {
+        return ctx.get<settings>().physics.gravity;
+    }
+    return {0.0f, -9.8f, 0.0f};
+}
+
+void physics_system::explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask)
+{
+    if(backend_)
+    {
+        backend_->explode(center, radius, falloff, impulse_per_area, layer_mask);
+    }
+}
+
+auto physics_system::shape_cast(const physics_compound_shape& shape,
+                                const math::vec3& origin,
+                                const math::quat& rotation,
+                                const math::vec3& direction,
+                                float max_distance,
+                                int layer_mask,
+                                bool query_sensors) const -> hpp::optional<raycast_hit>
+{
+    if(!backend_)
+    {
+        return {};
+    }
+    return backend_->shape_cast(shape, origin, rotation, direction, max_distance, layer_mask, query_sensors);
+}
+
+auto physics_system::shape_cast_all(const physics_compound_shape& shape,
+                                    const math::vec3& origin,
+                                    const math::quat& rotation,
+                                    const math::vec3& direction,
+                                    float max_distance,
+                                    int layer_mask,
+                                    bool query_sensors) const -> physics_vector<raycast_hit>
+{
+    if(!backend_)
+    {
+        return {};
+    }
+    return backend_->shape_cast_all(shape, origin, rotation, direction, max_distance, layer_mask, query_sensors);
+}
+
+auto physics_system::shape_overlap(const physics_compound_shape& shape,
+                                   const math::vec3& origin,
+                                   const math::quat& rotation,
+                                   int layer_mask,
+                                   bool query_sensors) const -> physics_vector<entt::entity>
+{
+    if(!backend_)
+    {
+        return {};
+    }
+    return backend_->shape_overlap(shape, origin, rotation, layer_mask, query_sensors);
+}
+
+auto physics_system::get_world_stats() const -> physics_backend::world_stats
+{
+    return backend_ ? backend_->get_world_stats() : physics_backend::world_stats{};
 }
 
 void physics_system::apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode)

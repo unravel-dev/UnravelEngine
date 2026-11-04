@@ -100,6 +100,12 @@ auto from_bullet(const btVector3& v) -> math::vec3
     return {v.getX(), v.getY(), v.getZ()};
 }
 
+/// A shape's rotation from its Euler angles in degrees.
+auto make_shape_rotation(const math::vec3& degrees) -> math::quat
+{
+    return math::normalize(math::quat(math::radians(degrees)));
+}
+
 auto to_bullet(const math::quat& q) -> btQuaternion
 {
     return {q.x, q.y, q.z, q.w};
@@ -1686,6 +1692,7 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
 
             btTransform local_transform = btTransform::getIdentity();
             local_transform.setOrigin(bullet::to_bullet(shape.center));
+            local_transform.setRotation(bullet::to_bullet(bullet::make_shape_rotation(shape.rotation)));
             cp->addChildShape(local_transform, box_shape);
         }
         else if(hpp::holds_alternative<physics_sphere_shape>(s.shape))
@@ -1706,6 +1713,7 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
 
             btTransform local_transform = btTransform::getIdentity();
             local_transform.setOrigin(bullet::to_bullet(shape.center));
+            local_transform.setRotation(bullet::to_bullet(bullet::make_shape_rotation(shape.rotation)));
             cp->addChildShape(local_transform, capsule_shape);
         }
         else if(hpp::holds_alternative<physics_cylinder_shape>(s.shape))
@@ -1717,6 +1725,7 @@ auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompound
 
             btTransform local_transform = btTransform::getIdentity();
             local_transform.setOrigin(bullet::to_bullet(shape.center));
+            local_transform.setRotation(bullet::to_bullet(bullet::make_shape_rotation(shape.rotation)));
             cp->addChildShape(local_transform, cylinder_shape);
         }
         else if(hpp::holds_alternative<physics_mesh_shape>(s.shape))
@@ -1791,7 +1800,7 @@ void update_rigidbody_kind(bullet::rigidbody& body, physics_component& comp)
             break;
         case rigidbody_type::dynamic:
             body.internal->setCollisionFlags(flags);
-            body.internal->forceActivationState(ACTIVE_TAG);
+            body.internal->forceActivationState(comp.can_sleep() ? ACTIVE_TAG : DISABLE_DEACTIVATION);
             body.internal->setDeactivationTime(0.0f);
             break;
     }
@@ -1902,12 +1911,36 @@ void update_rigidbody_gravity(bullet::world& world, bullet::rigidbody& body, phy
 {
     if(comp.is_using_gravity())
     {
-        body.internal->setGravity(world.dynamics_world->getGravity());
+        body.internal->setGravity(world.dynamics_world->getGravity() * comp.get_gravity_scale());
     }
     else
     {
         // Do not clear linear velocity here - that would wipe same-frame impulses.
         body.internal->setGravity(btVector3{0, 0, 0});
+    }
+}
+
+void update_rigidbody_damping(bullet::rigidbody& body, physics_component& comp)
+{
+    // Bullet damps a share of the velocity per second, 0..1; Box3D's damping is a rate. Below 1 they agree closely.
+    body.internal->setDamping(math::clamp(comp.get_linear_damping(), 0.0f, 1.0f),
+                              math::clamp(comp.get_angular_damping(), 0.0f, 1.0f));
+}
+
+void update_rigidbody_motion(bullet::rigidbody& body, physics_component& comp)
+{
+    const bool continuous = comp.get_body_type() == rigidbody_type::dynamic && comp.is_continuous();
+    // Continuous collision starts once a step moves the body further than half its smallest extent.
+    btVector3 aabb_min;
+    btVector3 aabb_max;
+    body.internal->getAabb(aabb_min, aabb_max);
+    const btVector3 size = aabb_max - aabb_min;
+    const float smallest = std::max(0.01f, float(std::min({size.x(), size.y(), size.z()})) * 0.5f);
+    body.internal->setCcdMotionThreshold(continuous ? smallest : 0.0f);
+    body.internal->setCcdSweptSphereRadius(continuous ? smallest * 0.4f : 0.0f);
+    if(comp.get_body_type() == rigidbody_type::dynamic)
+    {
+        body.internal->forceActivationState(comp.can_sleep() ? ACTIVE_TAG : DISABLE_DEACTIVATION);
     }
 }
 
@@ -1972,6 +2005,8 @@ void update_rigidbody_full(bullet::world& world, bullet::rigidbody& body, physic
     update_rigidbody_sensor(body, comp);
     update_rigidbody_constraints(body, comp);
     update_rigidbody_gravity(world, body, comp);
+    update_rigidbody_damping(body, comp);
+    update_rigidbody_motion(body, comp);
     // Velocity last so explicit velocities / impulses are not overwritten by earlier setup.
     update_rigidbody_velocity(body, comp);
     update_rigidbody_angular_velocity(body, comp);
@@ -2106,6 +2141,14 @@ void sync_physics_body(bullet::world& world, physics_component& comp, bool force
             if(comp.is_property_dirty(physics_property::gravity))
             {
                 update_rigidbody_gravity(world, body, comp);
+            }
+            if(comp.is_property_dirty(physics_property::damping))
+            {
+                update_rigidbody_damping(body, comp);
+            }
+            if(comp.is_property_dirty(physics_property::motion))
+            {
+                update_rigidbody_motion(body, comp);
             }
             if(comp.is_property_dirty(physics_property::velocity))
             {
@@ -2267,8 +2310,12 @@ auto sync_transforms_from_physics(physics_component& comp, transform_component& 
         return false;
     }
 
-    if(!body->internal->isActive())
+    const bool awake = body->internal->isActive();
+    comp.set_sleeping_internal(!awake);
+    if(!awake)
     {
+        comp.set_velocity_internal(math::vec3{0.0f});
+        comp.set_angular_velocity_internal(math::vec3{0.0f});
         return false;
     }
 
@@ -2914,6 +2961,233 @@ void bullet_backend::apply_force(physics_component& comp, const math::vec3& forc
     comp.set_velocity_internal(bullet::from_bullet(bbody->internal->getLinearVelocity()));
     bbody->internal->forceActivationState(ACTIVE_TAG);
     bbody->internal->setDeactivationTime(0.0f);
+}
+
+void bullet_backend::apply_force_at_position(physics_component& comp,
+                                             const math::vec3& force,
+                                             const math::vec3& position,
+                                             force_mode mode)
+{
+    if(comp.get_body_type() != rigidbody_type::dynamic)
+    {
+        return;
+    }
+    auto* world = bullet::find_bullet_world();
+    if(!world)
+    {
+        return;
+    }
+    auto owner = comp.get_owner();
+    bullet::sync_physics_body(*world, comp, !owner.all_of<bullet::rigidbody>());
+    auto* bbody = owner.try_get<bullet::rigidbody>();
+    if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
+    {
+        return;
+    }
+    btRigidBody* body = bbody->internal.get();
+    const btVector3 relative = bullet::to_bullet(position) - body->getCenterOfMassPosition();
+    btVector3 value = bullet::to_bullet(force);
+    switch(mode)
+    {
+        case force_mode::acceleration:
+            value *= btScalar(1.0) / body->getInvMass();
+            [[fallthrough]];
+        case force_mode::force:
+            body->applyForce(value, relative);
+            break;
+        case force_mode::velocity_change:
+            value *= btScalar(1.0) / body->getInvMass();
+            [[fallthrough]];
+        case force_mode::impulse:
+            body->applyImpulse(value, relative);
+            break;
+    }
+    body->forceActivationState(ACTIVE_TAG);
+    body->setDeactivationTime(0.0f);
+    comp.set_velocity_internal(bullet::from_bullet(body->getLinearVelocity()));
+    comp.set_angular_velocity_internal(bullet::from_bullet(body->getAngularVelocity()));
+}
+
+void bullet_backend::set_body_awake(physics_component& comp, bool awake)
+{
+    auto owner = comp.get_owner();
+    auto* bbody = owner.try_get<bullet::rigidbody>();
+    if(comp.get_body_type() != rigidbody_type::dynamic || !bbody || !bbody->internal)
+    {
+        return;
+    }
+    if(awake)
+    {
+        bbody->internal->activate(true);
+    }
+    else
+    {
+        bbody->internal->setLinearVelocity(btVector3{0, 0, 0});
+        bbody->internal->setAngularVelocity(btVector3{0, 0, 0});
+        bbody->internal->setActivationState(ISLAND_SLEEPING);
+    }
+    comp.set_sleeping_internal(!awake);
+}
+
+void bullet_backend::set_gravity(const math::vec3& gravity)
+{
+    auto* world = bullet::find_bullet_world();
+    if(!world)
+    {
+        return;
+    }
+    world->dynamics_world->setGravity(bullet::to_bullet(gravity));
+    auto& registry = *engine::context().get_cached<ecs>().get_scene().registry;
+    registry.view<physics_component, bullet::rigidbody>().each(
+        [&](auto e, auto&& comp, auto&& body)
+        {
+            bullet::update_rigidbody_gravity(*world, body, comp);
+        });
+}
+
+auto bullet_backend::get_gravity() const -> math::vec3
+{
+    auto* world = bullet::find_bullet_world();
+    return world ? bullet::from_bullet(world->dynamics_world->getGravity()) : bullet::from_bullet(bullet::gravity_earth);
+}
+
+void bullet_backend::explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask)
+{
+    auto* world = bullet::find_bullet_world();
+    if(!world || radius + falloff <= 0.0f)
+    {
+        return;
+    }
+    // Bullet has no explosion query: each body takes the impulse a sphere of its own size would, facing the blast.
+    auto& registry = *engine::context().get_cached<ecs>().get_scene().registry;
+    registry.view<physics_component, bullet::rigidbody>().each(
+        [&](auto e, auto&& comp, auto&& body)
+        {
+            if(comp.get_body_type() != rigidbody_type::dynamic || !body.internal ||
+               (body.collision_filter_group & layer_mask) == 0)
+            {
+                return;
+            }
+            const btVector3 offset = body.internal->getCenterOfMassPosition() - bullet::to_bullet(center);
+            const float distance = float(offset.length());
+            if(distance > radius + falloff)
+            {
+                return;
+            }
+            btVector3 aabb_min;
+            btVector3 aabb_max;
+            body.internal->getAabb(aabb_min, aabb_max);
+            const float half = float((aabb_max - aabb_min).length()) * 0.25f;
+            const float area = math::pi<float>() * half * half;
+            const float fade = distance <= radius ? 1.0f : 1.0f - (distance - radius) / std::max(falloff, 1e-4f);
+            const btVector3 direction = distance > 1e-4f ? offset / distance : btVector3{0, 1, 0};
+            body.internal->applyCentralImpulse(direction * (impulse_per_area * area * fade));
+            body.internal->activate(true);
+        });
+}
+
+void bullet_backend::warn_unsupported(const char* feature) const
+{
+    if(warned_.insert(feature).second)
+    {
+        APPLOG_WARNING("bullet: {} is not supported by the Bullet backend; it works with Box3D, the engine default",
+                       feature);
+    }
+}
+
+auto bullet_backend::shape_cast(const physics_compound_shape& shape,
+                                const math::vec3& origin,
+                                const math::quat& rotation,
+                                const math::vec3& direction,
+                                float max_distance,
+                                int layer_mask,
+                                bool query_sensors) -> hpp::optional<raycast_hit>
+{
+    if(const auto* sphere = hpp::get_if<physics_sphere_shape>(&shape.shape))
+    {
+        return sphere_cast(origin + rotation * sphere->center, direction, sphere->radius, max_distance, layer_mask, query_sensors);
+    }
+    warn_unsupported("A box or capsule cast");
+    return {};
+}
+
+auto bullet_backend::shape_cast_all(const physics_compound_shape& shape,
+                                    const math::vec3& origin,
+                                    const math::quat& rotation,
+                                    const math::vec3& direction,
+                                    float max_distance,
+                                    int layer_mask,
+                                    bool query_sensors) -> physics_vector<raycast_hit>
+{
+    if(const auto* sphere = hpp::get_if<physics_sphere_shape>(&shape.shape))
+    {
+        return sphere_cast_all(origin + rotation * sphere->center,
+                               direction,
+                               sphere->radius,
+                               max_distance,
+                               layer_mask,
+                               query_sensors);
+    }
+    warn_unsupported("A box or capsule cast");
+    return {};
+}
+
+auto bullet_backend::shape_overlap(const physics_compound_shape& shape,
+                                   const math::vec3& origin,
+                                   const math::quat& rotation,
+                                   int layer_mask,
+                                   bool query_sensors) -> physics_vector<entt::entity>
+{
+    if(const auto* sphere = hpp::get_if<physics_sphere_shape>(&shape.shape))
+    {
+        return sphere_overlap(origin + rotation * sphere->center, sphere->radius, layer_mask, query_sensors);
+    }
+    warn_unsupported("A box or capsule overlap");
+    return {};
+}
+
+void bullet_backend::on_create_joint_component(entt::registry& r, entt::entity e)
+{
+    if(r.ctx().find<bullet::world>() != nullptr)
+    {
+        warn_unsupported("The joint component");
+    }
+}
+
+void bullet_backend::on_destroy_joint_component(entt::registry& r, entt::entity e)
+{
+}
+
+void bullet_backend::on_create_ragdoll_component(entt::registry& r, entt::entity e)
+{
+    if(r.ctx().find<bullet::world>() != nullptr)
+    {
+        warn_unsupported("The ragdoll component");
+    }
+}
+
+void bullet_backend::on_destroy_ragdoll_component(entt::registry& r, entt::entity e)
+{
+}
+
+auto bullet_backend::get_world_stats() const -> world_stats
+{
+    world_stats stats;
+    auto* world = bullet::find_bullet_world();
+    if(!world)
+    {
+        return stats;
+    }
+    const auto& objects = world->dynamics_world->getCollisionObjectArray();
+    stats.body_count = objects.size();
+    for(int i = 0; i < objects.size(); ++i)
+    {
+        stats.awake_body_count += objects[i]->isActive() ? 1 : 0;
+    }
+    stats.shape_count = stats.body_count;
+    stats.contact_count = world->dynamics_world->getDispatcher()->getNumManifolds();
+    stats.joint_count = world->dynamics_world->getNumConstraints();
+    return stats;
 }
 
 void bullet_backend::apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode)

@@ -18,6 +18,110 @@ namespace Unravel.Core
         public const int DefaultRaycastLayers = -1;
 
         /// <summary>
+        /// World gravity in meters per second squared. It starts as the project setting; changing it while playing
+        /// changes the running world.
+        /// </summary>
+        public static Vector3 gravity
+        {
+            get => internal_m2n_physics_get_gravity();
+            set => internal_m2n_physics_set_gravity(value);
+        }
+
+        /// <summary>
+        /// Pushes every dynamic body within <paramref name="radius"/> of <paramref name="center"/> away from it, by the
+        /// area each one turns to it: a wide crate takes more than a thin pole.
+        /// </summary>
+        /// <param name="center">The center of the blast.</param>
+        /// <param name="radius">Bodies closer than this take the full push.</param>
+        /// <param name="impulsePerArea">Newton seconds per square meter facing the blast; negative pulls in.</param>
+        /// <param name="falloff">Distance beyond the radius over which the push fades to nothing.</param>
+        /// <param name="layerMask">The layers that feel it.</param>
+        public static void Explode(Vector3 center, float radius, float impulsePerArea, float falloff = 0.0f, int layerMask = DefaultRaycastLayers)
+        {
+            internal_m2n_physics_explode(center, radius, falloff, impulsePerArea, layerMask);
+        }
+
+        /// <summary>
+        /// Sweeps a box along a direction and returns the first object hit.
+        /// </summary>
+        /// <param name="center">Where the box starts.</param>
+        /// <param name="halfExtents">Half the box's size along each of its axes.</param>
+        /// <param name="direction">The direction of the sweep.</param>
+        /// <param name="orientation">The box's rotation.</param>
+        /// <param name="maxDistance">How far the box travels.</param>
+        /// <param name="layerMask">The layers it hits.</param>
+        /// <param name="querySensors">Whether it hits sensors.</param>
+        public static RaycastHit? BoxCast(Vector3 center, Vector3 halfExtents, Vector3 direction, Quaternion orientation, float maxDistance = Mathf.Infinity, int layerMask = DefaultRaycastLayers, bool querySensors = false)
+        {
+            RaycastHit hit;
+            if (internal_m2n_physics_shape_cast(out hit, 0, halfExtents * 2.0f, center, orientation, direction, maxDistance, layerMask, querySensors))
+            {
+                return hit;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Sweeps a box along a direction and returns everything it hits, nearest first.
+        /// </summary>
+        public static RaycastHit[] BoxCastAll(Vector3 center, Vector3 halfExtents, Vector3 direction, Quaternion orientation, float maxDistance = Mathf.Infinity, int layerMask = DefaultRaycastLayers, bool querySensors = false)
+        {
+            byte[] rawHits = internal_m2n_physics_shape_cast_all(0, halfExtents * 2.0f, center, orientation, direction, maxDistance, layerMask, querySensors);
+            return rawHits.ToStructArray<RaycastHit>();
+        }
+
+        /// <summary>
+        /// The entities whose shapes touch a box.
+        /// </summary>
+        public static Entity[] BoxOverlap(Vector3 center, Vector3 halfExtents, Quaternion orientation, int layerMask = DefaultRaycastLayers, bool querySensors = false)
+        {
+            byte[] rawHits = internal_m2n_physics_shape_overlap(0, halfExtents * 2.0f, center, orientation, layerMask, querySensors);
+            return rawHits.ToStructArray<Entity>();
+        }
+
+        /// <summary>
+        /// Sweeps a capsule between two sphere centers along a direction and returns the first object hit.
+        /// </summary>
+        /// <param name="point1">The center of one end sphere.</param>
+        /// <param name="point2">The center of the other end sphere.</param>
+        /// <param name="radius">The capsule's radius.</param>
+        /// <param name="direction">The direction of the sweep.</param>
+        /// <param name="maxDistance">How far the capsule travels.</param>
+        /// <param name="layerMask">The layers it hits.</param>
+        /// <param name="querySensors">Whether it hits sensors.</param>
+        public static RaycastHit? CapsuleCast(Vector3 point1, Vector3 point2, float radius, Vector3 direction, float maxDistance = Mathf.Infinity, int layerMask = DefaultRaycastLayers, bool querySensors = false)
+        {
+            CapsulePose(point1, point2, out Vector3 center, out Quaternion orientation, out float length);
+            RaycastHit hit;
+            if (internal_m2n_physics_shape_cast(out hit, 1, new Vector3(radius, length, 0.0f), center, orientation, direction, maxDistance, layerMask, querySensors))
+            {
+                return hit;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The entities whose shapes touch a capsule between two sphere centers.
+        /// </summary>
+        public static Entity[] CapsuleOverlap(Vector3 point1, Vector3 point2, float radius, int layerMask = DefaultRaycastLayers, bool querySensors = false)
+        {
+            CapsulePose(point1, point2, out Vector3 center, out Quaternion orientation, out float length);
+            byte[] rawHits = internal_m2n_physics_shape_overlap(1, new Vector3(radius, length, 0.0f), center, orientation, layerMask, querySensors);
+            return rawHits.ToStructArray<Entity>();
+        }
+
+        /// <summary>
+        /// A capsule's center, the rotation that turns its local Y axis from one end to the other, and its length.
+        /// </summary>
+        private static void CapsulePose(Vector3 point1, Vector3 point2, out Vector3 center, out Quaternion orientation, out float length)
+        {
+            Vector3 axis = point2 - point1;
+            length = axis.magnitude;
+            center = (point1 + point2) * 0.5f;
+            orientation = length > 1e-6f ? Quaternion.FromToRotation(Vector3.up, axis / length) : Quaternion.identity;
+        }
+
+        /// <summary>
         /// Casts a ray and returns the first object hit, if any.
         /// </summary>
         /// <param name="ray">The ray to cast.</param>
@@ -208,5 +312,23 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern byte[] internal_m2n_physics_sphere_overlap(Vector3 origin, float radius, int layerMask, bool querySensors);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern Vector3 internal_m2n_physics_get_gravity();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_set_gravity(Vector3 gravity);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_explode(Vector3 center, float radius, float falloff, float impulsePerArea, int layerMask);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_physics_shape_cast(out RaycastHit hit, int kind, Vector3 size, Vector3 origin, Quaternion rotation, Vector3 direction, float maxDistance, int layerMask, bool querySensors);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_physics_shape_cast_all(int kind, Vector3 size, Vector3 origin, Quaternion rotation, Vector3 direction, float maxDistance, int layerMask, bool querySensors);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte[] internal_m2n_physics_shape_overlap(int kind, Vector3 size, Vector3 origin, Quaternion rotation, int layerMask, bool querySensors);
     }
 }

@@ -637,6 +637,7 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
         cache_.script_component_type.get_method("internal_n2m_on_collision_enter", 2);
     cache_.on_collision_exit_method =
         cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 3);
+    cache_.on_joint_break_method = cache_.script_component_type.get_method("internal_n2m_on_joint_break", 5);
     cache_.on_animation_event_method =
         cache_.script_component_type.get_method("internal_n2m_on_animation_event", 8);
     cache_.invoke_method = cache_.script_component_type.get_method("internal_n2m_invoke", 2);
@@ -1754,6 +1755,31 @@ void script_system::on_collision_enter(entt::handle a, entt::handle b, const std
     catch(const dotnet::exception& e)
     {
         log_exception(e);
+    }
+}
+
+void script_system::on_joint_break(entt::handle joint,
+                                   entt::handle body_a,
+                                   entt::handle body_b,
+                                   const math::vec3& force,
+                                   const math::vec3& torque)
+{
+    const float force_magnitude = math::length(force);
+    const float torque_magnitude = math::length(torque);
+    std::array<entt::handle, 3> receivers{joint, body_a, body_b};
+    for(size_t i = 0; i < receivers.size(); ++i)
+    {
+        const auto receiver = receivers[i];
+        const bool is_repeat = std::find(receivers.begin(), receivers.begin() + std::ptrdiff_t(i), receiver) !=
+                               receivers.begin() + std::ptrdiff_t(i);
+        if(!receiver || is_repeat)
+        {
+            continue;
+        }
+        if(auto* comp = receiver.try_get<script_component>())
+        {
+            comp->on_joint_break(joint, body_a, body_b, force_magnitude, torque_magnitude);
+        }
     }
 }
 

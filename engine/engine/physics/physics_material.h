@@ -50,6 +50,10 @@ struct physics_material
     /// Tooltip: Coefficient of damping. Represents the material's resistance to motion. Higher values result in more
     /// energy loss.
 
+    /// Resistance to rolling, 0..1, for spheres and capsules: a ball on a carpet comes to rest, one on ice keeps
+    /// rolling. Combined by taking the larger of the two.
+    float rolling_resistance{0.0f};
+
     combine_mode restitution_combine{combine_mode::average}; ///< How to combine restitution values.
 
     combine_mode friction_combine{combine_mode::average}; ///< How to combine friction values.

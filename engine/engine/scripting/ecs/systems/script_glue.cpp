@@ -16,6 +16,8 @@ auto script_system::bind_internal_calls(rtti::context& ctx) -> bool
     register_entity_script_bindings();
     register_transform_component_script_bindings();
     register_physics_component_script_bindings();
+    register_joint_component_script_bindings();
+    register_ragdoll_component_script_bindings();
     register_character_controller_component_script_bindings();
     register_animation_component_script_bindings();
     register_camera_component_script_bindings();

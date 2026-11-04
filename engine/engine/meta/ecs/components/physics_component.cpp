@@ -30,6 +30,12 @@ REFLECT(physics_box_shape)
             entt::attribute{"name", "extends"},
             entt::attribute{"pretty_name", "Extends"},
             entt::attribute{"tooltip", "The extends of the collider."},
+        })
+        .data<&physics_box_shape::rotation>("rotation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation"},
+            entt::attribute{"pretty_name", "Rotation"},
+            entt::attribute{"tooltip", "Turn of the collider against the body, Euler angles in degrees."},
         });
 }
 
@@ -37,6 +43,7 @@ SAVE(physics_box_shape)
 {
     try_save(ar, ser20::make_nvp("center", obj.center));
     try_save(ar, ser20::make_nvp("extends", obj.extends));
+    try_save(ar, ser20::make_nvp("rotation", obj.rotation));
 }
 SAVE_INSTANTIATE(physics_box_shape, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(physics_box_shape, ser20::oarchive_binary_t);
@@ -45,6 +52,7 @@ LOAD(physics_box_shape)
 {
     try_load(ar, ser20::make_nvp("center", obj.center));
     try_load(ar, ser20::make_nvp("extends", obj.extends));
+    try_load(ar, ser20::make_nvp("rotation", obj.rotation));
 }
 
 LOAD_INSTANTIATE(physics_box_shape, ser20::iarchive_associative_t);
@@ -120,6 +128,12 @@ REFLECT(physics_capsule_shape)
             entt::attribute{"tooltip", "The length of the collider."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
+        })
+        .data<&physics_capsule_shape::rotation>("rotation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation"},
+            entt::attribute{"pretty_name", "Rotation"},
+            entt::attribute{"tooltip", "Turn of the collider against the body, Euler angles in degrees."},
         });
 }
 
@@ -128,6 +142,7 @@ SAVE(physics_capsule_shape)
     try_save(ar, ser20::make_nvp("center", obj.center));
     try_save(ar, ser20::make_nvp("radius", obj.radius));
     try_save(ar, ser20::make_nvp("length", obj.length));
+    try_save(ar, ser20::make_nvp("rotation", obj.rotation));
 }
 SAVE_INSTANTIATE(physics_capsule_shape, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(physics_capsule_shape, ser20::oarchive_binary_t);
@@ -137,6 +152,7 @@ LOAD(physics_capsule_shape)
     try_load(ar, ser20::make_nvp("center", obj.center));
     try_load(ar, ser20::make_nvp("radius", obj.radius));
     try_load(ar, ser20::make_nvp("length", obj.length));
+    try_load(ar, ser20::make_nvp("rotation", obj.rotation));
 }
 
 LOAD_INSTANTIATE(physics_capsule_shape, ser20::iarchive_associative_t);
@@ -171,6 +187,12 @@ REFLECT(physics_cylinder_shape)
             entt::attribute{"tooltip", "The length of the collider."},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
+        })
+        .data<&physics_cylinder_shape::rotation>("rotation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "rotation"},
+            entt::attribute{"pretty_name", "Rotation"},
+            entt::attribute{"tooltip", "Turn of the collider against the body, Euler angles in degrees."},
         });
 }
 
@@ -179,6 +201,7 @@ SAVE(physics_cylinder_shape)
     try_save(ar, ser20::make_nvp("center", obj.center));
     try_save(ar, ser20::make_nvp("radius", obj.radius));
     try_save(ar, ser20::make_nvp("length", obj.length));
+    try_save(ar, ser20::make_nvp("rotation", obj.rotation));
 }
 SAVE_INSTANTIATE(physics_cylinder_shape, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(physics_cylinder_shape, ser20::oarchive_binary_t);
@@ -188,6 +211,7 @@ LOAD(physics_cylinder_shape)
     try_load(ar, ser20::make_nvp("center", obj.center));
     try_load(ar, ser20::make_nvp("radius", obj.radius));
     try_load(ar, ser20::make_nvp("length", obj.length));
+    try_load(ar, ser20::make_nvp("rotation", obj.rotation));
 }
 
 LOAD_INSTANTIATE(physics_cylinder_shape, ser20::iarchive_associative_t);
@@ -406,6 +430,58 @@ REFLECT(physics_component)
             entt::attribute{"tooltip", "Mass for dynamic rigidbodies."},
             entt::attribute{"min", 0.0f},
         })
+        .data<&physics_component::set_gravity_scale, &physics_component::get_gravity_scale>("gravity_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gravity_scale"},
+            entt::attribute{"pretty_name", "Gravity Scale"},
+            entt::attribute{"tooltip", "Multiplies gravity while Use Gravity is on. 0 floats, negative falls up."},
+            entt::attribute{"step", 0.1f},
+        })
+        .data<&physics_component::set_linear_damping, &physics_component::get_linear_damping>("linear_damping"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "linear_damping"},
+            entt::attribute{"pretty_name", "Linear Damping"},
+            entt::attribute{"tooltip",
+                            "How fast the body loses speed, per second. 0 keeps it; large values drift as in water."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+        })
+        .data<&physics_component::set_angular_damping, &physics_component::get_angular_damping>("angular_damping"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "angular_damping"},
+            entt::attribute{"pretty_name", "Angular Damping"},
+            entt::attribute{"tooltip", "How fast the body loses spin, per second."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+        })
+        .data<&physics_component::set_is_continuous, &physics_component::is_continuous>("is_continuous"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_continuous"},
+            entt::attribute{"pretty_name", "Continuous"},
+            entt::attribute{"tooltip",
+                            "Continuous collision against other moving bodies, for small fast bodies. Dynamic "
+                            "bodies always sweep against static geometry."},
+        })
+        .data<&physics_component::set_can_sleep, &physics_component::can_sleep>("can_sleep"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "can_sleep"},
+            entt::attribute{"pretty_name", "Can Sleep"},
+            entt::attribute{"tooltip", "Whether the body may sleep when it comes to rest. A sleeping body costs nothing."},
+        })
+        .data<nullptr, &physics_component::is_sleeping>("is_sleeping"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_sleeping"},
+            entt::attribute{"pretty_name", "Sleeping"},
+            entt::attribute{"tooltip", "Whether the simulation put the body to sleep."},
+        })
+        .data<&physics_component::set_surface_velocity, &physics_component::get_surface_velocity>("surface_velocity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "surface_velocity"},
+            entt::attribute{"pretty_name", "Surface Velocity"},
+            entt::attribute{"tooltip",
+                            "Speed of the surface along its contacts, in the body's space, without the body moving: "
+                            "a conveyor belt carries what lies on it."},
+        })
         .data<&physics_component::set_collision_include_mask, &physics_component::get_collision_include_mask>("include_layers"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "include_layers"},
@@ -478,6 +554,12 @@ SAVE(physics_component)
 
     try_save(ar, ser20::make_nvp("material", obj.get_material()));
     try_save(ar, ser20::make_nvp("shapes", obj.get_shapes()));
+    try_save(ar, ser20::make_nvp("gravity_scale", obj.get_gravity_scale()));
+    try_save(ar, ser20::make_nvp("linear_damping", obj.get_linear_damping()));
+    try_save(ar, ser20::make_nvp("angular_damping", obj.get_angular_damping()));
+    try_save(ar, ser20::make_nvp("is_continuous", obj.is_continuous()));
+    try_save(ar, ser20::make_nvp("can_sleep", obj.can_sleep()));
+    try_save(ar, ser20::make_nvp("surface_velocity", obj.get_surface_velocity()));
 }
 SAVE_INSTANTIATE(physics_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(physics_component, ser20::oarchive_binary_t);
@@ -582,6 +664,37 @@ LOAD(physics_component)
     if(try_load(ar, ser20::make_nvp("shapes", shapes)))
     {
         obj.set_shapes(shapes);
+    }
+
+    float gravity_scale{1.0f};
+    if(try_load(ar, ser20::make_nvp("gravity_scale", gravity_scale)))
+    {
+        obj.set_gravity_scale(gravity_scale);
+    }
+    float linear_damping{0.0f};
+    if(try_load(ar, ser20::make_nvp("linear_damping", linear_damping)))
+    {
+        obj.set_linear_damping(linear_damping);
+    }
+    float angular_damping{0.0f};
+    if(try_load(ar, ser20::make_nvp("angular_damping", angular_damping)))
+    {
+        obj.set_angular_damping(angular_damping);
+    }
+    bool is_continuous{false};
+    if(try_load(ar, ser20::make_nvp("is_continuous", is_continuous)))
+    {
+        obj.set_is_continuous(is_continuous);
+    }
+    bool can_sleep{true};
+    if(try_load(ar, ser20::make_nvp("can_sleep", can_sleep)))
+    {
+        obj.set_can_sleep(can_sleep);
+    }
+    math::vec3 surface_velocity{0.0f};
+    if(try_load(ar, ser20::make_nvp("surface_velocity", surface_velocity)))
+    {
+        obj.set_surface_velocity(surface_velocity);
     }
 }
 
