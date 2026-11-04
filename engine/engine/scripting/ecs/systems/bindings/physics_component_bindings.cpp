@@ -297,6 +297,23 @@ void internal_m2n_physics_set_can_sleep(entt::entity id, bool value)
     }
 }
 
+auto internal_m2n_physics_get_interpolate(entt::entity id) -> bool
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return comp->get_interpolate();
+    }
+    return false;
+}
+
+void internal_m2n_physics_set_interpolate(entt::entity id, bool value)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_interpolate(value);
+    }
+}
+
 auto internal_m2n_physics_is_sleeping(entt::entity id) -> bool
 {
     if(auto comp = safe_get_component<physics_component>(id))
@@ -444,6 +461,8 @@ void register_physics_component_script_bindings()
     UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_is_continuous);
     UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_can_sleep);
     UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_can_sleep);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_interpolate);
+    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_interpolate);
     UNRAVEL_PHYSICS_CALL(internal_m2n_physics_is_sleeping);
     UNRAVEL_PHYSICS_CALL(internal_m2n_physics_wake_up);
     UNRAVEL_PHYSICS_CALL(internal_m2n_physics_sleep);

@@ -1064,6 +1064,217 @@ void test_moves_are_shared_by_time()
     check_near(motion.queued_time, 0.08f, 1e-6f, "the time moves span has a limit");
 }
 
+// --- bodies shown between fixed steps -----------------------------------------------------
+
+constexpr float glide_speed = 5.0f;
+/// Radians per second about Y.
+constexpr float spin_speed = 3.0f;
+
+/**
+ * @brief A dynamic body that glides along X and spins about Y with nothing to touch, and the frame loop physics_system
+ *        runs for it.
+ */
+struct body_frames
+{
+    body_frames(sim_fixture& f, bool interpolate, float step)
+        : fx(f)
+        , glider(f.spawn_box("glider", {-12.0f, 5.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, rigidbody_type::dynamic))
+        , body(glider.get<physics_component>())
+        , transform(glider.get<transform_component>())
+        , step_seconds(step)
+    {
+        body.set_is_using_gravity(false);
+        body.set_can_sleep(false);
+        body.set_interpolate(interpolate);
+    }
+
+    void launch()
+    {
+        body.set_velocity({glide_speed, 0.0f, 0.0f});
+        body.set_angular_velocity({0.0f, spin_speed, 0.0f});
+    }
+
+    void advance(float frame_seconds)
+    {
+        runner.advance(fx.ctx, *fx.backend, frame_seconds, step_seconds, max_fixed_steps);
+    }
+
+    sim_fixture& fx;
+    entt::handle glider;
+    physics_component& body;
+    transform_component& transform;
+    float step_seconds;
+    fixed_step_runner runner;
+};
+
+struct glide_result
+{
+    /// Travel and turn of a frame over what its game time pays for, the extremes after the body locked on.
+    float slowest{1.0f};
+    float fastest{1.0f};
+    float slowest_turn{1.0f};
+    float fastest_turn{1.0f};
+};
+
+/// Radians between two rotations.
+auto get_angle_between(const math::quat& a, const math::quat& b) -> float
+{
+    const float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    return 2.0f * std::acos(math::clamp(std::abs(dot), 0.0f, 1.0f));
+}
+
+auto glide(body_frames& frames, float frames_per_second, float seconds) -> glide_result
+{
+    glide_result result;
+    math::vec3 previous_position = frames.transform.get_position_global();
+    math::quat previous_rotation = frames.transform.get_rotation_global();
+    float time = 0.0f;
+    for(int frame = 0; time < seconds; ++frame)
+    {
+        const float frame_seconds = get_jittered_frame_seconds(frames_per_second, frame);
+        time += frame_seconds;
+        frames.advance(frame_seconds);
+        const math::vec3 position = frames.transform.get_position_global();
+        const math::quat rotation = frames.transform.get_rotation_global();
+        if(time > lock_seconds)
+        {
+            const float travel = (position.x - previous_position.x) / (glide_speed * frame_seconds);
+            const float turn = get_angle_between(previous_rotation, rotation) / (spin_speed * frame_seconds);
+            result.slowest = std::min(result.slowest, travel);
+            result.fastest = std::max(result.fastest, travel);
+            result.slowest_turn = std::min(result.slowest_turn, turn);
+            result.fastest_turn = std::max(result.fastest_turn, turn);
+        }
+        previous_position = position;
+        previous_rotation = rotation;
+    }
+    return result;
+}
+
+void test_body_motion_is_even(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_body_motion_is_even\n");
+    for(const auto& timing : beating_timings)
+    {
+        sim_fixture fx(ctx, backend);
+        body_frames frames(fx, true, timing.step_seconds);
+        fx.begin();
+        frames.launch();
+        const auto result = glide(frames, timing.frames_per_second, 2.0f);
+        const std::string name = std::to_string(int(timing.frames_per_second)) + " fps, step " +
+                                 std::to_string(int(timing.step_seconds * 1000.0f)) + " ms";
+        check(result.slowest > 0.85f, name + ": no frame falls behind (slowest " + std::to_string(result.slowest) + ")");
+        check(result.fastest < 1.15f, name + ": no frame jumps ahead (fastest " + std::to_string(result.fastest) + ")");
+        check(result.slowest_turn > 0.85f && result.fastest_turn < 1.15f,
+              name + ": it turns evenly (" + std::to_string(result.slowest_turn) + " to " +
+                  std::to_string(result.fastest_turn) + ")");
+    }
+}
+
+/// What the test above guards against: a body shown at its raw steps stands still in some frames.
+void test_raw_body_steps_stall(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_raw_body_steps_stall\n");
+    sim_fixture fx(ctx, backend);
+    body_frames frames(fx, false, 0.02f);
+    fx.begin();
+    frames.launch();
+    const auto result = glide(frames, 60.0f, 2.0f);
+    check(result.slowest < 0.2f, "raw steps leave frames without travel");
+}
+
+struct body_fixed_update_probe
+{
+    void on_fixed_update(rtti::context& /*ctx*/, delta_t /*step*/)
+    {
+        ++updates;
+        const float gap = math::distance(frames->transform.get_position_global(),
+                                         frames->body.get_motion().step_end_position);
+        widest_gap = std::max(widest_gap, gap);
+    }
+
+    body_frames* frames{};
+    int updates{};
+    float widest_gap{};
+};
+
+void test_a_fixed_update_reads_the_body_pose(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_fixed_update_reads_the_body_pose\n");
+    sim_fixture fx(ctx, backend);
+    body_frames frames(fx, true, 0.02f);
+    fx.begin();
+    frames.launch();
+    body_fixed_update_probe probe;
+    probe.frames = &frames;
+    auto sentinel = std::make_shared<int>(0);
+    ctx.get_cached<events>().on_frame_fixed_update.connect(sentinel, &probe, &body_fixed_update_probe::on_fixed_update);
+    for(int frame = 0; frame < 60; ++frame)
+    {
+        frames.advance(1.0f / 60.0f);
+    }
+    sentinel.reset();
+    check(probe.updates > 40, "the fixed update runs");
+    check(probe.widest_gap < 1e-4f, "a fixed update reads the pose the last step ended at");
+}
+
+void test_a_teleported_body_does_not_smear(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_a_teleported_body_does_not_smear\n");
+    sim_fixture fx(ctx, backend);
+    body_frames frames(fx, true, 0.02f);
+    fx.begin();
+    frames.launch();
+    const float frame_seconds = 1.0f / 60.0f;
+    for(int frame = 0; frame < 40; ++frame)
+    {
+        frames.advance(frame_seconds);
+    }
+    const math::vec3 written{-6.0f, 5.0f, 3.0f};
+    frames.transform.set_position_global(written);
+    float furthest_step = 0.0f;
+    math::vec3 previous = written;
+    for(int frame = 0; frame < 30; ++frame)
+    {
+        frames.advance(frame_seconds);
+        const math::vec3 position = frames.transform.get_position_global();
+        furthest_step = std::max(furthest_step, math::distance(position, previous));
+        previous = position;
+    }
+    check(furthest_step < glide_speed * frame_seconds * 2.5f, "no frame lies on the way to where a script put it");
+    check_near(frames.body.get_motion().step_end_position.z, written.z, 1e-3f, "the body went there too");
+    check(previous.x > written.x, "and glides on from there");
+}
+
+void test_body_interpolation_turns_off_cleanly(rtti::context& ctx, physics_backend_type backend)
+{
+    std::printf("test_body_interpolation_turns_off_cleanly\n");
+    sim_fixture fx(ctx, backend);
+    body_frames frames(fx, true, 0.02f);
+    fx.begin();
+    frames.launch();
+    const float frame_seconds = 1.0f / 60.0f;
+    for(int frame = 0; frame < 31; ++frame)
+    {
+        frames.advance(frame_seconds);
+    }
+    const float truth = frames.body.get_motion().step_end_position.x;
+    check(frames.transform.get_position_global().x < truth, "while interpolating the transform trails the body");
+    frames.body.set_interpolate(false);
+    frames.advance(frame_seconds);
+    check(frames.transform.get_position_global().x >= truth - 1e-4f, "turned off, it goes to where the body is");
+    check(!frames.body.get_motion().is_tracked, "and the body is no longer tracked");
+}
+
+void run_body_interpolation_tests(rtti::context& ctx, physics_backend_type backend)
+{
+    test_body_motion_is_even(ctx, backend);
+    test_raw_body_steps_stall(ctx, backend);
+    test_a_fixed_update_reads_the_body_pose(ctx, backend);
+    test_a_teleported_body_does_not_smear(ctx, backend);
+    test_body_interpolation_turns_off_cleanly(ctx, backend);
+}
+
 void run_character_interpolation_tests(rtti::context& ctx, physics_backend_type backend)
 {
     test_character_travel_is_even(ctx, backend);
@@ -1151,6 +1362,10 @@ auto run_box3d_suite(rtti::context& ctx) -> int
     run_character_interpolation_tests(ctx, physics_backend_type::box3d);
     std::printf("character interpolation: Bullet\n");
     run_character_interpolation_tests(ctx, physics_backend_type::bullet);
+    std::printf("body interpolation: Box3D\n");
+    run_body_interpolation_tests(ctx, physics_backend_type::box3d);
+    std::printf("body interpolation: Bullet\n");
+    run_body_interpolation_tests(ctx, physics_backend_type::bullet);
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

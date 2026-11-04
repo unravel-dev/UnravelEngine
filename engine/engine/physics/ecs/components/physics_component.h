@@ -112,8 +112,31 @@ struct physics_compound_shape
 };
 
 /**
+ * @struct rigidbody_motion
+ * @brief What fixed_step_runner keeps to show a dynamic body between fixed steps. Runtime state, not serialized.
+ */
+struct rigidbody_motion
+{
+    /// The pose the last fixed step began and ended at. The end is where the body really is.
+    math::vec3 step_start_position{};
+    math::quat step_start_rotation{math::identity<math::quat>()};
+    math::vec3 step_end_position{};
+    math::quat step_end_rotation{math::identity<math::quat>()};
+    bool is_tracked{false};
+
+    /**
+     * @brief Starts over at a pose, as if the body had always been there.
+     */
+    void place_at(const math::vec3& position, const math::quat& rotation) noexcept;
+};
+
+/**
  * @class physics_component
  * @brief Component that handles physics properties and behaviors.
+ *
+ * A dynamic body moves on fixed steps. With interpolation on, the entity's transform is placed between the last two
+ * steps every frame, so the body moves evenly at any frame rate and trails its physics pose by at most one step;
+ * during a fixed step it holds the physics pose. Writing the transform teleports the body at once.
  */
 class physics_component : public component_crtp<physics_component, owned_component>
 {
@@ -162,6 +185,16 @@ public:
     /// Whether the simulation put the body to sleep. Kept by the backend after every step.
     auto is_sleeping() const noexcept -> bool;
     void set_sleeping_internal(bool sleeping) noexcept;
+
+    /**
+     * @brief Sets whether a dynamic body's transform is placed between fixed steps every frame. Off by default: the
+     *        transform then holds the last step's pose. A script that writes the transform every frame should leave it
+     *        off, since each write teleports the body to the trailing pose.
+     */
+    void set_interpolate(bool interpolate) noexcept;
+    auto get_interpolate() const noexcept -> bool;
+
+    auto get_motion() noexcept -> rigidbody_motion&;
 
     /// Wakes a sleeping dynamic body.
     void wake_up();
@@ -263,6 +296,8 @@ private:
     bool is_continuous_{};
     bool can_sleep_{true};
     bool is_sleeping_{};
+    bool interpolate_{};
+    rigidbody_motion motion_{};
     float mass_{1};
     float gravity_scale_{1.0f};
     float linear_damping_{};

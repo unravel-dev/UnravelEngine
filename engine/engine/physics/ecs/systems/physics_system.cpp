@@ -158,6 +158,123 @@ void show_characters(entt::registry& registry, float step_fraction)
                                   motion.shown = transform.get_position_global();
                               });
 }
+
+/// Kinematic and static bodies follow their transforms, so only a dynamic body is ever shown between steps.
+auto is_body_interpolated(const physics_component& body) noexcept -> bool
+{
+    return body.get_interpolate() && body.get_body_type() == rigidbody_type::dynamic;
+}
+
+template<typename Function>
+void for_each_interpolated_body(entt::registry& registry, Function&& function)
+{
+    registry.view<transform_component, physics_component, active_component>().each(
+        [&](auto /*entity*/, auto& transform, auto& body, auto& /*active*/)
+        {
+            auto& motion = body.get_motion();
+            if(is_body_interpolated(body) && motion.is_tracked)
+            {
+                function(transform, motion);
+            }
+        });
+}
+
+/**
+ * @brief Places a body without it reading as a teleport: the sync flag the backend tests stays as it was, so a
+ *        script's write still reaches the backend and this one never does.
+ */
+void place_body(transform_component& transform, const math::vec3& position, const math::quat& rotation)
+{
+    const bool has_pending_sync = transform.is_dirty(dirty_ids::physics);
+    transform.set_position_and_rotation_global(position, rotation, 0.0f);
+    transform.set_dirty(dirty_ids::physics, has_pending_sync);
+}
+
+/// Ends interpolation for a body that turned it off or stopped being dynamic, where the body really is.
+void release_body(transform_component& transform, rigidbody_motion& motion)
+{
+    if(!motion.is_tracked)
+    {
+        return;
+    }
+    if(!transform.is_dirty(dirty_ids::physics))
+    {
+        place_body(transform, motion.step_end_position, motion.step_end_rotation);
+    }
+    motion = {};
+}
+
+/// A transform written since the last step (the flag the backend teleports on) starts the body over there.
+void begin_body_frame(entt::registry& registry)
+{
+    registry.view<transform_component, physics_component, active_component>().each(
+        [](auto /*entity*/, auto& transform, auto& body, auto& /*active*/)
+        {
+            auto& motion = body.get_motion();
+            if(!is_body_interpolated(body))
+            {
+                release_body(transform, motion);
+                return;
+            }
+            if(!motion.is_tracked || transform.is_dirty(dirty_ids::physics))
+            {
+                motion.place_at(transform.get_position_global(), transform.get_rotation_global());
+            }
+        });
+}
+
+void put_bodies_at_their_steps(entt::registry& registry)
+{
+    for_each_interpolated_body(registry,
+                               [](transform_component& transform, rigidbody_motion& motion)
+                               {
+                                   place_body(transform, motion.step_end_position, motion.step_end_rotation);
+                               });
+}
+
+void note_body_step_start(entt::registry& registry)
+{
+    for_each_interpolated_body(registry,
+                               [](transform_component& transform, rigidbody_motion& motion)
+                               {
+                                   motion.step_start_position = transform.get_position_global();
+                                   motion.step_start_rotation = transform.get_rotation_global();
+                               });
+}
+
+void note_body_step_end(entt::registry& registry)
+{
+    for_each_interpolated_body(registry,
+                               [](transform_component& transform, rigidbody_motion& motion)
+                               {
+                                   motion.step_end_position = transform.get_position_global();
+                                   motion.step_end_rotation = transform.get_rotation_global();
+                               });
+}
+
+/// A contact callback that moved a body teleported it: nothing lies between where it was and where it went.
+void adopt_body_contact_teleports(entt::registry& registry)
+{
+    for_each_interpolated_body(registry,
+                               [](transform_component& transform, rigidbody_motion& motion)
+                               {
+                                   if(transform.is_dirty(dirty_ids::physics))
+                                   {
+                                       motion.place_at(transform.get_position_global(), transform.get_rotation_global());
+                                   }
+                               });
+}
+
+void show_bodies(entt::registry& registry, float step_fraction)
+{
+    for_each_interpolated_body(registry,
+                               [&](transform_component& transform, rigidbody_motion& motion)
+                               {
+                                   place_body(transform,
+                                              math::mix(motion.step_start_position, motion.step_end_position, step_fraction),
+                                              math::slerp(motion.step_start_rotation, motion.step_end_rotation, step_fraction));
+                               });
+}
 } // namespace
 
 void fixed_step_runner::advance(rtti::context& ctx,
@@ -175,9 +292,11 @@ void fixed_step_runner::advance(rtti::context& ctx,
     const float max_elapsed = step_seconds * static_cast<float>(max_steps + 1);
 
     begin_character_frame(registry, backend, frame_seconds, max_elapsed);
+    begin_body_frame(registry);
     if(elapsed_ >= step_seconds && max_steps > 0)
     {
         put_characters_at_their_steps(registry);
+        put_bodies_at_their_steps(registry);
     }
 
     int steps = 0;
@@ -192,11 +311,14 @@ void fixed_step_runner::advance(rtti::context& ctx,
         hand_moves_to_step(registry, backend, step_seconds);
         backend.sync_to_physics(ctx, step_dt);
         note_step_start(registry);
+        note_body_step_start(registry);
         backend.simulate(step_dt);
         backend.sync_from_physics(ctx);
         note_step_end(registry);
+        note_body_step_end(registry);
         backend.dispatch_contacts(ctx);
         adopt_contact_teleports(registry);
+        adopt_body_contact_teleports(registry);
 
         elapsed_ -= step_seconds;
         steps++;
@@ -207,7 +329,9 @@ void fixed_step_runner::advance(rtti::context& ctx,
         elapsed_ = max_elapsed;
     }
 
-    show_characters(registry, math::min(elapsed_ / step_seconds, 1.0f));
+    const float step_fraction = math::min(elapsed_ / step_seconds, 1.0f);
+    show_characters(registry, step_fraction);
+    show_bodies(registry, step_fraction);
 }
 
 void fixed_step_runner::reset() noexcept
@@ -316,6 +440,11 @@ void physics_system::on_play_begin(rtti::context& ctx)
         [](auto /*entity*/, auto& character)
         {
             character.get_motion() = {};
+        });
+    registry.view<physics_component>().each(
+        [](auto /*entity*/, auto& body)
+        {
+            body.get_motion() = {};
         });
     backend_->on_play_begin(ctx);
     if(ctx.has<settings>())

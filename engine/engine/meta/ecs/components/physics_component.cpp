@@ -468,6 +468,15 @@ REFLECT(physics_component)
             entt::attribute{"pretty_name", "Can Sleep"},
             entt::attribute{"tooltip", "Whether the body may sleep when it comes to rest. A sleeping body costs nothing."},
         })
+        .data<&physics_component::set_interpolate, &physics_component::get_interpolate>("interpolate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "interpolate"},
+            entt::attribute{"pretty_name", "Interpolate"},
+            entt::attribute{"tooltip",
+                            "Places a dynamic body between its last two physics steps every frame, so it moves evenly "
+                            "at any frame rate. It trails its physics pose by at most one step. Turn it on for bodies "
+                            "the camera follows or the player watches closely."},
+        })
         .data<nullptr, &physics_component::is_sleeping>("is_sleeping"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "is_sleeping"},
@@ -560,6 +569,7 @@ SAVE(physics_component)
     try_save(ar, ser20::make_nvp("is_continuous", obj.is_continuous()));
     try_save(ar, ser20::make_nvp("can_sleep", obj.can_sleep()));
     try_save(ar, ser20::make_nvp("surface_velocity", obj.get_surface_velocity()));
+    try_save(ar, ser20::make_nvp("interpolate", obj.get_interpolate()));
 }
 SAVE_INSTANTIATE(physics_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(physics_component, ser20::oarchive_binary_t);
@@ -695,6 +705,11 @@ LOAD(physics_component)
     if(try_load(ar, ser20::make_nvp("surface_velocity", surface_velocity)))
     {
         obj.set_surface_velocity(surface_velocity);
+    }
+    bool interpolate{false};
+    if(try_load(ar, ser20::make_nvp("interpolate", interpolate)))
+    {
+        obj.set_interpolate(interpolate);
     }
 }
 

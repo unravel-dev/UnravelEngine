@@ -203,6 +203,30 @@ auto physics_component::can_sleep() const noexcept -> bool
     return can_sleep_;
 }
 
+void physics_component::set_interpolate(bool interpolate) noexcept
+{
+    interpolate_ = interpolate;
+}
+
+auto physics_component::get_interpolate() const noexcept -> bool
+{
+    return interpolate_;
+}
+
+auto physics_component::get_motion() noexcept -> rigidbody_motion&
+{
+    return motion_;
+}
+
+void rigidbody_motion::place_at(const math::vec3& position, const math::quat& rotation) noexcept
+{
+    step_start_position = position;
+    step_start_rotation = rotation;
+    step_end_position = position;
+    step_end_rotation = rotation;
+    is_tracked = true;
+}
+
 auto physics_component::is_sleeping() const noexcept -> bool
 {
     return is_sleeping_;

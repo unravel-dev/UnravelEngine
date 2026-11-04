@@ -87,7 +87,15 @@ stale interpolated position must never reach the body. A transform not holding w
 written (`character_motion::shown`) was moved by someone else and starts over there. Moves are
 queued and each step takes its share by time (`take_step_move`): frame-sized moves would make
 steps of uneven length, and interpolation would show that as a wobble. Moves made in a fixed
-update go straight to the backend. Rigid bodies are not interpolated.
+update go straight to the backend.
+
+Dynamic rigid bodies interpolate only with `physics_component::interpolate` on (off by default, as
+in Unity): `fixed_step_runner` keeps a `rigidbody_motion` (step start / end pose) and shows
+position and rotation between them. A transform whose `dirty_ids::physics` flag is set at the
+start of a frame or after the contacts was written by someone else: the backend teleports on
+that flag, and the motion starts over there. `place_body` keeps the flag as it was. A camera that
+follows a body (a car) stutters at any frame rate that beats against the fixed step unless the
+body interpolates.
 
 ## Joints
 

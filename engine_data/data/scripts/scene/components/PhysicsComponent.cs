@@ -108,6 +108,19 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Whether a dynamic body's <c>transform</c> is placed between the last two physics steps every frame, so the
+        /// body moves evenly at any frame rate. It then trails the body's physics pose by at most one step; in
+        /// OnFixedUpdate the two are the same. Off by default. Turn it on for bodies the camera follows (a car) or the
+        /// player watches closely. Writing <c>transform.position</c> still teleports the body at once, so a script that
+        /// writes it every frame should leave this off.
+        /// </summary>
+        public bool interpolate
+        {
+            get => internal_m2n_physics_get_interpolate(owner);
+            set => internal_m2n_physics_set_interpolate(owner, value);
+        }
+
+        /// <summary>
         /// Whether the simulation put the body to sleep.
         /// </summary>
         public bool isSleeping => internal_m2n_physics_is_sleeping(owner);
@@ -190,6 +203,8 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_is_continuous(Entity eid, bool value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_physics_get_can_sleep(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_can_sleep(Entity eid, bool value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_physics_get_interpolate(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_set_interpolate(Entity eid, bool value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_physics_is_sleeping(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_wake_up(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_physics_sleep(Entity eid);

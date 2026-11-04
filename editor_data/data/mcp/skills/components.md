@@ -284,6 +284,11 @@ turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
   the surface moves along its contacts in the body's space while the body stays
   put, e.g. [0,0,2] on a static belt).
 - Physics material rolling_resistance (0..1) stops rolling balls and capsules.
+- interpolate (off by default) places a dynamic body between its last two
+  physics steps every frame. Turn it on for bodies the camera follows (a car
+  and its wheels) or that the player watches closely: physics steps at a fixed
+  rate, so at another frame rate such a body stalls in some frames and jumps in
+  others. Writing the transform still teleports the body at once.
 
 ## Joint
 
