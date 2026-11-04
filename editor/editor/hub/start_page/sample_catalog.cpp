@@ -50,6 +50,17 @@ auto get_samples() -> const std::vector<sample_info>&
          "editor:/samples/sample_2048.jpg",
          ICON_MDI_NUMERIC_2_BOX,
          true},
+        {"Physics Playground",
+         "UnravelEngine-Sample-Physics",
+         "Physics",
+         "Six stations around a plaza, walked in first person with a tool that pushes, carries and throws. "
+         "Shows ragdolls that are knocked down and get up again, joints with motors, springs and break forces, "
+         "physics materials, wind, water, magnets and explosions, a buggy on wheel joints, and ray, shape and "
+         "overlap queries.",
+         {"Physics", "Ragdolls", "Joints"},
+         "editor:/samples/sample_physics.jpg",
+         ICON_MDI_BOWLING,
+         true},
         {"Animation Gallery",
          "UnravelEngine-Sample-Animation",
          "Animation",
