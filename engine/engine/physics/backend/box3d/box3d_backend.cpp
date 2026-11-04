@@ -5263,7 +5263,7 @@ void box3d_backend::on_play_end(rtti::context& ctx)
         [&](auto e, auto&& comp)
         {
             box3d::destroy_joint(comp.get_owner());
-            comp.get_owner().remove<box3d::joint>();
+            comp.get_owner().template remove<box3d::joint>();
             comp.get_state() = {};
         });
     registry.view<ragdoll_component>().each(
