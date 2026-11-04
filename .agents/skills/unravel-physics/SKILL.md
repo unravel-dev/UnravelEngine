@@ -18,6 +18,13 @@ description: >-
 | Box3D backend | `engine/engine/physics/backend/box3d/` |
 | Physics component | `engine/engine/physics/ecs/components/physics_component.h` |
 | Character controller | `engine/engine/physics/ecs/components/character_controller_component.h` |
+| Joint component | `engine/engine/physics/ecs/components/joint_component.h` |
+| Ragdoll component | `engine/engine/physics/ecs/components/ragdoll_component.h` |
+| Ragdoll poses (capture / write) | `engine/engine/physics/ecs/systems/ragdoll_poses.h` |
+| Ragdoll auto setup | `engine/engine/physics/ragdoll_builder.h` |
+| Joint / ragdoll inspectors, Auto Setup | `editor/editor/hub/panels/inspector_panel/inspectors/inspector_physics_components.h` |
+| MCP physics tools | `editor/editor/system/mcp/mcp_tools_physics.cpp` (`physics_ragdoll`, `physics_world`) |
+| Design notes | `tasks/physics_ragdoll_analysis_2026-11-04.md` |
 | Meta | `engine/engine/meta/ecs/components/physics_component.hpp`, `character_controller_component.hpp` |
 | Layer masks | `engine/engine/layers/layer_mask.h` |
 | Editor gizmos | `editor/editor/hub/panels/scene_panel/gizmos/` (physics shapes) |
@@ -44,7 +51,15 @@ description: >-
 - Forces and torques reach DYNAMIC bodies only, on both backends (`apply_force` returns early
   otherwise). A kinematic body is moved through its ECS transform; velocity writes on it are
   discarded by the next sync
-- `physics_system` owns simulation step in `on_frame_update`
+- `physics_system` owns simulation step in `on_frame_update`, at `frame_update_priority::physics`: after the
+  scene-system band (animation, root motion) and before scripts. Kinematic bodies and ragdoll hitboxes follow this
+  frame's pose, and ragdoll bone writes are not overwritten by the animation
+- A paused or frozen game (dt 0) steps nothing, but `physics_system` still runs `capture_ragdoll_animations` and
+  `show_ragdolls`: the animation poses bones every frame, so ragdolls must pose them again
+- Box3D kinematic bodies never sleep, so whatever touches them stays awake and keeps counting towards sleep. A body
+  a moving kinematic body touches gets its count restarted (`restart_sleep_count`: sleep off for one step, back on
+  after it), else a crate a gate or platform lets go of falls asleep where it hangs. `set_body_awake(true)` (C#
+  `WakeUp`) restarts it too
 - Play mode lifecycle: `on_play_begin` / `on_play_end` / `on_pause` / `on_resume`
 - Components use `component_crtp` + `owned_component` pattern
 
@@ -68,6 +83,37 @@ written (`character_motion::shown`) was moved by someone else and starts over th
 queued and each step takes its share by time (`take_step_move`): frame-sized moves would make
 steps of uneven length, and interpolation would show that as a wobble. Moves made in a fixed
 update go straight to the backend. Rigid bodies are not interpolated.
+
+## Joints
+
+- `joint_component` is an entity of its own (Unreal constraint actor / Godot Joint3D): its transform, `anchor` and
+  `axis_rotation` give the joint frame, read once when the joint is made; the frame's X axis is the joint axis.
+  `body_a` null = the world (Box3D `world.ground`), `body_b` null = the joint's entity.
+- Box3D measures revolute / spherical joints about frame z and slides prismatic joints along x: the backend turns
+  the engine frame (`get_joint_axis_rotation`). Wheels: spin z, suspension x in Box3D.
+- The backend keeps the local frames (`box3d::joint`), so a body made again (type change, reload) gets the same
+  joint back; `needs_rebuild` re-reads them from the scene.
+- Breaking: thresholds go to `b3JointDef.forceThreshold` / `torqueThreshold`; `b3World_GetJointEvents` after the step
+  breaks the joint, `dispatch_contacts` calls `script_system::on_joint_break`.
+- Bullet does not implement joints or ragdolls: it warns once.
+
+## Ragdolls
+
+- `ragdoll_component` on the skinned model's entity; bodies by bone name, shapes in bone space (scaled by the bone's
+  world scale at build). Joint frames come from the BIND pose (limits are relative to the rest pose).
+- Frame order (`physics_system::on_frame_update`): animation already posed the bones -> `capture_ragdoll_animations`
+  (a bone still holding what the ragdoll wrote keeps its last animated pose) -> fixed steps (backend syncs kinematic
+  targets, drives, impulses; reads poses) -> `show_ragdolls` writes bones parents first, parent-local blend, only the
+  root body takes its position, poses interpolated between steps.
+- The armature root (root follower) moves with the root body so culling bounds follow the ragdoll.
+- The owner's character controller ignores its own ragdoll (mover filter `own_ragdoll`, filter joints with the proxy).
+- Contacts: ragdoll shapes carry the bone entity (queries report bones); contacts and sensors see the ragdoll entity
+  (`contact_entity_from_shape`).
+- Pushes: `add_impulse` (one body, at a point), `add_velocity` (every body), `add_angular_velocity` (every body turns
+  as one about a pivot: rolls a lying body over), `add_explosion`.
+- MCP `physics_world {"ragdoll_bodies":true}` lists each body's physics position against its drawn bone and the turn
+  between them: the check that the drawn pose matches the simulation.
+- Tests: `unravel-tests --suite joints` (synthetic mannequin skeleton, no mesh).
 
 ## Layer filtering
 
@@ -127,3 +173,7 @@ Covered by the `physics contacts / destroy funnel` test suite.
 - Forgetting to sync transform after physics step
 - Layer mask not set on new entities (default layer only)
 - Missing `on_play_end` cleanup
+- The cylinder primitive is 2 m tall (1 m across) while a physics cylinder defaults to length 1: a scaled cylinder
+  primitive needs `{"type":"cylinder","length":2}`
+- Judging a ragdoll from screenshots alone: compare `physics_world {"ragdoll_bodies":true}` (physics against drawn)
+  before tuning, so a display problem is not mistaken for a physics one

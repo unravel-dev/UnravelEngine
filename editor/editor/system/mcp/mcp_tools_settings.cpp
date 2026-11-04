@@ -52,6 +52,8 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"physics", "fixed_timestep"},
         {"physics", "max_fixed_steps"},
         {"physics", "solver_iterations"},
+        {"physics", "gravity"},
+        {"physics", "sub_steps"},
         {"splash", "enabled"},
         {"splash", "show_made_with"},
         {"splash", "fade_in_sec"},

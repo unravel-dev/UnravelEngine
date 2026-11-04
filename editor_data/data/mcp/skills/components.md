@@ -1,7 +1,7 @@
 ---
 name: components
 title: Component workflow + semantics
-description: The list -> add -> set -> get -> remove workflow, how properties are shaped (nested objects, lists, enums, entity and asset references), and per-component knowledge - lights, particle emitters (semantics + recipes), physics bodies and shapes, character controllers, animation clips, world-space text, reflection probes, local volumes and post effects.
+description: The list -> add -> set -> get -> remove workflow, how properties are shaped (nested objects, lists, enums, entity and asset references), and per-component knowledge - lights, particle emitters (semantics + recipes), physics bodies and shapes, joints, ragdolls, character controllers, animation clips, world-space text, reflection probes, local volumes and post effects.
 order: 40
 ---
 # Component workflow and semantics
@@ -248,14 +248,18 @@ turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
   (simulated). Dynamic bodies need is_using_gravity true and a mass.
 - A freshly added Physics component has NO shapes, and a body without a shape
   collides with nothing - things fall straight through it. Always set shapes.
-- shapes is an array: {type:"box",center,extends} | {type:"sphere",center,
-  radius} | {type:"capsule"|"cylinder",center,radius,length} |
+- shapes is an array: {type:"box",center,extends,rotation} | {type:"sphere",
+  center,radius} | {type:"capsule"|"cylinder",center,radius,length,rotation} |
   {type:"mesh",center,mesh_asset,collision_type:"convex"|"concave"} (convex
-  for dynamic bodies). Omitted fields take defaults: box extends [1,1,1] (FULL
+  for dynamic bodies). rotation is Euler degrees in the body's space: a
+  compound of turned boxes makes an L, a ramp or a chair; a capsule lies down
+  with rotation [90,0,0] or [0,0,90]. Omitted fields take defaults: box extends [1,1,1] (FULL
   size - a unit cube), sphere radius 0.5 (a real radius - the 1 m sphere
-  primitive). With is_autoscaled true (the default) they are multiplied by the
-  entity scale, so a scaled cube primitive needs only [{"type":"box"}] and a
-  sphere primitive [{"type":"sphere"}]. A shape written with its own type
+  primitive), cylinder radius 0.5 and length 1. With is_autoscaled true (the
+  default) they are multiplied by the entity scale, so a scaled cube primitive
+  needs only [{"type":"box"}] and a sphere primitive [{"type":"sphere"}]. The
+  cylinder primitive is 1 m across but 2 m tall (Y from -1 to 1), so a scaled
+  cylinder primitive needs [{"type":"cylinder","length":2}]. A shape written with its own type
   keeps the fields you leave out.
 - For meshes, set center/extends from the model AABB (assets_get_mesh_info), or
   use a mesh shape.
@@ -272,8 +276,62 @@ turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
 - Contact events (sensor_events, collision_events, sensor_exit_on_destroy) are
   ON by default - triggers and collisions already reach scripts. Turn one off
   only to save cost; collision_exit_on_destroy is the one that starts off.
-- velocity / angular_velocity are read-only: the simulation writes them, so read
-  them in play mode to confirm something moves.
+- velocity / angular_velocity / is_sleeping are read-only: the simulation writes
+  them, so read them in play mode to confirm something moves.
+- Motion: gravity_scale (0 floats, 0.2 drifts down slowly), linear_damping /
+  angular_damping (per second; 2-5 feels like water), is_continuous (fast small
+  bodies against other moving bodies), can_sleep, surface_velocity (a conveyor:
+  the surface moves along its contacts in the body's space while the body stays
+  put, e.g. [0,0,2] on a static belt).
+- Physics material rolling_resistance (0..1) stops rolling balls and capsules.
+
+## Joint
+
+A joint is its own entity, like Unreal's constraint actor: its transform (moved
+by anchor, turned by axis_rotation) is the joint frame, read when play starts.
+Its X axis is the hinge, slider, twist or wheel axis.
+
+- body_a: the entity it hangs on (null = the world). body_b: the entity it holds
+  (null = the joint's own entity, which then needs a Physics component).
+  Both bodies need Physics components; body B is normally dynamic.
+- type: fixed | hinge | slider | ball | distance | wheel.
+- limits {enabled, lower, upper, cone_angle}: hinge and ball twist in degrees,
+  slider and wheel suspension in meters, distance min / max length (a rope:
+  enabled with upper = the rope length). cone_angle is the ball's swing.
+- spring {enabled, frequency (Hz), damping_ratio, target, target_rotation}:
+  pulls to a target (a self-closing door: hinge spring target 0); a fixed joint
+  with a spring is soft; for a wheel it is the suspension.
+- motor {enabled, speed (deg/s or m/s), max_force}: hinges, sliders, distance,
+  wheel spin. friction resists motion while the motor is off (heavy doors).
+- steering {enabled, angle, limit, max_torque}: wheels only.
+- break_force / break_torque > 0 make it breakable; scripts get OnJointBreak.
+- state (read-only, play): is_active, is_broken, angle, position, speed, force.
+- Typical frames: a door hinge stands up -> axis_rotation [0,0,90] (X turned to
+  +Y); a hinge about world Z -> [0,-90,0]; a slider pointing down -> [0,0,-90].
+- Chains and bridges: one ball or hinge joint entity between each pair of
+  links, placed where they touch, body_a = the link above, body_b = the next.
+
+## Ragdoll
+
+On the entity with the skinned Model. Add the component, then physics_ragdoll
+{entity_id} builds the bodies from the humanoid skeleton (the inspector's Auto
+Setup). Bodies are bound to bones by name; shapes are in bone space.
+
+- start_state animated | simulated | powered. Animated: kinematic hitboxes that
+  follow the animation (rays report the bone entity hit). Simulated: physics
+  moves the bones. Powered: drives pull the bodies to the animation.
+- joint_friction (N m) - 1-3 floppy, 5+ stiff. self_collision keeps arms out of
+  the chest; disabled_collisions lists pairs that never collide.
+- drive {local_frequency, local_damping_ratio, world_frequency, ...}: local
+  drives turn joints to the animated pose; world_frequency > 0 keeps a powered
+  ragdoll standing.
+- Scripts switch it: RagdollComponent.Simulate / Power / Recover(blendTime),
+  SetBoneSimulated(bone, true) for a limp limb, AddImpulse(body, impulse, point),
+  AddVelocity(change), AddAngularVelocity(angularVelocity, pivot) to roll the
+  whole body over, GetRecoveryPose to place a get-up animation.
+- physics_world (play) reports each ragdoll's state, speed and rest time;
+  {"ragdoll_bodies":true} adds every body's physics position against its drawn
+  bone, to check the pose on screen is the simulated one.
 
 ## Character Controller
 
