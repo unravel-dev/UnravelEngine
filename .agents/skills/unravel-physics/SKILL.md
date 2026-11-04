@@ -56,6 +56,11 @@ description: >-
   frame's pose, and ragdoll bone writes are not overwritten by the animation
 - A paused or frozen game (dt 0) steps nothing, but `physics_system` still runs `capture_ragdoll_animations` and
   `show_ragdolls`: the animation poses bones every frame, so ragdolls must pose them again
+- Ragdoll bones are written in their parents' space, so a script that moves the character after the steps (standing
+  it where the ragdoll lies before a get-up) would carry the shown pose along for a frame. At
+  `frame_update_priority::physics_late`, after LateUpdate, `show_moved_ragdolls` shows again every ragdoll whose
+  model entity moved since `show_ragdolls`, without advancing weights. Paused MCP frame steps hide this class of bug
+  (the paused frame after a step shows again); catch it in real-time play by reading bone positions every frame
 - Box3D kinematic bodies never sleep, so whatever touches them stays awake and keeps counting towards sleep. A body
   a moving kinematic body touches gets its count restarted (`restart_sleep_count`: sleep off for one step, back on
   after it), else a crate a gate or platform lets go of falls asleep where it hangs. `set_body_awake(true)` (C#

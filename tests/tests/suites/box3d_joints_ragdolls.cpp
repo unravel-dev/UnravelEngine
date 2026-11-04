@@ -107,7 +107,7 @@ struct sim_fixture
         }
     }
 
-    /// One frame of one fixed step, ragdoll poses included.
+    /// One frame of one fixed step, ragdoll poses included, then the scripts and what physics does after them.
     void step(int count = 1)
     {
         const delta_t dt(step_seconds);
@@ -123,6 +123,11 @@ struct sim_fixture
             backend->sync_from_physics(ctx);
             backend->dispatch_contacts(ctx);
             show_ragdolls(registry, 1.0f, step_seconds);
+            if(script)
+            {
+                script();
+            }
+            show_moved_ragdolls(registry);
         }
     }
 
@@ -213,6 +218,8 @@ struct sim_fixture
     bool playing{false};
     /// Runs at the start of every frame, before the ragdolls read the pose: what the animation system does.
     std::function<void()> animate;
+    /// Runs in each frame after the fixed steps, where the scripts update.
+    std::function<void()> script;
 };
 
 // --- body properties ------------------------------------------------------------------------
@@ -734,6 +741,80 @@ void test_ragdoll_draws_physics_under_animation(rtti::context& ctx)
     check_drawn("while the game is paused");
 }
 
+void test_ragdoll_stays_put_when_its_character_moves(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_stays_put_when_its_character_moves\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    ragdoll.set_state(ragdoll_state::simulated);
+    ragdoll.add_impulse(ragdoll.find_body("spine_03"), {0.0f, 0.0f, -60.0f});
+    fx.step(3 * one_second);
+    const char* bones[] = {"pelvis", "head", "hand_l", "foot_r"};
+    const auto get_drawn = [&]()
+    {
+        std::vector<math::vec3> drawn;
+        for(const char* bone : bones)
+        {
+            drawn.push_back(humanoid.bone(bone).get<transform_component>().get_position_global());
+        }
+        return drawn;
+    };
+    const auto check_drawn_on_bodies = [&](const std::string& when)
+    {
+        const auto drawn = get_drawn();
+        for(size_t i = 0; i < drawn.size(); ++i)
+        {
+            check(math::distance(drawn[i], body_position(ragdoll, bones[i])) < 0.05f,
+                  std::string("the ragdoll draws ") + bones[i] + " where its body lies " + when);
+        }
+    };
+    // A script moves and turns the character after the frame's fixed steps, as one standing it up does.
+    auto& character = humanoid.model.get<transform_component>();
+    const auto move_character = [&](float yaw_degrees)
+    {
+        const math::vec3 pelvis = body_position(ragdoll, "pelvis");
+        character.set_position_global({pelvis.x + 0.4f, 0.0f, pelvis.z - 0.3f});
+        character.set_rotation_global(math::angleAxis(math::radians(yaw_degrees), math::vec3{0.0f, 1.0f, 0.0f}));
+    };
+    bool has_moved = false;
+    fx.script = [&]()
+    {
+        if(!has_moved)
+        {
+            move_character(90.0f);
+            has_moved = true;
+        }
+    };
+    fx.step(1);
+    check(has_moved, "the script ran");
+    check_drawn_on_bodies("in the frame a script moves its character");
+    // Standing up: the character moves under the ragdoll and the ragdoll blends back to the animation.
+    bool has_recovered = false;
+    fx.script = [&]()
+    {
+        if(!has_recovered)
+        {
+            move_character(200.0f);
+            ragdoll.set_state(ragdoll_state::animated, 0.45f);
+            has_recovered = true;
+        }
+    };
+    fx.step(1);
+    check_drawn_on_bodies("in the frame it starts to blend back");
+    const auto recovered = get_drawn();
+    fx.step(1);
+    const auto blending = get_drawn();
+    for(size_t i = 0; i < blending.size(); ++i)
+    {
+        check(math::distance(blending[i], recovered[i]) < 0.1f,
+              std::string("the next frame blends on from there, no jump for ") + bones[i]);
+    }
+}
+
 void test_ragdoll_turns_as_one(rtti::context& ctx)
 {
     std::printf("test_ragdoll_turns_as_one\n");
@@ -840,6 +921,7 @@ auto run_joints_suite(rtti::context& ctx) -> int
     test_ragdoll_animated_follows_bones(ctx);
     test_ragdoll_falls_and_holds_together(ctx);
     test_ragdoll_draws_physics_under_animation(ctx);
+    test_ragdoll_stays_put_when_its_character_moves(ctx);
     test_ragdoll_turns_as_one(ctx);
     test_ragdoll_blends_back(ctx);
     test_ragdoll_powered_stands(ctx);

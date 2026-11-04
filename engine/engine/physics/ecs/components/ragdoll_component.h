@@ -197,6 +197,10 @@ struct ragdoll_runtime
     bool bodies_changed{false};
     /// The next step puts every body on the animated pose, with no velocity.
     bool teleport{false};
+    /// Where the model entity was, and between which fixed steps, when the pose was last shown.
+    math::transform shown_owner_world{};
+    float shown_step_fraction{1.0f};
+    bool has_shown{false};
 };
 
 /**

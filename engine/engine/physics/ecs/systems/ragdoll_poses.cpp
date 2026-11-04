@@ -282,7 +282,8 @@ void capture_one(ragdoll_component& ragdoll, float frame_seconds)
 }
 
 /// Where a body's physics shows: between the last two steps while it simulates, its snapshot while it blends back.
-auto get_source_pose(const ragdoll_body_runtime& body, float step_fraction) -> math::transform
+auto get_source_pose(const ragdoll_body_runtime& body, float step_fraction, const math::transform& anim_world)
+    -> math::transform
 {
     if(body.simulated && body.has_physics_pose)
     {
@@ -294,7 +295,7 @@ auto get_source_pose(const ragdoll_body_runtime& body, float step_fraction) -> m
     }
     if(body.simulated)
     {
-        return body.anim_world;
+        return anim_world;
     }
     return body.snapshot_world;
 }
@@ -322,7 +323,7 @@ void advance_weights(ragdoll_component& ragdoll, float frame_seconds)
     runtime.rest_time = is_resting ? runtime.rest_time + frame_seconds : 0.0f;
 }
 
-void write_root_follower(ragdoll_runtime& runtime, float step_fraction)
+void write_root_follower(ragdoll_runtime& runtime, float step_fraction, const math::transform& root_anim_world)
 {
     if(!runtime.root_follower || runtime.write_order.empty())
     {
@@ -344,7 +345,8 @@ void write_root_follower(ragdoll_runtime& runtime, float step_fraction)
         parent ? parent.get<transform_component>().get_transform_global() : math::transform{};
     const math::transform anim_world = parent_world * runtime.root_follower_anim_local;
     const math::vec3 shift =
-        (get_source_pose(root, step_fraction).get_position() - root.anim_world.get_position()) * root.weight;
+        (get_source_pose(root, step_fraction, root_anim_world).get_position() - root_anim_world.get_position()) *
+        root.weight;
     math::transform local = runtime.root_follower_anim_local;
     local.set_position(parent_world.inverse_transform_coord(anim_world.get_position() + shift));
     transform.set_transform_local(local);
@@ -352,7 +354,7 @@ void write_root_follower(ragdoll_runtime& runtime, float step_fraction)
     runtime.root_follower_has_written = true;
 }
 
-void write_body(ragdoll_body_runtime& body, float step_fraction)
+void write_body(ragdoll_body_runtime& body, float step_fraction, const math::transform& anim_world)
 {
     auto& transform = body.bone.get<transform_component>();
     if(body.weight <= 0.0f)
@@ -364,7 +366,7 @@ void write_body(ragdoll_body_runtime& body, float step_fraction)
         }
         return;
     }
-    const math::transform source = get_source_pose(body, step_fraction);
+    const math::transform source = get_source_pose(body, step_fraction, anim_world);
     const entt::handle parent = get_parent(body.bone);
     const math::transform parent_world =
         parent ? parent.get<transform_component>().get_transform_global() : math::transform{};
@@ -386,10 +388,53 @@ void show_one(ragdoll_component& ragdoll, float step_fraction, float frame_secon
 {
     auto& runtime = ragdoll.get_runtime();
     advance_weights(ragdoll, frame_seconds);
-    write_root_follower(runtime, step_fraction);
+    if(!runtime.write_order.empty())
+    {
+        write_root_follower(runtime, step_fraction, runtime.bodies[size_t(runtime.write_order.front())].anim_world);
+    }
     for(const int index : runtime.write_order)
     {
-        write_body(runtime.bodies[size_t(index)], step_fraction);
+        auto& body = runtime.bodies[size_t(index)];
+        write_body(body, step_fraction, body.anim_world);
+    }
+    runtime.shown_owner_world = ragdoll.get_owner().get<transform_component>().get_transform_global();
+    runtime.shown_step_fraction = step_fraction;
+    runtime.has_shown = true;
+}
+
+/// Some body shows physics, simulating or blending back to the animation.
+auto is_showing_physics(const ragdoll_runtime& runtime) -> bool
+{
+    return std::any_of(runtime.bodies.begin(),
+                       runtime.bodies.end(),
+                       [](const ragdoll_body_runtime& body)
+                       {
+                           return body.weight > 0.0f;
+                       });
+}
+
+void show_again_if_moved(ragdoll_component& ragdoll)
+{
+    auto& runtime = ragdoll.get_runtime();
+    const auto owner = ragdoll.get_owner();
+    const math::transform owner_world = owner.get<transform_component>().get_transform_global();
+    if(!runtime.has_shown || owner_world == runtime.shown_owner_world)
+    {
+        return;
+    }
+    runtime.shown_owner_world = owner_world;
+    if(runtime.write_order.empty() || !is_showing_physics(runtime))
+    {
+        return;
+    }
+    // The animated pose moved with the character, so it is composed again here. The one the fixed steps read stays
+    // as it is: the next frame measures the animation's velocity from it.
+    const auto& root = runtime.bodies[size_t(runtime.write_order.front())];
+    write_root_follower(runtime, runtime.shown_step_fraction, compose_anim_world(runtime, root.bone, owner));
+    for(const int index : runtime.write_order)
+    {
+        auto& body = runtime.bodies[size_t(index)];
+        write_body(body, runtime.shown_step_fraction, compose_anim_world(runtime, body.bone, owner));
     }
 }
 } // namespace ragdoll_poses_detail
@@ -475,6 +520,19 @@ void show_ragdolls(entt::registry& registry, float step_fraction, float frame_se
             if(ragdoll.get_runtime().is_built)
             {
                 ragdoll_poses_detail::show_one(ragdoll, step_fraction, frame_seconds);
+            }
+        });
+}
+
+void show_moved_ragdolls(entt::registry& registry)
+{
+    APP_SCOPE_PERF("Physics/Ragdolls/Show Moved");
+    registry.view<ragdoll_component, active_component>().each(
+        [&](auto /*entity*/, ragdoll_component& ragdoll, auto& /*active*/)
+        {
+            if(ragdoll.get_runtime().is_built)
+            {
+                ragdoll_poses_detail::show_again_if_moved(ragdoll);
             }
         });
 }

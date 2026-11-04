@@ -172,6 +172,8 @@ public:
 
 private:
     void on_frame_update(rtti::context& ctx, const frame_times& times);
+    /// After every script: shows again the ragdolls whose character a script moved since the fixed steps.
+    void on_frame_late_update(rtti::context& ctx, const frame_times& times);
     void on_play_begin(rtti::context& ctx);
     void on_play_end(rtti::context& ctx);
     void on_pause(rtti::context& ctx);

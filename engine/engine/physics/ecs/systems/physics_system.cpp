@@ -274,6 +274,10 @@ auto physics_system::init(rtti::context& ctx) -> bool
 
     auto& ev = ctx.get_cached<events>();
     ev.on_frame_update.connect(sentinel_, frame_update_priority::physics, this, &physics_system::on_frame_update);
+    ev.on_frame_update.connect(sentinel_,
+                               frame_update_priority::physics_late,
+                               this,
+                               &physics_system::on_frame_late_update);
 
     ev.on_play_begin.connect(sentinel_, 10, this, &physics_system::on_play_begin);
     ev.on_play_end.connect(sentinel_, -10, this, &physics_system::on_play_end);
@@ -382,6 +386,16 @@ void physics_system::on_frame_update(rtti::context& ctx, const frame_times& time
         step_runner_.advance(ctx, *backend_, dt.count(), fixed_time_step, max_subs_steps);
     }
     show_ragdolls(registry, step_runner_.get_step_fraction(fixed_time_step), dt.count());
+}
+
+void physics_system::on_frame_late_update(rtti::context& ctx, const frame_times& /*times*/)
+{
+    APP_SCOPE_PERF("Physics/System Late Update");
+    if(!ctx.get_cached<play_mode>().is_simulation_running())
+    {
+        return;
+    }
+    show_moved_ragdolls(*ctx.get_cached<ecs>().get_scene().registry);
 }
 
 void physics_system::apply_explosion_force(physics_component& comp,

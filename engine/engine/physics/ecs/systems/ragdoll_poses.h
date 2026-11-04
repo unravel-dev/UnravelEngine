@@ -41,4 +41,13 @@ void capture_ragdoll_animations(entt::registry& registry, float frame_seconds);
  */
 void show_ragdolls(entt::registry& registry, float step_fraction, float frame_seconds);
 
+/**
+ * @brief Shows again the ragdolls whose model entity moved or turned since show_ragdolls, where their bodies are.
+ *
+ * The bones are written in their parents' space, so a script that moves the character after the fixed steps (to
+ * stand it where its ragdoll lies before a get-up, say) would carry the shown physics pose along until the next
+ * frame. Weights do not advance.
+ */
+void show_moved_ragdolls(entt::registry& registry);
+
 } // namespace unravel

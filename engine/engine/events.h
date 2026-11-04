@@ -51,6 +51,10 @@ struct frame_update_priority
 
     /// Script LateUpdate - after every other frame-update consumer.
     static constexpr int64_t scripts_late = -100000;
+
+    /// Physics after every script, LateUpdate included: a ragdoll whose character a script moved since the fixed
+    /// steps is shown again where its bodies are, so the move does not carry the shown pose along for a frame.
+    static constexpr int64_t physics_late = -200000;
 };
 
 struct events
