@@ -96,6 +96,16 @@ update go straight to the backend. Rigid bodies are not interpolated.
   `body_a` null = the world (Box3D `world.ground`), `body_b` null = the joint's entity.
 - Box3D measures revolute / spherical joints about frame z and slides prismatic joints along x: the backend turns
   the engine frame (`get_joint_axis_rotation`). Wheels: spin z, suspension x in Box3D.
+- Wheel steering is a Box3D spring (`steeringHertz`); `tune_wheel` sets it stiff (`wheel_steering_hertz`), since
+  Box3D's 1 Hz default cannot turn a loaded tire against the ground's twist friction and the wheel stays straight.
+- Box3D's steering term divides by the sine of the angle between the wheel's spin and suspension axes: a wheel
+  turned towards its suspension axis (a script righting a chassis without its wheels) gives NaN velocities and the
+  `b3IsValidVec3( v )` assert in `solver.c`, which breaks into the debugger. `sync_joint` checks it before every
+  step (`apply_wheel_steering`): a wheel more than 45 degrees off square does not steer until its joint has turned it
+  back (`test_car_righted_by_its_chassis_alone`). Scripts that teleport a vehicle should still move its wheels with it.
+- Box3D has no true cylinder: a cylinder shape is a 16-sided hull (`cylinder_hull_sides`). A wheel on one bumps over
+  its faces, which acts as drag that grows with speed and lifts the tire off the ground (wheelspin, little grip).
+  Wheels that roll should collide as spheres; the cylinder stays the visual.
 - The backend keeps the local frames (`box3d::joint`), so a body made again (type change, reload) gets the same
   joint back; `needs_rebuild` re-reads them from the scene.
 - Breaking: thresholds go to `b3JointDef.forceThreshold` / `torqueThreshold`; `b3World_GetJointEvents` after the step

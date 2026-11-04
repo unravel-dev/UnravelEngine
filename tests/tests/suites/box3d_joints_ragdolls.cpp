@@ -520,6 +520,77 @@ void test_wheel(rtti::context& ctx)
     check(sag > 0.0f && sag <= 0.31f, "a wheel hangs on its suspension inside its limits");
 }
 
+void test_wheel_steers_on_the_ground(rtti::context& ctx)
+{
+    std::printf("test_wheel_steers_on_the_ground\n");
+    constexpr float tire_radius = 0.42f;
+    constexpr float target_degrees = 25.0f;
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto tire = fx.spawn("tire", {0.0f, tire_radius, 0.0f});
+    physics_cylinder_shape cylinder;
+    cylinder.radius = tire_radius;
+    cylinder.length = 0.32f;
+    cylinder.rotation = {0.0f, 0.0f, 90.0f};
+    fx.add_body(tire, rigidbody_type::dynamic, cylinder, 18.0f);
+    // The joint sits below the tire's centre, so the suspension presses the tire on the ground with about the load
+    // of a car's corner.
+    auto& wheel = fx.spawn_joint("wheel", {0.0f, tire_radius - 0.12f, 0.0f}, joint_type::wheel, {}, tire);
+    wheel.set_spring({true, 3.0f, 0.65f, 0.0f, math::vec3{0.0f}});
+    wheel.set_limits({true, -0.3f, 0.3f, 0.0f});
+    wheel.set_steering({true, target_degrees, 30.0f, 900.0f});
+    fx.begin();
+    fx.step(one_second / 2);
+    check_near(wheel.get_state().angle, target_degrees, 2.0f, "a loaded wheel on the ground steers to its angle");
+    wheel.set_steering({true, -target_degrees, 30.0f, 900.0f});
+    fx.step(one_second / 2);
+    check_near(wheel.get_state().angle, -target_degrees, 2.0f, "and back across to the other side");
+}
+
+void test_car_righted_by_its_chassis_alone(rtti::context& ctx)
+{
+    std::printf("test_car_righted_by_its_chassis_alone\n");
+    constexpr float tire_radius = 0.42f;
+    constexpr float track = 0.98f;
+    constexpr float wheelbase = 1.2f;
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto chassis = fx.spawn_box("chassis", {0.0f, 0.9f, 0.0f}, {1.5f, 0.4f, 3.3f}, rigidbody_type::dynamic, 320.0f);
+    std::vector<entt::handle> tires;
+    for(const math::vec2 side : {math::vec2{-1.0f, 1.0f}, math::vec2{1.0f, 1.0f}, math::vec2{-1.0f, -1.0f}, math::vec2{1.0f, -1.0f}})
+    {
+        const math::vec3 position{side.x * track, tire_radius, side.y * wheelbase};
+        auto tire = fx.spawn("tire", position);
+        physics_sphere_shape sphere;
+        sphere.radius = tire_radius;
+        fx.add_body(tire, rigidbody_type::dynamic, sphere, 18.0f);
+        auto& wheel = fx.spawn_joint("wheel", position, joint_type::wheel, chassis, tire);
+        wheel.set_spring({true, 3.0f, 0.65f, 0.0f, math::vec3{0.0f}});
+        wheel.set_limits({true, -0.22f, 0.16f, 0.0f});
+        wheel.set_motor({true, 0.0f, 25.0f});
+        wheel.set_steering({side.y > 0.0f, 0.0f, 30.0f, 900.0f});
+        tires.push_back(tire);
+    }
+    fx.begin();
+    fx.step(one_second);
+    // Lying on its side, then stood up by moving the chassis only, as a script righting a car would.
+    auto& chassis_transform = chassis.get<transform_component>();
+    chassis_transform.set_rotation_global(math::angleAxis(math::radians(90.0f), math::vec3{0.0f, 0.0f, 1.0f}));
+    fx.step();
+    chassis_transform.set_position_global(fx.position_of(chassis) + math::vec3{0.0f, 1.2f, 0.0f});
+    chassis_transform.set_rotation_global(math::angleAxis(0.0f, math::vec3{0.0f, 1.0f, 0.0f}));
+    fx.step(2 * one_second);
+    bool finite = is_finite(fx.position_of(chassis));
+    float farthest = 0.0f;
+    for(const auto& tire : tires)
+    {
+        finite = finite && is_finite(fx.position_of(tire));
+        farthest = std::max(farthest, math::distance(fx.position_of(tire), fx.position_of(chassis)));
+    }
+    check(finite, "a car righted by its chassis alone stays finite");
+    check(farthest < 2.0f, "and its wheels come back to it");
+}
+
 // --- ragdolls -----------------------------------------------------------------------------------
 
 struct test_humanoid
@@ -917,6 +988,8 @@ auto run_joints_suite(rtti::context& ctx) -> int
     test_breaking(ctx);
     test_ball_cone(ctx);
     test_wheel(ctx);
+    test_wheel_steers_on_the_ground(ctx);
+    test_car_righted_by_its_chassis_alone(ctx);
     test_ragdoll_setup(ctx);
     test_ragdoll_animated_follows_bones(ctx);
     test_ragdoll_falls_and_holds_together(ctx);

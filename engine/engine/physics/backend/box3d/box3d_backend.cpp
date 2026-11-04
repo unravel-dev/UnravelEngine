@@ -65,6 +65,15 @@ constexpr int winding_sample_triangles = 256;
 /// Ragdoll limbs grip like skin and cloth, and roll to a stop instead of spinning on.
 constexpr float ragdoll_friction = 0.7f;
 constexpr float ragdoll_rolling_resistance = 0.05f;
+/// Wheel steering is a spring towards the steering angle. Box3D's default of 1 Hz cannot turn a loaded tire
+/// against the ground's friction, so the wheel stays near straight; at this stiffness it holds the angle and the
+/// steering's max torque is what limits it. Critically damped, so it does not overshoot.
+constexpr float wheel_steering_hertz = 10.0f;
+constexpr float wheel_steering_damping_ratio = 1.0f;
+/// Box3D steers a wheel through a term divided by the sine of the angle between its spin and suspension axes, so a
+/// wheel turned towards its suspension axis (a chassis moved without its wheels) would make the solver's velocities
+/// infinite. A wheel steers only while that angle's cosine stays below this one, of 45 degrees.
+constexpr float wheel_steering_max_axis_cosine = 0.7071f;
 /// Debug draw sizes.
 constexpr float debug_point_half_size = 0.02f;
 constexpr float debug_axis_length = 0.25f;
@@ -3418,12 +3427,29 @@ void tune_wheel(b3JointId id, const joint_component& comp)
     b3WheelJoint_EnableSpinMotor(id, is_motor_on(comp));
     b3WheelJoint_SetSpinMotorSpeed(id, math::radians(get_motor_speed(comp)));
     b3WheelJoint_SetMaxSpinTorque(id, get_motor_force(comp));
-    b3WheelJoint_EnableSteering(id, steering.enabled);
+    b3WheelJoint_SetSteeringHertz(id, wheel_steering_hertz);
+    b3WheelJoint_SetSteeringDampingRatio(id, wheel_steering_damping_ratio);
     b3WheelJoint_SetMaxSteeringTorque(id, steering.max_torque);
-    b3WheelJoint_EnableSteeringLimit(id, steering.enabled);
     const float limit = math::radians(math::clamp(std::abs(steering.limit), 0.0f, 89.0f));
     b3WheelJoint_SetSteeringLimits(id, -limit, limit);
     b3WheelJoint_SetTargetSteeringAngle(id, math::clamp(math::radians(steering.angle), -limit, limit));
+}
+
+auto is_wheel_square_to_suspension(const box3d::joint& joint) -> bool
+{
+    const b3Quat frame_a = b3MulQuat(b3Body_GetRotation(joint.body_a), joint.frame_a.q);
+    const b3Quat frame_b = b3MulQuat(b3Body_GetRotation(joint.body_b), joint.frame_b.q);
+    const b3Vec3 suspension_axis = b3RotateVector(frame_a, b3Vec3_axisX);
+    const b3Vec3 spin_axis = b3RotateVector(frame_b, b3Vec3_axisZ);
+    return std::abs(b3Dot(suspension_axis, spin_axis)) < wheel_steering_max_axis_cosine;
+}
+
+/// Checked before every step: a wheel knocked far off square stops steering until its joint has turned it back.
+void apply_wheel_steering(const box3d::joint& joint, const joint_component& comp)
+{
+    const bool steers = comp.get_steering().enabled && is_wheel_square_to_suspension(joint);
+    b3WheelJoint_EnableSteering(joint.id, steers);
+    b3WheelJoint_EnableSteeringLimit(joint.id, steers);
 }
 
 void tune_fixed(b3JointId id, const joint_component& comp)
@@ -3607,6 +3633,10 @@ void sync_joint(box3d::world& world, joint_component& comp)
     }
     comp.set_dirty(system_id, false);
     state.is_active = B3_IS_NON_NULL(joint.id);
+    if(state.is_active && comp.get_type() == joint_type::wheel)
+    {
+        apply_wheel_steering(joint, comp);
+    }
 }
 
 void read_joint_state(box3d::joint& joint, joint_component& comp, float dt)

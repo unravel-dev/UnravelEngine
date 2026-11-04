@@ -303,7 +303,12 @@ Its X axis is the hinge, slider, twist or wheel axis.
   with a spring is soft; for a wheel it is the suspension.
 - motor {enabled, speed (deg/s or m/s), max_force}: hinges, sliders, distance,
   wheel spin. friction resists motion while the motor is off (heavy doors).
-- steering {enabled, angle, limit, max_torque}: wheels only.
+- steering {enabled, angle, limit, max_torque}: wheels only. The wheel holds
+  the angle; max_torque is what limits it.
+- Vehicles: give each wheel body a sphere shape of the tire radius, and keep
+  the cylinder as the visual. A cylinder shape is a many-sided prism that bumps
+  over its faces, so it rolls slowly and loses grip. Keep the drive torque per
+  wheel below friction x load x radius, or the tires spin and cannot steer.
 - break_force / break_torque > 0 make it breakable; scripts get OnJointBreak.
 - state (read-only, play): is_active, is_broken, angle, position, speed, force.
 - Typical frames: a door hinge stands up -> axis_rotation [0,0,90] (X turned to
