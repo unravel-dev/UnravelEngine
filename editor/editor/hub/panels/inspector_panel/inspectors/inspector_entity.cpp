@@ -164,6 +164,14 @@ auto get_component_icon() -> std::string
     {
         return ICON_MDI_ATOM;
     }
+    else if constexpr(std::is_same<T, joint_component>::value)
+    {
+        return ICON_MDI_LINK;
+    }
+    else if constexpr(std::is_same<T, ragdoll_component>::value)
+    {
+        return ICON_MDI_HUMAN;
+    }
     // Audio
     else if constexpr(std::is_same<T, audio_source_component>::value)
     {

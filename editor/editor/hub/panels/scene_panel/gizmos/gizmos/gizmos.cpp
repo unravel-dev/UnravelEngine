@@ -3,6 +3,7 @@
 #include "gizmo_physics_component.h"
 #include "gizmo_character_controller_component.h"
 #include "gizmo_rig_components.h"
+#include "gizmo_joint_ragdoll_components.h"
 #include "reflection/reflection.h"
 #include <engine/rendering/camera.h>
 #include "../gizmos_renderer.h"
