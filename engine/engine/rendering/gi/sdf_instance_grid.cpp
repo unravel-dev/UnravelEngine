@@ -21,6 +21,27 @@ constexpr float min_cell_size = 1e-4f;
 /// Present so a denormal direction cannot spin forever rather than as a real limit.
 constexpr int max_traversal_steps = 4096;
 
+/// Cells along one axis that the sizing still counts exactly; more than this is "too many" anyway, and
+/// counting in float past it would overflow the integer cell counts.
+constexpr double max_axis_cells = 1 << 24;
+
+/// Largest extent, in metres, of bounds the grid places. Reset bounds transformed into world space come out
+/// infinite or near the float limit; no real instance is this large.
+constexpr float max_placeable_extent = 1.0e7f;
+
+/// Whether instance bounds can be placed in the grid: populated (a mesh still loading has reset bounds),
+/// finite and of a real size. Such bounds made the grid's region infinite, and sizing its cells never ended.
+auto is_placeable(const math::bbox& bounds) -> bool
+{
+    if(!bounds.is_populated())
+    {
+        return false;
+    }
+    const math::vec3 extent = bounds.max - bounds.min;
+    return std::isfinite(extent.x) && std::isfinite(extent.y) && std::isfinite(extent.z) &&
+           extent.x <= max_placeable_extent && extent.y <= max_placeable_extent && extent.z <= max_placeable_extent;
+}
+
 } // namespace
 
 void sdf_instance_grid::init(const settings& settings)
@@ -53,8 +74,11 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds)
     scene.reset();
     for(const auto& bounds : instance_bounds)
     {
-        scene.add_point(bounds.min);
-        scene.add_point(bounds.max);
+        if(is_placeable(bounds))
+        {
+            scene.add_point(bounds.min);
+            scene.add_point(bounds.max);
+        }
     }
     build(instance_bounds, scene);
 }
@@ -77,7 +101,7 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds, co
     cell_instances_.clear();
     dim_ = math::uvec3(0u);
     cell_size_ = 0.0f;
-    if(instance_bounds.empty() || !region.is_populated())
+    if(instance_bounds.empty() || !is_placeable(region))
     {
         return;
     }
@@ -92,7 +116,8 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds, co
     cell_size_ = math::max(cell_size_, min_cell_size);
     const auto axis_cells = [&](float axis_extent) -> uint32_t
     {
-        return math::max(1u, uint32_t(std::ceil(axis_extent / cell_size_)));
+        const double cells = std::ceil(double(axis_extent) / double(cell_size_));
+        return uint32_t(math::clamp(cells, 1.0, max_axis_cells));
     };
     dim_ = math::uvec3(axis_cells(extent.x), axis_cells(extent.y), axis_cells(extent.z));
     // Coarsen until the cell count fits the guard. Growing the cells keeps every instance
@@ -112,6 +137,11 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds, co
     counts.assign(cell_count, 0u);
     const auto for_each_overlapped_cell = [&](const math::bbox& bounds, const auto& fn)
     {
+        // Bounds that cannot be placed (a mesh still loading) belong to no cell until they can.
+        if(!is_placeable(bounds))
+        {
+            return;
+        }
         const math::ivec3 lo = to_cell(bounds.min);
         const math::ivec3 hi = to_cell(bounds.max);
         const int x0 = math::clamp(lo.x, 0, int(dim_.x) - 1);

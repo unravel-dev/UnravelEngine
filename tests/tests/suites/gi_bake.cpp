@@ -3924,6 +3924,38 @@ void test_instance_grid_handles_degenerate_input()
     check(!candidates.empty(), "and finds the instance in it");
 }
 
+void test_instance_grid_skips_bounds_it_cannot_place()
+{
+    std::printf("test_instance_grid_skips_bounds_it_cannot_place\n");
+    // A mesh still loading has reset bounds; moved into world space they come out infinite. They once
+    // made the region infinite, and sizing the cells looped forever on the main thread.
+    sdf_instance_grid grid;
+    sdf_instance_grid::settings grid_settings;
+    grid_settings.max_cell_size = 6.0f;
+    grid.init(grid_settings);
+    math::bbox real;
+    real.reset();
+    real.add_point(math::vec3(-10.0f, 0.0f, -10.0f));
+    real.add_point(math::vec3(10.0f, 2.0f, 10.0f));
+    math::bbox unloaded;
+    unloaded.reset();
+    math::bbox infinite;
+    infinite.min = math::vec3(-std::numeric_limits<float>::infinity());
+    infinite.max = math::vec3(std::numeric_limits<float>::infinity());
+    math::bbox huge;
+    huge.min = math::vec3(-std::numeric_limits<float>::max());
+    huge.max = math::vec3(std::numeric_limits<float>::max());
+    grid.build({unloaded, real, infinite, huge});
+    check(grid.is_valid(), "a grid is built from the bounds that can be placed");
+    std::vector<uint32_t> candidates;
+    check(grid.gather_candidates(math::vec3(0.0f, 1.0f, -50.0f), math::vec3(0.0f, 0.0f, 1.0f), 0.0f, 100.0f, candidates),
+          "a ray through the real instance finds the grid");
+    check(std::find(candidates.begin(), candidates.end(), 1u) != candidates.end(), "and finds the real instance");
+    check(std::find(candidates.begin(), candidates.end(), 2u) == candidates.end(), "but not the infinite one");
+    grid.build({unloaded, infinite});
+    check(!grid.is_valid(), "nothing that can be placed builds no grid");
+}
+
 void test_clipmap_is_world_stable()
 {
     std::printf("test_clipmap_is_world_stable\n");
@@ -6308,6 +6340,7 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_instance_grid_cell_clamping_covers_every_instance();
     test_instance_grid_walk_stops_past_the_nearest_hit();
     test_instance_grid_handles_degenerate_input();
+    test_instance_grid_skips_bounds_it_cannot_place();
     test_clipmap_partial_update_follows_moved_geometry();
     test_clipmap_continuous_edits_update_partially();
     test_clipmap_full_edit_coalescing();
