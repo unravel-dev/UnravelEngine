@@ -31,7 +31,7 @@ void draw(DebugDrawEncoder& dde, const physics_sphere_shape& sh)
 /// The local Y axis of a shape turned by its Euler angles in degrees.
 auto shape_axis(const math::vec3& rotation) -> math::vec3
 {
-    return math::normalize(math::quat(math::radians(rotation))) * math::vec3{0.0f, 1.0f, 0.0f};
+    return make_shape_rotation(rotation) * math::vec3{0.0f, 1.0f, 0.0f};
 }
 
 void draw(DebugDrawEncoder& dde, const physics_cylinder_shape& sh)
@@ -53,7 +53,7 @@ void draw(DebugDrawEncoder& dde, const physics_box_shape& sh)
     // An oriented box: the unit cube (-1..1) scaled to half the extents, turned and moved into place.
     math::transform box;
     box.set_position(sh.center);
-    box.set_rotation(math::normalize(math::quat(math::radians(sh.rotation))));
+    box.set_rotation(make_shape_rotation(sh.rotation));
     box.set_scale(sh.extends * 0.5f);
     bx::Obb obb;
     std::copy_n(static_cast<const float*>(box), 16, obb.mtx);

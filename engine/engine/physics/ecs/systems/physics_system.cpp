@@ -15,43 +15,236 @@
 
 #include <logging/logging.h>
 
+#include <cmath>
+
 namespace unravel
 {
 namespace
 {
-template<typename Function>
-void for_each_active_character(entt::registry& registry, Function&& function)
+/// Writes a pose whatever its distance from the one held; the transform still drops an exactly equal one.
+constexpr float EXACT_WRITE_EPSILON = 0.0f;
+
+/// The kinds of movers the runner shows between steps this frame: a pass skips a kind with none.
+struct tracked_movers
 {
-    registry.view<transform_component, character_controller_component, active_component>().each(
-        [&](auto /*entity*/, auto& transform, auto& character, auto& /*active*/)
+    bool has_characters{};
+    bool has_bodies{};
+};
+
+auto is_interpolated(const character_controller_component& character) noexcept -> bool
+{
+    return character.get_interpolate();
+}
+
+/// Kinematic and static bodies follow their transforms, so only a dynamic body is ever shown between steps.
+auto is_interpolated(const physics_component& body) noexcept -> bool
+{
+    return body.get_interpolate() && body.get_body_type() == rigidbody_type::dynamic;
+}
+
+/// A character's rotation is left to scripts: only its position is shown between steps.
+auto is_turning(const character_controller_component& /*character*/) noexcept -> bool
+{
+    return false;
+}
+
+auto is_turning(const physics_component& /*body*/) noexcept -> bool
+{
+    return true;
+}
+
+template<typename Component, typename Function>
+void for_each_tracked(entt::registry& registry, Function& function)
+{
+    registry.view<transform_component, Component, active_component>().each(
+        [&](auto /*entity*/, transform_component& transform, Component& component, auto& /*active*/)
         {
-            function(transform, character);
+            if(is_interpolated(component) && component.get_motion().is_tracked)
+            {
+                function(transform, component);
+            }
         });
 }
 
-/**
- * @brief Places a character without it reading as a teleport: the sync flag the backend tests stays as it was, so a
- *        script's write still reaches the backend and this one never does.
- */
-void place_character(transform_component& transform, const math::vec3& position)
+/// Runs a function on every character and dynamic body shown between steps.
+template<typename Function>
+void for_each_tracked_mover(entt::registry& registry, const tracked_movers& tracked, Function&& function)
 {
-    const bool has_pending_sync = transform.is_dirty(dirty_ids::physics);
+    if(tracked.has_characters)
+    {
+        for_each_tracked<character_controller_component>(registry, function);
+    }
+    if(tracked.has_bodies)
+    {
+        for_each_tracked<physics_component>(registry, function);
+    }
+}
+
+/// Whether the transform holds a pose exactly; the rotation counts only for a mover that turns.
+auto is_at_pose(const transform_component& transform,
+                const math::vec3& position,
+                const math::quat& rotation,
+                bool turns) -> bool
+{
+    if(transform.get_position_global() != position)
+    {
+        return false;
+    }
+    return !turns || transform.get_rotation_global() == rotation;
+}
+
+void write_pose(transform_component& transform, const math::vec3& position, const math::quat& rotation, bool turns)
+{
+    if(turns)
+    {
+        transform.set_position_and_rotation_global(position, rotation, EXACT_WRITE_EPSILON);
+        return;
+    }
     transform.set_position_global(position);
+}
+
+/**
+ * @brief Places a mover without it reading as a teleport: the sync flag the backend tests stays as it was, so a
+ *        script's write still reaches the backend and this one never does. A pose the transform holds is not written.
+ *
+ * The global transform is resolved before the flag is put back. A transform raises its consumer flags only when its
+ * lazy global turns dirty, so a flag put back while the global stays dirty would miss every later write of the frame,
+ * local ones included.
+ */
+void place_pose(transform_component& transform, const math::vec3& position, const math::quat& rotation, bool turns)
+{
+    if(is_at_pose(transform, position, rotation, turns))
+    {
+        return;
+    }
+    const bool has_pending_sync = transform.is_dirty(dirty_ids::physics);
+    write_pose(transform, position, rotation, turns);
+    transform.resolve_transform_global();
     transform.set_dirty(dirty_ids::physics, has_pending_sync);
 }
 
-/// Ends interpolation for a character that turned it off, where the character really is.
-void release_character(transform_component& transform, character_controller_component& character, physics_backend& backend)
+/// The backend places the mover where its transform is at the next step.
+void request_sync(transform_component& transform)
+{
+    transform.set_dirty(dirty_ids::physics, true);
+}
+
+void note_shown(const transform_component& transform, stepped_motion& motion)
+{
+    motion.shown_position = transform.get_position_global();
+    motion.shown_rotation = transform.get_rotation_global();
+    motion.shown_local_position = transform.get_position_local();
+    motion.shown_local_rotation = transform.get_rotation_local();
+}
+
+/// Starts over at the transform's pose, as if the mover had always been there.
+void restart_at_transform(const transform_component& transform, stepped_motion& motion)
+{
+    motion.step_start_position = transform.get_position_global();
+    motion.step_start_rotation = transform.get_rotation_global();
+    motion.step_end_position = motion.step_start_position;
+    motion.step_end_rotation = motion.step_start_rotation;
+    note_shown(transform, motion);
+    motion.is_tracked = true;
+}
+
+/// Someone wrote the mover's own transform since it was drawn: its pose in its parent's space changed.
+auto is_written_since_shown(const transform_component& transform, const stepped_motion& motion, bool turns) -> bool
+{
+    if(transform.get_position_local() != motion.shown_local_position)
+    {
+        return true;
+    }
+    return turns && transform.get_rotation_local() != motion.shown_local_rotation;
+}
+
+/**
+ * @brief How the parent turned since the mover was drawn: the change of the global rotation without the mover's own
+ *        local one, which a script may have turned in the same frame (a character's rotation is its scripts').
+ *
+ * A parent that did not turn gives the identity exactly, so a parent that only moves leaves the step rotations as
+ * they were.
+ */
+auto get_parent_turn(const transform_component& transform, const stepped_motion& motion) -> math::quat
+{
+    const math::quat parent_rotation = transform.get_rotation_global() * glm::inverse(transform.get_rotation_local());
+    const math::quat shown_parent_rotation = motion.shown_rotation * glm::inverse(motion.shown_local_rotation);
+    if(parent_rotation == shown_parent_rotation)
+    {
+        return math::identity<math::quat>();
+    }
+    return math::normalize(parent_rotation * glm::inverse(shown_parent_rotation));
+}
+
+/// Moves the step poses rigidly as a parent moved the drawn pose, so the mover keeps the travel it made since.
+void carry_step_poses(const transform_component& transform, stepped_motion& motion)
+{
+    const math::quat parent_turn = get_parent_turn(transform, motion);
+    const math::vec3 position = transform.get_position_global();
+    motion.step_start_position = position + parent_turn * (motion.step_start_position - motion.shown_position);
+    motion.step_end_position = position + parent_turn * (motion.step_end_position - motion.shown_position);
+    motion.step_start_rotation = parent_turn * motion.step_start_rotation;
+    motion.step_end_rotation = parent_turn * motion.step_end_rotation;
+    note_shown(transform, motion);
+}
+
+/// A parent moved the mover since it was drawn: the step poses move along, and the backend places the carried pose.
+void follow_parent(transform_component& transform, stepped_motion& motion, bool turns)
+{
+    if(is_at_pose(transform, motion.shown_position, motion.shown_rotation, turns))
+    {
+        return;
+    }
+    carry_step_poses(transform, motion);
+    request_sync(transform);
+}
+
+/**
+ * @brief Catches up with what happened to a mover's transform since it was drawn: tracking starts where it is, a
+ *        write starts it over there, and a parent's move carries its step poses along. The backend follows the last
+ *        two.
+ */
+void follow_transform(transform_component& transform, stepped_motion& motion, bool turns)
+{
+    if(!motion.is_tracked)
+    {
+        restart_at_transform(transform, motion);
+        return;
+    }
+    if(is_written_since_shown(transform, motion, turns))
+    {
+        restart_at_transform(transform, motion);
+        request_sync(transform);
+        return;
+    }
+    follow_parent(transform, motion, turns);
+}
+
+/**
+ * @brief Leaves a mover whose interpolation ends where it really is: at the last step's end, carried along with a
+ *        parent that moved since. A transform written since it was drawn (inside a fixed step too) keeps what it holds.
+ */
+void show_real_pose(transform_component& transform, stepped_motion& motion, bool turns)
+{
+    if(is_written_since_shown(transform, motion, turns))
+    {
+        return;
+    }
+    follow_parent(transform, motion, turns);
+    place_pose(transform, motion.step_end_position, motion.step_end_rotation, turns);
+}
+
+/// Ends interpolation for a character that turned it off, where the character really is, and hands on queued moves.
+void release_character(transform_component& transform,
+                       character_controller_component& character,
+                       physics_backend& backend)
 {
     auto& motion = character.get_motion();
     if(!motion.is_tracked)
     {
         return;
     }
-    if(transform.get_position_global() == motion.shown)
-    {
-        place_character(transform, motion.step_end);
-    }
+    show_real_pose(transform, motion, is_turning(character));
     if(motion.queued_move != math::vec3{0.0f})
     {
         backend.move_character(character, motion.queued_move);
@@ -59,221 +252,306 @@ void release_character(transform_component& transform, character_controller_comp
     motion = {};
 }
 
-void begin_character_frame(entt::registry& registry, physics_backend& backend, float frame_seconds, float max_queued_seconds)
-{
-    for_each_active_character(registry,
-                              [&](transform_component& transform, character_controller_component& character)
-                              {
-                                  if(!character.get_interpolate())
-                                  {
-                                      release_character(transform, character, backend);
-                                      return;
-                                  }
-                                  auto& motion = character.get_motion();
-                                  const math::vec3 position = transform.get_position_global();
-                                  if(!motion.is_tracked || position != motion.shown)
-                                  {
-                                      motion.place_at(position);
-                                  }
-                                  motion.add_queued_time(frame_seconds, max_queued_seconds);
-                              });
-}
-
-void put_characters_at_their_steps(entt::registry& registry)
-{
-    for_each_active_character(registry,
-                              [](transform_component& transform, character_controller_component& character)
-                              {
-                                  const auto& motion = character.get_motion();
-                                  if(character.get_interpolate() && motion.is_tracked)
-                                  {
-                                      place_character(transform, motion.step_end);
-                                  }
-                              });
-}
-
-void hand_moves_to_step(entt::registry& registry, physics_backend& backend, float step_seconds)
-{
-    for_each_active_character(registry,
-                              [&](transform_component& /*transform*/, character_controller_component& character)
-                              {
-                                  auto& motion = character.get_motion();
-                                  if(!character.get_interpolate() || !motion.is_tracked)
-                                  {
-                                      return;
-                                  }
-                                  const math::vec3 move = motion.take_step_move(step_seconds);
-                                  if(move != math::vec3{0.0f})
-                                  {
-                                      backend.move_character(character, move);
-                                  }
-                              });
-}
-
-void note_step_start(entt::registry& registry)
-{
-    for_each_active_character(registry,
-                              [](transform_component& transform, character_controller_component& character)
-                              {
-                                  character.get_motion().step_start = transform.get_position_global();
-                              });
-}
-
-void note_step_end(entt::registry& registry)
-{
-    for_each_active_character(registry,
-                              [](transform_component& transform, character_controller_component& character)
-                              {
-                                  character.get_motion().step_end = transform.get_position_global();
-                              });
-}
-
-/// A contact callback that moved a character teleported it: nothing lies between where it was and where it went.
-void adopt_contact_teleports(entt::registry& registry)
-{
-    for_each_active_character(registry,
-                              [](transform_component& transform, character_controller_component& character)
-                              {
-                                  auto& motion = character.get_motion();
-                                  const math::vec3 position = transform.get_position_global();
-                                  if(position != motion.step_end)
-                                  {
-                                      motion.step_start = position;
-                                      motion.step_end = position;
-                                  }
-                              });
-}
-
-void show_characters(entt::registry& registry, float step_fraction)
-{
-    for_each_active_character(registry,
-                              [&](transform_component& transform, character_controller_component& character)
-                              {
-                                  auto& motion = character.get_motion();
-                                  if(!character.get_interpolate() || !motion.is_tracked)
-                                  {
-                                      return;
-                                  }
-                                  place_character(transform, math::mix(motion.step_start, motion.step_end, step_fraction));
-                                  motion.shown = transform.get_position_global();
-                              });
-}
-
-/// Kinematic and static bodies follow their transforms, so only a dynamic body is ever shown between steps.
-auto is_body_interpolated(const physics_component& body) noexcept -> bool
-{
-    return body.get_interpolate() && body.get_body_type() == rigidbody_type::dynamic;
-}
-
-template<typename Function>
-void for_each_interpolated_body(entt::registry& registry, Function&& function)
-{
-    registry.view<transform_component, physics_component, active_component>().each(
-        [&](auto /*entity*/, auto& transform, auto& body, auto& /*active*/)
-        {
-            auto& motion = body.get_motion();
-            if(is_body_interpolated(body) && motion.is_tracked)
-            {
-                function(transform, motion);
-            }
-        });
-}
-
-/**
- * @brief Places a body without it reading as a teleport: the sync flag the backend tests stays as it was, so a
- *        script's write still reaches the backend and this one never does.
- */
-void place_body(transform_component& transform, const math::vec3& position, const math::quat& rotation)
-{
-    const bool has_pending_sync = transform.is_dirty(dirty_ids::physics);
-    transform.set_position_and_rotation_global(position, rotation, 0.0f);
-    transform.set_dirty(dirty_ids::physics, has_pending_sync);
-}
-
 /// Ends interpolation for a body that turned it off or stopped being dynamic, where the body really is.
-void release_body(transform_component& transform, rigidbody_motion& motion)
+void release_body(transform_component& transform, physics_component& body)
 {
+    auto& motion = body.get_motion();
     if(!motion.is_tracked)
     {
         return;
     }
-    if(!transform.is_dirty(dirty_ids::physics))
-    {
-        place_body(transform, motion.step_end_position, motion.step_end_rotation);
-    }
+    show_real_pose(transform, motion, is_turning(body));
     motion = {};
 }
 
-/// A transform written since the last step (the flag the backend teleports on) starts the body over there.
-void begin_body_frame(entt::registry& registry)
+/// @return Whether the character is shown between steps this frame.
+auto begin_character_frame(transform_component& transform,
+                           character_controller_component& character,
+                           physics_backend& backend,
+                           float frame_seconds,
+                           float max_queued_seconds) -> bool
 {
-    registry.view<transform_component, physics_component, active_component>().each(
-        [](auto /*entity*/, auto& transform, auto& body, auto& /*active*/)
+    if(!is_interpolated(character))
+    {
+        release_character(transform, character, backend);
+        return false;
+    }
+    auto& motion = character.get_motion();
+    follow_transform(transform, motion, is_turning(character));
+    motion.add_queued_time(frame_seconds, max_queued_seconds);
+    return true;
+}
+
+/// @return Whether the body is shown between steps this frame.
+auto begin_body_frame(transform_component& transform, physics_component& body) -> bool
+{
+    if(!is_interpolated(body))
+    {
+        release_body(transform, body);
+        return false;
+    }
+    follow_transform(transform, body.get_motion(), is_turning(body));
+    return true;
+}
+
+auto begin_frame(entt::registry& registry, physics_backend& backend, float frame_seconds, float max_queued_seconds)
+    -> tracked_movers
+{
+    tracked_movers tracked;
+    registry.view<transform_component, character_controller_component, active_component>().each(
+        [&](auto /*entity*/, auto& transform, auto& character, auto& /*active*/)
         {
-            auto& motion = body.get_motion();
-            if(!is_body_interpolated(body))
-            {
-                release_body(transform, motion);
-                return;
-            }
-            if(!motion.is_tracked || transform.is_dirty(dirty_ids::physics))
-            {
-                motion.place_at(transform.get_position_global(), transform.get_rotation_global());
-            }
+            const bool is_shown =
+                begin_character_frame(transform, character, backend, frame_seconds, max_queued_seconds);
+            tracked.has_characters = tracked.has_characters || is_shown;
         });
+    registry.view<transform_component, physics_component, active_component>().each(
+        [&](auto /*entity*/, auto& transform, auto& body, auto& /*active*/)
+        {
+            const bool is_shown = begin_body_frame(transform, body);
+            tracked.has_bodies = tracked.has_bodies || is_shown;
+        });
+    return tracked;
 }
 
-void put_bodies_at_their_steps(entt::registry& registry)
+/// Before the steps, every mover's transform holds where it really is, which fixed updates read and the backend syncs.
+void put_at_step_ends(entt::registry& registry, const tracked_movers& tracked)
 {
-    for_each_interpolated_body(registry,
-                               [](transform_component& transform, rigidbody_motion& motion)
-                               {
-                                   place_body(transform, motion.step_end_position, motion.step_end_rotation);
-                               });
+    for_each_tracked_mover(registry,
+                           tracked,
+                           [](transform_component& transform, auto& component)
+                           {
+                               const stepped_motion& motion = component.get_motion();
+                               place_pose(transform,
+                                          motion.step_end_position,
+                                          motion.step_end_rotation,
+                                          is_turning(component));
+                           });
 }
 
-void note_body_step_start(entt::registry& registry)
+void hand_moves_to_step(entt::registry& registry,
+                        const tracked_movers& tracked,
+                        physics_backend& backend,
+                        float step_seconds)
 {
-    for_each_interpolated_body(registry,
-                               [](transform_component& transform, rigidbody_motion& motion)
-                               {
-                                   motion.step_start_position = transform.get_position_global();
-                                   motion.step_start_rotation = transform.get_rotation_global();
-                               });
+    if(!tracked.has_characters)
+    {
+        return;
+    }
+    auto hand_move = [&](transform_component& /*transform*/, character_controller_component& character)
+    {
+        const math::vec3 move = character.get_motion().take_step_move(step_seconds);
+        if(move != math::vec3{0.0f})
+        {
+            backend.move_character(character, move);
+        }
+    };
+    for_each_tracked<character_controller_component>(registry, hand_move);
 }
 
-void note_body_step_end(entt::registry& registry)
+/// Reads the poses a step begins at, after the backend synced the transforms written since the last step.
+void note_step_starts(entt::registry& registry, const tracked_movers& tracked)
 {
-    for_each_interpolated_body(registry,
-                               [](transform_component& transform, rigidbody_motion& motion)
-                               {
-                                   motion.step_end_position = transform.get_position_global();
-                                   motion.step_end_rotation = transform.get_rotation_global();
-                               });
+    for_each_tracked_mover(registry,
+                           tracked,
+                           [](transform_component& transform, auto& component)
+                           {
+                               stepped_motion& motion = component.get_motion();
+                               motion.step_start_position = transform.get_position_global();
+                               motion.step_start_rotation = transform.get_rotation_global();
+                           });
 }
 
-/// A contact callback that moved a body teleported it: nothing lies between where it was and where it went.
-void adopt_body_contact_teleports(entt::registry& registry)
+/// Reads the poses a step ended at. The backend writes an interpolated mover's pose exactly, however little it moved.
+void note_step_ends(entt::registry& registry, const tracked_movers& tracked)
 {
-    for_each_interpolated_body(registry,
-                               [](transform_component& transform, rigidbody_motion& motion)
-                               {
-                                   if(transform.is_dirty(dirty_ids::physics))
-                                   {
-                                       motion.place_at(transform.get_position_global(), transform.get_rotation_global());
-                                   }
-                               });
+    for_each_tracked_mover(registry,
+                           tracked,
+                           [](transform_component& transform, auto& component)
+                           {
+                               stepped_motion& motion = component.get_motion();
+                               motion.step_end_position = transform.get_position_global();
+                               motion.step_end_rotation = transform.get_rotation_global();
+                           });
 }
 
-void show_bodies(entt::registry& registry, float step_fraction)
+/// A contact callback that moved a mover teleported it: nothing lies between where it was and where it went.
+void adopt_contact_teleports(entt::registry& registry, const tracked_movers& tracked)
 {
-    for_each_interpolated_body(registry,
-                               [&](transform_component& transform, rigidbody_motion& motion)
+    for_each_tracked_mover(registry,
+                           tracked,
+                           [](transform_component& transform, auto& component)
+                           {
+                               stepped_motion& motion = component.get_motion();
+                               const bool turns = is_turning(component);
+                               if(!is_at_pose(transform, motion.step_end_position, motion.step_end_rotation, turns))
                                {
-                                   place_body(transform,
-                                              math::mix(motion.step_start_position, motion.step_end_position, step_fraction),
-                                              math::slerp(motion.step_start_rotation, motion.step_end_rotation, step_fraction));
-                               });
+                                   restart_at_transform(transform, motion);
+                                   request_sync(transform);
+                               }
+                           });
+}
+
+/// One fixed step after its fixed update: queued moves handed over, the world synced and stepped, the poses read.
+void simulate_step(rtti::context& ctx,
+                   physics_backend& backend,
+                   entt::registry& registry,
+                   const tracked_movers& tracked,
+                   float step_seconds)
+{
+    const delta_t step_dt(step_seconds);
+    hand_moves_to_step(registry, tracked, backend, step_seconds);
+    backend.sync_to_physics(ctx, step_dt);
+    note_step_starts(registry, tracked);
+    backend.simulate(step_dt);
+    backend.sync_from_physics(ctx);
+    note_step_ends(registry, tracked);
+    backend.dispatch_contacts(ctx);
+    adopt_contact_teleports(registry, tracked);
+}
+
+/**
+ * @brief Where a mover is shown between its step poses. Equal poses are taken as they are: mixing a pose with itself
+ *        is not exact, and a resting mover would be rewritten every frame.
+ */
+auto get_shown_position(const stepped_motion& motion, float step_fraction) -> math::vec3
+{
+    if(motion.step_start_position == motion.step_end_position)
+    {
+        return motion.step_end_position;
+    }
+    return math::mix(motion.step_start_position, motion.step_end_position, step_fraction);
+}
+
+auto get_shown_rotation(const stepped_motion& motion, float step_fraction) -> math::quat
+{
+    if(motion.step_start_rotation == motion.step_end_rotation)
+    {
+        return motion.step_end_rotation;
+    }
+    return math::slerp(motion.step_start_rotation, motion.step_end_rotation, step_fraction);
+}
+
+void show_movers(entt::registry& registry, const tracked_movers& tracked, float step_fraction)
+{
+    for_each_tracked_mover(registry,
+                           tracked,
+                           [&](transform_component& transform, auto& component)
+                           {
+                               stepped_motion& motion = component.get_motion();
+                               place_pose(transform,
+                                          get_shown_position(motion, step_fraction),
+                                          get_shown_rotation(motion, step_fraction),
+                                          is_turning(component));
+                               note_shown(transform, motion);
+                           });
+}
+
+/// Whether game time pays for another step and the frame may still run one.
+auto is_step_due(float elapsed_seconds, float step_seconds, int steps_left) noexcept -> bool
+{
+    return steps_left > 0 && elapsed_seconds >= step_seconds;
+}
+
+/// How far game time has come through the next fixed step, 0..1. Without a step length nothing waits.
+auto compute_step_fraction(float elapsed_seconds, float step_seconds) noexcept -> float
+{
+    return step_seconds > 0.0f ? math::clamp(elapsed_seconds / step_seconds, 0.0f, 1.0f) : 1.0f;
+}
+
+struct fixed_step_settings
+{
+    float step_seconds{};
+    int max_steps{};
+};
+
+/// A fixed step that is not a positive time (a hand-edited settings file) would make every shown pose NaN.
+auto is_usable_step(float step_seconds) noexcept -> bool
+{
+    return step_seconds > 0.0f && std::isfinite(step_seconds);
+}
+
+void warn_unusable_step_once(float step_seconds, float fallback_seconds)
+{
+    static bool has_warned = false;
+    if(has_warned)
+    {
+        return;
+    }
+    has_warned = true;
+    APPLOG_WARNING("The physics fixed timestep {} is not a positive time, so {} is used instead.",
+                   step_seconds,
+                   fallback_seconds);
+}
+
+/// The fixed step and the most steps a frame runs, from the project settings, with the default for a step unfit to use.
+auto get_fixed_step_settings(rtti::context& ctx) -> fixed_step_settings
+{
+    const settings::physics_settings defaults{};
+    const settings::physics_settings& physics = ctx.has<settings>() ? ctx.get<settings>().physics : defaults;
+    if(is_usable_step(physics.fixed_timestep))
+    {
+        return {physics.fixed_timestep, physics.max_fixed_steps};
+    }
+    warn_unusable_step_once(physics.fixed_timestep, defaults.fixed_timestep);
+    return {defaults.fixed_timestep, physics.max_fixed_steps};
+}
+
+/// A cast the backends can run: a unit direction and a finite length.
+struct cast_query
+{
+    math::vec3 direction{};
+    float max_distance{};
+};
+
+auto is_finite(const math::vec3& value) noexcept -> bool
+{
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+/// A length a direction or rotation can be divided by.
+auto is_usable_length(float length) noexcept -> bool
+{
+    return length > 0.0f && std::isfinite(length);
+}
+
+/// NaN fails too.
+auto is_usable_distance(float distance) noexcept -> bool
+{
+    return distance >= 0.0f;
+}
+
+auto is_usable_radius(float radius) noexcept -> bool
+{
+    return radius >= 0.0f && std::isfinite(radius);
+}
+
+/**
+ * @brief Makes a cast fit for the backends, whose libraries assert on bad input: the direction turns unit length and
+ *        the length is cut to MAX_QUERY_DISTANCE.
+ * @return Nothing for a cast that can hit nothing: a zero or non-finite direction, a non-finite origin, or a NaN or
+ *         negative distance.
+ */
+auto make_cast_query(const math::vec3& origin, const math::vec3& direction, float max_distance)
+    -> hpp::optional<cast_query>
+{
+    const float length = math::length(direction);
+    if(!is_finite(origin) || !is_usable_length(length) || !is_usable_distance(max_distance))
+    {
+        return {};
+    }
+    return cast_query{direction / length, math::min(max_distance, MAX_QUERY_DISTANCE)};
+}
+
+/// A shape query's rotation made unit length, or nothing for a zero or non-finite one.
+auto make_query_rotation(const math::quat& rotation) -> hpp::optional<math::quat>
+{
+    const float length = math::length(rotation);
+    if(!is_usable_length(length))
+    {
+        return {};
+    }
+    return rotation / length;
 }
 } // namespace
 
@@ -283,60 +561,40 @@ void fixed_step_runner::advance(rtti::context& ctx,
                                 float step_seconds,
                                 int max_steps)
 {
-    auto& ev = ctx.get_cached<events>();
     auto& registry = *ctx.get_cached<ecs>().get_scene().registry;
-
     elapsed_ += frame_seconds;
-
-    // Clamp leftover to at most one extra fixed step worth after the max burst.
+    // Game time left for later frames is capped at max_steps + 1 steps, a little more than one frame's steps catch up:
+    // beyond that a slow frame rate would only fall further behind, so the rest is dropped. Queued character moves
+    // span no more than that either.
     const float max_elapsed = step_seconds * static_cast<float>(max_steps + 1);
-
-    begin_character_frame(registry, backend, frame_seconds, max_elapsed);
-    begin_body_frame(registry);
-    if(elapsed_ >= step_seconds && max_steps > 0)
+    const tracked_movers tracked = begin_frame(registry, backend, frame_seconds, max_elapsed);
+    if(is_step_due(elapsed_, step_seconds, max_steps))
     {
-        put_characters_at_their_steps(registry);
-        put_bodies_at_their_steps(registry);
+        put_at_step_ends(registry, tracked);
     }
-
-    int steps = 0;
-    while(elapsed_ >= step_seconds && steps < max_steps)
+    for(int steps = 0; is_step_due(elapsed_, step_seconds, max_steps - steps); ++steps)
     {
         APP_SCOPE_PERF("Physics/Fixed Update");
-        delta_t step_dt(step_seconds);
-        is_in_fixed_update_ = true;
-        ev.on_frame_fixed_update(ctx, step_dt);
-        is_in_fixed_update_ = false;
-
-        hand_moves_to_step(registry, backend, step_seconds);
-        backend.sync_to_physics(ctx, step_dt);
-        note_step_start(registry);
-        note_body_step_start(registry);
-        backend.simulate(step_dt);
-        backend.sync_from_physics(ctx);
-        note_step_end(registry);
-        note_body_step_end(registry);
-        backend.dispatch_contacts(ctx);
-        adopt_contact_teleports(registry);
-        adopt_body_contact_teleports(registry);
-
+        run_fixed_update(ctx, delta_t(step_seconds));
+        simulate_step(ctx, backend, registry, tracked, step_seconds);
         elapsed_ -= step_seconds;
-        steps++;
     }
+    elapsed_ = math::min(elapsed_, max_elapsed);
+    step_fraction_ = compute_step_fraction(elapsed_, step_seconds);
+    show_movers(registry, tracked, step_fraction_);
+}
 
-    if(elapsed_ > max_elapsed)
-    {
-        elapsed_ = max_elapsed;
-    }
-
-    const float step_fraction = math::min(elapsed_ / step_seconds, 1.0f);
-    show_characters(registry, step_fraction);
-    show_bodies(registry, step_fraction);
+void fixed_step_runner::run_fixed_update(rtti::context& ctx, delta_t step)
+{
+    is_in_fixed_update_ = true;
+    ctx.get_cached<events>().on_frame_fixed_update(ctx, step);
+    is_in_fixed_update_ = false;
 }
 
 void fixed_step_runner::reset() noexcept
 {
     elapsed_ = 0.0f;
+    step_fraction_ = 0.0f;
 }
 
 auto fixed_step_runner::is_in_fixed_update() const noexcept -> bool
@@ -344,9 +602,9 @@ auto fixed_step_runner::is_in_fixed_update() const noexcept -> bool
     return is_in_fixed_update_;
 }
 
-auto fixed_step_runner::get_step_fraction(float step_seconds) const noexcept -> float
+auto fixed_step_runner::get_step_fraction() const noexcept -> float
 {
-    return step_seconds > 0.0f ? math::clamp(elapsed_ / step_seconds, 0.0f, 1.0f) : 1.0f;
+    return step_fraction_;
 }
 
 void physics_system::on_create_component(entt::registry& r, entt::entity e)
@@ -495,16 +753,7 @@ void physics_system::on_frame_update(rtti::context& ctx, const frame_times& time
         dt = {};
     }
 
-    float fixed_time_step = 1.0f / 50.0f;
-    int max_subs_steps = 3;
-
-    if(ctx.has<settings>())
-    {
-        auto& ss = ctx.get<settings>();
-        fixed_time_step = ss.physics.fixed_timestep;
-        max_subs_steps = ss.physics.max_fixed_steps;
-    }
-
+    const fixed_step_settings steps = get_fixed_step_settings(ctx);
     auto& registry = *ctx.get_cached<ecs>().get_scene().registry;
     // The animation has posed the bones for this frame: ragdolls read it before the steps and pose the bones after.
     // A paused or frozen game steps nothing, but the animation still poses the bones every frame, so the ragdolls pose
@@ -512,9 +761,14 @@ void physics_system::on_frame_update(rtti::context& ctx, const frame_times& time
     capture_ragdoll_animations(registry, dt.count());
     if(dt > delta_t::zero())
     {
-        step_runner_.advance(ctx, *backend_, dt.count(), fixed_time_step, max_subs_steps);
+        step_runner_.advance(ctx, *backend_, dt.count(), steps.step_seconds, steps.max_steps);
     }
-    show_ragdolls(registry, step_runner_.get_step_fraction(fixed_time_step), dt.count());
+    show_ragdolls(registry, step_runner_.get_step_fraction(), dt.count());
+}
+
+auto physics_system::get_step_fraction() const noexcept -> float
+{
+    return step_runner_.get_step_fraction();
 }
 
 void physics_system::on_frame_late_update(rtti::context& ctx, const frame_times& /*times*/)
@@ -648,7 +902,7 @@ auto physics_system::get_gravity() const -> math::vec3
     {
         return ctx.get<settings>().physics.gravity;
     }
-    return {0.0f, -9.8f, 0.0f};
+    return get_default_gravity();
 }
 
 void physics_system::explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask)
@@ -667,11 +921,19 @@ auto physics_system::shape_cast(const physics_compound_shape& shape,
                                 int layer_mask,
                                 bool query_sensors) const -> hpp::optional<raycast_hit>
 {
-    if(!backend_)
+    const auto query = make_cast_query(origin, direction, max_distance);
+    const auto query_rotation = make_query_rotation(rotation);
+    if(!backend_ || !query || !query_rotation)
     {
         return {};
     }
-    return backend_->shape_cast(shape, origin, rotation, direction, max_distance, layer_mask, query_sensors);
+    return backend_->shape_cast(shape,
+                                origin,
+                                *query_rotation,
+                                query->direction,
+                                query->max_distance,
+                                layer_mask,
+                                query_sensors);
 }
 
 auto physics_system::shape_cast_all(const physics_compound_shape& shape,
@@ -682,11 +944,19 @@ auto physics_system::shape_cast_all(const physics_compound_shape& shape,
                                     int layer_mask,
                                     bool query_sensors) const -> physics_vector<raycast_hit>
 {
-    if(!backend_)
+    const auto query = make_cast_query(origin, direction, max_distance);
+    const auto query_rotation = make_query_rotation(rotation);
+    if(!backend_ || !query || !query_rotation)
     {
         return {};
     }
-    return backend_->shape_cast_all(shape, origin, rotation, direction, max_distance, layer_mask, query_sensors);
+    return backend_->shape_cast_all(shape,
+                                    origin,
+                                    *query_rotation,
+                                    query->direction,
+                                    query->max_distance,
+                                    layer_mask,
+                                    query_sensors);
 }
 
 auto physics_system::shape_overlap(const physics_compound_shape& shape,
@@ -695,11 +965,12 @@ auto physics_system::shape_overlap(const physics_compound_shape& shape,
                                    int layer_mask,
                                    bool query_sensors) const -> physics_vector<entt::entity>
 {
-    if(!backend_)
+    const auto query_rotation = make_query_rotation(rotation);
+    if(!backend_ || !is_finite(origin) || !query_rotation)
     {
         return {};
     }
-    return backend_->shape_overlap(shape, origin, rotation, layer_mask, query_sensors);
+    return backend_->shape_overlap(shape, origin, *query_rotation, layer_mask, query_sensors);
 }
 
 auto physics_system::get_world_stats() const -> physics_backend::world_stats
@@ -811,11 +1082,12 @@ auto physics_system::ray_cast(const math::vec3& origin,
                               int layer_mask,
                               bool query_sensors) const -> hpp::optional<raycast_hit>
 {
-    if(!backend_)
+    const auto query = make_cast_query(origin, direction, max_distance);
+    if(!backend_ || !query)
     {
         return {};
     }
-    return backend_->ray_cast(origin, direction, max_distance, layer_mask, query_sensors);
+    return backend_->ray_cast(origin, query->direction, query->max_distance, layer_mask, query_sensors);
 }
 
 auto physics_system::ray_cast_all(const math::vec3& origin,
@@ -824,11 +1096,12 @@ auto physics_system::ray_cast_all(const math::vec3& origin,
                                   int layer_mask,
                                   bool query_sensors) const -> physics_vector<raycast_hit>
 {
-    if(!backend_)
+    const auto query = make_cast_query(origin, direction, max_distance);
+    if(!backend_ || !query)
     {
         return {};
     }
-    return backend_->ray_cast_all(origin, direction, max_distance, layer_mask, query_sensors);
+    return backend_->ray_cast_all(origin, query->direction, query->max_distance, layer_mask, query_sensors);
 }
 
 auto physics_system::sphere_cast(const math::vec3& origin,
@@ -838,11 +1111,12 @@ auto physics_system::sphere_cast(const math::vec3& origin,
                                  int layer_mask,
                                  bool query_sensors) const -> hpp::optional<raycast_hit>
 {
-    if(!backend_)
+    const auto query = make_cast_query(origin, direction, max_distance);
+    if(!backend_ || !query || !is_usable_radius(radius))
     {
         return {};
     }
-    return backend_->sphere_cast(origin, direction, radius, max_distance, layer_mask, query_sensors);
+    return backend_->sphere_cast(origin, query->direction, radius, query->max_distance, layer_mask, query_sensors);
 }
 
 auto physics_system::sphere_cast_all(const math::vec3& origin,
@@ -852,17 +1126,18 @@ auto physics_system::sphere_cast_all(const math::vec3& origin,
                                      int layer_mask,
                                      bool query_sensors) const -> physics_vector<raycast_hit>
 {
-    if(!backend_)
+    const auto query = make_cast_query(origin, direction, max_distance);
+    if(!backend_ || !query || !is_usable_radius(radius))
     {
         return {};
     }
-    return backend_->sphere_cast_all(origin, direction, radius, max_distance, layer_mask, query_sensors);
+    return backend_->sphere_cast_all(origin, query->direction, radius, query->max_distance, layer_mask, query_sensors);
 }
 
 auto physics_system::sphere_overlap(const math::vec3& origin, float radius, int layer_mask, bool query_sensors) const
     -> physics_vector<entt::entity>
 {
-    if(!backend_)
+    if(!backend_ || !is_finite(origin) || !is_usable_radius(radius))
     {
         return {};
     }

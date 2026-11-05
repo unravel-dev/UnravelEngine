@@ -7,6 +7,7 @@
 #include <context/context.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <editor/editing/prefab_removal_record.h>
+#include <hpp/string_view.hpp>
 
 namespace unravel
 {
@@ -628,6 +629,19 @@ auto inspect_enum(rtti::context& ctx,
                   entt::meta_any& var,
                   const meta_any_proxy& var_proxy,
                   const var_info& info = {}) -> inspect_result;
+
+/// Colours of the status line a component's inspector draws over its properties: doing what it is set to (a joint
+/// active, a target reached), idle or waiting, and failed (a joint broken).
+inline constexpr ImU32 INSPECTOR_STATUS_ACTIVE_COLOR = IM_COL32(96, 200, 110, 255);
+inline constexpr ImU32 INSPECTOR_STATUS_IDLE_COLOR = IM_COL32(150, 150, 150, 255);
+inline constexpr ImU32 INSPECTOR_STATUS_FAILED_COLOR = IM_COL32(230, 90, 80, 255);
+
+/**
+ * @brief Draws a dimmed hint that wraps at the window's edge: the notes an inspector or panel shows beside its own
+ *        tools.
+ * @param text The hint, in full sentences.
+ */
+void draw_inspector_hint(hpp::string_view text);
 
 /**
  * @brief Convenience template function for inspecting objects of known type

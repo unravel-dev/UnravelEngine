@@ -7,9 +7,12 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/mesh.h>
 
+#include <hpp/optional.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <numeric>
 #include <unordered_map>
 
 namespace unravel
@@ -18,6 +21,7 @@ namespace unravel
 namespace ragdoll_builder_detail
 {
 const math::vec3 up_axis{0.0f, 1.0f, 0.0f};
+const math::vec3 z_axis{0.0f, 0.0f, 1.0f};
 /// Share of the vertices around a limb inside the radius.
 constexpr float limb_radius_percentile = 0.75f;
 /// Hands and necks are flat or thin: the middle distance fits them better.
@@ -36,16 +40,69 @@ constexpr size_t min_fit_vertices = 12;
 constexpr float min_radius_of_height = 0.012f;
 constexpr float min_neck_of_height = 0.035f;
 constexpr float overlap_margin_of_height = 0.006f;
-/// Limb radius as a share of the limb's length when there are no vertices to fit.
-constexpr float upper_arm_radius_of_length = 0.18f;
-constexpr float lower_arm_radius_of_length = 0.15f;
-constexpr float upper_leg_radius_of_length = 0.19f;
-constexpr float lower_leg_radius_of_length = 0.13f;
-constexpr float hand_length_of_forearm = 0.7f;
-constexpr float head_height_of_height = 0.13f;
+/// A skeleton flatter than this is measured as this tall, so every size taken from the height stays positive.
+constexpr float min_character_height = 0.1f;
+/// A segment shorter than this share of the height has its end bone on its start: it has no direction to lie along.
+constexpr float min_segment_of_height = 1e-3f;
+/// How far a segment reaches, as a share of the height, when the bone it would reach to is missing: up for the
+/// trunk, down for a limb, up to the elbow for a hand, ahead to the ball of the foot for a foot.
+constexpr float missing_trunk_end_of_height = 0.1f;
+constexpr float missing_limb_end_of_height = 0.2f;
+constexpr float missing_forearm_of_height = 0.15f;
+constexpr float missing_toes_of_height = 0.09f;
+/// Squared lengths below this count as zero in the distance between two segments.
+constexpr float min_squared_length = 1e-8f;
+
+/**
+ * @brief How a capsule from joint to joint is sized: its radius as a share of its length when there are no vertices
+ *        to fit, the share of the vertices around it inside the radius, and the largest radius its length allows.
+ */
+struct capsule_fit
+{
+    float radius_of_length;
+    float percentile;
+    float max_radius_of_length;
+};
+
 /// A limb capsule is never thicker than this share of its length.
-constexpr float max_radius_of_length = 0.45f;
-constexpr float test_turn_degrees = 30.0f;
+constexpr float max_limb_radius_of_length = 0.45f;
+/// Limb radii by the proportions of a human body.
+constexpr capsule_fit upper_arm_fit{0.18f, limb_radius_percentile, max_limb_radius_of_length};
+constexpr capsule_fit lower_arm_fit{0.15f, limb_radius_percentile, max_limb_radius_of_length};
+constexpr capsule_fit upper_leg_fit{0.19f, limb_radius_percentile, max_limb_radius_of_length};
+constexpr capsule_fit lower_leg_fit{0.13f, limb_radius_percentile, max_limb_radius_of_length};
+/// A neck is short and thick: its capsule may be a ball wider than the neck is long.
+constexpr capsule_fit neck_fit{0.5f, flat_radius_percentile, 0.6f};
+/// A torso without vertices: a spine segment is about half as tall as the body is wide, and a little less deep.
+constexpr float torso_width_of_segment = 2.0f;
+constexpr float torso_depth_of_segment = 1.2f;
+/// A head without vertices: narrower than tall, a little deeper than wide, and in front of the neck.
+constexpr float head_height_of_height = 0.13f;
+constexpr float head_width_of_head_height = 0.75f;
+constexpr float head_depth_of_width = 1.1f;
+constexpr float head_forward_of_width = 0.1f;
+/// A hand without vertices is this share of its forearm long; a fitted one still reaches this share of that guess,
+/// so fingers curled in the bind pose do not shorten it to the palm.
+constexpr float hand_length_of_forearm = 0.7f;
+constexpr float min_hand_reach_of_guess = 0.5f;
+/// Hands are flat: thin against their length.
+constexpr float hand_radius_of_length = 0.2f;
+constexpr float max_hand_radius_of_length = 0.3f;
+/// A foot without vertices: the ball of the foot is about this share of the foot's length from the ankle, and the
+/// foot is never shorter than this share of the height.
+constexpr float foot_length_of_ankle_to_ball = 1.6f;
+constexpr float min_foot_of_height = 0.1f;
+/// The ankle stands at least this share of the height above the floor.
+constexpr float min_ankle_of_height = 0.03f;
+/// The heel reaches behind the ankle and the toes ahead of it by these shares of the foot's length; the foot is
+/// twice as wide as this share of it.
+constexpr float heel_of_foot_length = 0.25f;
+constexpr float toes_of_foot_length = 0.75f;
+constexpr float foot_half_width_of_length = 0.2f;
+/// The foot box stops below the ankle, by this share of the ankle's height without vertices and at this share of the
+/// fitted height with them: the shin capsule covers the top of the ankle.
+constexpr float foot_top_below_ankle = 0.3f;
+constexpr float foot_box_of_fitted_height = 0.7f;
 
 /// Mass shares of the body segments, from Winter, Biomechanics and Motor Control of Human Movement (table 4.1).
 constexpr float head_mass_share = 0.081f;
@@ -53,12 +110,85 @@ constexpr float neck_share_of_head = 0.15f;
 constexpr float pelvis_mass_share = 0.142f;
 constexpr float abdomen_mass_share = 0.139f;
 constexpr float thorax_mass_share = 0.216f;
+/// The upper chest carries the ribs and the shoulders: the larger part of the thorax.
+constexpr float chest_share_of_thorax = 0.4f;
 constexpr float upper_arm_mass_share = 0.028f;
 constexpr float forearm_mass_share = 0.016f;
 constexpr float hand_mass_share = 0.006f;
 constexpr float thigh_mass_share = 0.100f;
 constexpr float shank_mass_share = 0.0465f;
 constexpr float foot_mass_share = 0.0145f;
+
+/**
+ * @brief A ball joint's cone and twist range in degrees, and its share of the ragdoll's joint friction.
+ */
+struct ball_range
+{
+    float swing;
+    float twist_lower;
+    float twist_upper;
+    float friction_scale;
+};
+
+/**
+ * @brief A hinge's range in degrees and its share of the ragdoll's joint friction.
+ */
+struct hinge_range
+{
+    float lower;
+    float upper;
+    float friction_scale;
+};
+
+/// Box3D asserts on a cone wider than this, and the engine clamps cones to it.
+constexpr float max_swing_degrees = 90.0f;
+/// Each spine joint bends a little, and stiffly, so the trunk does not fold like a chain.
+constexpr ball_range torso_range{22.0f, -18.0f, 18.0f, 2.0f};
+constexpr ball_range neck_range{35.0f, -35.0f, 35.0f, 1.0f};
+/// A head on a neck body turns on top of the neck's range; without one its joint carries both.
+constexpr ball_range head_on_neck_range{30.0f, -30.0f, 30.0f, 0.8f};
+constexpr ball_range head_range{50.0f, -60.0f, 60.0f, 0.8f};
+/// The shoulder is the widest joint; its cone centres away from the bind pose (shoulder_cone_from_hanging_degrees).
+constexpr ball_range shoulder_range{80.0f, -60.0f, 60.0f, 0.8f};
+/// Elbows and knees fold one way, and barely past straight.
+constexpr hinge_range elbow_range{-3.0f, 140.0f, 0.6f};
+constexpr hinge_range knee_range{-3.0f, 140.0f, 1.0f};
+/// A light, loose wrist.
+constexpr ball_range wrist_range{50.0f, -60.0f, 60.0f, 0.3f};
+/// The hip flexes through its twist, far forward and a little back; the cone holds the leg's sideways swing. Legs are
+/// heavy, so their friction is high.
+constexpr ball_range hip_range{30.0f, -20.0f, 110.0f, 1.5f};
+constexpr ball_range ankle_range{18.0f, -40.0f, 25.0f, 0.5f};
+/// The shoulder cone centres on the arm this far from hanging, halfway to held out level, so a hanging arm and a
+/// T-pose both lie well inside it.
+constexpr float shoulder_cone_from_hanging_degrees = 45.0f;
+/// The least room a rest pose keeps inside a cone, so it does not start on the limit.
+constexpr float min_cone_margin_degrees = 10.0f;
+/// The elbow folds the forearm forward and a little up: the lift settles which way for a forearm pointing forward.
+constexpr float elbow_fold_lift = 0.2f;
+/// Directions closer than about 18 degrees make a poor cross product: a frame takes another reference then.
+constexpr float parallel_cosine = 0.95f;
+/// A cross product shorter than this has no direction: its two vectors are parallel.
+constexpr float min_axis_length = 1e-4f;
+
+/// Every cone the builder makes, checked against Box3D's limit at compile time.
+constexpr std::array<ball_range, 8> ball_ranges{torso_range,
+                                                neck_range,
+                                                head_on_neck_range,
+                                                head_range,
+                                                shoulder_range,
+                                                wrist_range,
+                                                hip_range,
+                                                ankle_range};
+static_assert(std::all_of(ball_ranges.begin(),
+                          ball_ranges.end(),
+                          [](const ball_range& range)
+                          {
+                              return range.swing <= max_swing_degrees;
+                          }),
+              "Box3D asserts on cones wider than 90 degrees.");
+static_assert(shoulder_range.swing - min_cone_margin_degrees >= shoulder_cone_from_hanging_degrees,
+              "A hanging arm lies inside the shoulder cone with room to spare.");
 
 enum class body_kind : uint8_t
 {
@@ -72,6 +202,29 @@ enum class body_kind : uint8_t
     lower_leg,
     foot,
 };
+
+/**
+ * @brief A limb segment's role and the role of the bone it reaches to.
+ */
+struct role_link
+{
+    humanoid_bone from;
+    humanoid_bone to;
+};
+
+/// Each limb segment reaches from its bone to the next one down the limb.
+constexpr std::array<role_link, 10> limb_links{{
+    {humanoid_bone::left_upper_arm, humanoid_bone::left_lower_arm},
+    {humanoid_bone::left_lower_arm, humanoid_bone::left_hand},
+    {humanoid_bone::right_upper_arm, humanoid_bone::right_lower_arm},
+    {humanoid_bone::right_lower_arm, humanoid_bone::right_hand},
+    {humanoid_bone::left_upper_leg, humanoid_bone::left_lower_leg},
+    {humanoid_bone::left_lower_leg, humanoid_bone::left_foot},
+    {humanoid_bone::left_foot, humanoid_bone::left_toes},
+    {humanoid_bone::right_upper_leg, humanoid_bone::right_lower_leg},
+    {humanoid_bone::right_lower_leg, humanoid_bone::right_foot},
+    {humanoid_bone::right_foot, humanoid_bone::right_toes},
+}};
 
 struct body_plan
 {
@@ -92,6 +245,8 @@ struct body_plan
     bool is_fitted{false};
     /// Joint frame in the model's space; X is the twist or hinge axis.
     math::quat joint_frame{1.0f, 0.0f, 0.0f, 0.0f};
+    /// Turn of the cone's centre away from the bind pose, Euler angles in degrees in the joint frame.
+    math::vec3 swing_offset{0.0f};
     ragdoll_joint_type joint{ragdoll_joint_type::ball};
     float swing{30.0f};
     float twist_lower{-20.0f};
@@ -119,6 +274,19 @@ struct character_frame
     math::vec3 forward;
 };
 
+/**
+ * @brief What one Auto Setup reads and makes, step by step.
+ */
+struct build_context
+{
+    const model_component& model;
+    entt::handle model_entity;
+    const ragdoll_build_options& options;
+    skeleton_view view{};
+    std::vector<body_plan> plans{};
+    ragdoll_build_result result{};
+};
+
 auto percentile(std::vector<float> values, float share) -> float
 {
     if(values.empty())
@@ -130,14 +298,19 @@ auto percentile(std::vector<float> values, float share) -> float
     return values[index];
 }
 
+/// Whether @p direction lies too close to the unit vector @p unit, either way, for a sound axis across both. A zero
+/// vector counts as parallel.
+auto is_parallel(const math::vec3& unit, const math::vec3& direction) -> bool
+{
+    const float length = math::length(direction);
+    return length <= 0.0f || std::abs(math::dot(unit, direction)) > parallel_cosine * length;
+}
+
 auto make_frame(const math::vec3& x_axis, const math::vec3& hint) -> math::quat
 {
     const math::vec3 x = math::normalize(x_axis);
-    math::vec3 reference = hint;
-    if(std::abs(math::dot(x, math::normalize(reference))) > 0.95f)
-    {
-        reference = std::abs(x.y) < 0.9f ? up_axis : math::vec3{0.0f, 0.0f, 1.0f};
-    }
+    const math::vec3 fallback = is_parallel(x, up_axis) ? z_axis : up_axis;
+    const math::vec3 reference = is_parallel(x, hint) ? fallback : hint;
     const math::vec3 z = math::normalize(math::cross(x, reference));
     const math::vec3 y = math::cross(z, x);
     return math::normalize(math::quat_cast(math::mat3(x, y, z)));
@@ -155,16 +328,30 @@ auto find_skin_mesh(const model_component& model) -> std::shared_ptr<mesh>
     return lod ? lod.try_get() : nullptr;
 }
 
-auto read_skeleton(const model_component& model, entt::handle owner, skeleton_view& view) -> bool
+/// Why a model has no armature to build on: a mesh still loading gets one soon, a mesh without a skeleton never does.
+auto describe_missing_armature(const model_component& model) -> std::string
+{
+    const auto& lod = model.get_model().get_lod(0);
+    if(!lod)
+    {
+        return "The model has no mesh.";
+    }
+    const auto loaded = lod.try_get();
+    if(!loaded)
+    {
+        return "The model's mesh is still loading. Try again once it has loaded.";
+    }
+    return loaded->get_armature() ? "The model's armature is not built yet. Try again in a moment."
+                                  : "The model's mesh has no skeleton, so it cannot have a humanoid ragdoll.";
+}
+
+/// Names, parents and bind poses of the armature's bones, in the model's space.
+void read_bones(const model_component& model, entt::handle owner, skeleton_view& view)
 {
     const auto& armature = model.get_armature_entities();
-    if(armature.empty())
-    {
-        return false;
-    }
     view.names.resize(armature.size());
     view.parents.assign(armature.size(), -1);
-    view.bind.resize(armature.size());
+    view.bind = get_bind_poses_in_model_space(model, owner);
     view.positions.resize(armature.size());
     std::unordered_map<entt::entity, int> index_of;
     for(size_t i = 0; i < armature.size(); ++i)
@@ -187,18 +374,22 @@ auto read_skeleton(const model_component& model, entt::handle owner, skeleton_vi
         const auto parent = armature[i].get<transform_component>().get_parent();
         const auto it = parent ? index_of.find(parent.entity()) : index_of.end();
         view.parents[i] = it != index_of.end() ? it->second : -1;
-        view.bind[i] = get_bind_pose_in_model_space(model, owner, int(i));
         view.positions[i] = view.bind[i].get_position();
     }
+}
+
+void find_roles(const model_component& model, skeleton_view& view)
+{
     view.roles = find_humanoid_bones(view.names, view.parents, view.positions);
     if(const auto skin = find_skin_mesh(model))
     {
         apply_humanoid_overrides(skin->get_humanoid_overrides(), view.names, view.roles);
     }
-    if(view.roles[size_t(humanoid_bone::hips)] < 0)
-    {
-        return false;
-    }
+}
+
+/// The character's side and forward axes, and its height from the lowest bone to the highest.
+void measure_character(skeleton_view& view)
+{
     const math::vec3 side = find_humanoid_side_axis(view.roles, view.bind);
     if(math::length(side) > 0.0f)
     {
@@ -212,8 +403,7 @@ auto read_skeleton(const model_component& model, entt::handle owner, skeleton_vi
         lowest = std::min(lowest, position.y);
         highest = std::max(highest, position.y);
     }
-    view.height = std::max(highest - lowest, 0.1f);
-    return true;
+    view.height = std::max(highest - lowest, min_character_height);
 }
 
 auto role_bone(const skeleton_view& view, humanoid_bone role) -> int
@@ -221,9 +411,34 @@ auto role_bone(const skeleton_view& view, humanoid_bone role) -> int
     return view.roles[size_t(role)];
 }
 
-auto role_position(const skeleton_view& view, humanoid_bone role) -> math::vec3
+/// The bone of the role after @p role down its limb; -1 when the skeleton lacks it.
+auto find_next_bone(const skeleton_view& view, humanoid_bone role) -> int
 {
-    return view.positions[size_t(role_bone(view, role))];
+    const auto link = std::find_if(limb_links.begin(),
+                                   limb_links.end(),
+                                   [role](const role_link& candidate)
+                                   {
+                                       return candidate.from == role;
+                                   });
+    return link != limb_links.end() ? role_bone(view, link->to) : -1;
+}
+
+/// The bone of the role before @p role up its limb; -1 when the skeleton lacks it.
+auto find_previous_bone(const skeleton_view& view, humanoid_bone role) -> int
+{
+    const auto link = std::find_if(limb_links.begin(),
+                                   limb_links.end(),
+                                   [role](const role_link& candidate)
+                                   {
+                                       return candidate.to == role;
+                                   });
+    return link != limb_links.end() ? role_bone(view, link->from) : -1;
+}
+
+/// "Left Upper Arm bone 'upperarm_l'", for messages.
+auto describe_bone(const skeleton_view& view, const body_plan& plan) -> std::string
+{
+    return std::string(get_humanoid_bone_name(plan.role)) + " bone '" + view.names[size_t(plan.bone)] + "'";
 }
 
 void add_plan(std::vector<body_plan>& plans, const skeleton_view& view, humanoid_bone role, body_kind kind, float mass)
@@ -253,8 +468,12 @@ auto make_plans(const skeleton_view& view, const ragdoll_build_options& options)
     std::vector<body_plan> plans;
     add_plan(plans, view, humanoid_bone::hips, body_kind::torso, pelvis_mass_share);
     add_plan(plans, view, humanoid_bone::spine, body_kind::torso, abdomen_mass_share);
-    add_plan(plans, view, humanoid_bone::chest, body_kind::torso, thorax_mass_share * 0.4f);
-    add_plan(plans, view, humanoid_bone::upper_chest, body_kind::torso, thorax_mass_share * 0.6f);
+    add_plan(plans, view, humanoid_bone::chest, body_kind::torso, thorax_mass_share * chest_share_of_thorax);
+    add_plan(plans,
+             view,
+             humanoid_bone::upper_chest,
+             body_kind::torso,
+             thorax_mass_share * (1.0f - chest_share_of_thorax));
     const int neck = role_bone(view, humanoid_bone::neck);
     const int head = role_bone(view, humanoid_bone::head);
     if(options.include_neck && neck >= 0 && head >= 0 &&
@@ -480,38 +699,58 @@ void set_capsule(body_plan& plan, const math::vec3& a, const math::vec3& b, floa
     plan.rotation = length > 0.0f ? make_y_rotation(axis / length) : math::quat{1.0f, 0.0f, 0.0f, 0.0f};
 }
 
-auto limb_radius_of_length(body_kind kind) -> float
+auto get_limb_fit(body_kind kind) -> const capsule_fit&
 {
     switch(kind)
     {
         case body_kind::upper_arm:
-            return upper_arm_radius_of_length;
+            return upper_arm_fit;
         case body_kind::lower_arm:
-            return lower_arm_radius_of_length;
+            return lower_arm_fit;
         case body_kind::upper_leg:
-            return upper_leg_radius_of_length;
-        case body_kind::lower_leg:
-            return lower_leg_radius_of_length;
+            return upper_leg_fit;
         default:
-            return lower_arm_radius_of_length;
+            return lower_leg_fit;
     }
 }
 
-void fit_limb(body_plan& plan, const skeleton_view& view)
+/// A capsule from the plan's start to its end, its radius fitted to the vertices around it, else a share of its
+/// length.
+void fit_capsule(body_plan& plan, const skeleton_view& view, const capsule_fit& fit)
 {
     const float length = math::distance(plan.start, plan.end);
-    float radius = length * limb_radius_of_length(plan.kind);
-    plan.is_fitted = fit_segment_radius(plan, limb_radius_percentile, radius);
-    radius = math::clamp(radius, min_radius_of_height * view.height, length * max_radius_of_length);
+    float radius = length * fit.radius_of_length;
+    plan.is_fitted = fit_segment_radius(plan, fit.percentile, radius);
+    radius = math::clamp(radius, min_radius_of_height * view.height, length * fit.max_radius_of_length);
     set_capsule(plan, plan.start, plan.end, radius);
+}
+
+/// A limb from its bone to the next one down the limb. Refuses a limb whose next bone sits on its start: it has no
+/// length to size a capsule by and no direction for its joint.
+auto fit_limb(body_plan& plan, const skeleton_view& view, std::string& error) -> bool
+{
+    const int next = find_next_bone(view, plan.role);
+    plan.end =
+        next >= 0 ? view.positions[size_t(next)] : plan.start - up_axis * (view.height * missing_limb_end_of_height);
+    if(math::distance(plan.start, plan.end) <= min_segment_of_height * view.height)
+    {
+        error = "The " + describe_bone(view, plan) + " has no length: the next bone down the limb, '" +
+                view.names[size_t(next)] + "', sits at its start.";
+        return false;
+    }
+    fit_capsule(plan, view, get_limb_fit(plan.kind));
+    return true;
 }
 
 /// Pelvis and spine: a capsule across the body, as wide as the body and as thick as it is deep.
 void fit_torso(body_plan& plan, const skeleton_view& view, const character_frame& frame)
 {
-    const float height = math::distance(plan.start, plan.end);
-    float width = height * 2.0f;
-    float depth = height * 1.2f;
+    // A spine bone on top of the one below it leaves no segment to size from: a typical segment stands in.
+    const float segment = math::distance(plan.start, plan.end);
+    const float height =
+        segment > min_segment_of_height * view.height ? segment : view.height * missing_trunk_end_of_height;
+    float width = height * torso_width_of_segment;
+    float depth = height * torso_depth_of_segment;
     float side_center = 0.0f;
     float forward_center = 0.0f;
     if(plan.vertices.size() >= min_fit_vertices)
@@ -525,21 +764,20 @@ void fit_torso(body_plan& plan, const skeleton_view& view, const character_frame
         plan.is_fitted = true;
     }
     const float radius = math::clamp(depth * 0.5f, min_radius_of_height * view.height, width * 0.5f);
-    const float segment = std::max(width - 2.0f * radius, 0.0f);
     const float up_center = math::dot((plan.start + plan.end) * 0.5f - plan.start, frame.up);
     plan.center = plan.start + frame.side * side_center + frame.forward * forward_center + frame.up * up_center;
     plan.radius = radius;
-    plan.segment = segment;
+    plan.segment = std::max(width - 2.0f * radius, 0.0f);
     plan.rotation = make_y_rotation(frame.side);
 }
 
 void fit_head(body_plan& plan, const skeleton_view& view, const character_frame& frame)
 {
-    float width = view.height * head_height_of_height * 0.75f;
-    float depth = width * 1.1f;
+    float width = view.height * head_height_of_height * head_width_of_head_height;
+    float depth = width * head_depth_of_width;
     math::vec2 vertical{0.0f, view.height * head_height_of_height};
     float side_center = 0.0f;
-    float forward_center = width * 0.1f;
+    float forward_center = width * head_forward_of_width;
     if(plan.vertices.size() >= min_fit_vertices)
     {
         const math::vec2 across = project_extent(plan.vertices, plan.start, frame.side, tight_low, tight_high);
@@ -569,24 +807,13 @@ void fit_hand(body_plan& plan, const skeleton_view& view, const math::vec3& fore
     if(plan.vertices.size() >= min_fit_vertices)
     {
         const math::vec2 reach = project_extent(plan.vertices, plan.start, direction, tight_low, tight_high);
-        length = std::max(reach.y, length * 0.5f);
+        length = std::max(reach.y, length * min_hand_reach_of_guess);
     }
     plan.end = plan.start + direction * length;
-    float radius = length * 0.2f;
+    float radius = length * hand_radius_of_length;
     plan.is_fitted = fit_segment_radius(plan, flat_radius_percentile, radius);
-    radius = math::clamp(radius, min_radius_of_height * view.height, length * 0.3f);
+    radius = math::clamp(radius, min_radius_of_height * view.height, length * max_hand_radius_of_length);
     set_capsule(plan, plan.start, plan.end, radius);
-}
-
-void fit_neck(body_plan& plan, const skeleton_view& view)
-{
-    const float length = math::distance(plan.start, plan.end);
-    float radius = length * 0.5f;
-    plan.is_fitted = fit_segment_radius(plan, flat_radius_percentile, radius);
-    radius = math::clamp(radius, min_radius_of_height * view.height, length * 0.6f);
-    // The neck capsule stops short of the head and the chest, which carry the rest of it.
-    set_capsule(plan, plan.start, plan.end, radius);
-    plan.segment = std::max(length - 2.0f * radius, 0.0f);
 }
 
 /// Feet: a box on the sole, from the heel to the toes.
@@ -601,18 +828,18 @@ void fit_foot(body_plan& plan, const skeleton_view& view, const character_frame&
     {
         lowest = std::min(lowest, position.y);
     }
-    const float ankle_height = std::max(plan.start.y - lowest, 0.03f * view.height);
-    const float foot_length = std::max(math::distance(plan.start, toe_hint) * 1.6f, 0.1f * view.height);
-    math::vec2 along{-0.25f * foot_length, 0.75f * foot_length};
-    math::vec2 across{-0.2f * foot_length, 0.2f * foot_length};
-    math::vec2 vertical{-ankle_height, -0.3f * ankle_height};
+    const float ankle_height = std::max(plan.start.y - lowest, min_ankle_of_height * view.height);
+    const float foot_length =
+        std::max(math::distance(plan.start, toe_hint) * foot_length_of_ankle_to_ball, min_foot_of_height * view.height);
+    math::vec2 along{-heel_of_foot_length * foot_length, toes_of_foot_length * foot_length};
+    math::vec2 across{-foot_half_width_of_length * foot_length, foot_half_width_of_length * foot_length};
+    math::vec2 vertical{-ankle_height, -foot_top_below_ankle * ankle_height};
     if(plan.vertices.size() >= min_fit_vertices)
     {
         along = project_extent(plan.vertices, plan.start, forward, tight_low, tight_high);
         across = project_extent(plan.vertices, plan.start, side, tight_low, tight_high);
         vertical = project_extent(plan.vertices, plan.start, up_axis, 0.0f, tight_high);
-        // The top of the ankle stays out of the box: the shin capsule covers it.
-        vertical.y = vertical.x + (vertical.y - vertical.x) * 0.7f;
+        vertical.y = vertical.x + (vertical.y - vertical.x) * foot_box_of_fitted_height;
         plan.is_fitted = true;
     }
     plan.is_box = true;
@@ -623,69 +850,85 @@ void fit_foot(body_plan& plan, const skeleton_view& view, const character_frame&
     plan.end = plan.start + forward * along.y;
 }
 
-void fit_shapes(std::vector<body_plan>& plans, const skeleton_view& view)
+/// Where a torso or neck body ends: at the trunk body above it, else a short way up.
+auto find_trunk_end(const std::vector<body_plan>& plans, size_t index, const skeleton_view& view) -> math::vec3
 {
-    const character_frame frame{view.side, up_axis, view.forward};
-    for(size_t i = 0; i < plans.size(); ++i)
+    const int child = find_child_plan(plans, int(index));
+    return child >= 0 ? view.positions[size_t(plans[size_t(child)].bone)]
+                      : plans[index].start + up_axis * (view.height * missing_trunk_end_of_height);
+}
+
+/// Where a hand's forearm starts: at its elbow, else a forearm's length above the wrist.
+auto find_forearm_start(const skeleton_view& view, const body_plan& hand) -> math::vec3
+{
+    const int elbow = find_previous_bone(view, hand.role);
+    return elbow >= 0 ? view.positions[size_t(elbow)]
+                      : hand.start + up_axis * (view.height * missing_forearm_of_height);
+}
+
+/// Where a foot's toes start: at its toe bone, else ahead of the ankle.
+auto find_toes(const skeleton_view& view, const body_plan& foot, const character_frame& frame) -> math::vec3
+{
+    const int toes = find_next_bone(view, foot.role);
+    return toes >= 0 ? view.positions[size_t(toes)]
+                     : foot.start + frame.forward * (view.height * missing_toes_of_height);
+}
+
+auto fit_shape(build_context& ctx, size_t index, const character_frame& frame) -> bool
+{
+    auto& plan = ctx.plans[index];
+    const auto& view = ctx.view;
+    plan.start = view.positions[size_t(plan.bone)];
+    switch(plan.kind)
     {
-        auto& plan = plans[i];
-        plan.start = view.positions[size_t(plan.bone)];
-        switch(plan.kind)
-        {
-            case body_kind::torso:
-            case body_kind::neck:
-            {
-                const int child = find_child_plan(plans, int(i));
-                plan.end = child >= 0 ? view.positions[size_t(plans[size_t(child)].bone)]
-                                      : plan.start + up_axis * (view.height * 0.1f);
-                if(plan.kind == body_kind::torso)
-                {
-                    fit_torso(plan, view, frame);
-                }
-                else
-                {
-                    fit_neck(plan, view);
-                }
-                break;
-            }
-            case body_kind::head:
-                fit_head(plan, view, frame);
-                break;
-            case body_kind::upper_arm:
-            case body_kind::lower_arm:
-            case body_kind::upper_leg:
-            case body_kind::lower_leg:
-            {
-                const humanoid_bone next_role = humanoid_bone(size_t(plan.role) + 1);
-                const int next = role_bone(view, next_role);
-                plan.end = next >= 0 ? view.positions[size_t(next)] : plan.start - up_axis * (view.height * 0.2f);
-                fit_limb(plan, view);
-                break;
-            }
-            case body_kind::hand:
-            {
-                const humanoid_bone forearm = humanoid_bone(size_t(plan.role) - 1);
-                const int forearm_bone = role_bone(view, forearm);
-                fit_hand(plan, view, forearm_bone >= 0 ? view.positions[size_t(forearm_bone)] : plan.start + up_axis);
-                break;
-            }
-            case body_kind::foot:
-            {
-                const humanoid_bone toes = humanoid_bone(size_t(plan.role) + 1);
-                const int toes_bone = role_bone(view, toes);
-                const math::vec3 hint = toes_bone >= 0 ? view.positions[size_t(toes_bone)] : plan.start + frame.forward;
-                fit_foot(plan, view, frame, hint);
-                break;
-            }
-        }
+        case body_kind::torso:
+            plan.end = find_trunk_end(ctx.plans, index, view);
+            fit_torso(plan, view, frame);
+            break;
+        case body_kind::neck:
+            plan.end = find_trunk_end(ctx.plans, index, view);
+            fit_capsule(plan, view, neck_fit);
+            break;
+        case body_kind::head:
+            fit_head(plan, view, frame);
+            break;
+        case body_kind::hand:
+            fit_hand(plan, view, find_forearm_start(view, plan));
+            break;
+        case body_kind::foot:
+            fit_foot(plan, view, frame, find_toes(view, plan, frame));
+            break;
+        case body_kind::upper_arm:
+        case body_kind::lower_arm:
+        case body_kind::upper_leg:
+        case body_kind::lower_leg:
+            return fit_limb(plan, view, ctx.result.error);
     }
+    return true;
 }
 
 /// Flips @p axis so that turning @p direction about it by a positive angle moves it towards @p wanted.
 auto orient_axis(const math::vec3& axis, const math::vec3& direction, const math::vec3& wanted) -> math::vec3
 {
-    const math::vec3 turned = math::angleAxis(math::radians(test_turn_degrees), axis) * direction;
-    return math::dot(turned - direction, wanted) >= 0.0f ? axis : -axis;
+    // A small positive turn moves the direction along cross(axis, direction).
+    return math::dot(math::cross(axis, direction), wanted) >= 0.0f ? axis : -axis;
+}
+
+/// The first axis across @p direction and one of @p references, in order, that is not near parallel to it.
+auto find_axis_across(const math::vec3& direction, const std::array<math::vec3, 2>& references)
+    -> hpp::optional<math::vec3>
+{
+    const auto usable = std::find_if(references.begin(),
+                                     references.end(),
+                                     [&direction](const math::vec3& reference)
+                                     {
+                                         return !is_parallel(direction, reference);
+                                     });
+    if(usable == references.end())
+    {
+        return hpp::nullopt;
+    }
+    return math::normalize(math::cross(direction, *usable));
 }
 
 auto get_segment_direction(const body_plan& plan) -> math::vec3
@@ -694,93 +937,124 @@ auto get_segment_direction(const body_plan& plan) -> math::vec3
     return math::length(axis) > 0.0f ? math::normalize(axis) : up_axis;
 }
 
-void set_ball(body_plan& plan, float swing, float twist_lower, float twist_upper, float friction)
+/// Angle between two unit vectors, degrees.
+auto get_angle_degrees(const math::vec3& a, const math::vec3& b) -> float
+{
+    return math::degrees(std::acos(math::clamp(math::dot(a, b), -1.0f, 1.0f)));
+}
+
+void set_ball(body_plan& plan, const ball_range& range)
 {
     plan.joint = ragdoll_joint_type::ball;
-    plan.swing = swing;
-    plan.twist_lower = twist_lower;
-    plan.twist_upper = twist_upper;
-    plan.friction_scale = friction;
+    plan.swing = range.swing;
+    plan.twist_lower = range.twist_lower;
+    plan.twist_upper = range.twist_upper;
+    plan.friction_scale = range.friction_scale;
 }
 
-void set_hinge(body_plan& plan, float lower, float upper, float friction)
+void set_hinge(body_plan& plan, const hinge_range& range)
 {
     plan.joint = ragdoll_joint_type::hinge;
-    plan.twist_lower = lower;
-    plan.twist_upper = upper;
-    plan.friction_scale = friction;
+    plan.twist_lower = range.lower;
+    plan.twist_upper = range.upper;
+    plan.friction_scale = range.friction_scale;
 }
 
-/// Human ranges of motion, in degrees, with the twist axis and its sign chosen so positive angles bend the way
-/// the joint bends.
-void plan_joints(std::vector<body_plan>& plans, const skeleton_view& view)
+auto has_neck_body(const std::vector<body_plan>& plans, const body_plan& plan) -> bool
 {
-    const math::vec3 forward = view.forward;
-    for(auto& plan : plans)
+    return plan.parent >= 0 && plans[size_t(plan.parent)].kind == body_kind::neck;
+}
+
+/// Degrees to turn the shoulder cone's centre from an arm's bind direction, @p to_hanging degrees from hanging, towards
+/// hanging: to halfway down, keeping the bind pose inside the cone, and hanging inside it above all.
+auto find_shoulder_offset(float to_hanging) -> float
+{
+    const float reach = shoulder_range.swing - min_cone_margin_degrees;
+    const float halfway = math::clamp(to_hanging - shoulder_cone_from_hanging_degrees, 0.0f, reach);
+    return std::max(halfway, to_hanging - reach);
+}
+
+/// The shoulder's cone centres on the arm halfway between hanging and held out level, turned from the arm's bind
+/// direction, so a T-pose and an A-pose rig get the same cone and a hanging arm lies well inside it. The turn is
+/// about the joint frame's Y axis: the backend turns its own frame about Y, so the offset means the same on both.
+void plan_shoulder(body_plan& plan, const math::vec3& forward)
+{
+    const math::vec3 direction = get_segment_direction(plan);
+    const math::vec3 hanging = -up_axis;
+    const math::vec3 turn_axis = math::cross(direction, hanging);
+    const float offset = find_shoulder_offset(get_angle_degrees(direction, hanging));
+    const bool has_offset = offset > 0.0f && math::length(turn_axis) > min_axis_length;
+    plan.joint_frame = make_frame(direction, has_offset ? turn_axis : forward);
+    plan.swing_offset = has_offset ? math::vec3{0.0f, offset, 0.0f} : math::vec3{0.0f};
+    set_ball(plan, shoulder_range);
+}
+
+/// The elbow folds the forearm towards the front of the body; a forearm pointing forward folds up instead. Refuses
+/// a forearm with no axis across it.
+auto plan_elbow(body_plan& plan, const skeleton_view& view, std::string& error) -> bool
+{
+    const math::vec3 direction = get_segment_direction(plan);
+    const auto hinge = find_axis_across(direction, {view.forward, up_axis});
+    if(!hinge)
     {
-        const math::vec3 direction = get_segment_direction(plan);
-        switch(plan.kind)
+        error = "The " + describe_bone(view, plan) +
+                " gives the elbow no hinge axis: the forearm lies along both the character's forward and up axes.";
+        return false;
+    }
+    const math::vec3 axis = orient_axis(*hinge, direction, view.forward + up_axis * elbow_fold_lift);
+    plan.joint_frame = make_frame(axis, direction);
+    set_hinge(plan, elbow_range);
+    return true;
+}
+
+/// Human ranges of motion, with the twist axis and its sign chosen so positive angles bend the way the joint bends.
+auto plan_joint(build_context& ctx, body_plan& plan) -> bool
+{
+    const math::vec3 forward = ctx.view.forward;
+    const math::vec3 direction = get_segment_direction(plan);
+    switch(plan.kind)
+    {
+        case body_kind::torso:
+            plan.joint_frame = make_frame(direction, forward);
+            set_ball(plan, torso_range);
+            break;
+        case body_kind::neck:
+            plan.joint_frame = make_frame(direction, forward);
+            set_ball(plan, neck_range);
+            break;
+        case body_kind::head:
+            plan.joint_frame = make_frame(up_axis, forward);
+            set_ball(plan, has_neck_body(ctx.plans, plan) ? head_on_neck_range : head_range);
+            break;
+        case body_kind::upper_arm:
+            plan_shoulder(plan, forward);
+            break;
+        case body_kind::lower_arm:
+            return plan_elbow(plan, ctx.view, ctx.result.error);
+        case body_kind::hand:
+            plan.joint_frame = make_frame(direction, forward);
+            set_ball(plan, wrist_range);
+            break;
+        case body_kind::upper_leg:
+            // The hip flexes through its twist, about the side axis. Legs hang in the bind pose, so the cone stays
+            // centred on it.
+            plan.joint_frame = make_frame(orient_axis(ctx.view.side, direction, forward), direction);
+            set_ball(plan, hip_range);
+            break;
+        case body_kind::lower_leg:
+            // The knee bends the shin back.
+            plan.joint_frame = make_frame(orient_axis(ctx.view.side, direction, -forward), direction);
+            set_hinge(plan, knee_range);
+            break;
+        case body_kind::foot:
         {
-            case body_kind::torso:
-                plan.joint_frame = make_frame(direction, forward);
-                set_ball(plan, 22.0f, -18.0f, 18.0f, 2.0f);
-                break;
-            case body_kind::neck:
-                plan.joint_frame = make_frame(direction, forward);
-                set_ball(plan, 35.0f, -35.0f, 35.0f, 1.0f);
-                break;
-            case body_kind::head:
-            {
-                const bool has_neck_body = plan.parent >= 0 && plans[size_t(plan.parent)].kind == body_kind::neck;
-                plan.joint_frame = make_frame(up_axis, forward);
-                set_ball(plan, has_neck_body ? 30.0f : 50.0f, has_neck_body ? -30.0f : -60.0f, has_neck_body ? 30.0f : 60.0f,
-                         0.8f);
-                break;
-            }
-            case body_kind::upper_arm:
-                plan.joint_frame = make_frame(direction, forward);
-                set_ball(plan, 80.0f, -60.0f, 60.0f, 0.8f);
-                break;
-            case body_kind::lower_arm:
-            {
-                // The elbow bends the forearm up towards the front of the body.
-                const math::vec3 hinge = math::normalize(math::cross(direction, forward));
-                const math::vec3 axis = orient_axis(hinge, direction, forward + up_axis * 0.2f);
-                plan.joint_frame = make_frame(axis, direction);
-                set_hinge(plan, -3.0f, 140.0f, 0.6f);
-                break;
-            }
-            case body_kind::hand:
-                plan.joint_frame = make_frame(direction, forward);
-                set_ball(plan, 50.0f, -60.0f, 60.0f, 0.3f);
-                break;
-            case body_kind::upper_leg:
-            {
-                // The hip flexes through its twist, about the side axis: far forward, a little back. The cone holds
-                // the leg's sideways swing and its turn about itself.
-                const math::vec3 axis = orient_axis(view.side, direction, forward);
-                plan.joint_frame = make_frame(axis, direction);
-                set_ball(plan, 30.0f, -20.0f, 110.0f, 1.5f);
-                break;
-            }
-            case body_kind::lower_leg:
-            {
-                // The knee bends the shin back.
-                const math::vec3 axis = orient_axis(view.side, direction, -forward);
-                plan.joint_frame = make_frame(axis, direction);
-                set_hinge(plan, -3.0f, 140.0f, 1.0f);
-                break;
-            }
-            case body_kind::foot:
-            {
-                const math::vec3 shin = plan.parent >= 0 ? get_segment_direction(plans[size_t(plan.parent)]) : -up_axis;
-                const math::vec3 axis = orient_axis(view.side, shin, forward);
-                plan.joint_frame = make_frame(axis, shin);
-                set_ball(plan, 18.0f, -40.0f, 25.0f, 0.5f);
-                break;
-            }
+            const math::vec3 shin = plan.parent >= 0 ? get_segment_direction(ctx.plans[size_t(plan.parent)]) : -up_axis;
+            plan.joint_frame = make_frame(orient_axis(ctx.view.side, shin, forward), shin);
+            set_ball(plan, ankle_range);
+            break;
         }
     }
+    return true;
 }
 
 struct capsule_proxy
@@ -815,18 +1089,18 @@ auto segment_distance(const math::vec3& p1, const math::vec3& q1, const math::ve
     const float f = math::dot(d2, r);
     float s = 0.0f;
     float t = 0.0f;
-    if(a <= 1e-8f && e <= 1e-8f)
+    if(a <= min_squared_length && e <= min_squared_length)
     {
         return math::distance(p1, p2);
     }
-    if(a <= 1e-8f)
+    if(a <= min_squared_length)
     {
         t = math::clamp(f / e, 0.0f, 1.0f);
     }
     else
     {
         const float c = math::dot(d1, r);
-        if(e <= 1e-8f)
+        if(e <= min_squared_length)
         {
             s = math::clamp(-c / a, 0.0f, 1.0f);
         }
@@ -834,7 +1108,7 @@ auto segment_distance(const math::vec3& p1, const math::vec3& q1, const math::ve
         {
             const float b = math::dot(d1, d2);
             const float denominator = a * e - b * b;
-            s = denominator > 1e-8f ? math::clamp((b * f - c * e) / denominator, 0.0f, 1.0f) : 0.0f;
+            s = denominator > min_squared_length ? math::clamp((b * f - c * e) / denominator, 0.0f, 1.0f) : 0.0f;
             t = (b * s + f) / e;
             if(t < 0.0f)
             {
@@ -880,11 +1154,21 @@ auto find_disabled_pairs(const std::vector<body_plan>& plans, const skeleton_vie
     return pairs;
 }
 
-auto get_uniform_scale(const math::transform& transform) -> float
+/// The bone's scale as the backend applies it to shapes: its absolute value, with a vanished axis taken as 1.
+auto get_shape_scale(const math::transform& transform) -> math::vec3
 {
-    const math::vec3 scale = math::abs(transform.get_scale());
-    const float value = (scale.x + scale.y + scale.z) / 3.0f;
-    return value > 0.0f ? value : 1.0f;
+    const auto to_usable = [](float value)
+    {
+        const float size = std::abs(value);
+        return size > 0.0f ? size : 1.0f;
+    };
+    const math::vec3& scale = transform.get_scale();
+    return {to_usable(scale.x), to_usable(scale.y), to_usable(scale.z)};
+}
+
+auto get_uniform_scale(const math::vec3& shape_scale) -> float
+{
+    return (shape_scale.x + shape_scale.y + shape_scale.z) / 3.0f;
 }
 
 auto to_degrees(const math::quat& rotation) -> math::vec3
@@ -892,14 +1176,16 @@ auto to_degrees(const math::quat& rotation) -> math::vec3
     return math::degrees(math::eulerAngles(math::normalize(rotation)));
 }
 
-auto make_body(const body_plan& plan, const skeleton_view& view, float total_mass) -> ragdoll_body
+auto make_body(const body_plan& plan, const skeleton_view& view, float mass_scale) -> ragdoll_body
 {
     const auto& bone = view.bind[size_t(plan.bone)];
-    const float scale = get_uniform_scale(bone);
+    const math::vec3 shape_scale = get_shape_scale(bone);
+    const float scale = get_uniform_scale(shape_scale);
     const math::quat inverse_bone = glm::inverse(math::normalize(bone.get_rotation()));
-    const math::vec3 center = bone.inverse_transform_coord(plan.center);
+    // The backend places a shape by the bone's rotation and the absolute value of its scale. The full inverse would
+    // reflect a mirrored bone's centre through the bone.
+    const math::vec3 center = (inverse_bone * (plan.center - bone.get_position())) / shape_scale;
     const math::vec3 rotation = to_degrees(inverse_bone * plan.rotation);
-
     ragdoll_body body;
     body.bone = view.names[size_t(plan.bone)];
     if(plan.is_box)
@@ -919,57 +1205,212 @@ auto make_body(const body_plan& plan, const skeleton_view& view, float total_mas
         capsule.rotation = rotation;
         body.shape.shape = capsule;
     }
-    body.mass = total_mass * plan.mass_share;
+    body.mass = mass_scale * plan.mass_share;
     body.joint = plan.joint;
     body.joint_rotation = to_degrees(inverse_bone * plan.joint_frame);
+    body.swing_offset = plan.swing_offset;
     body.swing_limit = plan.swing;
     body.twist_lower = plan.twist_lower;
     body.twist_upper = plan.twist_upper;
     body.friction_scale = plan.friction_scale;
     return body;
 }
+
+auto is_finite(const math::vec3& value) -> bool
+{
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+/// Finite and above zero.
+auto is_positive(float value) -> bool
+{
+    return std::isfinite(value) && value > 0.0f;
+}
+
+auto is_usable_capsule(const physics_capsule_shape& capsule) -> bool
+{
+    const bool is_placed = is_finite(capsule.center) && is_finite(capsule.rotation);
+    const bool has_length = std::isfinite(capsule.length) && capsule.length >= 0.0f;
+    return is_placed && has_length && is_positive(capsule.radius);
+}
+
+auto is_usable_box(const physics_box_shape& box) -> bool
+{
+    const bool is_placed = is_finite(box.center) && is_finite(box.rotation);
+    return is_placed && is_positive(box.extends.x) && is_positive(box.extends.y) && is_positive(box.extends.z);
+}
+
+auto has_usable_shape(const ragdoll_body& body) -> bool
+{
+    const auto* capsule = hpp::get_if<physics_capsule_shape>(&body.shape.shape);
+    const auto* box = hpp::get_if<physics_box_shape>(&body.shape.shape);
+    return capsule != nullptr ? is_usable_capsule(*capsule) : box != nullptr && is_usable_box(*box);
+}
+
+auto has_usable_joint(const ragdoll_body& body) -> bool
+{
+    return is_finite(body.joint_rotation) && is_finite(body.swing_offset);
+}
+
+/// Refuses a body whose shape or joint came out without a size or with a number that is not one, rather than save it.
+auto check_body(const ragdoll_body& body, const body_plan& plan, const skeleton_view& view, std::string& error) -> bool
+{
+    if(!has_usable_shape(body))
+    {
+        error = "The " + describe_bone(view, plan) +
+                " gives its body no usable shape: its bones and vertices leave it without a size.";
+        return false;
+    }
+    if(!has_usable_joint(body))
+    {
+        error = "The " + describe_bone(view, plan) + " gives its joint no usable frame.";
+        return false;
+    }
+    return true;
+}
+
+// --- build steps ----------------------------------------------------------------------------
+
+/// Refuses a total mass the bodies cannot share out: zero, negative, infinite or not a number.
+auto check_total_mass(build_context& ctx) -> bool
+{
+    const float total_mass = ctx.options.total_mass;
+    if(std::isnormal(total_mass) && total_mass > 0.0f)
+    {
+        return true;
+    }
+    ctx.result.error = "The total mass must be a finite number of kilograms above zero.";
+    return false;
+}
+
+auto read_skeleton(build_context& ctx) -> bool
+{
+    if(ctx.model.get_armature_entities().empty())
+    {
+        ctx.result.error = describe_missing_armature(ctx.model);
+        return false;
+    }
+    read_bones(ctx.model, ctx.model_entity, ctx.view);
+    find_roles(ctx.model, ctx.view);
+    if(role_bone(ctx.view, humanoid_bone::hips) < 0)
+    {
+        ctx.result.error = "No humanoid skeleton was found: the hips (two legs below a spine) are missing.";
+        return false;
+    }
+    measure_character(ctx.view);
+    return true;
+}
+
+auto plan_bodies(build_context& ctx) -> bool
+{
+    ctx.plans = make_plans(ctx.view, ctx.options);
+    link_parents(ctx.plans, ctx.view);
+    if(!ctx.plans.empty())
+    {
+        return true;
+    }
+    ctx.result.error = "The humanoid skeleton has no bones for bodies.";
+    return false;
+}
+
+auto collect_skin_vertices(build_context& ctx) -> bool
+{
+    if(ctx.options.fit_to_skin)
+    {
+        collect_vertices(ctx.plans, ctx.view, ctx.model);
+    }
+    return true;
+}
+
+auto fit_shapes(build_context& ctx) -> bool
+{
+    const character_frame frame{ctx.view.side, up_axis, ctx.view.forward};
+    for(size_t i = 0; i < ctx.plans.size(); ++i)
+    {
+        if(!fit_shape(ctx, i, frame))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+auto plan_joints(build_context& ctx) -> bool
+{
+    for(auto& plan : ctx.plans)
+    {
+        if(!plan_joint(ctx, plan))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Shares the total mass out by each body's share and turns the plans into checked bodies in their bones' space.
+auto make_bodies(build_context& ctx) -> bool
+{
+    const float share_sum = std::accumulate(ctx.plans.begin(),
+                                            ctx.plans.end(),
+                                            0.0f,
+                                            [](float sum, const body_plan& plan)
+                                            {
+                                                return sum + plan.mass_share;
+                                            });
+    const float mass_scale = ctx.options.total_mass / share_sum;
+    std::vector<ragdoll_body> bodies;
+    bodies.reserve(ctx.plans.size());
+    for(const auto& plan : ctx.plans)
+    {
+        bodies.push_back(make_body(plan, ctx.view, mass_scale));
+        if(!check_body(bodies.back(), plan, ctx.view, ctx.result.error))
+        {
+            return false;
+        }
+    }
+    ctx.result.bodies = std::move(bodies);
+    ctx.result.skin_fitted_bodies = int(std::count_if(ctx.plans.begin(),
+                                                      ctx.plans.end(),
+                                                      [](const body_plan& plan)
+                                                      {
+                                                          return plan.is_fitted;
+                                                      }));
+    return true;
+}
+
+auto disable_overlapping_pairs(build_context& ctx) -> bool
+{
+    ctx.result.disabled_collisions = find_disabled_pairs(ctx.plans, ctx.view);
+    return true;
+}
+
+using build_step = auto (*)(build_context&) -> bool;
+
+/// Auto Setup in order. A step that refuses the rig stops it and leaves the reason in the result.
+constexpr std::array<build_step, 8> build_steps{
+    check_total_mass,
+    read_skeleton,
+    plan_bodies,
+    collect_skin_vertices,
+    fit_shapes,
+    plan_joints,
+    make_bodies,
+    disable_overlapping_pairs,
+};
 } // namespace ragdoll_builder_detail
 
 auto build_humanoid_ragdoll(const model_component& model, entt::handle model_entity, const ragdoll_build_options& options)
     -> ragdoll_build_result
 {
     namespace detail = ragdoll_builder_detail;
-    ragdoll_build_result result;
-    detail::skeleton_view view;
-    if(!detail::read_skeleton(model, model_entity, view))
-    {
-        result.error = model.get_armature_entities().empty()
-                           ? "The model has no armature yet. Wait for its mesh to load."
-                           : "No humanoid skeleton was found: the hips (two legs below a spine) are missing.";
-        return result;
-    }
-    auto plans = detail::make_plans(view, options);
-    detail::link_parents(plans, view);
-    if(options.fit_to_skin)
-    {
-        detail::collect_vertices(plans, view, model);
-    }
-    detail::fit_shapes(plans, view);
-    detail::plan_joints(plans, view);
-
-    float share_sum = 0.0f;
-    for(const auto& plan : plans)
-    {
-        share_sum += plan.mass_share;
-    }
-    const float mass_scale = share_sum > 0.0f ? options.total_mass / share_sum : 0.0f;
-    for(const auto& plan : plans)
-    {
-        result.bodies.push_back(detail::make_body(plan, view, mass_scale));
-        result.skin_fitted_bodies += plan.is_fitted ? 1 : 0;
-    }
-    result.disabled_collisions = detail::find_disabled_pairs(plans, view);
-    result.ok = !result.bodies.empty();
-    if(!result.ok)
-    {
-        result.error = "The humanoid skeleton has no bones for bodies.";
-    }
-    return result;
+    detail::build_context ctx{model, model_entity, options};
+    ctx.result.ok = std::all_of(detail::build_steps.begin(),
+                                detail::build_steps.end(),
+                                [&ctx](detail::build_step step)
+                                {
+                                    return step(ctx);
+                                });
+    return std::move(ctx.result);
 }
 
 auto setup_ragdoll(ragdoll_component& ragdoll, const ragdoll_build_options& options) -> ragdoll_build_result

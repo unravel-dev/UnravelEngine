@@ -49,7 +49,7 @@ struct frame_update_priority
     /// on_frame_before_render.
     static constexpr int64_t scripts = -1000;
 
-    /// Script LateUpdate - after every other frame-update consumer.
+    /// Script LateUpdate - after every other frame-update consumer but physics_late, which has to see its moves.
     static constexpr int64_t scripts_late = -100000;
 
     /// Physics after every script, LateUpdate included: a ragdoll whose character a script moved since the fixed

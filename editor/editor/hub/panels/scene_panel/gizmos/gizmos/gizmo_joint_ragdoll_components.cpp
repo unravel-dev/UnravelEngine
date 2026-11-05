@@ -1,11 +1,14 @@
 #include "gizmo_joint_ragdoll_components.h"
 
 #include <engine/ecs/components/transform_component.h>
+#include <engine/physics/ecs/systems/ragdoll_poses.h>
 #include <engine/physics/gizmos/gizmos.h>
 #include <engine/rendering/ecs/components/model_component.h>
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <vector>
 
 namespace unravel
 {
@@ -26,6 +29,24 @@ constexpr uint32_t BLENDING_COLOR = 0xc0e0e0e0;
 constexpr float AXIS_LENGTH = 0.35f;
 constexpr float RANGE_RADIUS = 0.25f;
 constexpr float RAGDOLL_AXIS_LENGTH = 0.08f;
+constexpr float SLIDER_TICK_HALF_LENGTH = 0.05f;
+constexpr float FIXED_MARK_HALF_SIZE = 0.04f;
+/// Parts of the joint axis, as fractions of AXIS_LENGTH: the arrow head's start and radius, how far the axis reaches
+/// behind the centre, and the length of the frame's Y axis.
+constexpr float AXIS_HEAD_START = 0.8f;
+constexpr float AXIS_HEAD_RADIUS = 0.06f;
+constexpr float AXIS_BACK_LENGTH = 0.3f;
+constexpr float SECONDARY_AXIS_LENGTH = 0.4f;
+/// The ball joint's twist arc, as a fraction of RANGE_RADIUS: it sits at the tip of the cone, inside the rim.
+constexpr float TWIST_ARC_RADIUS = 0.4f;
+/// A slider without limits is drawn this many AXIS_LENGTHs to each side.
+constexpr float FREE_SLIDER_REACH = 3.0f;
+/// A hinge without limits turns all the way round: this many degrees to each side.
+constexpr float FREE_HINGE_HALF_RANGE = 180.0f;
+/// Cones are drawn up to this half angle: at 180 degrees the cone has no rim left.
+constexpr float MAX_DRAWN_CONE_ANGLE = 179.0f;
+/// A direction across the axis shorter than this, in meters, has no direction and takes the fallback.
+constexpr float MIN_ACROSS_LENGTH = 1e-3f;
 /// Segments of the drawn arcs and circles.
 constexpr int ARC_SEGMENTS = 24;
 /// Cones wider than this do not read as cones and are drawn as their rim only.
@@ -81,7 +102,7 @@ void draw_cone(gfx::dd_raii& dd,
                float length,
                uint32_t color)
 {
-    const float clamped = math::clamp(half_angle, 0.0f, 179.0f);
+    const float clamped = math::clamp(half_angle, 0.0f, MAX_DRAWN_CONE_ANGLE);
     const math::vec3 tip = axis * std::cos(math::radians(clamped)) * length;
     const float rim = std::sin(math::radians(clamped)) * length;
     dd.encoder.setColor(color);
@@ -117,7 +138,7 @@ auto get_across(const math::vec3& axis, const math::vec3& center, const hpp::opt
     {
         math::vec3 across = *target - center;
         across -= axis * math::dot(across, axis);
-        if(math::length(across) > 1e-3f)
+        if(math::length(across) > MIN_ACROSS_LENGTH)
         {
             return math::normalize(across);
         }
@@ -138,8 +159,8 @@ void draw_joint_range(gfx::dd_raii& dd,
         case joint_type::hinge:
         {
             const math::vec3 from = get_across(x_axis, center, body_b, y_axis);
-            const float lower = limits.enabled ? std::min(limits.lower, limits.upper) : -180.0f;
-            const float upper = limits.enabled ? std::max(limits.lower, limits.upper) : 180.0f;
+            const float lower = limits.enabled ? std::min(limits.lower, limits.upper) : -FREE_HINGE_HALF_RANGE;
+            const float upper = limits.enabled ? std::max(limits.lower, limits.upper) : FREE_HINGE_HALF_RANGE;
             draw_arc(dd, center, x_axis, from, lower, upper, RANGE_RADIUS, RANGE_COLOR);
             break;
         }
@@ -149,14 +170,15 @@ void draw_joint_range(gfx::dd_raii& dd,
                 draw_cone(dd, center, x_axis, y_axis, limits.cone_angle, AXIS_LENGTH, RANGE_COLOR);
                 const math::vec3 z_axis = math::cross(x_axis, y_axis);
                 draw_arc(dd, center + x_axis * AXIS_LENGTH, x_axis, z_axis, limits.lower, limits.upper,
-                         RANGE_RADIUS * 0.4f, RANGE_COLOR);
+                         RANGE_RADIUS * TWIST_ARC_RADIUS, RANGE_COLOR);
             }
             break;
         case joint_type::slider:
         {
-            const float lower = limits.enabled ? std::min(limits.lower, limits.upper) : -AXIS_LENGTH * 3.0f;
-            const float upper = limits.enabled ? std::max(limits.lower, limits.upper) : AXIS_LENGTH * 3.0f;
-            const math::vec3 tick = y_axis * 0.05f;
+            const float reach = AXIS_LENGTH * FREE_SLIDER_REACH;
+            const float lower = limits.enabled ? std::min(limits.lower, limits.upper) : -reach;
+            const float upper = limits.enabled ? std::max(limits.lower, limits.upper) : reach;
+            const math::vec3 tick = y_axis * SLIDER_TICK_HALF_LENGTH;
             draw_line(dd, center + x_axis * lower, center + x_axis * upper, RANGE_COLOR);
             draw_line(dd, center + x_axis * lower - tick, center + x_axis * lower + tick, RANGE_COLOR);
             draw_line(dd, center + x_axis * upper - tick, center + x_axis * upper + tick, RANGE_COLOR);
@@ -177,7 +199,8 @@ void draw_joint_range(gfx::dd_raii& dd,
         case joint_type::fixed:
         {
             dd.encoder.setColor(RANGE_COLOR);
-            dd.encoder.draw(bx::Aabb{to_point(center - math::vec3(0.04f)), to_point(center + math::vec3(0.04f))});
+            dd.encoder.draw(bx::Aabb{to_point(center - math::vec3(FIXED_MARK_HALF_SIZE)),
+                                     to_point(center + math::vec3(FIXED_MARK_HALF_SIZE))});
             break;
         }
     }
@@ -198,11 +221,49 @@ auto get_ragdoll_color(const ragdoll_component& ragdoll, int index) -> uint32_t
     return body.weight > 0.0f ? BLENDING_COLOR : ANIMATED_COLOR;
 }
 
-auto find_bone(const model_component& model, const std::string& name) -> entt::handle
+/// The bone of every body, in body order: a null handle where the model has no such bone.
+auto find_body_bones(const model_component& model, const std::vector<ragdoll_body>& bodies) -> std::vector<entt::handle>
 {
-    int index = model.get_armature_index_by_name_cached(name);
-    index = index >= 0 ? index : model.get_armature_index_by_base_name_cached(name);
-    return index >= 0 ? model.get_armature_by_index(size_t(index)) : entt::handle{};
+    std::vector<entt::handle> bones;
+    bones.reserve(bodies.size());
+    std::transform(bodies.begin(),
+                   bodies.end(),
+                   std::back_inserter(bones),
+                   [&](const ragdoll_body& body)
+                   {
+                       return find_ragdoll_bone(model, body.bone);
+                   });
+    return bones;
+}
+
+auto get_parent(entt::handle entity) -> entt::handle
+{
+    const auto* transform = entity.try_get<transform_component>();
+    return transform ? transform->get_parent() : entt::handle{};
+}
+
+/// Whether a body hangs on a joint: a bone above its own, below the ragdoll's entity, has a body. The root body has
+/// none, as ragdoll_poses finds the parent bodies.
+auto has_parent_body(entt::handle bone, entt::handle owner, const std::vector<entt::handle>& body_bones) -> bool
+{
+    for(entt::handle current = get_parent(bone); current && current != owner; current = get_parent(current))
+    {
+        if(std::find(body_bones.begin(), body_bones.end(), current) != body_bones.end())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The axis of a body's joint at its bone's origin: the twist or hinge axis.
+void draw_ragdoll_joint_axis(gfx::dd_raii& dd, const math::transform& bone_world, const ragdoll_body& body)
+{
+    const math::quat joint_rotation =
+        math::normalize(bone_world.get_rotation() * math::quat(math::radians(body.joint_rotation)));
+    const math::vec3 origin = bone_world.get_position();
+    const math::vec3 axis = joint_rotation * math::vec3{1.0f, 0.0f, 0.0f};
+    draw_line(dd, origin, origin + axis * RAGDOLL_AXIS_LENGTH, AXIS_COLOR);
 }
 } // namespace joint_gizmo_detail
 
@@ -238,12 +299,13 @@ void gizmo_joint_component::draw(rtti::context& ctx, entt::meta_any& var, const 
                           broken ? detail::BROKEN_COLOR : detail::RANGE_COLOR);
     }
     dd.encoder.setColor(broken ? detail::BROKEN_COLOR : detail::AXIS_COLOR);
-    dd.encoder.drawCone(detail::to_point(center + x_axis * (detail::AXIS_LENGTH * 0.8f)),
+    dd.encoder.drawCone(detail::to_point(center + x_axis * (detail::AXIS_LENGTH * detail::AXIS_HEAD_START)),
                         detail::to_point(center + x_axis * detail::AXIS_LENGTH),
-                        detail::AXIS_LENGTH * 0.06f);
-    detail::draw_line(dd, center - x_axis * detail::AXIS_LENGTH * 0.3f, center + x_axis * detail::AXIS_LENGTH,
-                      broken ? detail::BROKEN_COLOR : detail::AXIS_COLOR);
-    detail::draw_line(dd, center, center + y_axis * detail::AXIS_LENGTH * 0.4f, detail::SECONDARY_AXIS_COLOR);
+                        detail::AXIS_LENGTH * detail::AXIS_HEAD_RADIUS);
+    detail::draw_line(dd, center - x_axis * detail::AXIS_LENGTH * detail::AXIS_BACK_LENGTH,
+                      center + x_axis * detail::AXIS_LENGTH, broken ? detail::BROKEN_COLOR : detail::AXIS_COLOR);
+    detail::draw_line(dd, center, center + y_axis * detail::AXIS_LENGTH * detail::SECONDARY_AXIS_LENGTH,
+                      detail::SECONDARY_AXIS_COLOR);
     if(!broken)
     {
         detail::draw_joint_range(dd, joint, center, x_axis, y_axis, body_b);
@@ -268,25 +330,22 @@ void gizmo_ragdoll_component::draw(rtti::context& ctx, entt::meta_any& var, cons
     DebugDrawEncoderScopePush scope(dd.encoder);
     dd.encoder.setWireframe(true);
     const auto& bodies = ragdoll.get_bodies();
+    const auto bones = detail::find_body_bones(*model, bodies);
     for(size_t i = 0; i < bodies.size(); ++i)
     {
-        const auto bone = detail::find_bone(*model, bodies[i].bone);
-        if(!bone)
+        if(!bones[i])
         {
             continue;
         }
-        const auto& world = bone.get<transform_component>().get_transform_global();
+        const auto& world = bones[i].get<transform_component>().get_transform_global();
         dd.encoder.pushTransform(static_cast<const float*>(world));
         dd.encoder.setColor(detail::get_ragdoll_color(ragdoll, int(i)));
         ::unravel::draw(dd.encoder, bodies[i].shape);
         dd.encoder.popTransform();
-
-        // The joint axis at the bone's origin: the twist or hinge axis.
-        const math::quat joint_rotation = math::normalize(world.get_rotation() *
-                                                          math::quat(math::radians(bodies[i].joint_rotation)));
-        const math::vec3 origin = world.get_position();
-        const math::vec3 axis = joint_rotation * math::vec3{1.0f, 0.0f, 0.0f};
-        detail::draw_line(dd, origin, origin + axis * detail::RAGDOLL_AXIS_LENGTH, detail::AXIS_COLOR);
+        if(detail::has_parent_body(bones[i], owner, bones))
+        {
+            detail::draw_ragdoll_joint_axis(dd, world, bodies[i]);
+        }
     }
 }
 

@@ -30,10 +30,14 @@
 #include <btBulletDynamicsCommon.h>
 #include <BulletDynamics/Character/btKinematicCharacterController.h>
 #include <BulletCollision/CollisionDispatch/btGhostObject.h>
+#include <LinearMath/btGeometryUtil.h>
 
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -52,6 +56,39 @@ namespace bullet
 namespace
 {
 bool enable_logging = false;
+
+/// Meters (or about 1 degree of turn, per quaternion component) a dynamic body must move before its transform is
+/// written: float noise from the Bullet round trip stays out of the transform.
+constexpr float pose_write_epsilon = 0.009f;
+/// Continuous collision starts once a step moves a body further than this share of its smallest extent.
+constexpr float ccd_threshold_share_of_extent = 0.5f;
+/// Meters: the smallest continuous collision threshold, so a sliver of a body still gets one.
+constexpr float min_ccd_motion_threshold = 0.01f;
+/// The swept sphere is this share of the threshold, so it stays inside the body.
+constexpr float ccd_swept_sphere_share = 0.4f;
+/// An explosion pushes a body like a sphere of this radius per meter of its bounds' diagonal: a quarter of a cube's
+/// diagonal is close to half its side.
+constexpr float explosion_radius_per_diagonal = 0.25f;
+/// Meters treated as nothing in an explosion: a falloff that would divide by zero, or a body at the center, which is
+/// pushed up.
+constexpr float explosion_length_epsilon = 1e-4f;
+/// Box3D rolls a hull on a quarter of its inner radius.
+constexpr btScalar hull_rolling_radius_share = btScalar(0.25);
+/// Box3D's choice of the helper axis for the radial scale of a capsule: the body's up axis, unless the capsule's axis is
+/// near it.
+constexpr float radial_helper_axis_limit = 0.9f;
+/// Sides of the hull a cylinder becomes when a scale turns it into something Bullet's cylinder cannot hold; Box3D
+/// always uses this hull.
+constexpr int cylinder_hull_side_count = 16;
+/// A scale counts as uniform while its components differ by less than this share of the largest.
+constexpr float uniform_scale_tolerance = 1e-4f;
+/// Degrees below which a child shape counts as not turned.
+constexpr float unturned_shape_tolerance_degrees = 1e-3f;
+/// Fewer points than this make no solid hull.
+constexpr int min_hull_point_count = 4;
+constexpr int box_corner_count = 8;
+/// Below this the entity scale counts as unchanged and the shapes are not rebuilt.
+constexpr float scale_epsilon = 1e-4f;
 
 enum class manifold_type
 {
@@ -98,12 +135,6 @@ auto to_bullet(const math::vec3& v) -> btVector3
 auto from_bullet(const btVector3& v) -> math::vec3
 {
     return {v.getX(), v.getY(), v.getZ()};
-}
-
-/// A shape's rotation from its Euler angles in degrees.
-auto make_shape_rotation(const math::vec3& degrees) -> math::quat
-{
-    return math::normalize(math::quat(math::radians(degrees)));
 }
 
 auto to_bullet(const math::quat& q) -> btQuaternion
@@ -352,6 +383,155 @@ static btScalar combined_spinning_friction_callback(const btCollisionObject* bod
     return combined_friction_callback(body0, body1, f0, f1);
 }
 
+/**
+ * @class surface_rigid_body
+ * @brief A rigid body with the contact surface Box3D keeps on its shapes: rolling resistance and surface velocity.
+ *
+ * Bullet calls add_surface_to_contact only for objects flagged CF_CUSTOM_MATERIAL_CALLBACK, and only
+ * update_rigidbody_surface sets that flag, on this class, so the callback reads flagged objects as this class.
+ */
+ATTRIBUTE_ALIGNED16(class)
+surface_rigid_body : public btRigidBody
+{
+public:
+    BT_DECLARE_ALIGNED_ALLOCATOR();
+
+    using btRigidBody::btRigidBody;
+
+    /// Speed of the surface along its contacts, in the body's space: a conveyor belt.
+    btVector3 surface_velocity{0, 0, 0};
+    /// Resistance to rolling, 0..1; a contact takes the larger of its two bodies'.
+    btScalar rolling_resistance{0};
+};
+
+/// The surface of a flagged body; null for every other object.
+auto find_surface(const btCollisionObject& object) -> const surface_rigid_body*
+{
+    if((object.getCollisionFlags() & btCollisionObject::CF_CUSTOM_MATERIAL_CALLBACK) == 0)
+    {
+        return nullptr;
+    }
+    return static_cast<const surface_rigid_body*>(&object);
+}
+
+/**
+ * @brief The radius Box3D rolls a shape on: a sphere's or a capsule's own, a quarter of a hull's inner radius (here
+ *        the smallest half extent of its bounds), and none for a mesh triangle.
+ */
+auto get_rolling_radius(const btCollisionShape& shape) -> btScalar
+{
+    switch(shape.getShapeType())
+    {
+        case SPHERE_SHAPE_PROXYTYPE:
+            return static_cast<const btSphereShape&>(shape).getRadius();
+        case CAPSULE_SHAPE_PROXYTYPE:
+            return static_cast<const btCapsuleShape&>(shape).getRadius();
+        case TRIANGLE_SHAPE_PROXYTYPE:
+            return btScalar(0);
+        default:
+            break;
+    }
+    if(!shape.isConvex())
+    {
+        return btScalar(0);
+    }
+    btVector3 aabb_min;
+    btVector3 aabb_max;
+    shape.getAabb(btTransform::getIdentity(), aabb_min, aabb_max);
+    const btVector3 half_extents = (aabb_max - aabb_min) * btScalar(0.5);
+    return hull_rolling_radius_share * half_extents[half_extents.minAxis()];
+}
+
+/**
+ * @brief Gives a contact the larger rolling resistance of its bodies on the larger radius of its shapes, as Box3D does.
+ *
+ * Box3D resists every turn of one body against the other; Bullet splits that into two rolling rows and a spinning row,
+ * so both get the value. Bullet also caps each row at the value itself, which lets heavy bodies roll further than on
+ * Box3D.
+ */
+void apply_rolling_resistance(btManifoldPoint& point,
+                              const btCollisionObjectWrapper& a,
+                              const btCollisionObjectWrapper& b)
+{
+    const auto* surface_a = find_surface(*a.getCollisionObject());
+    const auto* surface_b = find_surface(*b.getCollisionObject());
+    const btScalar resistance = btMax(surface_a ? surface_a->rolling_resistance : btScalar(0),
+                                      surface_b ? surface_b->rolling_resistance : btScalar(0));
+    if(resistance <= btScalar(0))
+    {
+        return;
+    }
+    const btScalar radius =
+        btMax(get_rolling_radius(*a.getCollisionShape()), get_rolling_radius(*b.getCollisionShape()));
+    point.m_combinedRollingFriction = resistance * radius;
+    point.m_combinedSpinningFriction = resistance * radius;
+}
+
+/// How fast a body's surface moves in the world, on top of the body's own motion.
+auto get_world_surface_velocity(const btCollisionObject& object) -> btVector3
+{
+    const auto* surface = find_surface(object);
+    return surface ? object.getWorldTransform().getBasis() * surface->surface_velocity : btVector3(0, 0, 0);
+}
+
+auto get_point_velocity(const btCollisionObject& object, const btVector3& point) -> btVector3
+{
+    const auto* body = btRigidBody::upcast(&object);
+    return body ? body->getVelocityInLocalPoint(point - body->getCenterOfMassPosition()) : btVector3(0, 0, 0);
+}
+
+auto remove_normal_part(const btVector3& value, const btVector3& normal) -> btVector3
+{
+    return value - normal * normal.dot(value);
+}
+
+/**
+ * @brief Makes the bodies' surface velocities carry what touches them, as Box3D's tangent velocity does.
+ *
+ * With BT_CONTACT_FLAG_LATERAL_FRICTION_INITIALIZED on a point (and friction direction caching in the solver), Bullet's
+ * friction drives the sliding of body a against body b along m_lateralFrictionDir1 to m_contactMotion1. The direction
+ * taken is the sliding still off the target, so one friction row removes all of it, as Bullet's own row along the
+ * sliding does for a target of zero. A point Bullet keeps from an earlier step keeps the direction it got then.
+ */
+void apply_surface_velocity(btManifoldPoint& point, const btCollisionObject& a, const btCollisionObject& b)
+{
+    const btVector3& normal = point.m_normalWorldOnB;
+    const btVector3 target = remove_normal_part(get_world_surface_velocity(b) - get_world_surface_velocity(a), normal);
+    if(target.fuzzyZero())
+    {
+        return;
+    }
+    const btVector3 sliding = remove_normal_part(get_point_velocity(a, point.getPositionWorldOnA()) -
+                                                     get_point_velocity(b, point.getPositionWorldOnB()),
+                                                 normal);
+    const btVector3 error = sliding - target;
+    const btVector3 direction = error.fuzzyZero() ? target.normalized() : error.normalized();
+    point.m_lateralFrictionDir1 = direction;
+    point.m_lateralFrictionDir2 = direction.cross(normal);
+    point.m_contactMotion1 = target.dot(point.m_lateralFrictionDir1);
+    point.m_contactMotion2 = target.dot(point.m_lateralFrictionDir2);
+    point.m_contactPointFlags |= BT_CONTACT_FLAG_LATERAL_FRICTION_INITIALIZED;
+}
+
+/**
+ * @brief Bullet's contact-added callback: the rolling resistance and the surface velocity of a contact.
+ *
+ * Bullet calls it for every point it finds on a pair with a flagged body, each step, from the collision threads, so it
+ * only reads the bodies and writes the point. The first wrapper is the manifold's body a. The result is ignored.
+ */
+auto add_surface_to_contact(btManifoldPoint& point,
+                            const btCollisionObjectWrapper* wrapper_a,
+                            int /*part_a*/,
+                            int /*index_a*/,
+                            const btCollisionObjectWrapper* wrapper_b,
+                            int /*part_b*/,
+                            int /*index_b*/) -> bool
+{
+    apply_rolling_resistance(point, *wrapper_a, *wrapper_b);
+    apply_surface_velocity(point, *wrapper_a->getCollisionObject(), *wrapper_b->getCollisionObject());
+    return true;
+}
+
 void override_combine_callbacks()
 {
     // Restitution:
@@ -361,6 +541,9 @@ void override_combine_callbacks()
     gCalculateCombinedFrictionCallback = combined_friction_callback;
     gCalculateCombinedRollingFrictionCallback = combined_rolling_friction_callback;
     gCalculateCombinedSpinningFrictionCallback = combined_spinning_friction_callback;
+
+    // Rolling resistance and surface velocity, for bodies flagged CF_CUSTOM_MATERIAL_CALLBACK:
+    gContactAddedCallback = add_surface_to_contact;
 }
 
 // Owned only when created via btCreateDefaultTaskScheduler(). Sequential/OpenMP/TBB/PPL
@@ -690,6 +873,7 @@ public:
     struct hit_info
     {
         const btCollisionObject* object = nullptr;
+        btVector3 point;
         btVector3 normal;
         btScalar fraction;
     };
@@ -706,6 +890,8 @@ public:
         // Store the fraction, normal, object, etc.
         hit_info hi;
         hi.object = convexResult.m_hitCollisionObject;
+        // Despite its name, Bullet fills m_hitPointLocal with the contact point in the world.
+        hi.point = convexResult.m_hitPointLocal;
         hi.fraction = convexResult.m_hitFraction;
 
         if(normalInWorldSpace)
@@ -800,8 +986,10 @@ struct sphere_overlap_callback : btCollisionWorld::ContactResultCallback
 
 struct rigidbody
 {
-    std::shared_ptr<btRigidBody> internal{};
+    std::shared_ptr<surface_rigid_body> internal{};
     std::shared_ptr<btCollisionShape> internal_shape{};
+    /// Entity scale baked into the shapes.
+    math::vec3 shape_scale{1.0f, 1.0f, 1.0f};
     int collision_filter_group{};
     int collision_filter_mask{};
     unravel::contact_links links{};
@@ -871,6 +1059,8 @@ struct world
 
     bool in_simulate{};
     float elapsed{};
+    /// Milliseconds the last step took.
+    float last_step_ms{};
 
     void add_rigidbody(const rigidbody& body)
     {
@@ -1266,10 +1456,35 @@ struct world
     {
         APP_SCOPE_PERF("Physics/Bullet/Simulate Step");
         in_simulate = true;
-
+        const auto start = std::chrono::steady_clock::now();
         dynamics_world->stepSimulation(dt, max_subs_steps, fixed_time_step);
-
+        last_step_ms = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
         in_simulate = false;
+    }
+
+    /**
+     * @brief What every cast reports: the contact point, the surface normal, and how far the cast travelled along
+     *        @p direction (unit length) before it touched. A cast that starts inside a shape can get no normal from
+     *        Bullet; it reports the way back against the cast.
+     */
+    static auto make_hit(const btCollisionObject* object,
+                         const btVector3& point,
+                         const btVector3& normal,
+                         btScalar fraction,
+                         const math::vec3& direction,
+                         float max_distance) -> hpp::optional<unravel::raycast_hit>
+    {
+        const entt::entity entity = resolve_entity_from_collision_object(object);
+        if(entity == entt::null)
+        {
+            return {};
+        }
+        unravel::raycast_hit hit;
+        hit.entity = entity;
+        hit.point = from_bullet(point);
+        hit.normal = normal.fuzzyZero() ? -direction : from_bullet(normal.normalized());
+        hit.distance = float(fraction) * max_distance;
+        return hit;
     }
 
     auto ray_cast_closest(const math::vec3& origin,
@@ -1290,20 +1505,16 @@ struct world
 
         ray_callback.m_flags |= btTriangleRaycastCallback::kF_UseGjkConvexCastRaytest;
         dynamics_world->rayTest(ray_origin, ray_end, ray_callback);
-        if(ray_callback.hasHit())
+        if(!ray_callback.hasHit())
         {
-            const entt::entity entity = resolve_entity_from_collision_object(ray_callback.m_collisionObject);
-            if(entity != entt::null)
-            {
-                unravel::raycast_hit hit;
-                hit.entity = entity;
-                hit.point = from_bullet(ray_callback.m_hitPointWorld);
-                hit.normal = from_bullet(ray_callback.m_hitNormalWorld);
-                hit.distance = math::distance(origin, hit.point);
-                return hit;
-            }
+            return {};
         }
-        return {};
+        return make_hit(ray_callback.m_collisionObject,
+                        ray_callback.m_hitPointWorld,
+                        ray_callback.m_hitNormalWorld,
+                        ray_callback.m_closestHitFraction,
+                        direction,
+                        max_distance);
     }
 
     auto ray_cast_all(const math::vec3& origin,
@@ -1336,17 +1547,15 @@ struct world
         hits.reserve(ray_callback.m_hitPointWorld.size());
         for(int i = 0; i < ray_callback.m_hitPointWorld.size(); ++i)
         {
-            const btCollisionObject* collision_object = ray_callback.m_collisionObjects[i];
-            const entt::entity entity = resolve_entity_from_collision_object(collision_object);
-            if(entity == entt::null)
+            if(auto hit = make_hit(ray_callback.m_collisionObjects[i],
+                                   ray_callback.m_hitPointWorld[i],
+                                   ray_callback.m_hitNormalWorld[i],
+                                   ray_callback.m_hitFractions[i],
+                                   direction,
+                                   max_distance))
             {
-                continue;
+                hits.push_back(*hit);
             }
-            auto& hit = hits.emplace_back();
-            hit.entity = entity;
-            hit.point = from_bullet(ray_callback.m_hitPointWorld[i]);
-            hit.normal = from_bullet(ray_callback.m_hitNormalWorld[i]);
-            hit.distance = math::distance(origin, hit.point);
         }
         return hits;
     }
@@ -1390,17 +1599,12 @@ struct world
         if(!cb.hasHit())
             return {}; // no hit
 
-        // Build a raycast_hit
-        unravel::raycast_hit hit;
-        const btCollisionObject* obj = cb.m_hitCollisionObject;
-        float fraction = cb.m_closestHitFraction;
-        btVector3 hitPoint = btOrigin.lerp(btEnd, fraction);
-        btVector3 normal = cb.m_hitNormalWorld;
-        hit.entity = resolve_entity_from_collision_object(obj);
-        hit.point = from_bullet(hitPoint);
-        hit.normal = from_bullet(normal.normalized());
-        hit.distance = fraction * max_distance; // approximate
-        return hit;
+        return make_hit(cb.m_hitCollisionObject,
+                        cb.m_hitPointWorld,
+                        cb.m_hitNormalWorld,
+                        cb.m_closestHitFraction,
+                        direction,
+                        max_distance);
     }
 
     auto sphere_cast_all(const math::vec3& origin,
@@ -1447,12 +1651,10 @@ struct world
 
         for(const auto& hi : cb.hits)
         {
-            auto& hit = hits.emplace_back();
-            hit.entity = resolve_entity_from_collision_object(hi.object);
-            btVector3 hitPoint = btOrigin.lerp(btEnd, hi.fraction);
-            hit.point = from_bullet(hitPoint);
-            hit.normal = from_bullet(hi.normal.normalized());
-            hit.distance = hi.fraction * max_distance;
+            if(auto hit = make_hit(hi.object, hi.point, hi.normal, hi.fraction, direction, max_distance))
+            {
+                hits.push_back(*hit);
+            }
         }
 
         return hits;
@@ -1527,8 +1729,12 @@ auto create_dynamics_world() -> bullet::world
     world.dispatcher = dispatcher;
     world.broadphase = broadphase;
     world.solver = solver;
-    world.dynamics_world->setGravity(gravity_earth);
+    world.dynamics_world->setGravity(to_bullet(unravel::get_default_gravity()));
     world.dynamics_world->setForceUpdateAllAabbs(false);
+    // Points add_surface_to_contact flags keep the friction directions and targets it gave them. Every other point
+    // still gets Bullet's own each step: the solver flags points itself only with two friction rows and
+    // velocity-independent directions, both off here.
+    world.dynamics_world->getSolverInfo().m_solverMode |= SOLVER_ENABLE_FRICTION_DIRECTION_CACHING;
     world.ghost_pair_callback = std::make_shared<btGhostPairCallback>();
     world.dynamics_world->getPairCache()->setInternalGhostPairCallback(world.ghost_pair_callback.get());
     return world;
@@ -1548,6 +1754,16 @@ public:
             delete m_children[i].m_childShape;
         }
     }
+
+    /// Keeps a mesh a child shape reads its triangles from; Bullet's mesh shapes do not own theirs.
+    void own_mesh(std::unique_ptr<btTriangleMesh> mesh)
+    {
+        meshes_.push_back(std::move(mesh));
+    }
+
+private:
+    /// Destroyed after the child shapes, which read them.
+    std::vector<std::unique_ptr<btTriangleMesh>> meshes_;
 };
 } // namespace
 } // namespace bullet
@@ -1571,40 +1787,262 @@ void wake_up(bullet::rigidbody& body)
     }
 }
 
-// Builds one Bullet collision shape per submesh, each paired with the submesh's node
-// transform (relative to the model root). The vertex buffer stores positions in node-local
-// space; keeping a separate shape per submesh lets us apply the matching node transform via
-// addChildShape so the collision geometry stays aligned with the rendered mesh.
-auto create_bullet_mesh_shapes(const physics_mesh_shape& shape)
-    -> std::vector<std::pair<btCollisionShape*, btTransform>>
+/**
+ * @brief Gives a body that cannot sleep its DISABLE_DEACTIVATION back once it is awake.
+ *
+ * Bullet keeps "cannot sleep" in the activation state itself, which put_island_to_sleep and a forced ACTIVE_TAG
+ * overwrite.
+ */
+void keep_sleepless_body_awake(btRigidBody& body, const physics_component& comp)
 {
-    std::vector<std::pair<btCollisionShape*, btTransform>> result;
+    if(!comp.can_sleep() && body.getActivationState() != DISABLE_DEACTIVATION)
+    {
+        body.forceActivationState(DISABLE_DEACTIVATION);
+    }
+}
+
+void put_to_sleep(btCollisionObject& object)
+{
+    if(auto* body = btRigidBody::upcast(&object))
+    {
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+    }
+    object.forceActivationState(ISLAND_SLEEPING);
+}
+
+/**
+ * @brief Puts a body to sleep with every body of its island, as Box3D's b3Body_SetAwake(false) does.
+ *
+ * Bullet wakes a sleeping body in the next step while anything else in its island is awake, so the whole island
+ * sleeps, bodies that cannot sleep included, as on Box3D; they wake with no velocity, as there. Bullet's islands come
+ * from the last step and join bodies whose bounds overlap, where Box3D's join bodies that touch, so a few more
+ * neighbors can fall asleep with it.
+ */
+void put_island_to_sleep(bullet::world& world, btRigidBody& body)
+{
+    const int island = body.getIslandTag();
+    if(island < 0)
+    {
+        put_to_sleep(body);
+        return;
+    }
+    const auto& objects = world.dynamics_world->getCollisionObjectArray();
+    for(int i = 0; i < objects.size(); ++i)
+    {
+        if(objects[i]->getIslandTag() == island && !objects[i]->isStaticOrKinematicObject())
+        {
+            put_to_sleep(*objects[i]);
+        }
+    }
+}
+
+/**
+ * @brief Drops what a ragdoll asks of the backend, since Bullet builds no ragdoll bodies.
+ *
+ * A prepared definition counts as built, so the full prepare does not run again every frame, and queued impulses are
+ * cleared every step instead of piling up.
+ */
+void drop_ragdoll_requests(ragdoll_component& comp)
+{
+    auto& runtime = comp.get_runtime();
+    if(runtime.is_prepared)
+    {
+        comp.set_needs_rebuild(false);
+    }
+    runtime.impulses.clear();
+}
+
+/// Islands of the last step: the distinct island tags of the bodies that simulate (the others have none).
+auto count_islands(const btCollisionObjectArray& objects) -> int
+{
+    std::vector<int> tags;
+    tags.reserve(size_t(objects.size()));
+    for(int i = 0; i < objects.size(); ++i)
+    {
+        if(objects[i]->getIslandTag() >= 0)
+        {
+            tags.push_back(objects[i]->getIslandTag());
+        }
+    }
+    std::sort(tags.begin(), tags.end());
+    return int(std::unique(tags.begin(), tags.end()) - tags.begin());
+}
+
+/// Shapes a collision object holds, with a compound counted by its children, as Box3D counts shapes.
+auto count_leaf_shapes(const btCollisionShape* shape) -> int
+{
+    if(shape == nullptr)
+    {
+        return 0;
+    }
+    if(!shape->isCompound())
+    {
+        return 1;
+    }
+    const auto* compound = static_cast<const btCompoundShape*>(shape);
+    int count = 0;
+    for(int i = 0; i < compound->getNumChildShapes(); ++i)
+    {
+        count += count_leaf_shapes(compound->getChildShape(i));
+    }
+    return count;
+}
+
+auto get_max_abs_component(const math::vec3& value) -> float
+{
+    const math::vec3 magnitude = math::abs(value);
+    return std::max({magnitude.x, magnitude.y, magnitude.z});
+}
+
+/// Whether two scale components are the same, within uniform_scale_tolerance of the largest component.
+auto is_same_scale(float a, float b, const math::vec3& scale) -> bool
+{
+    return std::abs(a - b) <= uniform_scale_tolerance * get_max_abs_component(scale);
+}
+
+/// Whether a scale stretches every axis alike, sign included.
+auto is_uniform_scale(const math::vec3& scale) -> bool
+{
+    return is_same_scale(scale.x, scale.y, scale) && is_same_scale(scale.y, scale.z, scale);
+}
+
+/// Whether a child shape is not turned against the body, so a scale stretches it along its own axes.
+auto is_unturned(const math::vec3& rotation_degrees) -> bool
+{
+    return math::all(math::lessThanEqual(math::abs(rotation_degrees), math::vec3{unturned_shape_tolerance_degrees}));
+}
+
+/**
+ * @brief Adds a convex hull around points in the body's space.
+ *
+ * Bullet rounds a hull by its margin outside the points, while btBoxShape keeps its margin inside. The faces move in by
+ * the margin first, so a hull keeps the size of the shape it stands for; a hull too thin for that keeps its points.
+ */
+void add_hull_shape(btCompoundShape& compound, btAlignedObjectArray<btVector3>& points)
+{
+    auto* hull = new btConvexHullShape();
+    btAlignedObjectArray<btVector3> planes;
+    btGeometryUtil::getPlaneEquationsFromVertices(points, planes);
+    for(int i = 0; i < planes.size(); ++i)
+    {
+        planes[i][3] += hull->getMargin();
+    }
+    btAlignedObjectArray<btVector3> core;
+    btGeometryUtil::getVerticesFromPlaneEquations(planes, core);
+    const btAlignedObjectArray<btVector3>& kept = core.size() >= min_hull_point_count ? core : points;
+    for(int i = 0; i < kept.size(); ++i)
+    {
+        hull->addPoint(kept[i], false);
+    }
+    hull->recalcLocalAabb();
+    compound.addChildShape(btTransform::getIdentity(), hull);
+}
+
+/// A box stays a box under a uniform scale, or unturned; otherwise the scale slants it into a hull, as on Box3D.
+void add_box_shape(btCompoundShape& compound, const physics_box_shape& shape, const math::vec3& scale)
+{
+    const math::quat rotation = unravel::make_shape_rotation(shape.rotation);
+    const math::vec3 half_extents = shape.extends * 0.5f;
+    if(is_uniform_scale(scale) || is_unturned(shape.rotation))
+    {
+        const btTransform local(bullet::to_bullet(rotation), bullet::to_bullet(shape.center * scale));
+        compound.addChildShape(local, new btBoxShape(bullet::to_bullet(half_extents * math::abs(scale))));
+        return;
+    }
+    btAlignedObjectArray<btVector3> corners;
+    for(int corner = 0; corner < box_corner_count; ++corner)
+    {
+        const math::vec3 side{(corner & 1) != 0 ? 1.0f : -1.0f,
+                              (corner & 2) != 0 ? 1.0f : -1.0f,
+                              (corner & 4) != 0 ? 1.0f : -1.0f};
+        corners.push_back(bullet::to_bullet((shape.center + rotation * (half_extents * side)) * scale));
+    }
+    add_hull_shape(compound, corners);
+}
+
+/// A sphere takes the largest stretch of the scale, as on Box3D.
+void add_sphere_shape(btCompoundShape& compound, const physics_sphere_shape& shape, const math::vec3& scale)
+{
+    btTransform local = btTransform::getIdentity();
+    local.setOrigin(bullet::to_bullet(shape.center * scale));
+    compound.addChildShape(local, new btSphereShape(shape.radius * get_max_abs_component(scale)));
+}
+
+/// How much a scale stretches the radius of a capsule around @p axis: the larger stretch across it, as Box3D takes it.
+auto get_radial_scale(const math::vec3& axis, const math::vec3& scale) -> float
+{
+    const math::vec3 helper = std::abs(axis.y) < radial_helper_axis_limit ? math::vec3{0.0f, 1.0f, 0.0f}
+                                                                          : math::vec3{1.0f, 0.0f, 0.0f};
+    const math::vec3 across = math::normalize(math::cross(axis, helper));
+    const math::vec3 other_across = math::cross(axis, across);
+    return std::max(math::length(across * scale), math::length(other_across * scale));
+}
+
+/// A capsule keeps its kind: the scale moves its two end centers, and its radius takes the stretch across it.
+void add_capsule_shape(btCompoundShape& compound, const physics_capsule_shape& shape, const math::vec3& scale)
+{
+    const math::vec3 axis = unravel::make_shape_rotation(shape.rotation) * math::vec3{0.0f, 1.0f, 0.0f};
+    const math::vec3 bottom = (shape.center - axis * (shape.length * 0.5f)) * scale;
+    const math::vec3 top = (shape.center + axis * (shape.length * 0.5f)) * scale;
+    const float length = math::distance(bottom, top);
+    const math::vec3 direction = length > 0.0f ? (top - bottom) / length : axis;
+    const btTransform local(shortestArcQuat(btVector3(0, 1, 0), bullet::to_bullet(direction)),
+                            bullet::to_bullet((bottom + top) * 0.5f));
+    compound.addChildShape(local, new btCapsuleShape(shape.radius * get_radial_scale(axis, scale), length));
+}
+
+/// A cylinder stays round under a uniform scale, or unturned with the same stretch across it; otherwise it becomes
+/// the hull Box3D always uses.
+void add_cylinder_shape(btCompoundShape& compound, const physics_cylinder_shape& shape, const math::vec3& scale)
+{
+    const math::quat rotation = unravel::make_shape_rotation(shape.rotation);
+    const math::vec3 magnitude = math::abs(scale);
+    const bool stays_round =
+        is_uniform_scale(scale) || (is_unturned(shape.rotation) && is_same_scale(magnitude.x, magnitude.z, scale));
+    if(stays_round)
+    {
+        const btTransform local(bullet::to_bullet(rotation), bullet::to_bullet(shape.center * scale));
+        const btVector3 half_extents(shape.radius * magnitude.x,
+                                     shape.length * 0.5f * magnitude.y,
+                                     shape.radius * magnitude.x);
+        compound.addChildShape(local, new btCylinderShape(half_extents));
+        return;
+    }
+    btAlignedObjectArray<btVector3> rims;
+    for(int side = 0; side < cylinder_hull_side_count; ++side)
+    {
+        const float angle = math::two_pi<float>() * float(side) / float(cylinder_hull_side_count);
+        const math::vec3 top{shape.radius * std::cos(angle), shape.length * 0.5f, shape.radius * std::sin(angle)};
+        const math::vec3 bottom{top.x, -top.y, top.z};
+        rims.push_back(bullet::to_bullet((shape.center + rotation * top) * scale));
+        rims.push_back(bullet::to_bullet((shape.center + rotation * bottom) * scale));
+    }
+    add_hull_shape(compound, rims);
+}
+
+/**
+ * @brief Adds one Bullet collision shape per submesh, with the submesh's node transform, the shape center and the
+ *        scale baked into its vertices, as Box3D bakes them. The vertex buffer stores positions in node-local space.
+ */
+void add_mesh_shapes(bullet::btCompoundShapeOwning& compound, const physics_mesh_shape& shape, const math::vec3& scale)
+{
     const auto& mesh_ref = shape.mesh_asset.get();
-    
-    // Get vertex and index data from mesh
     auto* vertex_data = mesh_ref->get_system_vb();
     auto* index_data = mesh_ref->get_system_ib();
     auto vertex_count = mesh_ref->get_vertex_count();
     auto face_count = mesh_ref->get_face_count();
     const auto& vertex_format = mesh_ref->get_vertex_format();
-    
     if(!vertex_data || !index_data || vertex_count == 0 || face_count == 0)
     {
-        return result;
+        return;
     }
-    
-    // Find position attribute offset in vertex format
-    auto position_offset = vertex_format.getOffset(bgfx::Attrib::Position);
-    
-    if(position_offset == UINT16_MAX)
+    if(vertex_format.getOffset(bgfx::Attrib::Position) == UINT16_MAX)
     {
-        return result; // No position data
+        return;
     }
-    
     const auto& submeshes = mesh_ref->get_submeshes();
     const auto node_transforms = mesh_ref->get_submesh_node_transforms();
-    result.reserve(submeshes.size());
-    
     for(size_t s = 0; s < submeshes.size(); ++s)
     {
         const auto* submesh = submeshes[s];
@@ -1617,168 +2055,94 @@ auto create_bullet_mesh_shapes(const physics_mesh_shape& shape)
         {
             continue;
         }
-        
-        // Build a triangle mesh from this submesh's faces only.
-        auto* triangle_mesh = new btTriangleMesh(true, false); // 32-bit indices, 3-component vertices
+        math::transform node;
+        if(s < node_transforms.size())
+        {
+            node = node_transforms[s];
+        }
+        // Build a triangle mesh from this submesh's faces only: 32-bit indices, 3-component vertices.
+        auto triangle_mesh = std::make_unique<btTriangleMesh>(true, false);
         const auto face_end = std::min(face_begin + submesh->face_count, face_count);
         for(uint32_t f = face_begin; f < face_end; ++f)
         {
-            uint32_t i0 = index_data[f * 3 + 0];
-            uint32_t i1 = index_data[f * 3 + 1];
-            uint32_t i2 = index_data[f * 3 + 2];
-            
-            float v0[4];
-            float v1[4];
-            float v2[4];
-            bgfx::vertexUnpack(v0, bgfx::Attrib::Position, vertex_format, vertex_data, i0);
-            bgfx::vertexUnpack(v1, bgfx::Attrib::Position, vertex_format, vertex_data, i1);
-            bgfx::vertexUnpack(v2, bgfx::Attrib::Position, vertex_format, vertex_data, i2);
-
-            btVector3 vertex0(v0[0], v0[1], v0[2]);
-            btVector3 vertex1(v1[0], v1[1], v1[2]);
-            btVector3 vertex2(v2[0], v2[1], v2[2]);
-            triangle_mesh->addTriangle(vertex0, vertex1, vertex2);
+            btVector3 corners[3];
+            for(uint32_t k = 0; k < 3; ++k)
+            {
+                float position[4];
+                bgfx::vertexUnpack(position, bgfx::Attrib::Position, vertex_format, vertex_data, index_data[f * 3 + k]);
+                const math::vec3 local{position[0], position[1], position[2]};
+                corners[k] = bullet::to_bullet((node.transform_coord(local) + shape.center) * scale);
+            }
+            triangle_mesh->addTriangle(corners[0], corners[1], corners[2]);
         }
-        
-        // Create appropriate collision shape based on type
+        // A convex hull can be dynamic; the quantized BVH mesh is accurate but static only.
         btCollisionShape* collision_shape = nullptr;
         if(shape.collision_type == mesh_collision_type::convex)
         {
-            // Create convex hull shape (can be dynamic)
-            collision_shape = new btConvexTriangleMeshShape(triangle_mesh);
+            collision_shape = new btConvexTriangleMeshShape(triangle_mesh.get());
         }
         else
         {
-            // Create concave BVH triangle mesh shape (static only, but accurate)
-            collision_shape = new btBvhTriangleMeshShape(triangle_mesh, true); // Use quantized AABB compression
+            collision_shape = new btBvhTriangleMeshShape(triangle_mesh.get(), true);
         }
-        
-        // Apply the submesh's node transform. btTransform only carries rotation/translation,
-        // so any node scale is applied via the shape's local scaling.
-        btTransform child_transform = btTransform::getIdentity();
-        if(s < node_transforms.size())
-        {
-            const auto& node_transform = node_transforms[s];
-            child_transform.setRotation(bullet::to_bullet(node_transform.get_rotation()));
-            child_transform.setOrigin(bullet::to_bullet(node_transform.get_position()));
-            collision_shape->setLocalScaling(bullet::to_bullet(node_transform.get_scale()));
-        }
-        
-        result.emplace_back(collision_shape, child_transform);
+        compound.addChildShape(btTransform::getIdentity(), collision_shape);
+        compound.own_mesh(std::move(triangle_mesh));
     }
-    
-    return result;
 }
 
-auto make_rigidbody_shape(physics_component& comp) -> std::shared_ptr<btCompoundShape>
+/**
+ * @brief Builds the body's shape with @p scale baked into every child along the body's axes, as Box3D bakes it: a
+ *        turned box under a non-uniform scale slants, where btCompoundShape::setLocalScaling would stretch it along
+ *        its own axes.
+ */
+auto make_rigidbody_shape(const physics_component& comp, const math::vec3& scale) -> std::shared_ptr<btCompoundShape>
 {
     // use an ownning compound shape. When sharing is implemented we can go back to non owning
     auto cp = std::make_shared<bullet::btCompoundShapeOwning>();
-
-    auto compound_shapes = comp.get_shapes();
-    if(compound_shapes.empty())
+    for(const auto& s : comp.get_shapes())
     {
-        return cp;
-    }
-
-    for(const auto& s : compound_shapes)
-    {
-        if(hpp::holds_alternative<physics_box_shape>(s.shape))
+        if(const auto* box = hpp::get_if<physics_box_shape>(&s.shape))
         {
-            const auto& shape = hpp::get<physics_box_shape>(s.shape);
-            auto half_extends = shape.extends * 0.5f;
-
-            btBoxShape* box_shape = new btBoxShape({half_extends.x, half_extends.y, half_extends.z});
-
-            btTransform local_transform = btTransform::getIdentity();
-            local_transform.setOrigin(bullet::to_bullet(shape.center));
-            local_transform.setRotation(bullet::to_bullet(bullet::make_shape_rotation(shape.rotation)));
-            cp->addChildShape(local_transform, box_shape);
+            add_box_shape(*cp, *box, scale);
         }
-        else if(hpp::holds_alternative<physics_sphere_shape>(s.shape))
+        else if(const auto* sphere = hpp::get_if<physics_sphere_shape>(&s.shape))
         {
-            const auto& shape = hpp::get<physics_sphere_shape>(s.shape);
-
-            btSphereShape* sphere_shape = new btSphereShape(shape.radius);
-
-            btTransform local_transform = btTransform::getIdentity();
-            local_transform.setOrigin(bullet::to_bullet(shape.center));
-            cp->addChildShape(local_transform, sphere_shape);
+            add_sphere_shape(*cp, *sphere, scale);
         }
-        else if(hpp::holds_alternative<physics_capsule_shape>(s.shape))
+        else if(const auto* capsule = hpp::get_if<physics_capsule_shape>(&s.shape))
         {
-            const auto& shape = hpp::get<physics_capsule_shape>(s.shape);
-
-            btCapsuleShape* capsule_shape = new btCapsuleShape(shape.radius, shape.length);
-
-            btTransform local_transform = btTransform::getIdentity();
-            local_transform.setOrigin(bullet::to_bullet(shape.center));
-            local_transform.setRotation(bullet::to_bullet(bullet::make_shape_rotation(shape.rotation)));
-            cp->addChildShape(local_transform, capsule_shape);
+            add_capsule_shape(*cp, *capsule, scale);
         }
-        else if(hpp::holds_alternative<physics_cylinder_shape>(s.shape))
+        else if(const auto* cylinder = hpp::get_if<physics_cylinder_shape>(&s.shape))
         {
-            const auto& shape = hpp::get<physics_cylinder_shape>(s.shape);
-
-            btVector3 half_extends(shape.radius, shape.length * 0.5f, shape.radius);
-            btCylinderShape* cylinder_shape = new btCylinderShape(half_extends);
-
-            btTransform local_transform = btTransform::getIdentity();
-            local_transform.setOrigin(bullet::to_bullet(shape.center));
-            local_transform.setRotation(bullet::to_bullet(bullet::make_shape_rotation(shape.rotation)));
-            cp->addChildShape(local_transform, cylinder_shape);
+            add_cylinder_shape(*cp, *cylinder, scale);
         }
-        else if(hpp::holds_alternative<physics_mesh_shape>(s.shape))
+        else if(const auto* mesh = hpp::get_if<physics_mesh_shape>(&s.shape))
         {
-            const auto& shape = hpp::get<physics_mesh_shape>(s.shape);
-            
-            // The build waits for a mesh still loading: a body without its collider lets whatever rests on it fall through.
-            if(shape.mesh_asset)
+            // The build waits for a mesh still loading: a body without its collider lets whatever rests on it fall
+            // through.
+            if(mesh->mesh_asset)
             {
-                // One collision shape per submesh, each carrying its own node transform.
-                auto mesh_shapes = create_bullet_mesh_shapes(shape);
-                for(auto& [mesh_shape, node_transform] : mesh_shapes)
-                {
-                    if(!mesh_shape)
-                    {
-                        continue;
-                    }
-                    // Apply the shape center on top of the submesh node transform.
-                    btTransform local_transform = node_transform;
-                    local_transform.setOrigin(local_transform.getOrigin() + bullet::to_bullet(shape.center));
-                    cp->addChildShape(local_transform, mesh_shape);
-                }
+                add_mesh_shapes(*cp, *mesh, scale);
             }
         }
     }
-
     return cp;
 }
 
-void update_rigidbody_shape(bullet::rigidbody& body, physics_component& comp)
+void update_rigidbody_shape(bullet::world& world, bullet::rigidbody& body, physics_component& comp)
 {
-    auto shape = make_rigidbody_shape(comp);
-    // A rebuilt shape keeps the scale applied to the old one: only a transform change applies it again.
-    if(body.internal_shape && comp.is_autoscaled())
+    auto shape = make_rigidbody_shape(comp, body.shape_scale);
+    // The collision algorithms of the body's pairs were made for the old children, and a new compound with as many
+    // children has the same revision, so they would not be remade: a box turned hull would be read as a box.
+    if(auto* proxy = body.internal->getBroadphaseHandle())
     {
-        shape->setLocalScaling(body.internal_shape->getLocalScaling());
+        world.dynamics_world->getBroadphase()->getOverlappingPairCache()->cleanProxyFromPairs(
+            proxy,
+            world.dynamics_world->getDispatcher());
     }
-
     body.internal->setCollisionShape(shape.get());
     body.internal_shape = shape;
-}
-
-void update_rigidbody_shape_scale(bullet::world& world, bullet::rigidbody& body, const math::vec3& s)
-{
-    auto bt_scale = body.internal_shape->getLocalScaling();
-    auto scale = bullet::from_bullet(bt_scale);
-
-    if(math::any(math::epsilonNotEqual(scale, s, math::epsilon<float>())))
-    {
-        bt_scale = bullet::to_bullet(s);
-        body.internal_shape->setLocalScaling(bt_scale);
-        world.dynamics_world->updateSingleAabb(body.internal.get());
-    }
 }
 
 void update_rigidbody_kind(bullet::rigidbody& body, physics_component& comp)
@@ -1920,28 +2284,53 @@ void update_rigidbody_gravity(bullet::world& world, bullet::rigidbody& body, phy
     }
 }
 
+/**
+ * @brief Bullet's damping for the engine's damping rate.
+ *
+ * The engine's damping is Box3D's: a rate d >= 0 in dv/dt = -d v, which Box3D steps as v / (1 + h d) per sub-step.
+ * Bullet steps v (1 - b)^h, the exact solution for b = 1 - e^-d, so the two agree up to Box3D's step error.
+ */
+auto to_bullet_damping(float rate) -> btScalar
+{
+    return btScalar(1) - std::exp(-std::max(rate, 0.0f));
+}
+
 void update_rigidbody_damping(bullet::rigidbody& body, physics_component& comp)
 {
-    // Bullet damps a share of the velocity per second, 0..1; Box3D's damping is a rate. Below 1 they agree closely.
-    body.internal->setDamping(math::clamp(comp.get_linear_damping(), 0.0f, 1.0f),
-                              math::clamp(comp.get_angular_damping(), 0.0f, 1.0f));
+    body.internal->setDamping(to_bullet_damping(comp.get_linear_damping()),
+                              to_bullet_damping(comp.get_angular_damping()));
 }
 
 void update_rigidbody_motion(bullet::rigidbody& body, physics_component& comp)
 {
     const bool continuous = comp.get_body_type() == rigidbody_type::dynamic && comp.is_continuous();
-    // Continuous collision starts once a step moves the body further than half its smallest extent.
     btVector3 aabb_min;
     btVector3 aabb_max;
     body.internal->getAabb(aabb_min, aabb_max);
     const btVector3 size = aabb_max - aabb_min;
-    const float smallest = std::max(0.01f, float(std::min({size.x(), size.y(), size.z()})) * 0.5f);
+    const float smallest = std::max(min_ccd_motion_threshold,
+                                    float(std::min({size.x(), size.y(), size.z()})) * ccd_threshold_share_of_extent);
     body.internal->setCcdMotionThreshold(continuous ? smallest : 0.0f);
-    body.internal->setCcdSweptSphereRadius(continuous ? smallest * 0.4f : 0.0f);
+    body.internal->setCcdSweptSphereRadius(continuous ? smallest * ccd_swept_sphere_share : 0.0f);
     if(comp.get_body_type() == rigidbody_type::dynamic)
     {
         body.internal->forceActivationState(comp.can_sleep() ? ACTIVE_TAG : DISABLE_DEACTIVATION);
     }
+}
+
+/// Rolling resistance and surface velocity act through add_surface_to_contact, which Bullet calls for flagged bodies
+/// only.
+void update_rigidbody_surface(bullet::rigidbody& body,
+                              const physics_material& mat,
+                              const math::vec3& surface_velocity)
+{
+    auto& internal = *body.internal;
+    internal.rolling_resistance = std::max(mat.rolling_resistance, 0.0f);
+    internal.surface_velocity = bullet::to_bullet(surface_velocity);
+    const bool has_surface = internal.rolling_resistance > 0.0f || !internal.surface_velocity.fuzzyZero();
+    const int flags = internal.getCollisionFlags();
+    internal.setCollisionFlags(has_surface ? flags | btCollisionObject::CF_CUSTOM_MATERIAL_CALLBACK
+                                           : flags & ~btCollisionObject::CF_CUSTOM_MATERIAL_CALLBACK);
 }
 
 void update_rigidbody_material(bullet::rigidbody& body, physics_component& comp)
@@ -1969,6 +2358,7 @@ void update_rigidbody_material(bullet::rigidbody& body, physics_component& comp)
     {
         body.internal->setContactStiffnessAndDamping(stiffness, mat->damping);
     }
+    update_rigidbody_surface(body, *mat, comp.get_surface_velocity());
 }
 
 void update_rigidbody_sensor(bullet::rigidbody& body, physics_component& comp)
@@ -1999,7 +2389,7 @@ void set_rigidbody_active(bullet::world& world, bullet::rigidbody& body, bool en
 void update_rigidbody_full(bullet::world& world, bullet::rigidbody& body, physics_component& comp)
 {
     // Kind is applied inside update_rigidbody_mass_and_inertia (after setMassProps).
-    update_rigidbody_shape(body, comp);
+    update_rigidbody_shape(world, body, comp);
     update_rigidbody_mass_and_inertia(body, comp);
     update_rigidbody_material(body, comp);
     update_rigidbody_sensor(body, comp);
@@ -2023,25 +2413,26 @@ void make_rigidbody(bullet::world& world, entt::handle entity, physics_component
 {
     auto& body = entity.emplace<bullet::rigidbody>();
 
-    body.internal = std::make_shared<btRigidBody>(comp.get_mass(), nullptr, nullptr);
+    body.internal = std::make_shared<bullet::surface_rigid_body>(comp.get_mass(), nullptr, nullptr);
     body.internal->setUserIndex(int(entity.entity()));
     body.internal->setUserPointer(&world);
     body.internal->setFlags(BT_DISABLE_WORLD_GRAVITY);
 
+    auto* transform = entity.try_get<transform_component>();
+    if(transform && comp.is_autoscaled())
+    {
+        // The shapes are built with the scale in them, before the body enters the world and gets its bounds.
+        body.shape_scale = transform->get_scale_global();
+    }
     update_rigidbody_full(world, body, comp);
 
     // Apply ECS pose immediately so same-frame ApplyForce / queries hit the correct transform.
-    if(auto* transform = entity.try_get<transform_component>())
+    if(transform)
     {
         const btTransform bt_trans(bullet::to_bullet(transform->get_rotation_global()),
                                    bullet::to_bullet(transform->get_position_global()));
         body.internal->setWorldTransform(bt_trans);
         body.internal->setInterpolationWorldTransform(bt_trans);
-        if(body.internal_shape && comp.is_autoscaled())
-        {
-            // Set scale before add; AABB is built when the body enters the world.
-            body.internal_shape->setLocalScaling(bullet::to_bullet(transform->get_scale_global()));
-        }
     }
 
     if(entity.all_of<active_component>())
@@ -2115,7 +2506,7 @@ void sync_physics_body(bullet::world& world, physics_component& comp, bool force
             if(comp.is_property_dirty(physics_property::shape))
             {
                 comp.set_property_dirty(physics_property::mass, true);
-                update_rigidbody_shape(body, comp);
+                update_rigidbody_shape(world, body, comp);
                 world.dynamics_world->updateSingleAabb(body.internal.get());
             }
             if(comp.is_property_dirty(physics_property::mass))
@@ -2183,14 +2574,28 @@ auto make_bt_transform(const transform_component& transform) -> btTransform
     return btTransform(bullet::to_bullet(q), bullet::to_bullet(p));
 }
 
+/// Scale lives inside the shapes, so a scale change is a shape rebuild, with the mass that follows from it. Only paid
+/// when the entity changed scale.
 void apply_shape_scale_if_needed(bullet::world& world,
                                  bullet::rigidbody& body,
                                  physics_component& comp,
                                  const transform_component& transform)
 {
-    if(body.internal_shape && comp.is_autoscaled())
+    if(!body.internal_shape || !comp.is_autoscaled())
     {
-        update_rigidbody_shape_scale(world, body, transform.get_scale_global());
+        return;
+    }
+    const math::vec3 scale = transform.get_scale_global();
+    if(!math::any(math::epsilonNotEqual(scale, body.shape_scale, bullet::scale_epsilon)))
+    {
+        return;
+    }
+    body.shape_scale = scale;
+    update_rigidbody_shape(world, body, comp);
+    update_rigidbody_mass_and_inertia(body, comp);
+    if(body.internal->getBroadphaseHandle() != nullptr)
+    {
+        world.dynamics_world->updateSingleAabb(body.internal.get());
     }
 }
 
@@ -2318,6 +2723,7 @@ auto sync_transforms_from_physics(physics_component& comp, transform_component& 
         comp.set_angular_velocity_internal(math::vec3{0.0f});
         return false;
     }
+    keep_sleepless_body_awake(*body->internal, comp);
 
     comp.set_velocity_internal(bullet::from_bullet(body->internal->getLinearVelocity()));
     comp.set_angular_velocity_internal(bullet::from_bullet(body->internal->getAngularVelocity()));
@@ -2326,8 +2732,9 @@ auto sync_transforms_from_physics(physics_component& comp, transform_component& 
     auto p = bullet::from_bullet(bt_trans.getOrigin());
     auto q = bullet::from_bullet(bt_trans.getRotation());
 
-    // Generous epsilon for Bullet float conversion noise.
-    float epsilon = 0.009f;
+    // An interpolated body reads its step poses from the transform, so every step's pose is written: under the epsilon
+    // a slow body would stand still for steps, then jump.
+    const float epsilon = comp.get_interpolate() ? 0.0f : bullet::pose_write_epsilon;
     return transform.set_position_and_rotation_global(p, q, epsilon);
 }
 
@@ -2361,11 +2768,23 @@ auto to_physics(bullet::world& world,
     return false;
 }
 
+/**
+ * @brief Clears the physics bit of a transform the backend has just written.
+ *
+ * The global is resolved first. The lazy global raises the consumer bits only on its rising edge, so one left
+ * unresolved would let a later local-space write pass without a physics bit, and the next step would undo it.
+ */
+void clear_physics_bit(transform_component& transform)
+{
+    (void)transform.get_transform_global();
+    transform.set_dirty(system_id, false);
+}
+
 auto from_physics(transform_component& transform, physics_component& comp) -> bool
 {
     bool result = sync_transforms_from_physics(comp, transform);
 
-    transform.set_dirty(system_id, false);
+    clear_physics_bit(transform);
     comp.set_dirty(system_id, false);
 
     return result;
@@ -2532,14 +2951,13 @@ auto from_physics_cc(bullet::world& world,
     const auto& bt_trans = cc->ghost->getWorldTransform();
     auto p = bullet::from_bullet(bt_trans.getOrigin()) - comp.get_center();
     auto q = bullet::from_bullet(bt_trans.getRotation());
-    float epsilon = 0.009f;
-    bool changed = transform.set_position_and_rotation_global(p, q, epsilon);
+    bool changed = transform.set_position_and_rotation_global(p, q, bullet::pose_write_epsilon);
 
     comp.set_grounded(cc->controller->onGround());
     auto bt_vel = cc->controller->getLinearVelocity();
     comp.set_velocity_internal(bullet::from_bullet(bt_vel));
 
-    transform.set_dirty(system_id, false);
+    clear_physics_bit(transform);
     comp.set_dirty(system_id, false);
     return changed;
 }
@@ -3012,19 +3430,19 @@ void bullet_backend::set_body_awake(physics_component& comp, bool awake)
 {
     auto owner = comp.get_owner();
     auto* bbody = owner.try_get<bullet::rigidbody>();
-    if(comp.get_body_type() != rigidbody_type::dynamic || !bbody || !bbody->internal)
+    auto* world = bullet::find_bullet_world();
+    if(comp.get_body_type() != rigidbody_type::dynamic || !bbody || !bbody->internal || !world)
     {
         return;
     }
     if(awake)
     {
         bbody->internal->activate(true);
+        bullet::keep_sleepless_body_awake(*bbody->internal, comp);
     }
     else
     {
-        bbody->internal->setLinearVelocity(btVector3{0, 0, 0});
-        bbody->internal->setAngularVelocity(btVector3{0, 0, 0});
-        bbody->internal->setActivationState(ISLAND_SLEEPING);
+        bullet::put_island_to_sleep(*world, *bbody->internal);
     }
     comp.set_sleeping_internal(!awake);
 }
@@ -3048,7 +3466,7 @@ void bullet_backend::set_gravity(const math::vec3& gravity)
 auto bullet_backend::get_gravity() const -> math::vec3
 {
     auto* world = bullet::find_bullet_world();
-    return world ? bullet::from_bullet(world->dynamics_world->getGravity()) : bullet::from_bullet(bullet::gravity_earth);
+    return world ? bullet::from_bullet(world->dynamics_world->getGravity()) : get_default_gravity();
 }
 
 void bullet_backend::explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask)
@@ -3077,10 +3495,13 @@ void bullet_backend::explode(const math::vec3& center, float radius, float fallo
             btVector3 aabb_min;
             btVector3 aabb_max;
             body.internal->getAabb(aabb_min, aabb_max);
-            const float half = float((aabb_max - aabb_min).length()) * 0.25f;
+            const float half = float((aabb_max - aabb_min).length()) * bullet::explosion_radius_per_diagonal;
             const float area = math::pi<float>() * half * half;
-            const float fade = distance <= radius ? 1.0f : 1.0f - (distance - radius) / std::max(falloff, 1e-4f);
-            const btVector3 direction = distance > 1e-4f ? offset / distance : btVector3{0, 1, 0};
+            const float fade = distance <= radius
+                                   ? 1.0f
+                                   : 1.0f - (distance - radius) / std::max(falloff, bullet::explosion_length_epsilon);
+            const btVector3 direction =
+                distance > bullet::explosion_length_epsilon ? offset / distance : btVector3{0, 1, 0};
             body.internal->applyCentralImpulse(direction * (impulse_per_area * area * fade));
             body.internal->activate(true);
         });
@@ -3170,6 +3591,12 @@ void bullet_backend::on_destroy_ragdoll_component(entt::registry& r, entt::entit
 {
 }
 
+/**
+ * Bullet's numbers next to Box3D's: bodies include the character controllers' ghost objects, as Box3D counts their
+ * proxies; contacts are Bullet's manifolds, one per pair of bodies whose bounds overlap, where Box3D keeps one per
+ * pair of shapes; islands are those of the last step, joining bodies whose bounds overlap, where Box3D joins bodies
+ * that touch; joints are always 0, since the Bullet backend makes none.
+ */
 auto bullet_backend::get_world_stats() const -> world_stats
 {
     world_stats stats;
@@ -3183,10 +3610,12 @@ auto bullet_backend::get_world_stats() const -> world_stats
     for(int i = 0; i < objects.size(); ++i)
     {
         stats.awake_body_count += objects[i]->isActive() ? 1 : 0;
+        stats.shape_count += bullet::count_leaf_shapes(objects[i]->getCollisionShape());
     }
-    stats.shape_count = stats.body_count;
     stats.contact_count = world->dynamics_world->getDispatcher()->getNumManifolds();
     stats.joint_count = world->dynamics_world->getNumConstraints();
+    stats.island_count = bullet::count_islands(objects);
+    stats.step_ms = world->last_step_ms;
     return stats;
 }
 
@@ -3343,6 +3772,21 @@ void bullet_backend::on_play_begin(rtti::context& ctx)
         {
             bullet::sync_character_controller_body(world, comp, true);
         });
+    warn_unsupported_components(registry);
+}
+
+void bullet_backend::warn_unsupported_components(entt::registry& registry)
+{
+    // Every play warns once per feature, for a scene saved with joints or ragdolls as for one that adds them.
+    warned_.clear();
+    if(!registry.storage<joint_component>().empty())
+    {
+        warn_unsupported("The joint component");
+    }
+    if(!registry.storage<ragdoll_component>().empty())
+    {
+        warn_unsupported("The ragdoll component");
+    }
 }
 
 void bullet_backend::on_play_end(rtti::context& ctx)
@@ -3401,6 +3845,11 @@ void bullet_backend::sync_to_physics(rtti::context& ctx, delta_t step_dt)
         [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
         {
             bullet::to_physics_cc(world, transform, cc_comp);
+        });
+    registry.view<ragdoll_component>().each(
+        [&](auto e, auto&& ragdoll)
+        {
+            bullet::drop_ragdoll_requests(ragdoll);
         });
 }
 

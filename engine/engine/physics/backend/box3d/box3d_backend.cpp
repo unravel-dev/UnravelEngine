@@ -34,8 +34,6 @@ namespace
 {
 // --- tuning -----------------------------------------------------------------------
 
-/// Matches the gravity the Bullet backend uses, so scenes behave the same under both.
-constexpr float default_gravity_y = -9.8f;
 /// Solver sub-steps per b3World_Step. physics_system already advances the world one
 /// fixed step at a time, so the backend never catches up on its own; Box3D sub-steps
 /// only subdivide the solver inside that one step (collision runs once per call), the
@@ -47,6 +45,8 @@ constexpr int max_sub_step_count = 16;
 constexpr int cylinder_hull_sides = 16;
 /// Box3D asserts on degenerate half widths; a collapsed axis is clamped to this.
 constexpr float min_half_extent = 0.005f;
+/// A box has eight corners.
+constexpr int box_corner_count = 8;
 /// Below this the entity scale is considered unchanged and shapes are not rebuilt.
 constexpr float scale_epsilon = 1e-4f;
 /// Generous epsilon for float conversion noise when writing transforms back.
@@ -74,6 +74,12 @@ constexpr float wheel_steering_damping_ratio = 1.0f;
 /// wheel turned towards its suspension axis (a chassis moved without its wheels) would make the solver's velocities
 /// infinite. A wheel steers only while that angle's cosine stays below this one, of 45 degrees.
 constexpr float wheel_steering_max_axis_cosine = 0.7071f;
+/// A wheel steers less than a right angle: Box3D's steering term grows without bound towards it.
+constexpr float max_steering_degrees = 89.0f;
+/// An axis this close to Y (as a cosine) takes X as the helper axis for its perpendiculars instead.
+constexpr float helper_axis_max_cosine = 0.9f;
+/// Degrees in a whole turn: joint angles wrap at half of it either way.
+constexpr float full_turn_degrees = 360.0f;
 /// Debug draw sizes.
 constexpr float debug_point_half_size = 0.02f;
 constexpr float debug_axis_length = 0.25f;
@@ -1158,6 +1164,57 @@ struct world
         return 1.0f;
     }
 
+    /**
+     * @brief What every cast reports: the contact point, the surface normal, and how far the cast travelled along
+     *        @p direction (unit length) before it touched. A shape that starts inside another gets no normal from
+     *        Box3D; it reports the way back against the cast.
+     */
+    static auto make_hit(const cast_hit& cast, entt::entity entity, const math::vec3& direction, float max_distance)
+        -> unravel::raycast_hit
+    {
+        unravel::raycast_hit hit;
+        hit.entity = entity;
+        hit.point = cast.point;
+        const float normal_length = math::length(cast.normal);
+        hit.normal = normal_length > 0.0f ? cast.normal / normal_length : -direction;
+        hit.distance = cast.fraction * max_distance;
+        return hit;
+    }
+
+    static auto make_closest_hit(const closest_cast_context& ctx, const math::vec3& direction, float max_distance)
+        -> hpp::optional<unravel::raycast_hit>
+    {
+        const entt::entity entity = ctx.has_hit ? entity_from_shape(ctx.hit.shape) : entt::null;
+        if(entity == entt::null)
+        {
+            return {};
+        }
+        return make_hit(ctx.hit, entity, direction, max_distance);
+    }
+
+    /// The hits of a cast that reports all of them, nearest first.
+    static auto make_sorted_hits(all_casts_context& ctx, const math::vec3& direction, float max_distance)
+        -> unravel::physics_vector<unravel::raycast_hit>
+    {
+        std::sort(ctx.hits.begin(),
+                  ctx.hits.end(),
+                  [](const cast_hit& a, const cast_hit& b)
+                  {
+                      return a.fraction < b.fraction;
+                  });
+        unravel::physics_vector<unravel::raycast_hit> hits;
+        hits.reserve(ctx.hits.size());
+        for(const auto& cast : ctx.hits)
+        {
+            const entt::entity entity = entity_from_shape(cast.shape);
+            if(entity != entt::null)
+            {
+                hits.push_back(make_hit(cast, entity, direction, max_distance));
+            }
+        }
+        return hits;
+    }
+
     auto ray_cast_closest(const math::vec3& origin,
                           const math::vec3& direction,
                           float max_distance,
@@ -1178,22 +1235,7 @@ struct world
                         make_query_filter(layer_mask),
                         &closest_cast_callback,
                         &ctx);
-
-        if(!ctx.has_hit)
-        {
-            return {};
-        }
-        const entt::entity entity = entity_from_shape(ctx.hit.shape);
-        if(entity == entt::null)
-        {
-            return {};
-        }
-        unravel::raycast_hit hit;
-        hit.entity = entity;
-        hit.point = ctx.hit.point;
-        hit.normal = ctx.hit.normal;
-        hit.distance = math::distance(origin, hit.point);
-        return hit;
+        return make_closest_hit(ctx, direction, max_distance);
     }
 
     auto ray_cast_all(const math::vec3& origin,
@@ -1216,34 +1258,9 @@ struct world
                         make_query_filter(layer_mask),
                         &all_casts_callback,
                         &ctx);
-
-        std::sort(ctx.hits.begin(),
-                  ctx.hits.end(),
-                  [](const cast_hit& a, const cast_hit& b)
-                  {
-                      return a.fraction < b.fraction;
-                  });
-
-        unravel::physics_vector<unravel::raycast_hit> hits;
-        hits.reserve(ctx.hits.size());
-        for(const auto& ch : ctx.hits)
-        {
-            const entt::entity entity = entity_from_shape(ch.shape);
-            if(entity == entt::null)
-            {
-                continue;
-            }
-            auto& hit = hits.emplace_back();
-            hit.entity = entity;
-            hit.point = ch.point;
-            hit.normal = ch.normal;
-            hit.distance = math::distance(origin, hit.point);
-        }
-        return hits;
+        return make_sorted_hits(ctx, direction, max_distance);
     }
 
-    /// Sphere casts report the sphere center at the time of impact, matching the
-    /// Bullet backend, so distance is always measured along the cast.
     auto sphere_cast_closest(const math::vec3& origin,
                              const math::vec3& direction,
                              float radius,
@@ -1268,22 +1285,7 @@ struct world
                           make_query_filter(layer_mask),
                           &closest_cast_callback,
                           &ctx);
-
-        if(!ctx.has_hit)
-        {
-            return {};
-        }
-        const entt::entity entity = entity_from_shape(ctx.hit.shape);
-        if(entity == entt::null)
-        {
-            return {};
-        }
-        unravel::raycast_hit hit;
-        hit.entity = entity;
-        hit.point = origin + translation * ctx.hit.fraction;
-        hit.normal = math::normalize(ctx.hit.normal);
-        hit.distance = ctx.hit.fraction * max_distance;
-        return hit;
+        return make_closest_hit(ctx, direction, max_distance);
     }
 
     auto sphere_cast_all(const math::vec3& origin,
@@ -1310,30 +1312,7 @@ struct world
                           make_query_filter(layer_mask),
                           &all_casts_callback,
                           &ctx);
-
-        std::sort(ctx.hits.begin(),
-                  ctx.hits.end(),
-                  [](const cast_hit& a, const cast_hit& b)
-                  {
-                      return a.fraction < b.fraction;
-                  });
-
-        unravel::physics_vector<unravel::raycast_hit> hits;
-        hits.reserve(ctx.hits.size());
-        for(const auto& ch : ctx.hits)
-        {
-            const entt::entity entity = entity_from_shape(ch.shape);
-            if(entity == entt::null)
-            {
-                continue;
-            }
-            auto& hit = hits.emplace_back();
-            hit.entity = entity;
-            hit.point = origin + translation * ch.fraction;
-            hit.normal = math::normalize(ch.normal);
-            hit.distance = ch.fraction * max_distance;
-        }
-        return hits;
+        return make_sorted_hits(ctx, direction, max_distance);
     }
 
     struct overlap_context
@@ -1384,7 +1363,7 @@ auto create_world() -> world
     world result{};
 
     b3WorldDef def = b3DefaultWorldDef();
-    def.gravity = {0.0f, default_gravity_y, 0.0f};
+    def.gravity = box3d::to_b3(unravel::get_default_gravity());
     def.enableSleep = true;
     def.enableContinuous = true;
     def.frictionCallback = &combined_friction_callback;
@@ -1760,10 +1739,46 @@ void add_shape(shape_build_context& ctx, b3ShapeId shape)
     }
 }
 
-/// A shape's rotation from its Euler angles in degrees.
-auto make_shape_rotation(const math::vec3& degrees) -> math::quat
+/// Corner @p index (0..7) of a box with @p half widths: each bit of the index picks the far side of one axis.
+auto get_box_corner(const math::vec3& half, int index) -> math::vec3
 {
-    return math::normalize(math::quat(math::radians(degrees)));
+    return {(index & 1) ? half.x : -half.x, (index & 2) ? half.y : -half.y, (index & 4) ? half.z : -half.z};
+}
+
+/**
+ * @brief Adds the hull of @p points (in the shape's frame), placed by @p local and then scaled in the body's space.
+ *
+ * Box3D scales a box and a transformed hull along the shape's own axes, before turning it, which keeps a box a box.
+ * The entity's scale applies after the shape's turn, so a turned shape on a body scaled differently along its axes is
+ * sheared; this hull is, too, and matches what the transform shows.
+ */
+void add_hull_in_body_space(shape_build_context& ctx, const b3Vec3* points, int count, const b3Transform& local)
+{
+    const math::quat rotation = box3d::from_b3(local.q);
+    const math::vec3 offset = box3d::from_b3(local.p);
+    std::vector<b3Vec3> placed(static_cast<size_t>(count));
+    std::transform(points,
+                   points + count,
+                   placed.begin(),
+                   [&](const b3Vec3& point)
+                   {
+                       return box3d::to_b3((rotation * box3d::from_b3(point) + offset) * ctx.scale);
+                   });
+    b3HullData* hull = b3CreateHull(placed.data(), count, B3_MAX_HULL_VERTICES);
+    if(hull == nullptr)
+    {
+        return;
+    }
+    add_shape(ctx, b3CreateHullShape(ctx.body.body, &ctx.def, hull));
+    b3DestroyHull(hull);
+}
+
+/// A turned shape on a body scaled differently along its axes is sheared in the body's space, as it is drawn.
+auto is_sheared_by(const math::vec3& rotation_degrees, const math::vec3& scale) -> bool
+{
+    const math::vec3 size = math::abs(scale);
+    const bool is_uniform = size.x == size.y && size.y == size.z;
+    return rotation_degrees != math::vec3{0.0f} && !is_uniform;
 }
 
 void create_box_shape(shape_build_context& ctx, const physics_box_shape& shape)
@@ -1771,9 +1786,19 @@ void create_box_shape(shape_build_context& ctx, const physics_box_shape& shape)
     const math::vec3 half_widths = math::max(shape.extends * 0.5f, math::vec3{box3d::min_half_extent});
     b3Transform local = box3d::identity_transform();
     local.p = box3d::to_b3(shape.center);
-    local.q = box3d::to_b3(make_shape_rotation(shape.rotation));
-    const b3BoxHull hull = b3MakeScaledBoxHull(box3d::to_b3(half_widths), local, box3d::to_b3(ctx.scale));
-    add_shape(ctx, b3CreateHullShape(ctx.body.body, &ctx.def, &hull.base));
+    local.q = box3d::to_b3(unravel::make_shape_rotation(shape.rotation));
+    if(!is_sheared_by(shape.rotation, ctx.scale))
+    {
+        const b3BoxHull hull = b3MakeScaledBoxHull(box3d::to_b3(half_widths), local, box3d::to_b3(ctx.scale));
+        add_shape(ctx, b3CreateHullShape(ctx.body.body, &ctx.def, &hull.base));
+        return;
+    }
+    std::array<b3Vec3, box_corner_count> corners{};
+    for(int i = 0; i < box_corner_count; ++i)
+    {
+        corners[size_t(i)] = box3d::to_b3(get_box_corner(half_widths, i));
+    }
+    add_hull_in_body_space(ctx, corners.data(), box_corner_count, local);
 }
 
 void create_sphere_shape(shape_build_context& ctx, const physics_sphere_shape& shape)
@@ -1787,7 +1812,8 @@ void create_sphere_shape(shape_build_context& ctx, const physics_sphere_shape& s
 /// How much a scale stretches the radius of a capsule or cylinder around @p axis: the larger stretch across it.
 auto radial_scale(const math::vec3& axis, const math::vec3& scale) -> float
 {
-    const math::vec3 helper = std::abs(axis.y) < 0.9f ? math::vec3{0.0f, 1.0f, 0.0f} : math::vec3{1.0f, 0.0f, 0.0f};
+    const math::vec3 helper = std::abs(axis.y) < box3d::helper_axis_max_cosine ? math::vec3{0.0f, 1.0f, 0.0f}
+                                                                                 : math::vec3{1.0f, 0.0f, 0.0f};
     const math::vec3 u = math::normalize(math::cross(axis, helper));
     const math::vec3 v = math::cross(axis, u);
     return std::max(math::length(u * scale), math::length(v * scale));
@@ -1795,7 +1821,7 @@ auto radial_scale(const math::vec3& axis, const math::vec3& scale) -> float
 
 void create_capsule_shape(shape_build_context& ctx, const physics_capsule_shape& shape)
 {
-    const math::vec3 axis = make_shape_rotation(shape.rotation) * math::vec3{0.0f, 1.0f, 0.0f};
+    const math::vec3 axis = unravel::make_shape_rotation(shape.rotation) * math::vec3{0.0f, 1.0f, 0.0f};
     const math::vec3 c1 = (shape.center - axis * (shape.length * 0.5f)) * ctx.scale;
     const math::vec3 c2 = (shape.center + axis * (shape.length * 0.5f)) * ctx.scale;
     const float radius = std::max(shape.radius * radial_scale(axis, ctx.scale), box3d::min_half_extent);
@@ -1826,9 +1852,16 @@ void create_cylinder_shape(shape_build_context& ctx, const physics_cylinder_shap
     }
     b3Transform local = box3d::identity_transform();
     local.p = box3d::to_b3(shape.center);
-    local.q = box3d::to_b3(make_shape_rotation(shape.rotation));
-    // The transformed hull is cloned into the world hull database; the source is ours.
-    add_shape(ctx, b3CreateTransformedHullShape(ctx.body.body, &ctx.def, hull, local, box3d::to_b3(ctx.scale)));
+    local.q = box3d::to_b3(unravel::make_shape_rotation(shape.rotation));
+    if(is_sheared_by(shape.rotation, ctx.scale))
+    {
+        add_hull_in_body_space(ctx, b3GetHullPoints(hull), hull->vertexCount, local);
+    }
+    else
+    {
+        // The transformed hull is cloned into the world hull database; the source is ours.
+        add_shape(ctx, b3CreateTransformedHullShape(ctx.body.body, &ctx.def, hull, local, box3d::to_b3(ctx.scale)));
+    }
     b3DestroyHull(hull);
 }
 
@@ -1943,25 +1976,18 @@ void destroy_shapes(box3d::rigidbody& body)
 }
 
 /**
- * @brief Replaces automatic mass with the authored mass.
+ * @brief Gives a body the authored mass (1 kg when it is not positive).
  *
  * Box3D derives mass from shape density. The authored mass is kept by scaling the
  * computed inertia by the same ratio, so the body keeps its shape-derived inertia
  * distribution. A dynamic body must never end up massless: gravity and impulses would
- * silently become no-ops.
+ * silently become no-ops, so shapes that give no mass (meshes) get a unit sphere's inertia.
  */
-void apply_mass_override(box3d::rigidbody& body, physics_component& comp)
+void apply_body_mass(b3BodyId body, float mass)
 {
-    if(!b3Body_IsValid(body.body) || comp.get_body_type() != rigidbody_type::dynamic)
-    {
-        return;
-    }
-    float mass = comp.get_mass();
-    if(mass <= 0.0f)
-    {
-        mass = 1.0f;
-    }
-    b3MassData data = b3Body_GetMassData(body.body);
+    b3Body_ApplyMassFromShapes(body);
+    mass = mass > 0.0f ? mass : 1.0f;
+    b3MassData data = b3Body_GetMassData(body);
     if(data.mass > 0.0f)
     {
         const float ratio = mass / data.mass;
@@ -1974,7 +2000,7 @@ void apply_mass_override(box3d::rigidbody& body, physics_component& comp)
         data.inertia = {{inertia, 0.0f, 0.0f}, {0.0f, inertia, 0.0f}, {0.0f, 0.0f, inertia}};
     }
     data.mass = mass;
-    b3Body_SetMassData(body.body, data);
+    b3Body_SetMassData(body, data);
 }
 
 void update_rigidbody_mass_and_inertia(box3d::rigidbody& body, physics_component& comp)
@@ -1983,8 +2009,12 @@ void update_rigidbody_mass_and_inertia(box3d::rigidbody& body, physics_component
     {
         return;
     }
+    if(comp.get_body_type() == rigidbody_type::dynamic)
+    {
+        apply_body_mass(body.body, comp.get_mass());
+        return;
+    }
     b3Body_ApplyMassFromShapes(body.body);
-    apply_mass_override(body, comp);
 }
 
 /**
@@ -1993,6 +2023,27 @@ void update_rigidbody_mass_and_inertia(box3d::rigidbody& body, physics_component
  * Scale, sensor-ness and geometry are all creation-time properties in Box3D, so any of
  * them changing costs a rebuild. Mass is re-derived afterwards.
  */
+/// Adds a box, sphere, capsule or cylinder; mesh shapes need the body type and are made by create_mesh_shapes.
+void add_convex_shape(shape_build_context& ctx, const physics_compound_shape& shape)
+{
+    if(const auto* box = hpp::get_if<physics_box_shape>(&shape.shape))
+    {
+        create_box_shape(ctx, *box);
+    }
+    else if(const auto* sphere = hpp::get_if<physics_sphere_shape>(&shape.shape))
+    {
+        create_sphere_shape(ctx, *sphere);
+    }
+    else if(const auto* capsule = hpp::get_if<physics_capsule_shape>(&shape.shape))
+    {
+        create_capsule_shape(ctx, *capsule);
+    }
+    else if(const auto* cylinder = hpp::get_if<physics_cylinder_shape>(&shape.shape))
+    {
+        create_cylinder_shape(ctx, *cylinder);
+    }
+}
+
 void rebuild_shapes(box3d::world& world, box3d::rigidbody& body, physics_component& comp)
 {
     destroy_shapes(body);
@@ -2028,26 +2079,12 @@ void rebuild_shapes(box3d::world& world, box3d::rigidbody& body, physics_compone
 
     for(const auto& s : comp.get_shapes())
     {
-        if(hpp::holds_alternative<physics_box_shape>(s.shape))
+        if(const auto* mesh = hpp::get_if<physics_mesh_shape>(&s.shape))
         {
-            create_box_shape(ctx, hpp::get<physics_box_shape>(s.shape));
+            create_mesh_shapes(ctx, *mesh, comp.get_body_type());
+            continue;
         }
-        else if(hpp::holds_alternative<physics_sphere_shape>(s.shape))
-        {
-            create_sphere_shape(ctx, hpp::get<physics_sphere_shape>(s.shape));
-        }
-        else if(hpp::holds_alternative<physics_capsule_shape>(s.shape))
-        {
-            create_capsule_shape(ctx, hpp::get<physics_capsule_shape>(s.shape));
-        }
-        else if(hpp::holds_alternative<physics_cylinder_shape>(s.shape))
-        {
-            create_cylinder_shape(ctx, hpp::get<physics_cylinder_shape>(s.shape));
-        }
-        else if(hpp::holds_alternative<physics_mesh_shape>(s.shape))
-        {
-            create_mesh_shapes(ctx, hpp::get<physics_mesh_shape>(s.shape), comp.get_body_type());
-        }
+        add_convex_shape(ctx, s);
     }
 
     update_rigidbody_mass_and_inertia(body, comp);
@@ -2075,7 +2112,7 @@ void update_rigidbody_kind(box3d::rigidbody& body, physics_component& comp)
             b3Body_EnableSleep(body.body, false);
             break;
         case rigidbody_type::dynamic:
-            b3Body_EnableSleep(body.body, comp.can_sleep());
+            // update_rigidbody_motion sets whether it may sleep.
             b3Body_SetAwake(body.body, true);
             break;
     }
@@ -2510,6 +2547,22 @@ void restart_sleep_of_touching_bodies(world& w, b3BodyId body)
 }
 
 /**
+ * @brief The sleep restart for kinematic bodies the engine drives on its own (ragdoll hitboxes, character proxies):
+ *        only while they move faster than their sleep threshold, so a character standing still beside a crate lets
+ *        it sleep.
+ */
+void restart_sleep_while_moving(world& w, b3BodyId body)
+{
+    const float threshold = b3Body_GetSleepThreshold(body);
+    const bool is_moving = b3Length(b3Body_GetLinearVelocity(body)) > threshold ||
+                           b3Length(b3Body_GetAngularVelocity(body)) > threshold;
+    if(is_moving)
+    {
+        restart_sleep_of_touching_bodies(w, body);
+    }
+}
+
+/**
  * @brief Drives a kinematic body to the ECS pose over the step.
  *
  * Box3D moves kinematic bodies by velocity, so the target transform is what pushes
@@ -2614,7 +2667,9 @@ auto sync_transforms_from_physics(physics_component& comp, transform_component& 
     const math::vec3 p = box3d::from_b3_pos(pose.p);
     const math::quat q = box3d::from_b3(pose.q);
 
-    return transform.set_position_and_rotation_global(p, q, box3d::transform_sync_epsilon);
+    // An interpolated body is shown between the poses written here, so any rounding would show as a stall.
+    const float epsilon = comp.get_interpolate() ? 0.0f : box3d::transform_sync_epsilon;
+    return transform.set_position_and_rotation_global(p, q, epsilon);
 }
 
 auto to_physics(box3d::world& world, transform_component& transform, physics_component& comp, float step_dt) -> bool
@@ -2654,10 +2709,11 @@ auto to_physics(box3d::world& world, transform_component& transform, physics_com
 auto from_physics(transform_component& transform, physics_component& comp) -> bool
 {
     const bool result = sync_transforms_from_physics(comp, transform);
-
+    // Resolved before the bit is cleared: the global's dirty flag raises the consumer bits only when it turns on,
+    // so a local-space write later in the frame would otherwise reach no consumer and never teleport the body.
+    transform.resolve_transform_global();
     transform.set_dirty(system_id, false);
     comp.set_dirty(system_id, false);
-
     return result;
 }
 
@@ -2990,6 +3046,7 @@ void step_character(box3d::world& world,
     target.p = box3d::to_b3_pos(cc.position);
     target.q = box3d::identity_quat();
     b3Body_SetTargetTransform(cc.body, target, dt, true);
+    restart_sleep_while_moving(world, cc.body);
 }
 
 void make_character_controller_body(box3d::world& world, entt::handle entity, character_controller_component& comp)
@@ -3078,6 +3135,26 @@ void destroy_character_controller_body(box3d::world& world, entt::handle entity,
     }
 }
 
+void connect_ragdoll_controller(box3d::world& world, entt::handle owner, box3d::ragdoll& ragdoll);
+
+/// A proxy body made again lost the filter joints that kept it apart from the character's own ragdoll.
+void reconnect_own_ragdoll(box3d::world& world, entt::handle controller, entt::entity ragdoll_entity)
+{
+    auto& registry = *controller.registry();
+    auto* ragdoll = registry.valid(ragdoll_entity) ? registry.try_get<box3d::ragdoll>(ragdoll_entity) : nullptr;
+    if(ragdoll == nullptr)
+    {
+        return;
+    }
+    const auto is_gone = [](b3JointId id)
+    {
+        return !b3Joint_IsValid(id);
+    };
+    ragdoll->filters.erase(std::remove_if(ragdoll->filters.begin(), ragdoll->filters.end(), is_gone),
+                           ragdoll->filters.end());
+    connect_ragdoll_controller(world, entt::handle(registry, ragdoll_entity), *ragdoll);
+}
+
 void sync_character_controller_body(box3d::world& world, character_controller_component& comp, bool force = false)
 {
     auto owner = comp.get_owner();
@@ -3102,6 +3179,7 @@ void sync_character_controller_body(box3d::world& world, character_controller_co
             const math::vec3 velocity = cc->velocity;
             const math::vec3 pending = cc->pending_displacement;
             const bool grounded = cc->grounded;
+            const entt::entity own_ragdoll = cc->own_ragdoll;
             destroy_character_controller_body(world, owner, true);
             make_character_controller_body(world, owner, comp);
             if(auto* rebuilt = owner.try_get<box3d::character_controller>())
@@ -3109,6 +3187,7 @@ void sync_character_controller_body(box3d::world& world, character_controller_co
                 rebuilt->velocity = velocity;
                 rebuilt->pending_displacement = pending;
                 rebuilt->grounded = grounded;
+                reconnect_own_ragdoll(world, owner, own_ragdoll);
             }
         }
     }
@@ -3160,7 +3239,8 @@ auto from_physics_cc(box3d::world& /*world*/, transform_component& transform, ch
 
     comp.set_grounded(cc->grounded);
     comp.set_velocity_internal(cc->velocity);
-
+    // Resolved before the bit is cleared, as for bodies: a later local-space write must still raise it.
+    transform.resolve_transform_global();
     transform.set_dirty(system_id, false);
     comp.set_dirty(system_id, false);
     return changed;
@@ -3299,6 +3379,11 @@ auto to_threshold(float value) -> float
     return value > 0.0f ? value : FLT_MAX;
 }
 
+auto clamp_cone_angle(float degrees) -> float
+{
+    return math::radians(math::clamp(degrees, 0.0f, MAX_CONE_ANGLE));
+}
+
 auto clamp_joint_angle(float degrees) -> float
 {
     // Box3D keeps revolute and twist limits inside +-0.99 pi.
@@ -3380,7 +3465,7 @@ void tune_ball(b3JointId id, const joint_component& comp)
     const auto& limits = comp.get_limits();
     const auto& spring = comp.get_spring();
     b3SphericalJoint_EnableConeLimit(id, limits.enabled);
-    b3SphericalJoint_SetConeLimit(id, math::radians(math::clamp(limits.cone_angle, 0.0f, 180.0f)));
+    b3SphericalJoint_SetConeLimit(id, clamp_cone_angle(limits.cone_angle));
     b3SphericalJoint_EnableTwistLimit(id, limits.enabled);
     b3SphericalJoint_SetTwistLimits(id,
                                     clamp_joint_angle(std::min(limits.lower, limits.upper)),
@@ -3388,7 +3473,12 @@ void tune_ball(b3JointId id, const joint_component& comp)
     b3SphericalJoint_EnableSpring(id, spring.enabled);
     b3SphericalJoint_SetSpringHertz(id, spring.frequency);
     b3SphericalJoint_SetSpringDampingRatio(id, spring.damping_ratio);
-    b3SphericalJoint_SetTargetRotation(id, box3d::to_b3(math::normalize(math::quat(math::radians(spring.target_rotation)))));
+    // The target is in the engine's joint frame, where X twists; Box3D's frame is that one turned so Z twists.
+    const math::quat to_box3d_frame = get_z_to_x_rotation();
+    const math::quat target = math::quat(math::radians(spring.target_rotation));
+    b3SphericalJoint_SetTargetRotation(id,
+                                       box3d::to_b3(math::normalize(glm::inverse(to_box3d_frame) * target *
+                                                                    to_box3d_frame)));
     // A ball joint has no motor speed to drive: its motor is its friction.
     b3SphericalJoint_EnableMotor(id, comp.get_friction() > 0.0f);
     b3SphericalJoint_SetMotorVelocity(id, b3Vec3_zero);
@@ -3430,7 +3520,7 @@ void tune_wheel(b3JointId id, const joint_component& comp)
     b3WheelJoint_SetSteeringHertz(id, wheel_steering_hertz);
     b3WheelJoint_SetSteeringDampingRatio(id, wheel_steering_damping_ratio);
     b3WheelJoint_SetMaxSteeringTorque(id, steering.max_torque);
-    const float limit = math::radians(math::clamp(std::abs(steering.limit), 0.0f, 89.0f));
+    const float limit = math::radians(math::clamp(std::abs(steering.limit), 0.0f, box3d::max_steering_degrees));
     b3WheelJoint_SetSteeringLimits(id, -limit, limit);
     b3WheelJoint_SetTargetSteeringAngle(id, math::clamp(math::radians(steering.angle), -limit, limit));
 }
@@ -3592,7 +3682,9 @@ void sync_joint(box3d::world& world, joint_component& comp)
         state.is_broken = false;
         comp.set_needs_rebuild(true);
     }
-    if(comp.take_requested_break())
+    // A destroyed body lets the joint go: falling back to the world or to the joint's own entity would hold the
+    // other body by frames measured on the body that is gone.
+    if(comp.take_requested_break() || comp.is_body_missing())
     {
         break_joint(world, owner, joint, comp);
     }
@@ -3675,7 +3767,7 @@ void read_joint_state(box3d::joint& joint, joint_component& comp, float dt)
     {
         float delta = angle - joint.previous_angle;
         // The angle wraps at +-180 degrees.
-        delta = delta > 180.0f ? delta - 360.0f : (delta < -180.0f ? delta + 360.0f : delta);
+        delta = std::remainder(delta, box3d::full_turn_degrees);
         state.speed = joint.has_previous_angle && dt > 0.0f ? delta / dt : 0.0f;
         joint.previous_angle = angle;
         joint.has_previous_angle = true;
@@ -3695,6 +3787,29 @@ void destroy_joint(entt::handle entity)
         comp->get_state().is_active = false;
         comp->set_needs_rebuild(true);
     }
+}
+
+/**
+ * @brief Box3D tests the break thresholds only for the joints its constraint graph colours; a joint on a body with
+ *        more constraints than the colours hold is solved in the overflow, which never reports. The same test
+ *        (constraint force or torque at or above the threshold) runs here for every joint after the step.
+ */
+void break_overloaded_joints(box3d::world& world, entt::registry& registry)
+{
+    registry.view<joint_component, box3d::joint>().each(
+        [&](auto /*entity*/, joint_component& comp, box3d::joint& joint)
+        {
+            if(comp.get_state().is_broken || B3_IS_NULL(joint.id) || !b3Joint_IsValid(joint.id))
+            {
+                return;
+            }
+            const float force = b3Length(b3Joint_GetConstraintForce(joint.id));
+            const float torque = b3Length(b3Joint_GetConstraintTorque(joint.id));
+            if(force >= to_threshold(comp.get_break_force()) || torque >= to_threshold(comp.get_break_torque()))
+            {
+                break_joint(world, comp.get_owner(), joint, comp);
+            }
+        });
 }
 
 /// Joints whose force passed their threshold in the last step break.
@@ -3717,6 +3832,7 @@ void collect_broken_joints(box3d::world& world, unravel::scene& scn)
         }
         break_joint(world, owner, *joint, *comp);
     }
+    break_overloaded_joints(world, *scn.registry);
 }
 
 // --- ragdolls -----------------------------------------------------------------------------
@@ -3742,43 +3858,6 @@ auto get_ragdoll_joint_rotation(ragdoll_joint_type type) -> math::quat
     return type == ragdoll_joint_type::fixed ? math::identity<math::quat>() : get_z_to_x_rotation();
 }
 
-void add_ragdoll_shape(shape_build_context& ctx, const physics_compound_shape& shape)
-{
-    if(hpp::holds_alternative<physics_box_shape>(shape.shape))
-    {
-        create_box_shape(ctx, hpp::get<physics_box_shape>(shape.shape));
-    }
-    else if(hpp::holds_alternative<physics_sphere_shape>(shape.shape))
-    {
-        create_sphere_shape(ctx, hpp::get<physics_sphere_shape>(shape.shape));
-    }
-    else if(hpp::holds_alternative<physics_capsule_shape>(shape.shape))
-    {
-        create_capsule_shape(ctx, hpp::get<physics_capsule_shape>(shape.shape));
-    }
-    else if(hpp::holds_alternative<physics_cylinder_shape>(shape.shape))
-    {
-        create_cylinder_shape(ctx, hpp::get<physics_cylinder_shape>(shape.shape));
-    }
-}
-
-void set_ragdoll_part_mass(b3BodyId body, float mass)
-{
-    b3Body_ApplyMassFromShapes(body);
-    b3MassData data = b3Body_GetMassData(body);
-    mass = mass > 0.0f ? mass : 1.0f;
-    if(data.mass > 0.0f)
-    {
-        data.inertia = b3MulSM(mass / data.mass, data.inertia);
-    }
-    else
-    {
-        const float inertia = box3d::fallback_unit_inertia * mass;
-        data.inertia = {{inertia, 0.0f, 0.0f}, {0.0f, inertia, 0.0f}, {0.0f, 0.0f, inertia}};
-    }
-    data.mass = mass;
-    b3Body_SetMassData(body, data);
-}
 
 auto make_ragdoll_filter(const ragdoll_component& comp, const box3d::ragdoll& ragdoll, entt::handle owner) -> b3Filter
 {
@@ -3787,19 +3866,15 @@ auto make_ragdoll_filter(const ragdoll_component& comp, const box3d::ragdoll& ra
     return filter;
 }
 
-void destroy_ragdoll(entt::handle owner)
+/// Destroys a ragdoll's Box3D bodies and joints and lets its character go; the component stays on the entity.
+void release_ragdoll(entt::handle owner, box3d::ragdoll& ragdoll)
 {
-    auto* ragdoll = owner.try_get<box3d::ragdoll>();
-    if(ragdoll == nullptr)
-    {
-        return;
-    }
-    for(auto& filter : ragdoll->filters)
+    for(auto& filter : ragdoll.filters)
     {
         destroy_joint_id(filter);
     }
-    ragdoll->filters.clear();
-    for(auto& part : ragdoll->parts)
+    ragdoll.filters.clear();
+    for(auto& part : ragdoll.parts)
     {
         destroy_joint_id(part.joint);
         destroy_joint_id(part.anchor_joint);
@@ -3810,19 +3885,27 @@ void destroy_ragdoll(entt::handle owner)
         part.anchor = b3_nullBodyId;
         release_rigidbody(part.body);
     }
-    ragdoll->parts.clear();
-    if(auto controller = owner.registry()->valid(ragdoll->controller) ? entt::handle(*owner.registry(), ragdoll->controller)
-                                                                       : entt::handle{})
+    ragdoll.parts.clear();
+    if(auto controller = owner.registry()->valid(ragdoll.controller) ? entt::handle(*owner.registry(), ragdoll.controller)
+                                                                      : entt::handle{})
     {
         if(auto* cc = controller.try_get<box3d::character_controller>(); cc && cc->own_ragdoll == owner.entity())
         {
             cc->own_ragdoll = entt::null;
         }
     }
-    owner.remove<box3d::ragdoll>();
     if(auto* comp = owner.try_get<ragdoll_component>())
     {
         comp->get_runtime().is_built = false;
+    }
+}
+
+void destroy_ragdoll(entt::handle owner)
+{
+    if(auto* ragdoll = owner.try_get<box3d::ragdoll>())
+    {
+        release_ragdoll(owner, *ragdoll);
+        owner.remove<box3d::ragdoll>();
     }
 }
 
@@ -3851,7 +3934,12 @@ void create_ragdoll_part(box3d::world& world,
     auto& runtime = comp.get_runtime().bodies[index];
     auto& part = ragdoll.parts[index];
     const auto& bone_transform = runtime.bone.get<transform_component>();
-    const math::transform pose = runtime.has_anim_pose ? runtime.anim_world : bone_transform.get_transform_global();
+    // A ragdoll made again during play (its definition changed) carries on from where its simulated bodies are.
+    const bool keeps_physics = runtime.simulated && runtime.has_physics_pose;
+    const math::transform anim_pose = runtime.has_anim_pose ? runtime.anim_world : bone_transform.get_transform_global();
+    const math::transform pose = keeps_physics ? runtime.world : anim_pose;
+    const math::vec3 linear_velocity = keeps_physics ? runtime.linear_velocity : runtime.anim_linear_velocity;
+    const math::vec3 angular_velocity = keeps_physics ? runtime.angular_velocity : runtime.anim_angular_velocity;
 
     b3BodyDef def = b3DefaultBodyDef();
     def.type = runtime.simulated ? b3_dynamicBody : b3_kinematicBody;
@@ -3879,12 +3967,12 @@ void create_ragdoll_part(box3d::world& world,
     ctx.def.updateBodyMass = false;
     ctx.def.baseMaterial.friction = ragdoll_friction;
     ctx.def.baseMaterial.rollingResistance = ragdoll_rolling_resistance;
-    add_ragdoll_shape(ctx, definition.shape);
-    set_ragdoll_part_mass(part.body.body, definition.mass);
+    add_convex_shape(ctx, definition.shape);
+    apply_body_mass(part.body.body, definition.mass);
     if(runtime.simulated)
     {
-        b3Body_SetLinearVelocity(part.body.body, box3d::to_b3(runtime.anim_linear_velocity));
-        b3Body_SetAngularVelocity(part.body.body, box3d::to_b3(runtime.anim_angular_velocity));
+        b3Body_SetLinearVelocity(part.body.body, box3d::to_b3(linear_velocity));
+        b3Body_SetAngularVelocity(part.body.body, box3d::to_b3(angular_velocity));
     }
     runtime.world = pose;
     runtime.world_previous = pose;
@@ -3903,6 +3991,31 @@ auto get_rest_relative(const math::transform& owner_world,
     const math::quat child_rotation = math::normalize(owner_rotation * child.bind_model.get_rotation());
     const math::quat inverse_parent = glm::inverse(parent_rotation);
     return {inverse_parent * (child_position - parent_position), math::normalize(inverse_parent * child_rotation)};
+}
+
+/// A joint's friction is a motor held at zero speed with at most this torque; it follows the setting during play.
+void apply_part_friction(const ragdoll_component& comp, const ragdoll_body& definition, box3d::ragdoll_part& part)
+{
+    if(B3_IS_NULL(part.joint) || !b3Joint_IsValid(part.joint))
+    {
+        return;
+    }
+    const float friction = comp.get_joint_friction() * definition.friction_scale;
+    switch(part.joint_type)
+    {
+        case ragdoll_joint_type::ball:
+            b3SphericalJoint_EnableMotor(part.joint, friction > 0.0f);
+            b3SphericalJoint_SetMotorVelocity(part.joint, b3Vec3_zero);
+            b3SphericalJoint_SetMaxMotorTorque(part.joint, friction);
+            break;
+        case ragdoll_joint_type::hinge:
+            b3RevoluteJoint_EnableMotor(part.joint, friction > 0.0f);
+            b3RevoluteJoint_SetMotorSpeed(part.joint, 0.0f);
+            b3RevoluteJoint_SetMaxMotorTorque(part.joint, friction);
+            break;
+        case ragdoll_joint_type::fixed:
+            break;
+    }
 }
 
 void create_ragdoll_joint(box3d::world& world,
@@ -3927,70 +4040,57 @@ void create_ragdoll_joint(box3d::world& world,
         get_rest_relative(owner.get<transform_component>().get_transform_global(),
                           comp.get_runtime().bodies[size_t(runtime.parent)],
                           runtime);
-    const math::quat frame_rotation = math::normalize(math::quat(math::radians(definition.joint_rotation)) *
-                                                      get_ragdoll_joint_rotation(definition.joint));
+    const math::quat joint_rotation = math::quat(math::radians(definition.joint_rotation));
+    const math::quat to_box3d_frame = get_ragdoll_joint_rotation(definition.joint);
+    // The parent's side carries the swing offset, turned in the engine's joint frame (X twists), so the cone's
+    // centre turns away from the rest pose.
+    const math::quat swing_offset = math::quat(math::radians(definition.swing_offset));
     part.frame_b.p = b3Vec3_zero;
-    part.frame_b.q = box3d::to_b3(frame_rotation);
+    part.frame_b.q = box3d::to_b3(math::normalize(joint_rotation * to_box3d_frame));
     part.frame_a.p = box3d::to_b3(relative_position);
-    part.frame_a.q = box3d::to_b3(math::normalize(relative_rotation * frame_rotation));
+    part.frame_a.q = box3d::to_b3(math::normalize(relative_rotation * joint_rotation * swing_offset * to_box3d_frame));
     part.joint_type = definition.joint;
-
-    const float friction = comp.get_joint_friction() * definition.friction_scale;
+    const auto fill_base = [&](b3JointDef& base)
+    {
+        base.bodyIdA = parent.body.body;
+        base.bodyIdB = part.body.body;
+        base.localFrameA = part.frame_a;
+        base.localFrameB = part.frame_b;
+        base.collideConnected = false;
+    };
     switch(definition.joint)
     {
         case ragdoll_joint_type::ball:
         {
             b3SphericalJointDef def = b3DefaultSphericalJointDef();
-            def.base.bodyIdA = parent.body.body;
-            def.base.bodyIdB = part.body.body;
-            def.base.localFrameA = part.frame_a;
-            def.base.localFrameB = part.frame_b;
-            def.base.collideConnected = false;
+            fill_base(def.base);
             def.enableConeLimit = true;
-            def.coneAngle = math::radians(math::clamp(definition.swing_limit, 0.0f, 180.0f));
+            def.coneAngle = clamp_cone_angle(definition.swing_limit);
             def.enableTwistLimit = true;
             def.lowerTwistAngle = clamp_joint_angle(std::min(definition.twist_lower, definition.twist_upper));
             def.upperTwistAngle = clamp_joint_angle(std::max(definition.twist_lower, definition.twist_upper));
-            def.enableMotor = friction > 0.0f;
-            def.maxMotorTorque = friction;
-            def.motorVelocity = b3Vec3_zero;
             part.joint = b3CreateSphericalJoint(world.id, &def);
             break;
         }
         case ragdoll_joint_type::hinge:
         {
             b3RevoluteJointDef def = b3DefaultRevoluteJointDef();
-            def.base.bodyIdA = parent.body.body;
-            def.base.bodyIdB = part.body.body;
-            def.base.localFrameA = part.frame_a;
-            def.base.localFrameB = part.frame_b;
-            def.base.collideConnected = false;
+            fill_base(def.base);
             def.enableLimit = true;
             def.lowerAngle = clamp_joint_angle(std::min(definition.twist_lower, definition.twist_upper));
             def.upperAngle = clamp_joint_angle(std::max(definition.twist_lower, definition.twist_upper));
-            def.enableMotor = friction > 0.0f;
-            def.maxMotorTorque = friction;
-            def.motorSpeed = 0.0f;
             part.joint = b3CreateRevoluteJoint(world.id, &def);
             break;
         }
         case ragdoll_joint_type::fixed:
         {
             b3WeldJointDef def = b3DefaultWeldJointDef();
-            def.base.bodyIdA = parent.body.body;
-            def.base.bodyIdB = part.body.body;
-            def.base.localFrameA = part.frame_a;
-            def.base.localFrameB = part.frame_b;
-            def.base.collideConnected = false;
+            fill_base(def.base);
             part.joint = b3CreateWeldJoint(world.id, &def);
             break;
         }
     }
-}
-
-auto find_part_of_bone(const ragdoll_component& comp, const std::string& bone) -> int
-{
-    return comp.find_body(bone);
+    apply_part_friction(comp, definition, part);
 }
 
 void create_ragdoll_filters(box3d::world& world, ragdoll_component& comp, box3d::ragdoll& ragdoll)
@@ -4002,8 +4102,8 @@ void create_ragdoll_filters(box3d::world& world, ragdoll_component& comp, box3d:
     }
     for(const auto& pair : comp.get_disabled_collisions())
     {
-        const int a = find_part_of_bone(comp, pair.bone_a);
-        const int b = find_part_of_bone(comp, pair.bone_b);
+        const int a = comp.find_body(pair.bone_a);
+        const int b = comp.find_body(pair.bone_b);
         if(a < 0 || b < 0 || a == b)
         {
             continue;
@@ -4090,6 +4190,10 @@ void apply_ragdoll_settings(ragdoll_component& comp, box3d::ragdoll& ragdoll, en
         b3Body_SetLinearDamping(part.body.body, comp.get_linear_damping());
         b3Body_SetAngularDamping(part.body.body, comp.get_angular_damping());
         b3Body_SetBullet(part.body.body, comp.is_continuous());
+        if(i < comp.get_bodies().size())
+        {
+            apply_part_friction(comp, comp.get_bodies()[i], part);
+        }
         for(const b3ShapeId shape : part.body.shapes)
         {
             if(b3Shape_IsValid(shape))
@@ -4130,7 +4234,7 @@ void set_part_dynamic(ragdoll_component& comp, box3d::ragdoll_part& part, ragdol
     {
         b3Body_SetType(part.body.body, b3_dynamicBody);
         // A type change recomputes the mass from the shape densities.
-        set_ragdoll_part_mass(part.body.body, comp.get_bodies()[index].mass);
+        apply_body_mass(part.body.body, comp.get_bodies()[index].mass);
         b3Body_EnableSleep(part.body.body, true);
         b3Body_SetLinearVelocity(part.body.body, box3d::to_b3(body.anim_linear_velocity));
         b3Body_SetAngularVelocity(part.body.body, box3d::to_b3(body.anim_angular_velocity));
@@ -4243,7 +4347,25 @@ auto get_drive_target(const box3d::ragdoll_part& part, const ragdoll_body_runtim
     return math::normalize(glm::inverse(frame_a) * frame_b);
 }
 
-void follow_ragdoll_animation(ragdoll_component& comp, box3d::ragdoll& ragdoll, float dt)
+/**
+ * @brief Where a kinematic body goes: the animated pose, or, while its bone blends back from where the body stopped
+ *        simulating, the blend that is shown, so the hitbox follows what is drawn instead of sweeping to the
+ *        animation in one step (and knocking what it passes through).
+ */
+auto get_kinematic_target(const ragdoll_body_runtime& body) -> math::transform
+{
+    if(body.weight <= 0.0f)
+    {
+        return body.anim_world;
+    }
+    math::transform target = body.anim_world;
+    target.set_position(math::mix(body.anim_world.get_position(), body.snapshot_world.get_position(), body.weight));
+    target.set_rotation(math::normalize(
+        math::slerp(body.anim_world.get_rotation(), body.snapshot_world.get_rotation(), body.weight)));
+    return target;
+}
+
+void follow_ragdoll_animation(box3d::world& world, ragdoll_component& comp, box3d::ragdoll& ragdoll, float dt)
 {
     auto& runtime = comp.get_runtime();
     for(size_t i = 0; i < ragdoll.parts.size() && i < runtime.bodies.size(); ++i)
@@ -4256,7 +4378,8 @@ void follow_ragdoll_animation(ragdoll_component& comp, box3d::ragdoll& ragdoll, 
         }
         if(!part.is_dynamic)
         {
-            b3Body_SetTargetTransform(part.body.body, rigid_pose(body.anim_world), dt, true);
+            b3Body_SetTargetTransform(part.body.body, rigid_pose(get_kinematic_target(body)), dt, true);
+            restart_sleep_while_moving(world, part.body.body);
             continue;
         }
         if(B3_IS_NON_NULL(part.anchor))
@@ -4347,6 +4470,9 @@ void sync_ragdoll(box3d::world& world, entt::handle owner, ragdoll_component& co
     auto& runtime = comp.get_runtime();
     if(!runtime.is_prepared)
     {
+        // The model or its armature went: bodies left in the world would drift on with nothing to show them.
+        destroy_ragdoll(owner);
+        runtime.impulses.clear();
         return;
     }
     if(comp.needs_rebuild() || !runtime.is_built || !owner.all_of<box3d::ragdoll>())
@@ -4370,7 +4496,7 @@ void sync_ragdoll(box3d::world& world, entt::handle owner, ragdoll_component& co
     {
         teleport_ragdoll(comp, *ragdoll);
     }
-    follow_ragdoll_animation(comp, *ragdoll, dt);
+    follow_ragdoll_animation(world, comp, *ragdoll, dt);
     apply_ragdoll_impulses(comp, *ragdoll);
     comp.set_dirty(system_id, false);
 }
@@ -4424,17 +4550,16 @@ auto make_query_proxy(const physics_compound_shape& shape, const math::quat& rot
 {
     const auto place = [&](const math::vec3& center, const math::vec3& shape_rotation, const math::vec3& point)
     {
-        return box3d::to_b3(rotation * (center + make_shape_rotation(shape_rotation) * point));
+        return box3d::to_b3(rotation * (center + unravel::make_shape_rotation(shape_rotation) * point));
     };
     if(const auto* box = hpp::get_if<physics_box_shape>(&shape.shape))
     {
         const math::vec3 half = math::max(box->extends * 0.5f, math::vec3{box3d::min_half_extent});
-        for(int i = 0; i < 8; ++i)
+        for(int i = 0; i < box3d::box_corner_count; ++i)
         {
-            const math::vec3 corner{(i & 1) ? half.x : -half.x, (i & 2) ? half.y : -half.y, (i & 4) ? half.z : -half.z};
-            proxy.points[size_t(i)] = place(box->center, box->rotation, corner);
+            proxy.points[size_t(i)] = place(box->center, box->rotation, get_box_corner(half, i));
         }
-        proxy.count = 8;
+        proxy.count = box3d::box_corner_count;
         return true;
     }
     if(const auto* capsule = hpp::get_if<physics_capsule_shape>(&shape.shape))
@@ -4481,21 +4606,7 @@ auto shape_cast_closest(box3d::world& world,
                       box3d::make_query_filter(layer_mask),
                       &box3d::world::closest_cast_callback,
                       &ctx);
-    if(!ctx.has_hit)
-    {
-        return {};
-    }
-    const entt::entity entity = box3d::entity_from_shape(ctx.hit.shape);
-    if(entity == entt::null)
-    {
-        return {};
-    }
-    raycast_hit hit;
-    hit.entity = entity;
-    hit.point = ctx.hit.point;
-    hit.normal = math::normalize(ctx.hit.normal);
-    hit.distance = ctx.hit.fraction * max_distance;
-    return hit;
+    return box3d::world::make_closest_hit(ctx, direction, max_distance);
 }
 
 auto shape_cast_all(box3d::world& world,
@@ -4523,27 +4634,7 @@ auto shape_cast_all(box3d::world& world,
                       box3d::make_query_filter(layer_mask),
                       &box3d::world::all_casts_callback,
                       &ctx);
-    std::sort(ctx.hits.begin(),
-              ctx.hits.end(),
-              [](const auto& a, const auto& b)
-              {
-                  return a.fraction < b.fraction;
-              });
-    physics_vector<raycast_hit> hits;
-    for(const auto& cast : ctx.hits)
-    {
-        const entt::entity entity = box3d::entity_from_shape(cast.shape);
-        if(entity == entt::null)
-        {
-            continue;
-        }
-        auto& hit = hits.emplace_back();
-        hit.entity = entity;
-        hit.point = cast.point;
-        hit.normal = math::normalize(cast.normal);
-        hit.distance = cast.fraction * max_distance;
-    }
-    return hits;
+    return box3d::world::make_sorted_hits(ctx, direction, max_distance);
 }
 
 auto shape_overlap(box3d::world& world,
@@ -4725,6 +4816,20 @@ void box3d_backend::on_destroy_ragdoll_component(entt::registry& r, entt::entity
     entt::handle entity(r, e);
     world->release_contacts_for(entity, contact_end_reason::other_disabled, !scene::is_destroy_suppressed());
     box3d::destroy_ragdoll(entity);
+}
+
+void box3d_backend::on_destroy_box3d_ragdoll_component(entt::registry& r, entt::entity e)
+{
+    // A destroyed entity loses this component before its ragdoll_component (entt empties the newest pools
+    // first), so the bodies are released here rather than by the ragdoll_component's hook.
+    if(r.ctx().find<box3d::world>() == nullptr)
+    {
+        return;
+    }
+    if(auto* ragdoll = r.try_get<box3d::ragdoll>(e))
+    {
+        box3d::release_ragdoll(entt::handle(r, e), *ragdoll);
+    }
 }
 
 void box3d_backend::move_character(character_controller_component& comp, const math::vec3& displacement)
@@ -5035,7 +5140,7 @@ auto box3d_backend::get_gravity() const -> math::vec3
     {
         return box3d::from_b3(b3World_GetGravity(world->id));
     }
-    return {0.0f, box3d::default_gravity_y, 0.0f};
+    return get_default_gravity();
 }
 
 void box3d_backend::explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask)
@@ -5247,6 +5352,7 @@ void box3d_backend::on_play_begin(rtti::context& ctx)
     registry.on_destroy<box3d::rigidbody>().connect<&on_destroy_box3d_rigidbody_component>();
     registry.on_destroy<box3d::character_controller>().connect<&on_destroy_box3d_cc_component>();
     registry.on_destroy<box3d::joint>().connect<&on_destroy_box3d_joint_component>();
+    registry.on_destroy<box3d::ragdoll>().connect<&on_destroy_box3d_ragdoll_component>();
     registry.on_construct<active_component>().connect<&on_create_active_component>();
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
 
@@ -5316,6 +5422,7 @@ void box3d_backend::on_play_end(rtti::context& ctx)
 
     on_pre_destroy(registry).disconnect<&on_pre_destroy_entity>();
     registry.on_destroy<box3d::joint>().disconnect<&on_destroy_box3d_joint_component>();
+    registry.on_destroy<box3d::ragdoll>().disconnect<&on_destroy_box3d_ragdoll_component>();
     registry.on_construct<active_component>().disconnect<&on_create_active_component>();
     registry.on_destroy<active_component>().disconnect<&on_destroy_active_component>();
     registry.on_destroy<box3d::character_controller>().disconnect<&on_destroy_box3d_cc_component>();

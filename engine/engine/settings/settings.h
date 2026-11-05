@@ -256,7 +256,7 @@ struct settings
         int solver_iterations{10};
 
         /// World gravity in meters per second squared. Scripts change it while playing through Physics.gravity.
-        math::vec3 gravity{0.0f, -9.8f, 0.0f};
+        math::vec3 gravity{get_default_gravity()};
 
         /// Box3D: solver sub-steps per fixed step. More keep stacks and ragdoll joints stiffer at the cost of solve
         /// time; 4 is Box3D's own recommendation.

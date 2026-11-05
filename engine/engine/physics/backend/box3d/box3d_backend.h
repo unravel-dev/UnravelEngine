@@ -140,6 +140,7 @@ public:
     static void on_destroy_box3d_rigidbody_component(entt::registry& r, entt::entity e);
     static void on_destroy_box3d_cc_component(entt::registry& r, entt::entity e);
     static void on_destroy_box3d_joint_component(entt::registry& r, entt::entity e);
+    static void on_destroy_box3d_ragdoll_component(entt::registry& r, entt::entity e);
 };
 
 } // namespace unravel

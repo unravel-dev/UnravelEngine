@@ -450,30 +450,28 @@ void register_physics_component_script_bindings()
                             script_internal_call(internal_m2n_physics_get_use_gravity));
     reg.add_internal_call("internal_m2n_physics_set_use_gravity",
                             script_internal_call(internal_m2n_physics_set_use_gravity));
-#define UNRAVEL_PHYSICS_CALL(name) reg.add_internal_call(#name, script_internal_call(name))
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_gravity_scale);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_gravity_scale);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_linear_damping);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_linear_damping);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_angular_damping);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_angular_damping);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_is_continuous);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_is_continuous);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_can_sleep);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_can_sleep);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_interpolate);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_interpolate);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_is_sleeping);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_wake_up);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_sleep);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_surface_velocity);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_surface_velocity);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_freeze_position);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_freeze_position);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_get_freeze_rotation);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_set_freeze_rotation);
-    UNRAVEL_PHYSICS_CALL(internal_m2n_physics_apply_force_at_position);
-#undef UNRAVEL_PHYSICS_CALL
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_gravity_scale);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_gravity_scale);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_linear_damping);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_linear_damping);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_angular_damping);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_angular_damping);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_is_continuous);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_is_continuous);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_can_sleep);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_can_sleep);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_interpolate);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_interpolate);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_is_sleeping);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_wake_up);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_sleep);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_surface_velocity);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_surface_velocity);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_freeze_position);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_freeze_position);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_get_freeze_rotation);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_set_freeze_rotation);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_physics_apply_force_at_position);
 }
 
 } // namespace unravel

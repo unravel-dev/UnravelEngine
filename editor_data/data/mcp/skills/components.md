@@ -279,16 +279,32 @@ turbulence_strength 0.3, scale growing 1 -> 2.6, gray fading alpha); sparks
 - velocity / angular_velocity / is_sleeping are read-only: the simulation writes
   them, so read them in play mode to confirm something moves.
 - Motion: gravity_scale (0 floats, 0.2 drifts down slowly), linear_damping /
-  angular_damping (per second; 2-5 feels like water), is_continuous (fast small
+  angular_damping (per second: speed falls by e^-damping each second on both
+  backends; 2-5 feels like water), is_continuous (fast small
   bodies against other moving bodies), can_sleep, surface_velocity (a conveyor:
   the surface moves along its contacts in the body's space while the body stays
   put, e.g. [0,0,2] on a static belt).
 - Physics material rolling_resistance (0..1) stops rolling balls and capsules.
+  Both backends support it and surface_velocity; Bullet caps each rolling row
+  at the value, so heavy bodies roll a little further there.
+- A body whose entity scale changes rebuilds its shapes on the next step (scale
+  is built into the shapes on both backends), which is costly for mesh
+  colliders scaled every frame.
 - interpolate (off by default) places a dynamic body between its last two
   physics steps every frame. Turn it on for bodies the camera follows (a car
   and its wheels) or that the player watches closely: physics steps at a fixed
   rate, so at another frame rate such a body stalls in some frames and jumps in
   others. Writing the transform still teleports the body at once.
+- Script casts (Physics.Raycast, SphereCast, BoxCast, CapsuleCast and their
+  *All forms) normalize the direction, so its length does not matter. An
+  infinite or huge maxDistance (the default is Mathf.Infinity) runs as a long
+  finite query. RaycastHit.point is the contact point on the surface hit, for
+  shape casts too (not the shape's centre), and RaycastHit.distance is how far
+  the ray or shape travelled before it touched. Every *All cast and overlap has
+  a *NonAlloc form (RaycastNonAlloc, SphereCastNonAlloc, BoxCastNonAlloc,
+  CapsuleCastNonAlloc, SphereOverlapNonAlloc, BoxOverlapNonAlloc,
+  CapsuleOverlapNonAlloc) that fills a caller's array and returns the count:
+  use those in per-frame code.
 
 ## Joint
 
@@ -297,12 +313,20 @@ by anchor, turned by axis_rotation) is the joint frame, read when play starts.
 Its X axis is the hinge, slider, twist or wheel axis.
 
 - body_a: the entity it hangs on (null = the world). body_b: the entity it holds
-  (null = the joint's own entity, which then needs a Physics component).
-  Both bodies need Physics components; body B is normally dynamic.
+  (null = the joint's own entity). Every body the joint uses needs a Physics
+  component: body_a when set, and body_b or, when it is null, the joint's own
+  entity. body_a and body_b must be two different bodies; body B is normally
+  dynamic. The Joint inspector says which of these is missing.
 - type: fixed | hinge | slider | ball | distance | wheel.
+- collide_connected (off by default): whether the two jointed bodies still
+  collide with each other.
 - limits {enabled, lower, upper, cone_angle}: hinge and ball twist in degrees,
   slider and wheel suspension in meters, distance min / max length (a rope:
-  enabled with upper = the rope length). cone_angle is the ball's swing.
+  enabled with upper = the rope length). cone_angle is the ball's swing, the
+  half angle of its cone in degrees, at most 90.
+- Distance joints: distance is the length kept in meters (0 = the distance
+  between the anchors when the joint is made); connected_anchor is the point
+  held on body B, in body B's space.
 - spring {enabled, frequency (Hz), damping_ratio, target, target_rotation}:
   pulls to a target (a self-closing door: hinge spring target 0); a fixed joint
   with a spring is soft; for a wheel it is the suspension.
@@ -320,13 +344,22 @@ Its X axis is the hinge, slider, twist or wheel axis.
   +Y); a hinge about world Z -> [0,-90,0]; a slider pointing down -> [0,0,-90].
 - Chains and bridges: one ball or hinge joint entity between each pair of
   links, placed where they touch, body_a = the link above, body_b = the next.
+- Joints and ragdolls need the Box3D backend (the default). Bullet does not
+  simulate them: they do nothing there, and play start logs a warning when the
+  scene has any.
 
 ## Ragdoll
 
 On the entity with the skinned Model. Add the component, then physics_ragdoll
 {entity_id} builds the bodies from the humanoid skeleton (the inspector's Auto
-Setup). Bodies are bound to bones by name; shapes are in bone space.
+Setup): capsules fitted to the skin, boxes on the soles of the feet. Bodies are
+bound to bones by name; shapes are in bone space.
 
+- bodies[i]: bone, shape, mass, joint (ball | hinge | fixed), joint_rotation,
+  swing_limit (the ball's cone half angle in degrees, at most 90), swing_offset
+  (Euler degrees: turns the centre of the swing cone on the parent's side, away
+  from the bone's rest direction, so arms can hang from a T-pose bind pose),
+  twist_lower / twist_upper, friction_scale, drive_scale.
 - start_state animated | simulated | powered. Animated: kinematic hitboxes that
   follow the animation (rays report the bone entity hit). Simulated: physics
   moves the bones. Powered: drives pull the bodies to the animation.
@@ -340,8 +373,12 @@ Setup). Bodies are bound to bones by name; shapes are in bone space.
   AddVelocity(change), AddAngularVelocity(angularVelocity, pivot) to roll the
   whole body over, GetRecoveryPose to place a get-up animation.
 - physics_world (play) reports each ragdoll's state, speed and rest time;
-  {"ragdoll_bodies":true} adds every body's physics position against its drawn
-  bone, to check the pose on screen is the simulated one.
+  {"ragdoll_bodies":true} adds every body's last step position (physics), the
+  position the drawing interpolates to between the last two steps
+  (interpolated), and its drawn bone. Compare drawn with interpolated:
+  physics runs up to one step ahead by design. A simulating body at weight 1
+  is drawn turned as interpolated (turn near 0); only the root bone also stands
+  at that position, the others keep their bone lengths.
 
 ## Character Controller
 

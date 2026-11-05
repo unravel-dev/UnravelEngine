@@ -15,13 +15,23 @@ namespace unravel
 
 /**
  * @class fixed_step_runner
- * @brief Runs the fixed steps a frame's game time pays for and places characters between them.
+ * @brief Runs the fixed steps a frame's game time pays for and shows interpolated characters and dynamic bodies
+ *        between them.
  *
- * A character moves on fixed steps but is seen every frame, and a follow camera reads its transform: left at the last
- * step's position it stands still for some frames and takes double steps on others. Through the steps its transform
- * holds where it really is, which is what the backend syncs; afterwards it is placed between the last step's two
- * positions, by how far game time has come through the next step. A transform found anywhere else was moved by
- * someone else (a teleport, a warp, a moving parent): it starts over there, and the backend's sync follows it.
+ * A mover steps at a fixed rate but is seen every frame, and a follow camera reads its transform: left at the last
+ * step's pose it stands still for some frames and takes double steps on others. Through the steps its transform holds
+ * where it really is, which is what the backend syncs; afterwards it is placed between the last step's two poses, by
+ * how far game time has come through the next step. A body is shown turning too; a character's rotation is left to
+ * scripts.
+ *
+ * One rule tells other moves apart, for characters and bodies alike. The runner remembers the pose it drew last, in
+ * world space and in the parent's space:
+ * - a transform whose pose in its parent's space changed was written (a teleport, a warp, a reset): the mover starts
+ *   over there, and the backend places it there;
+ * - the same local pose somewhere else was carried by a moving parent: the step poses move along with it, so no
+ *   travel is lost, and the backend places the mover at the carried step pose.
+ * Interpolation that ends leaves the mover at its last step's pose, unless its transform was written since it was
+ * drawn.
  */
 class fixed_step_runner
 {
@@ -29,7 +39,7 @@ public:
     /**
      * @brief Advances by a frame's game time.
      * @param frame_seconds The frame's game time, greater than 0.
-     * @param step_seconds Length of a fixed step.
+     * @param step_seconds Length of a fixed step, greater than 0.
      * @param max_steps The most steps one frame runs; game time beyond what they catch up is dropped.
      */
     void advance(rtti::context& ctx, physics_backend& backend, float frame_seconds, float step_seconds, int max_steps);
@@ -40,17 +50,26 @@ public:
     /// Whether the fixed update event is running: a move made there belongs to that step alone.
     auto is_in_fixed_update() const noexcept -> bool;
 
-    /// How far game time has come through the next fixed step, 0..1: where shown poses sit between the last two.
-    auto get_step_fraction(float step_seconds) const noexcept -> float;
+    /// How far game time had come through the next fixed step when the last frame was shown, 0..1: where shown poses
+    /// sit between the last two.
+    auto get_step_fraction() const noexcept -> float;
 
 private:
+    /// Raises the fixed update event, marking the time a move belongs to its step.
+    void run_fixed_update(rtti::context& ctx, delta_t step);
+
     float elapsed_{};
+    float step_fraction_{};
     bool is_in_fixed_update_{};
 };
 
 /**
  * @class physics_system
  * @brief Owns fixed-step simulation and dispatches work to the compile-time physics backend.
+ *
+ * Casts take any direction and length. The direction is made unit length, so a hit's distance is travel along it,
+ * and the length is cut to MAX_QUERY_DISTANCE, which a script's default of infinity reaches. A cast or overlap with a
+ * zero or non-finite direction, a non-finite origin, rotation or radius, or a NaN or negative distance hits nothing.
  */
 class physics_system
 {
@@ -161,6 +180,12 @@ public:
 
     auto sphere_overlap(const math::vec3& origin, float radius, int layer_mask, bool query_sensors) const
         -> physics_vector<entt::entity>;
+
+    /**
+     * @brief How far game time had come through the next fixed step when the last frame was shown, 0..1: where
+     *        interpolated bodies, characters and ragdolls were drawn between their last two step poses.
+     */
+    auto get_step_fraction() const noexcept -> float;
 
     /**
      * @brief Draws backend physics debug gizmos for the active world.

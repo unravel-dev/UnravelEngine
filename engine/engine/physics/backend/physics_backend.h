@@ -66,13 +66,15 @@ public:
                                        float upwards_modifier,
                                        force_mode mode) = 0;
     virtual void apply_force(physics_component& comp, const math::vec3& force, force_mode mode) = 0;
+    /// Applies a force (or impulse, by @p mode) at a world point, so it also turns the body.
     virtual void apply_force_at_position(physics_component& comp,
                                          const math::vec3& force,
                                          const math::vec3& position,
                                          force_mode mode) = 0;
     virtual void apply_torque(physics_component& comp, const math::vec3& torque, force_mode mode) = 0;
     virtual void clear_kinematic_velocities(physics_component& comp) = 0;
-    /// Wakes a dynamic body, or puts it to sleep.
+    /// Wakes a dynamic body, or puts it to sleep together with its island: the bodies it touches sleep with it, even
+    /// ones that may not fall asleep on their own.
     virtual void set_body_awake(physics_component& comp, bool awake) = 0;
 
     /// World gravity while playing; the project setting seeds it at play start.
@@ -89,6 +91,9 @@ public:
     /**
      * @brief Sweeps a box, capsule or sphere and returns the first hit. The shape is placed at @p origin turned by
      *        @p rotation; its own center and rotation offset it from there.
+     *
+     * Every cast takes a unit @p direction and a finite @p max_distance (physics_system sees to both) and reports the
+     * contact point, the surface normal and the distance travelled along the direction.
      */
     virtual auto shape_cast(const physics_compound_shape& shape,
                             const math::vec3& origin,
@@ -98,6 +103,7 @@ public:
                             int layer_mask,
                             bool query_sensors) -> hpp::optional<raycast_hit> = 0;
 
+    /// Like shape_cast, every hit, nearest first.
     virtual auto shape_cast_all(const physics_compound_shape& shape,
                                 const math::vec3& origin,
                                 const math::quat& rotation,
@@ -170,7 +176,7 @@ public:
                             const camera& cam,
                             gfx::dd_raii& dd) = 0;
 
-    /// Counts of what the running world holds, for tools.
+    /// Counts of what the running world holds, for tools. A backend that cannot count something reports 0.
     struct world_stats
     {
         int body_count{};
@@ -182,6 +188,7 @@ public:
         /// Milliseconds the last step took.
         float step_ms{};
     };
+    /// What the running world holds now; all zero when no world runs.
     virtual auto get_world_stats() const -> world_stats = 0;
 };
 

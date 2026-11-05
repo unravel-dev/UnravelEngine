@@ -3,9 +3,12 @@
 #include <engine/ecs/components/basic_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/physics/ecs/components/joint_component.h>
+#include <engine/physics/ecs/systems/ragdoll_poses.h>
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace unravel
 {
@@ -16,6 +19,42 @@ namespace ragdoll_component_detail
 auto resolve_blend_time(float requested, float fallback) -> float
 {
     return requested < 0.0f ? fallback : requested;
+}
+
+/// Directions shorter than this are taken as no direction.
+constexpr float min_direction_length = 1e-4f;
+/// The lightest a body may be, in kilograms: Box3D needs mass to move a body.
+constexpr float min_body_mass = 0.01f;
+
+auto is_valid_state(ragdoll_state state) -> bool
+{
+    return state <= ragdoll_state::powered;
+}
+
+/// One rule for every caller (inspector, MCP, scripts, files): a joint type the build has, a cone Box3D takes and a
+/// body with mass.
+auto make_valid_body(ragdoll_body body) -> ragdoll_body
+{
+    if(body.joint > ragdoll_joint_type::fixed)
+    {
+        body.joint = ragdoll_joint_type::ball;
+    }
+    body.swing_limit = math::clamp(body.swing_limit, 0.0f, MAX_CONE_ANGLE);
+    body.mass = std::isfinite(body.mass) ? math::max(body.mass, min_body_mass) : min_body_mass;
+    body.friction_scale = math::max(body.friction_scale, 0.0f);
+    body.drive_scale = math::max(body.drive_scale, 0.0f);
+    return body;
+}
+
+auto make_valid_drive(ragdoll_drive drive) -> ragdoll_drive
+{
+    drive.local_frequency = math::max(drive.local_frequency, 0.0f);
+    drive.local_damping_ratio = math::max(drive.local_damping_ratio, 0.0f);
+    drive.world_frequency = math::max(drive.world_frequency, 0.0f);
+    drive.world_damping_ratio = math::max(drive.world_damping_ratio, 0.0f);
+    drive.world_max_force = math::max(drive.world_max_force, 0.0f);
+    drive.world_max_torque = math::max(drive.world_max_torque, 0.0f);
+    return drive;
 }
 
 auto make_rotation_from_to(const math::vec3& from, const math::vec3& to) -> math::quat
@@ -49,6 +88,19 @@ void ragdoll_component::mark_definition_changed()
 {
     dirty_.set();
     needs_rebuild_ = true;
+    fit_runtime_to_definition();
+}
+
+void ragdoll_component::fit_runtime_to_definition()
+{
+    const size_t kept = std::min(runtime_.bodies.size(), bodies_.size());
+    runtime_.bodies.resize(bodies_.size());
+    const bool simulate = state_ != ragdoll_state::animated;
+    for(size_t i = kept; i < runtime_.bodies.size(); ++i)
+    {
+        runtime_.bodies[i].simulated = simulate;
+        runtime_.bodies[i].weight = simulate ? 1.0f : 0.0f;
+    }
 }
 
 void ragdoll_component::mark_settings_changed()
@@ -59,11 +111,14 @@ void ragdoll_component::mark_settings_changed()
 
 void ragdoll_component::set_bodies(const std::vector<ragdoll_body>& bodies)
 {
-    if(bodies_ == bodies)
+    std::vector<ragdoll_body> valid;
+    valid.reserve(bodies.size());
+    std::transform(bodies.begin(), bodies.end(), std::back_inserter(valid), ragdoll_component_detail::make_valid_body);
+    if(bodies_ == valid)
     {
         return;
     }
-    bodies_ = bodies;
+    bodies_ = std::move(valid);
     mark_definition_changed();
 }
 
@@ -89,7 +144,10 @@ auto ragdoll_component::get_disabled_collisions() const noexcept -> const std::v
 
 void ragdoll_component::set_start_state(ragdoll_state state)
 {
-    start_state_ = state;
+    if(ragdoll_component_detail::is_valid_state(state))
+    {
+        start_state_ = state;
+    }
 }
 
 auto ragdoll_component::get_start_state() const noexcept -> ragdoll_state
@@ -212,11 +270,12 @@ auto ragdoll_component::get_collision_mask() const noexcept -> layer_mask
 
 void ragdoll_component::set_drive(const ragdoll_drive& drive)
 {
-    if(drive_ == drive)
+    const ragdoll_drive valid = ragdoll_component_detail::make_valid_drive(drive);
+    if(drive_ == valid)
     {
         return;
     }
-    drive_ = drive;
+    drive_ = valid;
     mark_settings_changed();
     runtime_.bodies_changed = true;
 }
@@ -257,7 +316,8 @@ void ragdoll_component::set_body_simulated(int index, bool simulated, float blen
     {
         body.snapshot_world = body.has_physics_pose ? body.world : body.anim_world;
         body.blend_time = blend_time;
-        if(blend_time <= 0.0f)
+        // A body that never had a pose (before the first physics frame) has nowhere to blend back from.
+        if(blend_time <= 0.0f || !(body.has_physics_pose || body.has_anim_pose))
         {
             body.weight = 0.0f;
         }
@@ -269,7 +329,7 @@ void ragdoll_component::set_body_simulated(int index, bool simulated, float blen
 void ragdoll_component::set_state(ragdoll_state state, float blend_time)
 {
     const float blend = ragdoll_component_detail::resolve_blend_time(blend_time, blend_time_);
-    if(state_ == state && state != ragdoll_state::animated)
+    if(!ragdoll_component_detail::is_valid_state(state) || (state_ == state && state != ragdoll_state::animated))
     {
         return;
     }
@@ -301,7 +361,7 @@ void ragdoll_component::collect_bodies_below(int index, std::vector<int>& out) c
     }
 }
 
-auto ragdoll_component::set_bone_simulated(const std::string& bone, bool simulated, bool include_children, float blend_time)
+auto ragdoll_component::set_bone_simulated(hpp::string_view bone, bool simulated, bool include_children, float blend_time)
     -> bool
 {
     const int index = find_body(bone);
@@ -312,6 +372,8 @@ auto ragdoll_component::set_bone_simulated(const std::string& bone, bool simulat
     std::vector<int> targets;
     if(include_children)
     {
+        // The bodies below are found through the bones, which a call before the first physics frame has not met yet.
+        prepare_ragdoll_runtime(*this);
         collect_bodies_below(index, targets);
     }
     else
@@ -331,7 +393,7 @@ auto ragdoll_component::is_body_simulated(int index) const -> bool
     return index >= 0 && size_t(index) < runtime_.bodies.size() && runtime_.bodies[size_t(index)].simulated;
 }
 
-auto ragdoll_component::find_body(const std::string& bone) const -> int
+auto ragdoll_component::find_body(hpp::string_view bone) const -> int
 {
     const auto it = std::find_if(bodies_.begin(),
                                  bodies_.end(),
@@ -368,9 +430,16 @@ auto ragdoll_component::find_body(entt::handle bone) const -> int
     return -1;
 }
 
+auto ragdoll_component::can_take_impulses() const -> bool
+{
+    // An inactive ragdoll is not stepped, so what it queued would all land at once when it comes back.
+    const auto owner = get_owner();
+    return owner && owner.all_of<active_component>();
+}
+
 void ragdoll_component::add_impulse(int body, const math::vec3& impulse, const math::vec3& point)
 {
-    if(body < 0 || size_t(body) >= bodies_.size())
+    if(body < 0 || size_t(body) >= bodies_.size() || !can_take_impulses())
     {
         return;
     }
@@ -380,7 +449,7 @@ void ragdoll_component::add_impulse(int body, const math::vec3& impulse, const m
 
 void ragdoll_component::add_impulse(int body, const math::vec3& impulse)
 {
-    if(body < 0 || size_t(body) >= bodies_.size())
+    if(body < 0 || size_t(body) >= bodies_.size() || !can_take_impulses())
     {
         return;
     }
@@ -390,6 +459,10 @@ void ragdoll_component::add_impulse(int body, const math::vec3& impulse)
 
 void ragdoll_component::add_velocity(const math::vec3& velocity_change)
 {
+    if(!can_take_impulses())
+    {
+        return;
+    }
     for(size_t i = 0; i < bodies_.size(); ++i)
     {
         runtime_.impulses.push_back({int(i), velocity_change, math::vec3{0.0f}, false, true});
@@ -399,6 +472,10 @@ void ragdoll_component::add_velocity(const math::vec3& velocity_change)
 
 void ragdoll_component::add_angular_velocity(const math::vec3& angular_velocity, const math::vec3& pivot)
 {
+    if(!can_take_impulses())
+    {
+        return;
+    }
     for(size_t i = 0; i < bodies_.size() && i < runtime_.bodies.size(); ++i)
     {
         const math::vec3 offset = runtime_.bodies[i].world.get_position() - pivot;
@@ -410,7 +487,7 @@ void ragdoll_component::add_angular_velocity(const math::vec3& angular_velocity,
 
 void ragdoll_component::add_explosion(const math::vec3& center, float radius, float impulse)
 {
-    if(radius <= 0.0f)
+    if(radius <= 0.0f || !can_take_impulses())
     {
         return;
     }
@@ -430,7 +507,7 @@ void ragdoll_component::add_explosion(const math::vec3& center, float radius, fl
         {
             continue;
         }
-        direction = distance > 1e-4f ? direction / distance : math::vec3{0.0f, 1.0f, 0.0f};
+        direction = distance > ragdoll_component_detail::min_direction_length ? direction / distance : math::vec3{0.0f, 1.0f, 0.0f};
         const float falloff = 1.0f - distance / radius;
         // The impulse is shared by mass, so every body gets the same velocity change, as Unreal's radial impulse.
         const float share = total_mass > 0.0f ? bodies_[i].mass / total_mass : 1.0f / float(bodies_.size());
@@ -516,11 +593,12 @@ auto ragdoll_component::get_recovery_pose(const math::vec3& head_direction) cons
     lying.y = 0.0f;
     math::vec3 wanted = head_direction;
     wanted.y = 0.0f;
-    if(math::length(lying) < 1e-4f || math::length(wanted) < 1e-4f)
+    if(math::length(lying) < ragdoll_component_detail::min_direction_length ||
+       math::length(wanted) < ragdoll_component_detail::min_direction_length)
     {
         math::vec3 forward = root.get_rotation() * runtime_.root_forward_local;
         forward.y = 0.0f;
-        const float yaw = math::length(forward) > 1e-4f ? std::atan2(forward.x, forward.z) : 0.0f;
+        const float yaw = math::length(forward) > ragdoll_component_detail::min_direction_length ? std::atan2(forward.x, forward.z) : 0.0f;
         result.set_rotation(math::angleAxis(yaw, math::vec3{0.0f, 1.0f, 0.0f}));
         return result;
     }
@@ -578,6 +656,7 @@ void ragdoll_component::reset_runtime_state()
     runtime_ = {};
     needs_rebuild_ = true;
     settings_dirty_ = true;
+    fit_runtime_to_definition();
 }
 
 } // namespace unravel

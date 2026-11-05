@@ -8,18 +8,19 @@ namespace Unravel.Core
 {
 
     /// <summary>
-    /// Represents information about a single hit during a raycasting operation.
+    /// Represents information about a single hit of a ray, sphere, box or capsule cast.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct RaycastHit : IFormattable
     {
         /// <summary>
-        /// The <see cref="Entity"/> that was hit by the ray.
+        /// The <see cref="Entity"/> that was hit.
         /// </summary>
         public Entity entity;
 
         /// <summary>
-        /// The point in 3D space where the ray hit the entity.
+        /// Where the cast touched the entity, in world space. For a sphere, box or capsule cast this is the contact
+        /// point on the entity's surface, not where the swept shape's center was.
         /// </summary>
         public Vector3 point;
 
@@ -29,7 +30,9 @@ namespace Unravel.Core
         public Vector3 normal;
 
         /// <summary>
-        /// The distance from the ray's origin to the point of contact.
+        /// How far the cast traveled along its normalized direction before it touched the entity, in meters. For a
+        /// ray this is the distance from the origin to <see cref="point"/>; a swept shape was moved by this much from
+        /// where it started.
         /// </summary>
         public float distance;
 

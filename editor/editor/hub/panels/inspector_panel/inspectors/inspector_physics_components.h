@@ -9,13 +9,8 @@ namespace unravel
 {
 
 /**
- * @brief Gives the ragdoll on @p owner the bodies build_humanoid_ragdoll makes for its model, as one undo step. On a
- *        prefab instance the changed fields become overrides. The inspector's Auto Setup and the MCP tool both call it.
- */
-auto auto_setup_ragdoll(rtti::context& ctx, entt::handle owner, const ragdoll_build_options& options) -> ragdoll_build_result;
-
-/**
- * @brief Ragdoll: reflected properties, what it holds and does, and Auto Setup from the humanoid skeleton.
+ * @brief Ragdoll: reflected properties, what it holds and does, and Auto Setup from the humanoid skeleton
+ *        (editor_actions::auto_setup_ragdoll).
  */
 struct inspector_ragdoll_component : public crtp_meta_type<inspector_ragdoll_component, inspector>
 {
@@ -26,10 +21,13 @@ struct inspector_ragdoll_component : public crtp_meta_type<inspector_ragdoll_com
                  const entt::meta_custom& custom) -> inspect_result override;
 
 private:
+    /// The total mass field, the Auto Setup button and what the last Auto Setup made.
+    auto draw_auto_setup(rtti::context& ctx, ragdoll_component& data) -> inspect_result;
+
     /// What the last Auto Setup made, and on which ragdoll: shown under its button for that one only.
     std::string auto_setup_report_;
     entt::handle auto_setup_owner_;
-    float total_mass_{70.0f};
+    float total_mass_{ragdoll_build_options{}.total_mass};
 };
 
 /**

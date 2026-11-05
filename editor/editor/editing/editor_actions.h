@@ -6,6 +6,7 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/prefab.h>
+#include <engine/physics/ragdoll_builder.h>
 #include <engine/threading/threader.h>
 #include <logging/logging.h>
 
@@ -74,6 +75,17 @@ struct import_files_result
 {
     std::vector<import_files_item> items;
     tpp::shared_future<bool> future;
+};
+
+/**
+ * @brief What editor_actions::auto_setup_ragdoll made.
+ */
+struct ragdoll_auto_setup_result
+{
+    /// The bodies and pairs built, or why nothing was (build.ok false, the reason in build.error).
+    ragdoll_build_result build;
+    /// The ragdoll's bodies or never-colliding pairs changed, as one undo step.
+    bool is_changed{false};
 };
 
 struct editor_actions
@@ -251,6 +263,18 @@ struct editor_actions
      * @return The executed steps, empty when no rebuild was pending.
      */
     static auto rebuild_pending_armatures(rtti::context& ctx) -> std::vector<std::shared_ptr<editing_action_t>>;
+
+    /**
+     * @brief Ragdoll Auto Setup, shared by the Ragdoll inspector and MCP: gives the ragdoll on @p owner the bodies
+     *        build_humanoid_ragdoll makes for its model, as one undo step. On a prefab instance the changed fields
+     *        become overrides.
+     *
+     * Refused, with the reason in build.error, in play mode, on an entity without a ragdoll and a model component,
+     * and for a total mass that is not above 0 kg. A failed build, or one that matches the bodies and pairs the
+     * ragdoll has, changes nothing and records no undo step.
+     */
+    static auto auto_setup_ragdoll(rtti::context& ctx, entt::handle owner, const ragdoll_build_options& options)
+        -> ragdoll_auto_setup_result;
 
     /**
      * @brief Where import_files copies each of @p paths: target_path / the source's file name,

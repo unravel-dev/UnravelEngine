@@ -3,6 +3,7 @@
 
 #include <engine/ecs/components/basic_component.h>
 #include <engine/layers/layer_mask.h>
+#include <engine/physics/physics_types.h>
 #include <math/math.h>
 
 #include <bitset>
@@ -28,24 +29,14 @@ enum class character_controller_property : uint8_t
 
 /**
  * @struct character_motion
- * @brief What fixed_step_runner keeps to show a character between fixed steps. Runtime state, not serialized.
+ * @brief What fixed_step_runner keeps to show a character between fixed steps, and the moves waiting for them.
+ *        Runtime state, not serialized. Only the step positions are shown: a character's rotation is left to scripts.
  */
-struct character_motion
+struct character_motion : stepped_motion
 {
     /// Moves waiting for a fixed step, and the game time they span.
     math::vec3 queued_move{};
     float queued_time{};
-    /// Where the last fixed step began and ended. The end is where the character really is.
-    math::vec3 step_start{};
-    math::vec3 step_end{};
-    /// The position last written to the transform. A transform holding anything else was moved by someone else.
-    math::vec3 shown{};
-    bool is_tracked{false};
-
-    /**
-     * @brief Starts over at a position, as if the character had always stood there. Queued moves stay.
-     */
-    void place_at(const math::vec3& position) noexcept;
 
     /**
      * @brief Counts a frame's game time for the moves waiting, up to a limit that keeps a slow frame rate from
@@ -72,7 +63,8 @@ struct character_motion
  *
  * With interpolation on (the default) the entity's transform is placed between the last two fixed steps every frame,
  * so it trails the character's physics position by at most one step and moves evenly at any frame rate. During a
- * fixed step it holds the physics position. Writing the position or warping teleports at once.
+ * fixed step it holds the physics position. Writing the position, in world or local space, or warping teleports at
+ * once; a moving parent carries the character along without losing its travel.
  */
 class character_controller_component : public component_crtp<character_controller_component, owned_component>
 {

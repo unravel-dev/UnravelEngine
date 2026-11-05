@@ -296,20 +296,13 @@ auto character_controller_component::get_interpolate() const noexcept -> bool
 auto character_controller_component::get_position() const -> math::vec3
 {
     const math::vec3 position = get_owner().get<transform_component>().get_position_global();
-    return interpolate_ && motion_.is_tracked && position == motion_.shown ? motion_.step_end : position;
+    const bool is_shown_between_steps = interpolate_ && motion_.is_tracked && position == motion_.shown_position;
+    return is_shown_between_steps ? motion_.step_end_position : position;
 }
 
 auto character_controller_component::get_motion() noexcept -> character_motion&
 {
     return motion_;
-}
-
-void character_motion::place_at(const math::vec3& position) noexcept
-{
-    step_start = position;
-    step_end = position;
-    shown = position;
-    is_tracked = true;
 }
 
 void character_motion::add_queued_time(float seconds, float max_seconds) noexcept

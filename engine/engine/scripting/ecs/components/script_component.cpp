@@ -176,10 +176,11 @@ void script_component::on_joint_break(entt::handle joint,
                          auto method = dotnet::make_method_invoker<void(entt::entity, entt::entity, entt::entity, float, float)>(
                              engine_script_cache().on_joint_break_method,
                              false);
+                         // Entity.Invalid (id 0) stands for no body and for a destroyed one, as everywhere in C#.
                          method(obj,
                                 joint.entity(),
-                                body_a ? body_a.entity() : entt::entity(entt::null),
-                                body_b ? body_b.entity() : entt::entity(entt::null),
+                                body_a ? body_a.entity() : entt::entity(0),
+                                body_b ? body_b.entity() : entt::entity(0),
                                 force,
                                 torque);
                      }

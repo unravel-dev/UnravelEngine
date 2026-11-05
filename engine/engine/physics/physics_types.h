@@ -196,12 +196,70 @@ struct manifold_point
     float impulse{};
 };
 
+/**
+ * @struct raycast_hit
+ * @brief What a ray, sphere, box, capsule or shape cast hit, the same for every backend and cast.
+ */
 struct raycast_hit
 {
     entt::entity entity{};
+    /// Where the cast touched the hit shape, in world space. For a sphere or shape cast this is the contact point on
+    /// the surface, not where the cast shape's center stood.
     math::vec3 point{};
+    /// The hit surface's normal at the point, unit length.
     math::vec3 normal{};
+    /// How far the cast traveled along its direction, taken as unit length, before the hit, in meters.
     float distance{};
+};
+
+/**
+ * @brief The longest distance a cast sweeps, in meters. Longer ones, infinity included, are cut to it.
+ *
+ * Box3D sweeps in floats: the broadphase is traversed relative to the world origin, and a hit's distance is a float
+ * fraction of the swept length. At 10 km both still resolve about a millimeter (a float's step at 10^4 is 2^-10),
+ * while Box3D itself counts positions beyond about 16 km as imprecise, so a longer sweep finds nothing a game can
+ * place.
+ */
+inline constexpr float MAX_QUERY_DISTANCE = 10000.0f;
+
+/**
+ * @brief World gravity in meters per second squared, until the project settings or a script set another.
+ */
+inline auto get_default_gravity() noexcept -> math::vec3
+{
+    return {0.0f, -9.8f, 0.0f};
+}
+
+/**
+ * @brief The rotation of a collision shape inside its body, from the shape's Euler angles in degrees.
+ */
+inline auto make_shape_rotation(const math::vec3& degrees) noexcept -> math::quat
+{
+    return math::normalize(math::quat(math::radians(degrees)));
+}
+
+/**
+ * @struct stepped_motion
+ * @brief What fixed_step_runner keeps to show a dynamic body or a character between fixed steps. Runtime state, not
+ *        serialized.
+ *
+ * Poses are in world space. The pose last drawn is also kept in the parent's space: a transform whose local pose
+ * changed since was written by someone else, and the same local pose somewhere else was carried by a moving parent.
+ */
+struct stepped_motion
+{
+    /// The pose the last fixed step began and ended at. The end is where the mover really is.
+    math::vec3 step_start_position{};
+    math::quat step_start_rotation{math::identity<math::quat>()};
+    math::vec3 step_end_position{};
+    math::quat step_end_rotation{math::identity<math::quat>()};
+    /// The pose last written to the transform, in world space.
+    math::vec3 shown_position{};
+    math::quat shown_rotation{math::identity<math::quat>()};
+    /// The same pose in the parent's space.
+    math::vec3 shown_local_position{};
+    math::quat shown_local_rotation{math::identity<math::quat>()};
+    bool is_tracked{false};
 };
 
 /**

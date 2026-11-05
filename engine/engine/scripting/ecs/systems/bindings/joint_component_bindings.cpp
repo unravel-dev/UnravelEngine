@@ -11,12 +11,29 @@ namespace unravel
 namespace joint_bindings
 {
 
-/// Entity.Invalid is id 0, the entity every scene reserves: it stands for none, like a null handle.
-auto to_handle(entt::entity id) -> entt::handle
+/**
+ * @brief Managed JointSpring. joint_spring holds a math::vec3, which is padded to 16 bytes, while C#'s Vector3 is 12.
+ */
+struct managed_joint_spring
 {
-    auto& registry = *engine::context().get_cached<ecs>().get_scene().registry;
-    const bool is_none = id == entt::entity{0} || !registry.valid(id);
-    return is_none ? entt::handle{} : entt::handle(registry, id);
+    bool enabled;
+    float frequency;
+    float damping_ratio;
+    float target;
+    dotnetpp_backend::managed_interface::vector3 target_rotation;
+};
+
+// JointLimits, JointSpring, JointMotor and JointSteering in C# mirror these structs field for field, bools as one
+// byte, and cross the boundary as they are. A field added on one side must be added on the other.
+static_assert(sizeof(joint_limits) == 16, "JointLimits in C# is 16 bytes.");
+static_assert(sizeof(managed_joint_spring) == 28, "JointSpring in C# is 28 bytes.");
+static_assert(sizeof(joint_motor) == 12, "JointMotor in C# is 12 bytes.");
+static_assert(sizeof(joint_steering) == 16, "JointSteering in C# is 16 bytes.");
+
+/// The id C# sees for a body: Entity.Invalid (id 0) for none or a destroyed one, as get_entity_from_id reads back.
+auto to_script_entity(const entt::handle& body) -> entt::entity
+{
+    return body ? body.entity() : entt::entity(0);
 }
 
 auto internal_m2n_joint_get_type(entt::entity id) -> uint8_t
@@ -40,17 +57,16 @@ auto internal_m2n_joint_get_body_a(entt::entity id) -> entt::entity
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        const auto body = comp->get_body_a();
-        return body ? body.entity() : entt::entity(entt::null);
+        return to_script_entity(comp->get_body_a());
     }
-    return entt::null;
+    return entt::entity(0);
 }
 
 void internal_m2n_joint_set_body_a(entt::entity id, entt::entity value)
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        comp->set_body_a(to_handle(value));
+        comp->set_body_a(get_entity_from_id(value));
     }
 }
 
@@ -58,17 +74,16 @@ auto internal_m2n_joint_get_body_b(entt::entity id) -> entt::entity
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        const auto body = comp->get_body_b();
-        return body ? body.entity() : entt::entity(entt::null);
+        return to_script_entity(comp->get_body_b());
     }
-    return entt::null;
+    return entt::entity(0);
 }
 
 void internal_m2n_joint_set_body_b(entt::entity id, entt::entity value)
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        comp->set_body_b(to_handle(value));
+        comp->set_body_b(get_entity_from_id(value));
     }
 }
 
@@ -106,6 +121,23 @@ void internal_m2n_joint_set_axis_rotation(entt::entity id, const math::vec3& val
     }
 }
 
+auto internal_m2n_joint_get_connected_anchor(entt::entity id) -> math::vec3
+{
+    if(auto comp = safe_get_component<joint_component>(id))
+    {
+        return comp->get_connected_anchor();
+    }
+    return {};
+}
+
+void internal_m2n_joint_set_connected_anchor(entt::entity id, const math::vec3& value)
+{
+    if(auto comp = safe_get_component<joint_component>(id))
+    {
+        comp->set_connected_anchor(value);
+    }
+}
+
 auto internal_m2n_joint_get_collide_connected(entt::entity id) -> bool
 {
     if(auto comp = safe_get_component<joint_component>(id))
@@ -123,7 +155,7 @@ void internal_m2n_joint_set_collide_connected(entt::entity id, bool value)
     }
 }
 
-/// Reads one field of a joint's settings, or a default without the component.
+/// Reads a joint's setting or state, or a default without the component.
 template<typename Getter>
 auto read_joint(entt::entity id, Getter&& getter) -> decltype(getter(std::declval<const joint_component&>()))
 {
@@ -134,120 +166,66 @@ auto read_joint(entt::entity id, Getter&& getter) -> decltype(getter(std::declva
     return {};
 }
 
-auto internal_m2n_joint_get_limits_enabled(entt::entity id) -> bool
+void internal_m2n_joint_get_limits(entt::entity id, joint_limits* value)
 {
-    return read_joint(id, [](const joint_component& c) { return c.get_limits().enabled; });
+    *value = read_joint(id, [](const joint_component& c) { return c.get_limits(); });
 }
 
-auto internal_m2n_joint_get_limits_lower(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_limits().lower; });
-}
-
-auto internal_m2n_joint_get_limits_upper(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_limits().upper; });
-}
-
-auto internal_m2n_joint_get_limits_cone(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_limits().cone_angle; });
-}
-
-void internal_m2n_joint_set_limits(entt::entity id, bool enabled, float lower, float upper, float cone_angle)
+void internal_m2n_joint_set_limits(entt::entity id, const joint_limits& value)
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        comp->set_limits({enabled, lower, upper, cone_angle});
+        comp->set_limits(value);
     }
 }
 
-auto internal_m2n_joint_get_spring_enabled(entt::entity id) -> bool
+void internal_m2n_joint_get_spring(entt::entity id, managed_joint_spring* value)
 {
-    return read_joint(id, [](const joint_component& c) { return c.get_spring().enabled; });
+    using converter = dotnet::managed_interface::converter;
+    const joint_spring spring = read_joint(id, [](const joint_component& c) { return c.get_spring(); });
+    *value = {spring.enabled,
+              spring.frequency,
+              spring.damping_ratio,
+              spring.target,
+              converter::convert<math::vec3, dotnetpp_backend::managed_interface::vector3>(spring.target_rotation)};
 }
 
-auto internal_m2n_joint_get_spring_frequency(entt::entity id) -> float
+void internal_m2n_joint_set_spring(entt::entity id, const managed_joint_spring& value)
 {
-    return read_joint(id, [](const joint_component& c) { return c.get_spring().frequency; });
-}
-
-auto internal_m2n_joint_get_spring_damping(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_spring().damping_ratio; });
-}
-
-auto internal_m2n_joint_get_spring_target(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_spring().target; });
-}
-
-auto internal_m2n_joint_get_spring_target_rotation(entt::entity id) -> math::vec3
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_spring().target_rotation; });
-}
-
-void internal_m2n_joint_set_spring(entt::entity id,
-                                   bool enabled,
-                                   float frequency,
-                                   float damping_ratio,
-                                   float target,
-                                   const math::vec3& target_rotation)
-{
+    using converter = dotnet::managed_interface::converter;
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        comp->set_spring({enabled, frequency, damping_ratio, target, target_rotation});
+        comp->set_spring({value.enabled,
+                          value.frequency,
+                          value.damping_ratio,
+                          value.target,
+                          converter::convert<dotnetpp_backend::managed_interface::vector3, math::vec3>(value.target_rotation)});
     }
 }
 
-auto internal_m2n_joint_get_motor_enabled(entt::entity id) -> bool
+void internal_m2n_joint_get_motor(entt::entity id, joint_motor* value)
 {
-    return read_joint(id, [](const joint_component& c) { return c.get_motor().enabled; });
+    *value = read_joint(id, [](const joint_component& c) { return c.get_motor(); });
 }
 
-auto internal_m2n_joint_get_motor_speed(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_motor().speed; });
-}
-
-auto internal_m2n_joint_get_motor_force(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_motor().max_force; });
-}
-
-void internal_m2n_joint_set_motor(entt::entity id, bool enabled, float speed, float max_force)
+void internal_m2n_joint_set_motor(entt::entity id, const joint_motor& value)
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        comp->set_motor({enabled, speed, max_force});
+        comp->set_motor(value);
     }
 }
 
-auto internal_m2n_joint_get_steering_enabled(entt::entity id) -> bool
+void internal_m2n_joint_get_steering(entt::entity id, joint_steering* value)
 {
-    return read_joint(id, [](const joint_component& c) { return c.get_steering().enabled; });
+    *value = read_joint(id, [](const joint_component& c) { return c.get_steering(); });
 }
 
-auto internal_m2n_joint_get_steering_angle(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_steering().angle; });
-}
-
-auto internal_m2n_joint_get_steering_limit(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_steering().limit; });
-}
-
-auto internal_m2n_joint_get_steering_torque(entt::entity id) -> float
-{
-    return read_joint(id, [](const joint_component& c) { return c.get_steering().max_torque; });
-}
-
-void internal_m2n_joint_set_steering(entt::entity id, bool enabled, float angle, float limit, float max_torque)
+void internal_m2n_joint_set_steering(entt::entity id, const joint_steering& value)
 {
     if(auto comp = safe_get_component<joint_component>(id))
     {
-        comp->set_steering({enabled, angle, limit, max_torque});
+        comp->set_steering(value);
     }
 }
 
@@ -361,57 +339,45 @@ void register_joint_component_script_bindings()
     APPLOG_TRACE("{}", __func__);
     using namespace joint_bindings;
     auto reg = dotnet::internal_call_registry("Unravel.Core.JointComponent");
-#define UNRAVEL_JOINT_CALL(name) reg.add_internal_call(#name, script_internal_call(name))
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_type);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_type);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_body_a);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_body_a);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_body_b);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_body_b);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_anchor);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_anchor);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_axis_rotation);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_axis_rotation);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_collide_connected);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_collide_connected);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_limits_enabled);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_limits_lower);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_limits_upper);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_limits_cone);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_limits);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_spring_enabled);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_spring_frequency);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_spring_damping);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_spring_target);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_spring_target_rotation);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_spring);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_motor_enabled);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_motor_speed);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_motor_force);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_motor);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_steering_enabled);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_steering_angle);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_steering_limit);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_steering_torque);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_steering);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_friction);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_friction);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_distance);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_distance);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_break_force);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_break_force);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_break_torque);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_set_break_torque);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_is_active);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_is_broken);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_angle);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_position);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_speed);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_reaction_force);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_get_reaction_torque);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_break);
-    UNRAVEL_JOINT_CALL(internal_m2n_joint_repair);
-#undef UNRAVEL_JOINT_CALL
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_type);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_type);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_body_a);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_body_a);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_body_b);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_body_b);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_anchor);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_anchor);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_axis_rotation);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_axis_rotation);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_connected_anchor);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_connected_anchor);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_collide_connected);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_collide_connected);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_limits);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_limits);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_spring);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_spring);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_motor);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_motor);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_steering);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_steering);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_friction);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_friction);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_distance);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_distance);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_break_force);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_break_force);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_break_torque);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_set_break_torque);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_is_active);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_is_broken);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_angle);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_position);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_speed);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_reaction_force);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_get_reaction_torque);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_break);
+    UNRAVEL_ADD_INTERNAL_CALL(reg, internal_m2n_joint_repair);
 }
 
 } // namespace unravel

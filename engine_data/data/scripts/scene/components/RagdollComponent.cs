@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Unravel.Core
 {
@@ -17,6 +18,90 @@ namespace Unravel.Core
     }
 
     /// <summary>
+    /// How a ragdoll body turns against its parent body.
+    /// </summary>
+    public enum RagdollJointType : byte
+    {
+        /// <summary>Swings in a cone about the joint axis and twists about it (shoulders, hips, spine, neck).</summary>
+        Ball,
+        /// <summary>Turns about the joint axis only (elbows, knees).</summary>
+        Hinge,
+        /// <summary>Does not turn.</summary>
+        Fixed,
+    }
+
+    /// <summary>
+    /// The settings of one ragdoll body: its mass and its joint to the parent body. Angles are in degrees.
+    /// </summary>
+    /// <remarks>
+    /// The bone a body moves is read with <see cref="RagdollComponent.GetBodyBone"/>. Body shapes are set in the
+    /// inspector or by <see cref="RagdollComponent.AutoSetup"/>; scripts do not change them. <c>new RagdollBody()</c>,
+    /// with or without an object initializer, starts from the engine's defaults; <c>default(RagdollBody)</c> and array
+    /// elements start from zero.
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RagdollBody
+    {
+        /// <summary>Mass in kilograms.</summary>
+        public float mass = 1.0f;
+        /// <summary>How the body turns against its parent body.</summary>
+        public RagdollJointType joint = RagdollJointType.Ball;
+        /// <summary>Turn of the joint frame against the bone, Euler angles. The frame's X axis is the twist or hinge axis.</summary>
+        public Vector3 jointRotation = Vector3.zero;
+        /// <summary>
+        /// Ball: turn of the swing cone's centre away from the bone's rest direction, Euler angles in the joint frame,
+        /// so a limb can rest away from its bind pose (arms hanging from a T-pose).
+        /// </summary>
+        public Vector3 swingOffset = Vector3.zero;
+        /// <summary>Ball: half angle of the swing cone, at most 90.</summary>
+        public float swingLimit = 30.0f;
+        /// <summary>Ball: lowest twist. Hinge: lowest angle.</summary>
+        public float twistLower = -20.0f;
+        /// <summary>Ball: highest twist. Hinge: highest angle.</summary>
+        public float twistUpper = 20.0f;
+        /// <summary>Multiplies the ragdoll's <see cref="RagdollComponent.jointFriction"/> for this joint.</summary>
+        public float frictionScale = 1.0f;
+        /// <summary>Multiplies the ragdoll's drives for this body.</summary>
+        public float driveScale = 1.0f;
+
+        /// <summary>A body with the engine's defaults: 1 kg on a ball joint with a 30 degree cone and a twist of 20 degrees either way.</summary>
+        public RagdollBody()
+        {
+        }
+    }
+
+    /// <summary>
+    /// How hard a powered ragdoll, or a simulated part of an animated one, follows the animation. Frequencies are
+    /// oscillations per second, damping ratios run from 0 (bounces) to 1 (settles without overshoot); negative values
+    /// count as 0.
+    /// </summary>
+    /// <remarks>
+    /// <c>new RagdollDrive()</c>, with or without an object initializer, starts from the engine's defaults;
+    /// <c>default(RagdollDrive)</c> and array elements start from zero, which turns every drive off.
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RagdollDrive
+    {
+        /// <summary>Joint springs towards the animated rotation against the parent body; 0 turns them off.</summary>
+        public float localFrequency = 5.0f;
+        /// <summary>Damping ratio of the joint springs.</summary>
+        public float localDampingRatio = 1.0f;
+        /// <summary>Pull of every powered body towards its animated place in the world, which keeps it standing; 0 turns it off.</summary>
+        public float worldFrequency = 0.0f;
+        /// <summary>Damping ratio of the world pull.</summary>
+        public float worldDampingRatio = 1.0f;
+        /// <summary>Newtons the world pull uses at most, per body.</summary>
+        public float worldMaxForce = 800.0f;
+        /// <summary>Newton meters the world pull uses at most, per body.</summary>
+        public float worldMaxTorque = 150.0f;
+
+        /// <summary>Drives with the engine's defaults: joint springs at 5, no world pull.</summary>
+        public RagdollDrive()
+        {
+        }
+    }
+
+    /// <summary>
     /// Physics bodies on the bones of a skinned model, held together by joints.
     /// </summary>
     /// <remarks>
@@ -24,6 +109,10 @@ namespace Unravel.Core
     /// animation as kinematic hitboxes; <see cref="Simulate"/> hands the bones to physics with the momentum the
     /// animation gave them; <see cref="Recover"/> blends them back. A ray cast reports the bone entity it hit: pass it to
     /// <see cref="FindBody(Entity)"/> to push that body.
+    /// <para>
+    /// A body is given by its index, 0 to <see cref="bodyCount"/> - 1; every per-body call ignores another index.
+    /// Body poses and velocities need the running ragdoll: they read zero until play has prepared it for its model.
+    /// </para>
     /// </remarks>
     public class RagdollComponent : Component
     {
@@ -32,6 +121,13 @@ namespace Unravel.Core
         {
             get => (RagdollState)internal_m2n_ragdoll_get_state(owner);
             set => internal_m2n_ragdoll_set_state(owner, (byte)value, -1.0f);
+        }
+
+        /// <summary>Who moves the bones when play starts.</summary>
+        public RagdollState startState
+        {
+            get => (RagdollState)internal_m2n_ragdoll_get_start_state(owner);
+            set => internal_m2n_ragdoll_set_start_state(owner, (byte)value);
         }
 
         /// <summary>Seconds the bones take to blend back to the animation.</summary>
@@ -55,22 +151,91 @@ namespace Unravel.Core
             set => internal_m2n_ragdoll_set_drive_strength(owner, value);
         }
 
-        /// <summary>Joint springs towards the animated rotation against the parent body, oscillations per second.</summary>
+        /// <summary>How hard the bodies follow the animation while they simulate.</summary>
+        public RagdollDrive drive
+        {
+            get
+            {
+                internal_m2n_ragdoll_get_drive(owner, out RagdollDrive result);
+                return result;
+            }
+            set => internal_m2n_ragdoll_set_drive(owner, value);
+        }
+
+        /// <summary>Joint springs towards the animated rotation against the parent body, oscillations per second: <see cref="RagdollDrive.localFrequency"/> of <see cref="drive"/>.</summary>
         public float localDriveFrequency
         {
-            get => internal_m2n_ragdoll_get_local_drive(owner);
-            set => internal_m2n_ragdoll_set_local_drive(owner, value);
+            get => drive.localFrequency;
+            set
+            {
+                RagdollDrive changed = drive;
+                changed.localFrequency = value;
+                drive = changed;
+            }
         }
 
-        /// <summary>Pull of every powered body towards its animated place in the world, oscillations per second. Keeps it standing.</summary>
+        /// <summary>Pull of every powered body towards its animated place in the world, oscillations per second. Keeps it standing: <see cref="RagdollDrive.worldFrequency"/> of <see cref="drive"/>.</summary>
         public float worldDriveFrequency
         {
-            get => internal_m2n_ragdoll_get_world_drive(owner);
-            set => internal_m2n_ragdoll_set_world_drive(owner, value);
+            get => drive.worldFrequency;
+            set
+            {
+                RagdollDrive changed = drive;
+                changed.worldFrequency = value;
+                drive = changed;
+            }
         }
 
-        /// <summary>Number of bodies.</summary>
+        /// <summary>How fast the bodies lose speed, per second.</summary>
+        public float linearDamping
+        {
+            get => internal_m2n_ragdoll_get_linear_damping(owner);
+            set => internal_m2n_ragdoll_set_linear_damping(owner, value);
+        }
+
+        /// <summary>How fast the bodies lose spin, per second.</summary>
+        public float angularDamping
+        {
+            get => internal_m2n_ragdoll_get_angular_damping(owner);
+            set => internal_m2n_ragdoll_set_angular_damping(owner, value);
+        }
+
+        /// <summary>
+        /// Whether bodies that are not parent and child collide with each other, so arms do not pass through the chest.
+        /// A change during play makes the bodies again.
+        /// </summary>
+        public bool selfCollision
+        {
+            get => internal_m2n_ragdoll_get_self_collision(owner);
+            set => internal_m2n_ragdoll_set_self_collision(owner, value);
+        }
+
+        /// <summary>Continuous collision for the bodies, so a fast fall does not pass through thin geometry.</summary>
+        public bool isContinuous
+        {
+            get => internal_m2n_ragdoll_get_is_continuous(owner);
+            set => internal_m2n_ragdoll_set_is_continuous(owner, value);
+        }
+
+        /// <summary>Layers the bodies collide with (include filter).</summary>
+        public LayerMask includeLayers
+        {
+            get => internal_m2n_ragdoll_get_include_layers(owner);
+            set => internal_m2n_ragdoll_set_include_layers(owner, value);
+        }
+
+        /// <summary>Layers the bodies ignore (exclude filter).</summary>
+        public LayerMask excludeLayers
+        {
+            get => internal_m2n_ragdoll_get_exclude_layers(owner);
+            set => internal_m2n_ragdoll_set_exclude_layers(owner, value);
+        }
+
+        /// <summary>Number of bodies the ragdoll defines.</summary>
         public int bodyCount => internal_m2n_ragdoll_get_body_count(owner);
+
+        /// <summary>Number of bone pairs whose bodies never collide with each other.</summary>
+        public int disabledCollisionCount => internal_m2n_ragdoll_get_disabled_collision_count(owner);
 
         /// <summary>Mean speed of the bodies in meters per second.</summary>
         public float averageSpeed => internal_m2n_ragdoll_get_average_speed(owner);
@@ -140,22 +305,63 @@ namespace Unravel.Core
             return internal_m2n_ragdoll_find_body(owner, bone);
         }
 
-        /// <summary>The name of the bone a body moves.</summary>
+        /// <summary>The name of the bone a body moves; empty for an index out of range.</summary>
         public string GetBodyBone(int body)
         {
             return internal_m2n_ragdoll_get_body_bone(owner, body);
         }
 
-        /// <summary>The world position of a body.</summary>
+        /// <summary>The settings of a body; the engine's defaults for an index out of range.</summary>
+        public RagdollBody GetBody(int body)
+        {
+            internal_m2n_ragdoll_get_body(owner, body, out RagdollBody result);
+            return result;
+        }
+
+        /// <summary>
+        /// Changes the settings of a body. A change during play makes the bodies again.
+        /// </summary>
+        /// <returns>False, and nothing changes, for an index out of range or an unknown joint type.</returns>
+        public bool SetBody(int body, RagdollBody settings)
+        {
+            return internal_m2n_ragdoll_set_body(owner, body, settings);
+        }
+
+        /// <summary>The world position of a body. Zero until play has prepared the ragdoll.</summary>
         public Vector3 GetBodyPosition(int body)
         {
             return internal_m2n_ragdoll_get_body_position(owner, body);
         }
 
-        /// <summary>The velocity of a body in meters per second.</summary>
+        /// <summary>The velocity of a body in meters per second. Zero until play has prepared the ragdoll.</summary>
         public Vector3 GetBodyVelocity(int body)
         {
             return internal_m2n_ragdoll_get_body_velocity(owner, body);
+        }
+
+        /// <summary>
+        /// The bones of a pair whose bodies never collide with each other, <paramref name="pair"/> from 0 to
+        /// <see cref="disabledCollisionCount"/> - 1; empty names for an index out of range.
+        /// </summary>
+        public void GetDisabledCollision(int pair, out string boneA, out string boneB)
+        {
+            boneA = internal_m2n_ragdoll_get_disabled_collision_bone_a(owner, pair);
+            boneB = internal_m2n_ragdoll_get_disabled_collision_bone_b(owner, pair);
+        }
+
+        /// <summary>Whether the bodies of two bones, named in either order, never collide with each other.</summary>
+        public bool IsCollisionDisabled(string boneA, string boneB)
+        {
+            return internal_m2n_ragdoll_is_collision_disabled(owner, boneA, boneB);
+        }
+
+        /// <summary>
+        /// Stops or restores collisions between the bodies of two bones, named in either order, as the inspector's
+        /// disabled collision list does. A change during play makes the bodies again.
+        /// </summary>
+        public void SetCollisionDisabled(string boneA, string boneB, bool disabled)
+        {
+            internal_m2n_ragdoll_set_collision_disabled(owner, boneA, boneB, disabled);
         }
 
         /// <summary>Pushes one body at a world point, which also turns it. Only simulating bodies move.</summary>
@@ -208,13 +414,12 @@ namespace Unravel.Core
         /// <param name="rotation">How to turn the character.</param>
         public void GetRecoveryPose(Vector3 headDirection, out Vector3 position, out Quaternion rotation)
         {
-            position = internal_m2n_ragdoll_get_recovery_position(owner, headDirection);
-            rotation = internal_m2n_ragdoll_get_recovery_rotation(owner, headDirection);
+            internal_m2n_ragdoll_get_recovery_pose(owner, headDirection, out position, out rotation);
         }
 
         /// <summary>Rebuilds the bodies of a humanoid from its skeleton and skin, like the inspector's Auto Setup.</summary>
-        /// <param name="totalMass">Kilograms shared out over the bodies.</param>
-        /// <returns>False when the model is not a humanoid or its mesh is not loaded yet.</returns>
+        /// <param name="totalMass">Kilograms shared out over the bodies, more than 0.</param>
+        /// <returns>False when the mass is not more than 0, the model is not a humanoid or its mesh is not loaded yet.</returns>
         public bool AutoSetup(float totalMass = 70.0f)
         {
             return internal_m2n_ragdoll_auto_setup(owner, totalMass);
@@ -228,10 +433,22 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_joint_friction(Entity eid, float value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_drive_strength(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_drive_strength(Entity eid, float value);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_local_drive(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_local_drive(Entity eid, float value);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_world_drive(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_world_drive(Entity eid, float value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_get_drive(Entity eid, out RagdollDrive value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_drive(Entity eid, RagdollDrive value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern byte internal_m2n_ragdoll_get_start_state(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_start_state(Entity eid, byte state);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_linear_damping(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_linear_damping(Entity eid, float value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_angular_damping(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_angular_damping(Entity eid, float value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_ragdoll_get_self_collision(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_self_collision(Entity eid, bool value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_ragdoll_get_is_continuous(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_is_continuous(Entity eid, bool value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern LayerMask internal_m2n_ragdoll_get_include_layers(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_include_layers(Entity eid, LayerMask mask);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern LayerMask internal_m2n_ragdoll_get_exclude_layers(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_exclude_layers(Entity eid, LayerMask mask);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern int internal_m2n_ragdoll_get_body_count(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_average_speed(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_ragdoll_get_rest_time(Entity eid);
@@ -243,16 +460,22 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern int internal_m2n_ragdoll_find_body_by_name(Entity eid, string bone);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern int internal_m2n_ragdoll_find_body(Entity eid, Entity bone);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern string internal_m2n_ragdoll_get_body_bone(Entity eid, int body);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_get_body(Entity eid, int body, out RagdollBody value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_ragdoll_set_body(Entity eid, int body, RagdollBody value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_ragdoll_get_body_position(Entity eid, int body);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_ragdoll_get_body_velocity(Entity eid, int body);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern int internal_m2n_ragdoll_get_disabled_collision_count(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern string internal_m2n_ragdoll_get_disabled_collision_bone_a(Entity eid, int pair);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern string internal_m2n_ragdoll_get_disabled_collision_bone_b(Entity eid, int pair);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_ragdoll_is_collision_disabled(Entity eid, string boneA, string boneB);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_set_collision_disabled(Entity eid, string boneA, string boneB, bool disabled);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_add_impulse_at(Entity eid, int body, Vector3 impulse, Vector3 point);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_add_impulse(Entity eid, int body, Vector3 impulse);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_add_velocity(Entity eid, Vector3 velocityChange);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_add_angular_velocity(Entity eid, Vector3 angularVelocity, Vector3 pivot);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_add_explosion(Entity eid, Vector3 center, float radius, float impulse);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_reset_to_animation(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_ragdoll_get_recovery_position(Entity eid, Vector3 headDirection);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Quaternion internal_m2n_ragdoll_get_recovery_rotation(Entity eid, Vector3 headDirection);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_ragdoll_get_recovery_pose(Entity eid, Vector3 headDirection, out Vector3 position, out Quaternion rotation);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_ragdoll_auto_setup(Entity eid, float totalMass);
     }
 }

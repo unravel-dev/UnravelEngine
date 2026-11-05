@@ -22,12 +22,13 @@ description: >-
 | Ragdoll component | `engine/engine/physics/ecs/components/ragdoll_component.h` |
 | Ragdoll poses (capture / write) | `engine/engine/physics/ecs/systems/ragdoll_poses.h` |
 | Ragdoll auto setup | `engine/engine/physics/ragdoll_builder.h` |
-| Joint / ragdoll inspectors, Auto Setup | `editor/editor/hub/panels/inspector_panel/inspectors/inspector_physics_components.h` |
+| Joint / ragdoll inspectors | `editor/editor/hub/panels/inspector_panel/inspectors/inspector_physics_components.h` |
+| Ragdoll Auto Setup (inspector button and MCP) | `editor/editor/editing/editor_actions.h` (`auto_setup_ragdoll`) |
 | MCP physics tools | `editor/editor/system/mcp/mcp_tools_physics.cpp` (`physics_ragdoll`, `physics_world`) |
 | Design notes | `tasks/physics_ragdoll_analysis_2026-11-04.md` |
-| Meta | `engine/engine/meta/ecs/components/physics_component.hpp`, `character_controller_component.hpp` |
+| Meta | `engine/engine/meta/ecs/components/` `physics_component.hpp`, `character_controller_component.hpp`, `joint_component.hpp`, `ragdoll_component.hpp` |
 | Layer masks | `engine/engine/layers/layer_mask.h` |
-| Editor gizmos | `editor/editor/hub/panels/scene_panel/gizmos/` (physics shapes) |
+| Editor gizmos | `editor/editor/hub/panels/scene_panel/gizmos/gizmos/` (`gizmo_physics_component`, `gizmo_character_controller_component`, `gizmo_joint_ragdoll_components`) |
 | Script bridge | `engine/engine/scripting/ecs/systems/script_glue.cpp` |
 
 ## Architecture
@@ -90,8 +91,9 @@ steps of uneven length, and interpolation would show that as a wobble. Moves mad
 update go straight to the backend.
 
 Dynamic rigid bodies interpolate only with `physics_component::interpolate` on (off by default, as
-in Unity): `fixed_step_runner` keeps a `rigidbody_motion` (step start / end pose) and shows
-position and rotation between them. A transform whose `dirty_ids::physics` flag is set at the
+in Unity): each `physics_component` holds a `rigidbody_motion` (step start / end pose,
+`get_motion()`, runtime only), and `fixed_step_runner` records the steps there and shows position
+and rotation between them. A transform whose `dirty_ids::physics` flag is set at the
 start of a frame or after the contacts was written by someone else: the backend teleports on
 that flag, and the motion starts over there. `place_body` keeps the flag as it was. A camera that
 follows a body (a car) stutters at any frame rate that beats against the fixed step unless the
@@ -118,12 +120,21 @@ body interpolates.
   joint back; `needs_rebuild` re-reads them from the scene.
 - Breaking: thresholds go to `b3JointDef.forceThreshold` / `torqueThreshold`; `b3World_GetJointEvents` after the step
   breaks the joint, `dispatch_contacts` calls `script_system::on_joint_break`.
-- Bullet does not implement joints or ragdolls: it warns once.
+- A ball joint's `cone_angle` is at most 90 degrees: `b3SphericalJoint_SetConeLimit` asserts above pi/2, and the
+  assert breaks into the debugger.
+- Bullet does not implement joints or ragdolls: at play start it logs a warning when the scene has any, and the
+  joint and ragdoll inspectors say so under Bullet.
 
 ## Ragdolls
 
 - `ragdoll_component` on the skinned model's entity; bodies by bone name, shapes in bone space (scaled by the bone's
   world scale at build). Joint frames come from the BIND pose (limits are relative to the rest pose).
+- A body's `swing_limit` (the ball's cone half angle) is at most 90 degrees, as for joints. `swing_offset` (Euler
+  degrees) turns the centre of the swing cone on the parent's side, away from the bone's rest direction, so arms can
+  hang from a T-pose bind pose inside their cone.
+- Auto Setup (`build_humanoid_ragdoll`, run through `editor_actions::auto_setup_ragdoll`): capsules fitted to the
+  skin, boxes on the soles of the feet. The editor action refuses play mode and a total mass that is not above 0 kg,
+  and records one undo step only when the bodies or pairs change.
 - Frame order (`physics_system::on_frame_update`): animation already posed the bones -> `capture_ragdoll_animations`
   (a bone still holding what the ragdoll wrote keeps its last animated pose) -> fixed steps (backend syncs kinematic
   targets, drives, impulses; reads poses) -> `show_ragdolls` writes bones parents first, parent-local blend, only the
@@ -134,9 +145,20 @@ body interpolates.
   (`contact_entity_from_shape`).
 - Pushes: `add_impulse` (one body, at a point), `add_velocity` (every body), `add_angular_velocity` (every body turns
   as one about a pivot: rolls a lying body over), `add_explosion`.
-- MCP `physics_world {"ragdoll_bodies":true}` lists each body's physics position against its drawn bone and the turn
-  between them: the check that the drawn pose matches the simulation.
+- MCP `physics_world {"ragdoll_bodies":true}` lists each body's last step position (`physics`), the pose the drawing
+  interpolates to between the last two steps (`interpolated`, by the ragdoll's `shown_step_fraction`), its drawn bone
+  and the turn between drawn and interpolated. Compare drawn with interpolated: `physics` runs up to one step ahead
+  by design. At weight 1 a simulating body's bone turns as interpolated, and only the root bone also takes its
+  position (the others keep their bone lengths).
 - Tests: `unravel-tests --suite joints` (synthetic mannequin skeleton, no mesh).
+
+## Queries
+
+- Every cast (ray, sphere, box, capsule, and the `*_all` forms) normalizes its direction, so any length works, and
+  treats an infinite or huge max distance (C#'s default `Mathf.Infinity`) as a long finite query: Box3D asserts on a
+  non-finite translation.
+- `RaycastHit.point` is the contact point on the surface hit, for shape casts too (not the shape's centre), and
+  `RaycastHit.distance` is how far the ray or shape travelled before it touched.
 
 ## Layer filtering
 
@@ -198,5 +220,5 @@ Covered by the `physics contacts / destroy funnel` test suite.
 - Missing `on_play_end` cleanup
 - The cylinder primitive is 2 m tall (1 m across) while a physics cylinder defaults to length 1: a scaled cylinder
   primitive needs `{"type":"cylinder","length":2}`
-- Judging a ragdoll from screenshots alone: compare `physics_world {"ragdoll_bodies":true}` (physics against drawn)
-  before tuning, so a display problem is not mistaken for a physics one
+- Judging a ragdoll from screenshots alone: compare `physics_world {"ragdoll_bodies":true}` (interpolated against
+  drawn) before tuning, so a display problem is not mistaken for a physics one

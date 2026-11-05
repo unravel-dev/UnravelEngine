@@ -28,9 +28,9 @@ namespace unravel
 {
 namespace
 {
-constexpr ImU32 COL_REACHED = IM_COL32(96, 200, 110, 255);
+constexpr ImU32 COL_REACHED = INSPECTOR_STATUS_ACTIVE_COLOR;
 constexpr ImU32 COL_UNREACHED = IM_COL32(240, 150, 60, 255);
-constexpr ImU32 COL_IDLE = IM_COL32(150, 150, 150, 255);
+constexpr ImU32 COL_IDLE = INSPECTOR_STATUS_IDLE_COLOR;
 /// Weights below this count as off.
 constexpr float MIN_ACTIVE_WEIGHT = 1e-3f;
 /// A created look-at target sits this far in front of the eyes, in meters.
@@ -72,14 +72,6 @@ auto find_bone_model_owner(entt::handle bone) -> entt::handle
     return {};
 }
 
-/// A dimmed hint that wraps at the inspector's edge.
-void draw_rig_hint(const char* text)
-{
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", text);
-    ImGui::PopStyleColor();
-}
-
 /// Rigs built from separate models are drawn from their transforms: the solve shows in play mode.
 void draw_plain_rig_hint(rtti::context& ctx, entt::handle owner)
 {
@@ -87,7 +79,7 @@ void draw_plain_rig_hint(rtti::context& ctx, entt::handle owner)
     {
         return;
     }
-    draw_rig_hint(ICON_MDI_INFORMATION_OUTLINE " Plain hierarchy: the solved pose shows in play mode. The gizmo previews it.");
+    draw_inspector_hint(ICON_MDI_INFORMATION_OUTLINE " Plain hierarchy: the solved pose shows in play mode. The gizmo previews it.");
 }
 
 /// The entity with the character's skinned model: the character itself or the first one under it.
@@ -568,7 +560,7 @@ auto inspector_foot_ik_component::inspect(rtti::context& ctx,
                            data.pelvis_offset);
         if(!ctx.get_cached<play_mode>().is_active())
         {
-            draw_rig_hint("Ground probes use physics: feet plant in play mode.");
+            draw_inspector_hint("Ground probes use physics: feet plant in play mode.");
         }
     }
     if(ImGui::Button(ICON_MDI_AUTO_FIX " Auto Setup"))
@@ -583,7 +575,7 @@ auto inspector_foot_ik_component::inspect(rtti::context& ctx,
                             "skeleton's shape) and assigns the ones it finds.");
     if(!auto_setup_report_.empty() && auto_setup_owner_ == data.get_owner())
     {
-        draw_rig_hint(auto_setup_report_.c_str());
+        draw_inspector_hint(auto_setup_report_);
     }
     ImGui::PopID();
     return result;

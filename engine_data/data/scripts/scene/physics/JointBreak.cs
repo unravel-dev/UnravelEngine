@@ -14,12 +14,13 @@ namespace Unravel.Core
         public Entity joint;
 
         /// <summary>
-        /// The body the joint hung on; invalid when it hung on the world.
+        /// The body the joint hung on; <see cref="Entity.Invalid"/> when it hung on the world or the body was destroyed.
         /// </summary>
         public Entity bodyA;
 
         /// <summary>
-        /// The body the joint held.
+        /// The body the joint held: the joint's own entity when it named none; <see cref="Entity.Invalid"/> when the body
+        /// was destroyed.
         /// </summary>
         public Entity bodyB;
 

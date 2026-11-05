@@ -262,31 +262,52 @@ namespace Unravel.Samples
             Input.simulateMouseWithTouches = wasSimulatingMouse;
         }
 
-        /// <summary>Lays the controls out for the screen's size and the safe area.</summary>
+        /// <summary>The screen's shorter side, which the sizes are shares of.</summary>
+        private float LayoutUnit => Mathf.Min(screenSize.x, screenSize.y);
+
+        /// <summary>Space between the safe area's edges and the controls.</summary>
+        private float Margin => EdgeMargin * LayoutUnit;
+
+        /// <summary>The lowest the controls reach.</summary>
+        private float Bottom => safeArea.y + safeArea.height - Margin;
+
+        /// <summary>
+        /// Lays the controls out for the screen's size and the safe area. A label change lays out the buttons alone, so
+        /// a held stick keeps its center and its knob.
+        /// </summary>
         private void UpdateLayout()
         {
             var size = new Vector2(Screen.width, Screen.height);
             Rect safe = Screen.safeArea;
-            if (size == screenSize && safe == safeArea && !HasLabelChanged())
+            if (size != screenSize || safe != safeArea)
             {
-                return;
+                screenSize = size;
+                safeArea = safe;
+                LayOutStick();
+                LayOutButtons();
             }
-            screenSize = size;
-            safeArea = safe;
-            float unit = Mathf.Min(size.x, size.y);
-            float margin = EdgeMargin * unit;
-            travel = Radius * unit;
-            float baseRadius = travel * BaseDiameter * 0.5f;
-            float bottom = safe.y + safe.height - margin;
-            float stickX = RightStick ? safe.x + safe.width - margin - baseRadius : safe.x + margin + baseRadius;
-            restCenter = new Vector2(stickX, bottom - baseRadius);
-            stickCenter = restCenter;
-            stickZone.rect = Floating ? GetStickArea(size, safe) : Square(restCenter, baseRadius * 2.0f);
+            else if (HasLabelChanged())
+            {
+                LayOutButtons();
+            }
+        }
 
-            float buttonDiameter = ButtonSize * unit;
+        private void LayOutStick()
+        {
+            travel = Radius * LayoutUnit;
+            float baseRadius = travel * BaseDiameter * 0.5f;
+            float stickX = RightStick ? safeArea.x + safeArea.width - Margin - baseRadius : safeArea.x + Margin + baseRadius;
+            restCenter = new Vector2(stickX, Bottom - baseRadius);
+            stickCenter = restCenter;
+            stickZone.rect = Floating ? GetStickArea(screenSize, safeArea) : Square(restCenter, baseRadius * 2.0f);
+        }
+
+        private void LayOutButtons()
+        {
+            float buttonDiameter = ButtonSize * LayoutUnit;
             float clusterReach = buttonDiameter * (ButtonSpread + 0.5f);
-            float clusterX = RightStick ? safe.x + margin + clusterReach : safe.x + safe.width - margin - clusterReach;
-            var clusterCenter = new Vector2(clusterX, bottom - clusterReach);
+            float clusterX = RightStick ? safeArea.x + Margin + clusterReach : safeArea.x + safeArea.width - Margin - clusterReach;
+            var clusterCenter = new Vector2(clusterX, Bottom - clusterReach);
             foreach (var faceButton in buttons)
             {
                 LayOutButton(faceButton, clusterCenter, buttonDiameter);

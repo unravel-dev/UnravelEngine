@@ -59,6 +59,7 @@
 #include <hpp/string_view.hpp>
 #include <string_utils/utils.h>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <set>
 
@@ -2026,6 +2027,67 @@ auto editor_actions::rebuild_pending_armatures(rtti::context& ctx) -> std::vecto
         }
     }
     return steps;
+}
+
+// Named, not anonymous: the unity build joins sources and their anonymous namespaces.
+namespace ragdoll_auto_setup_detail
+{
+/// Why Auto Setup cannot run on @p owner with @p options, or empty when it can.
+auto find_setup_problem(rtti::context& ctx, entt::handle owner, const ragdoll_build_options& options) -> std::string
+{
+    if(ctx.get_cached<play_mode>().is_active())
+    {
+        return "Ragdoll Auto Setup works in edit mode only: stop play first.";
+    }
+    if(!owner || !owner.all_of<ragdoll_component, model_component>())
+    {
+        return "The entity needs a ragdoll and a skinned model component.";
+    }
+    if(!std::isfinite(options.total_mass) || options.total_mass <= 0.0f)
+    {
+        return fmt::format("The total mass must be more than 0 kg, and it is {} kg.", options.total_mass);
+    }
+    return {};
+}
+
+/// Whether @p build holds the bodies and pairs the ragdoll has already.
+auto is_same_setup(const ragdoll_component& ragdoll, const ragdoll_build_result& build) -> bool
+{
+    return ragdoll.get_bodies() == build.bodies && ragdoll.get_disabled_collisions() == build.disabled_collisions;
+}
+
+/// Gives the ragdoll the bodies and pairs of @p build, recorded as one undo step through its setters.
+void apply_setup(rtti::context& ctx, entt::handle owner, const ragdoll_build_result& build)
+{
+    const auto type = entt::resolve<ragdoll_component>();
+    auto state_before = prefab_override_context::save_component_state(owner, type);
+    auto& ragdoll = owner.get<ragdoll_component>();
+    ragdoll.set_bodies(build.bodies);
+    ragdoll.set_disabled_collisions(build.disabled_collisions);
+    ctx.get_cached<editing_manager>().do_action(
+        "Ragdoll Auto Setup",
+        std::make_shared<entity_component_state_action_t>(owner, type, std::move(state_before)));
+}
+} // namespace ragdoll_auto_setup_detail
+
+auto editor_actions::auto_setup_ragdoll(rtti::context& ctx, entt::handle owner, const ragdoll_build_options& options)
+    -> ragdoll_auto_setup_result
+{
+    namespace detail = ragdoll_auto_setup_detail;
+    ragdoll_auto_setup_result setup;
+    setup.build.error = detail::find_setup_problem(ctx, owner, options);
+    if(!setup.build.error.empty())
+    {
+        return setup;
+    }
+    setup.build = build_humanoid_ragdoll(owner.get<model_component>(), owner, options);
+    if(!setup.build.ok || detail::is_same_setup(owner.get<ragdoll_component>(), setup.build))
+    {
+        return setup;
+    }
+    detail::apply_setup(ctx, owner, setup.build);
+    setup.is_changed = true;
+    return setup;
 }
 
 auto editor_actions::request_main_window_focus(rtti::context& ctx, std::string* error) -> bool

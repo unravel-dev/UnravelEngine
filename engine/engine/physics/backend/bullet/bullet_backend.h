@@ -46,7 +46,7 @@ public:
     auto get_gravity() const -> math::vec3 override;
     void explode(const math::vec3& center, float radius, float falloff, float impulse_per_area, int layer_mask) override;
 
-    /// Spheres only: box and capsule shapes warn once and find nothing.
+    /// Spheres only: box and capsule shapes warn once per play and find nothing.
     auto shape_cast(const physics_compound_shape& shape,
                     const math::vec3& origin,
                     const math::quat& rotation,
@@ -67,7 +67,7 @@ public:
                        int layer_mask,
                        bool query_sensors) -> physics_vector<entt::entity> override;
 
-    /// Joints and ragdolls are Box3D features: the Bullet backend warns once and leaves them out.
+    /// Joints and ragdolls are Box3D features: the Bullet backend warns once per play and leaves them out.
     void on_create_joint_component(entt::registry& r, entt::entity e) override;
     void on_destroy_joint_component(entt::registry& r, entt::entity e) override;
     void on_create_ragdoll_component(entt::registry& r, entt::entity e) override;
@@ -140,6 +140,8 @@ public:
 
 private:
     void warn_unsupported(const char* feature) const;
+    /// Warns at play start about joints and ragdolls the scene already holds, which Bullet leaves out.
+    void warn_unsupported_components(entt::registry& registry);
 
     mutable std::unordered_set<std::string> warned_;
 };

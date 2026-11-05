@@ -16,6 +16,7 @@
 #include <engine/ecs/scene.h>
 #include <engine/layers/layer_mask.h>
 #include <engine/physics/backend/physics_backend.h>
+#include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/physics/ecs/components/joint_component.h>
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/physics/ecs/components/ragdoll_component.h>
@@ -27,6 +28,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <functional>
 #include <memory>
 #include <string>
@@ -122,7 +124,7 @@ struct sim_fixture
             backend->simulate(dt);
             backend->sync_from_physics(ctx);
             backend->dispatch_contacts(ctx);
-            show_ragdolls(registry, 1.0f, step_seconds);
+            show_ragdolls(registry, show_fraction, step_seconds);
             if(script)
             {
                 script();
@@ -216,6 +218,8 @@ struct sim_fixture
     std::unique_ptr<physics_backend> backend;
     std::vector<entt::handle> entities;
     bool playing{false};
+    /// Where between the last two fixed steps step() shows the ragdolls; a frame that ends on a step shows 1.
+    float show_fraction{1.0f};
     /// Runs at the start of every frame, before the ragdolls read the pose: what the animation system does.
     std::function<void()> animate;
     /// Runs in each frame after the fixed steps, where the scripts update.
@@ -468,13 +472,124 @@ void test_breaking(rtti::context& ctx)
     check(strong.get_state().is_broken, "a script can break a joint");
     check(fx.position_of(light).y < 2.5f, "a joint broken by a script lets go");
 
+    // Gravity stays on, so the repaired weld has to hold the body up; the break force goes so it does not break again.
+    weak.set_break_force(0.0f);
+    heavy.get<physics_component>().set_velocity({0.0f, 0.0f, 0.0f});
     weak.repair();
     const float y_before = fx.position_of(heavy).y;
-    heavy.get<physics_component>().set_is_using_gravity(false);
-    heavy.get<physics_component>().set_velocity({0.0f, 0.0f, 0.0f});
     fx.step(one_second / 2);
     check(!weak.get_state().is_broken && weak.get_state().is_active, "a repaired joint holds again");
-    check_near(fx.position_of(heavy).y, y_before, 0.05f, "a repaired joint holds the body where it was");
+    check_near(fx.position_of(heavy).y, y_before, 0.05f, "a repaired joint holds the body where it was, against gravity");
+}
+
+void test_joint_lets_go_of_a_destroyed_body(rtti::context& ctx)
+{
+    std::printf("test_joint_lets_go_of_a_destroyed_body\n");
+    sim_fixture fx(ctx);
+    // A box hangs from a frame by a hinge anchor_point from the world origin; the frame is destroyed during play.
+    const math::vec3 anchor_point{30.0f, 6.0f, 20.0f};
+    auto frame = fx.spawn_box("frame", anchor_point, {1.0f, 0.2f, 1.0f}, rigidbody_type::kinematic);
+    auto box = fx.spawn_box("box", anchor_point - math::vec3{0.0f, 1.0f, 0.0f}, {0.5f, 0.5f, 0.5f}, rigidbody_type::dynamic);
+    auto& hinge = fx.spawn_joint("hinge", anchor_point - math::vec3{0.0f, 0.5f, 0.0f}, joint_type::hinge, frame, box);
+    auto other = fx.spawn_box("other", anchor_point + math::vec3{4.0f, 0.0f, 0.0f}, {0.5f, 0.5f, 0.5f}, rigidbody_type::dynamic);
+    auto holder = fx.spawn_box("holder", anchor_point + math::vec3{4.0f, 1.0f, 0.0f}, {1.0f, 0.2f, 1.0f}, rigidbody_type::kinematic);
+    auto& weld = fx.spawn_joint("weld", anchor_point + math::vec3{4.0f, 0.5f, 0.0f}, joint_type::fixed, holder, other);
+    fx.begin();
+    fx.step(10);
+    check(hinge.get_state().is_active && weld.get_state().is_active, "both joints hold their bodies");
+    scene::destroy_entity(frame);
+    scene::destroy_entity(other);
+    const math::vec3 box_before = fx.position_of(box);
+    fx.step(1);
+    check(hinge.is_body_missing() && hinge.get_state().is_broken, "a joint whose body A was destroyed breaks");
+    check(weld.is_body_missing() && weld.get_state().is_broken, "a joint whose body B was destroyed breaks");
+    check(math::distance(fx.position_of(box), box_before) < 0.1f,
+          "the body left behind is not pulled towards the world origin");
+}
+
+void test_joint_values_stay_in_range(rtti::context& ctx)
+{
+    std::printf("test_joint_values_stay_in_range\n");
+    sim_fixture fx(ctx);
+    auto rod = fx.spawn_box("rod", {0.0f, 4.0f, 0.0f}, {0.1f, 2.0f, 0.1f}, rigidbody_type::dynamic);
+    auto& ball = fx.spawn_joint("ball", {0.0f, 5.0f, 0.0f}, joint_type::ball, {}, rod, {0.0f, 0.0f, -90.0f});
+    ball.set_limits({true, -20.0f, 20.0f, 150.0f});
+    check_near(ball.get_limits().cone_angle, MAX_CONE_ANGLE, 0.0f, "a cone wider than a quarter turn is held to one");
+    joint_spring spring;
+    spring.enabled = true;
+    spring.frequency = -3.0f;
+    spring.damping_ratio = -1.0f;
+    ball.set_spring(spring);
+    check(ball.get_spring().frequency == 0.0f && ball.get_spring().damping_ratio == 0.0f,
+          "a negative spring is held at zero");
+    joint_motor motor;
+    motor.max_force = -10.0f;
+    ball.set_motor(motor);
+    check(ball.get_motor().max_force == 0.0f, "a negative motor force is held at zero");
+    joint_steering steering;
+    steering.max_torque = -5.0f;
+    ball.set_steering(steering);
+    check(ball.get_steering().max_torque == 0.0f, "a negative steering torque is held at zero");
+    ball.set_type(static_cast<joint_type>(200));
+    check(ball.get_type() == joint_type::ball, "a joint type this build does not have is refused");
+    // Box3D asserts on these; a run that gets here without stopping passed them.
+    fx.begin();
+    fx.step(10);
+    check(ball.get_state().is_active, "the joint runs with the clamped values");
+}
+
+void test_ball_spring_turns_about_the_joint_axes(rtti::context& ctx)
+{
+    std::printf("test_ball_spring_turns_about_the_joint_axes\n");
+    sim_fixture fx(ctx);
+    // A weightless box on a ball joint whose axis is world X; the spring's target twists it 45 degrees about X.
+    auto box = fx.spawn_box("box", {0.0f, 5.0f, 0.0f}, {0.6f, 0.4f, 0.2f}, rigidbody_type::dynamic);
+    box.get<physics_component>().set_is_using_gravity(false);
+    auto& ball = fx.spawn_joint("ball", {0.0f, 5.0f, 0.0f}, joint_type::ball, {}, box);
+    joint_spring spring;
+    spring.enabled = true;
+    spring.frequency = 4.0f;
+    spring.damping_ratio = 1.0f;
+    spring.target_rotation = {45.0f, 0.0f, 0.0f};
+    ball.set_spring(spring);
+    fx.begin();
+    fx.step(3 * one_second);
+    const math::quat rotation = box.get<transform_component>().get_rotation_global();
+    const math::quat expected = math::angleAxis(math::radians(45.0f), math::vec3{1.0f, 0.0f, 0.0f});
+    const float apart = math::degrees(2.0f * std::acos(math::clamp(std::abs(math::dot(rotation, expected)), 0.0f, 1.0f)));
+    check(apart < 5.0f, "a twist target turns the body about the joint's X axis, got " + std::to_string(apart) + " degrees off");
+}
+
+void test_overflow_joints_break(rtti::context& ctx)
+{
+    std::printf("test_overflow_joints_break\n");
+    sim_fixture fx(ctx);
+    // One hub body with more joints than Box3D's constraint colours hold: the rest are solved in the overflow,
+    // which Box3D never tests against break thresholds.
+    constexpr int joint_count = 40;
+    auto hub = fx.spawn_box("hub", {0.0f, 20.0f, 0.0f}, {1.0f, 1.0f, 1.0f}, rigidbody_type::dynamic, 1000.0f);
+    hub.get<physics_component>().set_is_using_gravity(false);
+    std::vector<joint_component*> joints;
+    for(int i = 0; i < joint_count; ++i)
+    {
+        const float angle = math::two_pi<float>() * float(i) / float(joint_count);
+        const math::vec3 offset{std::cos(angle) * 2.0f, 0.0f, std::sin(angle) * 2.0f};
+        auto weight = fx.spawn_box("weight", math::vec3{0.0f, 20.0f, 0.0f} + offset, {0.2f, 0.2f, 0.2f},
+                                   rigidbody_type::dynamic, 10.0f);
+        auto& weld = fx.spawn_joint("weld", math::vec3{0.0f, 20.0f, 0.0f} + offset * 0.5f, joint_type::fixed, hub, weight);
+        weld.set_break_force(20.0f);
+        joints.push_back(&weld);
+    }
+    fx.begin();
+    fx.step(one_second / 2);
+    const auto broken = std::count_if(joints.begin(),
+                                      joints.end(),
+                                      [](const joint_component* joint)
+                                      {
+                                          return joint->get_state().is_broken;
+                                      });
+    check(broken == joint_count, "every overloaded joint breaks, overflow included: " + std::to_string(broken) + " of " +
+                                     std::to_string(joint_count));
 }
 
 void test_ball_cone(rtti::context& ctx)
@@ -972,6 +1087,342 @@ void test_ragdoll_partial(rtti::context& ctx)
                "the rest of the character stays on the animation");
     check(!ragdoll.is_body_simulated(ragdoll.find_body("upperarm_r")), "the other arm stays animated");
 }
+
+auto bone_position(test_humanoid& humanoid, const std::string& bone) -> math::vec3
+{
+    return humanoid.bone(bone).get<transform_component>().get_position_global();
+}
+
+/// A ragdoll that fell, switched back to the animation with a blend of @p blend_seconds.
+auto make_fallen_ragdoll(sim_fixture& fx, test_humanoid& humanoid, float blend_seconds) -> ragdoll_component&
+{
+    auto& ragdoll = add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    ragdoll.set_state(ragdoll_state::simulated);
+    fx.step(3 * one_second);
+    ragdoll.set_state(ragdoll_state::animated, blend_seconds);
+    return ragdoll;
+}
+
+void test_ragdoll_blends_back_evenly(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_blends_back_evenly\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = make_fallen_ragdoll(fx, humanoid, 0.5f);
+    const int pelvis = ragdoll.find_body("pelvis");
+    const math::vec3 lying = ragdoll.get_runtime().bodies[size_t(pelvis)].snapshot_world.get_position();
+    const math::vec3 standing{0.0f, 0.95f, 0.0f};
+    for(int frame = 0; frame < 20; ++frame)
+    {
+        fx.step(1);
+        const float weight = ragdoll.get_runtime().bodies[size_t(pelvis)].weight;
+        const math::vec3 expected = math::mix(standing, lying, weight);
+        check(math::distance(bone_position(humanoid, "pelvis"), expected) < 0.01f,
+              "the hips move from where they lay to the animation by the blend weight, frame " + std::to_string(frame));
+    }
+}
+
+void test_ragdoll_hitboxes_follow_the_blend(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_hitboxes_follow_the_blend\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = make_fallen_ragdoll(fx, humanoid, 0.5f);
+    fx.step(1);
+    // The pelvis hitbox goes where the pelvis is drawn, not straight to the standing pose in one step.
+    check(math::distance(body_position(ragdoll, "pelvis"), bone_position(humanoid, "pelvis")) < 0.1f,
+          "a hitbox blending back is where its bone is drawn");
+    check(body_position(ragdoll, "pelvis").y < 0.8f, "a hitbox blending back has not jumped to the animation");
+}
+
+void test_ragdoll_friction_changes_during_play(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_friction_changes_during_play\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    auto drive = ragdoll.get_drive();
+    drive.local_frequency = 0.0f;
+    ragdoll.set_drive(drive);
+    ragdoll.set_joint_friction(0.0f);
+    fx.begin();
+    fx.step(2);
+    // The shoulder is a ball joint, so the held-out arm swings down under gravity; the elbow hinge of a T-pose turns
+    // about a vertical axis, which gravity cannot turn.
+    ragdoll.set_bone_simulated("upperarm_l", true, true);
+    fx.step(3);
+    // Friction far above what the arm's weight can turn: the joints lock where they are.
+    ragdoll.set_joint_friction(1.0e5f);
+    fx.step(1);
+    const float hand_before = bone_position(humanoid, "hand_l").y;
+    fx.step(one_second);
+    check_near(bone_position(humanoid, "hand_l").y, hand_before, 0.05f, "joint friction set during play holds the joint");
+}
+
+void test_ragdoll_bone_simulated_before_the_first_step(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_bone_simulated_before_the_first_step\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    auto drive = ragdoll.get_drive();
+    drive.local_frequency = 0.0f;
+    ragdoll.set_drive(drive);
+    fx.begin();
+    // Where a script's OnCreate calls it: play began, no physics frame ran yet.
+    check(ragdoll.set_bone_simulated("upperarm_l", true, true), "a bone can be handed to physics before the first step");
+    check(ragdoll.is_body_simulated(ragdoll.find_body("lowerarm_l")), "the bodies below it simulate with it");
+    fx.step(2 * one_second);
+    check(bone_position(humanoid, "hand_l").y < 1.2f, "the arm handed over before the first step hangs down");
+}
+
+void test_ragdoll_keeps_falling_through_a_rebuild(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_keeps_falling_through_a_rebuild\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 3.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    ragdoll.set_state(ragdoll_state::simulated);
+    fx.step(15);
+    const float falling = body_position(ragdoll, "pelvis").y;
+    // A definition change during play makes the bodies again.
+    ragdoll.set_self_collision(!ragdoll.get_self_collision());
+    fx.step(3);
+    check(ragdoll.is_body_simulated(ragdoll.find_body("pelvis")), "the bodies still simulate after the rebuild");
+    check(body_position(ragdoll, "pelvis").y < falling, "the ragdoll falls on from where it was");
+    const int pelvis = ragdoll.find_body("pelvis");
+    check(ragdoll.get_runtime().bodies[size_t(pelvis)].linear_velocity.y < -1.0f, "the ragdoll keeps its speed");
+}
+
+void test_ragdoll_draws_between_steps(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_draws_between_steps\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 3.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    ragdoll.set_state(ragdoll_state::simulated);
+    fx.step(10);
+    fx.show_fraction = 0.5f;
+    fx.step(1);
+    const auto& body = ragdoll.get_runtime().bodies[size_t(ragdoll.find_body("pelvis"))];
+    const math::vec3 halfway = math::mix(body.world_previous.get_position(), body.world.get_position(), 0.5f);
+    check(math::distance(bone_position(humanoid, "pelvis"), halfway) < 1e-3f,
+          "a frame half way between two steps draws the body half way between their poses");
+}
+
+void test_destroyed_ragdoll_leaves_no_bodies(rtti::context& ctx)
+{
+    std::printf("test_destroyed_ragdoll_leaves_no_bodies\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    const int with_ragdoll = fx.backend->get_world_stats().body_count;
+    check(fx.backend->ray_cast({0.0f, 0.95f, 2.0f}, {0.0f, 0.0f, -1.0f}, 5.0f, everything, false).has_value(),
+          "a ray hits the ragdoll");
+    scene::destroy_entity(humanoid.model);
+    fx.step(1);
+    check(fx.backend->get_world_stats().body_count < with_ragdoll, "a destroyed ragdoll takes its bodies along");
+    check(!fx.backend->ray_cast({0.0f, 0.95f, 2.0f}, {0.0f, 0.0f, -1.0f}, 5.0f, everything, false).has_value(),
+          "a ray finds nothing where the destroyed ragdoll stood");
+}
+
+void test_ragdoll_without_its_model_leaves_no_bodies(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_without_its_model_leaves_no_bodies\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    check(ragdoll.get_runtime().is_built, "the ragdoll is built");
+    humanoid.model.remove<model_component>();
+    fx.step(1);
+    check(!ragdoll.get_runtime().is_built, "a ragdoll whose model went has no bodies");
+    check(!fx.backend->ray_cast({0.0f, 0.95f, 2.0f}, {0.0f, 0.0f, -1.0f}, 5.0f, everything, false).has_value(),
+          "a ray finds nothing where the ragdoll stood");
+}
+
+void test_ragdoll_swing_limits_stay_in_range(rtti::context& ctx)
+{
+    std::printf("test_ragdoll_swing_limits_stay_in_range\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    auto bodies = ragdoll.get_bodies();
+    for(auto& body : bodies)
+    {
+        body.swing_limit = 170.0f;
+    }
+    ragdoll.set_bodies(bodies);
+    // Box3D asserts on cones over a quarter turn; a run that gets here without stopping passed them.
+    fx.begin();
+    fx.step(2);
+    ragdoll.set_state(ragdoll_state::simulated);
+    fx.step(one_second);
+    check(ragdoll.get_runtime().is_built, "a ragdoll with too wide swing limits builds with them held to a quarter turn");
+}
+
+void test_crouching_keeps_the_own_ragdoll_apart(rtti::context& ctx)
+{
+    std::printf("test_crouching_keeps_the_own_ragdoll_apart\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    auto character = fx.spawn("character", {0.0f, 1.0f, 0.0f});
+    auto& controller = character.emplace<character_controller_component>();
+    controller.set_radius(0.3f);
+    controller.set_height(1.8f);
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    humanoid.model.get<transform_component>().set_parent(character, true);
+    add_ragdoll(humanoid);
+    fx.begin();
+    fx.step(2);
+    const int joints_standing = fx.backend->get_world_stats().joint_count;
+    // Crouching makes the controller's proxy body again; its filters against its own ragdoll must come back.
+    controller.set_height(1.0f);
+    fx.step(2);
+    check(fx.backend->get_world_stats().joint_count == joints_standing,
+          "the crouched proxy keeps away from its own ragdoll's bodies");
+}
+
+/// Where the cone of a ragdoll body's ball joint is centred, in the bone's space (the test rig's bones do not turn).
+auto get_swing_centre(const ragdoll_body& body) -> math::vec3
+{
+    return math::quat(math::radians(body.joint_rotation)) * math::quat(math::radians(body.swing_offset)) *
+           math::vec3{1.0f, 0.0f, 0.0f};
+}
+
+auto get_angle_degrees(const math::vec3& a, const math::vec3& b) -> float
+{
+    return math::degrees(std::acos(math::clamp(math::dot(math::normalize(a), math::normalize(b)), -1.0f, 1.0f)));
+}
+
+auto find_definition(const ragdoll_component& ragdoll, const std::string& bone) -> const ragdoll_body&
+{
+    return ragdoll.get_bodies()[size_t(ragdoll.find_body(bone))];
+}
+
+void check_shoulders(const ragdoll_component& ragdoll, float expected_offset, const std::string& pose)
+{
+    const auto& left = find_definition(ragdoll, "upperarm_l");
+    const auto& right = find_definition(ragdoll, "upperarm_r");
+    check_near(left.swing_offset.y, expected_offset, 0.01f, pose + ": the left shoulder's cone turns towards hanging");
+    const math::vec3 left_centre = get_swing_centre(left);
+    const math::vec3 right_centre = get_swing_centre(right);
+    check(math::distance(left_centre, math::vec3{0.7071f, -0.7071f, 0.0f}) < 1e-3f,
+          pose + ": the left shoulder's cone is centred half way down");
+    check(math::distance(right_centre, math::vec3{-0.7071f, -0.7071f, 0.0f}) < 1e-3f,
+          pose + ": the right shoulder's cone is centred half way down");
+    check(get_angle_degrees(left_centre, math::vec3{0.0f, -1.0f, 0.0f}) <= left.swing_limit - 10.0f,
+          pose + ": an arm hanging down is inside the cone with room to spare");
+}
+
+void test_builder_centres_shoulders_between_bind_and_hanging(rtti::context& ctx)
+{
+    std::printf("test_builder_centres_shoulders_between_bind_and_hanging\n");
+    {
+        sim_fixture fx(ctx);
+        auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+        auto& ragdoll = add_ragdoll(humanoid);
+        check_shoulders(ragdoll, 45.0f, "T-pose");
+        for(const auto& body : ragdoll.get_bodies())
+        {
+            const bool is_shoulder = body.bone == "upperarm_l" || body.bone == "upperarm_r";
+            check(is_shoulder || body.swing_offset == math::vec3{0.0f}, "only the shoulders turn their cones: " + body.bone);
+            check(body.swing_limit <= MAX_CONE_ANGLE, "no cone is wider than a quarter turn: " + body.bone);
+        }
+    }
+    {
+        // Arms 30 degrees down from level.
+        sim_fixture fx(ctx);
+        auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+        humanoid.bone("lowerarm_l").get<transform_component>().set_position_global({0.42249f, 1.31f, 0.0f});
+        humanoid.bone("hand_l").get<transform_component>().set_position_global({0.64766f, 1.18f, 0.0f});
+        humanoid.bone("lowerarm_r").get<transform_component>().set_position_global({-0.42249f, 1.31f, 0.0f});
+        humanoid.bone("hand_r").get<transform_component>().set_position_global({-0.64766f, 1.18f, 0.0f});
+        auto& ragdoll = add_ragdoll(humanoid);
+        check_shoulders(ragdoll, 15.0f, "A-pose");
+    }
+}
+
+void test_builder_refuses_a_limb_without_length(rtti::context& ctx)
+{
+    std::printf("test_builder_refuses_a_limb_without_length\n");
+    sim_fixture fx(ctx);
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    humanoid.bone("lowerarm_l").get<transform_component>().set_position_global({0.18f, 1.45f, 0.0f});
+    humanoid.bone("hand_l").get<transform_component>().set_position_global({0.72f, 1.45f, 0.0f});
+    auto& ragdoll = humanoid.model.emplace<ragdoll_component>();
+    ragdoll_build_options options;
+    options.fit_to_skin = false;
+    const auto result = setup_ragdoll(ragdoll, options);
+    check(!result.ok && result.bodies.empty(), "a limb whose next bone sits at its start is refused");
+    check(result.error.find("upperarm_l") != std::string::npos && result.error.find("lowerarm_l") != std::string::npos &&
+              result.error.find("has no length") != std::string::npos,
+          "the refusal names the bones: " + result.error);
+    check(ragdoll.get_bodies().empty(), "a refused setup leaves the ragdoll as it was");
+}
+
+void test_builder_refuses_a_mass_that_is_not_positive(rtti::context& ctx)
+{
+    std::printf("test_builder_refuses_a_mass_that_is_not_positive\n");
+    sim_fixture fx(ctx);
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    const size_t built = ragdoll.get_bodies().size();
+    for(const float mass : {0.0f, -10.0f, std::numeric_limits<float>::quiet_NaN()})
+    {
+        ragdoll_build_options options;
+        options.fit_to_skin = false;
+        options.total_mass = mass;
+        const auto result = setup_ragdoll(ragdoll, options);
+        check(!result.ok && result.error == "The total mass must be a finite number of kilograms above zero.",
+              "a total mass of " + std::to_string(mass) + " is refused: " + result.error);
+    }
+    check(ragdoll.get_bodies().size() == built, "a refused setup keeps the bodies there were");
+}
+
+void test_builder_places_shapes_on_mirrored_bones(rtti::context& ctx)
+{
+    std::printf("test_builder_places_shapes_on_mirrored_bones\n");
+    sim_fixture fx(ctx);
+    auto humanoid = make_humanoid(fx, {0.0f, 0.0f, 0.0f});
+    humanoid.bone("upperarm_r").get<transform_component>().set_scale_local({-1.0f, 1.0f, 1.0f});
+    humanoid.bone("lowerarm_r").get<transform_component>().set_position_global({-0.46f, 1.45f, 0.0f});
+    humanoid.bone("hand_r").get<transform_component>().set_position_global({-0.72f, 1.45f, 0.0f});
+    auto& ragdoll = add_ragdoll(humanoid);
+    // Where the backend puts a shape: the bone's position, turned by its rotation, scaled by its size alone.
+    const auto get_placed = [&](const std::string& bone)
+    {
+        const auto& transform = humanoid.bone(bone).get<transform_component>();
+        const auto& definition = find_definition(ragdoll, bone);
+        const auto* capsule = hpp::get_if<physics_capsule_shape>(&definition.shape.shape);
+        const math::vec3 centre = capsule ? capsule->center : math::vec3{0.0f};
+        check(capsule != nullptr && capsule->radius > 0.0f, bone + " gets a capsule with a radius");
+        return transform.get_position_global() +
+               math::normalize(transform.get_rotation_global()) * (math::abs(transform.get_scale_global()) * centre);
+    };
+    check(math::distance(get_placed("upperarm_r"), math::vec3{-0.32f, 1.45f, 0.0f}) < 1e-3f,
+          "a mirrored upper arm's capsule lies along the arm");
+    check(math::distance(get_placed("lowerarm_r"), math::vec3{-0.59f, 1.45f, 0.0f}) < 1e-3f,
+          "a forearm under a mirrored bone has its capsule along the forearm");
+}
 } // namespace joints_suite
 
 auto run_joints_suite(rtti::context& ctx) -> int
@@ -986,6 +1437,10 @@ auto run_joints_suite(rtti::context& ctx) -> int
     test_hinge_motor(ctx);
     test_slider_and_rope(ctx);
     test_breaking(ctx);
+    test_joint_lets_go_of_a_destroyed_body(ctx);
+    test_joint_values_stay_in_range(ctx);
+    test_ball_spring_turns_about_the_joint_axes(ctx);
+    test_overflow_joints_break(ctx);
     test_ball_cone(ctx);
     test_wheel(ctx);
     test_wheel_steers_on_the_ground(ctx);
@@ -999,6 +1454,20 @@ auto run_joints_suite(rtti::context& ctx) -> int
     test_ragdoll_blends_back(ctx);
     test_ragdoll_powered_stands(ctx);
     test_ragdoll_partial(ctx);
+    test_ragdoll_blends_back_evenly(ctx);
+    test_ragdoll_hitboxes_follow_the_blend(ctx);
+    test_ragdoll_friction_changes_during_play(ctx);
+    test_ragdoll_bone_simulated_before_the_first_step(ctx);
+    test_ragdoll_keeps_falling_through_a_rebuild(ctx);
+    test_ragdoll_draws_between_steps(ctx);
+    test_destroyed_ragdoll_leaves_no_bodies(ctx);
+    test_ragdoll_without_its_model_leaves_no_bodies(ctx);
+    test_ragdoll_swing_limits_stay_in_range(ctx);
+    test_crouching_keeps_the_own_ragdoll_apart(ctx);
+    test_builder_centres_shoulders_between_bind_and_hanging(ctx);
+    test_builder_refuses_a_limb_without_length(ctx);
+    test_builder_refuses_a_mass_that_is_not_positive(ctx);
+    test_builder_places_shapes_on_mirrored_bones(ctx);
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

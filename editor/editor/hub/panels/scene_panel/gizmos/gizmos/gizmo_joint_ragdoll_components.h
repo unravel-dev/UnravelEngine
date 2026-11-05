@@ -17,7 +17,8 @@ struct gizmo_joint_component : public gizmo
 };
 
 /**
- * @brief Ragdoll: every body's shape on its bone and the axis of its joint, coloured by who moves it.
+ * @brief Ragdoll: every body's shape on its bone, coloured by who moves it, and the axis of the joint each body
+ *        other than the root hangs on.
  */
 struct gizmo_ragdoll_component : public gizmo
 {

@@ -88,14 +88,6 @@ auto with_alpha(ImU32 color, ImU32 alpha) -> ImU32
     return (color & ~IM_COL32_A_MASK) | (alpha << IM_COL32_A_SHIFT);
 }
 
-/// A dimmed hint that wraps at the panel edge.
-void draw_hint(const std::string& text)
-{
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", text.c_str());
-    ImGui::PopStyleColor();
-}
-
 auto get_clip_duration(const asset_handle<animation_clip>& clip) -> float
 {
     const auto clip_ptr = clip.try_get();
@@ -681,7 +673,7 @@ auto animation_clip_timeline::draw_events(rtti::context& ctx,
     advance_playback(importer, duration);
     draw_preview_bar(ctx, clip, duration);
     const auto track = draw_track("##event_track", importer, duration, true);
-    draw_hint("Double-click to add, drag to move (Shift snaps to 30 fps frames), right-click for more.");
+    draw_inspector_hint("Double-click to add, drag to move (Shift snaps to 30 fps frames), right-click for more.");
     const auto list = draw_event_list(importer, duration);
     result.changed |= track.changed || list.changed;
     result.edit_finished |= track.edit_finished || list.edit_finished;
@@ -707,8 +699,8 @@ auto animation_clip_timeline::draw_curves(rtti::context& ctx,
     advance_playback(importer, duration);
     draw_preview_bar(ctx, clip, duration);
     draw_track("##curve_track", importer, duration, false);
-    draw_hint("A controller float parameter with a curve's name follows it. IK components take a curve name as "
-              "their weight curve.");
+    draw_inspector_hint("A controller float parameter with a curve's name follows it. IK components take a curve name "
+                        "as their weight curve.");
     if(ImGui::Button(ICON_MDI_PLUS " Add Curve"))
     {
         animation_curve added;

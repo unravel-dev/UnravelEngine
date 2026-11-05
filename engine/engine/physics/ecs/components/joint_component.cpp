@@ -28,7 +28,8 @@ void joint_component::mark_changed(bool rebuild)
 
 void joint_component::set_type(joint_type type)
 {
-    if(type_ == type)
+    // Scripts and files hand the type over as a number; one this build has no joint for is refused.
+    if(type_ == type || type > joint_type::wheel)
     {
         return;
     }
@@ -73,11 +74,21 @@ auto joint_component::get_body_b() const noexcept -> entt::handle
 
 auto joint_component::get_resolved_body_b() noexcept -> entt::handle
 {
-    if(body_b_)
+    // A set body that was destroyed stays the joint's body B; the backend lets the joint go.
+    if(body_b_.entity() != entt::null)
     {
         return body_b_;
     }
     return get_owner();
+}
+
+auto joint_component::is_body_missing() const noexcept -> bool
+{
+    const auto is_gone = [](const entt::handle& body)
+    {
+        return body.entity() != entt::null && !body.valid();
+    };
+    return is_gone(body_a_) || is_gone(body_b_);
 }
 
 void joint_component::set_anchor(const math::vec3& anchor)
@@ -127,11 +138,13 @@ auto joint_component::get_collide_connected() const noexcept -> bool
 
 void joint_component::set_limits(const joint_limits& limits)
 {
-    if(limits_ == limits)
+    joint_limits clamped = limits;
+    clamped.cone_angle = math::clamp(clamped.cone_angle, 0.0f, MAX_CONE_ANGLE);
+    if(limits_ == clamped)
     {
         return;
     }
-    limits_ = limits;
+    limits_ = clamped;
     mark_changed(false);
 }
 
@@ -142,14 +155,15 @@ auto joint_component::get_limits() const noexcept -> const joint_limits&
 
 void joint_component::set_spring(const joint_spring& spring)
 {
-    if(spring_ == spring)
+    joint_spring clamped = spring;
+    clamped.frequency = math::max(clamped.frequency, 0.0f);
+    clamped.damping_ratio = math::max(clamped.damping_ratio, 0.0f);
+    if(spring_ == clamped)
     {
         return;
     }
-    // A fixed joint is made soft or rigid at creation.
-    const bool rebuild = type_ == joint_type::fixed && spring_.enabled != spring.enabled;
-    spring_ = spring;
-    mark_changed(rebuild);
+    spring_ = clamped;
+    mark_changed(false);
 }
 
 auto joint_component::get_spring() const noexcept -> const joint_spring&
@@ -159,11 +173,13 @@ auto joint_component::get_spring() const noexcept -> const joint_spring&
 
 void joint_component::set_motor(const joint_motor& motor)
 {
-    if(motor_ == motor)
+    joint_motor clamped = motor;
+    clamped.max_force = math::max(clamped.max_force, 0.0f);
+    if(motor_ == clamped)
     {
         return;
     }
-    motor_ = motor;
+    motor_ = clamped;
     mark_changed(false);
 }
 
@@ -174,11 +190,14 @@ auto joint_component::get_motor() const noexcept -> const joint_motor&
 
 void joint_component::set_steering(const joint_steering& steering)
 {
-    if(steering_ == steering)
+    joint_steering clamped = steering;
+    clamped.limit = math::max(clamped.limit, 0.0f);
+    clamped.max_torque = math::max(clamped.max_torque, 0.0f);
+    if(steering_ == clamped)
     {
         return;
     }
-    steering_ = steering;
+    steering_ = clamped;
     mark_changed(false);
 }
 

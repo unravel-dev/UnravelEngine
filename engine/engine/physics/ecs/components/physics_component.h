@@ -112,23 +112,9 @@ struct physics_compound_shape
 };
 
 /**
- * @struct rigidbody_motion
- * @brief What fixed_step_runner keeps to show a dynamic body between fixed steps. Runtime state, not serialized.
+ * @brief What fixed_step_runner keeps to show a dynamic body between fixed steps: its step poses alone.
  */
-struct rigidbody_motion
-{
-    /// The pose the last fixed step began and ended at. The end is where the body really is.
-    math::vec3 step_start_position{};
-    math::quat step_start_rotation{math::identity<math::quat>()};
-    math::vec3 step_end_position{};
-    math::quat step_end_rotation{math::identity<math::quat>()};
-    bool is_tracked{false};
-
-    /**
-     * @brief Starts over at a pose, as if the body had always been there.
-     */
-    void place_at(const math::vec3& position, const math::quat& rotation) noexcept;
-};
+using rigidbody_motion = stepped_motion;
 
 /**
  * @class physics_component
@@ -136,7 +122,8 @@ struct rigidbody_motion
  *
  * A dynamic body moves on fixed steps. With interpolation on, the entity's transform is placed between the last two
  * steps every frame, so the body moves evenly at any frame rate and trails its physics pose by at most one step;
- * during a fixed step it holds the physics pose. Writing the transform teleports the body at once.
+ * during a fixed step it holds the physics pose. Writing the transform, in world or local space, teleports the body at
+ * once; a moving parent carries it along without losing its travel.
  */
 class physics_component : public component_crtp<physics_component, owned_component>
 {
@@ -163,11 +150,14 @@ public:
     void set_gravity_scale(float scale);
     auto get_gravity_scale() const noexcept -> float;
 
-    /// Share of linear velocity lost per second, roughly. 0 keeps it; large values make the body drift as in water.
+    /**
+     * @brief Linear damping d, per second: velocity changes by dv/dt = -d * v, so it falls by a factor of e^-d each
+     *        second (about 63 percent at 1). 0 keeps it; large values make the body drift as in water.
+     */
     void set_linear_damping(float damping);
     auto get_linear_damping() const noexcept -> float;
 
-    /// Share of angular velocity lost per second, roughly.
+    /// Angular damping d, per second: angular velocity falls by a factor of e^-d each second, as the linear one does.
     void set_angular_damping(float damping);
     auto get_angular_damping() const noexcept -> float;
 

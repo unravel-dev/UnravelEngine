@@ -1,6 +1,6 @@
 #include "joint_component.hpp"
 #include <engine/meta/core/math/vector.hpp>
-#include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/ecs/entity_reference.hpp>
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -10,28 +10,6 @@ namespace unravel
 // Named, not anonymous: the unity build joins sources and their anonymous namespaces.
 namespace joint_meta_detail
 {
-template<typename Archive>
-void save_entity_reference(Archive& ar, const char* name, const entt::handle& handle)
-{
-    // Always written, empty when the save names no registry: binary archives are positional.
-    ser20::const_entity_handle_link link;
-    if(const auto* registry = get_save_context().get_registry())
-    {
-        link.handle = entt::const_handle(*registry, handle ? handle.entity() : entt::entity(entt::null));
-    }
-    try_save(ar, ser20::make_nvp(name, link));
-}
-
-template<typename Archive>
-void load_entity_reference(Archive& ar, const char* name, entt::handle& handle)
-{
-    ser20::entity_handle_link link;
-    if(try_load(ar, ser20::make_nvp(name, link)))
-    {
-        handle = link.handle;
-    }
-}
-
 auto is_type(std::initializer_list<joint_type> types)
 {
     std::vector<joint_type> list(types);
@@ -118,9 +96,9 @@ REFLECT(joint_limits)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cone_angle"},
             entt::attribute{"pretty_name", "Cone Angle"},
-            entt::attribute{"tooltip", "Ball: the half angle of the cone the axis may swing in, in degrees."},
+            entt::attribute{"tooltip", "Ball: the half angle of the cone the axis may swing in, in degrees, at most 90."},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 180.0f},
+            entt::attribute{"max", MAX_CONE_ANGLE},
         });
 }
 
@@ -503,7 +481,6 @@ REFLECT(joint_component)
 
 SAVE(joint_component)
 {
-    using joint_meta_detail::save_entity_reference;
     try_save(ar, ser20::make_nvp("type", obj.get_type()));
     save_entity_reference(ar, "body_a", obj.get_body_a());
     save_entity_reference(ar, "body_b", obj.get_body_b());
@@ -525,7 +502,6 @@ SAVE_INSTANTIATE(joint_component, ser20::oarchive_binary_t);
 
 LOAD(joint_component)
 {
-    using joint_meta_detail::load_entity_reference;
     joint_type type{joint_type::ball};
     if(try_load(ar, ser20::make_nvp("type", type)))
     {

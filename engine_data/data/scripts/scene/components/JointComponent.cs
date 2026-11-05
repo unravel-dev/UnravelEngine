@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Unravel.Core
 {
@@ -25,61 +26,101 @@ namespace Unravel.Core
     /// <summary>
     /// The range a joint moves in. Angles are in degrees, distances in meters.
     /// </summary>
+    /// <remarks>
+    /// <c>new JointLimits()</c>, with or without an object initializer, starts from the engine's defaults;
+    /// <c>default(JointLimits)</c> and array elements start from zero.
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
     public struct JointLimits
     {
         /// <summary>Keeps the joint inside its range.</summary>
-        public bool enabled;
+        public bool enabled = false;
         /// <summary>Hinge and ball twist: lowest angle. Slider and wheel suspension: lowest position. Distance: shortest length.</summary>
-        public float lower;
+        public float lower = -45.0f;
         /// <summary>Hinge and ball twist: highest angle. Slider and wheel suspension: highest position. Distance: longest length.</summary>
-        public float upper;
-        /// <summary>Ball: half angle of the cone the axis may swing in.</summary>
-        public float coneAngle;
+        public float upper = 45.0f;
+        /// <summary>Ball: half angle of the cone the axis may swing in, 0 to 90 degrees.</summary>
+        public float coneAngle = 45.0f;
+
+        /// <summary>Limits with the engine's defaults: off, -45 to 45, a 45 degree cone.</summary>
+        public JointLimits()
+        {
+        }
     }
 
     /// <summary>
     /// Pulls a joint towards a target, stated as a frequency and a damping ratio, so it does not depend on the masses.
     /// </summary>
+    /// <remarks>
+    /// <c>new JointSpring()</c>, with or without an object initializer, starts from the engine's defaults;
+    /// <c>default(JointSpring)</c> and array elements start from zero.
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
     public struct JointSpring
     {
         /// <summary>Pulls the joint towards its target. A fixed joint with a spring is soft.</summary>
-        public bool enabled;
-        /// <summary>Oscillations per second. Higher is stiffer.</summary>
-        public float frequency;
-        /// <summary>0 bounces forever, 1 settles without overshoot.</summary>
-        public float dampingRatio;
+        public bool enabled = false;
+        /// <summary>Oscillations per second. Higher is stiffer. Negative values count as 0.</summary>
+        public float frequency = 2.0f;
+        /// <summary>0 bounces forever, 1 settles without overshoot. Negative values count as 0.</summary>
+        public float dampingRatio = 0.7f;
         /// <summary>Hinge: angle in degrees. Slider: position in meters.</summary>
-        public float target;
+        public float target = 0.0f;
         /// <summary>Ball: the rotation of body B against body A the spring turns towards, Euler angles in degrees.</summary>
-        public Vector3 targetRotation;
+        public Vector3 targetRotation = Vector3.zero;
+
+        /// <summary>A spring with the engine's defaults: off, 2 oscillations per second, damping ratio 0.7.</summary>
+        public JointSpring()
+        {
+        }
     }
 
     /// <summary>
     /// Drives a joint at a speed with at most a force (or torque).
     /// </summary>
+    /// <remarks>
+    /// <c>new JointMotor { enabled = true, speed = 45 }</c> keeps the engine's default <see cref="maxForce"/>;
+    /// <c>default(JointMotor)</c> and array elements start from zero, which drives with no force.
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
     public struct JointMotor
     {
         /// <summary>Drives the joint at its speed.</summary>
-        public bool enabled;
+        public bool enabled = false;
         /// <summary>Hinge and wheel: degrees per second. Slider and distance: meters per second.</summary>
-        public float speed;
-        /// <summary>Hinge and wheel: newton meters. Slider and distance: newtons.</summary>
-        public float maxForce;
+        public float speed = 90.0f;
+        /// <summary>Hinge and wheel: newton meters. Slider and distance: newtons. Negative values count as 0.</summary>
+        public float maxForce = 100.0f;
+
+        /// <summary>A motor with the engine's defaults: off, 90 per second, 100 newton meters.</summary>
+        public JointMotor()
+        {
+        }
     }
 
     /// <summary>
     /// Turns a wheel about its frame's Y axis, like a car's front wheels.
     /// </summary>
+    /// <remarks>
+    /// <c>new JointSteering()</c>, with or without an object initializer, starts from the engine's defaults;
+    /// <c>default(JointSteering)</c> and array elements start from zero, which steers with no torque.
+    /// </remarks>
+    [StructLayout(LayoutKind.Sequential)]
     public struct JointSteering
     {
         /// <summary>Lets the wheel steer; otherwise it points straight ahead.</summary>
-        public bool enabled;
+        public bool enabled = false;
         /// <summary>The angle the wheel steers to, in degrees.</summary>
-        public float angle;
-        /// <summary>The largest angle either way, in degrees.</summary>
-        public float limit;
-        /// <summary>Newton meters available to steer with.</summary>
-        public float maxTorque;
+        public float angle = 0.0f;
+        /// <summary>The largest angle either way, in degrees. Negative values count as 0.</summary>
+        public float limit = 35.0f;
+        /// <summary>Newton meters available to steer with. Negative values count as 0.</summary>
+        public float maxTorque = 500.0f;
+
+        /// <summary>Steering with the engine's defaults: off, straight, 35 degrees either way, 500 newton meters.</summary>
+        public JointSteering()
+        {
+        }
     }
 
     /// <summary>
@@ -100,14 +141,20 @@ namespace Unravel.Core
             set => internal_m2n_joint_set_type(owner, (byte)value);
         }
 
-        /// <summary>The body the joint hangs on. An invalid entity hangs it on the world.</summary>
+        /// <summary>
+        /// The body the joint hangs on. <see cref="Entity.Invalid"/> hangs it on the world, and reads back for a body
+        /// that was destroyed.
+        /// </summary>
         public Entity bodyA
         {
             get => internal_m2n_joint_get_body_a(owner);
             set => internal_m2n_joint_set_body_a(owner, value);
         }
 
-        /// <summary>The body the joint holds. An invalid entity takes the joint's own entity.</summary>
+        /// <summary>
+        /// The body the joint holds. <see cref="Entity.Invalid"/> takes the joint's own entity, and reads back for a
+        /// body that was destroyed.
+        /// </summary>
         public Entity bodyB
         {
             get => internal_m2n_joint_get_body_b(owner);
@@ -128,6 +175,13 @@ namespace Unravel.Core
             set => internal_m2n_joint_set_axis_rotation(owner, value);
         }
 
+        /// <summary>Distance joint: the point it holds on body B, in body B's space.</summary>
+        public Vector3 connectedAnchor
+        {
+            get => internal_m2n_joint_get_connected_anchor(owner);
+            set => internal_m2n_joint_set_connected_anchor(owner, value);
+        }
+
         /// <summary>Whether the two jointed bodies still collide with each other.</summary>
         public bool collideConnected
         {
@@ -140,14 +194,10 @@ namespace Unravel.Core
         {
             get
             {
-                JointLimits result;
-                result.enabled = internal_m2n_joint_get_limits_enabled(owner);
-                result.lower = internal_m2n_joint_get_limits_lower(owner);
-                result.upper = internal_m2n_joint_get_limits_upper(owner);
-                result.coneAngle = internal_m2n_joint_get_limits_cone(owner);
+                internal_m2n_joint_get_limits(owner, out JointLimits result);
                 return result;
             }
-            set => internal_m2n_joint_set_limits(owner, value.enabled, value.lower, value.upper, value.coneAngle);
+            set => internal_m2n_joint_set_limits(owner, value);
         }
 
         /// <summary>The spring that pulls the joint to a target; for a wheel, the suspension.</summary>
@@ -155,15 +205,10 @@ namespace Unravel.Core
         {
             get
             {
-                JointSpring result;
-                result.enabled = internal_m2n_joint_get_spring_enabled(owner);
-                result.frequency = internal_m2n_joint_get_spring_frequency(owner);
-                result.dampingRatio = internal_m2n_joint_get_spring_damping(owner);
-                result.target = internal_m2n_joint_get_spring_target(owner);
-                result.targetRotation = internal_m2n_joint_get_spring_target_rotation(owner);
+                internal_m2n_joint_get_spring(owner, out JointSpring result);
                 return result;
             }
-            set => internal_m2n_joint_set_spring(owner, value.enabled, value.frequency, value.dampingRatio, value.target, value.targetRotation);
+            set => internal_m2n_joint_set_spring(owner, value);
         }
 
         /// <summary>The motor that drives the joint; for a wheel, its spin.</summary>
@@ -171,13 +216,10 @@ namespace Unravel.Core
         {
             get
             {
-                JointMotor result;
-                result.enabled = internal_m2n_joint_get_motor_enabled(owner);
-                result.speed = internal_m2n_joint_get_motor_speed(owner);
-                result.maxForce = internal_m2n_joint_get_motor_force(owner);
+                internal_m2n_joint_get_motor(owner, out JointMotor result);
                 return result;
             }
-            set => internal_m2n_joint_set_motor(owner, value.enabled, value.speed, value.maxForce);
+            set => internal_m2n_joint_set_motor(owner, value);
         }
 
         /// <summary>Wheel steering.</summary>
@@ -185,14 +227,10 @@ namespace Unravel.Core
         {
             get
             {
-                JointSteering result;
-                result.enabled = internal_m2n_joint_get_steering_enabled(owner);
-                result.angle = internal_m2n_joint_get_steering_angle(owner);
-                result.limit = internal_m2n_joint_get_steering_limit(owner);
-                result.maxTorque = internal_m2n_joint_get_steering_torque(owner);
+                internal_m2n_joint_get_steering(owner, out JointSteering result);
                 return result;
             }
-            set => internal_m2n_joint_set_steering(owner, value.enabled, value.angle, value.limit, value.maxTorque);
+            set => internal_m2n_joint_set_steering(owner, value);
         }
 
         /// <summary>Resistance to motion while the motor is off, in newton meters (newtons for a slider).</summary>
@@ -266,28 +304,18 @@ namespace Unravel.Core
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_anchor(Entity eid, Vector3 value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_joint_get_axis_rotation(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_axis_rotation(Entity eid, Vector3 value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_joint_get_connected_anchor(Entity eid);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_connected_anchor(Entity eid, Vector3 value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_joint_get_collide_connected(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_collide_connected(Entity eid, bool value);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_joint_get_limits_enabled(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_limits_lower(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_limits_upper(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_limits_cone(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_limits(Entity eid, bool enabled, float lower, float upper, float coneAngle);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_joint_get_spring_enabled(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_spring_frequency(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_spring_damping(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_spring_target(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern Vector3 internal_m2n_joint_get_spring_target_rotation(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_spring(Entity eid, bool enabled, float frequency, float dampingRatio, float target, Vector3 targetRotation);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_joint_get_motor_enabled(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_motor_speed(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_motor_force(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_motor(Entity eid, bool enabled, float speed, float maxForce);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern bool internal_m2n_joint_get_steering_enabled(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_steering_angle(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_steering_limit(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_steering_torque(Entity eid);
-        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_steering(Entity eid, bool enabled, float angle, float limit, float maxTorque);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_get_limits(Entity eid, out JointLimits value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_limits(Entity eid, JointLimits value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_get_spring(Entity eid, out JointSpring value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_spring(Entity eid, JointSpring value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_get_motor(Entity eid, out JointMotor value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_motor(Entity eid, JointMotor value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_get_steering(Entity eid, out JointSteering value);
+        [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_steering(Entity eid, JointSteering value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_friction(Entity eid);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern void internal_m2n_joint_set_friction(Entity eid, float value);
         [MethodImpl(MethodImplOptions.InternalCall)] private static extern float internal_m2n_joint_get_distance(Entity eid);

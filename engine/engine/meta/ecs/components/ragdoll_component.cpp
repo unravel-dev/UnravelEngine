@@ -1,6 +1,7 @@
 #include "ragdoll_component.hpp"
 #include "physics_component.hpp"
 #include <engine/meta/core/math/vector.hpp>
+#include <engine/physics/ecs/components/joint_component.h>
 #include <engine/meta/layers/layer_mask.hpp>
 
 #include <serialization/associative_archive.h>
@@ -105,13 +106,22 @@ REFLECT(ragdoll_body)
                             "Turn of the joint frame against the bone, Euler angles in degrees. Its X axis is the "
                             "twist or hinge axis."},
         })
+        .data<&ragdoll_body::swing_offset>("swing_offset"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "swing_offset"},
+            entt::attribute{"pretty_name", "Swing Offset"},
+            entt::attribute{"tooltip",
+                            "Ball: turn of the swing cone's centre away from the bone's rest direction, Euler angles "
+                            "in degrees in the joint frame. Lets a limb rest away from its bind pose, like arms "
+                            "hanging from a T-pose."},
+        })
         .data<&ragdoll_body::swing_limit>("swing_limit"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "swing_limit"},
             entt::attribute{"pretty_name", "Swing Limit"},
-            entt::attribute{"tooltip", "Ball: half angle of the cone the joint axis swings in, degrees."},
+            entt::attribute{"tooltip", "Ball: half angle of the cone the joint axis swings in, degrees, at most 90."},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 180.0f},
+            entt::attribute{"max", MAX_CONE_ANGLE},
         })
         .data<&ragdoll_body::twist_lower>("twist_lower"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -152,6 +162,7 @@ SAVE(ragdoll_body)
     try_save(ar, ser20::make_nvp("mass", obj.mass));
     try_save(ar, ser20::make_nvp("joint", obj.joint));
     try_save(ar, ser20::make_nvp("joint_rotation", obj.joint_rotation));
+    try_save(ar, ser20::make_nvp("swing_offset", obj.swing_offset));
     try_save(ar, ser20::make_nvp("swing_limit", obj.swing_limit));
     try_save(ar, ser20::make_nvp("twist_lower", obj.twist_lower));
     try_save(ar, ser20::make_nvp("twist_upper", obj.twist_upper));
@@ -168,6 +179,7 @@ LOAD(ragdoll_body)
     try_load(ar, ser20::make_nvp("mass", obj.mass));
     try_load(ar, ser20::make_nvp("joint", obj.joint));
     try_load(ar, ser20::make_nvp("joint_rotation", obj.joint_rotation));
+    try_load(ar, ser20::make_nvp("swing_offset", obj.swing_offset));
     try_load(ar, ser20::make_nvp("swing_limit", obj.swing_limit));
     try_load(ar, ser20::make_nvp("twist_lower", obj.twist_lower));
     try_load(ar, ser20::make_nvp("twist_upper", obj.twist_upper));

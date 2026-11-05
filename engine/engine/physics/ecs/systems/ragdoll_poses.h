@@ -6,6 +6,9 @@
 
 #include <entt/entity/registry.hpp>
 
+#include <string>
+#include <vector>
+
 namespace unravel
 {
 class model_component;
@@ -20,9 +23,20 @@ class model_component;
 auto prepare_ragdoll_runtime(ragdoll_component& ragdoll) -> bool;
 
 /**
- * @brief The rest pose of armature node @p index in the model entity's space.
+ * @brief The rest pose of every armature node in the model entity's space, indexed like the armature. Each node is
+ *        worked out once; a missing node gets the identity.
  */
-auto get_bind_pose_in_model_space(const model_component& model, entt::handle model_entity, int index) -> math::transform;
+auto get_bind_poses_in_model_space(const model_component& model, entt::handle model_entity)
+    -> std::vector<math::transform>;
+
+/**
+ * @brief The armature index of the bone a ragdoll body names: by full name, else by the name without its rig prefix.
+ * @return -1 when the model has no such bone.
+ */
+auto find_ragdoll_bone_index(const model_component& model, const std::string& name) -> int;
+
+/// The bone entity a ragdoll body names, found as find_ragdoll_bone_index finds it; none when the model lacks it.
+auto find_ragdoll_bone(const model_component& model, const std::string& name) -> entt::handle;
 
 /**
  * @brief Reads every ragdoll's animated pose before the fixed steps.

@@ -21,6 +21,9 @@ constexpr float rest_speed = 0.15f;
 constexpr float min_blend_seconds = 1e-3f;
 /// Local transforms closer than this to what the ragdoll wrote are still its write.
 constexpr float written_epsilon = 1e-6f;
+/// An animated bone moving faster than this, in meters per second, was placed (a teleport, a get-up, an entity
+/// turned back on): a body that starts simulating then inherits no velocity from it.
+constexpr float teleport_speed = 30.0f;
 
 auto get_parent(entt::handle entity) -> entt::handle
 {
@@ -125,11 +128,6 @@ private:
     std::vector<bool> is_cached_;
 };
 
-auto find_bone_index(const model_component& model, const std::string& name) -> int
-{
-    const int index = model.get_armature_index_by_name_cached(name);
-    return index >= 0 ? index : model.get_armature_index_by_base_name_cached(name);
-}
 
 auto find_body_of_entity(const ragdoll_runtime& runtime, entt::handle entity) -> int
 {
@@ -197,32 +195,33 @@ void find_root_follower(ragdoll_runtime& runtime, entt::handle owner)
     runtime.root_follower = topmost;
 }
 
-/// The anim pose of an entity in the world: body bones and the root follower count with their animated locals.
-auto compose_anim_world(const ragdoll_runtime& runtime, entt::handle entity, entt::handle owner) -> math::transform
+/**
+ * @brief The animated pose of body @p index in the world, below @p above: the parent body's animated pose, or the
+ *        model entity's pose for the root body. Bones between the two are taken as they stand, the root follower as
+ *        animated.
+ */
+auto compose_anim_world(const ragdoll_runtime& runtime, int index, entt::handle owner, const math::transform& above)
+    -> math::transform
 {
-    std::vector<entt::handle> chain;
-    for(entt::handle current = entity; current && current != owner; current = get_parent(current))
+    const auto& body = runtime.bodies[size_t(index)];
+    const entt::handle stop = body.parent >= 0 ? runtime.bodies[size_t(body.parent)].bone : owner;
+    math::transform below = body.anim_local;
+    for(entt::handle current = get_parent(body.bone); current && current != stop && current != owner;
+        current = get_parent(current))
     {
-        chain.push_back(current);
+        const bool is_follower = current == runtime.root_follower;
+        below = (is_follower ? runtime.root_follower_anim_local : current.get<transform_component>().get_transform_local()) *
+                below;
     }
-    math::transform world = owner.get<transform_component>().get_transform_global();
-    for(auto it = chain.rbegin(); it != chain.rend(); ++it)
-    {
-        const int body = find_body_of_entity(runtime, *it);
-        if(body >= 0)
-        {
-            world = world * runtime.bodies[size_t(body)].anim_local;
-        }
-        else if(*it == runtime.root_follower)
-        {
-            world = world * runtime.root_follower_anim_local;
-        }
-        else
-        {
-            world = world * it->get<transform_component>().get_transform_local();
-        }
-    }
-    return world;
+    return above * below;
+}
+
+/// What the animated pose of body @p index hangs from: its parent body's animated pose, else the model entity.
+auto get_anim_parent_world(const ragdoll_runtime& runtime, int index, const math::transform& owner_world)
+    -> const math::transform&
+{
+    const int parent = runtime.bodies[size_t(index)].parent;
+    return parent >= 0 ? runtime.bodies[size_t(parent)].anim_world : owner_world;
 }
 
 /// Angular velocity that turns @p from into @p to over @p seconds.
@@ -241,6 +240,25 @@ auto get_angular_velocity(const math::quat& from, const math::quat& to, float se
     }
     const math::vec3 axis{delta.x / sine, delta.y / sine, delta.z / sine};
     return axis * (angle / seconds);
+}
+
+/// The velocity of the animated pose, which a body keeps when it starts simulating; a jump faster than any motion
+/// (a teleport) gives none.
+void update_anim_velocity(ragdoll_body_runtime& body, const math::transform& world, float frame_seconds)
+{
+    if(!body.has_anim_pose || frame_seconds <= 0.0f)
+    {
+        return;
+    }
+    const math::vec3 velocity = (world.get_position() - body.anim_world.get_position()) / frame_seconds;
+    if(math::length(velocity) > teleport_speed)
+    {
+        body.anim_linear_velocity = math::vec3{0.0f};
+        body.anim_angular_velocity = math::vec3{0.0f};
+        return;
+    }
+    body.anim_linear_velocity = velocity;
+    body.anim_angular_velocity = get_angular_velocity(body.anim_world.get_rotation(), world.get_rotation(), frame_seconds);
 }
 
 void capture_one(ragdoll_component& ragdoll, float frame_seconds)
@@ -266,16 +284,14 @@ void capture_one(ragdoll_component& ragdoll, float frame_seconds)
             runtime.root_follower_has_written = false;
         }
     }
+    const math::transform owner_world = owner.get<transform_component>().get_transform_global();
+    // Parents come first in the write order, so each body hangs from its parent's pose of this frame.
     for(const int index : runtime.write_order)
     {
         auto& body = runtime.bodies[size_t(index)];
-        const math::transform world = compose_anim_world(runtime, body.bone, owner);
-        if(body.has_anim_pose && frame_seconds > 0.0f)
-        {
-            body.anim_linear_velocity = (world.get_position() - body.anim_world.get_position()) / frame_seconds;
-            body.anim_angular_velocity =
-                get_angular_velocity(body.anim_world.get_rotation(), world.get_rotation(), frame_seconds);
-        }
+        const math::transform world =
+            compose_anim_world(runtime, index, owner, get_anim_parent_world(runtime, index, owner_world));
+        update_anim_velocity(body, world, frame_seconds);
         body.anim_world = world;
         body.has_anim_pose = true;
     }
@@ -375,9 +391,11 @@ void write_body(ragdoll_body_runtime& body, float step_fraction, const math::tra
     local.set_rotation(math::normalize(math::slerp(body.anim_local.get_rotation(), physics_rotation, body.weight)));
     if(body.parent < 0)
     {
-        // Only the root body takes its position from physics: the others keep their bone lengths exactly.
-        const math::vec3 physics_position = parent_world.inverse_transform_coord(source.get_position());
-        local.set_position(math::mix(body.anim_local.get_position(), physics_position, body.weight));
+        // Only the root body takes its position from physics: the others keep their bone lengths exactly. The mix
+        // is made in the world: the parent (the root follower) already carries its share of the shift, so a mix of
+        // locals would count that share twice.
+        const math::vec3 shown_position = math::mix(anim_world.get_position(), source.get_position(), body.weight);
+        local.set_position(parent_world.inverse_transform_coord(shown_position));
     }
     transform.set_transform_local(local);
     body.written_local = transform.get_transform_local();
@@ -427,26 +445,47 @@ void show_again_if_moved(ragdoll_component& ragdoll)
     {
         return;
     }
-    // The animated pose moved with the character, so it is composed again here. The one the fixed steps read stays
-    // as it is: the next frame measures the animation's velocity from it.
-    const auto& root = runtime.bodies[size_t(runtime.write_order.front())];
-    write_root_follower(runtime, runtime.shown_step_fraction, compose_anim_world(runtime, root.bone, owner));
+    // The animated pose moved with the character, so it is composed again here, into a pose list of its own: the one
+    // the fixed steps read stays as it is, and the next frame measures the animation's velocity from it.
+    std::vector<math::transform> moved(runtime.bodies.size());
     for(const int index : runtime.write_order)
     {
-        auto& body = runtime.bodies[size_t(index)];
-        write_body(body, runtime.shown_step_fraction, compose_anim_world(runtime, body.bone, owner));
+        const int parent = runtime.bodies[size_t(index)].parent;
+        const math::transform& above = parent >= 0 ? moved[size_t(parent)] : owner_world;
+        moved[size_t(index)] = compose_anim_world(runtime, index, owner, above);
+    }
+    write_root_follower(runtime, runtime.shown_step_fraction, moved[size_t(runtime.write_order.front())]);
+    for(const int index : runtime.write_order)
+    {
+        write_body(runtime.bodies[size_t(index)], runtime.shown_step_fraction, moved[size_t(index)]);
     }
 }
 } // namespace ragdoll_poses_detail
 
-auto get_bind_pose_in_model_space(const model_component& model, entt::handle model_entity, int index) -> math::transform
+auto get_bind_poses_in_model_space(const model_component& model, entt::handle model_entity)
+    -> std::vector<math::transform>
 {
-    if(index < 0 || size_t(index) >= model.get_armature_entities().size())
-    {
-        return {};
-    }
+    const auto& armature = model.get_armature_entities();
+    std::vector<math::transform> poses(armature.size());
     ragdoll_poses_detail::bind_pose_view view(model, model_entity);
-    return view.get_model_space(index);
+    for(size_t i = 0; i < armature.size(); ++i)
+    {
+        // A node the armature lost (a stripped bone) has no pose of its own.
+        poses[i] = armature[i] ? view.get_model_space(int(i)) : math::transform{};
+    }
+    return poses;
+}
+
+auto find_ragdoll_bone_index(const model_component& model, const std::string& name) -> int
+{
+    const int index = model.get_armature_index_by_name_cached(name);
+    return index >= 0 ? index : model.get_armature_index_by_base_name_cached(name);
+}
+
+auto find_ragdoll_bone(const model_component& model, const std::string& name) -> entt::handle
+{
+    const int index = find_ragdoll_bone_index(model, name);
+    return index >= 0 ? model.get_armature_by_index(size_t(index)) : entt::handle{};
 }
 
 auto prepare_ragdoll_runtime(ragdoll_component& ragdoll) -> bool
@@ -465,21 +504,22 @@ auto prepare_ragdoll_runtime(ragdoll_component& ragdoll) -> bool
     {
         return true;
     }
-    const bool simulate = ragdoll.get_state() != ragdoll_state::animated;
-    runtime.bodies.assign(bodies.size(), ragdoll_body_runtime{});
+    // What play gave each body (simulated flags, weights, poses, velocities) stays: a definition changed during play
+    // must not stop a falling ragdoll in mid-air.
+    ragdoll.fit_runtime_to_definition();
     ragdoll_poses_detail::bind_pose_view bind(*model, owner);
     for(size_t i = 0; i < bodies.size(); ++i)
     {
         auto& body = runtime.bodies[i];
-        const int index = ragdoll_poses_detail::find_bone_index(*model, bodies[i].bone);
-        if(index < 0)
+        const int index = find_ragdoll_bone_index(*model, bodies[i].bone);
+        const entt::handle bone = index >= 0 ? model->get_armature_by_index(size_t(index)) : entt::handle{};
+        if(body.bone != bone)
         {
-            continue;
+            body.has_written = false;
+            body.has_anim_pose = false;
         }
-        body.bone = model->get_armature_by_index(size_t(index));
-        body.bind_model = bind.get_model_space(index);
-        body.simulated = simulate;
-        body.weight = simulate ? 1.0f : 0.0f;
+        body.bone = bone;
+        body.bind_model = index >= 0 ? bind.get_model_space(index) : math::transform{};
     }
     ragdoll_poses_detail::find_parent_bodies(runtime, owner);
     ragdoll_poses_detail::order_bodies(runtime, owner);

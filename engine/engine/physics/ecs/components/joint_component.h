@@ -10,6 +10,9 @@
 namespace unravel
 {
 
+/// Box3D asserts that a ball joint's cone half angle is at most a quarter turn, in degrees.
+constexpr float MAX_CONE_ANGLE = 90.0f;
+
 /**
  * @enum joint_type
  * @brief How a joint lets its two bodies move against each other. Persisted by value: append only.
@@ -47,7 +50,7 @@ struct joint_limits
     float lower{-45.0f};
     /// Hinge and ball twist: highest angle. Slider and wheel suspension: highest position. Distance: longest length.
     float upper{45.0f};
-    /// Ball: half angle of the cone the axis may swing in.
+    /// Ball: half angle of the cone the axis may swing in, at most MAX_CONE_ANGLE.
     float cone_angle{45.0f};
 };
 
@@ -112,7 +115,8 @@ struct joint_state
 {
     /// The joint exists in the running simulation.
     bool is_active{false};
-    /// The joint broke (a force or torque above its threshold) or was broken by a call; it stays broken until play ends.
+    /// The joint broke (a force or torque above its threshold, a call, or one of its bodies destroyed); it stays broken
+    /// until repair() or the end of play.
     bool is_broken{false};
     /// Hinge: angle in degrees. Ball: twist in degrees. Wheel: steering angle in degrees.
     float angle{0.0f};
@@ -150,8 +154,11 @@ public:
     void set_body_b(entt::handle body);
     auto get_body_b() const noexcept -> entt::handle;
 
-    /// Body B as the simulation sees it: the set body, else the joint's own entity.
+    /// Body B as the simulation sees it: the set body (even destroyed), else the joint's own entity.
     auto get_resolved_body_b() noexcept -> entt::handle;
+
+    /// Whether a body was set and its entity has been destroyed since; the joint then breaks.
+    auto is_body_missing() const noexcept -> bool;
 
     /// Offset of the joint frame from the entity, in the entity's space.
     void set_anchor(const math::vec3& anchor);

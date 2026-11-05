@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @brief Registers @p func with @p registry under its own name, which the C# extern declares too. Expands where
+ *        script_glue_common.h is included, for script_internal_call.
+ */
+#define UNRAVEL_ADD_INTERNAL_CALL(registry, func) (registry).add_internal_call(#func, script_internal_call(func))
+
 namespace unravel
 {
 

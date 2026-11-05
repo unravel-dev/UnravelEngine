@@ -4,6 +4,7 @@
 #include <engine/ecs/components/basic_component.h>
 #include <engine/layers/layer_mask.h>
 #include <engine/physics/ecs/components/physics_component.h>
+#include <hpp/string_view.hpp>
 #include <math/math.h>
 
 #include <bitset>
@@ -65,7 +66,11 @@ struct ragdoll_body
     ragdoll_joint_type joint{ragdoll_joint_type::ball};
     /// Turn of the joint frame against the bone, Euler angles in degrees.
     math::vec3 joint_rotation{0.0f};
-    /// Ball: half angle of the swing cone, degrees.
+    /// Ball: turn of the swing cone's centre away from the bone's rest direction, Euler angles in degrees in the
+    /// joint frame. The parent's side of the joint carries it, so a limb can rest away from its bind pose (arms
+    /// hanging from a T-pose).
+    math::vec3 swing_offset{0.0f};
+    /// Ball: half angle of the swing cone, degrees, at most 90.
     float swing_limit{30.0f};
     /// Ball: twist range, hinge: angle range, degrees.
     float twist_lower{-20.0f};
@@ -278,14 +283,14 @@ public:
      *        pulled to the animation by the local drive; stopping blends them back.
      * @return False when no body belongs to the bone.
      */
-    auto set_bone_simulated(const std::string& bone, bool simulated, bool include_children = true, float blend_time = -1.0f)
+    auto set_bone_simulated(hpp::string_view bone, bool simulated, bool include_children = true, float blend_time = -1.0f)
         -> bool;
 
     /// Whether the body at @p index simulates.
     auto is_body_simulated(int index) const -> bool;
 
     /// Index of the body of a bone given by name, -1 when it has none.
-    auto find_body(const std::string& bone) const -> int;
+    auto find_body(hpp::string_view bone) const -> int;
     /// Index of the body a bone entity belongs to: its own, else the nearest ancestor's. -1 when none.
     auto find_body(entt::handle bone) const -> int;
 
@@ -341,11 +346,19 @@ public:
     /// Puts the state, the simulated flags and the weights back to the start state, for a new play.
     void reset_runtime_state();
 
+    /**
+     * @brief Gives every body of the definition its play state, so the per-body calls work before the first physics
+     *        frame. Bodies that have one keep it (simulated flags, weights, poses, velocities); added ones start in the
+     *        ragdoll's state.
+     */
+    void fit_runtime_to_definition();
+
 private:
     void mark_definition_changed();
     void mark_settings_changed();
     void set_body_simulated(int index, bool simulated, float blend_time);
     void collect_bodies_below(int index, std::vector<int>& out) const;
+    auto can_take_impulses() const -> bool;
 
     std::vector<ragdoll_body> bodies_;
     std::vector<ragdoll_bone_pair> disabled_collisions_;
