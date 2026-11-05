@@ -317,6 +317,13 @@ struct script_system
 
 private:
     /**
+     * @brief Sets the managed Time to this frame's values while play runs, before any system runs script code.
+     * @param ctx The context for the frame.
+     * @param times The frame's times.
+     */
+    void on_frame_begin(rtti::context& ctx, const frame_times& times);
+
+    /**
      * @brief Updates the physics system for each frame.
      * @param ctx The context for the update.
      * @param times The frame's times.

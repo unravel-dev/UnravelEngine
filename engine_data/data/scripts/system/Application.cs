@@ -82,7 +82,9 @@ namespace Unravel.Core
         /// <summary>
         /// Cancelled when play stops (in the player, when the game quits); already cancelled outside
         /// play. Pass it to awaited work that no script owns, <c>Task.Delay</c> and <c>Task.Run</c> among
-        /// them, so nothing of it outlives the play session.
+        /// them, so nothing of it outlives the play session: the code awaiting it resumes cancelled when
+        /// play stops, and its catch and finally blocks run. A script's own work takes its
+        /// <see cref="ScriptComponent.destroyCancellationToken"/>, which play stop cancels too.
         /// </summary>
         public static System.Threading.CancellationToken exitCancellationToken => AwaitableScheduler.exitToken;
 

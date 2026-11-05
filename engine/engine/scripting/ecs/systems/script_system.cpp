@@ -236,6 +236,19 @@ auto make_frame_update_data(const simulation& sim, delta_t elapsed, const frame_
     return data;
 }
 
+/// The frame times scripts see: none pass in the first frame of play, where a mid-frame enter_running could not
+/// zero the game time, so Start() integrates no motion.
+auto get_script_frame_times(const play_mode& play, const frame_times& times) -> frame_times
+{
+    frame_times script_times = times;
+    if(play.frames_running() == 0)
+    {
+        script_times.scaled = {};
+        script_times.unscaled = {};
+    }
+    return script_times;
+}
+
 void invoke_play_hook(dotnet::method_invoker<void()>& hook)
 {
     if(!hook.valid())
@@ -454,6 +467,7 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
     // rewrites every animated bone's local transform, so IK and other bone
     // writes issued from OnUpdate must come after it to survive the frame.
     // See frame_update_priority in engine/events.h.
+    ev.on_frame_begin.connect(sentinel_, this, &script_system::on_frame_begin);
     ev.on_frame_update.connect(sentinel_, frame_update_priority::scripts, this, &script_system::on_frame_update);
     ev.on_frame_fixed_update.connect(sentinel_, this, &script_system::on_frame_fixed_update);
     ev.on_frame_update.connect(sentinel_,
@@ -1010,7 +1024,8 @@ void script_system::on_play_end(rtti::context& ctx)
     auto& scn = ec.get_scene();
     auto& registry = *scn.registry;
 
-    // First, so no awaited script code resumes into the session's teardown.
+    // First, while the scene is whole: pending awaits end cancelled here (their catch and finally blocks run), and
+    // no awaited script code resumes into the session's teardown.
     invoke_play_hook(cache_.end_play_invoker);
 
     seq::scope::stop_all("script");
@@ -1049,6 +1064,27 @@ void script_system::on_resume(rtti::context& ctx)
 {
 }
 
+void script_system::on_frame_begin(rtti::context& ctx, const frame_times& times)
+{
+    // Before every system that runs scripts: the physics steps, which run FixedUpdate, the collision callbacks and
+    // the fixed-update waits, come before the scripts' update. A frame that starts play sets the time in
+    // on_play_begin instead.
+    auto& play = ctx.get_cached<play_mode>();
+    if(!app_domain_ || !domain_ || !play.is_simulation_running() || !cache_.begin_frame_invoker.valid())
+    {
+        return;
+    }
+    try
+    {
+        cache_.begin_frame_invoker(
+            make_frame_update_data(ctx.get_cached<simulation>(), elapsed_time_, get_script_frame_times(play, times)));
+    }
+    catch(const dotnet::exception& e)
+    {
+        log_exception(e);
+    }
+}
+
 void script_system::on_frame_update(rtti::context& ctx, const frame_times& times)
 {
     APP_SCOPE_PERF("Script/System Update");
@@ -1073,21 +1109,9 @@ void script_system::on_frame_update(rtti::context& ctx, const frame_times& times
         auto& scn = ec.get_scene();
         auto& registry = *scn.registry;
 
-        // Mid-frame enter_running: process() could not zero the game time. Start() below still runs;
-        // skip integrating motion on this first frame.
-        frame_times script_times = times;
-        if(play.frames_running() == 0)
-        {
-            script_times.scaled = {};
-            script_times.unscaled = {};
-        }
+        // Time already holds this frame's values (on_frame_begin), for the scripts created or started below.
+        const frame_times script_times = get_script_frame_times(play, times);
         const auto data = make_frame_update_data(ctx.get_cached<simulation>(), elapsed_time_, script_times);
-
-        // Time first, so the scripts created or started below read this frame's values.
-        if(play.is_simulation_running() && cache_.begin_frame_invoker.valid())
-        {
-            cache_.begin_frame_invoker(data);
-        }
 
         registry.view<script_component>().each(
             [&](auto e, auto&& comp)

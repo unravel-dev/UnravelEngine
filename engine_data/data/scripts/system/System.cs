@@ -794,8 +794,10 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Native-to-managed play end: drops every pending continuation and wait without running
-        /// script code, and cancels <see cref="Application.exitCancellationToken"/>.
+        /// Native-to-managed play end, while the scene is still whole: cancels every script's destroy
+        /// token and <see cref="Application.exitCancellationToken"/>, and ends every pending wait
+        /// cancelled, so the code awaiting them runs its catch and finally blocks at once. No other awaited
+        /// script code runs after this.
         /// </summary>
         public static void internal_n2m_end_play()
         {
@@ -803,8 +805,9 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Native-to-managed frame begin: sets <see cref="Time"/> before scripts are created or
-        /// started this frame, so OnCreate and OnStart read the current frame's values.
+        /// Native-to-managed frame begin: sets <see cref="Time"/> before any script code of the frame
+        /// runs, so fixed updates, collision callbacks, fixed-update waits, OnCreate and OnStart read
+        /// the current frame's values.
         /// </summary>
         /// <param name="info">Per-frame timing values from the engine.</param>
         public static void internal_n2m_begin_frame(UpdateInfo info)

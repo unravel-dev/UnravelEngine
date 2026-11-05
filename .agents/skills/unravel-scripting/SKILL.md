@@ -56,8 +56,43 @@ C# scripts implement:
 
 Script system connects to `events` in `script_system.cpp`:
 
+- `on_frame_begin` (sets the managed `Time` before any system runs script code: the physics steps run
+  FixedUpdate and the collision callbacks before the scripts' update)
 - `on_frame_update`, `on_frame_fixed_update`, `on_frame_late_update`
 - `on_play_begin`, `on_play_end`, `on_pause`, `on_resume`
+
+## Async code (await)
+
+| Purpose | Path |
+|---------|------|
+| Contexts and pump (`ScriptSynchronizationContext`, `AwaitableScheduler`) | `engine_data/data/scripts/system/ScriptSynchronizationContext.cs` |
+| Waits (`Awaitable`) | `engine_data/data/scripts/system/Awaitable.cs` |
+| Destroy token, `RunningScope` | `engine_data/data/scripts/scene/components/ScriptComponent.cs` |
+
+- Each script has a synchronization context for each play session, and the session has one for code
+  no script runs. `RunningScope` installs it around every script call, so an `await` comes back to
+  the script. The pump runs after the coroutines; fixed-update waits after FixedUpdate, end-of-frame
+  waits after LateUpdate. Nothing pumps while paused or outside play.
+- One rule for the end of a script (destroy, before OnDestroy) and of a session (play stop,
+  `internal_n2m_end_play`, while the scene is whole; OnDestroy does not run at stop): the token
+  (`destroyCancellationToken`, or `Application.exitCancellationToken`) is cancelled and the pending
+  waits end cancelled, as the script on the script thread; what that cancellation posts runs right
+  after. Everything else is dropped: work queued before, and tasks that finish later (a running
+  `Task.Run` body, IO), finally blocks included. `task.WaitAsync(destroyCancellationToken)` ends such
+  a wait at once. Script tokens hang on the session token, so play stop cancels them all.
+- Pump lists only grow while they are pumped and shed ended waits after the outermost pump, so a
+  continuation may destroy scripts, add waits or run a pump again. Ending a script touches only its
+  own waits.
+- `MainThreadAsync` after `BackgroundThreadAsync` comes back as the same script: the worker runs
+  under a `WorkerSynchronizationContext` that carries the owner across worker awaits.
+- Never block the script thread on async code (`.Result`, `.Wait()`, `GetAwaiter().GetResult()`):
+  it deadlocks. On CoreCLR, `ScriptSynchronizationContext.Wait` logs a wait that lasts 3 s while
+  async code is pending, with its stack; Mono does not report waits.
+- Awaitables are not pooled: a kept Awaitable can be cancelled or awaited again, token callbacks
+  arrive from other threads after the wait ended, and a second await is chained (with an error)
+  rather than thrown, which pooling would turn into resuming the wrong code.
+- Exceptions from async code are logged with the script type; cancellations by a token are not.
+  An `async void` exception posted to a closed context is still logged.
 
 ## C++ <-> C# glue
 

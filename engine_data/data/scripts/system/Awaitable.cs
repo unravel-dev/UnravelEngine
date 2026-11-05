@@ -10,12 +10,32 @@ namespace Unravel.Core
     /// <c>await</c> runs on the script thread in the frame loop, so it can call the engine.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Every <c>await</c> in a script's code comes back to that script: after an awaited
     /// <see cref="System.Threading.Tasks.Task"/> too, in the frame after the task finished. Nothing
-    /// resumes while the game is paused or after play stops, and the waits of a destroyed script end
-    /// cancelled, so its <c>finally</c> blocks run once. Pass <see cref="ScriptComponent.destroyCancellationToken"/>
-    /// to other awaited calls so they stop with the script.
-    /// An Awaitable can be awaited once.
+    /// resumes while the game is paused.
+    /// </para>
+    /// <para>
+    /// When the script is destroyed, or play stops, its async work ends at once, as that script on the
+    /// script thread: its <see cref="ScriptComponent.destroyCancellationToken"/> is cancelled and its
+    /// waits end cancelled, so the code awaiting them gets an <see cref="OperationCanceledException"/>
+    /// and its catch and finally blocks run once. Nothing else of it resumes: a task that finishes later
+    /// (a running <c>Task.Run</c> body, a file or web read) is dropped with the code awaiting it, finally
+    /// blocks included. To end such a wait at once with the script, await
+    /// <c>task.WaitAsync(destroyCancellationToken)</c>; the work itself stops only if it checks the token.
+    /// </para>
+    /// <para>
+    /// Never block the script thread on async code: <c>.Result</c>, <c>.Wait()</c> or
+    /// <c>GetAwaiter().GetResult()</c> on a task whose code awaits without <c>ConfigureAwait(false)</c>,
+    /// library code included, waits for the script thread to resume that code, and the script thread
+    /// is the one waiting: it never returns, and the game freezes. Await the task instead. On CoreCLR,
+    /// such a wait is logged as an error after three seconds, with its stack.
+    /// </para>
+    /// <para>
+    /// Await an Awaitable once. Awaiting a pending one a second time logs an error; both awaits resume.
+    /// Awaitables are not pooled, so one can be kept to <see cref="Cancel"/> it or to read
+    /// <see cref="isCompleted"/>.
+    /// </para>
     /// </remarks>
     /// <example><code>
     /// async void OnStart()
@@ -53,14 +73,15 @@ namespace Unravel.Core
         private Action continuation;
         private CancellationToken cancelledBy;
         private CancellationTokenRegistration registration;
+        private bool isListed;
 
         private Awaitable(Kind kind, long frame, double until)
         {
             this.kind = kind;
             this.frame = frame;
             this.until = until;
-            owner = ScriptComponent.running;
-            context = AwaitableScheduler.ContextFor(owner) as ScriptSynchronizationContext;
+            owner = AwaitableScheduler.currentOwner;
+            context = AwaitableScheduler.ContextFor(owner);
         }
 
         /// <summary>
@@ -122,7 +143,8 @@ namespace Unravel.Core
 
         /// <summary>
         /// Continues on a worker thread, for work that calls no engine API. Code awaited from a worker
-        /// stays on it. <see cref="MainThreadAsync"/> comes back.
+        /// stays on workers, and still belongs to the script that went there: <see cref="MainThreadAsync"/>
+        /// comes back as that script (unless an await on the worker used <c>ConfigureAwait(false)</c>).
         /// </summary>
         public static Awaitable BackgroundThreadAsync()
         {
@@ -135,9 +157,10 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Continues on the script thread in the next frame, after a hop to a worker thread. Awaited on
-        /// the script thread, it continues at once. Use the script's destroy token to stop work a
-        /// destroyed script started.
+        /// Continues on the script thread in the next frame, as the script whose code went to the worker
+        /// with <see cref="BackgroundThreadAsync"/>. Awaited on the script thread, it continues at once.
+        /// When that script is destroyed or play stops first, it ends cancelled: on the script thread when
+        /// that happens while it waits, and on the worker when it happened before.
         /// </summary>
         public static Awaitable MainThreadAsync()
         {
@@ -145,6 +168,10 @@ namespace Unravel.Core
             if (AwaitableScheduler.isScriptThread)
             {
                 awaitable.state = State.Completed;
+            }
+            else if (!awaitable.canResume)
+            {
+                awaitable.StartCancelled(awaitable.endToken);
             }
             return awaitable;
         }
@@ -160,7 +187,7 @@ namespace Unravel.Core
         /// </summary>
         public void Cancel()
         {
-            CancelNow(default);
+            CancelNow(new CancellationToken(true));
         }
 
         /// <summary>
@@ -192,6 +219,12 @@ namespace Unravel.Core
             }
         }
 
+        // Whether code awaiting it can still resume: its script lives and play goes on.
+        private bool canResume => context != null && context.isOpen;
+
+        // The token of its script's or session's end, which is the reason it ends cancelled with them.
+        private CancellationToken endToken => context != null ? context.token : new CancellationToken(true);
+
         internal void Complete()
         {
             if (state != State.Pending)
@@ -199,11 +232,10 @@ namespace Unravel.Core
                 return;
             }
             state = State.Completed;
-            registration.Unregister();
-            RunContinuation();
+            Finish();
         }
 
-        /// <summary>Ends the wait cancelled now, on the script thread, resuming the code awaiting it.</summary>
+        /// <summary>Ends the wait cancelled at once, resuming the code awaiting it.</summary>
         internal void CancelNow(CancellationToken token)
         {
             if (state != State.Pending)
@@ -212,14 +244,13 @@ namespace Unravel.Core
             }
             state = State.Canceled;
             cancelledBy = token;
-            registration.Unregister();
-            RunContinuation();
+            Finish();
         }
 
-        /// <summary>Ends the wait of a destroyed script, as cancelled by its destroy token.</summary>
-        internal void CancelNow()
+        /// <summary>Ends the wait cancelled because its script was destroyed or play stopped.</summary>
+        internal void CancelWithContext()
         {
-            CancelNow(owner != null ? owner.destroyCancellationToken : default);
+            CancelNow(endToken);
         }
 
         // Waits in the frame loop are made on the script thread. One that can never resume (no play, a
@@ -228,10 +259,9 @@ namespace Unravel.Core
                                            CancellationToken cancellationToken,
                                            Action<Awaitable> queue)
         {
-            if (!AwaitableScheduler.isPlaying)
+            if (!awaitable.canResume)
             {
-                awaitable.state = State.Canceled;
-                awaitable.cancelledBy = AwaitableScheduler.exitToken;
+                awaitable.StartCancelled(awaitable.endToken);
                 return awaitable;
             }
             if (!AwaitableScheduler.isScriptThread)
@@ -241,91 +271,120 @@ namespace Unravel.Core
             }
             if (cancellationToken.IsCancellationRequested)
             {
-                awaitable.state = State.Canceled;
-                awaitable.cancelledBy = cancellationToken;
-                return awaitable;
-            }
-            if (awaitable.owner != null && awaitable.owner.isDestroyed)
-            {
-                awaitable.state = State.Canceled;
-                awaitable.cancelledBy = awaitable.owner.destroyCancellationToken;
+                awaitable.StartCancelled(cancellationToken);
                 return awaitable;
             }
             if (cancellationToken.CanBeCanceled)
             {
                 awaitable.registration = cancellationToken.UnsafeRegister(
                     static (state, token) => ((Awaitable)state).OnTokenCancelled(token), awaitable);
+                if (awaitable.isCompleted)
+                {
+                    return awaitable;
+                }
             }
+            awaitable.isListed = true;
+            awaitable.context.AddWait(awaitable);
             queue(awaitable);
             return awaitable;
         }
 
-        // Cancellation can come from any thread; the wait ends on the script thread.
+        private void StartCancelled(CancellationToken token)
+        {
+            state = State.Canceled;
+            cancelledBy = token;
+        }
+
+        // Cancellation can come from any thread; the wait ends on the script thread. A hop back to the
+        // script thread is cancelled only by its context's end: on the script thread, or on the worker
+        // that registers after that end, where nothing else would run it.
         private void OnTokenCancelled(CancellationToken token)
         {
-            if (AwaitableScheduler.isScriptThread)
+            if (AwaitableScheduler.isScriptThread || kind == Kind.MainThread)
             {
                 CancelNow(token);
                 return;
             }
-            var target = context ?? AwaitableScheduler.sessionContext;
-            if (target != null)
+            AwaitableScheduler.Post(context, _ => CancelNow(token), null);
+        }
+
+        private void Finish()
+        {
+            registration.Unregister();
+            if (isListed)
             {
-                AwaitableScheduler.Post(target, _ => CancelNow(token), null);
+                isListed = false;
+                context.RemoveWait(this);
             }
+            RunContinuation();
         }
 
         private void RunContinuation()
         {
             Action resume = continuation;
             continuation = null;
-            if (resume != null)
+            if (resume == null)
             {
-                AwaitableScheduler.Invoke(owner, static state => ((Action)state)(), resume);
+                return;
+            }
+            if (AwaitableScheduler.isScriptThread)
+            {
+                AwaitableScheduler.Invoke(owner, static action => ((Action)action)(), resume);
+            }
+            else
+            {
+                AwaitableScheduler.RunOnWorker(owner, resume);
             }
         }
 
+        // Never throws: the async machinery would rethrow it on the thread pool, which ends the process.
         private void SetContinuation(Action resume)
         {
             if (continuation != null)
             {
-                throw new InvalidOperationException("An Awaitable can be awaited once.");
+                Log.Error($"An Awaitable of {owner?.GetType().FullName ?? "no script"} was awaited a second time " +
+                          "while it was pending. Await each Awaitable once; both awaits resume when it ends.");
+                continuation += resume;
+                return;
+            }
+            continuation = resume;
+            if (state != State.Pending)
+            {
+                RunContinuation();
+                return;
             }
             switch (kind)
             {
                 case Kind.BackgroundThread:
                     state = State.Completed;
-                    ThreadPool.UnsafeQueueUserWorkItem(static action => action(), resume, preferLocal: false);
+                    continuation = null;
+                    AwaitableScheduler.RunOnWorker(owner, resume);
                     return;
                 case Kind.MainThread:
-                    PostToScriptThread(resume);
+                    PostToScriptThread();
                     return;
             }
-            if (state != State.Pending)
-            {
-                AwaitableScheduler.Invoke(owner, static state => ((Action)state)(), resume);
-                return;
-            }
-            continuation = resume;
         }
 
-        // From a worker: resumes in the next pump as the session's code; dropped when play has stopped.
-        private void PostToScriptThread(Action resume)
+        // From a worker: the end of its script or of play cancels it, else it completes in the next pump.
+        private void PostToScriptThread()
         {
-            var target = AwaitableScheduler.sessionContext;
-            if (target == null)
+            registration = context.token.UnsafeRegister(
+                static (state, token) => ((Awaitable)state).OnTokenCancelled(token), this);
+            if (!isCompleted)
             {
-                return;
+                AwaitableScheduler.Post(context, static state => ((Awaitable)state).Complete(), this);
             }
-            continuation = resume;
-            AwaitableScheduler.Post(target, static state => ((Awaitable)state).Complete(), this);
         }
 
         private void GetResult()
         {
-            if (state == State.Canceled)
+            switch (state)
             {
-                throw new OperationCanceledException(cancelledBy);
+                case State.Canceled:
+                    throw new OperationCanceledException(cancelledBy);
+                case State.Pending:
+                    throw new InvalidOperationException("The Awaitable has not ended: await it instead of reading its result.");
             }
         }
 
@@ -345,18 +404,23 @@ namespace Unravel.Core
             public bool IsCompleted => awaitable.isCompleted;
 
             /// <summary>Registers the code to resume when the wait is over.</summary>
+            /// <param name="continuation">The code to resume.</param>
             public void OnCompleted(Action continuation)
             {
                 awaitable.SetContinuation(continuation);
             }
 
             /// <summary>Registers the code to resume when the wait is over.</summary>
+            /// <param name="continuation">The code to resume.</param>
             public void UnsafeOnCompleted(Action continuation)
             {
                 awaitable.SetContinuation(continuation);
             }
 
-            /// <summary>Ends the <c>await</c>: throws <see cref="OperationCanceledException"/> when the wait was cancelled.</summary>
+            /// <summary>
+            /// Ends the <c>await</c>: throws <see cref="OperationCanceledException"/> when the wait was
+            /// cancelled, and <see cref="InvalidOperationException"/> when it has not ended yet.
+            /// </summary>
             public void GetResult()
             {
                 awaitable.GetResult();

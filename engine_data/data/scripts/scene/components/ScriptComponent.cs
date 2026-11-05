@@ -32,6 +32,14 @@ namespace Unravel.Core
     /// <summary>
     /// Represents a script component that provides lifecycle hooks and event handling for an entity.
     /// </summary>
+    /// <remarks>
+    /// Async code a script runs comes back to it on the script thread after each <c>await</c> (see
+    /// <see cref="Awaitable"/>). When the script is destroyed or play stops, its pending awaits end
+    /// cancelled at once (see <see cref="destroyCancellationToken"/>), and nothing else of its async
+    /// work resumes. Never block on async code with <c>.Result</c>, <c>.Wait()</c> or
+    /// <c>GetAwaiter().GetResult()</c>: the script thread would wait for itself and the game would
+    /// freeze. Await it instead.
+    /// </remarks>
     public abstract class ScriptComponent : Component
     {
         /// <summary>Levels of nested objects and entries of a list a tool sees in an invoked method's result.</summary>
@@ -87,45 +95,37 @@ namespace Unravel.Core
         }
 
         private ScriptSynchronizationContext m_synchronizationContext;
-        private CancellationTokenSource m_destroyCancellation;
-        private bool m_destroyed;
 
         /// <summary>
-        /// Cancelled when this script is destroyed, before its <see cref="OnDestroy"/>. Pass it to
-        /// awaited calls (<see cref="Awaitable"/> waits, <c>Task.Delay</c>, <c>Task.Run</c>) so they stop
-        /// with the script. The waits of a destroyed script end cancelled even without it.
+        /// Cancelled when this script is destroyed, before its <see cref="OnDestroy"/>, and when play
+        /// stops; already cancelled outside play. Pass it to awaited calls (<see cref="Awaitable"/> waits,
+        /// <c>Task.Delay</c>, <c>Task.Run</c>) so they stop with the script: the code awaiting them then
+        /// resumes cancelled at once, and its catch and finally blocks run. The waits of a destroyed
+        /// script end cancelled even without it. It can be read from any thread.
         /// </summary>
-        public CancellationToken destroyCancellationToken
+        public CancellationToken destroyCancellationToken => synchronizationContext.token;
+
+        /// <summary>
+        /// The context this script's awaited code comes back to: made on first use, from any thread, and
+        /// the first one made is kept. One made outside play is closed and gives way to one of the play
+        /// session the script then runs in; the context of a session that ended stays closed.
+        /// </summary>
+        internal ScriptSynchronizationContext synchronizationContext
         {
             get
             {
-                if (m_destroyed)
+                ScriptSynchronizationContext context = Volatile.Read(ref m_synchronizationContext);
+                ScriptSynchronizationContext session = AwaitableScheduler.sessionContext;
+                if (context != null && (context.session != null || session == null))
                 {
-                    return new CancellationToken(true);
+                    return context;
                 }
-                return LazyInitializer.EnsureInitialized(ref m_destroyCancellation).Token;
+                var created = new ScriptSynchronizationContext(this, session);
+                ScriptSynchronizationContext found = Interlocked.CompareExchange(ref m_synchronizationContext, created, context);
+                return found == context ? created : found;
             }
         }
 
-        /// <summary>The context this script's awaited code comes back to.</summary>
-        internal ScriptSynchronizationContext synchronizationContext =>
-            m_synchronizationContext ??= new ScriptSynchronizationContext(this);
-
-        internal bool isDestroyed => m_destroyed;
-
-        /// <summary>Marks the script destroyed, so new waits start cancelled, and cancels its destroy token.</summary>
-        internal void CancelDestroyToken()
-        {
-            m_destroyed = true;
-            try
-            {
-                m_destroyCancellation?.Cancel();
-            }
-            catch (Exception ex)
-            {
-                Log.Error($"A callback registered on the destroy token of {GetType().FullName} failed: {ex}");
-            }
-        }
         /// <summary>
         /// Called when the script is created. Override this method to initialize resources or data.
         /// OnCreate is called when the script is first loaded, or when an object it is attached to is instantiated
@@ -380,7 +380,8 @@ namespace Unravel.Core
         /// <summary>
         /// Internal method invoked when the script is destroyed. Calls <see cref="OnDestroy"/> and unsubscribes <see cref="OnUpdate"/> from the update system.
         /// Also ends the UI event subscriptions this script made, so callbacks cannot pin destroyed scripts,
-        /// and its async work: its waits end cancelled and what it still has posted is dropped.
+        /// and its async work: its destroy token is cancelled and its waits end cancelled, so the code
+        /// awaiting them runs its catch and finally blocks, and the rest of its async work is dropped.
         /// </summary>
         private void internal_n2m_on_destroy()
         {

@@ -54,6 +54,11 @@ script from memory of another engine's API.
 - Recompile once per batch of source edits (the default), not per file.
 - Test behavior in play mode (verification skill); script update logic does
   not run in edit mode.
+- In async script code, pass destroyCancellationToken to every awaited call
+  (Awaitable waits, Task.Delay, Task.Run). When the script is destroyed or play
+  stops, its pending awaits end cancelled and their catch and finally blocks
+  run; a task that finishes later is dropped with the code awaiting it. Await
+  task.WaitAsync(destroyCancellationToken) when cleanup must run with the script.
 
 ## Do not
 
@@ -63,3 +68,7 @@ script from memory of another engine's API.
   atomically and triggers the recompile the editor expects.
 - Do not rename a script file on disk: assets_move_batch renames the file and
   its class together.
+- Do not block on async code in a script with .Result, .Wait() or
+  GetAwaiter().GetResult(): awaited code resumes on the script thread, which is
+  the one waiting, so play freezes. Await it instead. The log reports such a
+  wait after 3 seconds.
