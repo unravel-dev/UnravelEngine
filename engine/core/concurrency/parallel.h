@@ -16,7 +16,12 @@
 //
 // Call sites include this header and call for_each_par_if. Nothing outside it should include
 // <poolstl/poolstl.hpp> or <execution> directly.
+//
+// In the single-threaded mode (threading_mode.h) every loop runs inline and neither pool is ever
+// started.
 #include <poolstl/poolstl.hpp>
+
+#include "threading_mode.h"
 
 #include <base/platform/thread.hpp>
 
@@ -30,6 +35,7 @@
 #include <mutex>
 #include <numeric>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // Extends poolSTL's own namespace: this is an extension of that library rather than a wrapper
@@ -133,13 +139,17 @@ inline auto get_current_pool() -> ttp::task_thread_pool&
 /// @brief While alive, sends every parallel loop the calling thread starts to the background pool.
 ///
 /// Covers the loops of everything the thread calls, so a loop deep inside a bake follows without a pool passed
-/// down to it. A loop started on another thread is not covered.
+/// down to it. A loop started on another thread is not covered. Does nothing in the single-threaded mode, where
+/// the loops run inline.
 class background_scope
 {
 public:
     background_scope() : previous_(detail::current_pool)
     {
-        detail::current_pool = &get_background_pool();
+        if(!unravel::is_single_threaded())
+        {
+            detail::current_pool = &get_background_pool();
+        }
     }
 
     ~background_scope()
@@ -165,11 +175,12 @@ private:
 ///
 /// @param parallel When false the range runs inline on the calling thread. That is not merely an
 ///        optimisation for small ranges: it is what keeps a caller that is already inside a
-///        parallel range from nesting one dispatch inside another.
+///        parallel range from nesting one dispatch inside another. The single-threaded mode
+///        runs every range inline.
 template<typename Iterator, typename Function>
 void for_each_par_if(bool parallel, Iterator first, Iterator last, Function func)
 {
-    if(parallel)
+    if(parallel && !unravel::is_single_threaded())
     {
         std::for_each(par.on(get_current_pool()), first, last, func);
         return;
@@ -203,8 +214,9 @@ void for_each_costliest_first_par_if(bool parallel, const std::vector<Cost>& cos
                      {
                          return costs[rhs] < costs[lhs];
                      });
+    const bool is_parallel = parallel && !unravel::is_single_threaded();
     const std::size_t worker_count =
-        parallel ? std::min<std::size_t>(get_current_pool().get_num_threads(), count) : std::size_t(1);
+        is_parallel ? std::min<std::size_t>(get_current_pool().get_num_threads(), count) : std::size_t(1);
     std::atomic<std::size_t> next{0};
     for_each_par_if(worker_count > 1,
                     iota_iter<std::size_t>(0),
@@ -218,6 +230,19 @@ void for_each_costliest_first_par_if(bool parallel, const std::vector<Cost>& cos
                     });
 }
 
+
+/// @brief Starts @a func on the background pool and returns without waiting for it. In the single-threaded
+///        mode it runs inline instead, before this returns.
+template<typename Function>
+void run_in_background(Function&& func)
+{
+    if(unravel::is_single_threaded())
+    {
+        std::forward<Function>(func)();
+        return;
+    }
+    get_background_pool().submit_detach(std::forward<Function>(func));
+}
 
 template <typename View, typename Fn>
 void for_each_entity_par(bool parallel, const View& view, Fn fn)

@@ -23,6 +23,11 @@ struct simulation
     using duration_t = clock_t::duration;
     using delta_t = std::chrono::duration<float>;
 
+    /// The minimum fps a simulation starts with: a frame longer than a third of a second counts as a third of a
+    /// second, so a hitch, or a browser tab that drew nothing while it was in the background, does not move the
+    /// game in one jump.
+    static constexpr uint32_t DEFAULT_MIN_FPS = 3;
+
     //-----------------------------------------------------------------------------
     //  Name : run_one_frame ()
     /// <summary>
@@ -51,9 +56,8 @@ struct simulation
     //  Name : set_min_fps ()
     /// <summary>
     /// Set minimum frames per second. If fps goes lower than this, time will
-    /// appear to slow.
-    ///
-    ///
+    /// appear to slow. Starts at DEFAULT_MIN_FPS; 0 lets a frame be as long as
+    /// it took.
     /// </summary>
     //-----------------------------------------------------------------------------
     void set_min_fps(uint32_t fps);
@@ -161,7 +165,7 @@ struct simulation
 protected:
     float time_scale_{1.0f};
     /// minimum/maximum frames per second
-    uint32_t min_fps_ = 0;
+    uint32_t min_fps_ = DEFAULT_MIN_FPS;
     ///
     uint32_t max_fps_ = 0;
     ///

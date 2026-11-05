@@ -127,6 +127,21 @@ auto is_main_window_shown(const renderer& rend) -> bool
     return window == nullptr || !window->get_window().is_minimized();
 }
 
+/// Restarts the frame clock when the main window is shown again. A browser stops calling the frames of a tab in
+/// the background and reports it hidden, then shown; the time in between is not a frame.
+void reset_frame_clock_when_shown(const renderer& rend, simulation& sim, const os::event& e)
+{
+    if(e.type != os::events::window || e.window.type != os::window_event_id::shown)
+    {
+        return;
+    }
+    auto* window = rend.get_main_window();
+    if(window != nullptr && window->get_window().get_id() == e.window.window_id)
+    {
+        sim.reset_delta_clock();
+    }
+}
+
 void update_input_zone(const renderer& rend, input_system& input)
 {
     const auto& window = rend.get_main_window();
@@ -315,7 +330,7 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<simulation>();
     ctx.add<events>();
     ctx.add<play_mode>();
-    ctx.add<threader>();
+    ctx.add<threader>(parser);
     ctx.add<renderer>(ctx, parser);
     ctx.add<audio_system>(parser);
     ctx.add<asset_manager>(ctx);
@@ -417,7 +432,7 @@ auto engine::init_core(const cmd_line::parser& parser, const std::function<bool(
     os::set_app_event_callback(on_app_event);
 
     ls.begin_module("Threading");
-    if(!ls.check(ctx.get_cached<threader>().init(ctx)))
+    if(!ls.check(ctx.get_cached<threader>().init(ctx, parser)))
     {
         return false;
     }
@@ -767,6 +782,8 @@ auto engine::process() -> int
             os::event e{};
             while(!should_quit && os::poll_event(e))
             {
+                reset_frame_clock_when_shown(rend, sim, e);
+
                 ev.on_os_event(ctx, e);
 
                 input.manager.on_os_event(e);

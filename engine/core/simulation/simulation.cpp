@@ -1,4 +1,5 @@
 #include "simulation.h"
+#include <base/platform/config.hpp>
 #include <algorithm>
 #include <thread>
 #include <limits>
@@ -14,6 +15,11 @@ void simulation::run_one_frame(bool is_active)
     {
         max_fps = max_fps > 0 ? std::min(max_inactive_fps_, max_fps) : max_inactive_fps_;
     }
+#if UNRAVEL_PLATFORM_OS_WEB
+    // The browser paces the frames, calling each from its animation-frame callback; a wait on its main thread
+    // would only spin and hold the page.
+    max_fps = 0;
+#endif
 
     const auto wait_begin = clock_t::now();
     duration_t elapsed = wait_begin - last_frame_timepoint_;

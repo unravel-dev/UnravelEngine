@@ -209,6 +209,12 @@ auto run_parallel_pools_suite(rtti::context& ctx) -> int
     (void)ctx;
     g_checks = 0;
     g_failures = 0;
+    // The single-threaded mode never starts the pools these test; the "threading mode" suite covers it.
+    if(is_single_threaded())
+    {
+        std::printf("SKIP: the single-threaded mode starts no pools\n");
+        return 0;
+    }
     test_background_scope_runs_on_its_own_threads();
     test_frame_loop_runs_while_background_threads_are_held();
     test_background_scope_covers_its_own_thread_and_block();

@@ -13,6 +13,8 @@
 namespace unravel
 {
 
+struct threader;
+
 /**
  * @class asset_manager
  * @brief Manages assets, including loading, unloading, and storage.
@@ -393,9 +395,9 @@ public:
             // the new one, as an evicted asset's is. A loaded asset keeps what it holds.
             if(handle.is_deferred() || handle.is_loading())
             {
-                pool_.stop(handle.task_id());
+                get_pool().stop(handle.task_id());
                 handle.demote_to_deferred();
-                storage.load_from_file(pool_, handle, new_key, load_mode::deferred);
+                storage.load_from_file(get_pool(), handle, new_key, load_mode::deferred);
             }
             storage.container[new_key] = handle;
         }
@@ -415,7 +417,7 @@ public:
     void unload_asset(const std::string& key)
     {
         auto& storage = get_storage<T>();
-        storage.unload_single(pool_, key);
+        storage.unload_single(get_pool(), key);
 
         if(parent_)
         {
@@ -580,13 +582,13 @@ private:
 
             if(handle.task_id())
             {
-                pool_.stop(handle.task_id());
+                get_pool().stop(handle.task_id());
                 handle.invalidate();
             }
 
             handle.set_internal_ids(uid, key);
             container_by_uid[uid] = handle;
-            load_func(pool_, handle, key, mode);
+            load_func(get_pool(), handle, key, mode);
         }
 
         return handle;
@@ -622,7 +624,7 @@ private:
         auto uid = add_asset(key);
         handle.set_internal_ids(uid, key);
         container_by_uid[uid] = handle;
-        load_func(pool_, handle, key, load_mode::deferred);
+        load_func(get_pool(), handle, key, load_mode::deferred);
 
         return handle;
     }
@@ -667,7 +669,7 @@ private:
             // executor
             handle.set_internal_ids(uid, key);
             container_by_uid[uid] = handle;
-            load_func(pool_, handle, entry);
+            load_func(get_pool(), handle, entry);
         }
 
         return handle;
@@ -739,8 +741,11 @@ private:
         return (static_cast<asset_storage<S>&>(*storage.get()));
     }
 
-    /// Thread pool for asset loading tasks.
-    tpp::thread_pool& pool_;
+    /// The thread pool for asset loading tasks.
+    auto get_pool() const -> tpp::thread_pool&;
+
+    /// Owns the thread pool, which it starts after this manager is constructed.
+    threader& threader_;
     /// Different storages for assets.
     std::unordered_map<std::size_t, std::unique_ptr<basic_storage>> storages_{};
     /// Mutex for database operations.

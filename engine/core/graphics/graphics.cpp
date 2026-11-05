@@ -6,6 +6,7 @@
 #include "utils/bgfx_utils.h"
 #include <bimg/bimg.h>
 #include <bx/file.h>
+#include <concurrency/threading_mode.h>
 #include <algorithm>
 #include <array>
 #include <cstdarg>
@@ -480,6 +481,12 @@ bool init(bgfx::Init init_data)
         init_data.callback = &callback;
     }
     s_context.frame = 0;
+    // Called before init, renderFrame keeps bgfx from starting its render thread: bgfx::frame then renders on
+    // the calling thread, as the single-threaded mode needs.
+    if(unravel::is_single_threaded())
+    {
+        bgfx::renderFrame();
+    }
     s_context.initted = bgfx::init(init_data);
     if(!s_context.initted)
     {

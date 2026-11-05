@@ -72,7 +72,14 @@ and prefab sources actually resolve. Exit code = number of failing checks.
 cmake --build build/Debug --target tests
 build/Debug/bin/unravel-tests.exe                              # all suites
 build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
+build/Debug/bin/unravel-tests.exe --single-threaded --suite asset  # the browser's threading
 ```
+
+`--single-threaded` (an engine option, also taken by the editor and the player) runs every
+job, parallel loop, physics step and frame on the main thread, as the browser build does
+(`engine/core/concurrency/threading_mode.h`). Suites that compile every shader or bake
+offline (`eshader files`, `gi bake`, `gi constants`, `raytracing backends`) take hours that
+way; run the rest suite by suite.
 
 | Suite name | Covers | Run when touching |
 |------------|--------|-------------------|
@@ -93,6 +100,7 @@ build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
 | `audio clip encoding` | Compiled clips keep the source codec and decode at load (`decode_sound`, mono, bad codec/bytes, old-format file refused); `asset_manager::save_database` filter | Audio import/load, deploy asset index |
 | `eshader files` | The `.eshader` parser and its errors, vertex input names and what they map to, generated tags and interface lines, the format (the `.sh` trap, deploy paths), `gfx::shader::find_variant`, dependencies, a compiled file read from a pack, each variant's binary equal to a file that defines the same in its code on every renderer, a failed variant changing nothing, and **compiles every `.eshader` the engine and editor ship**, failing on variants that are the same binary everywhere | `editor/core/asset_compiler/`, `gfx::shader`, `gpu_program`, any `.eshader` |
 | `third party notices` | The notices compiled into the engine (`THIRD_PARTY_NOTICES.txt`, `get_third_party_notices`): the LGPL libraries with their license texts and source addresses, and none of it in a build without them; libraries a build does not link left out; this binary's engine version filled in, ASCII only | `THIRD_PARTY_NOTICES.txt`, adding or updating a shipped dependency, an option that leaves a library out |
+| `threading mode` | The single-threaded mode: the job pool has no workers exactly in it and a job runs on the waiting thread or in the threader's frame pump; parallel loops and background work run inline and start no pool; a frame longer than the minimum fps allows counts as the longest it allows | `engine/core/concurrency/`, `threader`, `simulation`, threadpp |
 | `fs watcher` | Created / modified / removed / renamed reporting, non-atomic moves and safe saves pairing up, pause / resume, unwatch during a callback, per-format filters on one listener (`--bench` adds latency and fan-out timings; ~50 s) | `engine/core/filesystem/watchers/`, syncer, asset watcher |
 
 Suites self-register (`REGISTER_TEST_SUITE` in `tests/tests/suites/`); adding one is

@@ -1498,7 +1498,7 @@ public:
         // First ask: the bake runs on a worker; sync hands its polygons to the table.
         auto bake_state = std::make_shared<cutout_bake>();
         cutout_bakes_.emplace(key, bake_state);
-        poolstl::get_background_pool().submit_detach(
+        poolstl::run_in_background(
             [bake_state, bake]()
             {
                 try

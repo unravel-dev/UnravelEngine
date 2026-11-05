@@ -199,6 +199,46 @@ void service::prepare_restart(std::vector<std::string>& arguments)
     }
 }
 
+service_runner::service_runner(std::string name, std::vector<std::string> arguments)
+    : name_(std::move(name))
+    , arguments_(std::move(arguments))
+    , argv_(make_argv_pointers(arguments_))
+{
+}
+
+auto service_runner::start() -> bool
+{
+    app_ = std::make_unique<service>(static_cast<int>(argv_.size()), argv_.data());
+    // load unloads what it loaded when it fails.
+    if(!app_->load(std::vector<module_desc>{{name_, name_}}))
+    {
+        app_.reset();
+        return false;
+    }
+    return true;
+}
+
+auto service_runner::run_frame() -> int
+{
+    return app_->process();
+}
+
+auto service_runner::stop() -> bool
+{
+    if(!app_)
+    {
+        return true;
+    }
+    const bool is_unloaded = app_->unload();
+    app_.reset();
+    return is_unloaded;
+}
+
+auto service_runner::get_service() -> service&
+{
+    return *app_;
+}
+
 auto service_main(const char* name, int argc, char* argv[]) -> int
 {
     const unravel::process::startup_arguments startup =
@@ -219,60 +259,54 @@ auto service_main(const char* name, int argc, char* argv[]) -> int
         }
         std::cout << "Restarting: previous process exited, continuing startup" << std::endl;
     }
-    std::vector<std::string> service_argv_storage = unravel::process::build_service_argv(startup);
-    std::vector<char*> service_argv = make_argv_pointers(service_argv_storage);
-    const int service_argc = static_cast<int>(service_argv.size());
-    std::vector<module_desc> modules{{name, name}};
-    int run = SERVICE_RESULT_RUN;
-    while(run != SERVICE_RESULT_EXIT)
+    service_runner runner(name, unravel::process::build_service_argv(startup));
+    if(!runner.start())
     {
-        service app(service_argc, service_argv.data());
-        if(!app.load(modules))
-        {
-            return -1;
-        }
-        for(;;)
-        {
-            while(run == SERVICE_RESULT_RUN)
-            {
-                run = app.process();
-            }
-            if(run == SERVICE_RESULT_RESTART)
-            {
-                const std::uint32_t next_restart_count = startup.restart_count + 1;
-                auto replacement_arguments =
-                    unravel::process::build_replacement_application_arguments(startup);
-                app.prepare_restart(replacement_arguments);
-                std::cout << "Restart requested: handing off to replacement process (count="
-                          << next_restart_count << ")" << std::endl;
-                const unravel::process::restart_result spawn_result =
-                    unravel::process::spawn_replacement(replacement_arguments,
-                                                        next_restart_count,
-                                                        [&]()
-                                                        {
-                                                            return app.unload();
-                                                        });
-                if(!spawn_result.success)
-                {
-                    std::cerr << "Failed to hand off to replacement process: "
-                              << spawn_result.error.message() << " (" << spawn_result.error.value()
-                              << ")" << std::endl;
-                    if(spawn_result.resources_released)
-                    {
-                        return EXIT_FAILURE;
-                    }
-                    run = SERVICE_RESULT_RUN;
-                    continue;
-                }
-                std::cout << "Replacement process handoff succeeded" << std::endl;
-                return 0;
-            }
-            break;
-        }
-        if(!app.unload())
-        {
-            return -1;
-        }
+        return -1;
     }
-    return 0;
+    for(;;)
+    {
+        int run = SERVICE_RESULT_RUN;
+        while(run == SERVICE_RESULT_RUN)
+        {
+            run = runner.run_frame();
+        }
+        if(run == SERVICE_RESULT_RELOAD)
+        {
+            if(!runner.stop() || !runner.start())
+            {
+                return -1;
+            }
+            continue;
+        }
+        if(run == SERVICE_RESULT_RESTART)
+        {
+            const std::uint32_t next_restart_count = startup.restart_count + 1;
+            auto replacement_arguments = unravel::process::build_replacement_application_arguments(startup);
+            runner.get_service().prepare_restart(replacement_arguments);
+            std::cout << "Restart requested: handing off to replacement process (count=" << next_restart_count
+                      << ")" << std::endl;
+            const unravel::process::restart_result spawn_result =
+                unravel::process::spawn_replacement(replacement_arguments,
+                                                    next_restart_count,
+                                                    [&]()
+                                                    {
+                                                        return runner.stop();
+                                                    });
+            if(!spawn_result.success)
+            {
+                std::cerr << "Failed to hand off to replacement process: " << spawn_result.error.message() << " ("
+                          << spawn_result.error.value() << ")" << std::endl;
+                if(spawn_result.resources_released)
+                {
+                    return EXIT_FAILURE;
+                }
+                continue;
+            }
+            std::cout << "Replacement process handoff succeeded" << std::endl;
+            return 0;
+        }
+        break;
+    }
+    return runner.stop() ? 0 : -1;
 }

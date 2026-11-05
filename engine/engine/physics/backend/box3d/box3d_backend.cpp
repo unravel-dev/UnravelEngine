@@ -13,6 +13,7 @@
 #include <engine/settings/settings.h>
 
 #include <base/platform/thread.hpp>
+#include <concurrency/threading_mode.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <math/transform.hpp>
@@ -1369,8 +1370,9 @@ auto create_world() -> world
     def.frictionCallback = &combined_friction_callback;
     def.restitutionCallback = &combined_restitution_callback;
 
-    // Box3D spins up its own scheduler when no task callbacks are provided.
-    const uint32_t hardware_threads = platform::get_performance_core_count();
+    // Box3D spins up its own scheduler when no task callbacks are provided. One worker is the calling thread
+    // alone: the scheduler starts no threads, as the single-threaded mode needs.
+    const uint32_t hardware_threads = unravel::is_single_threaded() ? 1 : platform::get_performance_core_count();
     const int workers = static_cast<int>(hardware_threads > 1 ? hardware_threads - 1 : 1);
     def.workerCount = static_cast<uint32_t>(std::clamp(workers, 1, B3_MAX_WORKERS));
 

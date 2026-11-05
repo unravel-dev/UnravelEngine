@@ -4,6 +4,7 @@
 #include <context/context.hpp>
 #include <entt/meta/meta.hpp>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,41 @@ private:
     rtti::context ctx_;
     cmd_line::parser parser_;
     std::vector<module_data> modules_;
+};
+
+/**
+ * @brief Runs one application a frame at a time, for whoever owns the frame loop.
+ *
+ * service_main runs it in a loop. A browser cannot: a page shows nothing until each frame returns to it, so the
+ * browser's frame callback calls run_frame() once per frame instead.
+ */
+class service_runner
+{
+public:
+    /**
+     * @param name The application's module (ENTRY_APP_NAME).
+     * @param arguments Its command line, the program first.
+     */
+    service_runner(std::string name, std::vector<std::string> arguments);
+
+    /// Loads and initializes the application. Returns false when it did not start; nothing is left to stop then.
+    auto start() -> bool;
+
+    /// Runs one frame. Returns SERVICE_RESULT_RUN while the application wants more frames, else what it ends with.
+    auto run_frame() -> int;
+
+    /// Unloads the application, if it runs. Returns false when an unload failed.
+    auto stop() -> bool;
+
+    /// The running application; only between a successful start() and stop().
+    auto get_service() -> service&;
+
+private:
+    std::string name_;
+    /// Owns the strings argv_ points into, which the running service reads.
+    std::vector<std::string> arguments_;
+    std::vector<char*> argv_;
+    std::unique_ptr<service> app_;
 };
 
 int service_main(const char* name, int argc, char* argv[]);

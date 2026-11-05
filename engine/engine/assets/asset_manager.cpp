@@ -22,8 +22,13 @@
 
 namespace unravel
 {
-asset_manager::asset_manager(rtti::context& ctx) : pool_(*ctx.get_cached<threader>().pool)
+asset_manager::asset_manager(rtti::context& ctx) : threader_(ctx.get_cached<threader>())
 {
+}
+
+auto asset_manager::get_pool() const -> tpp::thread_pool&
+{
+    return *threader_.pool;
 }
 
 asset_manager::~asset_manager() = default;
@@ -143,7 +148,7 @@ void asset_manager::unload_all()
     for(auto& pair : storages_)
     {
         auto& storage = pair.second;
-        storage->unload_all(pool_);
+        storage->unload_all(get_pool());
     }
 
     {
@@ -157,7 +162,7 @@ void asset_manager::unload_group(const std::string& group)
     for(auto& pair : storages_)
     {
         auto& storage = pair.second;
-        storage->unload_group(pool_, group);
+        storage->unload_group(get_pool(), group);
     }
 
     {
@@ -345,7 +350,7 @@ void asset_manager::evict_unused_assets(const std::string& group, std::chrono::s
 {
     for(auto& [type_hash, storage] : storages_)
     {
-        storage->evict_unused(pool_, group, max_idle);
+        storage->evict_unused(get_pool(), group, max_idle);
     }
 }
 

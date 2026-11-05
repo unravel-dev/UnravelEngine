@@ -53,7 +53,10 @@ auto make_shared_material(const std::string& name) -> asset_handle<material>
     auto& am = engine::context().get_cached<asset_manager>();
     const std::string key = "engine:/embedded/shadow_caching_test/" + name;
     am.unload_asset<material>(key);
-    return am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
+    auto handle = am.get_asset_from_instance<material>(key, std::make_shared<pbr_material>());
+    // Ready before the checks read it without waiting: right after startup the pool is still busy with loads.
+    handle.get();
+    return handle;
 }
 
 auto get_pbr(const asset_handle<material>& handle) -> std::shared_ptr<pbr_material>

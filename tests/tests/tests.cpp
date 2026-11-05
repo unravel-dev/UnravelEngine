@@ -105,7 +105,7 @@ auto tests::init(const cmd_line::parser& parser) -> bool
 
     // Threading and assets only. The renderer wants a device and the suites do not want a
     // window; anything that needs one does not belong in here.
-    if(!ctx.get_cached<threader>().init(ctx))
+    if(!ctx.get_cached<threader>().init(ctx, parser))
     {
         APPLOG_CRITICAL("Failed to initialise threading.");
         return false;

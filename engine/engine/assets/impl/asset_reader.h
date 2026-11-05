@@ -100,6 +100,12 @@ inline auto load_from_instance(tpp::thread_pool& pool, asset_handle<T>& output, 
                        },
                        instance)
                    .share();
+    // A pool without workers runs a job only when it is waited for or in the next frame's pump. The instance is
+    // here already, so it is ready at once, as a worker makes it ready a moment after it is scheduled.
+    if(pool.get_workers_count() == 0)
+    {
+        job.wait();
+    }
 
     output.set_internal_job(job);
 

@@ -68,6 +68,9 @@ auto make_settings() -> instanced_draw_list::draw_settings
     instanced_draw_list::draw_settings settings;
     settings.render_mesh = am.get_asset_from_instance<mesh>(MESH_KEY, cube);
     settings.render_material = am.get_asset_from_instance<material>(MATERIAL_KEY, std::make_shared<pbr_material>());
+    // Ready before the draw list reads them without waiting: right after startup the pool is still busy with loads.
+    settings.render_mesh.get();
+    settings.render_material.get();
     settings.layer_mask = 1 << 3;
     return settings;
 }

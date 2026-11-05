@@ -20,6 +20,7 @@
 #include <engine/profiler/profiler.h>
 
 #include <base/platform/thread.hpp>
+#include <concurrency/threading_mode.h>
 #define BT_USE_SSE_IN_API
 #include <BulletCollision/CollisionDispatch/btCollisionDispatcherMt.h>
 #include <BulletCollision/NarrowPhaseCollision/btRaycastCallback.h>
@@ -555,6 +556,12 @@ void setup_task_scheduler()
 #ifdef BULLET_MT
     if(btGetTaskScheduler())
     {
+        return;
+    }
+    // The single-threaded mode starts no threads: the sequential scheduler runs every task on the caller.
+    if(unravel::is_single_threaded())
+    {
+        btSetTaskScheduler(btGetSequentialTaskScheduler());
         return;
     }
     owned_task_scheduler = btCreateDefaultTaskScheduler();
@@ -1706,7 +1713,7 @@ auto create_dynamics_world() -> bullet::world
 
 #ifdef BULLET_MT
     auto dispatcher = std::make_shared<btCollisionDispatcherMt>(collision_config.get());
-    const uint32_t hardware_threads = platform::get_performance_core_count();
+    const uint32_t hardware_threads = unravel::is_single_threaded() ? 1 : platform::get_performance_core_count();
     const int solver_threads = static_cast<int>(hardware_threads > 1 ? hardware_threads - 1 : 1);
     auto solver_pool = std::make_shared<btConstraintSolverPoolMt>(solver_threads);
     auto solver = std::make_shared<btSequentialImpulseConstraintSolverMt>();

@@ -88,7 +88,10 @@ auto make_texture() -> asset_handle<gfx::texture>
 {
     auto& am = engine::context().get_cached<asset_manager>();
     const std::string key = "engine:/embedded/render_change_test/texture_" + std::to_string(g_texture_count++);
-    return am.get_asset_from_instance<gfx::texture>(key, std::make_shared<gfx::texture>());
+    auto texture = am.get_asset_from_instance<gfx::texture>(key, std::make_shared<gfx::texture>());
+    // Ready before the checks read it without waiting: right after startup the pool is still busy with loads.
+    texture.get();
+    return texture;
 }
 
 /// A value of the same type as @p current that differs from it; empty for a type the suite does not know.
