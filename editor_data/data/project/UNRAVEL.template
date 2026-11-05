@@ -33,7 +33,7 @@ each time it opens the project, so this project's own rules belong in `AGENTS.md
 
 ## Scripts
 
-- Inherit `ScriptComponent` and keep `[ScriptSourceFile]` on the class.
+- Inherit `ScriptComponent`.
 - Lifecycle: `OnCreate` -> `OnEnable` -> `OnStart` (play mode) -> `OnUpdate` /
   `OnFixedUpdate` / `OnLateUpdate` -> `OnDisable` / `OnDestroy`.
 - Load assets with `Assets.GetAsset<T>("app:/data/...")` (or by `Guid`), not a Unity-style Load API.

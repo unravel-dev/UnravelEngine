@@ -794,8 +794,8 @@ auto process_drag_drop_target(rtti::context& ctx, entt::handle& obj) -> bool
     return result;
 }
 
-/// Scriptable component types defined in a script source file: those whose ScriptSourceFile attribute
-/// records the file, else those named after the file stem (the new-script template convention).
+/// Scriptable component types defined in a script source file: those script_system places in the
+/// file, else those named after the file stem (the new-script template convention).
 auto find_script_component_types(const script_system& scr, const fs::path& source_path) -> std::vector<dotnet::type>
 {
     std::vector<dotnet::type> by_source;
@@ -803,7 +803,7 @@ auto find_script_component_types(const script_system& scr, const fs::path& sourc
     const std::string stem = source_path.stem().string();
     for(const auto& type : scr.get_all_scriptable_components())
     {
-        const fs::path type_source = script_component::get_script_type_source_location(type);
+        const fs::path type_source = scr.get_script_source_file(type);
         fs::error_code ec;
         if(!type_source.empty() && fs::equivalent(type_source, source_path, ec))
         {
@@ -1459,7 +1459,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     APPLOG_ERROR("Script object type is invalid for domain version: {}", script.pinned->get_domain_version());
                     continue;
                 }
-                fs::path source_loc = script_comp->get_script_source_location(script);
+                fs::path source_loc = ctx.get_cached<script_system>().get_script_source_file(type);
 
                 auto name = type.get_fullname();
                 const auto& pretty_name = name;

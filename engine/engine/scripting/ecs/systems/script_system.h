@@ -17,6 +17,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <variant>
 
 namespace unravel
@@ -239,6 +240,14 @@ struct script_system
     auto get_type_by_fullname(const std::string& fullname) const -> dotnet::type;
     auto get_type(const std::string& name_space, const std::string& name) const -> dotnet::type;
 
+    /**
+     * @brief The source file a script type is declared in, for the editor: the path its
+     * ScriptSourceFile attribute records, else the file its library's debug symbols name, else
+     * its library's only script named after it. Main thread.
+     * @return The path, or empty when no file is known (always in a deployed game).
+     */
+    auto get_script_source_file(const dotnet::type& type) const -> fs::path;
+
     auto is_create_called() const -> bool;
     auto is_update_called() const -> bool;
     void wait_for_jobs_to_finish(rtti::context& ctx);
@@ -341,6 +350,24 @@ private:
     /// Lists the engine's script components after the app's, leaving out the ones an app type shadows.
     void append_engine_scriptable_component_types();
 
+    /// A loaded script library's files, for get_script_source_file. Its symbols are read on the
+    /// first lookup after it loads.
+    struct library_sources
+    {
+        fs::path library;
+        std::vector<fs::path> scripts;
+        bool are_symbols_read{};
+        std::unordered_map<std::string, fs::path> files_by_type;
+    };
+
+    /// Records the protocol's loaded library and its script files. Editor only.
+    void gather_library_sources(rtti::context& ctx, const std::string& protocol);
+    void forget_library_sources(const std::string& protocol);
+    /// The sources of the library @p type comes from, or null when that library is not recorded.
+    auto find_library_sources(const dotnet::type& type) const -> library_sources*;
+    /// Fills files_by_type from the library's symbols (see ScriptSources.internal_n2m_read).
+    void read_library_symbols(library_sources& sources) const;
+
     void check_for_recompile(rtti::context& ctx, delta_t dt, bool emit_callback);
 
     /**
@@ -379,6 +406,11 @@ private:
         std::vector<dotnet::type> scriptable_component_types;
 
     } app_cache_;
+
+    /// Loaded libraries' sources by protocol.
+    mutable std::map<std::string, library_sources> library_sources_;
+    /// get_script_source_file's answers by type handle; a handle is valid while its library is loaded.
+    mutable std::unordered_map<const void*, fs::path> source_files_by_type_;
 
     enum class call_progress
     {

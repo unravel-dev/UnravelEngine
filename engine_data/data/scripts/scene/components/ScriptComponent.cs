@@ -11,7 +11,9 @@ namespace Unravel.Core
 {
 
     /// <summary>
-    /// Records the source file path of a script class for editor and tooling use.
+    /// Records the source file path of a script class for editor and tooling use. Optional: the
+    /// editor finds a script's file from the library's debug symbols, or from a script named after
+    /// the class; this attribute takes precedence over both.
     /// </summary>
     [AttributeUsage(AttributeTargets.Class, Inherited = false, AllowMultiple = false)]
     public sealed class ScriptSourceFileAttribute : Attribute
@@ -124,12 +126,6 @@ namespace Unravel.Core
                 Log.Error($"A callback registered on the destroy token of {GetType().FullName} failed: {ex}");
             }
         }
-        protected string SourceFilePath { get; set; }
-        protected ScriptComponent([CallerFilePath] string file = "")
-        {
-            SourceFilePath = file;
-        }        
-
         /// <summary>
         /// Called when the script is created. Override this method to initialize resources or data.
         /// OnCreate is called when the script is first loaded, or when an object it is attached to is instantiated

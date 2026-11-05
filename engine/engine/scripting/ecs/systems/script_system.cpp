@@ -23,12 +23,14 @@
 
 #include <core/base/platform/config.hpp>
 #include <filesystem/filesystem.h>
+#include <hpp/string_view.hpp>
 #include <logging/logging.h>
 #include <seq/seq.h>
 #include <simulation/simulation.h>
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 
 namespace unravel
 {
@@ -596,6 +598,10 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
 
     auto assembly = domain_->get_assembly(engine_script_lib.string());
     // print_assembly_info(assembly);
+    if(!is_deploy_mode)
+    {
+        gather_library_sources(ctx, "engine");
+    }
 
     APPLOG_TRACE("-------------------------------------------------------------");
     APPLOG_TRACE("Loading domain {} with version: {}", domain_->get_name(), domain_->get_version());
@@ -670,6 +676,7 @@ void script_system::unload_engine_domain()
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload Engine Domain");
     cache_ = {};
+    forget_library_sources("engine");
     if(domain_)
     {
         APPLOG_TRACE("-------------------------------------------------------------");
@@ -736,6 +743,10 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
         {
             auto assembly = app_domain_->get_assembly(app_script_lib.string());
             // print_assembly_info(assembly);
+            if(!is_deploy_mode)
+            {
+                gather_library_sources(ctx, "app");
+            }
 
             if(!has_compilation_errors_)
             {
@@ -818,6 +829,7 @@ void script_system::unload_app_domain()
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Unload App Domain");
 
     app_cache_ = {};
+    forget_library_sources("app");
 
     if(app_domain_)
     {
@@ -1437,6 +1449,143 @@ auto script_system::get_type(const std::string& name_space, const std::string& n
         type = domain_->get_type(name_space, name);
     }
     return type;
+}
+
+namespace
+{
+/// C# attribute that names a script class's source file (see ScriptComponent.cs).
+constexpr const char* SCRIPT_SOURCE_FILE_ATTRIBUTE = "Unravel.Core.ScriptSourceFileAttribute";
+
+/// The source file a type's ScriptSourceFile attribute records, or empty.
+auto get_attributed_source_file(const dotnet::type& type) -> fs::path
+{
+    for(const auto& attribute : type.get_attributes())
+    {
+        if(attribute.get_type().get_fullname() == SCRIPT_SOURCE_FILE_ATTRIBUTE)
+        {
+            auto invoker = dotnet::make_property_invoker<std::string>(attribute.get_type(), "Path");
+            return invoker.get_value(attribute);
+        }
+    }
+    return {};
+}
+
+/// Parses ScriptSources.internal_n2m_read's listing: one "full name TAB path" per line.
+auto parse_source_listing(hpp::string_view listing) -> std::unordered_map<std::string, fs::path>
+{
+    std::unordered_map<std::string, fs::path> files;
+    while(!listing.empty())
+    {
+        const size_t line_end = std::min(listing.find('\n'), listing.size());
+        const hpp::string_view line = listing.substr(0, line_end);
+        listing.remove_prefix(std::min(line_end + 1, listing.size()));
+        const size_t tab = line.find('\t');
+        if(tab != hpp::string_view::npos)
+        {
+            files.emplace(std::string(line.substr(0, tab)), fs::path(std::string(line.substr(tab + 1))));
+        }
+    }
+    return files;
+}
+
+/// The one script named @p name, or empty when none is, or several are (in different folders).
+auto find_only_script_named(const std::vector<fs::path>& scripts, const std::string& name) -> fs::path
+{
+    const auto is_named = [&](const fs::path& script)
+    {
+        return script.stem().string() == name;
+    };
+    const auto found = std::find_if(scripts.begin(), scripts.end(), is_named);
+    if(found == scripts.end() || std::find_if(std::next(found), scripts.end(), is_named) != scripts.end())
+    {
+        return {};
+    }
+    return *found;
+}
+} // namespace
+
+auto script_system::get_script_source_file(const dotnet::type& type) const -> fs::path
+{
+    if(!type.valid())
+    {
+        return {};
+    }
+    const auto* handle = static_cast<const void*>(type.get_internal_ptr());
+    const auto cached = source_files_by_type_.find(handle);
+    if(cached != source_files_by_type_.end())
+    {
+        return cached->second;
+    }
+    fs::path file;
+    try
+    {
+        file = get_attributed_source_file(type);
+        auto* sources = file.empty() ? find_library_sources(type) : nullptr;
+        if(sources)
+        {
+            read_library_symbols(*sources);
+            const auto by_symbols = sources->files_by_type.find(type.get_fullname());
+            file = by_symbols != sources->files_by_type.end() ? by_symbols->second
+                                                              : find_only_script_named(sources->scripts, type.get_name());
+        }
+    }
+    catch(const dotnet::exception& e)
+    {
+        log_exception(e);
+    }
+    source_files_by_type_.emplace(handle, file);
+    return file;
+}
+
+void script_system::gather_library_sources(rtti::context& ctx, const std::string& protocol)
+{
+    library_sources sources;
+    sources.library = fs::resolve_protocol(get_lib_compiled_key(protocol));
+    for(const auto& asset : ctx.get_cached<asset_manager>().get_assets<script>(protocol))
+    {
+        if(asset)
+        {
+            sources.scripts.emplace_back(fs::resolve_protocol(asset.id()));
+        }
+    }
+    library_sources_[protocol] = std::move(sources);
+    source_files_by_type_.clear();
+}
+
+void script_system::forget_library_sources(const std::string& protocol)
+{
+    library_sources_.erase(protocol);
+    source_files_by_type_.clear();
+}
+
+auto script_system::find_library_sources(const dotnet::type& type) const -> library_sources*
+{
+    // The engine and the app library can both have a type of this name: the type is the one of
+    // the library that resolves the name to it.
+    const auto fullname = type.get_fullname();
+    const auto app = library_sources_.find("app");
+    if(app != library_sources_.end() && get_app_assembly().get_type(fullname).equals(type))
+    {
+        return &app->second;
+    }
+    const auto engine = library_sources_.find("engine");
+    if(engine != library_sources_.end() && get_engine_assembly().get_type(fullname).equals(type))
+    {
+        return &engine->second;
+    }
+    return nullptr;
+}
+
+void script_system::read_library_symbols(library_sources& sources) const
+{
+    if(sources.are_symbols_read)
+    {
+        return;
+    }
+    sources.are_symbols_read = true;
+    auto type = get_engine_assembly().get_type("Unravel.Core", "ScriptSources");
+    auto invoker = dotnet::make_method_invoker<std::string(std::string)>(type.get_method("internal_n2m_read", 1));
+    sources.files_by_type = parse_source_listing(invoker(sources.library.string()));
 }
 
 auto script_system::is_create_called() const -> bool

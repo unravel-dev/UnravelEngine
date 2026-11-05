@@ -4,7 +4,6 @@ using System.Collections.Generic;
 
 using Unravel.Core;
 
-[ScriptSourceFile]
 class #SCRIPTNAME# : ScriptComponent
 {
 	/// <summary>

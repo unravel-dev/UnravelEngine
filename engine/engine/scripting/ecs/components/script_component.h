@@ -152,15 +152,6 @@ public:
     auto has_script_components() const -> bool;
     auto has_script_components(const std::string& type_name) const -> bool;
 
-    auto get_script_source_location(const script_object& obj) const -> std::string;
-
-    /**
-     * @brief Returns the source file recorded on a script type by ScriptSourceFileAttribute.
-     * @param type The scriptable component type.
-     * @return The compiler-captured source path, or an empty string when the type carries no attribute.
-     */
-    static auto get_script_type_source_location(const dotnet::type& type) -> std::string;
-
     void create();
     void start();
     void destroy();

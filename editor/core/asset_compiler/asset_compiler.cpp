@@ -2680,6 +2680,9 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     }
 
     params.debug = flags & script_library::compilation_flags::debug;
+    // The editor finds each script type's source file through the symbols, in release builds too;
+    // deploy leaves them out unless the settings ask for them.
+    params.debug_symbols = true;
 
     std::string error;
     // auto cmd = dotnet::create_compile_command_detailed(params);
@@ -2687,7 +2690,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
     // APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
 
-    // A release build writes no symbols: an older build's pdb left here would travel with it.
+    // Symbols an older build left here (an mdb where this one writes a pdb) would travel with this one.
     script_system::remove_compiled_lib(temp);
 
     if(!run_process(cmd.cmd, cmd.args, true, error))

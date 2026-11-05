@@ -15,9 +15,6 @@ namespace unravel
 
 namespace
 {
-// C# attribute that records a script class's source file (see ScriptComponent.cs).
-constexpr const char* SCRIPT_SOURCE_FILE_ATTRIBUTE = "Unravel.Core.ScriptSourceFileAttribute";
-
 
 auto to_managed_contact_point(const manifold_point& manifold, bool use_b = false) -> dotnetpp_backend::managed_interface::manifold_point
 {
@@ -830,55 +827,5 @@ auto script_component::has_script_components(const std::string& type_name) const
     {
         return component.pinned->get_object().get_type().get_name() == type_name;
     });
-}
-
-auto script_component::get_script_source_location(const script_object& obj) const -> std::string
-{
-    if(!obj.pinned)
-    {
-        return {};
-    }
-
-    auto object = obj.pinned->get_object();
-    const auto& type = object.get_type();
-    auto location = get_script_type_source_location(type);
-    if(!location.empty())
-    {
-        return location;
-    }
-    try
-    {
-        auto prop = type.get_property("SourceFilePath");
-        auto invoker = dotnet::make_property_invoker<std::string>(prop);
-        return invoker.get_value(object);
-    }
-    catch(const dotnet::exception& e)
-    {
-        return {};
-    }
-}
-
-auto script_component::get_script_type_source_location(const dotnet::type& type) -> std::string
-{
-    if(!type.valid())
-    {
-        return {};
-    }
-    try
-    {
-        auto attrs = type.get_attributes();
-        for(auto& attr : attrs)
-        {
-            if(attr.get_type().get_fullname() == SCRIPT_SOURCE_FILE_ATTRIBUTE)
-            {
-                auto invoker = dotnet::make_property_invoker<std::string>(attr.get_type(), "Path");
-                return invoker.get_value(attr);
-            }
-        }
-    }
-    catch(const dotnet::exception& e)
-    {
-    }
-    return {};
 }
 } // namespace unravel
