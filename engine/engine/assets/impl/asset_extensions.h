@@ -307,7 +307,8 @@ inline auto get_format_version<unravel::animation_clip>() -> uint64_t
 {
     // 2: clips carry authored events and curves.
     // 3: channels carry the source rest pose (rest-aligned retargeting).
-    return 3;
+    // 4: node_index size_t -> uint32_t
+    return 4;
 }
 
 template<>
