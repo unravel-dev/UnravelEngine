@@ -67,6 +67,14 @@ auto collect_prefab_changes(entt::handle root) -> std::vector<prefab_instance_ch
 void revert_local_changes(prefab_component& prefab_comp);
 
 /**
+ * @brief Why an instance cannot be written into its prefab file, in full sentences, or empty when it can.
+ *
+ * Refused for a prefab this build does not load (find_document_problem): the instance holds only this scene's copy
+ * of it, and writing that would replace what a newer engine wrote.
+ */
+auto find_apply_problem(entt::handle root) -> std::string;
+
+/**
  * @brief Writes an instance into its prefab file and re-homes what it carried: what was stated
  *        here about the nested content is the document's statement now, what was stated about
  *        this instance's own content is its content.
@@ -74,8 +82,11 @@ void revert_local_changes(prefab_component& prefab_comp);
  * One override survives - a nested root's own placement, which is the containing document's to
  * state; dropping it would let the container's next replay snap the instance back to where it
  * was before the move. Does not sync; the caller does (editing_manager::sync_after_override_change).
+ *
+ * @param error When set, receives why nothing was written: find_apply_problem's reason, or a failed write.
+ * @return False when nothing was written; the instance is then as it was.
  */
-void apply_instance_to_prefab(entt::handle root);
+auto apply_instance_to_prefab(entt::handle root, std::string* error = nullptr) -> bool;
 
 /**
  * @brief Unlinks an entity from its prefab: it stays, with every value it has now, as plain

@@ -430,8 +430,8 @@ void start_page::handle_project_item_input(rtti::context& ctx, const project_ent
         selected_project_ = entry.path;
         ImGui::OpenPopup("##project_context_menu");
     }
-    const char* engine_note = entry.is_engine_older   ? "\nLast opened with an older engine: opening it asks first."
-                              : entry.is_engine_newer ? "\nLast opened with a newer engine: opening it asks first."
+    const char* engine_note = entry.is_engine_older   ? "\nOpened only with older engines so far: opening it asks first."
+                              : entry.is_engine_newer ? "\nOpened with a newer engine before: opening it asks first."
                                                       : "";
     const std::string engine_line = entry.engine_version.empty() ? std::string{} : "\nEngine " + entry.engine_version;
     ImGui::SetItemTooltipEx("%s%s%s", entry.path.c_str(), engine_line.c_str(), engine_note);

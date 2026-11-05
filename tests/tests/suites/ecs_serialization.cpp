@@ -843,50 +843,6 @@ void test_instantiate_sets_prefab_source()
     check_eq(prefab_comps, 1, "exactly one prefab_component per instance");
 }
 
-/**
- * @brief Demonstrates that entity data cannot survive the binary archive.
- *
- * NOT run by the default suite: the load does not fail, it hangs. Run it deliberately
- * with --binary-probe, and expect to kill the process.
- *
- * The binary archive stores no names and no field boundaries - BinaryInputArchive has no
- * setNextName or getNodeName at all, and its only throw is a short read at EOF. So it
- * cannot express "this optional field is absent": a reader expecting a field the writer
- * never emitted silently consumes the next field's bytes.
- *
- * SAVE(entity_components) writes "has_<component>" only for components that exist, while
- * LOAD(entity_components) reads one bool per type in all_serializeable_components. For an
- * entity with 4 of 32 components that is 4 bools written against 32 read. The stream
- * desynchronises on the first entity, and shortly afterwards a std::string or std::vector
- * length gets read out of misaligned bytes - which is why this hangs or exhausts memory
- * rather than throwing.
- *
- * The save side is asserted below because it is safe; the load is left commented so that
- * running this cannot wedge a machine by accident.
- */
-void test_binary_scene_roundtrip_is_broken()
-{
-    begin_test("scene round-trip through the binary archive (opt-in)");
-
-    scene src("src");
-    build_sample_tree(src);
-
-    std::stringstream ss(std::ios::in | std::ios::out | std::ios::binary);
-    save_to_stream_bin(ss, src);
-    const size_t written = ss.str().size();
-    check(written > 0, "the binary save produces bytes");
-
-    std::printf("  wrote %zu bytes for %zu entities\n", written, count_real_entities(*src.registry));
-    std::printf("  the matching load is left commented out: it does not throw, it hangs.\n");
-    std::printf("  see the comment on this function, and B16 in tasks/serialization_prefab_audit.md\n");
-
-    // Deliberately not executed. Uncomment only under a debugger:
-    //
-    // scene dst("dst");
-    // std::stringstream in(ss.str(), std::ios::in | std::ios::binary);
-    // load_from_stream_bin(in, dst);
-}
-
 namespace probe_concept_check
 {
 /// An archive-shaped type that can report the cursor but cannot answer membership.
@@ -1908,8 +1864,9 @@ auto count_occurrences(const std::string& text, const std::string& what) -> size
     return count;
 }
 
-/// The same scene in the first layout, as its writer wrote it: a root count, then the members of
-/// every root side by side in one object, each root followed by its "version" string.
+/// The same scene in the first layout, as its writer wrote it: a root count, the scene's nesting marker
+/// when it has one, then the members of every root side by side in one object, in the order that writer
+/// wrote them: the root's entities, its "version" string, and its own marker when it has one.
 auto to_first_scene_layout(const std::string& text) -> std::string
 {
     simdjson::dom::parser parser;
@@ -1924,10 +1881,26 @@ auto to_first_scene_layout(const std::string& text) -> std::string
         return {};
     }
     std::string first_layout = "{\"entities_count\":" + std::to_string(roots.size());
+    bool is_nesting_resolved = false;
+    if(!doc["nesting_resolved"].get_bool().get(is_nesting_resolved) && is_nesting_resolved)
+    {
+        first_layout += ",\"nesting_resolved\":true";
+    }
     for(const auto root : roots)
     {
-        const std::string members = simdjson::minify(root);
-        first_layout += "," + members.substr(1, members.size() - 2) + ",\"version\":\"1.0.0\"";
+        simdjson::dom::object members;
+        if(root.get_object().get(members))
+        {
+            return {};
+        }
+        for(const auto member : members)
+        {
+            first_layout += ",\"" + std::string(member.key) + "\":" + simdjson::minify(member.value);
+            if(member.key == "entities")
+            {
+                first_layout += ",\"version\":\"1.0.0\"";
+            }
+        }
     }
     first_layout += "}";
     return first_layout;
@@ -2177,6 +2150,805 @@ void test_prefab_document_version()
         check(!loaded, "a prefab in a newer version is refused");
         check_eq(count_real_entities(*dst.registry), size_t{0}, "and nothing of it loads");
         check_eq(read_document_version(asset), PREFAB_DOCUMENT_VERSION + 1, "the asset's version is read from its file");
+    }
+}
+
+/// The same document with its version written as the string "3", which names no layout.
+auto with_string_version(const std::string& text) -> std::string
+{
+    static const std::regex head_version(R"re("version"\s*:\s*[0-9]+)re");
+    return std::regex_replace(text, head_version, "\"version\": \"3\"", std::regex_constants::format_first_only);
+}
+
+/// The same scene with its members reordered, as a tool that rewrites JSON may leave it: the roots first,
+/// then the given version.
+auto with_roots_before_version(const std::string& text, uint32_t version) -> std::string
+{
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+    if(parser.parse(text.data(), text.size()).get(doc))
+    {
+        return {};
+    }
+    simdjson::dom::element roots;
+    if(doc["roots"].get(roots))
+    {
+        return {};
+    }
+    return "{\"roots\":" + simdjson::minify(roots) + ",\"version\":" + std::to_string(version) + "}";
+}
+
+/// The first entity in a registry with the given name, or an empty handle.
+auto find_entity_named(entt::registry& registry, const std::string& name) -> entt::handle
+{
+    entt::handle found{};
+    registry.view<tag_component>().each(
+        [&](auto e, const auto& tag)
+        {
+            if(!found && tag.name == name)
+            {
+                found = entt::handle(registry, e);
+            }
+        });
+    return found;
+}
+
+void test_malformed_scene_documents_leave_the_open_scene()
+{
+    begin_test("a scene whose version cannot be told, or is newer, is refused before the open scene goes");
+    // The editor's check and the loader read the version the same way, so neither can call a file readable
+    // that the other refuses: a load that cleared the open scene and refused afterwards would leave it empty.
+    scene src("src");
+    build_three_root_scene(src);
+    const auto saved = save_scene_text(src);
+    struct malformed_case
+    {
+        std::string what;
+        std::string text;
+        uint32_t version;
+    };
+    const std::vector<malformed_case> cases = {
+        {"an empty object", "{}", UNKNOWN_DOCUMENT_VERSION},
+        {"a version written as a string", with_string_version(saved), UNKNOWN_DOCUMENT_VERSION},
+        {"a version of zero", with_head_version(saved, 0), UNKNOWN_DOCUMENT_VERSION},
+        {"a newer version after the roots",
+         with_roots_before_version(saved, SCENE_DOCUMENT_VERSION + 1),
+         SCENE_DOCUMENT_VERSION + 1},
+    };
+    for(size_t index = 0; index < cases.size(); ++index)
+    {
+        const auto& item = cases[index];
+        check(!item.text.empty(), item.what + ": the document was made");
+        check_eq(read_document_version(item.text), item.version, item.what + ": its version is the loader's");
+        scene open("open");
+        build_three_root_scene(open);
+        const auto before = save_scene_text(open);
+        const auto asset = make_scene_asset(item.text, "test:/malformed_" + std::to_string(index) + ".spfb");
+        const auto problem = find_document_problem(asset);
+        check(!problem.empty(), item.what + ": the editor's check refuses it");
+        const bool is_newer = item.version != UNKNOWN_DOCUMENT_VERSION;
+        check((problem.find("newer engine") != std::string::npos) == is_newer,
+              item.what + ": the reason says a newer engine wrote it only when one did");
+        check(problem.find("4294967295") == std::string::npos, item.what + ": and names no made-up version");
+        check(!load_from_prefab(asset, open), item.what + ": loading it reports the refusal");
+        check(save_scene_text(open) == before, item.what + ": the scene that was open is untouched");
+        scene dst("dst");
+        std::stringstream in(item.text);
+        check(!load_from_stream(in, dst), item.what + ": the stream reader refuses it too");
+        check_eq(count_scene_roots(dst), size_t{0}, item.what + ": and loads nothing of it");
+    }
+    // Reordered in this build's version, the same document is read by both, and loads whole.
+    const auto reordered = with_roots_before_version(saved, SCENE_DOCUMENT_VERSION);
+    check_eq(read_document_version(reordered), SCENE_DOCUMENT_VERSION, "a reordered current scene is in its version");
+    scene dst("dst_reordered");
+    std::stringstream in(reordered);
+    check(load_from_stream(in, dst), "and loads");
+    check_eq(count_scene_roots(dst), size_t{3}, "with every root");
+}
+
+void test_baked_first_layout_scene_loads()
+{
+    begin_test("a baked scene in the first layout loads every root once, in order");
+    scene src("src");
+    build_three_root_scene(src);
+    std::stringstream baked;
+    const bool pushed = push_save_context();
+    get_save_context().nesting_resolved = true;
+    save_to_stream(baked, src);
+    get_save_context().nesting_resolved = false;
+    pop_save_context(pushed);
+    // The old writer: the root count, the scene's marker, then each root's entities, version and marker.
+    // Duplicate keys are read in file order, so a copy in any other order reads one root's keys for another's.
+    const auto first_layout = to_first_scene_layout(baked.str());
+    const auto count_at = first_layout.find("\"entities_count\"");
+    const auto marker_at = first_layout.find("\"nesting_resolved\"");
+    const auto entities_at = first_layout.find("\"entities\"");
+    const auto version_at = first_layout.find("\"version\"");
+    const auto root_marker_at = first_layout.find("\"nesting_resolved\"", marker_at + 1);
+    check(count_at == 1 && count_at < marker_at && marker_at < entities_at && entities_at < version_at &&
+              version_at < root_marker_at && root_marker_at != std::string::npos,
+          "the copy is in the order the old writer wrote");
+    check_eq(count_occurrences(first_layout, "\"nesting_resolved\""),
+             size_t{4},
+             "with a marker for the scene and each root");
+    check_eq(read_document_version(first_layout), FIRST_DOCUMENT_VERSION, "it is read as the first layout");
+    scene dst("dst");
+    std::stringstream in(first_layout);
+    check(load_from_stream(in, dst), "it loads");
+    check_eq(count_scene_roots(dst), size_t{3}, "every root loads");
+    check_eq(count_entities_named(*dst.registry, "first_root"), size_t{1}, "the first root once");
+    check_eq(count_entities_named(*dst.registry, "second_root"), size_t{1}, "the second root once");
+    check_eq(count_entities_named(*dst.registry, "third_root"), size_t{1}, "the third root once");
+    check_eq(count_real_entities(*dst.registry), count_real_entities(*src.registry), "and every entity, none twice");
+    check(save_scene_text(dst) == save_scene_text(src), "saved again, it is the scene that was baked");
+}
+
+/// A scene file the first layout's writer wrote, verbatim: ReflScene3D.spfb of a reference project. Four roots
+/// and seven entities, linked by the entity ids of that time; its assets are not in the test project.
+const char* const REAL_FIRST_LAYOUT_SCENE = R"json({
+ "entities_count": 4,
+ "entities": [
+  {
+   "id": 10485761,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "Main Camera",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": 0.0,
+       "y": 1.0,
+       "z": -10.0
+      },
+      "rotation": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0,
+       "w": 1.0
+      },
+      "scale": {
+       "x": 1.0,
+       "y": 1.0,
+       "z": 1.0
+      },
+      "skew": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      }
+     },
+     "parent": {
+      "id": 4294967295
+     },
+     "children": [],
+     "active": true
+    },
+    "has_camera_component": true,
+    "camera_component": {
+     "camera": {
+      "projection_mode": 0,
+      "field_of_view": 60.0,
+      "near_clip": 0.10000000149011612,
+      "far_clip": 1000.0,
+      "viewport_position": {
+       "x": 0,
+       "y": 0
+      },
+      "viewport_size": {
+       "width": 1409,
+       "height": 796
+      },
+      "orthographic_size": 5.0,
+      "aspect_ratio": 1.770100474357605,
+      "aspect_locked": false,
+      "frustum_locked": false
+     }
+    },
+    "has_assao_component": true,
+    "assao_component": {
+     "enabled": true,
+     "settings": {
+      "radius": 1.2000000476837159,
+      "shadow_multiplier": 1.0,
+      "shadow_power": 1.0,
+      "shadow_clamp": 0.9800000190734863,
+      "horizon_angle_threshold": 0.05999999865889549,
+      "fade_out_from": 50.0,
+      "fade_out_to": 200.0,
+      "quality_level": 3,
+      "adaptive_quality_limit": 0.44999998807907107,
+      "blur_pass_count": 2,
+      "sharpness": 0.9800000190734863,
+      "temporal_supersampling_angle_offset": 0.0,
+      "temporal_supersampling_radius_offset": 1.0,
+      "detail_shadow_strength": 0.5,
+      "generate_normals": false
+     }
+    },
+    "has_tonemapping_component": true,
+    "tonemapping_component": {
+     "enabled": true,
+     "settings": {
+      "exposure": 1.0,
+      "method": 6
+     }
+    },
+    "has_fxaa_component": true,
+    "fxaa_component": {
+     "enabled": true
+    },
+    "has_audio_listener_component": true,
+    "audio_listener_component": {}
+   }
+  }
+ ],
+ "version": "1.0.0",
+ "entities": [
+  {
+   "id": 10485763,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "Sky & Directional Light",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": 0.0,
+       "y": 1.0,
+       "z": 0.0
+      },
+      "rotation": {
+       "x": 0.4082179069519043,
+       "y": -0.234568789601326,
+       "z": 0.10938161611557007,
+       "w": 0.8754263520240784
+      },
+      "scale": {
+       "x": 1.000001311302185,
+       "y": 0.9999984502792358,
+       "z": 0.9999988675117493
+      },
+      "skew": {
+       "x": 1.4901178246873315e-7,
+       "y": -0.000002373506276853732,
+       "z": -0.0000026332741072110368
+      }
+     },
+     "parent": {
+      "id": 4294967295
+     },
+     "children": [],
+     "active": true
+    },
+    "has_light_component": true,
+    "light_component": {
+     "light": {
+      "type": 2,
+      "intensity": 1.0,
+      "color": {
+       "r": 1.0,
+       "g": 0.9568628072738648,
+       "b": 0.8392157554626465,
+       "a": 1.0
+      },
+      "casts_shadows": true,
+      "shadow_params": {
+       "type": 1,
+       "depth": 0,
+       "resolution": 3,
+       "bias": 0.0011500000255182386,
+       "normal_bias": 0.014999999664723874,
+       "near_plane": 0.20000000298023225,
+       "far_plane": 550.0
+      },
+      "directional_data": {
+       "shadow_params": {
+        "num_splits": 4,
+        "split_distribution": 0.800000011920929,
+        "stabilize": true
+       }
+      }
+     }
+    },
+    "has_skylight_component": true,
+    "skylight_component": {
+     "mode": 1,
+     "turbidity": 1.899999976158142,
+     "cubemap": {
+      "uid": "00000000-0000-0000-0000-000000000000"
+     }
+    }
+   }
+  }
+ ],
+ "version": "1.0.0",
+ "entities": [
+  {
+   "id": 8388613,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "Envinroment Probe",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": 0.0,
+       "y": 0.10000000149011612,
+       "z": 0.0
+      },
+      "rotation": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0,
+       "w": 1.0
+      },
+      "scale": {
+       "x": 1.0,
+       "y": 1.0,
+       "z": 1.0
+      },
+      "skew": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      }
+     },
+     "parent": {
+      "id": 4294967295
+     },
+     "children": [],
+     "active": true
+    },
+    "has_tonemapping_component": true,
+    "tonemapping_component": {
+     "enabled": true,
+     "settings": {
+      "exposure": 1.0,
+      "method": 6
+     }
+    },
+    "has_reflection_probe_component": true,
+    "reflection_probe_component": {
+     "probe": {
+      "type": 1,
+      "method": 0,
+      "intensity": 1.0,
+      "range": 1000.0
+     },
+     "faces_per_frame": 1,
+     "apply_prefilter": false
+    }
+   }
+  }
+ ],
+ "version": "1.0.0",
+ "entities": [
+  {
+   "id": 7340041,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "Plane",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": 0.0,
+       "y": 1.7114271599893983e-7,
+       "z": 0.0
+      },
+      "rotation": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0,
+       "w": 1.0
+      },
+      "scale": {
+       "x": 1.0,
+       "y": 1.0,
+       "z": 1.0
+      },
+      "skew": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      }
+     },
+     "parent": {
+      "id": 4294967295
+     },
+     "children": [
+      {
+       "id": 7340039
+      },
+      {
+       "id": 7340043
+      }
+     ],
+     "active": true
+    },
+    "has_model_component": true,
+    "model_component": {
+     "enabled": true,
+     "static": true,
+     "casts_shadow": true,
+     "casts_reflection": false,
+     "model": {
+      "lods": [
+       {
+        "uid": "d9fdfd2a-f890-a85c-917c-e284c810063d"
+       }
+      ],
+      "materials": [
+       {
+        "uid": "819043bf-3a62-d949-ad18-98136c59bd29"
+       }
+      ],
+      "material_instances": [
+       {
+        "polymorphic_id": 0
+       }
+      ],
+      "lod_limits": [
+       {
+        "min": 0,
+        "max": 100
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": 7340039,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "Sphere",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": -1.1847882270812989,
+       "y": 0.6078066229820252,
+       "z": 0.0
+      },
+      "rotation": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0,
+       "w": 1.0
+      },
+      "scale": {
+       "x": 1.0,
+       "y": 1.0,
+       "z": 1.0
+      },
+      "skew": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      }
+     },
+     "parent": {
+      "id": 7340041
+     },
+     "children": [],
+     "active": true
+    },
+    "has_model_component": true,
+    "model_component": {
+     "enabled": true,
+     "static": true,
+     "casts_shadow": true,
+     "casts_reflection": false,
+     "model": {
+      "lods": [
+       {
+        "uid": "b755a718-ef93-1552-bf79-f79c0e6973eb"
+       }
+      ],
+      "materials": [
+       {
+        "uid": "dd11cda0-190d-fd52-84dd-3a6f67d09813"
+       }
+      ],
+      "material_instances": [],
+      "lod_limits": [
+       {
+        "min": 0,
+        "max": 100
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": 7340043,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "DamagedHelmet",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": 1.39302396774292,
+       "y": 0.9664449691772461,
+       "z": -0.3049502372741699
+      },
+      "rotation": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0,
+       "w": 1.0
+      },
+      "scale": {
+       "x": 1.0,
+       "y": 1.0,
+       "z": 1.0
+      },
+      "skew": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      }
+     },
+     "parent": {
+      "id": 7340041
+     },
+     "children": [
+      {
+       "id": 7340044
+      }
+     ],
+     "active": true
+    },
+    "has_model_component": true,
+    "model_component": {
+     "enabled": true,
+     "static": true,
+     "casts_shadow": true,
+     "casts_reflection": false,
+     "model": {
+      "lods": [
+       {
+        "uid": "72a4eee9-5b2d-004d-9810-e06a83d6d05b"
+       }
+      ],
+      "materials": [
+       {
+        "uid": "9174dcef-747c-6145-b754-a9143ecdc39f"
+       }
+      ],
+      "material_instances": [],
+      "lod_limits": [
+       {
+        "min": 0,
+        "max": 100
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": 7340044,
+   "components": {
+    "has_tag_component": true,
+    "tag_component": {
+     "name": "node_damagedHelmet_-6514",
+     "tag": ""
+    },
+    "has_layer_component": true,
+    "layer_component": {
+     "layers": {
+      "mask": 1
+     }
+    },
+    "has_transform_component": true,
+    "transform_component": {
+     "local_transform": {
+      "position": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      },
+      "rotation": {
+       "x": 0.7071068286895752,
+       "y": 0.0,
+       "z": 0.0,
+       "w": 0.7071067094802856
+      },
+      "scale": {
+       "x": 1.0,
+       "y": 1.0000001192092896,
+       "z": 1.0000001192092896
+      },
+      "skew": {
+       "x": 0.0,
+       "y": 0.0,
+       "z": 0.0
+      }
+     },
+     "parent": {
+      "id": 7340043
+     },
+     "children": [],
+     "active": true
+    },
+    "has_submesh_component": true,
+    "submesh_component": {
+     "submeshes": [
+      0
+     ]
+    }
+   }
+  }
+ ],
+ "version": "1.0.0"
+})json";
+
+/// An empty scene as the first layout's writer saved it, verbatim.
+const char* const REAL_EMPTY_FIRST_LAYOUT_SCENE = "{\r\n \"entities_count\": 0\r\n}";
+
+/**
+ * @brief The file with only its tag, layer and transform components switched on: the others (camera, models, lights,
+ *        probes, post effects) make GPU resources, and the test runner has no renderer. What the test checks (the
+ *        layout, the names, the hierarchy and the root order) lives in those three.
+ */
+auto keep_scene_graph_components(const std::string& text) -> std::string
+{
+    static const std::regex has_component(R"re("has_([a-z_]+)": true)re");
+    std::string result;
+    auto last = text.cbegin();
+    for(std::sregex_iterator it(text.cbegin(), text.cend(), has_component), end; it != end; ++it)
+    {
+        const std::string name = (*it)[1].str();
+        const bool keep = name == "tag_component" || name == "layer_component" || name == "transform_component";
+        result.append(last, (*it)[0].first);
+        result += keep ? it->str() : "\"has_" + name + "\": false";
+        last = (*it)[0].second;
+    }
+    result.append(last, text.cend());
+    return result;
+}
+
+void test_real_first_layout_scene_file()
+{
+    begin_test("scene files the first layout's writer wrote still load");
+    const std::string text = keep_scene_graph_components(REAL_FIRST_LAYOUT_SCENE);
+    check_eq(read_document_version(text), FIRST_DOCUMENT_VERSION, "a real first-layout file is read as one");
+    scene open("open");
+    build_three_root_scene(open);
+    const auto asset = make_scene_asset(text, "test:/real_first_layout.spfb");
+    check(find_document_problem(asset).empty(), "the editor's check accepts it");
+    check(load_from_prefab(asset, open), "it loads in place of the open scene");
+    check_eq(count_scene_roots(open), size_t{4}, "with its four roots");
+    check_eq(count_entities_named(*open.registry, "first_root"), size_t{0}, "and nothing of what was open");
+    const char* names[] = {"Main Camera",
+                           "Sky & Directional Light",
+                           "Envinroment Probe",
+                           "Plane",
+                           "Sphere",
+                           "DamagedHelmet",
+                           "node_damagedHelmet_-6514"};
+    for(const char* name : names)
+    {
+        check_eq(count_entities_named(*open.registry, name),
+                 size_t{1},
+                 std::string("its entity ") + name + " loads once");
+    }
+    auto plane = find_entity_named(*open.registry, "Plane");
+    auto helmet = plane ? find_child_by_name(plane, "DamagedHelmet") : entt::handle{};
+    check(plane && find_child_by_name(plane, "Sphere") && helmet, "the plane keeps its two children");
+    check(helmet && find_child_by_name(helmet, "node_damagedHelmet_-6514"), "and the helmet its node");
+    const auto saved = save_scene_text(open);
+    const auto camera_at = saved.find("\"Main Camera\"");
+    const auto light_at = saved.find("\"Sky & Directional Light\"");
+    const auto probe_at = saved.find("\"Envinroment Probe\"");
+    const auto plane_at = saved.find("\"Plane\"");
+    check(camera_at < light_at && light_at < probe_at && probe_at < plane_at && plane_at != std::string::npos,
+          "saved again, its roots are in the order the file holds them");
+    scene empty_open("empty_open");
+    build_three_root_scene(empty_open);
+    const auto empty_asset = make_scene_asset(REAL_EMPTY_FIRST_LAYOUT_SCENE, "test:/real_empty_first_layout.spfb");
+    check_eq(read_document_version(REAL_EMPTY_FIRST_LAYOUT_SCENE),
+             FIRST_DOCUMENT_VERSION,
+             "an empty first-layout file is one too");
+    check(load_from_prefab(empty_asset, empty_open), "it loads");
+    check_eq(count_scene_roots(empty_open), size_t{0}, "as an empty scene");
+}
+
+void test_prefab_loaders_refuse_what_they_cannot_read()
+{
+    begin_test("the prefab loaders refuse a scene or a newer prefab, and leave an instance as it was");
+    scene authoring("authoring");
+    auto prefab_root = build_sample_tree(authoring);
+    const auto pfb = make_prefab_from(prefab_root, "test:/refusal_source.pfb");
+    check(find_document_problem(pfb).empty(), "a prefab this build wrote is not refused");
+    // A first-layout scene saved as a prefab: the single-root reader would read its first root alone.
+    scene three("three");
+    build_three_root_scene(three);
+    const auto scene_text = to_first_scene_layout(save_scene_text(three));
+    const auto scene_as_prefab =
+        make_prefab_asset(std::vector<uint8_t>(scene_text.begin(), scene_text.end()), "test:/scene_as_prefab.pfb");
+    check(!find_document_problem(scene_as_prefab).empty(), "a scene saved as a prefab is refused by the check");
+    {
+        scene dst("dst");
+        check(!load_from_prefab(scene_as_prefab, *dst.registry), "instantiating it loads nothing");
+        check_eq(count_real_entities(*dst.registry), size_t{0}, "not even its first root");
+    }
+    const auto prefab_bytes = serialize_as_prefab(prefab_root, "test:/refusal_newer.pfb");
+    const auto newer_text = minify_json(with_head_version(std::string(prefab_bytes.begin(), prefab_bytes.end()),
+                                                          PREFAB_DOCUMENT_VERSION + 1));
+    const auto newer =
+        make_prefab_asset(std::vector<uint8_t>(newer_text.begin(), newer_text.end()), "test:/refusal_newer.pfb");
+    check(find_document_problem(newer).find("newer engine") != std::string::npos, "a newer prefab is refused as one");
+    // A sync against a file the loader refuses leaves the caller's handle on the instance it had.
+    scene world("world");
+    auto instance = world.instantiate(pfb, false);
+    check(static_cast<bool>(instance), "a readable prefab instantiates");
+    const auto entities_before = count_real_entities(*world.registry);
+    for(const auto& refused : {scene_as_prefab, newer})
+    {
+        auto target = instance;
+        check(!load_from_prefab_out(refused, *world.registry, target), refused.id() + ": the sync reports the refusal");
+        check(target == instance, refused.id() + ": the caller's handle still names the instance");
+        check_eq(count_real_entities(*world.registry), entities_before, refused.id() + ": nothing of it is loaded");
     }
 }
 
@@ -6042,7 +6814,6 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
 
     const bool bench_only = tests::wants("bench-only");
     const bool bench = bench_only || tests::wants("bench");
-    const bool binary_probe = tests::wants("binary-probe");
 
     if(!bench_only)
     {
@@ -6084,7 +6855,11 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_scene_save_is_in_hierarchy_order_and_stable();
         test_first_layout_scene_still_loads();
         test_newer_scene_version_is_refused();
+        test_malformed_scene_documents_leave_the_open_scene();
+        test_baked_first_layout_scene_loads();
+        test_real_first_layout_scene_file();
         test_prefab_document_version();
+        test_prefab_loaders_refuse_what_they_cannot_read();
         test_nesting_resolved_marker();
         test_prefab_dependency_enumeration();
         test_nested_prefab_instance_keeps_its_link();
@@ -6151,11 +6926,6 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
 
         test_clone_scene_uses_one_load_context();
         test_clone_scene_preserves_structure_and_uids();
-    }
-
-    if(binary_probe)
-    {
-        test_binary_scene_roundtrip_is_broken();
     }
 
     if(bench)

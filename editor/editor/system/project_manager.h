@@ -35,17 +35,20 @@ public:
         /// No `project.cfg` found - this is a legacy project. `open_project`
         /// will create one on-the-fly, preserving all existing content.
         no_info_file,
-        /// Project was last opened by the same engine version as the running one.
+        /// The newest engine that opened the project is the running one: the
+        /// same release and the same number of commits since it.
         ok,
-        /// Project was last opened by a strictly older engine build than the
-        /// running one, compared across all version components. On-disk
-        /// formats may have evolved since, so the UI layer should prompt the
-        /// user before committing to an open that re-saves everything.
+        /// Every engine that opened the project so far is older than the
+        /// running one, an earlier release or fewer commits since the same one
+        /// (1.2.0-319 against 1.2.0-320). On-disk formats may have evolved
+        /// since, so the UI layer should prompt the user before committing to
+        /// an open that re-saves everything.
         engine_older,
-        /// Project was last opened by a strictly newer engine build than the
-        /// running one. Its files may be in formats the running engine cannot
+        /// An engine newer than the running one has opened the project,
+        /// whichever opened it last: a later release, or more commits since
+        /// the same one. Its files may be in formats the running engine cannot
         /// read: they would open empty or partly, and saving would write that
-        /// over them, so the UI layer should prompt the user before opening.
+        /// over them, so the UI layer should prompt the user before every open.
         engine_newer,
     };
 
@@ -126,6 +129,9 @@ public:
     auto get_project_editor_settings() -> project_editor_settings&;
     auto get_project_info() -> project_info&;
     auto get_project_info() const -> const project_info&;
+    /// Why each scene the project had open, or starts with, was refused when the project last opened: one reason in
+    /// full sentences per refused scene, empty when none was refused.
+    auto get_refused_scenes() const -> const std::vector<std::string>&;
 
 
     auto has_open_project() const -> bool;
@@ -230,6 +236,8 @@ private:
     editor_settings editor_settings_;
     project_editor_settings project_editor_settings_;
     project_info project_info_;
+    /// See get_refused_scenes.
+    std::vector<std::string> refused_scenes_;
     deployment::project_profiles profiles_;
     /// When true, @ref prepare_restart adds -p recent even if no project is open yet.
     bool restart_opens_recent_{false};

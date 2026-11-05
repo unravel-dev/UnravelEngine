@@ -58,7 +58,6 @@
 #include <base/platform/config.hpp>
 #include <hpp/string_view.hpp>
 #include <string_utils/utils.h>
-#include <version/version.h>
 #include <array>
 #include <memory>
 #include <set>
@@ -746,42 +745,51 @@ auto save_scene_as_impl(rtti::context& ctx, fs::path& path, const std::string& d
     return false;
 }
 
-auto describe_newer_document(hpp::string_view kind, const std::string& key, uint32_t version, uint32_t newest)
-    -> std::string
+/// The engine's reason a document is not opened, and what that means for its file; empty when there is none.
+auto describe_not_opened(std::string problem, hpp::string_view kind) -> std::string
 {
-    return fmt::format("The {} {} was saved by a newer engine, in {} version {}. This editor ({}) reads {} {}.\n\n"
-                       "The {} was not opened, so it cannot be overwritten or damaged. Open it with the engine "
-                       "that saved it, or update this editor.",
-                       kind,
-                       key,
-                       kind,
-                       version,
-                       version::get_current().to_string(),
-                       kind,
-                       describe_readable_versions(newest),
-                       kind);
+    if(problem.empty())
+    {
+        return problem;
+    }
+    return fmt::format("{}\n\nThe {} was not opened, so it cannot be overwritten or damaged.", problem, kind);
+}
+
+/// Logs and shows why a scene cannot be opened, and returns the reason; empty when it can be opened.
+auto show_scene_problem(const asset_handle<scene_prefab>& asset) -> std::string
+{
+    auto problem = editor_actions::find_newer_scene_problem(asset);
+    if(!problem.empty())
+    {
+        APPLOG_ERROR("{}", problem);
+        ImBox::ShowError("Scene not opened", problem);
+    }
+    return problem;
+}
+
+/// Asks to save the open scene, then opens @p asset in its place, or a new scene when it does not load.
+auto prompt_and_load_scene(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool
+{
+    return editor_actions::prompt_save_scene(ctx,
+                                             [&ctx, asset]()
+                                             {
+                                                 if(!editor_actions::load_scene_from_asset(ctx, asset))
+                                                 {
+                                                     editor_actions::new_scene(ctx);
+                                                 }
+                                             });
 }
 
 } // namespace
 
 auto editor_actions::find_newer_scene_problem(const asset_handle<scene_prefab>& asset) -> std::string
 {
-    const auto version = read_document_version(asset);
-    if(is_readable_scene_version(version))
-    {
-        return {};
-    }
-    return describe_newer_document("scene", asset.id(), version, SCENE_DOCUMENT_VERSION);
+    return describe_not_opened(find_document_problem(asset), "scene");
 }
 
 auto editor_actions::find_newer_prefab_problem(const asset_handle<prefab>& asset) -> std::string
 {
-    const auto version = read_document_version(asset);
-    if(is_readable_prefab_version(version))
-    {
-        return {};
-    }
-    return describe_newer_document("prefab", asset.id(), version, PREFAB_DOCUMENT_VERSION);
+    return describe_not_opened(find_document_problem(asset), "prefab");
 }
 
 auto editor_actions::new_scene(rtti::context& ctx) -> bool
@@ -829,7 +837,7 @@ auto editor_actions::load_scene_from_asset(rtti::context& ctx,
     {
         if(error)
         {
-            *error = "Failed to load scene: " + asset.id();
+            *error = fmt::format("The scene {} could not be loaded. The log says why.", asset.id());
         }
         return false;
     }
@@ -927,30 +935,30 @@ auto editor_actions::save_scene_to_path(rtti::context& ctx,
 }
 auto editor_actions::open_scene(rtti::context& ctx) -> bool
 {
-    auto& ev = ctx.get_cached<events>();
-    auto& play = ctx.get_cached<play_mode>();
-    if(play.is_active())
-    {
-        play.set_active(ctx, false);
-    }
-
     std::string picked;
-    if(native::open_file_dialog(picked,
-                                ex::get_suported_formats_with_wildcard<scene_prefab>(),
-                                "Scene files",
-                                "Open scene",
-                                fs::resolve_protocol("app:/data/").string()))
+    if(!native::open_file_dialog(picked,
+                                 ex::get_suported_formats_with_wildcard<scene_prefab>(),
+                                 "Scene files",
+                                 "Open scene",
+                                 fs::resolve_protocol("app:/data/").string()))
     {
-        auto path = fs::convert_to_protocol(picked);
-        if(ex::is_format<scene_prefab>(path.extension().generic_string()))
-        {
-            auto& am = ctx.get_cached<asset_manager>();
-            auto asset = am.get_asset<scene_prefab>(path.string());
-
-            return open_scene_from_asset(ctx, asset);
-        }
+        return false;
     }
-    return false;
+    auto path = fs::convert_to_protocol(picked);
+    if(!ex::is_format<scene_prefab>(path.extension().generic_string()))
+    {
+        return false;
+    }
+    auto& am = ctx.get_cached<asset_manager>();
+    auto asset = am.get_asset<scene_prefab>(path.string());
+    // Asked before play stops, so a scene this editor refuses leaves the game playing.
+    if(!show_scene_problem(asset).empty())
+    {
+        return false;
+    }
+    auto& play = ctx.get_cached<play_mode>();
+    play.set_active(ctx, false);
+    return prompt_and_load_scene(ctx, asset);
 }
 
 void editor_actions::open_animation_controller(rtti::context& ctx, const asset_handle<animation_controller>& asset)
@@ -958,24 +966,20 @@ void editor_actions::open_animation_controller(rtti::context& ctx, const asset_h
     ctx.get_cached<hub>().get_panels().get_animation_panel().open(asset);
 }
 
-auto editor_actions::open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool
+auto editor_actions::open_scene_from_asset(rtti::context& ctx,
+                                           const asset_handle<scene_prefab>& asset,
+                                           std::string* problem) -> bool
 {
     // Asked before the prompt to save the open scene, which stays open.
-    if(const auto problem = find_newer_scene_problem(asset); !problem.empty())
+    if(auto refusal = show_scene_problem(asset); !refusal.empty())
     {
-        APPLOG_ERROR("{}", problem);
-        ImBox::ShowError("Scene from a newer engine", problem);
+        if(problem)
+        {
+            *problem = std::move(refusal);
+        }
         return false;
     }
-    return prompt_save_scene(ctx,
-                             [&ctx, asset]()
-                             {
-                                 std::string error;
-                                 if(!editor_actions::load_scene_from_asset(ctx, asset, &error))
-                                 {
-                                     editor_actions::new_scene(ctx);
-                                 }
-                             });
+    return prompt_and_load_scene(ctx, asset);
 }
 auto editor_actions::save_scene(rtti::context& ctx) -> bool
 {

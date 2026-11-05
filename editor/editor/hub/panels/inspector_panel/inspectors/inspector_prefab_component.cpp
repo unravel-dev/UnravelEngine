@@ -89,6 +89,13 @@ auto resolve_inspected_entity(const meta_any_proxy& var_proxy, prefab_component&
     return owner_is_live ? owner : entt::handle{};
 }
 
+/// Logs and shows why Apply All to Prefab wrote nothing.
+void show_apply_problem(const std::string& problem)
+{
+    APPLOG_ERROR("{}", problem);
+    ImBox::ShowError("Prefab not applied", problem);
+}
+
 } // namespace
 
 auto inspector_prefab_component::inspect(rtti::context& ctx,
@@ -119,7 +126,11 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
 
     if(ImGui::Button(ICON_MDI_CONTENT_SAVE " Apply All to Prefab", ImVec2(-1, ImGui::GetFrameHeight())))
     {
-        if(is_nested_instance(root_prefab_entity))
+        if(const auto problem = find_apply_problem(root_prefab_entity); !problem.empty())
+        {
+            show_apply_problem(problem);
+        }
+        else if(is_nested_instance(root_prefab_entity))
         {
             // A nested instance: what goes into its file is everything stated about it here
             // *and* by the containing prefab - the container's authoring becomes the nested
@@ -140,15 +151,24 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
                     {
                         return;
                     }
+                    std::string problem;
+                    if(!apply_instance_to_prefab(entity, &problem))
+                    {
+                        show_apply_problem(problem);
+                        return;
+                    }
                     auto& ctx = engine::context();
-                    apply_instance_to_prefab(entity);
                     ctx.get_cached<editing_manager>().sync_after_override_change(ctx, entity);
                 });
         }
         else
         {
-            apply_instance_to_prefab(root_prefab_entity);
-            result.changed = true;
+            std::string problem;
+            result.changed = apply_instance_to_prefab(root_prefab_entity, &problem);
+            if(!result.changed)
+            {
+                show_apply_problem(problem);
+            }
         }
     }
     ImGui::SetItemTooltipEx("Save this instance - changes, additions and removals included -\n"

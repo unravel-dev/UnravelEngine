@@ -401,7 +401,10 @@ void editing_manager::load_checkpoint(rtti::context& ctx, scene_cache& cache, bo
 
     {
         // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "load_from_stream");
-        load_from_stream(cache.cache, *cache.scn);
+        if(!load_from_stream(cache.cache, *cache.scn))
+        {
+            APPLOG_ERROR("The scene saved before play could not be read back, so the scene is left empty.");
+        }
     }
 
     cache.scn->source = cache.cache_source;
@@ -840,7 +843,7 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
     if(const auto problem = editor_actions::find_newer_prefab_problem(prefab); !problem.empty())
     {
         APPLOG_ERROR("{}", problem);
-        ImBox::ShowError("Prefab from a newer engine", problem);
+        ImBox::ShowError("Prefab not opened", problem);
         return;
     }
 

@@ -735,7 +735,8 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name = "scene_open",
          .description =
              "Open a scene by key or uid. Refuses when the open scene or prefab has unsaved edits, "
-             "unless force:true discards them.",
+             "unless force:true discards them. Refuses a scene this engine does not load, such as one a newer "
+             "engine saved, before anything open changes.",
          .input_schema_json =
              R"json({"type":"object","properties":{"key":{"type":"string","description":"Scene key or uid, e.g. app:/data/MyScene.spfb"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}},"required":["key"]})json",
          .handler =
@@ -756,6 +757,11 @@ void register_scene_tools(mcp_tool_registry& registry)
              if(!asset)
              {
                  return {.text = error, .is_error = true};
+             }
+             // Refused before the open scene or prefab is touched: unsaved edits stay, even with force.
+             if(auto problem = editor_actions::find_newer_scene_problem(asset); !problem.empty())
+             {
+                 return {.text = std::move(problem), .is_error = true};
              }
              bool force = false;
              read_bool(args, "force", force);

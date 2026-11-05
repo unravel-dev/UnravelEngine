@@ -333,8 +333,6 @@ concept HasView = HasCharAndTraits<T> && requires(const T& t) {
 
 void save_to_stream(std::ostream& stream, entt::const_handle obj);
 void save_to_file(const std::string& absolute_path, entt::const_handle obj);
-void save_to_stream_bin(std::ostream& stream, entt::const_handle obj);
-void save_to_file_bin(const std::string& absolute_path, entt::const_handle obj);
 
 // Non-template overloads: asset_writer::atomic_save_to_file is a template that
 // calls unqualified save_to_file. Clang two-phase lookup + ADL only searches
@@ -352,9 +350,14 @@ void load_from_stream(std::istream& stream, entt::registry& obj);
 void load_from_view(hpp::string_view view, entt::handle& obj);
 void load_from_stream(std::istream& stream, entt::handle& obj);
 void load_from_file(const std::string& absolute_path, entt::handle& obj);
-void load_from_stream_bin(std::istream& stream, entt::handle& obj);
-void load_from_file_bin(const std::string& absolute_path, entt::handle& obj);
 
+/**
+ * @brief Loads a prefab asset into a registry: a fresh instance when @p obj is empty, or over the instance @p obj
+ *        names, matching its entities.
+ *
+ * @return False when the prefab's file is empty, is refused (find_document_problem says why), or the asset is
+ *         already being expanded further up (a nesting cycle); @p obj is then as it was.
+ */
 auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                           entt::registry& registry,
                           entt::handle& obj) -> bool;
@@ -438,8 +441,9 @@ void clear_local_statements_below(entt::handle root);
 /// an instance about to lose its link: what its document stated becomes what this scene states.
 void re_home_document_statements(entt::handle root);
 
+/// Instantiates a prefab asset into a registry, with fresh entity ids. An empty handle when its file is empty or
+/// refused (find_document_problem says why), or the asset is already being expanded further up.
 auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry) -> entt::handle;
-auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& registry) -> entt::handle;
 
 void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj);
 
@@ -454,6 +458,17 @@ constexpr uint32_t SCENE_DOCUMENT_VERSION = 2;
 /// The prefab file layout this build writes: a numeric "version" first, then the root's
 /// entities. A prefab in a newer layout is refused, as a scene is.
 constexpr uint32_t PREFAB_DOCUMENT_VERSION = 1;
+/// The layout of a document that names none this build can tell: it is not a JSON object with members, or its
+/// "version" is neither a whole number nor the first layout's string, or it holds none of the members that tell a
+/// layout without one. No build reads it.
+constexpr uint32_t UNKNOWN_DOCUMENT_VERSION = 0;
+
+/// What a scene or prefab document is read as.
+enum class document_kind
+{
+    scene,
+    prefab,
+};
 
 /// The versions from the first to @p newest in words, "version 1" or "versions 1 to 2", for messages.
 auto describe_readable_versions(uint32_t newest) -> std::string;
@@ -461,30 +476,58 @@ auto describe_readable_versions(uint32_t newest) -> std::string;
 auto is_readable_scene_version(uint32_t version) -> bool;
 /// Whether this build reads prefab files in the given layout.
 auto is_readable_prefab_version(uint32_t version) -> bool;
-/// The layout of a scene or prefab file, read from the head of its text: the writers put a numeric
-/// "version" first, and a file that does not start with one is in the first layout.
+/**
+ * @brief The layout of a scene or prefab document, decided by the reader that loads it.
+ *
+ * A root count marks a scene in the first layout, whose roots' "version" strings sit beside it. Otherwise a whole
+ * number in "version" names the layout, wherever the member is, and the string "1.0.0" there is the first layout.
+ * A document without a "version" is told by what it holds: a "roots" array is the layout that brought it, and a
+ * single root's "entities" the first layout.
+ *
+ * @return UNKNOWN_DOCUMENT_VERSION for text that is not JSON, or tells no layout.
+ */
 auto read_document_version(hpp::string_view text) -> uint32_t;
-/// The layout of a scene asset's file. Waits for the file.
+/// The layout of a scene asset's file, as read_document_version reads text. Waits for the file.
 auto read_document_version(const asset_handle<scene_prefab>& pfb) -> uint32_t;
-/// The layout of a prefab asset's file. Waits for the file.
+/// The layout of a prefab asset's file, as read_document_version reads text. Waits for the file.
 auto read_document_version(const asset_handle<prefab>& pfb) -> uint32_t;
+/**
+ * @brief Why this build does not load a scene asset's file, in full sentences, or an empty string when it does.
+ *
+ * The checks the scene loaders make before anything of the open scene goes: the file is empty or is not JSON,
+ * names a version this build does not read, or is not a scene. Waits for the file.
+ */
+auto find_document_problem(const asset_handle<scene_prefab>& pfb) -> std::string;
+/**
+ * @brief Why this build does not load a prefab asset's file, in full sentences, or an empty string when it does.
+ *
+ * The checks the prefab loaders make: the file is not JSON, names a version this build does not read, or is a
+ * scene. An empty file is not refused here, since it holds nothing a save could lose. Waits for the file.
+ */
+auto find_document_problem(const asset_handle<prefab>& pfb) -> std::string;
 
 void save_to_stream(std::ostream& stream, const scene& scn);
 void save_to_file(const std::string& absolute_path, const scene& scn);
-void save_to_stream_bin(std::ostream& stream, const scene& scn);
-void save_to_file_bin(const std::string& absolute_path, const scene& scn);
 
-void load_from_view(hpp::string_view view, scene& scn);
-void load_from_stream(std::istream& stream, scene& scn);
+/// Reads a scene document into a scene, next to what is in it. False, with the reason logged, when the document is
+/// refused (as find_document_problem refuses a file) or cannot be read.
+auto load_from_view(hpp::string_view view, scene& scn) -> bool;
+/// Reads a scene document from a stream, as load_from_view does.
+auto load_from_stream(std::istream& stream, scene& scn) -> bool;
+/// Reads a scene file, as load_from_view does. False also when the file does not open.
+auto load_from_file(const std::string& absolute_path, scene& scn) -> bool;
 
-void load_from_file(const std::string& absolute_path, scene& scn);
-void load_from_stream_bin(std::istream& stream, scene& scn);
-void load_from_file_bin(const std::string& absolute_path, scene& scn);
-
+/**
+ * @brief Loads a scene asset in place of what the scene holds, keeping its persistent roots.
+ *
+ * The file is parsed and checked before anything of the scene goes.
+ * @return False, with the reason logged, when the file is refused (find_document_problem says why); the scene is
+ *         then as it was. Also false when reading fails partway, which leaves part of the file loaded.
+ */
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool;
-/// Loads a scene into a registry next to the entities already in it, as an additive load does.
+/// Loads a scene into a registry next to the entities already in it, as an additive load does. False as the scene
+/// overload is.
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, entt::registry& registry) -> bool;
-auto load_from_prefab_bin(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool;
 
 void clone_scene_from_stream(const scene& src_scene, scene& dst_scene);
 

@@ -1315,6 +1315,14 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
         });
     if(!instance)
     {
+        // A prefab this build does not load cannot say what it holds, and is not loaded on every edit to find
+        // out. The instance's content came from it, so an edit there is an override: the engine that reads the
+        // prefab drops it if the content is gone, where an edit kept as this scene's content would be replaced by
+        // that engine's next sync.
+        if(!find_document_problem(prefab).empty())
+        {
+            return true;
+        }
         cache_scene.unload();
         instance = cache_scene.instantiate(prefab);
         if(!instance)

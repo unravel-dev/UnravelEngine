@@ -93,6 +93,42 @@ void seed_version_control_files(const fs::path& project_path, project_version_co
     }
 }
 
+/// How the newest engine that opened a project compares with the running one, the commits since the release counting
+/// (1.2.0-320 is newer than 1.2.0-319): any commit may change a file format. It decides both the question before an
+/// open and the warning during it.
+auto compare_project_engine(const project_info& info, const version::engine_version& running)
+    -> project_manager::project_compat
+{
+    const auto& newest = info.engine_version_newest;
+    if(newest == running)
+    {
+        return project_manager::project_compat::ok;
+    }
+    return is_from_newer_engine(newest, running) ? project_manager::project_compat::engine_newer
+                                                 : project_manager::project_compat::engine_older;
+}
+
+/// Logs that a project is opened by another engine build than the newest one that opened it before.
+void warn_about_project_engine(const project_info& info, const version::engine_version& running)
+{
+    const auto compat = compare_project_engine(info, running);
+    if(compat == project_manager::project_compat::engine_newer)
+    {
+        APPLOG_WARNING("This project has been opened with a newer engine ({}) than this one ({}). Proceeding: scenes "
+                       "and prefabs in formats this engine cannot read are refused when opened, and other files the "
+                       "newer engine saved could load in part.",
+                       info.engine_version_newest.to_string(),
+                       running.to_string());
+    }
+    else if(compat == project_manager::project_compat::engine_older)
+    {
+        APPLOG_WARNING("This project has been opened only with older engines so far ({} < {}). Proceeding: data "
+                       "loss is possible if the on-disk format has diverged.",
+                       info.engine_version_newest.to_string(),
+                       running.to_string());
+    }
+}
+
 } // namespace
 
 void project_manager::close_project(rtti::context& ctx)
@@ -112,6 +148,7 @@ void project_manager::close_project(rtti::context& ctx)
         deploy_settings_ = {};
         project_editor_settings_ = {};
         project_info_ = {};
+        refused_scenes_.clear();
         profiles_.clear();
     }
 
@@ -212,25 +249,23 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
         // Load or create the project signature file.
         //
         // * No file on disk: legacy project (or freshly created). Stamp the
-        //   current engine version in both `created` and `opened` and mint a
-        //   fresh GUID. This is the backward-compatibility path - opening an
+        //   current engine version in `created`, `opened` and `newest` and mint
+        //   a fresh GUID. This is the backward-compatibility path - opening an
         //   older project simply writes a new `project.cfg` on the spot.
         //
-        // * File present & engine_version_opened == current engine: the
-        //   project is up to date. Just update `opened` to the running engine
-        //   version.
+        // * File present: `newest`, the newest engine that ever opened the
+        //   project, is compared with the running one, commits since the
+        //   release included. Another build logs a loud warning - on every
+        //   open for a newer one, whose
+        //   files stay on disk whichever engine opened the project last - but
+        //   does NOT abort: the UI layer is expected to have already shown a
+        //   confirmation modal via `inspect_project`. Headless/CLI opens
+        //   intentionally proceed so automation is not blocked by this.
         //
-        // * File present & engine_version_opened differs from the running
-        //   engine (across all version components): the project was authored
-        //   against an older build and is being upgraded, or against a newer
-        //   one whose files this engine may not read. We log a loud warning
-        //   but do NOT abort - the UI layer is expected to have already shown
-        //   a confirmation modal via `inspect_project`.
-        //   Headless/CLI opens intentionally proceed so automation is not
-        //   blocked by this.
+        // `opened` becomes the running engine, and `newest` the newer of it and
+        // the one on disk.
         const bool had_info_file = load_project_info();
         const auto current = version::get_current();
-
         if(!had_info_file)
         {
             project_info_.engine_version_created = current;
@@ -240,23 +275,12 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
                         current.to_string(),
                         project_info_.project_guid);
         }
-        else if(is_from_older_engine(project_info_.engine_version_opened, current))
+        else
         {
-            APPLOG_WARNING("Project was last opened with an older engine ({} < {}). "
-                           "Proceeding - data loss is possible if the on-disk "
-                           "format has diverged.",
-                           project_info_.engine_version_opened.to_string(),
-                           current.to_string());
+            warn_about_project_engine(project_info_, current);
         }
-        else if(is_from_newer_engine(project_info_.engine_version_opened, current))
-        {
-            APPLOG_WARNING("Project was last opened with a newer engine ({} > {}). Proceeding - files in "
-                           "formats this engine cannot read are refused when opened.",
-                           project_info_.engine_version_opened.to_string(),
-                           current.to_string());
-        }
-
         project_info_.engine_version_opened = current;
+        project_info_.engine_version_newest = std::max(project_info_.engine_version_newest, current);
         save_project_info();
     }
 
@@ -276,18 +300,29 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     auto opened_scene = project_editor_settings_.scene.opened_scene;
     auto startup_scene = project_settings_.standalone.startup_scene;
+    refused_scenes_.clear();
+    const auto open_project_scene = [this, &ctx](const asset_handle<scene_prefab>& scene) -> bool
+    {
+        std::string problem;
+        const bool is_opened = editor_actions::open_scene_from_asset(ctx, scene, &problem);
+        if(!problem.empty())
+        {
+            refused_scenes_.push_back(std::move(problem));
+        }
+        return is_opened;
+    };
 
     bool scene_loaded = false;
     if(opened_scene)
     {
         ls.progress(0, 0, "Loading", opened_scene.id());
-        scene_loaded = editor_actions::open_scene_from_asset(ctx, opened_scene);
+        scene_loaded = open_project_scene(opened_scene);
     }
     // The same scene again would only fail, or ask, again.
     if(!scene_loaded && startup_scene && startup_scene.uid() != opened_scene.uid())
     {
         ls.progress(0, 0, "Loading", startup_scene.id());
-        scene_loaded = editor_actions::open_scene_from_asset(ctx, startup_scene);
+        scene_loaded = open_project_scene(startup_scene);
     }
     if(!scene_loaded)
     {
@@ -465,19 +500,13 @@ auto project_manager::inspect_project(const fs::path& project_path) const -> pro
         return report;
     }
 
-    if(is_from_older_engine(report.on_disk.engine_version_opened, version::get_current()))
-    {
-        report.status = project_compat::engine_older;
-    }
-    else if(is_from_newer_engine(report.on_disk.engine_version_opened, version::get_current()))
-    {
-        report.status = project_compat::engine_newer;
-    }
-    else
-    {
-        report.status = project_compat::ok;
-    }
+    report.status = compare_project_engine(report.on_disk, version::get_current());
     return report;
+}
+
+auto project_manager::get_refused_scenes() const -> const std::vector<std::string>&
+{
+    return refused_scenes_;
 }
 
 auto project_manager::can_create_project(const fs::path& project_path, std::string* error) const -> bool

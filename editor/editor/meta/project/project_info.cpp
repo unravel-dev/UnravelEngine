@@ -63,8 +63,10 @@ SAVE(project_info)
     // Serialized as strings: see rationale at the top of this file.
     const std::string created = to_nvp_string(obj.engine_version_created);
     const std::string opened = to_nvp_string(obj.engine_version_opened);
+    const std::string newest = to_nvp_string(obj.engine_version_newest);
     try_save(ar, ser20::make_nvp("engine_version_created", created));
     try_save(ar, ser20::make_nvp("engine_version_opened", opened));
+    try_save(ar, ser20::make_nvp("engine_version_newest", newest));
 }
 SAVE_INSTANTIATE(project_info, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(project_info, ser20::oarchive_binary_t);
@@ -82,6 +84,16 @@ LOAD(project_info)
     if(try_load(ar, ser20::make_nvp("engine_version_opened", opened)))
     {
         from_nvp_string(opened, obj.engine_version_opened);
+    }
+    // A project file without this member knows only the last engine that opened it.
+    std::string newest;
+    if(try_load(ar, ser20::make_nvp("engine_version_newest", newest)))
+    {
+        from_nvp_string(newest, obj.engine_version_newest);
+    }
+    else
+    {
+        obj.engine_version_newest = obj.engine_version_opened;
     }
 }
 LOAD_INSTANTIATE(project_info, ser20::iarchive_associative_t);

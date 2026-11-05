@@ -33,26 +33,19 @@ struct project_info
     /// Updated on every successful open.
     version::engine_version engine_version_opened;
 
+    /// The newest engine version that has opened this project. Raised on every open and never lowered, so an
+    /// older engine that opens the project still knows that files in newer formats may be on disk. A project file
+    /// without it reads engine_version_opened here.
+    version::engine_version engine_version_newest;
+
     /// Stable unique id for this project. Generated once on creation and kept
     /// forever - useful as a cache/bucket key for launchers, CI artifacts etc.
     std::string project_guid;
 };
 
-/// Returns true if `on_disk` is from an engine strictly older than `running`,
-/// comparing all four components (major, minor, patch, commit_count).
-///
-/// This models the common upgrade flow: a project was authored against one
-/// engine build and is later opened on a newer build, where on-disk formats
-/// may have evolved in the intervening commits.
-inline auto is_from_older_engine(const version::engine_version& on_disk,
-                                 const version::engine_version& running) -> bool
-{
-    return on_disk < running;
-}
-
 /// Returns true if `on_disk` is from an engine strictly newer than `running`,
-/// comparing the same four components: files that engine saved may be in
-/// formats the running one cannot read.
+/// comparing all four components (major, minor, patch, commit_count): files
+/// that engine saved may be in formats the running one cannot read.
 inline auto is_from_newer_engine(const version::engine_version& on_disk,
                                  const version::engine_version& running) -> bool
 {

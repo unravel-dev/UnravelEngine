@@ -191,17 +191,49 @@ void revert_local_changes(prefab_component& prefab_comp)
     prefab_comp.changed = true;
 }
 
-void apply_instance_to_prefab(entt::handle root)
+auto find_apply_problem(entt::handle root) -> std::string
 {
-    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
+    const auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
     if(prefab_comp == nullptr)
     {
-        return;
+        return "Only a prefab instance can be applied to its prefab.";
     }
-    prefab_comp->changed = false;
+    if(!prefab_comp->source)
+    {
+        return "The instance's prefab is missing, so there is nothing to apply it to.";
+    }
+    // The instance holds only this scene's copy of a file this build does not read, and writing that copy would
+    // replace what is in the file.
+    const auto problem = find_document_problem(prefab_comp->source);
+    if(problem.empty())
+    {
+        return problem;
+    }
+    return fmt::format("{}\n\nNothing was applied, so the prefab file is as it was.", problem);
+}
+
+auto apply_instance_to_prefab(entt::handle root, std::string* error) -> bool
+{
+    if(auto problem = find_apply_problem(root); !problem.empty())
+    {
+        if(error)
+        {
+            *error = std::move(problem);
+        }
+        return false;
+    }
+    auto* prefab_comp = root.try_get<prefab_component>();
     auto prefab_path = fs::resolve_protocol(prefab_comp->source.id());
     animation_entity_preview::stop_all();
-    asset_writer::atomic_save_to_file(prefab_path.string(), root);
+    if(!asset_writer::atomic_save_to_file(prefab_path.string(), root))
+    {
+        if(error)
+        {
+            *error = fmt::format("The prefab {} could not be written, so nothing was applied.", prefab_comp->source.id());
+        }
+        return false;
+    }
+    prefab_comp->changed = false;
     prefab_statements kept;
     if(is_nested_instance(root))
     {
@@ -222,6 +254,7 @@ void apply_instance_to_prefab(entt::handle root)
     prefab_comp->from_document = fold_document_statements(root);
     prefab_comp->local = std::move(kept);
     clear_local_statements_below(root);
+    return true;
 }
 
 void unlink_from_prefab(entt::handle entity)

@@ -26,8 +26,13 @@
 
 #include <algorithm>
 #include <charconv>
+#include <functional>
 #include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <set>
+#include <hpp/optional.hpp>
 #include <hpp/string_view.hpp>
 #include <hpp/utility.hpp>
 #include <sstream>
@@ -1906,58 +1911,99 @@ void save_root_content(Archive& ar, entt::const_handle obj)
 template<typename Archive>
 void save_to_archive(Archive& ar, entt::const_handle obj)
 {
-    // First, so the layout can be told from the head of the file.
+    // First, where a reader that looks only at the head of the file finds it.
     const uint32_t version = PREFAB_DOCUMENT_VERSION;
     try_save(ar, ser20::make_nvp("version", version));
     save_root_content(ar, obj);
 }
 
-/// Reads one root's entities. A scene in the first layout keeps every root's keys side by side in
-/// one object, told apart only by reading them in file order, so there the root's own "version"
-/// string is read too, to step past it.
+/// The document's statements, before its records: the filter asks "does this document state it" while they load.
+/// Only a prefab document carries them; a scene reads one root at a time and must not pay the absent-key probe for
+/// each (~2us per probe).
 template<typename Archive>
-auto load_from_archive_impl(Archive& ar, entt::registry& registry, bool is_first_scene_layout = false)
-    -> entt::handle
+void read_document_statements(Archive& ar)
 {
-    // The document's statements, before its records: the filter asks "does this document state
-    // it" while they load. Only a prefab document carries them; a scene calls this once per
-    // root and must not pay the absent-key probe each time (~2us per probe).
-    if(auto& load_ctx = get_load_context(); !load_ctx.document_uid.is_nil())
+    auto& load_ctx = get_load_context();
+    if(load_ctx.document_uid.is_nil())
     {
-        prefab_statements statements;
-        if(try_load(ar, ser20::make_nvp("statements", statements)))
-        {
-            load_ctx.document_statements = std::move(statements);
-            load_ctx.has_document_statements = true;
-        }
+        return;
     }
+    prefab_statements statements;
+    if(try_load(ar, ser20::make_nvp("statements", statements)))
+    {
+        load_ctx.document_statements = std::move(statements);
+        load_ctx.has_document_statements = true;
+    }
+}
 
+/// One root's entities, in the order they were written.
+template<typename Archive>
+auto read_root_entities(Archive& ar) -> std::vector<entity_data<entt::handle>>
+{
     std::vector<entity_data<entt::handle>> entities;
     try_load(ar, ser20::make_nvp("entities", entities));
+    return entities;
+}
 
-    if(is_first_scene_layout)
-    {
-        std::string root_version;
-        try_load(ar, ser20::make_nvp("version", root_version));
-    }
-
+/// The deploy bake's marker that the nested instances are already resolved.
+template<typename Archive>
+void read_nesting_resolved(Archive& ar)
+{
     bool nesting_resolved = false;
     if(try_load(ar, ser20::make_nvp("nesting_resolved", nesting_resolved)) && nesting_resolved)
     {
         get_load_context().nesting_resolved = true;
     }
+}
 
+/// Hands one root's loaded entities to the load context, and returns the root.
+auto adopt_root_entities(std::vector<entity_data<entt::handle>> entities) -> entt::handle
+{
     entt::handle result{};
     if(!entities.empty())
     {
         result = entities.front().components.entity;
     }
-
     auto& load_ctx = get_load_context();
     load_ctx.entities.reserve(load_ctx.entities.size() + entities.size());
     std::move(entities.begin(), entities.end(), std::back_inserter(load_ctx.entities));
-
     return result;
+}
+
+/// Reads one root's content: a single-root document, or one element of a scene's "roots".
+template<typename Archive>
+auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::handle
+{
+    read_document_statements(ar);
+    auto entities = read_root_entities(ar);
+    read_nesting_resolved(ar);
+    return adopt_root_entities(std::move(entities));
+}
+
+/// The string the first layout wrote as each root's "version".
+constexpr const char* FIRST_LAYOUT_VERSION_TEXT = "1.0.0";
+
+/// Reads one root of a scene in the first layout. Every root's members sit side by side in one object, told apart
+/// only by reading them in file order, so the root's own "version" string is read too, to step past it.
+template<typename Archive>
+auto load_first_layout_root(Archive& ar) -> entt::handle
+{
+    auto entities = read_root_entities(ar);
+    std::string root_version;
+    try_load(ar, ser20::make_nvp("version", root_version));
+    read_nesting_resolved(ar);
+    return adopt_root_entities(std::move(entities));
+}
+
+/// A member name no document holds. The archive answers every name as present at a level that is not an object
+/// with members, so asking for this one tells such a level apart wherever the read position is.
+constexpr const char* NO_MEMBER_NAME = "";
+
+/// Whether a document's top level is a JSON object with members, which every scene and prefab document is.
+template<typename Archive>
+auto has_members(const Archive& ar) -> bool
+{
+    return !ar.hasNextName(NO_MEMBER_NAME);
 }
 
 /// Whether a document is a scene file, which holds many roots, rather than a single-root document.
@@ -1966,12 +2012,96 @@ auto is_scene_document(const Archive& ar) -> bool
 {
     if constexpr(can_probe_names<Archive>)
     {
-        return ar.hasNextName("roots") || ar.hasNextName("entities_count");
+        return has_members(ar) && (ar.hasNextName("roots") || ar.hasNextName("entities_count"));
     }
     else
     {
         return false;
     }
+}
+
+/// The name a message gives a document of the given kind: "scene" or "prefab".
+auto get_document_kind_name(document_kind kind) -> hpp::string_view
+{
+    return kind == document_kind::scene ? hpp::string_view("scene") : hpp::string_view("prefab");
+}
+
+/// The newest layout this build reads for documents of the given kind.
+auto get_newest_document_version(document_kind kind) -> uint32_t
+{
+    return kind == document_kind::scene ? SCENE_DOCUMENT_VERSION : PREFAB_DOCUMENT_VERSION;
+}
+
+/// What a message calls a document after its kind: its asset key, or "file" when it has none.
+auto get_document_name(hpp::string_view key) -> hpp::string_view
+{
+    return key.empty() ? hpp::string_view("file") : key;
+}
+
+/// Why this build does not read a document of the given kind in the given layout, or an empty string when it does.
+auto describe_unreadable_version(document_kind kind, uint32_t version, hpp::string_view key) -> std::string
+{
+    const auto newest = get_newest_document_version(kind);
+    if(version >= FIRST_DOCUMENT_VERSION && version <= newest)
+    {
+        return {};
+    }
+    const auto kind_name = get_document_kind_name(kind);
+    const auto engine = version::get_current().to_string();
+    if(version == UNKNOWN_DOCUMENT_VERSION)
+    {
+        return fmt::format("The {} {} does not name a {} version this engine ({}) knows, so the engine did not load "
+                           "it. A {} names its version as a whole number, and this engine reads {} {}.",
+                           kind_name,
+                           get_document_name(key),
+                           kind_name,
+                           engine,
+                           kind_name,
+                           kind_name,
+                           describe_readable_versions(newest));
+    }
+    return fmt::format("The {} {} is in {} version {}, which a newer engine wrote. This engine ({}) reads {} {}, so it "
+                       "did not load the {}. Open it with the engine that saved it, or update this engine.",
+                       kind_name,
+                       get_document_name(key),
+                       kind_name,
+                       version,
+                       engine,
+                       kind_name,
+                       describe_readable_versions(newest),
+                       kind_name);
+}
+
+/// Why a document was not loaded as the given kind: it is a document of the other kind.
+auto describe_wrong_document_kind(document_kind expected, hpp::string_view key) -> std::string
+{
+    const auto file = key.empty() ? std::string("This file") : fmt::format("The file {}", key);
+    if(expected == document_kind::prefab)
+    {
+        return fmt::format("{} is a scene, not a prefab, so it was not loaded as one: the prefab reader would load "
+                           "only part of it. Scenes are opened with the scene reader.",
+                           file);
+    }
+    return fmt::format("{} is not a scene: it holds neither a roots array nor a root count, so it was not loaded as "
+                       "one.",
+                       file);
+}
+
+/// Why a document that could not be parsed was not loaded.
+auto describe_broken_document(document_kind kind, hpp::string_view key, hpp::string_view reason) -> std::string
+{
+    return fmt::format("The {} {} could not be read, so it was not loaded. The reader said: {}",
+                       get_document_kind_name(kind),
+                       get_document_name(key),
+                       reason);
+}
+
+/// Why a document with no content was not loaded.
+auto describe_empty_document(document_kind kind, hpp::string_view key) -> std::string
+{
+    return fmt::format("The {} {} has no content: its file is empty or could not be read, so it was not loaded.",
+                       get_document_kind_name(kind),
+                       get_document_name(key));
 }
 
 /// Refuses a scene file handed to the single-root reader, which would read part of it or none of it.
@@ -1982,24 +2112,22 @@ auto refuses_scene_document(const Archive& ar) -> bool
     {
         return false;
     }
-    APPLOG_ERROR("A scene file was handed to the reader of single-root documents, which would load only "
-                 "part of it. Scene files are read with the scene reader.");
+    APPLOG_ERROR("{}", describe_wrong_document_kind(document_kind::prefab, {}));
     return true;
 }
 
+/// Reads a single-root document over @p e. False, with @p e as it was, for a scene file.
 template<typename Archive>
-void load_from_archive_start(Archive& ar, entt::registry& registry, entt::handle& e)
+auto load_from_archive_start(Archive& ar, entt::registry& registry, entt::handle& e) -> bool
 {
     if(refuses_scene_document(ar))
     {
-        e = {};
-        return;
+        return false;
     }
     bool pushed = push_load_context(registry);
-
     e = load_from_archive_impl(ar, registry);
-
     pop_load_context(pushed);
+    return true;
 }
 
 template<typename Archive>
@@ -2085,7 +2213,7 @@ void save_to_archive(Archive& ar, const entt::registry& reg)
         get_save_context().registry = &reg;
     }
 
-    // First, so the layout can be told from the head of the file.
+    // First, where a reader that looks only at the head of the file finds it.
     const uint32_t version = SCENE_DOCUMENT_VERSION;
     try_save(ar, ser20::make_nvp("version", version));
 
@@ -2100,76 +2228,102 @@ void save_to_archive(Archive& ar, const entt::registry& reg)
     pop_save_context(pushed);
 }
 
-/// Logs why a scene or prefab file was not loaded: a newer engine wrote it in a layout this one does not read.
-void log_unreadable_document(hpp::string_view kind, uint32_t version, uint32_t newest, hpp::string_view key)
-{
-    APPLOG_ERROR("The {} {} is in {} version {}, which a newer engine wrote. This engine ({}) reads {} {}, so "
-                 "the {} was not loaded.",
-                 kind,
-                 key.empty() ? hpp::string_view("file") : key,
-                 kind,
-                 version,
-                 version::get_current().to_string(),
-                 kind,
-                 describe_readable_versions(newest),
-                 kind);
-}
-
-auto as_text(const std::vector<uint8_t>& buffer) -> hpp::string_view
-{
-    return {reinterpret_cast<const char*>(buffer.data()), buffer.size()};
-}
-
-/// Whether this build reads a prefab file, logging why not, before anything of it loads.
-auto can_read_prefab_file(const prefab& file, hpp::string_view key) -> bool
-{
-    const auto version = read_document_version(as_text(file.buffer.data));
-    if(is_readable_prefab_version(version))
-    {
-        return true;
-    }
-    log_unreadable_document("prefab", version, PREFAB_DOCUMENT_VERSION, key);
-    return false;
-}
-
 /// The scene layout that holds its roots in a "roots" array.
 constexpr uint32_t ROOTS_SCENE_DOCUMENT_VERSION = 2;
 
-/// The layout of a scene document. The first layout names none but always holds a root count, and
-/// its roots' own "version" strings sit at the same level, so the count is asked about first.
+/// The layout a document names in its "version" member: a whole number, or the string the first layout wrote.
+/// Reads the member.
 template<typename Archive>
-auto read_scene_version(Archive& ar) -> uint32_t
+auto read_version_member(Archive& ar) -> uint32_t
 {
-    if constexpr(can_probe_names<Archive>)
+    uint64_t number = 0;
+    if(try_load(ar, ser20::make_nvp("version", number)))
     {
-        if(ar.hasNextName("entities_count"))
-        {
-            return FIRST_DOCUMENT_VERSION;
-        }
-        // The second layout is the roots array, also where a file names no version for it.
-        if(!ar.hasNextName("version"))
-        {
-            return ar.hasNextName("roots") ? ROOTS_SCENE_DOCUMENT_VERSION : std::numeric_limits<uint32_t>::max();
-        }
+        return number <= std::numeric_limits<uint32_t>::max() ? static_cast<uint32_t>(number)
+                                                               : UNKNOWN_DOCUMENT_VERSION;
     }
-    // A version that is not a number is in no layout this build knows.
-    uint32_t version = std::numeric_limits<uint32_t>::max();
-    try_load(ar, ser20::make_nvp("version", version));
-    return version;
+    std::string text;
+    const bool is_first_layout = try_load(ar, ser20::make_nvp("version", text)) && text == FIRST_LAYOUT_VERSION_TEXT;
+    return is_first_layout ? FIRST_DOCUMENT_VERSION : UNKNOWN_DOCUMENT_VERSION;
+}
+
+/**
+ * @brief The layout of a parsed scene or prefab document, before any of its content is read.
+ *
+ * What every loader decides by, and read_document_version too, so a file the editor calls readable is one the
+ * loaders read. Reads the "version" member when the layout is told by it; members are found by name, so a reader
+ * of the content after it is not disturbed.
+ */
+template<typename Archive>
+auto read_archive_version(Archive& ar) -> uint32_t
+{
+    if(!has_members(ar))
+    {
+        return UNKNOWN_DOCUMENT_VERSION;
+    }
+    // Asked first: the first layout names no version of its own, and its roots' "version" strings sit beside it.
+    if(ar.hasNextName("entities_count"))
+    {
+        return FIRST_DOCUMENT_VERSION;
+    }
+    if(ar.hasNextName("version"))
+    {
+        return read_version_member(ar);
+    }
+    if(ar.hasNextName("roots"))
+    {
+        return ROOTS_SCENE_DOCUMENT_VERSION;
+    }
+    return ar.hasNextName("entities") ? FIRST_DOCUMENT_VERSION : UNKNOWN_DOCUMENT_VERSION;
+}
+
+/// What a document says of itself, and why this build does not load it, if it does not.
+struct document_check
+{
+    uint32_t version{UNKNOWN_DOCUMENT_VERSION};
+    std::string problem;
+};
+
+/// Reads the layout of a document to be loaded as a scene, and why this build does not load it, if it does not.
+template<typename Archive>
+auto check_scene_document(Archive& ar, hpp::string_view key) -> document_check
+{
+    document_check check;
+    const bool is_scene = is_scene_document(ar);
+    check.version = read_archive_version(ar);
+    check.problem = describe_unreadable_version(document_kind::scene, check.version, key);
+    if(check.problem.empty() && !is_scene)
+    {
+        check.problem = describe_wrong_document_kind(document_kind::scene, key);
+    }
+    return check;
+}
+
+/// Reads the layout of a document to be loaded as a prefab, and why this build does not load it, if it does not.
+template<typename Archive>
+auto check_prefab_document(Archive& ar, hpp::string_view key) -> document_check
+{
+    document_check check;
+    // Told first: a scene's version names a scene layout, which says nothing about prefabs.
+    const bool is_scene = is_scene_document(ar);
+    check.version = read_archive_version(ar);
+    check.problem = is_scene ? describe_wrong_document_kind(document_kind::prefab, key)
+                             : describe_unreadable_version(document_kind::prefab, check.version, key);
+    return check;
 }
 
 /// The roots of a scene file in the first layout: a root count, then one "entities" key per root
 /// in the same object, told apart only by reading the keys in file order.
 template<typename Archive>
-auto read_first_layout_roots(Archive& ar, entt::registry& reg, size_t count) -> std::vector<entt::handle>
+auto read_first_layout_roots(Archive& ar, size_t count) -> std::vector<entt::handle>
 {
     std::vector<entt::handle> roots;
     roots.reserve(count);
     for(size_t i = 0; i < count; ++i)
     {
-        // load_from_archive_impl creates the entities it needs and returns the root, so no
+        // load_first_layout_root creates the entities it needs and returns the root, so no
         // scratch entity is handed in: it would be abandoned, one componentless entity per root.
-        roots.push_back(load_from_archive_impl(ar, reg, true));
+        roots.push_back(load_first_layout_root(ar));
     }
     return roots;
 }
@@ -2191,37 +2345,23 @@ auto read_roots(Archive& ar) -> std::vector<entt::handle>
     return roots;
 }
 
+/// Reads the roots of a scene document whose layout is known into a registry, next to what is in it.
 template<typename Archive>
-void load_from_archive(Archive& ar, entt::registry& reg)
+void read_scene_document(Archive& ar, entt::registry& reg, uint32_t version)
 {
-    const uint32_t version = read_scene_version(ar);
-    if(!is_readable_scene_version(version))
-    {
-        log_unreadable_document("scene", version, SCENE_DOCUMENT_VERSION, {});
-        return;
-    }
-
     // The first layout's count is read before anything else, at the head of the file.
     size_t count = 0;
     if(version == FIRST_DOCUMENT_VERSION)
     {
         try_load(ar, ser20::make_nvp("entities_count", count));
     }
-
     bool pushed = push_load_context(reg);
-
-    bool nesting_resolved = false;
-    if(try_load(ar, ser20::make_nvp("nesting_resolved", nesting_resolved)) && nesting_resolved)
-    {
-        get_load_context().nesting_resolved = true;
-    }
-
+    read_nesting_resolved(ar);
     std::vector<entt::handle> roots;
     {
         APP_SCOPE_PERF("Scene/Load/Read Entities");
-        roots = version == FIRST_DOCUMENT_VERSION ? read_first_layout_roots(ar, reg, count) : read_roots(ar);
+        roots = version == FIRST_DOCUMENT_VERSION ? read_first_layout_roots(ar, count) : read_roots(ar);
     }
-
     // A scene from before ids named their document: attributed here, before any instance in
     // it syncs, so the instances' own assets can tell their content from what was added.
     if(get_load_context().saw_unqualified_ids)
@@ -2239,8 +2379,34 @@ void load_from_archive(Archive& ar, entt::registry& reg)
     {
         convert_positional_script_overrides_under(root);
     }
-
     pop_load_context(pushed);
+}
+
+/**
+ * @brief Reads a scene document into a registry, next to what is in it.
+ *
+ * @p clear runs once the document is known to be readable and before any of it loads: what a load replaces goes
+ * only then, and a refused document leaves it as it was.
+ * @return False, with the reason logged, when the document is refused.
+ */
+template<typename Archive>
+auto load_from_archive(Archive& ar,
+                       entt::registry& reg,
+                       hpp::string_view key,
+                       const std::function<void()>& clear = {}) -> bool
+{
+    const auto check = check_scene_document(ar, key);
+    if(!check.problem.empty())
+    {
+        APPLOG_ERROR("{}", check.problem);
+        return false;
+    }
+    if(clear)
+    {
+        clear();
+    }
+    read_scene_document(ar, reg, check.version);
+    return true;
 }
 
 } // namespace
@@ -2338,41 +2504,6 @@ auto atomic_save_to_file(const fs::path& key, entt::handle obj) -> bool
 }
 } // namespace asset_writer
 
-void save_to_stream_bin(std::ostream& stream, entt::const_handle obj)
-{
-    if(stream.good())
-    {
-        // Same identity pass as the text writer, or a binary prefab save would write a
-        // document whose nested instances are unnamed while the text save names them.
-        const bool to_prefab = save_ctx_ptr != nullptr && save_ctx_ptr->is_saving_to_prefab();
-        if(to_prefab && obj && obj.registry() != nullptr)
-        {
-            entt::handle mutable_obj{const_cast<entt::registry&>(*obj.registry()), obj.entity()};
-            prepare_prefab_identity(mutable_obj, {}, true, {});
-        }
-
-        ser20::oarchive_binary_t ar(stream);
-
-        save_to_archive(ar, obj);
-    }
-}
-
-void save_to_file_bin(const std::string& absolute_path, entt::const_handle obj)
-{
-    std::ofstream stream(absolute_path, std::ios::binary);
-
-    bool pushed = push_save_context();
-    auto& save_ctx = get_save_context();
-    save_ctx.save_source = obj;
-    save_ctx.to_prefab = true;
-
-    save_to_stream_bin(stream, obj);
-    save_ctx.to_prefab = false;
-    save_ctx.save_source = {};
-    pop_save_context(pushed);
-}
-
-
 void load_from_view(hpp::string_view view, entt::registry& obj)
 {
     if(!view.empty())
@@ -2451,33 +2582,6 @@ void load_from_file(const std::string& absolute_path, entt::handle& obj)
         return;
     }
     load_from_stream(input, obj);
-}
-
-void load_from_stream_bin(std::istream& stream, entt::handle& obj)
-{
-    if(stream.good())
-    {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-        try
-        {
-            ser20::iarchive_binary_t ar(stream);
-            load_from_archive(ar, obj);
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Failed to load entity from stream: {}", e.what());
-        }
-    }
-}
-
-void load_from_file_bin(const std::string& absolute_path, entt::handle& obj)
-{
-    fs::file_istream input(absolute_path, std::ios::binary);
-    if(!input.is_open())
-    {
-        return;
-    }
-    load_from_stream_bin(input, obj);
 }
 
 namespace
@@ -3264,6 +3368,36 @@ auto sync_all_prefab_instances(entt::registry& registry) -> size_t
     return synced;
 }
 
+namespace
+{
+/// Logs why a prefab was not loaded, once per prefab and reason: every instance of it is refused again on every
+/// sync, and one message for each would bury the rest of the log.
+void log_refused_prefab(const hpp::uuid& uid, const std::string& problem)
+{
+    static std::mutex mutex;
+    static std::set<std::pair<hpp::uuid, std::string>> logged;
+    const std::lock_guard<std::mutex> lock(mutex);
+    if(logged.emplace(uid, problem).second)
+    {
+        APPLOG_ERROR("{}", problem);
+    }
+}
+
+/// Refuses a prefab file this build does not load, saying why once: a newer layout, whose content this build would
+/// save back over it as what it made of it, or a scene, which the prefab reader would read only part of.
+template<typename Archive>
+auto refuses_prefab_document(Archive& ar, const asset_handle<prefab>& pfb) -> bool
+{
+    const auto check = check_prefab_document(ar, pfb.id());
+    if(check.problem.empty())
+    {
+        return false;
+    }
+    log_refused_prefab(pfb.uid(), check.problem);
+    return true;
+}
+} // namespace
+
 auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                           entt::registry& registry,
                           entt::handle& obj) -> bool
@@ -3282,80 +3416,64 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
     auto prefab = pfb.get();
     const auto& buffer = prefab->buffer.data;
 
-    // A newer layout is not read: what this build made of it would be saved back over it.
-    if(!buffer.empty() && !can_read_prefab_file(*prefab, pfb.id()))
+    // An empty document loads nothing, and must say so: a caller that takes "true" as "the
+    // replay ran" goes on to re-derive state from a replay that never happened.
+    if(buffer.empty())
     {
         return false;
     }
-
-    // An empty document loads nothing, and must say so: a caller that takes "true" as "the
-    // replay ran" goes on to re-derive state from a replay that never happened.
-    bool result = !buffer.empty();
-    if(!buffer.empty())
+    bool result = false;
+    try
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        try
+        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
+        if(refuses_prefab_document(ar, pfb))
         {
-            auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-             
-            bool pushed = push_load_context(registry);
-            get_load_context().document_uid = pfb.uid();
-
-            {
-                // Scopes the prefab-uid mapping to this instance. Records inside the frame
-                // resolve against the subtree recorded below and nothing else.
-                scoped_instance_frame frame;
-
-                add_to_uid_mapping(obj);
-
-                load_from_archive_start(ar, registry, obj);
-
-                cleanup_uid_mapping();
-
-            }
-
-            if(get_load_context().saw_unqualified_ids)
-            {
-                qualify_legacy_prefab_ids(obj, pfb.uid(), true);
-            }
-            if(!get_load_context().legacy_overrides.empty())
-            {
-                convert_legacy_override_state(registry, obj, pfb.uid());
-            }
-
-            // Read before the pop: pop_load_context destroys the context.
-            const bool nesting_resolved = get_load_context().nesting_resolved;
-            prefab_statements document_statements = std::move(get_load_context().document_statements);
-
-            pop_load_context(pushed);
-
-
-            if(obj)
-            {
-                auto& pfb_comp = obj.get_or_emplace<prefab_component>();
-                pfb_comp.source = pfb;
-                // The document's own statements, replaced wholesale: one author, and this is it.
-                pfb_comp.from_document = std::move(document_statements);
-                convert_positional_script_overrides_under(obj);
-
-                // Same staleness as in load_from_prefab: refresh anything nested against
-                // its own asset rather than trusting this one's snapshot of it - unless the
-                // document says a bake already did exactly that, or the caller is going to do
-                // it itself once it has restored what belongs to the instance.
-                if((!nesting_resolved || !can_trust_resolved_marker()) && !is_nested_sync_deferred())
-                {
-                    sync_nested_prefab_instances(obj);
-                }
-            }
+            return false;
         }
-        catch(const std::exception& e)
+        bool pushed = push_load_context(registry);
+        get_load_context().document_uid = pfb.uid();
         {
-            result = false;
-            APPLOG_ERROR("Broken prefab {}: {}", pfb.id(), e.what());
+            // Scopes the prefab-uid mapping to this instance. Records inside the frame
+            // resolve against the subtree recorded below and nothing else.
+            scoped_instance_frame frame;
+            add_to_uid_mapping(obj);
+            result = load_from_archive_start(ar, registry, obj);
+            cleanup_uid_mapping();
+        }
+        if(get_load_context().saw_unqualified_ids)
+        {
+            qualify_legacy_prefab_ids(obj, pfb.uid(), true);
+        }
+        if(!get_load_context().legacy_overrides.empty())
+        {
+            convert_legacy_override_state(registry, obj, pfb.uid());
+        }
+        // Read before the pop: pop_load_context destroys the context.
+        const bool nesting_resolved = get_load_context().nesting_resolved;
+        prefab_statements document_statements = std::move(get_load_context().document_statements);
+        pop_load_context(pushed);
+        if(result && obj)
+        {
+            auto& pfb_comp = obj.get_or_emplace<prefab_component>();
+            pfb_comp.source = pfb;
+            // The document's own statements, replaced wholesale: one author, and this is it.
+            pfb_comp.from_document = std::move(document_statements);
+            convert_positional_script_overrides_under(obj);
+            // Same staleness as in load_from_prefab: refresh anything nested against
+            // its own asset rather than trusting this one's snapshot of it - unless the
+            // document says a bake already did exactly that, or the caller is going to do
+            // it itself once it has restored what belongs to the instance.
+            if((!nesting_resolved || !can_trust_resolved_marker()) && !is_nested_sync_deferred())
+            {
+                sync_nested_prefab_instances(obj);
+            }
         }
     }
-
+    catch(const std::exception& e)
+    {
+        result = false;
+        log_refused_prefab(pfb.uid(), describe_broken_document(document_kind::prefab, pfb.id(), e.what()));
+    }
     return result;
 }
 
@@ -3386,91 +3504,54 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
     // copy here to keep it alive
     auto prefab = pfb.get();
     const auto& buffer = prefab->buffer.data;
-
-    // A newer layout is not read: what this build made of it would be saved back over it.
-    if(!buffer.empty() && can_read_prefab_file(*prefab, pfb.id()))
+    if(buffer.empty())
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        try
+        return obj;
+    }
+    try
+    {
+        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
+        if(refuses_prefab_document(ar, pfb))
         {
-            auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-
-            // Pushed here rather than inside load_from_archive_start so the document's
-            // nesting_resolved flag can be read before the context is destroyed.
-            const bool pushed = push_load_context(registry);
-            get_load_context().document_uid = pfb.uid();
-            obj = load_from_archive_impl(ar, registry);
-            if(get_load_context().saw_unqualified_ids)
-            {
-                qualify_legacy_prefab_ids(obj, pfb.uid(), true);
-            }
-            if(!get_load_context().legacy_overrides.empty())
-            {
-                convert_legacy_override_state(registry, obj, pfb.uid());
-            }
-            const bool nesting_resolved = get_load_context().nesting_resolved;
-            prefab_statements document_statements = std::move(get_load_context().document_statements);
-            pop_load_context(pushed);
-
-            if(obj)
-            {
-                regenerate_entity_uids(obj);
-                auto& pfb_comp = obj.get_or_emplace<prefab_component>();
-                pfb_comp.source = pfb;
-                pfb_comp.from_document = std::move(document_statements);
-                convert_positional_script_overrides_under(obj);
-
-                // This asset carries a snapshot of anything nested inside it, taken when it
-                // was last saved - so it is stale the moment that inner asset is edited.
-                // Refresh each nested instance against its own asset, unless a bake has
-                // already resolved them and said so.
-                if(!nesting_resolved || !can_trust_resolved_marker())
-                {
-                    sync_nested_prefab_instances(obj);
-                }
-            }
+            return obj;
         }
-        catch(const std::exception& e)
+        // Pushed here rather than inside load_from_archive_start so the document's
+        // nesting_resolved flag can be read before the context is destroyed.
+        const bool pushed = push_load_context(registry);
+        get_load_context().document_uid = pfb.uid();
+        obj = load_from_archive_impl(ar, registry);
+        if(get_load_context().saw_unqualified_ids)
         {
-            APPLOG_ERROR("Broken prefab {}: {}", pfb.id(), e.what());
+            qualify_legacy_prefab_ids(obj, pfb.uid(), true);
+        }
+        if(!get_load_context().legacy_overrides.empty())
+        {
+            convert_legacy_override_state(registry, obj, pfb.uid());
+        }
+        const bool nesting_resolved = get_load_context().nesting_resolved;
+        prefab_statements document_statements = std::move(get_load_context().document_statements);
+        pop_load_context(pushed);
+        if(obj)
+        {
+            regenerate_entity_uids(obj);
+            auto& pfb_comp = obj.get_or_emplace<prefab_component>();
+            pfb_comp.source = pfb;
+            pfb_comp.from_document = std::move(document_statements);
+            convert_positional_script_overrides_under(obj);
+            // This asset carries a snapshot of anything nested inside it, taken when it
+            // was last saved - so it is stale the moment that inner asset is edited.
+            // Refresh each nested instance against its own asset, unless a bake has
+            // already resolved them and said so.
+            if(!nesting_resolved || !can_trust_resolved_marker())
+            {
+                sync_nested_prefab_instances(obj);
+            }
         }
     }
-
-
-    return obj;
-}
-auto load_from_prefab_bin(const asset_handle<prefab>& pfb, entt::registry& registry) -> entt::handle
-{
-    entt::handle obj;
-
-    // copy here to keep it alive
-    auto prefab = pfb.get();
-    auto buffer = prefab->buffer.get_stream_buf();
-    std::istream stream(&buffer);
-    if(stream.good())
+    catch(const std::exception& e)
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        try
-        {
-            ser20::iarchive_binary_t ar(stream);
-
-            obj = load_from_archive_start(ar, registry);
-
-            if(obj)
-            {
-                regenerate_entity_uids(obj);
-                auto& pfb_comp = obj.get_or_emplace<prefab_component>();
-                pfb_comp.source = pfb;
-            }
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Broken prefab {}", pfb.id());
-        }
+        log_refused_prefab(pfb.uid(), describe_broken_document(document_kind::prefab, pfb.id(), e.what()));
     }
-
     return obj;
 }
 
@@ -3575,104 +3656,51 @@ void save_to_file(const std::string& absolute_path, const scene& scn)
     std::ofstream stream(absolute_path);
     save_to_stream(stream, scn);
 }
-void save_to_stream_bin(std::ostream& stream, const scene& scn)
+auto load_from_view(hpp::string_view view, scene& scn) -> bool
 {
-    if(stream.good())
+    if(view.empty())
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        try
-        {
-            ser20::oarchive_binary_t ar(stream);
-            save_to_archive(ar, *scn.registry);
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Failed to save scene to stream: {}", e.what());
-        }
+        return false;
     }
-}
-void save_to_file_bin(const std::string& absolute_path, const scene& scn)
-{
-    std::ofstream stream(absolute_path, std::ios::binary);
-    save_to_stream_bin(stream, scn);
-}
-
-
-void load_from_view(hpp::string_view view, scene& scn)
-{
-    if(!view.empty())
+    try
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        try
-        {
-            auto ar = ser20::create_iarchive_associative(view.data(), view.size());
-            load_from_archive(ar, *scn.registry);
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Failed to load scene from view: {}", e.what());
-        }
+        auto ar = ser20::create_iarchive_associative(view.data(), view.size());
+        return load_from_archive(ar, *scn.registry, {});
     }
-}
-
-void load_from_stream(std::istream& stream, scene& scn)
-{
-    if(stream.good())
+    catch(const std::exception& e)
     {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        stream.seekg(0);
-
-        try
-        {
-            auto ar = ser20::create_iarchive_associative(stream);
-            load_from_archive(ar, *scn.registry);
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Failed to load scene from stream: {}", e.what());
-        }
+        APPLOG_ERROR("{}", describe_broken_document(document_kind::scene, {}, e.what()));
     }
+    return false;
 }
-void load_from_file(const std::string& absolute_path, scene& scn)
+
+auto load_from_stream(std::istream& stream, scene& scn) -> bool
+{
+    if(!stream.good())
+    {
+        return false;
+    }
+    stream.seekg(0);
+    try
+    {
+        auto ar = ser20::create_iarchive_associative(stream);
+        return load_from_archive(ar, *scn.registry, {});
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_ERROR("{}", describe_broken_document(document_kind::scene, {}, e.what()));
+    }
+    return false;
+}
+
+auto load_from_file(const std::string& absolute_path, scene& scn) -> bool
 {
     fs::file_istream input(absolute_path);
     if(!input.is_open())
     {
-        return;
+        return false;
     }
-    load_from_stream(input, scn);
-}
-void load_from_stream_bin(std::istream& stream, scene& scn)
-{
-    if(stream.good())
-    {
-        // APPLOG_INFO_PERF(std::chrono::microseconds);
-
-        stream.seekg(0);
-
-        try
-        {
-            scn.unload();
-            ser20::iarchive_binary_t ar(stream);
-            load_from_archive(ar, *scn.registry);
-        }
-        catch(const std::exception& e)
-        {
-            APPLOG_ERROR("Failed to load scene from stream: {}", e.what());
-        }
-    }
-}
-void load_from_file_bin(const std::string& absolute_path, scene& scn)
-{
-    fs::file_istream input(absolute_path, std::ios::binary);
-    if(!input.is_open())
-    {
-        return;
-    }
-    load_from_stream_bin(input, scn);
+    return load_from_stream(input, scn);
 }
 
 namespace
@@ -3684,40 +3712,116 @@ auto wait_for_scene_file(const asset_handle<scene_prefab>& pfb) -> std::shared_p
     return pfb.get();
 }
 
-/// Reads a scene document into a registry, next to whatever is already in it.
-void read_scene_into(const std::vector<uint8_t>& buffer, entt::registry& registry)
+/**
+ * @brief Reads a scene asset's file into a registry, next to what is in it.
+ *
+ * The file is parsed and checked first, and @p clear runs only once it is known to be readable, so a refused file
+ * leaves what is open as it was.
+ * @return False, with the reason logged, when the file is empty, cannot be parsed, is refused, or fails partway.
+ */
+auto read_scene_file(const asset_handle<scene_prefab>& pfb, entt::registry& registry, const std::function<void()>& clear)
+    -> bool
 {
+    const auto file = wait_for_scene_file(pfb);
+    const auto& buffer = file->buffer.data;
+    if(buffer.empty())
+    {
+        APPLOG_ERROR("{}", describe_empty_document(document_kind::scene, pfb.id()));
+        return false;
+    }
     try
     {
         auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
-        load_from_archive(ar, registry);
+        return load_from_archive(ar, registry, pfb.id(), clear);
     }
     catch(const std::exception& e)
     {
-        APPLOG_ERROR("Failed to load scene from prefab: {}", e.what());
+        APPLOG_ERROR("{}", describe_broken_document(document_kind::scene, pfb.id(), e.what()));
     }
-}
-
-/// Whether this build reads a scene file, logging why not, before anything of the current scene goes.
-auto can_read_scene_file(const scene_prefab& file, hpp::string_view key) -> bool
-{
-    const auto version = read_document_version(as_text(file.buffer.data));
-    if(is_readable_scene_version(version))
-    {
-        return true;
-    }
-    log_unreadable_document("scene", version, SCENE_DOCUMENT_VERSION, key);
     return false;
 }
 
-auto skip_json_whitespace(hpp::string_view text, size_t position) -> size_t
+/**
+ * @brief The last check of each prefab file, kept while that file is loaded.
+ *
+ * The content browser asks for the layout of every prefab it shows, every frame, and a check parses the whole file.
+ * An entry holds for the loaded file it was made from, while that file's buffer and key are the ones checked.
+ */
+class prefab_check_cache
 {
-    while(position < text.size() &&
-          (text[position] == ' ' || text[position] == '\n' || text[position] == '\r' || text[position] == '\t'))
+public:
+    /// The layout of a prefab's file, and why this build does not load it, if it does not.
+    auto check(const asset_handle<prefab>& pfb) -> document_check
     {
-        ++position;
+        const auto file = pfb.get();
+        const auto key = pfb.id();
+        const auto uid = pfb.uid();
+        if(auto cached = find(uid, file, key))
+        {
+            return *cached;
+        }
+        auto checked = check_file(*file, key);
+        const std::lock_guard<std::mutex> lock(mutex_);
+        entries_[uid] = {file, file->buffer.data.data(), file->buffer.data.size(), key, checked};
+        return checked;
     }
-    return position;
+
+private:
+    struct entry
+    {
+        std::weak_ptr<prefab> file;
+        const uint8_t* data{};
+        size_t size{};
+        std::string key;
+        document_check check;
+    };
+
+    auto find(const hpp::uuid& uid, const std::shared_ptr<prefab>& file, const std::string& key)
+        -> hpp::optional<document_check>
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = entries_.find(uid);
+        if(it == entries_.end() || !is_current(it->second, file, key))
+        {
+            return hpp::nullopt;
+        }
+        return it->second.check;
+    }
+
+    static auto is_current(const entry& cached, const std::shared_ptr<prefab>& file, const std::string& key) -> bool
+    {
+        const auto& buffer = file->buffer.data;
+        return cached.file.lock() == file && cached.data == buffer.data() && cached.size == buffer.size() &&
+               cached.key == key;
+    }
+
+    static auto check_file(const prefab& file, hpp::string_view key) -> document_check
+    {
+        const auto& buffer = file.buffer.data;
+        // An empty file loads nothing and holds nothing a save could lose: it is not refused.
+        if(buffer.empty())
+        {
+            return {};
+        }
+        try
+        {
+            auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
+            return check_prefab_document(ar, key);
+        }
+        catch(const std::exception& e)
+        {
+            return {UNKNOWN_DOCUMENT_VERSION, describe_broken_document(document_kind::prefab, key, e.what())};
+        }
+    }
+
+    std::mutex mutex_;
+    std::map<hpp::uuid, entry> entries_;
+};
+
+auto get_prefab_check_cache() -> prefab_check_cache&
+{
+    static prefab_check_cache cache;
+    return cache;
 }
 } // namespace
 
@@ -3742,95 +3846,67 @@ auto is_readable_prefab_version(uint32_t version) -> bool
 
 auto read_document_version(hpp::string_view text) -> uint32_t
 {
-    constexpr hpp::string_view version_key = "\"version\"";
-    size_t position = skip_json_whitespace(text, 0);
-    if(position >= text.size() || text[position] != '{')
+    try
     {
-        return FIRST_DOCUMENT_VERSION;
+        auto ar = ser20::create_iarchive_associative(text.data(), text.size());
+        return read_archive_version(ar);
     }
-    position = skip_json_whitespace(text, position + 1);
-    if(text.substr(position, version_key.size()) != version_key)
+    catch(const std::exception&)
     {
-        return FIRST_DOCUMENT_VERSION;
+        return UNKNOWN_DOCUMENT_VERSION;
     }
-    position = skip_json_whitespace(text, position + version_key.size());
-    if(position >= text.size() || text[position] != ':')
-    {
-        return FIRST_DOCUMENT_VERSION;
-    }
-    position = skip_json_whitespace(text, position + 1);
-    // The first layout wrote its version as the string "1.0.0", and never first.
-    if(position < text.size() && text[position] == '"')
-    {
-        return FIRST_DOCUMENT_VERSION;
-    }
-    uint32_t version = 0;
-    const auto result = std::from_chars(text.data() + position, text.data() + text.size(), version);
-    // A version this build cannot even read as a number is newer than any it knows.
-    return result.ec == std::errc{} ? version : std::numeric_limits<uint32_t>::max();
 }
 
 auto read_document_version(const asset_handle<scene_prefab>& pfb) -> uint32_t
 {
     const auto file = wait_for_scene_file(pfb);
-    return read_document_version(as_text(file->buffer.data));
+    const auto& buffer = file->buffer.data;
+    return read_document_version(hpp::string_view(reinterpret_cast<const char*>(buffer.data()), buffer.size()));
 }
 
 auto read_document_version(const asset_handle<prefab>& pfb) -> uint32_t
 {
-    // copy here to keep it alive
-    const auto file = pfb.get();
-    return read_document_version(as_text(file->buffer.data));
+    return get_prefab_check_cache().check(pfb).version;
+}
+
+auto find_document_problem(const asset_handle<scene_prefab>& pfb) -> std::string
+{
+    const auto file = wait_for_scene_file(pfb);
+    const auto& buffer = file->buffer.data;
+    if(buffer.empty())
+    {
+        return describe_empty_document(document_kind::scene, pfb.id());
+    }
+    try
+    {
+        auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
+        return check_scene_document(ar, pfb.id()).problem;
+    }
+    catch(const std::exception& e)
+    {
+        return describe_broken_document(document_kind::scene, pfb.id(), e.what());
+    }
+}
+
+auto find_document_problem(const asset_handle<prefab>& pfb) -> std::string
+{
+    return get_prefab_check_cache().check(pfb).problem;
 }
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
 {
-    // The file is in hand, and known to be readable, before the current scene goes.
-    const auto prefab = wait_for_scene_file(pfb);
-    if(!prefab->buffer.data.empty())
-    {
-        if(!can_read_scene_file(*prefab, pfb.id()))
-        {
-            return false;
-        }
-        {
-            APP_SCOPE_PERF("Scene/Load/Unload");
-            scn.unload_except_persistent();
-        }
-        read_scene_into(prefab->buffer.data, *scn.registry);
-    }
-    return true;
+    return read_scene_file(pfb,
+                           *scn.registry,
+                           [&scn]()
+                           {
+                               APP_SCOPE_PERF("Scene/Load/Unload");
+                               scn.unload_except_persistent();
+                           });
 }
 
 auto load_from_prefab(const asset_handle<scene_prefab>& pfb, entt::registry& registry) -> bool
 {
-    const auto prefab = wait_for_scene_file(pfb);
-    if(!prefab->buffer.data.empty())
-    {
-        if(!can_read_scene_file(*prefab, pfb.id()))
-        {
-            return false;
-        }
-        read_scene_into(prefab->buffer.data, registry);
-    }
-    return true;
-}
-auto load_from_prefab_bin(const asset_handle<scene_prefab>& pfb, scene& scn) -> bool
-{
-    // copy here to keep it alive
-    auto prefab = pfb.get();
-    auto buffer = prefab->buffer.get_stream_buf();
-
-    // APPLOG_INFO_PERF(std::chrono::microseconds);
-    std::istream stream(&buffer);
-    if(!stream.good())
-    {
-        return false;
-    }
-
-    load_from_stream_bin(stream, scn);
-
-    return true;
+    return read_scene_file(pfb, registry, {});
 }
 
 void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)

@@ -409,12 +409,13 @@ auto prepare_apply(rtti::context& ctx, const std::string& entity_id, apply_outco
     {
         return {};
     }
-    const auto& source = root.get<prefab_component>().source;
-    if(!source)
+    // Refused before the file is read for undo: a prefab this build does not load is never written.
+    if(auto problem = find_apply_problem(root); !problem.empty())
     {
-        outcome.error = "The instance's prefab is missing; nothing to apply to";
+        outcome.error = std::move(problem);
         return {};
     }
+    const auto& source = root.get<prefab_component>().source;
     outcome.key = source.id();
     outcome.file = fs::absolute(fs::resolve_protocol(outcome.key));
     outcome.other_instances = count_other_instances(*scn, root, source);
@@ -543,7 +544,8 @@ void register_prefab_instance_tools(mcp_tool_registry& registry)
              "Write a prefab instance - its overrides, added and removed entities - into its prefab file; every "
              "other instance of that prefab follows (other_instances counts those in this scene). On an instance "
              "nested in another, writes the nested prefab. One undo step: edit_undo puts the file and the "
-             "instance back. Waits up to wait_ms (default 5000) for the prefab to reload.",
+             "instance back. Waits up to wait_ms (default 5000) for the prefab to reload. Refuses a prefab this "
+             "engine does not load, such as one a newer engine saved, and leaves its file as it is.",
          .input_schema_json =
              R"json({"type":"object","properties":{"entity_id":{"type":"string","description":"Any entity of the instance"},"wait_ms":{"type":"integer","minimum":0,"maximum":30000}},"required":["entity_id"]})json",
          .handler =

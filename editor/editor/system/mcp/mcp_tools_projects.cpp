@@ -45,16 +45,27 @@ auto compat_refusal(const fs::path& project_path, const project_manager::project
                           "legacy project. Pass upgrade:true only for a legacy project; opening writes project.cfg "
                           "and the project folders into it.";
         case project_manager::project_compat::engine_older:
-            return path + " was last opened by engine " + report.on_disk.engine_version_opened.to_string() +
-                   ", older than this one; opening may re-save its files in newer formats. Back it up, then pass "
-                   "upgrade:true.";
+            return path + " has been opened only by engine builds older than this one, the newest " +
+                   report.on_disk.engine_version_newest.to_string() +
+                   "; opening may re-save its files in newer formats. Back it up, then pass upgrade:true.";
         case project_manager::project_compat::engine_newer:
-            return path + " was last opened by engine " + report.on_disk.engine_version_opened.to_string() +
-                   ", newer than this one; files it saved may be in formats this engine cannot read, and saving "
-                   "them would overwrite them. Use the newer engine, or back the project up and pass "
+            return path + " has been opened by engine " + report.on_disk.engine_version_newest.to_string() +
+                   ", a newer build than this one; files it saved may be in formats this engine cannot read, and "
+                   "saving them would overwrite them. Use the newer engine, or back the project up and pass "
                    "downgrade:true.";
     }
     return {};
+}
+
+/// Why each scene the open project had open, or starts with, was refused when it opened, as a JSON array.
+auto refused_scenes_json(const project_manager& pm) -> std::string
+{
+    std::string json = "[";
+    for(const auto& problem : pm.get_refused_scenes())
+    {
+        json += (json.size() > 1 ? "," : "") + make_json_string(problem);
+    }
+    return json + "]";
 }
 
 } // namespace
@@ -89,13 +100,15 @@ void register_project_tools(mcp_tool_registry& registry)
                  const bool exists = fs::exists(path, ec);
                  const auto report = pm.inspect_project(path);
                  json += fmt::format(
-                     R"({{"index":{},"path":{},"exists":{},"compat":{},"guid":{},"engine_version_opened":{}}})",
+                     R"({{"index":{},"path":{},"exists":{},"compat":{},"guid":{},"engine_version_opened":{},)"
+                     R"("engine_version_newest":{}}})",
                      i,
                      make_json_string(path.generic_string()),
                      exists ? "true" : "false",
                      make_json_string(compat_to_string(report.status)),
                      make_json_string(report.on_disk.project_guid),
-                     make_json_string(report.on_disk.engine_version_opened.to_string()));
+                     make_json_string(report.on_disk.engine_version_opened.to_string()),
+                     make_json_string(report.on_disk.engine_version_newest.to_string()));
              }
              json += "]";
              return {.text = json, .is_error = false};
@@ -107,9 +120,11 @@ void register_project_tools(mcp_tool_registry& registry)
         {.name = "project_open",
          .description =
              "Open an existing project by path, recent:true, or recent_index. Refuses a folder that is "
-             "not a project or was saved by an older engine unless upgrade:true, one saved by a newer "
-             "engine unless downgrade:true, and unsaved edits in "
-             "the open project unless force:true. Seeds a scene from preset when the project has none.",
+             "not a project or was saved only by older engine builds unless upgrade:true, one a newer engine "
+             "build has opened unless downgrade:true, and unsaved edits in "
+             "the open project unless force:true. Seeds a scene from preset when the project has none. "
+             "scenes_not_opened says why the scene the project had open, or its startup scene, was refused (one a "
+             "newer engine saved, say); a scene seeded from preset then takes its place.",
          .input_schema_json =
              R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute project folder"},"recent":{"type":"boolean","description":"Open the most recent project"},"recent_index":{"type":"integer","minimum":0},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded when the project has none; default medium"},"upgrade":{"type":"boolean","default":false,"description":"Open a legacy folder without project.cfg, or a project saved by an older engine"},"downgrade":{"type":"boolean","default":false,"description":"Open a project saved by a newer engine"},"force":{"type":"boolean","default":false,"description":"Discard unsaved scene and prefab edits"}}})json",
          .handler =
@@ -216,11 +231,13 @@ void register_project_tools(mcp_tool_registry& registry)
                      }
 
                      return {.text = fmt::format(
-                                 R"({{"ok":true,"project":{},"compat":{},"created_scene_from_preset":{},"preset":{}}})",
+                                 R"({{"ok":true,"project":{},"compat":{},"created_scene_from_preset":{},"preset":{},)"
+                                 R"("scenes_not_opened":{}}})",
                                  project_info_json(pm),
                                  make_json_string(compat_to_string(report.status)),
                                  bool_to_json(created_from_preset),
-                                 make_json_string(std::string(preset_str.empty() ? "medium" : preset_str))),
+                                 make_json_string(std::string(preset_str.empty() ? "medium" : preset_str)),
+                                 refused_scenes_json(pm)),
                              .is_error = false};
                  },
                  std::chrono::milliseconds(120000));

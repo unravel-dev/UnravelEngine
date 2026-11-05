@@ -80,15 +80,26 @@ struct editor_actions
 {
     static auto new_scene(rtti::context& ctx) -> bool;
     static auto open_scene(rtti::context& ctx) -> bool;
-    static auto open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool;
+    /**
+     * @brief Opens a scene in place of the open one, asking to save that first.
+     *
+     * A scene this editor does not open is refused before anything of the open scene changes; the reason is logged
+     * and shown, and also written to @p problem when given.
+     * @return False when the scene is refused; otherwise what prompt_save_scene returns.
+     */
+    static auto open_scene_from_asset(rtti::context& ctx,
+                                      const asset_handle<scene_prefab>& asset,
+                                      std::string* problem = nullptr) -> bool;
 
     /**
-     * @brief Why this editor cannot open a scene file, or empty when it can: a newer engine wrote it
-     * in a layout this one does not read, so it would open empty and a save would write that over it.
+     * @brief Why this editor cannot open a scene file, in full sentences, or empty when it can: the reason
+     * find_document_problem gives (a newer engine wrote it, it is empty or not JSON, it is not a scene), which is
+     * why the scene loaders refuse it, and that the file is safe.
      */
     static auto find_newer_scene_problem(const asset_handle<scene_prefab>& asset) -> std::string;
     /**
-     * @brief Why this editor cannot open a prefab file, or empty when it can, for the same reason.
+     * @brief Why this editor cannot open a prefab file, or empty when it can, as for a scene. A prefab refused
+     * here is refused by the loaders and by Apply to Prefab, so nothing of this editor writes over it.
      */
     static auto find_newer_prefab_problem(const asset_handle<prefab>& asset) -> std::string;
 

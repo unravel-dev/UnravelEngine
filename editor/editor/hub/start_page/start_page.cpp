@@ -332,11 +332,11 @@ void start_page::open_project(rtti::context& ctx, const std::string& path)
     }
     else if(report.status == project_manager::project_compat::engine_newer)
     {
-        const auto& opened_version = report.on_disk.engine_version_opened;
-        const std::string opened_by = opened_version.original.empty() ? opened_version.to_string() : opened_version.original;
+        const auto& newest_version = report.on_disk.engine_version_newest;
+        const std::string newest = newest_version.original.empty() ? newest_version.to_string() : newest_version.original;
         title = "Project from a newer engine";
-        message = "This project was last opened with a newer engine version than the one you are running.\n\n"
-                  "  Project saved by: " + opened_by + "\n"
+        message = "This project has been opened with a newer engine build than the one you are running.\n\n"
+                  "  Newest engine:    " + newest + "\n"
                   "  Running engine:   " + running + "\n\n"
                   "Files the newer engine saved may be in formats this engine cannot read. Scenes and prefabs "
                   "in such a format are refused when you open them, but other files could open empty or in "
@@ -347,11 +347,11 @@ void start_page::open_project(rtti::context& ctx, const std::string& path)
     }
     else
     {
-        const auto& opened_version = report.on_disk.engine_version_opened;
-        const std::string opened_by = opened_version.original.empty() ? opened_version.to_string() : opened_version.original;
+        const auto& newest_version = report.on_disk.engine_version_newest;
+        const std::string newest = newest_version.original.empty() ? newest_version.to_string() : newest_version.original;
         title = "Project engine-version mismatch";
-        message = "This project was last opened with an older engine version than the one you are running.\n\n"
-                  "  Project saved by: " + opened_by + "\n"
+        message = "This project has been opened only with older engine builds than the one you are running.\n\n"
+                  "  Newest engine:    " + newest + "\n"
                   "  Running engine:   " + running + "\n\n"
                   "Opening it may cause data loss if the on-disk format has changed since then.\n"
                   "It is strongly recommended to back up the project folder yourself before proceeding.\n\n"
