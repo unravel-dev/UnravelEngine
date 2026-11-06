@@ -1,0 +1,64 @@
+# The pinned LLVM, CMake and Ninja of the Windows builds, and build_env.cmd in RUNNER_TEMP: every build step
+# calls it first for the MSVC headers and libraries (vcvars64) with the pinned tools ahead of the CMake and Ninja
+# that vcvars puts on the PATH. With android-ndk, also the NDK the Android player builds with.
+name: Windows build tools
+description: Installs the pinned LLVM, CMake and Ninja, and the Android NDK when asked, and writes build_env.cmd.
+inputs:
+  llvm-version:
+    description: The official LLVM build to install.
+    required: true
+  cmake-version:
+    description: The CMake release to install.
+    required: true
+  ninja-version:
+    description: The Ninja release to install.
+    required: true
+  android-ndk:
+    description: Whether to install the NDK of cmake/android_player.cmake into the runner's Android SDK.
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Install LLVM, CMake and Ninja
+      shell: pwsh
+      env:
+        LLVM_VERSION: ${{ inputs.llvm-version }}
+        CMAKE_VERSION: ${{ inputs.cmake-version }}
+        NINJA_VERSION: ${{ inputs.ninja-version }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $tools = Join-Path $env:RUNNER_TEMP 'tools'
+        New-Item -ItemType Directory -Force -Path $tools | Out-Null
+        function Save-Download([string] $url, [string] $file) {
+            curl.exe --fail --silent --show-error --location --retry 3 --output $file $url
+            if ($LASTEXITCODE -ne 0) { throw "Downloading $url failed." }
+        }
+        # LLVM in a folder of its own: the runner's preinstalled LLVM is another version.
+        $llvm = Join-Path $tools 'llvm'
+        Save-Download "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe" "$tools\llvm-setup.exe"
+        Start-Process -FilePath "$tools\llvm-setup.exe" -ArgumentList '/S', "/D=$llvm" -Wait
+        $clang_version = & "$llvm\bin\clang++.exe" --version | Select-Object -First 1
+        if ($clang_version -notmatch [regex]::Escape($env:LLVM_VERSION)) { throw "Expected clang $env:LLVM_VERSION, found: $clang_version" }
+        Save-Download "https://github.com/Kitware/CMake/releases/download/v$env:CMAKE_VERSION/cmake-$env:CMAKE_VERSION-windows-x86_64.zip" "$tools\cmake.zip"
+        Expand-Archive -Path "$tools\cmake.zip" -DestinationPath $tools
+        $cmake = Join-Path $tools "cmake-$env:CMAKE_VERSION-windows-x86_64\bin"
+        $ninja = Join-Path $tools 'ninja'
+        Save-Download "https://github.com/ninja-build/ninja/releases/download/v$env:NINJA_VERSION/ninja-win.zip" "$tools\ninja.zip"
+        Expand-Archive -Path "$tools\ninja.zip" -DestinationPath $ninja
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools on this runner.' }
+        @(
+            "@call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul || exit /b 1"
+            "@set `"PATH=$llvm\bin;$cmake;$ninja;%PATH%`""
+        ) | Set-Content -Encoding ascii -Path (Join-Path $env:RUNNER_TEMP 'build_env.cmd')
+    - name: Install the Android NDK
+      if: inputs.android-ndk == 'true'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if (-not $env:ANDROID_HOME) { throw 'ANDROID_HOME is not set on this runner.' }
+        $ndk = (Select-String -Path cmake/android_player.cmake -Pattern 'set\(UNRAVEL_ANDROID_NDK_VERSION "([^"]+)"\)').Matches[0].Groups[1].Value
+        & (Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat') --install "ndk;$ndk"
+        if ($LASTEXITCODE -ne 0) { throw "Installing NDK $ndk failed." }

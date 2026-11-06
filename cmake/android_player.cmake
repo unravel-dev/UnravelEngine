@@ -146,8 +146,10 @@ if(NOT UNRAVEL_ANDROID_PLAYER STREQUAL "OFF")
             USES_TERMINAL_CONFIGURE TRUE
             USES_TERMINAL_BUILD TRUE
         )
-        # After the editor, so the two compiles do not compete for memory.
-        add_dependencies(android_player_build editor)
+        if(UNRAVEL_PLAYERS_AFTER_EDITOR)
+            # After the editor, so the two compiles do not compete for memory.
+            add_dependencies(android_player_build editor)
+        endif()
         # The sub-build globs its sources when it configures, and an external project configures once:
         # it configures again after every configure of this tree, so the files added since reach it.
         set(android_configure_stamp "${PROJECT_BINARY_DIR}/android_player_host_configure.stamp")

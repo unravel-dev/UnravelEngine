@@ -234,6 +234,9 @@ if(UNRAVEL_BUILD_TESTS)
 endif()
 # The player templates the editor's deploys package (cmake/android_player.cmake, cmake/web_player.cmake).
 if(UNRAVEL_BUILD_EDITOR AND NOT ANDROID)
+    option(UNRAVEL_PLAYERS_AFTER_EDITOR
+           "Build the player templates after the editor, so their compiles do not compete with its for memory. Off: building a player template alone builds no editor."
+           ON)
     include(cmake/android_player.cmake)
     include(cmake/web_player.cmake)
 endif()

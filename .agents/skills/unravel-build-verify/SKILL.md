@@ -86,7 +86,11 @@ target (`cmake/web_player.cmake`): an Emscripten sub-build in `<build>/web` with
 Emscripten of a .NET SDK that has the wasm-tools workload (`UNRAVEL_WEB_DOTNET`, default the
 build's dotnet), then the .NET browser relink. It skips the relink while its inputs are
 unchanged. Start the editor from a shell without that SDK's `DOTNET_ROOT`: the editor would
-look for its runtime there.
+look for its runtime there. Its Emscripten needs Python 3.10 or newer (the configure says so
+when it is older); `-DUNRAVEL_WEB_PYTHON=<python>` names another one, as the release workflow
+does with a prebuilt standalone Python on Ubuntu 20.04. Both player sub-builds (`web_player`, `android_player`) wait for the editor
+so their compiles do not compete for memory; `-DUNRAVEL_PLAYERS_AFTER_EDITOR=OFF` builds one
+alone without the editor, as the release workflow's shared players do.
 
 | Suite name | Covers | Run when touching |
 |------------|--------|-------------------|

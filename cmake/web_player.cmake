@@ -21,6 +21,8 @@ set(UNRAVEL_WEB_PLAYER_JOBS "3" CACHE STRING
 
 # The .NET the browser player runs on (game/web/UnravelWebPlayer.csproj).
 set(UNRAVEL_WEB_DOTNET_MAJOR "11")
+# The oldest Python the Emscripten of that .NET's wasm-tools workload runs on (emcc.py checks it).
+set(UNRAVEL_WEB_PYTHON_MIN "3.10")
 
 # The newest folder or file `pattern` matches, by version-aware name order; "" when none does.
 function(unravel_find_newest out_var pattern)
@@ -85,6 +87,16 @@ function(unravel_check_web_player_tools)
     endif()
     if(NOT node OR NOT python)
         set(web_player_reason "Node.js or Python for Emscripten was not found" PARENT_SCOPE)
+        return()
+    endif()
+    execute_process(COMMAND "${python}" -c "import sys; print('%d.%d' % sys.version_info[:2])"
+                    OUTPUT_VARIABLE python_version
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE python_result)
+    if(NOT python_result EQUAL 0 OR python_version VERSION_LESS UNRAVEL_WEB_PYTHON_MIN)
+        set(web_player_reason
+            "Emscripten needs Python ${UNRAVEL_WEB_PYTHON_MIN} or newer, and ${python} is ${python_version}"
+            PARENT_SCOPE)
         return()
     endif()
     if(CMAKE_GENERATOR STREQUAL "Ninja")
@@ -168,8 +180,10 @@ if(NOT UNRAVEL_WEB_PLAYER STREQUAL "OFF")
             USES_TERMINAL_CONFIGURE TRUE
             USES_TERMINAL_BUILD TRUE
         )
-        # After the editor, so the two compiles do not compete for memory.
-        add_dependencies(web_player_build editor)
+        if(UNRAVEL_PLAYERS_AFTER_EDITOR)
+            # After the editor, so the two compiles do not compete for memory.
+            add_dependencies(web_player_build editor)
+        endif()
         # The sub-build globs its sources when it configures, and an external project configures once: it
         # configures again after every configure of this tree, so the files added since reach it.
         set(web_configure_stamp "${PROJECT_BINARY_DIR}/web_player_host_configure.stamp")

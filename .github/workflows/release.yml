@@ -13,7 +13,12 @@
 #
 # Windows builds with clang in GNU-driver mode (preset windows-x64-clang-msvc-gnu). Linux builds inside
 # an Ubuntu container, so the binaries need no newer glibc than that release has: the 20.04 package runs
-# on 20.04 and later. Both build the Android player template that the editor packages carry.
+# on 20.04 and later.
+#
+# Every package carries the Android and browser player templates, which are the same on every platform. Each
+# platform builds its own by default. A share checkbox builds that player once, on Windows, and every package
+# takes that copy instead, which saves the other builds of it. Ubuntu 20.04's Python is older than the browser
+# player's Emscripten needs, so its job builds that player with a prebuilt standalone Python.
 name: release
 
 on:
@@ -43,6 +48,14 @@ on:
         description: 'Build the Ubuntu 26.04 package.'
         type: boolean
         default: true
+      share_android_player:
+        description: 'Build the Android player once and put that copy in every package. Unchecked, each platform builds its own.'
+        type: boolean
+        default: false
+      share_web_player:
+        description: 'Build the browser player once and put that copy in every package. Unchecked, each platform builds its own.'
+        type: boolean
+        default: false
       replace_previous_builds:
         description: 'Remove the older builds of the same platforms from the release after the upload.'
         type: boolean
@@ -63,6 +76,14 @@ env:
   LLVM_VERSION: '21.1.8'
   # Windows .NET; on Linux install_dotnet.sh picks the SDK.
   DOTNET_VERSION: '10.0.x'
+  # The .NET SDK the browser player builds with (game/web/UnravelWebPlayer.csproj): its wasm-tools workload
+  # brings the Emscripten the player compiles with.
+  WEB_DOTNET_SDK_VERSION: '11.0.100-rc.3.26522.148'
+  # The Python that Emscripten runs on where the release's own is older than it needs (3.10; Ubuntu 20.04 has
+  # 3.8): a prebuilt CPython of python-build-standalone, checked against the SHA-256 its release publishes.
+  PYTHON_STANDALONE_RELEASE: '20261026'
+  PYTHON_STANDALONE_VERSION: '3.12.16'
+  PYTHON_STANDALONE_SHA256: '6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de'
   # Unity builds at -O2 take about 3 GB per compiler; more parallel jobs run the runners out of memory.
   BUILD_JOBS: '3'
   BUILD_DIR: build/Release
@@ -77,6 +98,8 @@ jobs:
       package_version: ${{ steps.version.outputs.package_version }}
       linux_matrix: ${{ steps.targets.outputs.linux_matrix }}
       has_linux: ${{ steps.targets.outputs.has_linux }}
+      players_matrix: ${{ steps.targets.outputs.players_matrix }}
+      has_players: ${{ steps.targets.outputs.has_players }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -120,19 +143,28 @@ jobs:
       # and its name with _ for - and . (ubuntu-20.04 -> build_ubuntu_20_04). packages: the GCC whose C++
       # library clang compiles against (clang takes the newest GCC installed), no newer than the libstdc++
       # the release ships, and the release's pipewire. 26.04 ships the libstdc++ of a GCC 16 snapshot, so
-      # it builds against its default GCC 15.
-      - name: Choose the Linux targets
+      # it builds against its default GCC 15. standalone_python: the release's Python is older than the 3.10 the
+      # browser player's Emscripten needs, so its job installs a prebuilt one.
+      #
+      # Each target's android_player and web_player say whether its job builds that player (build) or takes the
+      # copy the players job builds once (shared), as the share checkboxes ask.
+      - name: Choose the Linux targets and the shared players
         id: targets
         env:
           INPUTS: ${{ toJSON(inputs) }}
         run: |
           set -euo pipefail
-          targets="$(jq -c --argjson inputs "$INPUTS" '[.[] | select($inputs["build_" + (.name | gsub("[-.]"; "_"))] | tostring == "true")]' <<'EOF'
+          share_android="$(jq -r '.share_android_player | tostring' <<< "$INPUTS")"
+          share_web="$(jq -r '.share_web_player | tostring' <<< "$INPUTS")"
+          targets="$(jq -c --argjson inputs "$INPUTS" --arg share_android "$share_android" --arg share_web "$share_web" '
+            [.[] | select($inputs["build_" + (.name | gsub("[-.]"; "_"))] | tostring == "true")
+              | .android_player = (if $share_android == "true" then "shared" else "build" end)
+              | .web_player = (if $share_web == "true" then "shared" else "build" end)]' <<'EOF'
           [
-            {"name": "ubuntu-20.04", "image": "ubuntu:20.04", "clang": "18", "packages": "g++-10 libpipewire-0.2-dev"},
-            {"name": "ubuntu-22.04", "image": "ubuntu:22.04", "clang": "18", "packages": "g++-12 libpipewire-0.3-dev"},
-            {"name": "ubuntu-24.04", "image": "ubuntu:24.04", "clang": "21", "packages": "g++-14 libpipewire-0.3-dev"},
-            {"name": "ubuntu-26.04", "image": "ubuntu:26.04", "clang": "21", "packages": "g++-15 libpipewire-0.3-dev"}
+            {"name": "ubuntu-20.04", "image": "ubuntu:20.04", "clang": "18", "packages": "g++-10 libpipewire-0.2-dev", "standalone_python": true},
+            {"name": "ubuntu-22.04", "image": "ubuntu:22.04", "clang": "18", "packages": "g++-12 libpipewire-0.3-dev", "standalone_python": false},
+            {"name": "ubuntu-24.04", "image": "ubuntu:24.04", "clang": "21", "packages": "g++-14 libpipewire-0.3-dev", "standalone_python": false},
+            {"name": "ubuntu-26.04", "image": "ubuntu:26.04", "clang": "21", "packages": "g++-15 libpipewire-0.3-dev", "standalone_python": false}
           ]
           EOF
           )"
@@ -140,16 +172,79 @@ jobs:
             echo "::error::No platform is ticked."
             exit 1
           fi
-          # A matrix with no targets is an error, so the Linux job is skipped instead.
+          players="$(jq -c -n --arg android "$share_android" --arg web "$share_web" '[
+            (if $android == "true" then {"name": "Android player", "target": "android_player", "folder": "android-arm64", "artifact": "android-player"} else empty end),
+            (if $web == "true" then {"name": "Browser player", "target": "web_player", "folder": "web", "artifact": "web-player"} else empty end)
+          ]')"
+          # A matrix with no entries is an error, so a job without one is skipped instead.
           {
             echo "linux_matrix={\"include\":${targets}}"
             echo "has_linux=$([ "$targets" != "[]" ] && echo true || echo false)"
+            echo "players_matrix={\"include\":${players}}"
+            echo "has_players=$([ "$players" != "[]" ] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
 
+  # The players built once for every package (cmake/android_player.cmake, cmake/web_player.cmake). Only the
+  # player's target and what it needs are built: UNRAVEL_PLAYERS_AFTER_EDITOR=OFF builds it without the editor.
+  players:
+    name: ${{ matrix.name }}
+    needs: resolve
+    if: needs.resolve.outputs.has_players == 'true'
+    runs-on: windows-2025-vs2026
+    strategy:
+      matrix: ${{ fromJSON(needs.resolve.outputs.players_matrix) }}
+    defaults:
+      run:
+        shell: cmd
+    steps:
+      - name: Allow long paths in git
+        run: git config --system core.longpaths true
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          fetch-depth: 0 # the template's engine version comes from git describe
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: ./.github/actions/windows-build-tools
+        with:
+          llvm-version: ${{ env.LLVM_VERSION }}
+          cmake-version: ${{ env.CMAKE_VERSION }}
+          ninja-version: ${{ env.NINJA_VERSION }}
+          android-ndk: ${{ matrix.target == 'android_player' }}
+      - uses: ./.github/actions/web-player-dotnet
+        if: matrix.target == 'web_player'
+        with:
+          sdk-version: ${{ env.WEB_DOTNET_SDK_VERSION }}
+      # ON fails the configure rather than skip the template.
+      - name: Configure
+        env:
+          ANDROID_PLAYER: ${{ matrix.target == 'android_player' && 'ON' || 'OFF' }}
+          WEB_PLAYER: ${{ matrix.target == 'web_player' && 'ON' || 'OFF' }}
+        run: |
+          call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
+          cmake --preset windows-x64-clang-msvc-gnu -B %BUILD_DIR% -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_PLAYERS_AFTER_EDITOR=OFF -DUNRAVEL_ANDROID_PLAYER=%ANDROID_PLAYER% -DUNRAVEL_WEB_PLAYER=%WEB_PLAYER% "-DUNRAVEL_WEB_DOTNET=%WEB_DOTNET%" || exit /b 1
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
+          cmake --build %BUILD_DIR% --target %TARGET% || exit /b 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ env.BUILD_DIR }}/bin/players/${{ matrix.folder }}
+          if-no-files-found: error
+          include-hidden-files: true
+
+  # Runs when the players job is skipped (nothing shared) as when it succeeds: it waits for it only to take the
+  # shared players.
   windows:
     name: windows
-    needs: resolve
-    if: inputs.build_windows
+    needs: [resolve, players]
+    if: ${{ !cancelled() && inputs.build_windows && !contains(needs.*.result, 'failure') }}
     runs-on: windows-2025-vs2026
     defaults:
       run:
@@ -166,54 +261,41 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-      - name: Install LLVM, CMake, Ninja and the Android NDK
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tools = Join-Path $env:RUNNER_TEMP 'tools'
-          New-Item -ItemType Directory -Force -Path $tools | Out-Null
-          function Save-Download([string] $url, [string] $file) {
-              curl.exe --fail --silent --show-error --location --retry 3 --output $file $url
-              if ($LASTEXITCODE -ne 0) { throw "Downloading $url failed." }
-          }
-          # LLVM in a folder of its own: the runner's preinstalled LLVM is another version.
-          $llvm = Join-Path $tools 'llvm'
-          Save-Download "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe" "$tools\llvm-setup.exe"
-          Start-Process -FilePath "$tools\llvm-setup.exe" -ArgumentList '/S', "/D=$llvm" -Wait
-          $clang_version = & "$llvm\bin\clang++.exe" --version | Select-Object -First 1
-          if ($clang_version -notmatch [regex]::Escape($env:LLVM_VERSION)) { throw "Expected clang $env:LLVM_VERSION, found: $clang_version" }
-          Save-Download "https://github.com/Kitware/CMake/releases/download/v$env:CMAKE_VERSION/cmake-$env:CMAKE_VERSION-windows-x86_64.zip" "$tools\cmake.zip"
-          Expand-Archive -Path "$tools\cmake.zip" -DestinationPath $tools
-          $cmake = Join-Path $tools "cmake-$env:CMAKE_VERSION-windows-x86_64\bin"
-          $ninja = Join-Path $tools 'ninja'
-          Save-Download "https://github.com/ninja-build/ninja/releases/download/v$env:NINJA_VERSION/ninja-win.zip" "$tools\ninja.zip"
-          Expand-Archive -Path "$tools\ninja.zip" -DestinationPath $ninja
-          # The NDK of the Android player template, into the runner's Android SDK.
-          if (-not $env:ANDROID_HOME) { throw 'ANDROID_HOME is not set on this runner.' }
-          $ndk = (Select-String -Path cmake/android_player.cmake -Pattern 'set\(UNRAVEL_ANDROID_NDK_VERSION "([^"]+)"\)').Matches[0].Groups[1].Value
-          & (Join-Path $env:ANDROID_HOME 'cmdline-tools\latest\bin\sdkmanager.bat') --install "ndk;$ndk"
-          if ($LASTEXITCODE -ne 0) { throw "Installing NDK $ndk failed." }
-          # Every build step starts from this: the MSVC headers and libraries (vcvars64) for clang, with
-          # the pinned tools ahead of the CMake and Ninja that vcvars puts on the PATH.
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vs) { throw 'No Visual Studio with the x64 C++ tools on this runner.' }
-          @(
-              "@call `"$vs\VC\Auxiliary\Build\vcvars64.bat`" > nul || exit /b 1"
-              "@set `"PATH=$llvm\bin;$cmake;$ninja;%PATH%`""
-          ) | Set-Content -Encoding ascii -Path (Join-Path $env:RUNNER_TEMP 'build_env.cmd')
-      # The presets use single-configuration Ninja without a build type, so Release is set here.
-      # UNRAVEL_ANDROID_PLAYER=ON fails the configure rather than package an editor that cannot deploy
-      # to Android.
+      - uses: ./.github/actions/windows-build-tools
+        with:
+          llvm-version: ${{ env.LLVM_VERSION }}
+          cmake-version: ${{ env.CMAKE_VERSION }}
+          ninja-version: ${{ env.NINJA_VERSION }}
+          android-ndk: ${{ !inputs.share_android_player }}
+      - uses: ./.github/actions/web-player-dotnet
+        if: ${{ !inputs.share_web_player }}
+        with:
+          sdk-version: ${{ env.WEB_DOTNET_SDK_VERSION }}
+      # The presets use single-configuration Ninja without a build type, so Release is set here. A player built
+      # here is ON, which fails the configure rather than package an editor that cannot deploy to that platform;
+      # a shared one is OFF and comes from the players job.
       - name: Configure
+        env:
+          ANDROID_PLAYER: ${{ inputs.share_android_player && 'OFF' || 'ON' }}
+          WEB_PLAYER: ${{ inputs.share_web_player && 'OFF' || 'ON' }}
         run: |
           call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
           clang++ --version || exit /b 1
-          cmake --preset windows-x64-clang-msvc-gnu -B %BUILD_DIR% -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER=ON || exit /b 1
+          cmake --preset windows-x64-clang-msvc-gnu -B %BUILD_DIR% -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER=%ANDROID_PLAYER% -DUNRAVEL_WEB_PLAYER=%WEB_PLAYER% "-DUNRAVEL_WEB_DOTNET=%WEB_DOTNET%" || exit /b 1
       - name: Build
         run: |
           call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
           cmake --build %BUILD_DIR% --parallel %BUILD_JOBS% || exit /b 1
+      - uses: actions/download-artifact@v8
+        if: inputs.share_android_player
+        with:
+          name: android-player
+          path: ${{ env.BUILD_DIR }}/bin/players/android-arm64
+      - uses: actions/download-artifact@v8
+        if: inputs.share_web_player
+        with:
+          name: web-player
+          path: ${{ env.BUILD_DIR }}/bin/players/web
       - name: Package
         run: |
           call "%RUNNER_TEMP%\build_env.cmd" || exit /b 1
@@ -225,10 +307,11 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  # Runs when the players job is skipped (nothing shared) as when it succeeds, like the Windows job.
   linux:
     name: ${{ matrix.name }}
-    needs: resolve
-    if: needs.resolve.outputs.has_linux == 'true'
+    needs: [resolve, players]
+    if: ${{ !cancelled() && needs.resolve.outputs.has_linux == 'true' && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -236,13 +319,15 @@ jobs:
     container:
       image: ${{ matrix.image }}
       # Preinstalled host tools this job never uses, mounted so the first step can delete them: the
-      # sources, the build with its Android sub-build, the NDK and .NET need the disk space.
+      # sources, the build with its player sub-builds, the NDK and .NET need the disk space.
       volumes:
         - /usr/local/lib/android:/host/android
         - /usr/share/dotnet:/host/dotnet
     env:
       DEBIAN_FRONTEND: noninteractive
       CLANG_VERSION: ${{ matrix.clang }}
+      ANDROID_PLAYER: ${{ matrix.android_player == 'build' && 'ON' || 'OFF' }}
+      WEB_PLAYER: ${{ matrix.web_player == 'build' && 'ON' || 'OFF' }}
     defaults:
       run:
         shell: bash
@@ -293,24 +378,61 @@ jobs:
         run: git config --global --add safe.directory '*'
       # The repository's install scripts install into a user's home and refuse root, so they run as a
       # user made for them; the build takes the locations they set up from that user's profile.
-      - name: Install .NET and the Android SDK
+      - name: Install .NET
         run: |
           useradd --create-home --shell /bin/bash builder
           printf 'builder ALL=(ALL) NOPASSWD: ALL\nDefaults env_keep += "DEBIAN_FRONTEND"\n' > /etc/sudoers.d/builder
           chmod 0440 /etc/sudoers.d/builder
           sudo -u builder -H bash ./install_dotnet.sh
-          sudo -u builder -H bash ./install_android_studio.sh
-          sudo -u builder -H bash -lc 'printf "DOTNET_ROOT=%s\nANDROID_HOME=%s\nJAVA_HOME=%s\n" "$DOTNET_ROOT" "$ANDROID_HOME" "$JAVA_HOME"' >> "$GITHUB_ENV"
+          sudo -u builder -H bash -lc 'printf "DOTNET_ROOT=%s\n" "$DOTNET_ROOT"' >> "$GITHUB_ENV"
           sudo -u builder -H bash -lc 'echo "$DOTNET_ROOT"' >> "$GITHUB_PATH"
-      # The presets use single-configuration Ninja without a build type, so Release is set here.
-      # UNRAVEL_ANDROID_PLAYER=ON fails the configure rather than package an editor that cannot deploy
-      # to Android. clang -v names the GCC installation it compiles against.
+      - name: Install the Android SDK
+        if: matrix.android_player == 'build'
+        run: |
+          sudo -u builder -H bash ./install_android_studio.sh
+          sudo -u builder -H bash -lc 'printf "ANDROID_HOME=%s\nJAVA_HOME=%s\n" "$ANDROID_HOME" "$JAVA_HOME"' >> "$GITHUB_ENV"
+      - uses: ./.github/actions/web-player-dotnet
+        if: matrix.web_player == 'build'
+        with:
+          sdk-version: ${{ env.WEB_DOTNET_SDK_VERSION }}
+      # Into a folder of its own; the configure hands it to Emscripten (UNRAVEL_WEB_PYTHON). Emscripten downloads
+      # its WebGPU port with Python, so SSL_CERT_FILE points that Python at Ubuntu's certificate bundle, wherever
+      # its own OpenSSL looks by default.
+      - name: Install Python for Emscripten
+        if: matrix.standalone_python && matrix.web_player == 'build'
+        run: |
+          set -euo pipefail
+          archive="cpython-${PYTHON_STANDALONE_VERSION}+${PYTHON_STANDALONE_RELEASE}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+          curl -fsSL --retry 3 -o "/tmp/${archive}" "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE_RELEASE}/${archive}"
+          echo "${PYTHON_STANDALONE_SHA256}  /tmp/${archive}" | sha256sum -c -
+          mkdir -p /opt/python-standalone
+          tar -xzf "/tmp/${archive}" -C /opt/python-standalone --strip-components=1
+          rm "/tmp/${archive}"
+          /opt/python-standalone/bin/python3 --version
+          {
+            echo "WEB_PYTHON=/opt/python-standalone/bin/python3"
+            echo "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+          } >> "$GITHUB_ENV"
+      # The presets use single-configuration Ninja without a build type, so Release is set here. A player built
+      # here is ON, which fails the configure rather than package an editor that cannot deploy to that platform;
+      # a shared one is OFF and comes from the players job. clang -v names the GCC installation it compiles
+      # against.
       - name: Configure
         run: |
           "clang++-${CLANG_VERSION}" -v
-          cmake --preset "linux-clang-${CLANG_VERSION}" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER=ON
+          cmake --preset "linux-clang-${CLANG_VERSION}" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DUNRAVEL_ANDROID_PLAYER="$ANDROID_PLAYER" -DUNRAVEL_WEB_PLAYER="$WEB_PLAYER" -DUNRAVEL_WEB_DOTNET="${WEB_DOTNET:-}" ${WEB_PYTHON:+"-DUNRAVEL_WEB_PYTHON=$WEB_PYTHON"}
       - name: Build
         run: cmake --build "$BUILD_DIR" --parallel "$BUILD_JOBS"
+      - uses: actions/download-artifact@v8
+        if: matrix.android_player == 'shared'
+        with:
+          name: android-player
+          path: ${{ env.BUILD_DIR }}/bin/players/android-arm64
+      - uses: actions/download-artifact@v8
+        if: matrix.web_player == 'shared'
+        with:
+          name: web-player
+          path: ${{ env.BUILD_DIR }}/bin/players/web
       - name: Package
         run: cmake --build "$BUILD_DIR" --target package
       - uses: actions/upload-artifact@v7
@@ -322,7 +444,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: [resolve, windows, linux]
+    needs: [resolve, players, windows, linux]
     # A platform left unticked is skipped and does not stop the upload; a failed build does.
     if: ${{ !cancelled() && inputs.publish && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-24.04
