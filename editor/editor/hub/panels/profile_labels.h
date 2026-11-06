@@ -11,14 +11,35 @@
 namespace unravel::profile_labels
 {
 
+/// Every platform a profile can build for, in the order the editor offers them.
+constexpr target_platform PLATFORMS[] = {target_platform::desktop, target_platform::android, target_platform::web};
+
 inline auto get_platform_icon(target_platform platform) -> const char*
 {
-    return platform == target_platform::android ? ICON_MDI_ANDROID : ICON_MDI_MONITOR;
+    switch(platform)
+    {
+        case target_platform::android:
+            return ICON_MDI_ANDROID;
+        case target_platform::web:
+            return ICON_MDI_WEB;
+        case target_platform::desktop:
+        default:
+            return ICON_MDI_MONITOR;
+    }
 }
 
 inline auto get_platform_name(target_platform platform) -> const char*
 {
-    return platform == target_platform::android ? "Android" : "Desktop";
+    switch(platform)
+    {
+        case target_platform::android:
+            return "Android";
+        case target_platform::web:
+            return "Web";
+        case target_platform::desktop:
+        default:
+            return "Desktop";
+    }
 }
 
 /// "<platform icon> <name>".

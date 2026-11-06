@@ -186,6 +186,22 @@ auto make_frame_pacing_text(bool is_vsync_on, int max_fps) -> frame_pacing_text
     return {cap_prefix + make_max_fps_name(max_fps), cap_prefix + make_widest_max_fps_name()};
 }
 
+/// The renderer a profile's builds start with: Android's player renders with Vulkan, the browser player with
+/// WebGPU, and a desktop build with the one its settings prefer on this platform.
+auto get_profile_renderer(const settings_profile& profile, const settings& profile_settings) -> bgfx::RendererType::Enum
+{
+    switch(profile.platform)
+    {
+        case target_platform::android:
+            return bgfx::RendererType::Vulkan;
+        case target_platform::web:
+            return bgfx::RendererType::WebGPU;
+        case target_platform::desktop:
+        default:
+            return preferred_renderer_to_gfx_type(profile_settings.graphics.renderer.get_for_current_platform());
+    }
+}
+
 void draw_frame_pacing_popup(renderer& rend, simulation& sim, bool is_vsync_on, int max_fps)
 {
     ImGui::SeparatorText("Presentation");
@@ -851,11 +867,7 @@ void header_panel::draw_preview_profile(rtti::context& ctx)
         if(profile != nullptr)
         {
             // The renderer starts with the editor, so a profile's own one shows only in its builds.
-            const auto settings_of = pm.get_profile_settings(profile->name);
-            const auto renderer = profile->platform == target_platform::android
-                                      ? preferred_renderer::vulkan
-                                      : settings_of.graphics.renderer.get_for_current_platform();
-            const auto wanted = preferred_renderer_to_gfx_type(renderer);
+            const auto wanted = get_profile_renderer(*profile, pm.get_profile_settings(profile->name));
             if(wanted != bgfx::RendererType::Count && wanted != bgfx::getRendererType())
             {
                 ImGui::Separator();

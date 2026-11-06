@@ -482,6 +482,15 @@ auto project_profiles::set_desktop(const std::string& name, const desktop_deploy
                   });
 }
 
+auto project_profiles::set_web(const std::string& name, const web_deploy_settings& web) -> result
+{
+    return change(name,
+                  [&web](settings_profile& profile)
+                  {
+                      profile.web = web;
+                  });
+}
+
 auto project_profiles::check_editable(const settings_profile& profile, const profile_overrides& overrides, const char* file) const
     -> result
 {

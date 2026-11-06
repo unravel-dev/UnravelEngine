@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <!--
+    The browser player: the .NET browser runtime with the engine linked into its wasm module.
+
+    The page boots .NET first (dotnet.js) and runs Main, which hands the engine the script bridge and starts it
+    (os_main_from_host, in libospp); the engine runs its frames from the browser's animation frames. The engine comes
+    from an Emscripten build of the player made with this SDK's own Emscripten; cmake/web_player.cmake drives it all.
+
+    UnravelWebBuild     the engine's Emscripten build folder (its lib/ and the game's objects)
+    UnravelBridge       Clrpp.Managed.dll, the script bridge the engine was built with
+    UnravelCalliSignatures  the anchors tools/CalliSignatures wrote for the script assemblies
+  -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>UnravelWebPlayer</AssemblyName>
+    <RootNamespace>Unravel.Web</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <WasmBuildNative>true</WasmBuildNative>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <!-- Game scripts are loaded from bytes at run time and may call any framework API: nothing is trimmed. -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <!-- bgfx's WebGPU backend needs Dawn's emdawnwebgpu port, fetched into a writable Emscripten cache; the page keeps
+         the player's own files in IndexedDB (IDBFS). -->
+    <EmccExtraLDFlags>--use-port=emdawnwebgpu -sMAX_WEBGL_VERSION=2 -lidbfs.js</EmccExtraLDFlags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The build tools beside the player are projects of their own. -->
+    <Compile Remove="tools/**" />
+    <Content Remove="tools/**" />
+    <None Remove="tools/**" />
+    <Reference Include="Clrpp.Managed">
+      <HintPath>$(UnravelBridge)</HintPath>
+    </Reference>
+    <Compile Include="$(UnravelCalliSignatures)" />
+    <NativeFileReference Include="$(UnravelWebBuild)/lib/*.a" />
+    <NativeFileReference Include="$(UnravelWebBuild)/game/game/CMakeFiles/game.dir/**/*.o" />
+    <!-- calli through unmanaged pointers needs Mono's IL wrapper builder; the SDK only links it for marshalling
+         DllImports. -->
+    <_MonoComponent Include="marshal-ilgen" />
+  </ItemGroup>
+</Project>

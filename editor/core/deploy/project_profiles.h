@@ -73,6 +73,7 @@ public:
     auto set_android(const std::string& name, const android_deploy_settings& android) -> result;
     /// Replaces a desktop profile's icon and Steam settings.
     auto set_desktop(const std::string& name, const desktop_deploy_settings& desktop) -> result;
+    auto set_web(const std::string& name, const web_deploy_settings& web) -> result;
 
     /**
      * @brief Overrides, in a profile, the project settings an edit changed; an edit of the settings every

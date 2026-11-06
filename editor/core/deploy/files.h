@@ -61,7 +61,8 @@ auto is_shipped_compiled_file(const fs::path& file, bool with_debug_symbols) -> 
 using compiled_file_filter = std::function<bool(const fs::path& file, const fs::path& relative)>;
 
 /// Folders of cooked variants laid over a protocol's compiled cache, each holding files at the paths their
-/// compiled files have. A variant in an earlier folder wins over one in a later folder.
+/// compiled files have. A variant in an earlier folder wins over one in a later folder. A cooked file without a
+/// compiled file, such as a shader for a renderer the editor does not compile for itself, ships as well.
 using cooked_folders = std::vector<fs::path>;
 
 /// The file that ships for the compiled file at `relative`: the variant in the first cooked folder that has
@@ -70,8 +71,8 @@ auto get_shipped_variant(const cooked_folders& cooked, const fs::path& relative,
 
 /**
  * @brief The files a protocol's pack holds, read straight from the compiled cache: the compiled files
- * `is_shipped` keeps, with their cooked variants in their place, and the asset index. In name order, so
- * the same build packs to the same bytes.
+ * `is_shipped` keeps, with their cooked variants in their place, the cooked files it keeps that have no
+ * compiled file, and the asset index. In name order, so the same build packs to the same bytes.
  */
 auto collect_pack_inputs(const fs::path& compiled,
                          const cooked_folders& cooked,

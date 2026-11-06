@@ -11,6 +11,7 @@ namespace unravel::deployment
 namespace
 {
 constexpr const char* PROFILE_CACHES_FOLDER = "profiles";
+constexpr const char* SHADERS_FOLDER = "shaders";
 
 auto get_profile_caches_folder(const fs::path& project_root) -> fs::path
 {
@@ -53,6 +54,11 @@ auto get_profile_cache_folder(const fs::path& project_root, const std::string& p
 auto get_profile_variants_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path
 {
     return get_profile_cache_folder(project_root, profile) / protocol;
+}
+
+auto get_profile_shaders_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path
+{
+    return get_profile_cache_folder(project_root, profile) / SHADERS_FOLDER / protocol;
 }
 
 auto get_profile_symbols_folder(const fs::path& project_root, const std::string& profile) -> fs::path

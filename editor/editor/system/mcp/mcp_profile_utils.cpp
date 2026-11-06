@@ -38,6 +38,8 @@ auto get_platform_name(target_platform platform) -> const char*
     {
         case target_platform::android:
             return "android";
+        case target_platform::web:
+            return "web";
         case target_platform::desktop:
         default:
             return "desktop";
@@ -46,7 +48,7 @@ auto get_platform_name(target_platform platform) -> const char*
 
 auto parse_platform_name(hpp::string_view name, target_platform& platform) -> bool
 {
-    for(const auto candidate : {target_platform::desktop, target_platform::android})
+    for(const auto candidate : {target_platform::desktop, target_platform::android, target_platform::web})
     {
         if(name == get_platform_name(candidate))
         {

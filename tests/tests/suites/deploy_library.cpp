@@ -17,7 +17,11 @@
  *   - the content tree: counts, folders first, rows of open folders only, search and filter rows,
  *     left out but used assets counted;
  *   - files: classification, compiled paths, a target's shader variants, pack inputs with cooked
- *     variants from several folders (the first wins), stale binaries, older runtime versions;
+ *     variants from several folders (the first wins) and cooked files without a compiled file, stale
+ *     binaries, older runtime versions;
+ *   - cooked shaders: the renderers a web build ships and cooks, the plan of what a deploy cooks;
+ *   - web: the browser player template's stamp checks, the player copied beside the deployed data, and
+ *     the list of the data's files the page loads;
  *   - profile folders under the deploy folder; deploy locations relative to the project, and the
  *     project folders the editor manages;
  *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
@@ -55,14 +59,18 @@
 #include <deploy/folders.h>
 #include <deploy/icon_image.h>
 #include <deploy/keys.h>
+#include <deploy/profile_cache.h>
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
 #include <deploy/run_arguments.h>
+#include <deploy/shader_cook.h>
 #include <deploy/steam.h>
+#include <deploy/web.h>
 #include <deploy/windows_resources.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
+#include <graphics/graphics.h>
 #include <process/process.h>
 #include <subprocess/subprocess.hpp>
 
@@ -517,6 +525,48 @@ void test_shader_variants(const fs::path& root)
     check(!deployment::is_other_shader_variant(root / "compiled/shaders/fs_a.eshader.asset.dxbc", {}), "no target ships every variant");
 }
 
+void test_cooked_shader_variants()
+{
+    std::printf("test_cooked_shader_variants\n");
+    deploy_settings params;
+    params.deploy_target = unravel::deploy_platform::web;
+    const std::set<std::string> webgpu{".wgsl"};
+    check(deployment::get_shader_variants(params) == webgpu, "a web build ships WGSL shaders only");
+    check(deployment::get_cooked_shader_variants(webgpu) == webgpu, "the editor compiles no WGSL for itself, so a deploy cooks it");
+    check(deployment::get_cooked_shader_variants(gfx::get_renderer_platform_supported_filename_extensions()).empty(),
+          "the renderers the editor compiles for are never cooked");
+    params.deploy_target = unravel::deploy_platform::desktop;
+    check(deployment::get_shader_variants(params).empty(), "a desktop build ships every variant the editor compiled");
+}
+
+void test_shader_cook_plan(const fs::path& root)
+{
+    std::printf("test_shader_cook_plan\n");
+    asset_database::database_t engine;
+    add_asset(engine, make_uid("50000000-0000-4000-8000-000000000001"), "engine:/data/shaders/fs_a.eshader");
+    add_asset(engine, make_uid("50000000-0000-4000-8000-000000000002"), "engine:/data/textures/noise.png");
+    asset_database::database_t app;
+    add_asset(app, make_uid("50000000-0000-4000-8000-000000000003"), "app:/data/shaders/fs_b.eshader");
+    add_asset(app, make_uid("50000000-0000-4000-8000-000000000004"), "app:/data/shaders/fs_c.eshader");
+    const std::unordered_set<std::string> left_out{fs::make_path_key("app:/data/shaders/fs_c.eshader")};
+    deploy_settings params;
+    params.profile = "Web";
+    params.deploy_target = unravel::deploy_platform::web;
+    const auto plan = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    check(plan.has_work() && plan.renderers == std::set<std::string>{".wgsl"} && plan.protocols.size() == 2,
+          "a web deploy cooks WGSL for the engine and the project");
+    check(plan.protocols.size() == 2 && plan.protocols[0].variants == deployment::get_profile_shaders_folder(root, "Web", "engine") &&
+              plan.protocols[0].shipped == std::vector<std::string>{"engine:/data/shaders/fs_a.eshader"} &&
+              plan.protocols[0].left_out.empty(),
+          "the engine's shaders ship whole into the profile's shader cache");
+    check(plan.protocols.size() == 2 && plan.protocols[1].shipped == std::vector<std::string>{"app:/data/shaders/fs_b.eshader"} &&
+              plan.protocols[1].left_out == std::vector<std::string>{"app:/data/shaders/fs_c.eshader"},
+          "the project's shaders the content selection leaves out are not cooked");
+    params.deploy_target = unravel::deploy_platform::desktop;
+    const auto desktop = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
+    check(!desktop.has_work() && desktop.protocols.empty(), "a desktop deploy cooks no shader");
+}
+
 //-----------------------------------------------------------------------------
 // Android
 //-----------------------------------------------------------------------------
@@ -790,6 +840,54 @@ void test_player_version(const fs::path& root)
     check(deployment::get_player_version_problem(player, "v1").empty(), "a player of the editor's version ships");
     check(deployment::get_player_version_problem(player, "v2").find("v1") != std::string::npos,
           "a player of another version is refused, naming its version");
+}
+
+//-----------------------------------------------------------------------------
+// Web
+//-----------------------------------------------------------------------------
+
+void write_web_template(const fs::path& root, const std::string& engine_version)
+{
+    write_text(root / "template.stamp", "engine_version=" + engine_version + "\n");
+    write_text(root / "wwwroot/index.html", "page");
+    write_text(root / "wwwroot/main.js", "start");
+    write_text(root / "wwwroot/_framework/dotnet.js", "loader");
+}
+
+void test_web_template(const fs::path& root)
+{
+    std::printf("test_web_template\n");
+    check(!deployment::find_web_template(root / "none", "v1").is_found(), "a missing browser player is reported");
+    write_web_template(root / "template", "v1");
+    const auto found = deployment::find_web_template(root / "template", "v1");
+    check(found.is_found() && found.found.engine_version == "v1" && found.found.get_site_dir() == root / "template/wwwroot",
+          "a complete player of this version is found with its site");
+    const auto other = deployment::find_web_template(root / "template", "v2");
+    check(!other.is_found() && other.error.find("v1") != std::string::npos, "a player of another version is refused, naming its version");
+    fs::error_code ec;
+    fs::remove(root / "template/wwwroot/_framework/dotnet.js", ec);
+    check(!deployment::find_web_template(root / "template", "v1").is_found(), "a player without its runtime is refused");
+}
+
+void test_web_site(const fs::path& root)
+{
+    std::printf("test_web_site\n");
+    write_web_template(root / "template", "v1");
+    deployment::web_template player;
+    player.root = root / "template";
+    const auto site = root / "site";
+    write_text(site / "data/engine/content.pak", "engine pack");
+    write_text(site / "data/app/settings/settings.cfg", "settings");
+    write_text(site / "_framework/stale.wasm", "older runtime");
+    deployment::copy_web_player(player, site);
+    check(read_text(site / "index.html") == "page" && read_text(site / "_framework/dotnet.js") == "loader",
+          "the page and the runtime are copied beside the data");
+    check(!is_present(site / "_framework/stale.wasm"), "runtime files an older player had are removed");
+    check(read_text(site / "data/engine/content.pak") == "engine pack", "the deployed data stays");
+    deployment::write_web_data_manifest(site);
+    check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME) ==
+              "[\n  \"data/app/settings/settings.cfg\",\n  \"data/engine/content.pak\"\n]\n",
+          "the manifest lists the data's files by name, as the page fetches them");
 }
 
 void test_write_text(const fs::path& root)
@@ -1265,6 +1363,42 @@ void test_pack_inputs(const fs::path& root)
     check(inputs.size() == 3 && read_text(inputs[1].source) == "variant c", "a later folder's variant replaces a file the first has none for");
     check(deployment::get_shipped_variant({}, "c.png.asset", compiled / "c.png.asset") == compiled / "c.png.asset",
           "without cooked folders the compiled file ships");
+}
+
+void test_cooked_only_pack_inputs(const fs::path& root)
+{
+    std::printf("test_cooked_only_pack_inputs\n");
+    const auto compiled = root / "compiled";
+    const auto prefabs = root / "prefabs";
+    const auto shaders = root / "shaders";
+    const std::set<std::string> webgpu{".wgsl"};
+    write_text(compiled / "shaders/fs_a.eshader.asset.dxbc", "dxbc");
+    write_text(shaders / "shaders/fs_a.eshader.asset.wgsl", "wgsl a");
+    write_text(shaders / "shaders/fs_a.eshader.asset.wgsl.manifest", "manifest");
+    write_text(prefabs / "shaders/fs_b.eshader.asset.wgsl", "first");
+    write_text(shaders / "shaders/fs_b.eshader.asset.wgsl", "second");
+    write_text(shaders / "shaders/fs_c.eshader.asset.wgsl", "left out");
+    write_text(root / ex::get_asset_index_file_name(), "index");
+    const auto inputs = deployment::collect_pack_inputs(compiled,
+                                                        {prefabs, shaders},
+                                                        root / ex::get_asset_index_file_name(),
+                                                        [&webgpu](const fs::path& file, const fs::path& relative)
+                                                        {
+                                                            return deployment::is_shipped_compiled_file(file, false) &&
+                                                                   !deployment::is_other_shader_variant(file, webgpu) &&
+                                                                   relative.generic_string() != "shaders/fs_c.eshader.asset.wgsl";
+                                                        });
+    std::vector<std::string> names;
+    for(const auto& input : inputs)
+    {
+        names.push_back(input.name);
+    }
+    check(names == std::vector<std::string>{ex::get_asset_index_file_name(),
+                                            "compiled/shaders/fs_a.eshader.asset.wgsl",
+                                            "compiled/shaders/fs_b.eshader.asset.wgsl"},
+          "cooked files without a compiled file ship, as the filter keeps them, without their manifests");
+    check(inputs.size() == 3 && read_text(inputs[1].source) == "wgsl a" && read_text(inputs[2].source) == "first",
+          "each is read from its cooked folder, the first folder winning");
 }
 
 void test_stale_binaries(const fs::path& root)
@@ -1753,6 +1887,8 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_tree(walked);
         test_file_classification(temp / "files");
         test_shader_variants(temp / "variants");
+        test_cooked_shader_variants();
+        test_shader_cook_plan(temp / "shader_cook");
         test_profile_locations();
         test_deploy_locations(temp / "locations");
         test_application_ids();
@@ -1765,6 +1901,8 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_wireless_debugging_services();
         test_android_template(temp / "android");
         test_player_version(temp / "player");
+        test_web_template(temp / "web_template");
+        test_web_site(temp / "web_site");
         test_write_text(temp / "write_text");
         test_gradle_arguments();
         test_android_permissions();
@@ -1778,6 +1916,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_run_arguments();
         test_subprocess(temp / "subprocess");
         test_pack_inputs(temp / "inputs");
+        test_cooked_only_pack_inputs(temp / "cooked_only_inputs");
         test_stale_binaries(temp / "binaries");
         auto job = make_protocol_job(temp / "protocol");
         test_packed_protocol(job);

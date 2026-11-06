@@ -37,23 +37,23 @@ REFLECT(android_deploy_settings)
             entt::attribute{"pretty_name", "Automatic"},
         });
 
-    entt::meta_factory<android_texture_compression>{}
-        .type("android_texture_compression"_hs)
+    entt::meta_factory<deploy_texture_compression>{}
+        .type("deploy_texture_compression"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "android_texture_compression"},
+            entt::attribute{"name", "deploy_texture_compression"},
             entt::attribute{"pretty_name", "Texture Format"},
         })
-        .data<android_texture_compression::astc>("astc"_hs)
+        .data<deploy_texture_compression::astc>("astc"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "astc"},
             entt::attribute{"pretty_name", "ASTC"},
         })
-        .data<android_texture_compression::etc2>("etc2"_hs)
+        .data<deploy_texture_compression::etc2>("etc2"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "etc2"},
             entt::attribute{"pretty_name", "ETC2"},
         })
-        .data<android_texture_compression::bc>("bc"_hs)
+        .data<deploy_texture_compression::bc>("bc"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bc"},
             entt::attribute{"pretty_name", "BC (Desktop)"},
@@ -411,6 +411,47 @@ LOAD(desktop_deploy_settings)
 LOAD_INSTANTIATE(desktop_deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(desktop_deploy_settings, ser20::iarchive_binary_t);
 
+REFLECT(web_deploy_settings)
+{
+    entt::meta_factory<web_deploy_settings>{}
+        .type("web_deploy_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "web_deploy_settings"},
+            entt::attribute{"category", "EDITOR"},
+            entt::attribute{"pretty_name", "Web"},
+        })
+        .data<&web_deploy_settings::texture_compression>("texture_compression"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "texture_compression"},
+            entt::attribute{"pretty_name", "Texture Format"},
+            entt::attribute{"tooltip",
+                            "The formats the game's textures are compressed to in the browser.\n\n"
+                            "BC (Desktop): the formats the editor compiles for this computer, which the\n"
+                            "browsers of computers read. Most phones and tablets do not, and decode the\n"
+                            "textures when they load, into four to eight times the memory.\n"
+                            "ASTC: the better image for its size, which phones, tablets and Apple's\n"
+                            "computers read. Other computers decode the textures when they load, into\n"
+                            "four times the memory.\n"
+                            "ETC2: read by Android phones, at a lower quality.\n\n"
+                            "The deploy compresses the project's textures for this profile and keeps\n"
+                            "them in the project's cache/profiles folder; the engine's own stay BC."},
+        });
+}
+
+SAVE(web_deploy_settings)
+{
+    try_save(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
+}
+SAVE_INSTANTIATE(web_deploy_settings, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(web_deploy_settings, ser20::oarchive_binary_t);
+
+LOAD(web_deploy_settings)
+{
+    try_load(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
+}
+LOAD_INSTANTIATE(web_deploy_settings, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(web_deploy_settings, ser20::iarchive_binary_t);
+
 REFLECT(deploy_settings)
 {
     entt::meta_factory<deploy_settings>{}
@@ -437,7 +478,9 @@ REFLECT(deploy_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_dependencies"},
             entt::attribute{"pretty_name", "Deploy Dependencies"},
-            entt::attribute{"tooltip", "Copy the player executable and its libraries as well.\nUnchanged files are skipped."},
+            entt::attribute{"tooltip",
+                            "Copy the player executable and its libraries as well; for the web, the browser player.\n"
+                            "Unchanged files are skipped."},
         })
         .data<&deploy_settings::deploy_cooked_assets>("deploy_cooked_assets"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -81,6 +81,13 @@ job, parallel loop, physics step and frame on the main thread, as the browser bu
 offline (`eshader files`, `gi bake`, `gi constants`, `raytracing backends`) take hours that
 way; run the rest suite by suite.
 
+The browser player template web deploys copy (`<bin>/players/web`) is the `web_player`
+target (`cmake/web_player.cmake`): an Emscripten sub-build in `<build>/web` with the
+Emscripten of a .NET SDK that has the wasm-tools workload (`UNRAVEL_WEB_DOTNET`, default the
+build's dotnet), then the .NET browser relink. It skips the relink while its inputs are
+unchanged. Start the editor from a shell without that SDK's `DOTNET_ROOT`: the editor would
+look for its runtime there.
+
 | Suite name | Covers | Run when touching |
 |------------|--------|-------------------|
 | `ecs serialization / prefabs / cloning` | Save/load, prefab statements, cloning (`--bench` adds timings) | Serialization, meta, prefabs, components |

@@ -17,6 +17,8 @@ namespace unravel::deployment
 {
 namespace
 {
+/// The editor's folder of player templates.
+constexpr const char* PLAYERS_FOLDER = "binary:/players/";
 /// How long a problems_cache answer is kept while the settings stay the same.
 constexpr auto PROBLEMS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
 
@@ -169,6 +171,11 @@ auto get_player_file() -> fs::path
     return fs::resolve_protocol("binary:/" + std::string(PLAYER_NAME) + fs::executable_extension());
 }
 
+auto get_web_template() -> web_template_lookup
+{
+    return find_web_template(fs::resolve_protocol(std::string(PLAYERS_FOLDER) + WEB_TEMPLATE_NAME), version::get_full());
+}
+
 auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
 {
     std::vector<std::string> problems;
@@ -179,9 +186,10 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
         return problems;
     }
     const bool is_android = params.deploy_target == deploy_platform::android;
+    const bool is_desktop = params.deploy_target == deploy_platform::desktop;
     const auto folder_problem = get_folder_problem(get_deploy_folder(params), get_output_location(params), is_android);
     add_problem(problems, folder_problem);
-    if(folder_problem.empty() && !is_android && is_executable_in_use(get_deployed_executable(ctx, params)))
+    if(folder_problem.empty() && is_desktop && is_executable_in_use(get_deployed_executable(ctx, params)))
     {
         add_problem(problems, "The game in the deploy folder is running. Close it first.");
     }
@@ -193,7 +201,8 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
     {
         add_problem(problems, "Stop play mode first: prefabs cannot be cooked while the game runs.");
     }
-    // An Android game carries the runtime of the editor's Android player, not the editor's own.
+    // An Android game carries the runtime of the editor's Android player, and a web game the browser player's,
+    // not the editor's own.
     if(is_android)
     {
         for(auto& problem : get_android_problems(ctx, params))
@@ -201,16 +210,20 @@ auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vec
             add_problem(problems, std::move(problem));
         }
     }
-    else
+    else if(is_desktop)
     {
         add_problem(problems, get_runtime_problem());
         if(params.deploy_dependencies)
         {
             add_problem(problems, get_player_version_problem(get_player_file(), version::get_full()));
         }
-        // An Android package carries every pack whole, so only desktop deploys patch.
+        // Android packages and web builds carry every pack whole, so only desktop deploys patch.
         add_problem(problems, get_patch_problem(params));
         add_problem(problems, get_desktop_icon_problem(params));
+    }
+    else if(params.deploy_dependencies)
+    {
+        add_problem(problems, get_web_template().error);
     }
     add_problem(problems, get_compile_problem(ctx));
     return problems;

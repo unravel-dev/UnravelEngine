@@ -169,6 +169,7 @@ public:
     auto check_profiles_changeable(rtti::context& ctx) const -> deployment::result;
     auto set_profile_android(rtti::context& ctx, const std::string& name, const android_deploy_settings& android) -> deployment::result;
     auto set_profile_desktop(rtti::context& ctx, const std::string& name, const desktop_deploy_settings& desktop) -> deployment::result;
+    auto set_profile_web(rtti::context& ctx, const std::string& name, const web_deploy_settings& web) -> deployment::result;
     /// Overrides in a profile what `edited` (the profile's settings after an edit) changes.
     auto override_profile_settings(rtti::context& ctx, const std::string& name, const settings& edited) -> deployment::result;
     /// Overrides in a profile what an edit changed against `before`, the settings it started from: an override

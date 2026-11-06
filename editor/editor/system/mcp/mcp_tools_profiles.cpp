@@ -57,7 +57,7 @@ void register_profile_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "settings_profiles_list",
          .description =
-             "The project's settings profiles. Each is a target with a platform (desktop or android) that changes only "
+             "The project's settings profiles. Each is a target with a platform (desktop, android or web) that changes only "
              "what differs from the project: settings_overrides are project settings paths (settings_get and "
              "settings_set with profile), deploy_overrides are deploy settings as deploy_set_settings names them. "
              "unreadable_files lists a profile's files that could not be read: they override nothing, and edits are "
@@ -83,14 +83,14 @@ void register_profile_tools(mcp_tool_registry& registry)
         {.name = "settings_profiles_create",
          .description =
              "Create a settings profile; it builds into <deploy location>/<name>. With copy_from it starts as a copy of "
-             "that profile, on its platform. Otherwise platform (desktop or android, default desktop) picks the "
-             "platform, and the profile starts with that platform's starting values, stored as overrides. An Android "
+             "that profile, on its platform. Otherwise platform (desktop, android or web, default desktop) picks "
+             "the platform, and the profile starts with that platform's starting values, stored as overrides. An Android "
              "profile starts with textures of at most 1024, a smaller global illumination cache, half resolution "
              "particles, and global illumination, screen space reflections, screen space indirect lighting, ambient "
              "occlusion, soft and contact shadows turned off, anti-aliasing at most FXAA and shadow maps of at most "
-             "1024 (graphics.limits).",
+             "1024 (graphics.limits). A web profile starts with global illumination turned off, which WebGPU cannot run.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"name":{"type":"string"},"platform":{"type":"string","enum":["desktop","android"]},"copy_from":{"type":"string","description":"A profile to copy, platform included"}},"required":["name"]})json",
+             R"json({"type":"object","properties":{"name":{"type":"string"},"platform":{"type":"string","enum":["desktop","android","web"]},"copy_from":{"type":"string","description":"A profile to copy, platform included"}},"required":["name"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -112,7 +112,7 @@ void register_profile_tools(mcp_tool_registry& registry)
              std::string platform_name;
              if(read_string(args, "platform", platform_name) && !parse_platform_name(platform_name, platform))
              {
-                 return {.text = fmt::format("platform must be desktop or android, not '{}'.", platform_name), .is_error = true};
+                 return {.text = fmt::format("platform must be desktop, android or web, not '{}'.", platform_name), .is_error = true};
              }
              if(source != nullptr && source->platform != platform)
              {

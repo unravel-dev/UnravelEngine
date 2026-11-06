@@ -53,7 +53,7 @@ Building a scene is not shipping a game. The rest of the chain:
   standalone.startup_scene (the scene the built game loads) is required before
   the project can be deployed at all.
 - Settings profiles are the targets a project builds for: each has a platform
-  (desktop or android) and overrides only what differs from the project
+  (desktop, android or web) and overrides only what differs from the project
   settings. settings_profiles_list lists them (a project starts with Desktop);
   settings_profiles_create / _rename / _delete manage them. settings_get and
   settings_set with profile read and override a profile's values (overridden

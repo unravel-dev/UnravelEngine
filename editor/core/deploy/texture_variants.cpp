@@ -100,27 +100,22 @@ auto get_source_size(const std::string& key) -> std::uintmax_t
 
 auto describe_failures(const std::vector<std::string>& failed, const std::string& profile) -> std::string
 {
-    std::string listed;
-    for(std::size_t i = 0; i < failed.size() && i < LISTED_FAILURES_MAX; ++i)
-    {
-        listed += (i == 0 ? "" : ", ") + failed[i];
-    }
-    if(failed.size() > LISTED_FAILURES_MAX)
-    {
-        listed += fmt::format(" and {} more", failed.size() - LISTED_FAILURES_MAX);
-    }
-    return fmt::format("{} texture(s) could not be compiled for profile {} (the log says why): {}", failed.size(), profile, listed);
+    return fmt::format("{} texture(s) could not be compiled for profile {} (the log says why): {}",
+                       failed.size(),
+                       profile,
+                       list_keys(failed, LISTED_FAILURES_MAX));
 }
-/// The formats an Android profile's textures compile to.
-auto get_compression_family(android_texture_compression compression) -> asset_compiler::texture_compression_family
+
+/// The formats an Android or web profile's textures compile to.
+auto get_compression_family(deploy_texture_compression compression) -> asset_compiler::texture_compression_family
 {
     switch(compression)
     {
-        case android_texture_compression::etc2:
+        case deploy_texture_compression::etc2:
             return asset_compiler::texture_compression_family::etc2;
-        case android_texture_compression::bc:
+        case deploy_texture_compression::bc:
             return asset_compiler::texture_compression_family::bc;
-        case android_texture_compression::astc:
+        case deploy_texture_compression::astc:
         default:
             return asset_compiler::texture_compression_family::astc;
     }
@@ -135,6 +130,10 @@ auto get_profile_texture_target(const deploy_settings& params, const settings& r
     if(params.deploy_target == deploy_platform::android)
     {
         target.family = get_compression_family(params.android.texture_compression);
+    }
+    if(params.deploy_target == deploy_platform::web)
+    {
+        target.family = get_compression_family(params.web.texture_compression);
     }
     return target;
 }

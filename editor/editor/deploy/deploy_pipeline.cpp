@@ -12,7 +12,9 @@
 #include <deploy/protocol_data.h>
 #include <deploy/releases.h>
 #include <deploy/run_arguments.h>
+#include <deploy/shader_cook.h>
 #include <deploy/texture_variants.h>
+#include <deploy/web.h>
 #include <deploy/windows_resources.h>
 #include <editor/editing/prefab_bake.h>
 #include <editor/system/project_manager.h>
@@ -42,11 +44,13 @@ namespace
 constexpr const char* STEP_CHECK_ASSETS = "Checking Assets";
 constexpr const char* STEP_COOK = "Cooking Prefabs";
 constexpr const char* STEP_COOK_TEXTURES = "Cooking Textures";
+constexpr const char* STEP_COOK_SHADERS = "Cooking Shaders";
 constexpr const char* STEP_DEPENDENCIES = "Dependencies";
 constexpr const char* STEP_SETTINGS = "Project Settings";
 constexpr const char* STEP_PROJECT_DATA = "Project Data";
 constexpr const char* STEP_ENGINE_DATA = "Engine Data";
 constexpr const char* STEP_ANDROID_PACKAGE = "Android Package";
+constexpr const char* STEP_WEB_PLAYER = "Browser Player";
 /// Uncompiled assets named in the failed step before "and N more".
 constexpr std::size_t LISTED_UNCOMPILED_MAX = 10;
 constexpr const char* COOK_STAGING_PREFIX = "unravel-deploy-cook-";
@@ -84,8 +88,11 @@ struct deploy_plan
     runtime_plan runtime;
     fs::path cook_staging;
     texture_cook_plan textures;
+    shader_cook_plan shaders;
     /// Android deploys only: the package built from the deployed data.
     android_package_plan android;
+    /// Web deploys only: the browser player copied beside the data.
+    web_template web_player;
 };
 
 auto is_android(const deploy_plan& plan) -> bool
@@ -93,22 +100,16 @@ auto is_android(const deploy_plan& plan) -> bool
     return plan.params.deploy_target == deploy_platform::android;
 }
 
+auto is_web(const deploy_plan& plan) -> bool
+{
+    return plan.params.deploy_target == deploy_platform::web;
+}
+
 struct deploy_step
 {
     std::string name;
     std::function<void()> run;
 };
-
-/// The compiled shader variants a deploy ships: Android renders with Vulkan only; the desktop ships every
-/// variant its platform compiles, since the game picks its renderer when it starts.
-auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>
-{
-    if(params.deploy_target == deploy_platform::android)
-    {
-        return {gfx::get_renderer_filename_extension(bgfx::RendererType::Vulkan)};
-    }
-    return {};
-}
 
 /// A deploy refused before the folder is touched: one step that fails with the reason.
 auto make_failed_step(threader& th, const std::string& name, const std::string& reason) -> deploy_jobs
@@ -125,13 +126,15 @@ auto make_failed_step(threader& th, const std::string& name, const std::string& 
 }
 
 /// Shipped assets of a protocol's index without their compiled files. With the compiler idle that is a
-/// source it failed to compile, and a build without it silently lacks the asset.
+/// source it failed to compile, and a build without it silently lacks the asset. Shaders for the renderers the
+/// deploy cooks have no compiled file: cooking them checks them.
 void find_uncompiled_assets(const asset_database::database_t& database,
                             const fs::path& protocol_root,
                             const std::unordered_set<std::string>& left_out,
                             const std::set<std::string>& shader_variants,
                             std::vector<std::string>& uncompiled)
 {
+    const auto cooked_variants = get_cooked_shader_variants(shader_variants);
     for(const auto& [uid, meta] : database)
     {
         if(left_out.contains(fs::make_path_key(meta.location)))
@@ -141,10 +144,11 @@ void find_uncompiled_assets(const asset_database::database_t& database,
         const auto paths = get_compiled_paths(meta.location, protocol_root, shader_variants);
         const bool is_missing = std::any_of(paths.begin(),
                                             paths.end(),
-                                            [](const fs::path& path)
+                                            [&cooked_variants](const fs::path& path)
                                             {
                                                 fs::error_code ec;
-                                                return !fs::exists(path, ec);
+                                                return !cooked_variants.contains(path.extension().generic_string()) &&
+                                                       !fs::exists(path, ec);
                                             });
         if(is_missing)
         {
@@ -155,19 +159,10 @@ void find_uncompiled_assets(const asset_database::database_t& database,
 
 auto describe_uncompiled_assets(const std::vector<std::string>& uncompiled) -> std::string
 {
-    std::string listed;
-    for(std::size_t i = 0; i < uncompiled.size() && i < LISTED_UNCOMPILED_MAX; ++i)
-    {
-        listed += (i == 0 ? "" : ", ") + uncompiled[i];
-    }
-    if(uncompiled.size() > LISTED_UNCOMPILED_MAX)
-    {
-        listed += fmt::format(" and {} more", uncompiled.size() - LISTED_UNCOMPILED_MAX);
-    }
     return fmt::format("{} asset(s) have no compiled file (the log says why they failed to compile). Fix or remove "
                        "them and deploy again: {}",
                        uncompiled.size(),
-                       listed);
+                       list_keys(uncompiled, LISTED_UNCOMPILED_MAX));
 }
 
 /// A folder no other deploy uses: two editors cooking at once must not share one.
@@ -231,8 +226,8 @@ auto make_protocol_job(asset_manager& am,
     job.is_packed = params.deploy_packed_assets;
     job.with_debug_symbols = params.deploy_debug_symbols;
     job.shader_variants = get_shader_variants(params);
-    // An Android package carries every pack whole: patches are for desktop deploys.
-    if(!params.deploy_patch_release.empty() && params.deploy_target != deploy_platform::android)
+    // An Android package and a web build carry every pack whole: patches are for desktop deploys.
+    if(!params.deploy_patch_release.empty() && params.deploy_target == deploy_platform::desktop)
     {
         job.patch_release_pack =
             get_release_pack(get_profile_releases_folder(get_project_root(), params.profile), params.deploy_patch_release, protocol);
@@ -278,9 +273,21 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
                                            am.get_database_snapshot("app:/"),
                                            left_out,
                                            asset_compiler::get_editor_texture_target());
-    // The cooked prefabs and the texture variants: no file is in both, so their order does not matter.
-    plan.app = make_protocol_job(am, data_params, CONTENT_PROTOCOL, {staging / CONTENT_PROTOCOL, plan.textures.variants}, std::move(left_out));
-    plan.engine = make_protocol_job(am, data_params, ENGINE_PROTOCOL, {staging / ENGINE_PROTOCOL}, {});
+    plan.shaders = make_shader_cook_plan(get_project_root(),
+                                         params,
+                                         am.get_database_snapshot("engine:/"),
+                                         am.get_database_snapshot("app:/"),
+                                         left_out);
+    // The cooked prefabs, the texture variants and the cooked shaders: no file is in two of them, so their order
+    // does not matter.
+    const auto engine_shaders = plan.shaders.has_work() ? plan.shaders.protocols.front().variants : fs::path{};
+    const auto app_shaders = plan.shaders.has_work() ? plan.shaders.protocols.back().variants : fs::path{};
+    plan.app = make_protocol_job(am,
+                                 data_params,
+                                 CONTENT_PROTOCOL,
+                                 {staging / CONTENT_PROTOCOL, plan.textures.variants, app_shaders},
+                                 std::move(left_out));
+    plan.engine = make_protocol_job(am, data_params, ENGINE_PROTOCOL, {staging / ENGINE_PROTOCOL, engine_shaders}, {});
     plan.runtime = make_runtime_plan(ctx, data_params);
     plan.cook_staging = staging;
     if(is_android(plan))
@@ -289,6 +296,10 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
         plan.runtime.host_source.clear();
         plan.runtime.framework_source.clear();
         plan.android = make_android_package_plan(ctx, params);
+    }
+    if(is_web(plan))
+    {
+        plan.web_player = get_web_template().found;
     }
     return plan;
 }
@@ -392,19 +403,33 @@ void deploy_settings_file(const deploy_plan& plan)
     }
 }
 
-/// The steps that need nothing but the plan; Project Data waits for Cooking Textures instead.
+/// The steps that need nothing but the plan; the data steps wait for the cooks instead.
 auto make_steps(const std::shared_ptr<const deploy_plan>& plan) -> std::vector<deploy_step>
 {
     std::vector<deploy_step> steps;
-    // The player executable and its libraries are the desktop's; Android's come with the package.
-    if(plan->params.deploy_dependencies && !is_android(*plan))
+    // The player executable and its libraries are the desktop's; Android's come with the package, the browser
+    // player's in its own step.
+    if(plan->params.deploy_dependencies && plan->params.deploy_target == deploy_platform::desktop)
     {
         steps.push_back({STEP_DEPENDENCIES, [plan]() { deploy_dependencies(*plan); }});
     }
     steps.push_back({STEP_SETTINGS, [plan]() { deploy_settings_file(*plan); }});
-    steps.push_back({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }});
-    steps.push_back({plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime); }});
+    // The browser player carries its .NET runtime and the script bridge.
+    if(!is_web(*plan))
+    {
+        steps.push_back({plan->runtime.step_name, [plan]() { deploy_runtime(plan->runtime); }});
+    }
     return steps;
+}
+
+/// The browser player beside the deployed data, and the list of the data's files the page loads.
+void deploy_web_site(const deploy_plan& plan)
+{
+    if(plan.params.deploy_dependencies)
+    {
+        copy_web_player(plan.web_player, plan.output);
+    }
+    write_web_data_manifest(plan.output);
 }
 
 auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<void>
@@ -420,21 +445,32 @@ auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<
         .share();
 }
 
-/// Project Data packs the profile's texture variants, so it starts once Cooking Textures succeeded.
-auto schedule_project_data(const std::shared_ptr<const deploy_plan>& plan, const tpp::shared_future<void>& textures)
-    -> tpp::shared_future<void>
+/// A step that packs what cooking steps made, so it starts once they all succeeded; at once without any.
+auto schedule_after_cooks(threader& th, const deploy_step& step, const deploy_jobs& cooks) -> tpp::shared_future<void>
 {
-    return textures
+    if(cooks.empty())
+    {
+        return schedule_step(th, step);
+    }
+    std::vector<tpp::shared_future<void>> futures;
+    for(const auto& cook : cooks)
+    {
+        futures.push_back(cook.job);
+    }
+    return tpp::when_all(futures.begin(), futures.end())
         .then(
-            [plan](auto cooked)
+            [step, cooks](auto)
             {
-                if(!get_step_error(cooked).empty())
+                for(const auto& cook : cooks)
                 {
-                    throw std::runtime_error(fmt::format("Skipped: {} failed.", STEP_COOK_TEXTURES));
+                    if(!get_step_error(cook.job).empty())
+                    {
+                        throw std::runtime_error(fmt::format("Skipped: {} failed.", cook.name));
+                    }
                 }
-                APPLOG_INFO("Deploying {}...", STEP_PROJECT_DATA);
-                deploy_protocol_data(plan->app);
-                APPLOG_INFO("Deploying {} - Done", STEP_PROJECT_DATA);
+                APPLOG_INFO("Deploying {}...", step.name);
+                step.run();
+                APPLOG_INFO("Deploying {} - Done", step.name);
             })
         .share();
 }
@@ -461,9 +497,10 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
         APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", get_output_location(plan.params).generic_string());
         return;
     }
-    if(plan.params.deploy_and_run)
+    // An Android game was started by the package step, and its session finishes the device steps. A web build
+    // is opened through a web server, which the editor does not run.
+    if(plan.params.deploy_and_run && !is_web(plan))
     {
-        // An Android game was started by the package step, and its session finishes the device steps.
         if(!is_android(plan))
         {
             run_game(plan.executable, split_run_arguments(plan.params.deploy_run_arguments));
@@ -471,6 +508,26 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
         return;
     }
     fs::show_in_graphical_env(get_output_location(plan.params));
+}
+
+/// The browser player step: the list of files it writes is the deployed data's, so it starts once every other
+/// step succeeded.
+auto schedule_web_player(const std::shared_ptr<const deploy_plan>& plan, const std::vector<tpp::shared_future<void>>& steps)
+    -> tpp::shared_future<void>
+{
+    return tpp::when_all(steps.begin(), steps.end())
+        .then(
+            [plan](auto all)
+            {
+                if(has_failed_step(all.get()))
+                {
+                    throw std::runtime_error("Skipped: an earlier step failed.");
+                }
+                APPLOG_INFO("Deploying {}...", STEP_WEB_PLAYER);
+                deploy_web_site(*plan);
+                APPLOG_INFO("Deploying {} - Done", STEP_WEB_PLAYER);
+            })
+        .share();
 }
 
 /// The Android package step: it builds from what the other steps deployed, so it starts once they all
@@ -547,13 +604,30 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
         jobs.push_back({name, job});
         futures.push_back(job);
     };
-    const auto textures = schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_textures(plan->textures); }});
-    add_job(STEP_COOK_TEXTURES, textures);
+    // Each data step packs what the cooks of its protocol made: the engine's shaders, the project's textures and
+    // shaders.
+    deploy_jobs engine_cooks;
+    deploy_jobs app_cooks{{STEP_COOK_TEXTURES, schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_textures(plan->textures); }})}};
+    if(plan->shaders.has_work())
+    {
+        engine_cooks.push_back({STEP_COOK_SHADERS, schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }})});
+        app_cooks.push_back(engine_cooks.back());
+    }
+    add_job(STEP_COOK_TEXTURES, app_cooks.front().job);
+    if(plan->shaders.has_work())
+    {
+        add_job(STEP_COOK_SHADERS, engine_cooks.front().job);
+    }
     for(const auto& step : make_steps(plan))
     {
         add_job(step.name, schedule_step(th, step));
     }
-    add_job(STEP_PROJECT_DATA, schedule_project_data(plan, textures));
+    add_job(STEP_ENGINE_DATA, schedule_after_cooks(th, {STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, engine_cooks));
+    add_job(STEP_PROJECT_DATA, schedule_after_cooks(th, {STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, app_cooks));
+    if(is_web(*plan))
+    {
+        add_job(STEP_WEB_PLAYER, schedule_web_player(plan, futures));
+    }
     if(is_android(*plan))
     {
         add_job(STEP_ANDROID_PACKAGE, schedule_android_package(plan, futures));

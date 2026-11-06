@@ -11,8 +11,8 @@
  *   - sparse overrides: only the overridden properties are stated, they apply over any base and the
  *     rest follows the base, reverting removes them, a document's unknown paths and the settings every
  *     profile shares (layers, input, the physics backend, the deploy location) are left out;
- *   - profile files: a new Android profile's starting values (feature limits included), save / load round
- *     trip, rename, delete;
+ *   - profile files: a new Android or Web profile's starting values (feature limits included), save / load
+ *     round trip, rename, delete;
  *   - a project from before profiles: Desktop and Android made from its deploy.cfg, its releases and its
  *     patch release moved to Desktop, its deploy.cfg kept; the next load reads the profiles; an old
  *     deploy.cfg arriving beside profiles is reported and backed up, never overwriting an earlier backup;
@@ -30,7 +30,9 @@
  *   - texture variants, compiled with texturec: ASTC, ETC2 and BC formats (blocks that keep a texture's size),
  *     a variant reused while current, compiled again in place when a setting changes (never a second
  *     file), stray and unneeded files swept, a texture the profile compiles as the editor does shipping the
- *     editor's file once it is current and a variant until then, left-out textures kept.
+ *     editor's file once it is current and a variant until then, left-out textures kept;
+ *   - cooked shaders, compiled with shaderc: a web profile's WGSL with its manifest, reused while current,
+ *     stray files swept and left-out shaders' files kept.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
@@ -41,6 +43,7 @@
 #include <deploy/profile_cache.h>
 #include <deploy/project_profiles.h>
 #include <deploy/releases.h>
+#include <deploy/shader_cook.h>
 #include <deploy/texture_variants.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/meta/assets/asset_database.hpp>
@@ -317,8 +320,13 @@ void test_profile_files(const fs::path& root)
               !android.settings.is_overridden("graphics/render_scale"),
           "and with the effects a phone cannot afford limited, at the project's render scale");
     check(deployment::make_profile("Desktop", target_platform::desktop, base).settings.is_empty(), "a new Desktop profile overrides nothing");
+    const auto web = deployment::make_profile("Web", target_platform::web, base);
+    check(web.settings.is_overridden("graphics/limits/global_illumination") &&
+              !web.settings.is_overridden("graphics/limits/ambient_occlusion") &&
+              !web.settings.is_overridden("assets/texture/default_max_size"),
+          "a new Web profile starts with global illumination off, which WebGPU cannot run, and nothing else");
     android.android.application_id = "com.test.game";
-    android.android.texture_compression = unravel::android_texture_compression::etc2;
+    android.android.texture_compression = unravel::deploy_texture_compression::etc2;
     edit_profile_settings(android,
                           base,
                           [](settings& s)
@@ -337,7 +345,7 @@ void test_profile_files(const fs::path& root)
     check(list.warnings.empty() && list.profiles.size() == 2, "and load: " + std::to_string(list.warnings.size()) + " warning(s)");
     const auto& loaded = list.profiles.front();
     check(loaded.name == "Android" && loaded.platform == target_platform::android && loaded.android.application_id == "com.test.game" &&
-              loaded.android.texture_compression == unravel::android_texture_compression::etc2,
+              loaded.android.texture_compression == unravel::deploy_texture_compression::etc2,
           "a profile's platform and Android settings round trip");
     const auto& loaded_steam = list.profiles.back().desktop.steam;
     check(list.profiles.back().name == "Desktop" && loaded_steam.app_id == 480 && loaded_steam.depot_id == 481 &&
@@ -863,15 +871,15 @@ void test_texture_variants(const fs::path& root)
           "a smaller default size compiles it again, smaller");
     check(count_files(variants) == 4, "in place: one variant and its manifest per texture, nothing left of the earlier ones");
 
-    fixture.params.android.texture_compression = unravel::android_texture_compression::etc2;
+    fixture.params.android.texture_compression = unravel::deploy_texture_compression::etc2;
     report = deployment::cook_texture_variants(fixture.make_plan());
     check(report.compiled == 2 && read_texture_format(wall, width) == bimg::TextureFormat::ETC2A && count_files(variants) == 4,
           "ETC2 compiles in place too: ETC2A for a texture with alpha");
-    fixture.params.android.texture_compression = unravel::android_texture_compression::bc;
+    fixture.params.android.texture_compression = unravel::deploy_texture_compression::bc;
     report = deployment::cook_texture_variants(fixture.make_plan());
     check(report.compiled == 2 && read_texture_format(wall, width) == bimg::TextureFormat::BC3 && count_files(variants) == 4,
           "BC compiles the desktop's formats in place: BC3 for a texture with alpha");
-    fixture.params.android.texture_compression = unravel::android_texture_compression::etc2;
+    fixture.params.android.texture_compression = unravel::deploy_texture_compression::etc2;
     report = deployment::cook_texture_variants(fixture.make_plan());
     check(report.compiled == 2 && read_texture_format(wall, width) == bimg::TextureFormat::ETC2A, "and back to ETC2, in place");
 
@@ -892,7 +900,7 @@ void test_texture_variants(const fs::path& root)
     unravel::save_to_file((app_root / TEXTURE_FOLDER / "wall.png.meta").string(), meta);
     report = deployment::cook_texture_variants(fixture.make_plan());
     check(report.compiled == 1, "a texture's own quality for the platform compiles its variant again");
-    fixture.params.android.texture_compression = unravel::android_texture_compression::astc;
+    fixture.params.android.texture_compression = unravel::deploy_texture_compression::astc;
     report = deployment::cook_texture_variants(fixture.make_plan());
     check(read_texture_format(wall, width) == bimg::TextureFormat::ASTC8x8 && width == LOW_QUALITY_SIDE,
           "low quality is ASTC 8x8, at the texture's own max size");
@@ -925,6 +933,60 @@ void test_texture_variants(const fs::path& root)
     fs::remove_all(editor_compiled, ec);
 }
 
+void test_shader_cook(const fs::path& root)
+{
+    std::printf("test_shader_cook\n");
+    if(!is_present(fs::resolve_protocol(std::string("binary:/shaderc") + fs::executable_extension())))
+    {
+        check(false, "shaderc is beside the tests: the cooked shaders need it");
+        return;
+    }
+    deployment::shader_cook_protocol engine;
+    engine.variants = deployment::get_profile_shaders_folder(root, "Web", "engine");
+    engine.shipped = {"engine:/data/shaders/fs_blit.eshader"};
+    engine.left_out = {"engine:/data/shaders/fs_left_out.eshader"};
+    deployment::shader_cook_plan plan;
+    plan.profile = "Web";
+    plan.renderers = {".wgsl"};
+    plan.protocols = {engine};
+    const auto cooked = engine.variants / "shaders/fs_blit.eshader.asset.wgsl";
+    const auto left_out = engine.variants / "shaders/fs_left_out.eshader.asset.wgsl";
+    const auto stray = engine.variants / "shaders/fs_gone.eshader.asset.wgsl";
+    write_text(left_out, "left out");
+    write_text(stray, "stray");
+    auto report = deployment::cook_shader_variants(plan);
+    check(report.failed.empty() && report.variants == 1 && report.compiled == 1 && is_present(cooked) &&
+              is_present(fs::path(cooked).concat(".manifest")),
+          "a web profile cooks its shaders to WGSL, each with a manifest");
+    check(report.removed == 1 && !is_present(stray) && is_present(left_out),
+          "a file no shader needs is swept, a left-out shader's is kept");
+    report = deployment::cook_shader_variants(plan);
+    check(report.failed.empty() && report.compiled == 0 && report.variants == 1 && report.removed == 0, "a current cooked shader is reused");
+}
+
+void test_web_profile(const fs::path& root)
+{
+    std::printf("test_web_profile\n");
+    settings base;
+    deploy_settings deploy_base;
+    auto web = deployment::make_profile("Web", target_platform::web, base);
+    check(web.web.texture_compression == unravel::deploy_texture_compression::bc, "a web profile cooks BC textures by default");
+    web.web.texture_compression = unravel::deploy_texture_compression::astc;
+    check(deployment::save_profile(root, web).is_ok(), "a web profile saves");
+    const auto list = deployment::load_profiles(root, base, deploy_base);
+    check(list.warnings.empty() && list.profiles.size() == 1 && list.profiles.front().platform == target_platform::web &&
+              list.profiles.front().settings.is_overridden("graphics/limits/global_illumination"),
+          "and loads as a web profile with its starting values");
+    check(list.profiles.size() == 1 && list.profiles.front().web.texture_compression == unravel::deploy_texture_compression::astc,
+          "with its texture formats");
+    deploy_settings params;
+    params.deploy_target = target_platform::web;
+    params.web.texture_compression = unravel::deploy_texture_compression::astc;
+    check(deployment::get_profile_texture_target(params, base).family == ac::texture_compression_family::astc &&
+              deployment::get_profile_texture_target(params, base).platform == target_platform::web,
+          "a web deploy cooks its textures to the profile's formats");
+}
+
 auto run_settings_profiles_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -944,6 +1006,8 @@ auto run_settings_profiles_suite(rtti::context&) -> int
         test_texture_parameters();
         test_srgb_textures(temp / "srgb");
         test_texture_variants(temp / "variants");
+        test_shader_cook(temp / "shaders");
+        test_web_profile(temp / "web");
     }
     catch(const std::exception& ex)
     {

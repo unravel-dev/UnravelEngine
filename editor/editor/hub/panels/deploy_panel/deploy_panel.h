@@ -110,6 +110,9 @@ private:
     /// What a desktop profile builds: the player, its icon and where it goes on Steam, saved with the profile once
     /// an edit is finished.
     void draw_desktop_section(rtti::context& ctx);
+    /// What a web profile builds: the browser player and the game's data, served by a web server, and the formats
+    /// its textures are cooked to, saved with the profile once an edit is finished.
+    void draw_web_section(rtti::context& ctx);
     /// The Android settings: the device, the game's id and version, its orientation, signing and textures.
     void draw_android_section(rtti::context& ctx);
     /// The deploy profile's Android settings `names`, in rows; saved with the profile once an edit is finished.

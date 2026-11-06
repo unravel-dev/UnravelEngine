@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 /// Asset and folder keys as the deploy's rules, scene lists and content compare them.
 namespace unravel::deployment
@@ -33,5 +35,8 @@ auto get_key_name(const std::string& key) -> std::string;
 
 /// A key as the content browser shows it: under the data folder, without the protocol.
 auto get_display_path(const std::string& key) -> std::string;
+
+/// Keys for a sentence: the first `shown_max` separated by commas, then "and N more" for the rest.
+auto list_keys(const std::vector<std::string>& keys, std::size_t shown_max) -> std::string;
 
 } // namespace unravel::deployment

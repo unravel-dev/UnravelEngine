@@ -2,6 +2,7 @@
 
 #include <context/context.hpp>
 #include <deploy/deploy_settings.h>
+#include <deploy/web.h>
 #include <filesystem/filesystem.h>
 
 #include <chrono>
@@ -23,6 +24,10 @@ auto get_deployed_executable(rtti::context& ctx, const deploy_settings& params) 
 
 /// The player beside the editor, which a desktop deploy ships.
 auto get_player_file() -> fs::path;
+
+/// The browser player template beside the editor, which a web deploy ships. Looked up on every call: it is built
+/// apart from the editor, which may be running meanwhile.
+auto get_web_template() -> web_template_lookup;
 
 /// Why the compiled cache is not ready to deploy yet - assets or scripts still compiling - in one
 /// sentence, or empty when the compiler is idle. Main thread.

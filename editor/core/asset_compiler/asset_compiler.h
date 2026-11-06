@@ -17,6 +17,20 @@ template<typename T>
 auto read_importer(asset_manager& am, const fs::path& key) -> std::shared_ptr<asset_importer_meta>;
 
 /**
+ * @brief Compiles the shader at `key` (a protocol or absolute path) to `output` for the renderer its extension
+ *        names (".wgsl": WebGPU), with a manifest beside it, as the editor compiles its own cache.
+ * @return False when it did not compile; the log says why.
+ */
+auto compile_shader(const fs::path& key, const fs::path& output) -> bool;
+
+/**
+ * @brief Whether `output` holds the shader at `key` as compile_shader would write it now: the file and its
+ *        manifest exist, the manifest is of the current format, and the source and what it includes have the
+ *        fingerprint it records.
+ */
+auto is_shader_compiled(const fs::path& key, const fs::path& output) -> bool;
+
+/**
  * @brief The import settings a source starts with, by the type its extension names; null for a type without any.
  *        A new source's .meta is written with them, so its first compile already has them.
  */

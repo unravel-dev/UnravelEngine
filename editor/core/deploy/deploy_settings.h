@@ -29,15 +29,15 @@ enum class android_orientation : std::uint8_t
     automatic,
 };
 
-/// The block-compressed formats an Android build's textures are cooked to.
-enum class android_texture_compression : std::uint8_t
+/// The block-compressed formats an Android or web build's textures are cooked to.
+enum class deploy_texture_compression : std::uint8_t
 {
-    /// ASTC, the better image per byte. A device without it decodes the textures at load, into four
-    /// times the memory.
+    /// ASTC, the better image per byte, which phones, tablets and Apple's computers read. A device without it
+    /// decodes the textures at load, into four times the memory.
     astc,
     /// ETC2 and EAC, which every OpenGL ES 3 and Vulkan device reads.
     etc2,
-    /// BC, the desktop formats: the editor's own files ship. Some Android GPUs read them; on the others the
+    /// BC, the desktop formats: the editor's own files ship. Some phones read them; on the others the
     /// textures are decoded at load, into four to eight times the memory.
     bc,
 };
@@ -85,7 +85,7 @@ struct android_deploy_settings
     bool release{};
     fs::path keystore;
     std::string key_alias;
-    android_texture_compression texture_compression{android_texture_compression::astc};
+    deploy_texture_compression texture_compression{deploy_texture_compression::astc};
 };
 
 /// Where a desktop build goes on Steam. The upload logs in with the login steamcmd keeps for `account`, so
@@ -112,6 +112,15 @@ struct desktop_deploy_settings
     steam_deploy_settings steam;
 };
 
+/// What a web build is cooked for: the formats its textures are compressed to. A web profile holds one
+/// (profiles/<name>/profile.cfg).
+struct web_deploy_settings
+{
+    /// BC for the browsers of computers, ASTC for phones and tablets; a browser that reads neither decodes the
+    /// textures at load.
+    deploy_texture_compression texture_compression{deploy_texture_compression::bc};
+};
+
 /// The open project's folder, which a relative deploy location lies in.
 constexpr const char* PROJECT_ROOT_KEY = "app:/";
 /// The deploy location a project starts with: a folder of its own in the project.
@@ -134,6 +143,8 @@ struct deploy_settings
     android_deploy_settings android;
     /// The desktop profile's icon. From the profile.
     desktop_deploy_settings desktop;
+    /// The web profile's texture formats. From the profile.
+    web_deploy_settings web;
 
     /// The folder builds go to, each profile into a folder of its own in it (get_output_location). A
     /// relative location lies in the project's folder. Shared: no profile overrides it.

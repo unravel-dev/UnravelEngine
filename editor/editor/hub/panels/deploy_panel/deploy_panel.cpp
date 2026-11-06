@@ -882,8 +882,13 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
     widgets::draw_section_title("Deploy Settings");
     draw_edit_target(ctx);
     widgets::draw_gap(widgets::LINE_GAP);
-    inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
-    if(settings_editor_.get().deploy_and_run)
+    // A web build is opened through a web server, which the editor does not run yet.
+    const bool can_run = settings_editor_.get().deploy_target != deploy_platform::web;
+    if(can_run)
+    {
+        inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
+    }
+    if(can_run && settings_editor_.get().deploy_and_run)
     {
         inspect_deploy_properties(ctx, {"deploy_run_arguments"_hs});
         const auto& shown = settings_editor_.get();
@@ -978,13 +983,18 @@ void deploy_panel::draw_profile_section(rtti::context& ctx)
     draw_profile_picker(ctx);
     draw_message(profile_message_, is_profile_message_error_);
     widgets::draw_gap(widgets::LINE_GAP);
-    if(settings_editor_.get().deploy_target == deploy_platform::android)
+    switch(settings_editor_.get().deploy_target)
     {
-        draw_android_section(ctx);
-    }
-    else
-    {
-        draw_desktop_section(ctx);
+        case deploy_platform::android:
+            draw_android_section(ctx);
+            break;
+        case deploy_platform::web:
+            draw_web_section(ctx);
+            break;
+        case deploy_platform::desktop:
+        default:
+            draw_desktop_section(ctx);
+            break;
     }
 }
 
@@ -1084,9 +1094,9 @@ void deploy_panel::draw_new_profile_popup(rtti::context& ctx)
                                               new_profile_name_.text.size(),
                                               ImGuiInputTextFlags_EnterReturnsTrue);
         begin_popup_row("Platform");
-        for(const auto platform : {target_platform::desktop, target_platform::android})
+        for(const auto platform : profile_labels::PLATFORMS)
         {
-            if(platform != target_platform::desktop)
+            if(platform != profile_labels::PLATFORMS[0])
             {
                 ImGui::SameLine();
             }
@@ -1350,6 +1360,21 @@ void deploy_panel::draw_android_permissions(rtti::context& ctx)
         props.push_back(prop);
     }
     inspect_android_data(ctx, object, props);
+}
+
+void deploy_panel::draw_web_section(rtti::context& ctx)
+{
+    widgets::draw_muted_text("A folder for a web server: the browser player, which renders with WebGPU and runs the "
+                             "scripts on .NET in the browser, with the game's data beside it. Browsers load the game "
+                             "only from a web server, not from a folder on the disk.");
+    ImGui::SeparatorText("Textures");
+    auto& web = settings_editor_.get().web;
+    if(inspect_profile_properties(ctx, web, {"texture_compression"_hs}).edit_finished)
+    {
+        auto& pm = ctx.get_cached<project_manager>();
+        set_profile_message(pm.set_profile_web(ctx, settings_editor_.get_profile(), web), {});
+        problems_.invalidate();
+    }
 }
 
 void deploy_panel::draw_android_section(rtti::context& ctx)

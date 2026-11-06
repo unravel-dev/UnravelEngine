@@ -996,6 +996,14 @@ auto project_manager::set_profile_desktop(rtti::context& ctx, const std::string&
     return changed;
 }
 
+auto project_manager::set_profile_web(rtti::context& ctx, const std::string& name, const web_deploy_settings& web)
+    -> deployment::result
+{
+    auto changed = profiles_.set_web(name, web);
+    publish_settings(ctx);
+    return changed;
+}
+
 auto project_manager::override_profile_settings(rtti::context& ctx, const std::string& name, const settings& edited) -> deployment::result
 {
     auto changed = profiles_.override_settings(name, project_settings_, edited);

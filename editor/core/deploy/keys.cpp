@@ -58,4 +58,18 @@ auto get_display_path(const std::string& key) -> std::string
     return is_key_under(key, root) && key.size() > root.size() ? key.substr(root.size()) : key;
 }
 
+auto list_keys(const std::vector<std::string>& keys, std::size_t shown_max) -> std::string
+{
+    std::string listed;
+    for(std::size_t i = 0; i < keys.size() && i < shown_max; ++i)
+    {
+        listed += (i == 0 ? "" : ", ") + keys[i];
+    }
+    if(keys.size() > shown_max)
+    {
+        listed += " and " + std::to_string(keys.size() - shown_max) + " more";
+    }
+    return listed;
+}
+
 } // namespace unravel::deployment

@@ -141,6 +141,15 @@ function(unravel_set_default_thread_stack target)
   endif()
 endfunction()
 
+# The browser player is linked into the .NET runtime's wasm module (dotnet.native.wasm), so everything is compiled
+# the way the runtime is: wasm exception handling and SIMD. The Emscripten that .NET ships has no clang-scan-deps,
+# and the engine uses no C++ modules, so module scanning is off.
+if(EMSCRIPTEN)
+    add_compile_options(-fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 -msimd128)
+    add_link_options(-fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0)
+    set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+endif()
+
 # Set compiler flags based on the compiler and platform
 if (MSVC)
   # For Microsoft Visual C++, use /bigobj
@@ -223,9 +232,10 @@ add_subdirectory(game)
 if(UNRAVEL_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
-# The Android player the editor's deploy packages (cmake/android_player.cmake).
+# The player templates the editor's deploys package (cmake/android_player.cmake, cmake/web_player.cmake).
 if(UNRAVEL_BUILD_EDITOR AND NOT ANDROID)
     include(cmake/android_player.cmake)
+    include(cmake/web_player.cmake)
 endif()
 
 

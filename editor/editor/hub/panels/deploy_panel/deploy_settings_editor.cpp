@@ -45,6 +45,7 @@ void deploy_settings_editor::sync_shown(project_manager& pm)
         shown_.deploy_target = profile_fields.deploy_target;
         shown_.android = profile_fields.android;
         shown_.desktop = profile_fields.desktop;
+        shown_.web = profile_fields.web;
     }
 }
 

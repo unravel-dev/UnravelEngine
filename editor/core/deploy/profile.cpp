@@ -96,6 +96,7 @@ struct profile_header
     target_platform platform{target_platform::desktop};
     android_deploy_settings android;
     desktop_deploy_settings desktop;
+    web_deploy_settings web;
 };
 
 /// The target fields deploy.cfg held before profiles, and which of them it had.
@@ -118,6 +119,10 @@ SAVE_INLINE(profile_header)
     {
         try_save(ar, ser20::make_nvp("desktop", obj.desktop));
     }
+    if(obj.platform == target_platform::web)
+    {
+        try_save(ar, ser20::make_nvp("web", obj.web));
+    }
 }
 
 LOAD_INLINE(profile_header)
@@ -125,6 +130,7 @@ LOAD_INLINE(profile_header)
     try_load(ar, ser20::make_nvp("platform", obj.platform));
     try_load(ar, ser20::make_nvp("android", obj.android));
     try_load(ar, ser20::make_nvp("desktop", obj.desktop));
+    try_load(ar, ser20::make_nvp("web", obj.web));
 }
 
 LOAD_INLINE(legacy_target_fields)
@@ -206,13 +212,9 @@ auto describe_dropped(const std::string& profile, const std::string& file, const
                        join_names(dropped));
 }
 
-/// The values a new profile of `platform` starts with, set on `resolved`, which holds the base.
-void set_platform_starting_values(target_platform platform, settings& resolved)
+/// The values a new Android profile starts with: what a phone's GPU affords at frame rate.
+void set_android_starting_values(settings& resolved)
 {
-    if(platform != target_platform::android)
-    {
-        return;
-    }
     auto& texture = resolved.assets.texture;
     if(texture.default_max_size == texture_importer_meta::texture_size::project_default ||
        texture.default_max_size > ANDROID_DEFAULT_MAX_TEXTURE_SIZE)
@@ -251,6 +253,30 @@ void set_platform_starting_values(target_platform platform, settings& resolved)
     limits.per_frame_exposure_metering = false;
 }
 
+/// The values a new Web profile starts with. Global illumination is off: its surface cache reads and writes
+/// RG11B10F storage textures, which WebGPU allows on no device.
+void set_web_starting_values(settings& resolved)
+{
+    resolved.graphics.limits.global_illumination = false;
+}
+
+/// The values a new profile of `platform` starts with, set on `resolved`, which holds the base.
+void set_platform_starting_values(target_platform platform, settings& resolved)
+{
+    switch(platform)
+    {
+        case target_platform::android:
+            set_android_starting_values(resolved);
+            break;
+        case target_platform::web:
+            set_web_starting_values(resolved);
+            break;
+        case target_platform::desktop:
+        default:
+            break;
+    }
+}
+
 auto load_profile(const fs::path& folder,
                   const settings& base_settings,
                   const deploy_settings& base_deploy,
@@ -275,6 +301,7 @@ auto load_profile(const fs::path& folder,
     profile.platform = header.platform;
     profile.android = header.android;
     profile.desktop = header.desktop;
+    profile.web = header.web;
     for(auto&& warning : {read_overrides_file(profile.name,
                                               folder / PROFILE_SETTINGS_FILE_NAME,
                                               base_settings,
@@ -376,6 +403,7 @@ auto resolve_deploy_settings(const deploy_settings& base, const settings_profile
     resolved.deploy_target = profile.platform;
     resolved.android = profile.android;
     resolved.desktop = profile.desktop;
+    resolved.web = profile.web;
     resolved.android_device.clear();
     resolved.android_replace_installed = false;
     return resolved;
@@ -450,6 +478,7 @@ auto save_profile(const fs::path& project_root, const settings_profile& profile)
     header.platform = profile.platform;
     header.android = profile.android;
     header.desktop = profile.desktop;
+    header.web = profile.web;
     auto written = write_text_file(folder / PROFILE_FILE_NAME, serialization::save_to_document(header, PROFILE_DOCUMENT_ROOT));
     if(!written.is_ok())
     {

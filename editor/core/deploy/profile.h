@@ -113,6 +113,8 @@ struct settings_profile
     android_deploy_settings android;
     /// The desktop build's icon; used by desktop profiles only.
     desktop_deploy_settings desktop;
+    /// The web build's texture formats; used by web profiles only.
+    web_deploy_settings web;
     /// Overrides of the project settings (settings/settings.cfg), in profiles/<name>/settings.cfg.
     profile_overrides settings;
     /// Overrides of the shared deploy settings (deploy/deploy.cfg), in profiles/<name>/deploy.cfg.

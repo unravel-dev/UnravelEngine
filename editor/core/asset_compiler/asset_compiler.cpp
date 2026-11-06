@@ -849,6 +849,13 @@ auto run_shaderc(const shader_compile_input& input,
         str_platform = "osx";
         str_profile = "metal";
     }
+    else if(renderer == bgfx::RendererType::WebGPU)
+    {
+        // WGSL through tint, the only shading language a browser's WebGPU takes. The platform is linux: shaderc's
+        // asm.js platform means GLSL ES for WebGL.
+        str_platform = "linux";
+        str_profile = "wgsl";
+    }
 
     if(vs)
         str_type = "vertex";
@@ -1362,6 +1369,11 @@ auto create_default_importer(const fs::path& source_path) -> std::shared_ptr<ass
 template<>
 auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
+    return compile_shader(key, output);
+}
+
+auto compile_shader(const fs::path& key, const fs::path& output) -> bool
+{
     auto absolute_path = resolve_input_file(key);
     auto renderer = gfx::get_renderer_based_on_filename_extension(output.extension().string());
     // Before the source is read: an edit during the compile leaves a manifest the source no longer matches, so it compiles again.
@@ -1376,6 +1388,29 @@ auto compile<gfx::shader>(asset_manager& am, const fs::path& key, const fs::path
         return false;
     }
     return true;
+}
+
+auto is_shader_compiled(const fs::path& key, const fs::path& output) -> bool
+{
+    fs::error_code err;
+    const auto manifest_path = get_manifest_path(output);
+    if(!fs::exists(output, err) || !fs::exists(manifest_path, err))
+    {
+        return false;
+    }
+    asset_manifest manifest;
+    if(!load_manifest(manifest_path, manifest))
+    {
+        return false;
+    }
+    const auto source = resolve_input_file(key);
+    if(is_compiled_format_changed(source, manifest))
+    {
+        return false;
+    }
+    std::vector<fs::path> deps;
+    resolve_dependencies<gfx::shader>(source, deps);
+    return !is_source_file_changed(source, manifest, deps);
 }
 
 template<>
