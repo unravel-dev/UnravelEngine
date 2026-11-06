@@ -75,6 +75,12 @@ auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
         return false;
     }
     APPLOG_INFO("Mounted asset pack {}", pack.generic_string());
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    // The page put the pack in the browser's memory file system, and mapping it copied it into the module's memory.
+    // Nothing reads the file again, and dropping it frees its first copy.
+    fs::error_code ec;
+    fs::remove(pack, ec);
+#endif
     return true;
 }
 

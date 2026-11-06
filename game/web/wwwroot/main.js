@@ -8,6 +8,11 @@
 //
 // The player's own files (user:/ and cache:/, which SDL puts under /libsdl) are kept in the browser's IndexedDB:
 // read in before the engine starts, and stored again whenever a written file is closed.
+//
+// The game's files and the runtime's are kept in the browser's Cache Storage, so a later visit downloads only what a
+// new deploy changed: a data file under its fingerprint from the manifest, a runtime file under its name, which
+// carries its own. Each page keeps its own caches, and drops what its deploy no longer lists once the game started.
+// A page without Cache Storage (plain HTTP from another computer) downloads everything.
 import { dotnet } from './_framework/dotnet.js';
 
 const status = document.getElementById('status');
@@ -56,11 +61,50 @@ function showNotice(text) {
   document.body.appendChild(notice);
 }
 
-async function loadFiles(module) {
-  const files = await (await fetch('data_manifest.json')).json();
+async function openCache(kind) {
+  try {
+    return globalThis.caches ? await caches.open(`unravel-${kind}:${location.pathname}`) : null;
+  } catch {
+    return null;
+  }
+}
+
+/// The response for `url` from `cache` under `key`, or from the network, which then goes into the cache.
+async function fetchCached(cache, url, key, used) {
+  used.add(key);
+  const cached = cache ? await cache.match(key) : undefined;
+  if (cached) {
+    return cached;
+  }
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`${url} could not be downloaded (${response.status}).`);
+  }
+  if (cache) {
+    await cache.put(key, response.clone()).catch(() => {});
+  }
+  return response;
+}
+
+/// Drops what `cache` holds that this start did not use: files an older deploy had.
+async function dropUnused(cache, used) {
+  if (!cache) {
+    return;
+  }
+  for (const request of await cache.keys()) {
+    if (!used.has(request.url)) {
+      await cache.delete(request);
+    }
+  }
+}
+
+async function loadFiles(module, cache, used) {
+  const files = await (await fetch('data_manifest.json', { cache: 'no-cache' })).json();
   let loaded = 0;
-  await Promise.all(files.map(async (path) => {
-    const bytes = new Uint8Array(await (await fetch(path)).arrayBuffer());
+  await Promise.all(files.map(async ({ path, hash }) => {
+    const url = new URL(path, location.href);
+    const key = `${url.href}?fingerprint=${hash}`;
+    const bytes = new Uint8Array(await (await fetchCached(cache, url.href, key, used)).arrayBuffer());
     const slash = path.lastIndexOf('/');
     const folder = '/' + path.substring(0, slash);
     module.FS_createPath('/', path.substring(0, slash), true, true);
@@ -68,6 +112,20 @@ async function loadFiles(module) {
     loaded++;
     report(`Loading ${loaded} / ${files.length}`);
   }));
+}
+
+/// The runtime's binary files (assemblies, the wasm module, globalization data) from the cache; its JavaScript
+/// modules load as the runtime loads them.
+const CACHED_RUNTIME_TYPES = new Set(['assembly', 'pdb', 'dotnetwasm', 'globalization']);
+
+function loadRuntimeResource(cache, used) {
+  return (type, name, defaultUri) => {
+    if (!cache || !CACHED_RUNTIME_TYPES.has(type)) {
+      return null;
+    }
+    const url = new URL(defaultUri, location.href).href;
+    return fetchCached(cache, url, url, used);
+  };
 }
 
 function syncFiles(module, populate) {
@@ -94,12 +152,17 @@ try {
   report('Starting WebGPU');
   const { device, isSoftware } = await createDevice();
   report('Starting .NET');
+  const runtimeCache = await openCache('runtime');
+  const dataCache = await openCache('data');
+  const usedRuntime = new Set();
+  const usedData = new Set();
   const runtime = await dotnet
     .withModuleConfig({ preinitializedWebGPUDevice: device })
+    .withResourceLoader(loadRuntimeResource(runtimeCache, usedRuntime))
     .withApplicationArgumentsFromQuery()
     .create();
   const module = runtime.Module ?? globalThis.getDotnetRuntime(0).Module;
-  await loadFiles(module);
+  await loadFiles(module, dataCache, usedData);
   await mountUserFiles(module);
   report('Starting the engine');
   const result = await runtime.runMain();
@@ -112,6 +175,7 @@ try {
     showNotice(SOFTWARE_ADAPTER_NOTICE);
   }
   console.log('[player] started');
+  await Promise.all([dropUnused(runtimeCache, usedRuntime), dropUnused(dataCache, usedData)]);
 } catch (e) {
   report('The game could not start: ' + e.message);
   console.error(e);

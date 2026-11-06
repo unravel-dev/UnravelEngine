@@ -50,8 +50,9 @@ auto find_web_template(const fs::path& root, const std::string& engine_version) 
 
 /**
  * @brief The data_manifest.json of a web build in `site`: every file under its data/ folder, as the page fetches
- * it ("data/engine/content.pak"), in name order. The page writes each one to that path in the player's file
- * system, which the engine reads as its own folder.
+ * it ("data/engine/content.pak"), with a fingerprint of its content, in name order. The page writes each one to
+ * that path in the player's file system, which the engine reads as its own folder, and keeps it in the browser's
+ * cache under its fingerprint, so a later visit fetches only the files a new deploy changed.
  */
 auto make_web_data_manifest(const fs::path& site) -> std::string;
 

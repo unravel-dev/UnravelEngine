@@ -2,6 +2,7 @@
 #include "deploy_android.h"
 #include "deploy_preflight.h"
 #include "deploy_runtime.h"
+#include "web_preview_server.h"
 
 #include <deploy/content.h>
 #include <deploy/dependencies.h>
@@ -23,12 +24,14 @@
 #include <engine/meta/settings/settings.hpp>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
+#include <ospp/url.h>
 #include <process/process.h>
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -499,6 +502,49 @@ auto has_failed_step(const std::vector<tpp::shared_future<void>>& steps) -> bool
                        });
 }
 
+/// The page's address with the run arguments the page hands the engine, one per arg= (game/web/wwwroot/main.js).
+auto make_web_address(const std::string& address, const std::vector<std::string>& arguments) -> std::string
+{
+    constexpr const char* HEX_DIGITS = "0123456789ABCDEF";
+    std::string query;
+    for(const auto& argument : arguments)
+    {
+        query += query.empty() ? "?arg=" : "&arg=";
+        for(const unsigned char c : argument)
+        {
+            if(std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+            {
+                query += char(c);
+                continue;
+            }
+            query += '%';
+            query += HEX_DIGITS[c >> 4];
+            query += HEX_DIGITS[c & 0xF];
+        }
+    }
+    return address + query;
+}
+
+/// A browser loads the game only from a web server: the editor serves the deploy's folder on this computer and opens
+/// the page in the default browser.
+void open_web_deploy(const deploy_plan& plan)
+{
+    const auto address = get_web_preview_server().serve(plan.output);
+    if(address.empty())
+    {
+        APPLOG_ERROR("Deploy and Run could not serve {}: no port on this computer could be opened.",
+                     plan.output.generic_string());
+        fs::show_in_graphical_env(plan.output);
+        return;
+    }
+    const auto page = make_web_address(address, split_run_arguments(plan.params.deploy_run_arguments));
+    APPLOG_INFO("Serving {} at {} until the editor closes.", plan.output.generic_string(), address);
+    if(!os::url::open(page))
+    {
+        APPLOG_WARNING("Open {} in a browser to play the deploy.", page);
+    }
+}
+
 /// Runs on the main thread once every step ended. A failed step left a partial build: the Deploy window
 /// names it, and running or showing that build would only hide the failure.
 void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future<void>>& steps)
@@ -511,11 +557,14 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
         APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", get_output_location(plan.params).generic_string());
         return;
     }
-    // An Android game was started by the package step, and its session finishes the device steps. A web build
-    // is opened through a web server, which the editor does not run.
-    if(plan.params.deploy_and_run && !is_web(plan))
+    // An Android game was started by the package step, and its session finishes the device steps.
+    if(plan.params.deploy_and_run)
     {
-        if(!is_android(plan))
+        if(is_web(plan))
+        {
+            open_web_deploy(plan);
+        }
+        else if(!is_android(plan))
         {
             run_game(plan.executable, split_run_arguments(plan.params.deploy_run_arguments));
         }

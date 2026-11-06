@@ -882,13 +882,13 @@ void deploy_panel::draw_common_settings(rtti::context& ctx)
     widgets::draw_section_title("Deploy Settings");
     draw_edit_target(ctx);
     widgets::draw_gap(widgets::LINE_GAP);
-    // A web build is opened through a web server, which the editor does not run yet.
-    const bool can_run = settings_editor_.get().deploy_target != deploy_platform::web;
-    if(can_run)
+    inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
+    if(settings_editor_.get().deploy_target == deploy_platform::web && settings_editor_.get().deploy_and_run)
     {
-        inspect_deploy_properties(ctx, {"deploy_and_run"_hs});
+        widgets::draw_muted_text("The editor serves the build on this computer until it closes, and opens it in the "
+                                 "default browser. Run Arguments go into the page's address.");
     }
-    if(can_run && settings_editor_.get().deploy_and_run)
+    if(settings_editor_.get().deploy_and_run)
     {
         inspect_deploy_properties(ctx, {"deploy_run_arguments"_hs});
         const auto& shown = settings_editor_.get();
@@ -1375,6 +1375,17 @@ void deploy_panel::draw_web_section(rtti::context& ctx)
         set_profile_message(pm.set_profile_web(ctx, settings_editor_.get_profile(), web), {});
         problems_.invalidate();
     }
+    ImGui::SeparatorText("Hosting");
+    widgets::draw_muted_text("Upload the whole folder to any static web host. Browsers offer WebGPU only to pages served "
+                             "over HTTPS or from this computer. The game runs on one thread, so the page needs no "
+                             "cross-origin isolation headers.");
+    widgets::draw_muted_text("The player's files come with Brotli (.br) and gzip (.gz) copies. A host that compresses "
+                             "on its own needs nothing; a plain server such as nginx should send the copy the browser "
+                             "accepts, with its Content-Encoding header. The data packs are compressed already. Serve "
+                             ".wasm files as application/wasm.");
+    widgets::draw_muted_text("Files whose names carry a hash never change and can be cached for good. Have browsers "
+                             "check index.html, main.js, dotnet.js and data_manifest.json on every visit. The page keeps "
+                             "what it downloads in the browser, so a repeat visit downloads only what changed.");
 }
 
 void deploy_panel::draw_android_section(rtti::context& ctx)

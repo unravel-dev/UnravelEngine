@@ -1,6 +1,7 @@
 #include "web.h"
 #include "files.h"
 
+#include <filesystem/file_fingerprint.h>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -119,7 +120,11 @@ auto make_web_data_manifest(const fs::path& site) -> std::string
     const auto files = list_data_files(site);
     for(std::size_t i = 0; i < files.size(); ++i)
     {
-        manifest += (i == 0 ? "\n  " : ",\n  ") + to_json_string(files[i]);
+        const std::string hash = fs::hash_file_fingerprint(site / files[i], false);
+        manifest += fmt::format("{}{{\"path\": {}, \"hash\": {}}}",
+                                i == 0 ? "\n  " : ",\n  ",
+                                to_json_string(files[i]),
+                                to_json_string(hash));
     }
     return manifest + "\n]\n";
 }

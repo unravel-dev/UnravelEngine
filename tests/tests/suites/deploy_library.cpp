@@ -72,6 +72,7 @@
 #include <deploy/windows_resources.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/defaults/engine_asset_keys.h>
+#include <filesystem/file_fingerprint.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <graphics/graphics.h>
@@ -967,9 +968,16 @@ void test_web_site(const fs::path& root)
     check(!is_present(site / "_framework/stale.wasm"), "runtime files an older player had are removed");
     check(read_text(site / "data/engine/content.pak") == "engine pack", "the deployed data stays");
     deployment::write_web_data_manifest(site);
+    const auto settings_hash = fs::hash_file_fingerprint(site / "data/app/settings/settings.cfg", false);
+    const auto pack_hash = fs::hash_file_fingerprint(site / "data/engine/content.pak", false);
     check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME) ==
-              "[\n  \"data/app/settings/settings.cfg\",\n  \"data/engine/content.pak\"\n]\n",
-          "the manifest lists the data's files by name, as the page fetches them");
+              "[\n  {\"path\": \"data/app/settings/settings.cfg\", \"hash\": \"" + settings_hash +
+                  "\"},\n  {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash + "\"}\n]\n",
+          "the manifest lists the data's files by name with their content's fingerprint, as the page fetches and "
+          "caches them");
+    write_text(site / "data/engine/content.pak", "another engine pack");
+    check(deployment::make_web_data_manifest(site).find(pack_hash) == std::string::npos,
+          "a changed file has another fingerprint, so the page fetches it again");
 }
 
 void test_write_text(const fs::path& root)
