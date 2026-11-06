@@ -43,15 +43,7 @@ struct font : base_font
 
     auto get_scaled_font(uint32_t pixel_size) const -> std::shared_ptr<scaled_font>;
 
-    static auto default_thin() -> asset_handle<font>&;
-    static auto default_extra_light() -> asset_handle<font>&;
-    static auto default_light() -> asset_handle<font>&;
-    static auto default_medium() -> asset_handle<font>&;
     static auto default_regular() -> asset_handle<font>&;
-    static auto default_semi_bold() -> asset_handle<font>&;
-    static auto default_bold() -> asset_handle<font>&;
-    static auto default_heavy() -> asset_handle<font>&;
-    static auto default_black() -> asset_handle<font>&;
 
     gfx::true_type_handle ttf_handle{bgfx::kInvalidHandle};
 };

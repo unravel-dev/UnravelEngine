@@ -14,7 +14,7 @@ namespace
 {
 /// Raised when a change to the texture compiler (texturec, the format choice) changes what a texture
 /// compiles to with the same parameters, so that every compiled texture is compiled again.
-constexpr int TEXTURE_COMPILER_VERSION = 3;
+constexpr int TEXTURE_COMPILER_VERSION = 4;
 /// The protocol of the project's own files.
 constexpr const char* PROJECT_PROTOCOL = "app";
 /// What a texture compiles with when neither it nor the target sets a value.

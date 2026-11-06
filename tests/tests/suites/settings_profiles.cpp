@@ -809,7 +809,7 @@ struct cook_fixture
 
     auto make_plan(const std::unordered_set<std::string>& left_out = {}) const -> deployment::texture_cook_plan
     {
-        return deployment::make_texture_cook_plan(project, params, runtime, database, left_out, editor_target);
+        return deployment::make_texture_cook_plan(project, params, runtime, "app", database, left_out, editor_target);
     }
 };
 

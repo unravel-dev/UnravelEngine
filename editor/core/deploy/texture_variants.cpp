@@ -141,17 +141,24 @@ auto get_profile_texture_target(const deploy_settings& params, const settings& r
 auto make_texture_cook_plan(const fs::path& project_root,
                             const deploy_settings& params,
                             const settings& runtime_settings,
-                            const asset_database::database_t& app_database,
+                            const std::string& protocol,
+                            const asset_database::database_t& database,
                             const std::unordered_set<std::string>& left_out,
                             const asset_compiler::texture_target& editor_target) -> texture_cook_plan
 {
     texture_cook_plan plan;
     plan.profile = params.profile;
     plan.target = get_profile_texture_target(params, runtime_settings);
+    if(protocol != CONTENT_PROTOCOL)
+    {
+        // The engine's textures take the defaults every project shares, as the editor compiles them; only their
+        // formats follow the profile.
+        plan.target.defaults = editor_target.defaults;
+    }
     plan.editor_target = editor_target;
-    plan.variants = get_profile_variants_folder(project_root, params.profile, CONTENT_PROTOCOL);
-    plan.compiled = fs::resolve_protocol(ex::get_compiled_directory(CONTENT_PROTOCOL));
-    for(const auto& [uid, meta] : app_database)
+    plan.variants = get_profile_variants_folder(project_root, params.profile, protocol);
+    plan.compiled = fs::resolve_protocol(ex::get_compiled_directory(protocol));
+    for(const auto& [uid, meta] : database)
     {
         if(!is_texture_key(meta.location))
         {

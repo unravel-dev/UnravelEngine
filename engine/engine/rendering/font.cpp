@@ -854,47 +854,7 @@ auto font::get_scaled_font(uint32_t pixel_size) const -> std::shared_ptr<scaled_
     return f;
 }
 
-auto font::default_thin() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_extra_light() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_light() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_medium() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
 auto font::default_regular() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_semi_bold() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_bold() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_heavy() -> asset_handle<font>&
-{
-    static asset_handle<font> font;
-    return font;
-}
-auto font::default_black() -> asset_handle<font>&
 {
     static asset_handle<font> font;
     return font;

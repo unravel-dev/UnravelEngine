@@ -1,4 +1,5 @@
 #include "defaults.h"
+#include "engine_asset_keys.h"
 
 #include <engine/assets/asset_manager.h>
 
@@ -725,26 +726,7 @@ auto defaults::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str<defaults>(), __func__);
 
-    {
-        // 100
-        font::default_thin() = {};
-        // 200
-        font::default_extra_light() = {};
-        // 300
-        font::default_light() = {};
-        // 400
-        font::default_regular() = {};
-        // 500
-        font::default_medium() = {};
-        // 600
-        font::default_semi_bold() = {};
-        // 700
-        font::default_bold() = {};
-        // 800
-        font::default_heavy() = {};
-        // 900
-        font::default_black() = {};
-    }
+    font::default_regular() = {};
     material::default_color_map() = {};
     material::default_normal_map() = {};
     default_textures::get().clear();
@@ -865,27 +847,8 @@ auto defaults::init_assets(rtti::context& ctx) -> bool
         manager.get_asset_from_instance(id, instance);
     }
 
-    {
-        // 100
-        font::default_thin() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-Thin.ttf");
-        // 200
-        font::default_extra_light() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-ExtraLight.ttf");
-        // 300
-        font::default_light() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-Light.ttf");
-        // 400
-        font::default_regular() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-Regular.ttf");
-        // 500
-        font::default_medium() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-Medium.ttf");
-        // 600
-        font::default_semi_bold() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-SemiBold.ttf");
-        // 700
-        font::default_bold() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-Bold.ttf");
-        // 800
-        font::default_heavy() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-ExtraBold.ttf");
-        // 900
-        font::default_black() = manager.get_asset<font>("engine:/data/fonts/Inter/static/Inter-Black.ttf");
-
-    }
+    // The engine's other fonts load when a game uses them, and a deploy ships only those (engine_asset_keys.h).
+    font::default_regular() = manager.get_asset<font>(TEXT_DEFAULT_FONT_KEY);
 
     {
         material::default_color_map() = manager.get_asset<gfx::texture>("engine:/data/textures/default_color.dds");

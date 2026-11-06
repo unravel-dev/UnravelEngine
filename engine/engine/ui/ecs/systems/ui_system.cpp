@@ -6,6 +6,7 @@
 #include "../components/ui_document_component.h"
 #include "../../ui_data_transforms.h"
 #include "../../ui_element_handles.h"
+#include <engine/defaults/engine_asset_keys.h>
 #include "entt/entity/fwd.hpp"
 #include "filesystem/filesystem.h"
 #include "glm/ext/scalar_constants.hpp"
@@ -626,14 +627,10 @@ void ui_system::load_font(const std::string& path)
 
 void ui_system::load_fonts()
 {
-    load_font("engine:/data/fonts/Inter/InterVariable.ttf");
-    load_font("engine:/data/fonts/Inter/InterVariable-Italic.ttf");
-
-    load_font("engine:/data/fonts/OpenSans/OpenSans-VariableFont_wdth,wght.ttf");
-    load_font("engine:/data/fonts/OpenSans/OpenSans-Italic-VariableFont_wdth,wght.ttf");
-
-    load_font("engine:/data/fonts/RobotoMono/RobotoMono-VariableFont_wght.ttf");
-    load_font("engine:/data/fonts/RobotoMono/RobotoMono-Italic-VariableFont_wght.ttf");
+    for(const char* key : UI_FONT_KEYS)
+    {
+        load_font(key);
+    }
 }
 
 void ui_system::on_create_component(entt::registry& r, entt::entity e)

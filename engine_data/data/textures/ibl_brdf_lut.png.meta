@@ -13,7 +13,7 @@
      "generate_mipmaps": true,
      "quality": {
       "max_size": 0,
-      "compression": 0
+      "compression": 1
      }
     }
    }

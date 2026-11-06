@@ -782,7 +782,7 @@ void deploy_content_view::draw_tree(rtti::context& ctx)
     {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        widgets::draw_muted_text(content_->entries.empty() ? "The project has no assets yet." : "No asset matches.");
+        widgets::draw_muted_text(tree_.get_root().asset_count == 0 ? "The project has no assets yet." : "No asset matches.");
     }
     ImGui::EndTable();
 }
@@ -934,6 +934,9 @@ void deploy_content_view::draw_status_cell(const deployment::tree_node& node, co
                             fmt::format("Named in {}", deployment::get_key_name(entry.used_by)),
                             text);
             draw_tooltip_text("A script names its path:\n" + deployment::get_display_path(entry.used_by));
+            break;
+        case deployment::content_reason::engine:
+            draw_cell_label(ICON_MDI_COG_OUTLINE, widgets::get_accent_u32(), "Loaded by the engine", text);
             break;
         case deployment::content_reason::included:
             draw_cell_label(ICON_MDI_PLUS_CIRCLE_OUTLINE, ADDED_COLOR, "Added by you", text);

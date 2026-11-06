@@ -17,8 +17,9 @@ namespace unravel
 class asset_manager;
 }
 
-/// What a deploy ships of the project's assets: the walk from the scenes, and the include / exclude rules
-/// over it. Engine assets always ship whole.
+/// What a deploy ships of the project's assets and the engine's: the walk from the scenes, and the include /
+/// exclude rules over it. The engine's assets ship whole, but for the folders the walk decides
+/// (ENGINE_FOLDERS_SHIPPED_WHEN_USED): their assets ship when the game uses them or the engine loads them.
 namespace unravel::deployment
 {
 
@@ -33,6 +34,8 @@ enum class content_reason : std::uint8_t
     referenced,
     /// A script names its path.
     named_in_script,
+    /// An engine asset the engine loads, or one outside the engine folders the walk decides.
+    engine,
     /// An include rule, on it or on a folder holding it.
     included,
     /// An exclude rule, on it or on a folder holding it.
@@ -57,10 +60,10 @@ enum class content_filter : std::uint8_t
     changed,
 };
 
-/// A project asset as the deploy's content selection sees it.
+/// A project or engine asset as the deploy's content selection sees it.
 struct content_entry
 {
-    /// The asset's key, such as "app:/data/textures/wall.png".
+    /// The asset's key, such as "app:/data/textures/wall.png" or "engine:/data/fonts/Inter/InterVariable.ttf".
     std::string key;
     /// Whether the walk from the scenes reached it, whatever the rules say.
     bool is_used{};
@@ -81,10 +84,10 @@ struct named_folder
     std::vector<std::string> scripts;
 };
 
-/// What the walk from the deploy's scenes found in the project.
+/// What the walk from the deploy's scenes found in the project and the engine.
 struct content
 {
-    /// Every project asset that can ship, in key order.
+    /// Every project and engine asset that can ship, in key order.
     std::vector<content_entry> entries;
     /// Deploy scenes that are no longer in the project.
     std::vector<std::string> missing_scenes;
@@ -102,8 +105,8 @@ private:
     std::unordered_map<std::string, std::size_t> index_;
 };
 
-/// What the walk reads: the project's asset database and its folder. Taken on the main thread, so the
-/// walk itself touches no protocol and no asset manager and runs on any thread.
+/// What the walk reads: the asset databases of the project and the engine and their folders. Taken on the main
+/// thread, so the walk itself touches no protocol and no asset manager and runs on any thread.
 struct content_source
 {
     asset_database::database_t database;
@@ -112,6 +115,9 @@ struct content_source
     /// The settings the deploy ships, as a document: the handles in them (splash logos and the like) are
     /// reached. Empty: the project's settings file.
     std::string settings_document;
+    asset_database::database_t engine_database;
+    /// The folder of the engine protocol.
+    fs::path engine_root;
 };
 
 /// The open project's source, with `shipped_settings`, the settings its deploy ships (a profile's); main
@@ -119,10 +125,10 @@ struct content_source
 auto make_project_content_source(asset_manager& am, const settings& shipped_settings) -> content_source;
 
 /**
- * @brief Walks from the deploy's scenes - `startup_scene` and params.deploy_scenes - through what they
- * reference: quoted uids and app:/ paths in text asset files, the files UI documents and style sheets
- * link, the assets an import generates beside its source, the project settings' handles, and the paths
- * the project's scripts name.
+ * @brief Walks from the deploy's scenes - `startup_scene` and params.deploy_scenes - and the engine's assets
+ * that always ship through what they reference: quoted uids and app:/ and engine:/ paths in text asset
+ * files, the files UI documents and style sheets link, the assets an import generates beside its source,
+ * the project settings' handles, and the paths the project's and the engine's scripts name.
  */
 auto detect_content(const content_source& source, const deploy_settings& params, const std::string& startup_scene)
     -> content;

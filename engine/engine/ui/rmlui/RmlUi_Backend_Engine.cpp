@@ -16,6 +16,7 @@
 #include <RmlUi/Debugger/Debugger.h>
 
 #include <logging/logging.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <engine/engine.h>
 #include <engine/rendering/renderer.h>
 
@@ -116,7 +117,7 @@ auto initialize(rtti::context& ctx, const char* window_name, int width, int heig
 
         
     data->unravel_plugin = std::make_unique<PreloadStylesheetPlugin>();
-    auto path = fs::resolve_protocol("engine:/data/ui/rml.rcss");
+    auto path = fs::resolve_protocol(UI_BASE_STYLE_SHEET_KEY);
     Rml::SharedPtr<Rml::StyleSheetContainer> ss = Rml::Factory::InstanceStyleSheetFile(path.string());
     data->unravel_plugin->set_default_stylesheet(ss);
     // Register Unravel plugin

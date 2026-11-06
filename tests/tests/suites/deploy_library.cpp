@@ -14,6 +14,9 @@
  *   - the walk over a project folder: scenes, uids, quoted paths, UI links, generated assets, the
  *     project settings, script literals (with and without an extension, interpolated, folders),
  *     binary files not read, missing scenes reported, compiled sizes;
+ *   - the walk over the engine's assets: those outside the folders it decides and those the engine loads
+ *     always ship; engine fonts and UI files ship when a scene, a style sheet or a script uses them;
+ *     relative links stay in the engine; the content tree lists the project's assets only;
  *   - the content tree: counts, folders first, rows of open folders only, search and filter rows,
  *     left out but used assets counted;
  *   - files: classification, compiled paths, a target's shader variants, pack inputs with cooked
@@ -68,6 +71,7 @@
 #include <deploy/web.h>
 #include <deploy/windows_resources.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <graphics/graphics.h>
@@ -109,6 +113,7 @@ using unravel::deploy_settings;
 
 constexpr const char* TEST_PROTOCOL = "unravel-tests-deploy";
 constexpr std::size_t COMPILED_WALL_SIZE = 123;
+constexpr std::size_t COMPILED_FONT_SIZE = 77;
 constexpr auto SPAWN_WAIT = std::chrono::seconds(10);
 constexpr auto SPAWN_POLL = std::chrono::milliseconds(50);
 
@@ -437,6 +442,83 @@ void test_walk_shipped_settings(walk_project project)
     check(is_used_by(found, "app:/data/textures/unused.png", reason::referenced, "Project Settings") &&
               is_unused(found, "app:/data/textures/logo.png"),
           "the shipped settings' handles are followed instead of the settings file's");
+}
+
+/// A project whose scene, style sheet and script use engine fonts, beside engine fonts and UI files nothing
+/// uses.
+auto make_engine_walk_project(const fs::path& root) -> walk_project
+{
+    walk_project project;
+    const auto project_root = root / "project";
+    const auto engine_root = root / "engine";
+    project.source.project_root = project_root;
+    project.source.engine_root = engine_root;
+    auto& database = project.source.database;
+    auto& engine = project.source.engine_database;
+    const auto bold = make_uid("30000000-0000-4000-8000-000000000001");
+    add_asset(database, make_uid("30000000-0000-4000-8000-000000000002"), "app:/data/levels/one.spfb");
+    add_asset(database, make_uid("30000000-0000-4000-8000-000000000003"), "app:/data/ui/hud.rcss");
+    add_asset(database, make_uid("30000000-0000-4000-8000-000000000004"), "app:/data/scripts/game.cs");
+    add_asset(engine, bold, "engine:/data/fonts/Inter/static/Inter-Bold.ttf");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000005"), "engine:/data/fonts/Inter/static/Inter-Black.ttf");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000006"), "engine:/data/fonts/Inter/static/Inter-Light.ttf");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000007"), "engine:/data/fonts/Inter/static/Inter-Thin.ttf");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000008"), unravel::UI_FONT_KEYS[0]);
+    add_asset(engine, make_uid("30000000-0000-4000-8000-000000000009"), unravel::TEXT_DEFAULT_FONT_KEY);
+    add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000a"), unravel::SPLASH_DOCUMENT_KEY);
+    add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000b"), "engine:/data/ui/splash.rcss");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000c"), "engine:/data/ui/template.rhtml");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000d"), "engine:/data/ui/sample_hud.rhtml");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000e"), "engine:/data/scripts/SampleHud.cs");
+    add_asset(engine, make_uid("30000000-0000-4000-8000-00000000000f"), "engine:/data/textures/default_color.dds");
+    write_text(project_root / "data/levels/one.spfb",
+               "{\"font\": {\"uid\": " + quote(bold) + "}, \"style\": \"app:/data/ui/hud.rcss\"}");
+    write_text(project_root / "data/ui/hud.rcss", "@font-face { src: \"engine:/data/fonts/Inter/static/Inter-Black.ttf\"; }");
+    write_text(project_root / "data/scripts/game.cs", "class Game { string font = \"engine:/data/fonts/Inter/static/Inter-Light\"; }");
+    write_text(engine_root / "data/ui/splash.rhtml", "<rml><head><link type=\"text/rcss\" href=\"splash.rcss\"/></head></rml>");
+    write_text(engine_root / "data/scripts/SampleHud.cs",
+               "class SampleHud { const string Layout = \"engine:/data/ui/sample_hud.rhtml\"; }");
+    write_text(engine_root / "compiled/fonts/Inter/static/Inter-Thin.ttf.asset", std::string(COMPILED_FONT_SIZE, 'f'));
+    return project;
+}
+
+void test_walk_engine(const fs::path& root)
+{
+    std::printf("test_walk_engine\n");
+    using reason = deployment::content_reason;
+    const auto project = make_engine_walk_project(root);
+    const auto found = deployment::detect_content(project.source, {}, project.startup_scene);
+    check(is_used_by(found, "engine:/data/textures/default_color.dds", reason::engine, ""),
+          "an engine asset outside the folders the walk decides always ships");
+    check(is_used_by(found, unravel::UI_FONT_KEYS[0], reason::engine, "") &&
+              is_used_by(found, unravel::TEXT_DEFAULT_FONT_KEY, reason::engine, "") &&
+              is_used_by(found, unravel::SPLASH_DOCUMENT_KEY, reason::engine, ""),
+          "the fonts and documents the engine loads always ship");
+    check(is_used_by(found, "engine:/data/ui/splash.rcss", reason::referenced, unravel::SPLASH_DOCUMENT_KEY),
+          "an engine document's relative link stays in the engine");
+    check(is_used_by(found, "engine:/data/fonts/Inter/static/Inter-Bold.ttf", reason::referenced, "app:/data/levels/one.spfb"),
+          "an engine font a scene holds by uid ships");
+    check(is_used_by(found, "engine:/data/fonts/Inter/static/Inter-Black.ttf", reason::referenced, "app:/data/ui/hud.rcss"),
+          "an engine font a project style sheet names ships");
+    check(is_used_by(found, "engine:/data/fonts/Inter/static/Inter-Light.ttf", reason::named_in_script, "app:/data/scripts/game.cs"),
+          "an engine font a project script names ships");
+    check(is_used_by(found, "engine:/data/ui/sample_hud.rhtml", reason::named_in_script, "engine:/data/scripts/SampleHud.cs"),
+          "an engine document an engine script names ships");
+    check(is_unused(found, "engine:/data/fonts/Inter/static/Inter-Thin.ttf") && is_unused(found, "engine:/data/ui/template.rhtml"),
+          "engine fonts and UI files nothing uses are unused");
+    const auto* thin = found.find("engine:/data/fonts/Inter/static/Inter-Thin.ttf");
+    check(thin != nullptr && thin->size == COMPILED_FONT_SIZE, "an engine asset's size is its compiled file's in the engine folder");
+    deploy_settings params;
+    params.deploy_only_used_assets = true;
+    const auto left_out = deployment::get_left_out_keys(params, found);
+    check(left_out.contains(fs::make_path_key("engine:/data/fonts/Inter/static/Inter-Thin.ttf")) &&
+              !left_out.contains(fs::make_path_key("engine:/data/fonts/Inter/static/Inter-Black.ttf")) &&
+              !left_out.contains(fs::make_path_key("engine:/data/textures/default_color.dds")),
+          "only used assets leave the unused engine fonts out");
+    deployment::content_tree tree;
+    tree.build(found);
+    tree.update(params, {});
+    check(tree.get_root().asset_count == 2, "the content tree lists the project's assets only");
 }
 
 void test_tree(const deployment::content& found)
@@ -1884,6 +1966,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         const auto walked = deployment::detect_content(project.source, params, project.startup_scene);
         test_walk(walked);
         test_walk_shipped_settings(project);
+        test_walk_engine(temp / "walk_engine");
         test_tree(walked);
         test_file_classification(temp / "files");
         test_shader_variants(temp / "variants");

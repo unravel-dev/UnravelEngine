@@ -6,6 +6,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_references.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -26,12 +27,40 @@ constexpr std::size_t TEXT_SNIFF_BYTES = 4096;
 /// near it.
 constexpr std::uintmax_t MAX_SCANNED_BYTES = std::uintmax_t(64) << 20;
 
-/// The path below the protocol root of an app key ("app:/data/a.png" -> "data/a.png"); empty for other
-/// protocols.
-auto get_project_relative(const std::string& key) -> std::string
+/// The protocols whose assets the walk reads and follows.
+constexpr std::array<const char*, 2> WALKED_PROTOCOLS = {CONTENT_PROTOCOL, ENGINE_PROTOCOL};
+
+/// The protocol of an app or engine key ("app:/data/a.png" -> "app"); empty for other keys.
+auto get_key_protocol(const std::string& key) -> std::string
 {
-    const std::string prefix = std::string(CONTENT_PROTOCOL) + ":/";
-    return key.compare(0, prefix.size(), prefix) == 0 ? key.substr(prefix.size()) : std::string{};
+    for(const auto* protocol : WALKED_PROTOCOLS)
+    {
+        const std::string prefix = std::string(protocol) + ":/";
+        if(key.compare(0, prefix.size(), prefix) == 0)
+        {
+            return protocol;
+        }
+    }
+    return {};
+}
+
+/// The path below its protocol's root of an app or engine key ("app:/data/a.png" -> "data/a.png"); empty for
+/// other keys.
+auto get_protocol_relative(const std::string& key) -> std::string
+{
+    const auto protocol = get_key_protocol(key);
+    return protocol.empty() ? std::string{} : key.substr(protocol.size() + 2);
+}
+
+/// Whether the walk decides if an engine asset ships; the engine's other assets always ship.
+auto is_shipped_when_used(const std::string& key) -> bool
+{
+    return std::any_of(ENGINE_FOLDERS_SHIPPED_WHEN_USED.begin(),
+                       ENGINE_FOLDERS_SHIPPED_WHEN_USED.end(),
+                       [&key](const char* folder)
+                       {
+                           return is_key_under(key, folder);
+                       });
 }
 
 /// Reads a text file whole; false for a binary, missing or oversized file. The first bytes are read
@@ -120,8 +149,26 @@ public:
         }
     }
 
-    /// What the project's scripts name by path. A path that names no asset is reported as the folder it
-    /// points into, since what a script loads from there cannot be followed.
+    /// The engine's assets that ship whatever the game uses: those outside the folders the walk decides, and
+    /// those the engine loads by path.
+    void reach_engine()
+    {
+        for(std::size_t i = 0; i < content_.entries.size(); ++i)
+        {
+            const auto& key = content_.entries[i].key;
+            if(get_key_protocol(key) == ENGINE_PROTOCOL && !is_shipped_when_used(key))
+            {
+                reach_index(i, content_reason::engine, {});
+            }
+        }
+        for(const auto* key : ENGINE_LOADED_KEYS)
+        {
+            reach(key, content_reason::engine, {});
+        }
+    }
+
+    /// What the project's and the engine's scripts name by path. A path that names no asset is reported as
+    /// the folder it points into, since what a script loads from there cannot be followed.
     void reach_script_paths()
     {
         for(const auto& script_key : script_keys_)
@@ -131,7 +178,7 @@ public:
             {
                 continue;
             }
-            for(const auto& path : asset_references::find_quoted_protocol_paths(text, CONTENT_PROTOCOL))
+            for(const auto& path : find_quoted_paths(text))
             {
                 if(!reach_path(path, content_reason::named_in_script, script_key))
                 {
@@ -154,23 +201,8 @@ public:
 private:
     void index_database()
     {
-        for(const auto& [uid, meta] : source_.database)
-        {
-            if(is_script_key(meta.location))
-            {
-                script_keys_.push_back(meta.location);
-                continue;
-            }
-            if(get_compiled_paths(meta.location, source_.project_root).empty())
-            {
-                continue;
-            }
-            content_.entries.push_back({meta.location, false, content_reason::unused, {}, get_compiled_size(meta.location, source_.project_root)});
-            if(meta.meta.generated.is_generated())
-            {
-                generated_by_source_.emplace(meta.meta.generated.source_uid, meta.location);
-            }
-        }
+        index_protocol(source_.database, source_.project_root);
+        index_protocol(source_.engine_database, source_.engine_root);
         std::sort(content_.entries.begin(),
                   content_.entries.end(),
                   [](const content_entry& lhs, const content_entry& rhs)
@@ -182,17 +214,54 @@ private:
         {
             entries_by_stem_.emplace(fs::make_path_key(get_key_without_extension(content_.entries[i].key)), i);
         }
-        for(const auto& [uid, meta] : source_.database)
+        for(const auto* database : {&source_.database, &source_.engine_database})
         {
-            key_by_uid_.emplace(uid, meta.location);
-            uid_by_key_.emplace(fs::make_path_key(meta.location), uid);
+            for(const auto& [uid, meta] : *database)
+            {
+                key_by_uid_.emplace(uid, meta.location);
+                uid_by_key_.emplace(fs::make_path_key(meta.location), uid);
+            }
         }
         std::sort(script_keys_.begin(), script_keys_.end());
     }
 
+    void index_protocol(const asset_database::database_t& database, const fs::path& root)
+    {
+        for(const auto& [uid, meta] : database)
+        {
+            if(is_script_key(meta.location))
+            {
+                script_keys_.push_back(meta.location);
+                continue;
+            }
+            if(get_compiled_paths(meta.location, root).empty())
+            {
+                continue;
+            }
+            content_.entries.push_back({meta.location, false, content_reason::unused, {}, get_compiled_size(meta.location, root)});
+            if(meta.meta.generated.is_generated())
+            {
+                generated_by_source_.emplace(meta.meta.generated.source_uid, meta.location);
+            }
+        }
+    }
+
     auto get_file(const std::string& key) const -> fs::path
     {
-        return source_.project_root / get_project_relative(key);
+        const auto& root = get_key_protocol(key) == ENGINE_PROTOCOL ? source_.engine_root : source_.project_root;
+        return root / get_protocol_relative(key);
+    }
+
+    /// The quoted app:/ and engine:/ paths in a text.
+    static auto find_quoted_paths(hpp::string_view text) -> std::vector<std::string>
+    {
+        std::vector<std::string> paths;
+        for(const auto* protocol : WALKED_PROTOCOLS)
+        {
+            auto found = asset_references::find_quoted_protocol_paths(text, protocol);
+            paths.insert(paths.end(), std::make_move_iterator(found.begin()), std::make_move_iterator(found.end()));
+        }
+        return paths;
     }
 
     /// Marks the asset used and queues it. False when the key names no asset that can ship.
@@ -250,7 +319,7 @@ private:
 
     void add_named_folder(const std::string& folder, const std::string& script_key)
     {
-        if(folder.empty() || is_same_key(folder, ex::get_data_directory(CONTENT_PROTOCOL)))
+        if(folder.empty() || is_same_key(folder, ex::get_data_directory(get_key_protocol(folder))))
         {
             return;
         }
@@ -281,7 +350,7 @@ private:
         if(read_scannable_text_file(get_file(key), text))
         {
             reach_uids(text, key);
-            for(const auto& path : asset_references::find_quoted_protocol_paths(text, CONTENT_PROTOCOL))
+            for(const auto& path : find_quoted_paths(text))
             {
                 reach_path(path, content_reason::referenced, key);
             }
@@ -309,16 +378,16 @@ private:
     }
 
     /// A link relative to the document's folder, or a protocol path, as a key; empty when it leaves the
-    /// project.
+    /// document's protocol.
     static auto resolve_link(const std::string& from_key, const std::string& link) -> std::string
     {
         if(link.find(":/") != std::string::npos)
         {
             return link;
         }
-        const auto relative = (fs::path(get_project_relative(from_key)).parent_path() / link).lexically_normal().generic_string();
-        const bool leaves_project = relative.empty() || relative.compare(0, 2, "..") == 0;
-        return leaves_project ? std::string{} : std::string(CONTENT_PROTOCOL) + ":/" + relative;
+        const auto relative = (fs::path(get_protocol_relative(from_key)).parent_path() / link).lexically_normal().generic_string();
+        const bool leaves_protocol = relative.empty() || relative.compare(0, 2, "..") == 0;
+        return leaves_protocol ? std::string{} : get_key_protocol(from_key) + ":/" + relative;
     }
 
     void reach_ui_links(const std::string& key, const std::string& text)
@@ -463,9 +532,12 @@ void content::build_index()
 auto make_project_content_source(asset_manager& am, const settings& shipped_settings) -> content_source
 {
     const std::string root = std::string(CONTENT_PROTOCOL) + ":/";
+    const std::string engine_root = std::string(ENGINE_PROTOCOL) + ":/";
     return {am.get_database_snapshot(root),
             fs::resolve_protocol(root),
-            serialization::save_to_document(shipped_settings, SETTINGS_DOCUMENT_ROOT)};
+            serialization::save_to_document(shipped_settings, SETTINGS_DOCUMENT_ROOT),
+            am.get_database_snapshot(engine_root),
+            fs::resolve_protocol(engine_root)};
 }
 
 auto detect_content(const content_source& source, const deploy_settings& params, const std::string& startup_scene)
@@ -482,6 +554,7 @@ auto detect_content(const content_source& source, const deploy_settings& params,
         walker.reach_scene(scene);
     }
     walker.reach_settings();
+    walker.reach_engine();
     walker.reach_script_paths();
     walker.walk();
     return result;
@@ -625,6 +698,8 @@ auto get_reason_name(content_reason reason) -> const char*
             return "referenced";
         case content_reason::named_in_script:
             return "named_in_script";
+        case content_reason::engine:
+            return "engine";
         case content_reason::included:
             return "included";
         case content_reason::excluded:

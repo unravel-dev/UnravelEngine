@@ -591,7 +591,9 @@ auto compile_texture_to_file(const fs::path& input_path,
     std::string str_input = compile_input.string();
     std::string str_output = output_path.string();
     
-    bool try_compress = protocol == "app";
+    // The game's and the engine's textures compress; the editor's own (its icons and UI) stay exact. A texture that must
+    // stay exact, such as a lookup table, says so in its import settings (compression none).
+    bool try_compress = protocol != "editor";
 
     const auto& quality = parameters;
     const auto input_info = get_input_texture_info(compile_input, quality.max_size);

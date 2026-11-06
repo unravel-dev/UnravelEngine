@@ -2,6 +2,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
+#include <engine/defaults/engine_asset_keys.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/settings/settings.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
@@ -23,7 +24,6 @@ namespace unravel
 {
 namespace
 {
-constexpr const char* default_splash_document = "engine:/data/ui/splash.rhtml";
 constexpr const char* splash_seq_scope = "splash_scene";
 constexpr const char* made_with_logo = "engine:/data/logos/made_with.png";
 constexpr float made_with_duration_sec = 5.0f;
@@ -210,7 +210,7 @@ auto build_logo_sequence(entt::handle ui_entity, const std::vector<splash_logo_s
 auto splash_scene::get_document_key(rtti::context& ctx) -> std::string
 {
     (void)ctx;
-    return default_splash_document;
+    return SPLASH_DOCUMENT_KEY;
 }
 
 auto splash_scene::has_content(rtti::context& ctx) -> bool

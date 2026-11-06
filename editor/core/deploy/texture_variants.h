@@ -30,26 +30,29 @@ struct texture_cook_plan
     /// The target of the editor's own compiled files, which ship where the profile resolves the same and they
     /// are current.
     asset_compiler::texture_target editor_target;
-    /// The editor's compiled folder of the project's assets.
+    /// The editor's compiled folder of the protocol's assets.
     fs::path compiled;
-    /// cache/profiles/<profile>/app: the variants, laid out as the compiled folder.
+    /// cache/profiles/<profile>/<protocol>: the variants, laid out as the compiled folder.
     fs::path variants;
-    /// The keys ("app:/data/...") of the project's textures the deploy ships.
+    /// The keys ("app:/data/...", "engine:/data/...") of the protocol's textures the deploy ships.
     std::vector<std::string> shipped;
-    /// The keys of the project's textures the content selection leaves out: their variants are kept for a
+    /// The keys of the protocol's textures the content selection leaves out: their variants are kept for a
     /// later deploy, which checks them again before shipping them.
     std::vector<std::string> left_out;
 };
 
 /**
- * @param app_database The project's asset index; its textures are cooked.
+ * @param protocol The protocol whose textures are cooked: the project's (app) or the engine's.
+ * @param database The protocol's asset index.
  * @param left_out The path keys (fs::make_path_key) of the assets the content selection leaves out.
- * @param editor_target What the editor compiles its own cache for (asset_compiler::get_editor_texture_target).
+ * @param editor_target What the editor compiles the protocol's files for in its cache
+ * (asset_compiler::get_editor_texture_target_for).
  */
 auto make_texture_cook_plan(const fs::path& project_root,
                             const deploy_settings& params,
                             const settings& runtime_settings,
-                            const asset_database::database_t& app_database,
+                            const std::string& protocol,
+                            const asset_database::database_t& database,
                             const std::unordered_set<std::string>& left_out,
                             const asset_compiler::texture_target& editor_target) -> texture_cook_plan;
 

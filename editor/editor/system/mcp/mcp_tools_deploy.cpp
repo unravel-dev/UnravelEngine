@@ -1082,15 +1082,17 @@ void register_deploy_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "deploy_get_content",
          .description =
-             "What a deploy of a profile (default the deploy profile) ships of the project's assets, as the Deploy "
-             "window's Content tab shows it: finds what "
+             "What a deploy of a profile (default the deploy profile) ships of the project's and the engine's assets, "
+             "as the Deploy window's Content tab shows it: finds what "
              "the startup scene, the scenes list (deploy_set_settings scenes) and the scripts' path literals use, "
              "directly or through other assets, then applies the include / exclude rules and only_used_assets. "
              "Returns counts and sizes, deploy scenes no longer in the project, named_folders: folders scripts build "
              "asset paths in at run time, each with those scripts (worth an include rule), and one entry per asset: ships, reason (scene, referenced, named_in_script, "
-             "included, excluded, unused), used_by (what led to it) and compiled size, plus orphan_rules: rules on "
+             "engine, included, excluded, unused), used_by (what led to it) and compiled size, plus orphan_rules: rules on "
              "keys that name nothing in the project (deploy_set_settings drops them when given the lists without "
-             "them). Engine assets always ship and are not listed. The walk runs off the main thread.",
+             "them). Engine assets are listed too (folder engine:/data): they ship whole, but for engine:/data/fonts and "
+             "engine:/data/ui, whose assets ship when the game uses them or the engine loads them (reason engine). The "
+             "walk runs off the main thread.",
          .input_schema_json =
              R"json({"type":"object","properties":{"profile":{"type":"string","description":"Default the deploy profile"},"folder":{"type":"string","description":"Only assets in this folder (or this one asset), e.g. app:/data/levels"},"show":{"type":"string","enum":["all","shipped","left_out","changed"],"description":"Default all; changed = assets under an include or exclude rule"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":2000,"description":"Default 200"}}})json",
          .handler =

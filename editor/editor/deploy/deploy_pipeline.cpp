@@ -87,7 +87,9 @@ struct deploy_plan
     protocol_job engine;
     runtime_plan runtime;
     fs::path cook_staging;
+    /// The project's textures and the engine's, each cooked to the profile's formats.
     texture_cook_plan textures;
+    texture_cook_plan engine_textures;
     shader_cook_plan shaders;
     /// Android deploys only: the package built from the deployed data.
     android_package_plan android;
@@ -173,7 +175,7 @@ auto make_cook_staging() -> fs::path
            fmt::format("{}{}-{:08x}", COOK_STAGING_PREFIX, process::get_current_process_id(), device());
 }
 
-/// The path keys of the project assets the content selection leaves out; empty when everything ships.
+/// The path keys of the project and engine assets the content selection leaves out; empty when everything ships.
 auto find_left_out_assets(asset_manager& am, const deploy_settings& params, const settings& shipped_settings)
     -> std::unordered_set<std::string>
 {
@@ -185,7 +187,7 @@ auto find_left_out_assets(asset_manager& am, const deploy_settings& params, cons
     const auto found = needs_walk(params) ? detect_content(source, params, shipped_settings.standalone.startup_scene.id())
                                           : list_content(source);
     auto left_out = get_left_out_keys(params, found);
-    APPLOG_INFO("Deploy: shipping {} of {} project assets; {} left out (see the Deploy window's Content tab).",
+    APPLOG_INFO("Deploy: shipping {} of {} project and engine assets; {} left out (see the Deploy window's Content tab).",
                 found.entries.size() - left_out.size(),
                 found.entries.size(),
                 left_out.size());
@@ -270,9 +272,17 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     plan.textures = make_texture_cook_plan(get_project_root(),
                                            params,
                                            plan.runtime_settings,
+                                           CONTENT_PROTOCOL,
                                            am.get_database_snapshot("app:/"),
                                            left_out,
                                            asset_compiler::get_editor_texture_target());
+    plan.engine_textures = make_texture_cook_plan(get_project_root(),
+                                                  params,
+                                                  plan.runtime_settings,
+                                                  ENGINE_PROTOCOL,
+                                                  am.get_database_snapshot("engine:/"),
+                                                  left_out,
+                                                  asset_compiler::get_editor_texture_target_for("engine:/"));
     plan.shaders = make_shader_cook_plan(get_project_root(),
                                          params,
                                          am.get_database_snapshot("engine:/"),
@@ -286,8 +296,12 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
                                  data_params,
                                  CONTENT_PROTOCOL,
                                  {staging / CONTENT_PROTOCOL, plan.textures.variants, app_shaders},
-                                 std::move(left_out));
-    plan.engine = make_protocol_job(am, data_params, ENGINE_PROTOCOL, {staging / ENGINE_PROTOCOL, engine_shaders}, {});
+                                 left_out);
+    plan.engine = make_protocol_job(am,
+                                    data_params,
+                                    ENGINE_PROTOCOL,
+                                    {staging / ENGINE_PROTOCOL, plan.engine_textures.variants, engine_shaders},
+                                    std::move(left_out));
     plan.runtime = make_runtime_plan(ctx, data_params);
     plan.cook_staging = staging;
     if(is_android(plan))
@@ -575,7 +589,7 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
     // Before anything touches the destination, so a refused deploy leaves the previous build there.
     std::vector<std::string> uncompiled;
     const auto shader_variants = get_shader_variants(params);
-    find_uncompiled_assets(am.get_database_snapshot("engine:/"), fs::resolve_protocol("engine:/"), {}, shader_variants, uncompiled);
+    find_uncompiled_assets(am.get_database_snapshot("engine:/"), fs::resolve_protocol("engine:/"), left_out, shader_variants, uncompiled);
     find_uncompiled_assets(am.get_database_snapshot("app:/"), get_project_root(), left_out, shader_variants, uncompiled);
     if(!uncompiled.empty())
     {
@@ -604,19 +618,25 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
         jobs.push_back({name, job});
         futures.push_back(job);
     };
-    // Each data step packs what the cooks of its protocol made: the engine's shaders, the project's textures and
-    // shaders.
-    deploy_jobs engine_cooks;
-    deploy_jobs app_cooks{{STEP_COOK_TEXTURES, schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_textures(plan->textures); }})}};
+    // Each data step packs what the cooks of its protocol made: its textures and its shaders.
+    const auto textures_cook = schedule_step(th,
+                                             {STEP_COOK_TEXTURES,
+                                              [plan]()
+                                              {
+                                                  cook_textures(plan->textures);
+                                                  cook_textures(plan->engine_textures);
+                                              }});
+    deploy_jobs engine_cooks{{STEP_COOK_TEXTURES, textures_cook}};
+    deploy_jobs app_cooks{{STEP_COOK_TEXTURES, textures_cook}};
     if(plan->shaders.has_work())
     {
         engine_cooks.push_back({STEP_COOK_SHADERS, schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }})});
         app_cooks.push_back(engine_cooks.back());
     }
-    add_job(STEP_COOK_TEXTURES, app_cooks.front().job);
+    add_job(STEP_COOK_TEXTURES, textures_cook);
     if(plan->shaders.has_work())
     {
-        add_job(STEP_COOK_SHADERS, engine_cooks.front().job);
+        add_job(STEP_COOK_SHADERS, engine_cooks.back().job);
     }
     for(const auto& step : make_steps(plan))
     {
