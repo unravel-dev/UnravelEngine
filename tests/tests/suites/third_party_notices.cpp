@@ -66,6 +66,7 @@ auto make_libraries(bool has_openal_soft, bool has_libdwarf, bool has_miniaudio)
     libraries.has_openal_soft = has_openal_soft;
     libraries.has_libdwarf = has_libdwarf;
     libraries.has_miniaudio = has_miniaudio;
+    libraries.has_cpptrace = true;
     return libraries;
 }
 
@@ -134,6 +135,16 @@ void test_leaves_out_miniaudio_without_it()
           "a build without miniaudio keeps the LGPL part");
 }
 
+void test_leaves_out_cpptrace_without_it()
+{
+    auto libraries = make_libraries(false, false, true);
+    libraries.has_cpptrace = false;
+    const auto actual = get_third_party_notices(libraries);
+    check(!has_text(actual, "  cpptrace:") && !has_text(actual, "Jeremy Rifkin"),
+          "a build without cpptrace (the browser's) leaves out its line and license");
+    check(has_text(actual, "  miniaudio 0.11.26:"), "a build without cpptrace keeps the other libraries");
+}
+
 void test_follows_this_build()
 {
     const auto libraries = get_linked_libraries();
@@ -146,6 +157,7 @@ void test_follows_this_build()
           "this binary's notices name OpenAL Soft only when it links it");
     check(has_text(actual, "  miniaudio 0.11.26:") == libraries.has_miniaudio,
           "this binary's notices name miniaudio only when it links it");
+    check(libraries.has_cpptrace && has_text(actual, "  cpptrace:"), "a desktop build links cpptrace and names it");
 }
 
 void test_names_the_engine_version(const std::string& all)
@@ -170,6 +182,7 @@ auto run_third_party_notices_suite(rtti::context& /*ctx*/) -> int
     test_leaves_out_the_lgpl_without_its_libraries(all);
     test_keeps_the_lgpl_library_a_build_links();
     test_leaves_out_miniaudio_without_it();
+    test_leaves_out_cpptrace_without_it();
     test_follows_this_build();
     test_names_the_engine_version(all);
     test_is_ascii(all);

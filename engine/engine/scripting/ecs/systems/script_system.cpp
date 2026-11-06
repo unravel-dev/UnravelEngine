@@ -409,10 +409,15 @@ auto select_interpreter_config(const cmd_line::parser& parser) -> dotnet::interp
 /*
  * auto: hostfxr when the dotnet root has one (every desktop install and the default deploy),
  * the coreclr host otherwise. coreclr: start the runtime without hostfxr, as platforms that ship
- * no hostfxr must (--clr-host coreclr exercises that path on desktop).
+ * no hostfxr must (--clr-host coreclr exercises that path on desktop). In the browser the page
+ * started the runtime before the engine, so there is no choice.
  */
 auto select_runtime_host(const cmd_line::parser& parser) -> dotnet::runtime_host
 {
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    (void)parser;
+    return dotnet::runtime_host::browser;
+#else
     std::string host;
     parser.try_get("clr-host", host);
     if(host == "hostfxr")
@@ -424,6 +429,20 @@ auto select_runtime_host(const cmd_line::parser& parser) -> dotnet::runtime_host
         return dotnet::runtime_host::coreclr;
     }
     return dotnet::runtime_host::automatic;
+#endif
+}
+
+auto get_runtime_host_name(dotnet::runtime_host host) -> const char*
+{
+    switch(host)
+    {
+        case dotnet::runtime_host::coreclr:
+            return "coreclr";
+        case dotnet::runtime_host::browser:
+            return "the page";
+        default:
+            return "hostfxr";
+    }
 }
 #endif
 
@@ -525,7 +544,7 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
 #if !DOTNETPP_BACKEND_MONO
         APPLOG_INFO(".NET runtime {} started through {} from {}",
                     dotnet::get_runtime_version(),
-                    dotnet::get_runtime_host() == dotnet::runtime_host::coreclr ? "coreclr" : "hostfxr",
+                    get_runtime_host_name(dotnet::get_runtime_host()),
                     dotnet::get_runtime_framework_dir());
 #endif
         bind_internal_calls(ctx);

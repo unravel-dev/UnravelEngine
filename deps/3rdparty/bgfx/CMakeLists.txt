@@ -2,7 +2,12 @@ set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "Build bgfx examples." FORCE)
 set(BGFX_BUILD_TESTS OFF CACHE BOOL "Build bgfx tests." FORCE)
 set(BGFX_INSTALL OFF CACHE BOOL "Create installation target." FORCE)
 
-set(BGFX_CONFIG_MULTITHREADED ON CACHE BOOL "Build bgfx with multithreaded configuration." FORCE)
+# The browser gives the engine no threads, so there bgfx renders inside bgfx::frame.
+if(EMSCRIPTEN)
+    set(BGFX_CONFIG_MULTITHREADED OFF CACHE BOOL "Build bgfx with multithreaded configuration." FORCE)
+else()
+    set(BGFX_CONFIG_MULTITHREADED ON CACHE BOOL "Build bgfx with multithreaded configuration." FORCE)
+endif()
 
 # bx is built per source file: bx 2531549 declares IsDebuggerPresent() returning bool in
 # debug.cpp, which conflicts with the <windows.h> declaration other sources pull into the
@@ -70,6 +75,13 @@ add_definitions(-DBGFX_CONFIG_MAX_FRAME_LATENCY=4)
 # (src/config.h), the OpenGL ES backend and its EGL dependency included.
 if(ANDROID)
     add_definitions(-DBGFX_CONFIG_RENDERER_VULKAN=1)
+endif()
+
+# The browser renders through WebGPU. bgfx's src/config.h leaves it off on Emscripten unless defined, and
+# bgfx.cmake's option of the same name only links Dawn's emdawnwebgpu port.
+if(EMSCRIPTEN)
+    set(BGFX_CONFIG_RENDERER_WEBGPU ON CACHE BOOL "Enable the webgpu renderer" FORCE)
+    add_definitions(-DBGFX_CONFIG_RENDERER_WEBGPU=1)
 endif()
 
 # Fixes to bgfx itself (patches/, applied in file name order by apply_patches.cmake). bgfx.cmake fetches bgfx

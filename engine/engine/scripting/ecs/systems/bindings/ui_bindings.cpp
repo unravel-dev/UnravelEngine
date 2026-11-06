@@ -422,7 +422,7 @@ auto get_listener(bool capture) -> ui_global_event_listener*
 }
 
 // Ensure a native event listener is attached to the element for the given event type
-void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_handle, const std::string& event_type, bool capture)
+void internal_m2n_ui_ensure_native_event_listener(ui_element_handle element_handle, const std::string& event_type, bool capture)
 {
     auto* element = resolve_ui_element_handle(element_handle);
     if (!element)
@@ -446,7 +446,7 @@ void internal_m2n_ui_ensure_native_event_listener(std::intptr_t element_handle, 
     }
 }
 
-void internal_m2n_ui_remove_native_event_listener(std::intptr_t element_handle, const std::string& event_type, bool capture)
+void internal_m2n_ui_remove_native_event_listener(ui_element_handle element_handle, const std::string& event_type, bool capture)
 {
     // A destroyed element took its listeners with it.
     if(auto* element = resolve_ui_element_handle(element_handle))
@@ -460,7 +460,7 @@ void internal_m2n_ui_remove_native_event_listener(std::intptr_t element_handle, 
     }
 }
 
-auto internal_m2n_ui_take_destroyed_handle() -> std::intptr_t
+auto internal_m2n_ui_take_destroyed_handle() -> ui_element_handle
 {
     return take_destroyed_ui_element_handle();
 }
@@ -511,7 +511,7 @@ void internal_m2n_ui_stop_immediate_propagation(std::intptr_t native_ptr)
 using handle_list = std::vector<int64_t>;
 
 /// Resolves an element a call is about to change: layout read afterwards must update first.
-auto resolve_for_change(std::intptr_t element_handle) -> Rml::Element*
+auto resolve_for_change(ui_element_handle element_handle) -> Rml::Element*
 {
     auto* element = resolve_ui_element_handle(element_handle);
     if(element)
@@ -522,7 +522,7 @@ auto resolve_for_change(std::intptr_t element_handle) -> Rml::Element*
 }
 
 /// The document @p document_handle names while it is still @p owner_entity's open document.
-auto resolve_ui_document(std::intptr_t document_handle, entt::entity owner_entity) -> Rml::ElementDocument*
+auto resolve_ui_document(ui_element_handle document_handle, entt::entity owner_entity) -> Rml::ElementDocument*
 {
     auto* element = resolve_ui_element_handle(document_handle);
     if(!element)
@@ -540,7 +540,7 @@ auto resolve_ui_document(std::intptr_t document_handle, entt::entity owner_entit
 }
 
 /// Resolves an element whose layout a call reads, with that layout current.
-auto resolve_for_layout(std::intptr_t element_handle) -> Rml::Element*
+auto resolve_for_layout(ui_element_handle element_handle) -> Rml::Element*
 {
     auto* element = resolve_ui_element_handle(element_handle);
     if(element)
@@ -573,7 +573,7 @@ auto is_document(Rml::Element& element) -> bool
 // UI Document Wrapper Functions
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_document_get_wrapper(entt::entity entity_id) -> std::intptr_t
+auto internal_m2n_ui_document_get_wrapper(entt::entity entity_id) -> ui_element_handle
 {
     if (auto comp = safe_get_component<ui_document_component>(entity_id))
     {
@@ -582,13 +582,13 @@ auto internal_m2n_ui_document_get_wrapper(entt::entity entity_id) -> std::intptr
     return 0;
 }
 
-auto internal_m2n_ui_document_get_element_wrapper_by_id(std::intptr_t document_handle, entt::entity owner_entity, const std::string& element_id) -> std::intptr_t
+auto internal_m2n_ui_document_get_element_wrapper_by_id(ui_element_handle document_handle, entt::entity owner_entity, const std::string& element_id) -> ui_element_handle
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     return document ? get_ui_element_handle(document->GetElementById(element_id)) : 0;
 }
 
-auto internal_m2n_ui_document_query_selector_wrapper(std::intptr_t document_handle, entt::entity owner_entity, const std::string& selector) -> std::intptr_t
+auto internal_m2n_ui_document_query_selector_wrapper(ui_element_handle document_handle, entt::entity owner_entity, const std::string& selector) -> ui_element_handle
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     return document ? get_ui_element_handle(document->QuerySelector(selector)) : 0;
@@ -598,18 +598,18 @@ auto internal_m2n_ui_document_query_selector_wrapper(std::intptr_t document_hand
 // UI Document Wrapper Methods
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_document_wrapper_is_valid(std::intptr_t document_handle, entt::entity owner_entity) -> bool
+auto internal_m2n_ui_document_wrapper_is_valid(ui_element_handle document_handle, entt::entity owner_entity) -> bool
 {
     return resolve_ui_document(document_handle, owner_entity) != nullptr;
 }
 
-auto internal_m2n_ui_document_wrapper_get_title(std::intptr_t document_handle, entt::entity owner_entity) -> std::string
+auto internal_m2n_ui_document_wrapper_get_title(ui_element_handle document_handle, entt::entity owner_entity) -> std::string
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     return document ? document->GetTitle() : std::string();
 }
 
-void internal_m2n_ui_document_wrapper_set_title(std::intptr_t document_handle, entt::entity owner_entity, const std::string& title)
+void internal_m2n_ui_document_wrapper_set_title(ui_element_handle document_handle, entt::entity owner_entity, const std::string& title)
 {
     if(auto* document = resolve_ui_document(document_handle, owner_entity))
     {
@@ -617,13 +617,13 @@ void internal_m2n_ui_document_wrapper_set_title(std::intptr_t document_handle, e
     }
 }
 
-auto internal_m2n_ui_document_wrapper_is_visible(std::intptr_t document_handle, entt::entity owner_entity) -> bool
+auto internal_m2n_ui_document_wrapper_is_visible(ui_element_handle document_handle, entt::entity owner_entity) -> bool
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     return document && document->IsVisible();
 }
 
-void internal_m2n_ui_document_wrapper_show(std::intptr_t document_handle, entt::entity owner_entity)
+void internal_m2n_ui_document_wrapper_show(ui_element_handle document_handle, entt::entity owner_entity)
 {
     if(auto* document = resolve_ui_document(document_handle, owner_entity))
     {
@@ -631,7 +631,7 @@ void internal_m2n_ui_document_wrapper_show(std::intptr_t document_handle, entt::
     }
 }
 
-void internal_m2n_ui_document_wrapper_hide(std::intptr_t document_handle, entt::entity owner_entity)
+void internal_m2n_ui_document_wrapper_hide(ui_element_handle document_handle, entt::entity owner_entity)
 {
     if(auto* document = resolve_ui_document(document_handle, owner_entity))
     {
@@ -639,7 +639,7 @@ void internal_m2n_ui_document_wrapper_hide(std::intptr_t document_handle, entt::
     }
 }
 
-void internal_m2n_ui_document_wrapper_close(std::intptr_t document_handle, entt::entity owner_entity)
+void internal_m2n_ui_document_wrapper_close(ui_element_handle document_handle, entt::entity owner_entity)
 {
     if(resolve_ui_document(document_handle, owner_entity))
     {
@@ -647,7 +647,7 @@ void internal_m2n_ui_document_wrapper_close(std::intptr_t document_handle, entt:
     }
 }
 
-auto internal_m2n_ui_document_wrapper_query_selector_all(std::intptr_t document_handle, entt::entity owner_entity, const std::string& selector) -> handle_list
+auto internal_m2n_ui_document_wrapper_query_selector_all(ui_element_handle document_handle, entt::entity owner_entity, const std::string& selector) -> handle_list
 {
     Rml::ElementList elements;
     if(auto* document = resolve_ui_document(document_handle, owner_entity))
@@ -657,7 +657,7 @@ auto internal_m2n_ui_document_wrapper_query_selector_all(std::intptr_t document_
     return to_handles(elements);
 }
 
-auto internal_m2n_ui_document_wrapper_create_element(std::intptr_t document_handle, entt::entity owner_entity, const std::string& tag) -> std::intptr_t
+auto internal_m2n_ui_document_wrapper_create_element(ui_element_handle document_handle, entt::entity owner_entity, const std::string& tag) -> ui_element_handle
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     if(!document)
@@ -667,20 +667,20 @@ auto internal_m2n_ui_document_wrapper_create_element(std::intptr_t document_hand
     return get_ui_element_handle(adopt_orphan_ui_element(document, document->CreateElement(tag)));
 }
 
-auto internal_m2n_ui_document_wrapper_element_at(std::intptr_t document_handle, entt::entity owner_entity, const math::vec2& point) -> std::intptr_t
+auto internal_m2n_ui_document_wrapper_element_at(ui_element_handle document_handle, entt::entity owner_entity, const math::vec2& point) -> ui_element_handle
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     return document ? get_ui_element_handle(get_ui_element_at(*document, point)) : 0;
 }
 
-auto internal_m2n_ui_document_wrapper_get_dp_ratio(std::intptr_t document_handle, entt::entity owner_entity) -> float
+auto internal_m2n_ui_document_wrapper_get_dp_ratio(ui_element_handle document_handle, entt::entity owner_entity) -> float
 {
     auto* document = resolve_ui_document(document_handle, owner_entity);
     auto* context = document ? document->GetContext() : nullptr;
     return context ? context->GetDensityIndependentPixelRatio() : 1.0f;
 }
 
-void internal_m2n_ui_document_wrapper_update_layout(std::intptr_t document_handle, entt::entity owner_entity)
+void internal_m2n_ui_document_wrapper_update_layout(ui_element_handle document_handle, entt::entity owner_entity)
 {
     if(auto* document = resolve_ui_document(document_handle, owner_entity))
     {
@@ -692,30 +692,30 @@ void internal_m2n_ui_document_wrapper_update_layout(std::intptr_t document_handl
 // UI Element Wrapper Methods
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_element_wrapper_is_valid(std::intptr_t element_handle) -> bool
+auto internal_m2n_ui_element_wrapper_is_valid(ui_element_handle element_handle) -> bool
 {
     return resolve_ui_element_handle(element_handle) != nullptr;
 }
 
-auto internal_m2n_ui_element_wrapper_get_id(std::intptr_t element_handle) -> std::string
+auto internal_m2n_ui_element_wrapper_get_id(ui_element_handle element_handle) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? element->GetId() : std::string();
 }
 
-auto internal_m2n_ui_element_wrapper_get_tag_name(std::intptr_t element_handle) -> std::string
+auto internal_m2n_ui_element_wrapper_get_tag_name(ui_element_handle element_handle) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? element->GetTagName() : std::string();
 }
 
-auto internal_m2n_ui_element_wrapper_get_inner_rml(std::intptr_t element_handle) -> std::string
+auto internal_m2n_ui_element_wrapper_get_inner_rml(ui_element_handle element_handle) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? element->GetInnerRML() : std::string();
 }
 
-void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_handle, const std::string& rml)
+void internal_m2n_ui_element_wrapper_set_inner_rml(ui_element_handle element_handle, const std::string& rml)
 {
     auto* element = resolve_ui_element_handle(element_handle);
     // Rebuilding identical content would destroy the children and every handle to them for nothing.
@@ -726,24 +726,24 @@ void internal_m2n_ui_element_wrapper_set_inner_rml(std::intptr_t element_handle,
     }
 }
 
-void internal_m2n_ui_element_wrapper_set_text(std::intptr_t element_handle, const std::string& text)
+void internal_m2n_ui_element_wrapper_set_text(ui_element_handle element_handle, const std::string& text)
 {
     internal_m2n_ui_element_wrapper_set_inner_rml(element_handle, Rml::StringUtilities::EncodeRml(text));
 }
 
-auto internal_m2n_ui_element_wrapper_get_text(std::intptr_t element_handle) -> std::string
+auto internal_m2n_ui_element_wrapper_get_text(ui_element_handle element_handle) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? get_ui_element_text(*element) : std::string();
 }
 
-auto internal_m2n_ui_element_wrapper_is_visible(std::intptr_t element_handle) -> bool
+auto internal_m2n_ui_element_wrapper_is_visible(ui_element_handle element_handle) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element && is_ui_element_styled_visible(*element);
 }
 
-void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_handle, bool visible)
+void internal_m2n_ui_element_wrapper_set_visible(ui_element_handle element_handle, bool visible)
 {
     auto* element = resolve_for_change(element_handle);
     if(!element)
@@ -765,13 +765,13 @@ void internal_m2n_ui_element_wrapper_set_visible(std::intptr_t element_handle, b
     }
 }
 
-auto internal_m2n_ui_element_wrapper_get_attribute(std::intptr_t element_handle, const std::string& attribute_name) -> std::string
+auto internal_m2n_ui_element_wrapper_get_attribute(ui_element_handle element_handle, const std::string& attribute_name) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? element->GetAttribute<Rml::String>(attribute_name, "") : std::string();
 }
 
-void internal_m2n_ui_element_wrapper_set_attribute(std::intptr_t element_handle, const std::string& attribute_name, const std::string& value)
+void internal_m2n_ui_element_wrapper_set_attribute(ui_element_handle element_handle, const std::string& attribute_name, const std::string& value)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -779,7 +779,7 @@ void internal_m2n_ui_element_wrapper_set_attribute(std::intptr_t element_handle,
     }
 }
 
-void internal_m2n_ui_element_wrapper_remove_attribute(std::intptr_t element_handle, const std::string& attribute_name)
+void internal_m2n_ui_element_wrapper_remove_attribute(ui_element_handle element_handle, const std::string& attribute_name)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -787,13 +787,13 @@ void internal_m2n_ui_element_wrapper_remove_attribute(std::intptr_t element_hand
     }
 }
 
-auto internal_m2n_ui_element_wrapper_has_attribute(std::intptr_t element_handle, const std::string& attribute_name) -> bool
+auto internal_m2n_ui_element_wrapper_has_attribute(ui_element_handle element_handle, const std::string& attribute_name) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element && element->HasAttribute(attribute_name);
 }
 
-void internal_m2n_ui_element_wrapper_set_class(std::intptr_t element_handle, const std::string& class_name, bool activate)
+void internal_m2n_ui_element_wrapper_set_class(ui_element_handle element_handle, const std::string& class_name, bool activate)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -801,13 +801,13 @@ void internal_m2n_ui_element_wrapper_set_class(std::intptr_t element_handle, con
     }
 }
 
-auto internal_m2n_ui_element_wrapper_is_class_set(std::intptr_t element_handle, const std::string& class_name) -> bool
+auto internal_m2n_ui_element_wrapper_is_class_set(ui_element_handle element_handle, const std::string& class_name) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element && element->IsClassSet(class_name);
 }
 
-void internal_m2n_ui_element_wrapper_set_pseudo_class(std::intptr_t element_handle, const std::string& pseudo_class, bool activate)
+void internal_m2n_ui_element_wrapper_set_pseudo_class(ui_element_handle element_handle, const std::string& pseudo_class, bool activate)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -815,13 +815,13 @@ void internal_m2n_ui_element_wrapper_set_pseudo_class(std::intptr_t element_hand
     }
 }
 
-auto internal_m2n_ui_element_wrapper_is_pseudo_class_set(std::intptr_t element_handle, const std::string& pseudo_class) -> bool
+auto internal_m2n_ui_element_wrapper_is_pseudo_class_set(ui_element_handle element_handle, const std::string& pseudo_class) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element && element->IsPseudoClassSet(pseudo_class);
 }
 
-void internal_m2n_ui_element_wrapper_sync_transform_to_entity(std::intptr_t element_handle, entt::entity transform_entity)
+void internal_m2n_ui_element_wrapper_sync_transform_to_entity(ui_element_handle element_handle, entt::entity transform_entity)
 {
     auto transform = get_entity_from_id(transform_entity);
     if (!transform)
@@ -853,7 +853,7 @@ void internal_m2n_ui_element_wrapper_sync_transform_to_entity(std::intptr_t elem
     element->SetProperty("transform", s.str());
 }
 
-void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_handle)
+void internal_m2n_ui_element_wrapper_focus(ui_element_handle element_handle)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -861,7 +861,7 @@ void internal_m2n_ui_element_wrapper_focus(std::intptr_t element_handle)
     }
 }
 
-void internal_m2n_ui_element_wrapper_blur(std::intptr_t element_handle)
+void internal_m2n_ui_element_wrapper_blur(ui_element_handle element_handle)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -869,7 +869,7 @@ void internal_m2n_ui_element_wrapper_blur(std::intptr_t element_handle)
     }
 }
 
-void internal_m2n_ui_element_wrapper_click(std::intptr_t element_handle)
+void internal_m2n_ui_element_wrapper_click(ui_element_handle element_handle)
 {
     if(auto* element = resolve_ui_element_handle(element_handle))
     {
@@ -877,7 +877,7 @@ void internal_m2n_ui_element_wrapper_click(std::intptr_t element_handle)
     }
 }
 
-void internal_m2n_ui_element_wrapper_scroll_into_view(std::intptr_t element_handle, bool align_with_top)
+void internal_m2n_ui_element_wrapper_scroll_into_view(ui_element_handle element_handle, bool align_with_top)
 {
     if(auto* element = resolve_for_layout(element_handle))
     {
@@ -981,13 +981,13 @@ void apply_control_change(Rml::Element& element, bool notify, const Rml::Variant
     }
 }
 
-auto internal_m2n_ui_element_wrapper_get_control_kind(std::intptr_t element_handle) -> int32_t
+auto internal_m2n_ui_element_wrapper_get_control_kind(ui_element_handle element_handle) -> int32_t
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return static_cast<int32_t>(element ? get_control_kind(*element) : ui_control_kind::element);
 }
 
-auto internal_m2n_ui_element_wrapper_get_value(std::intptr_t element_handle) -> std::string
+auto internal_m2n_ui_element_wrapper_get_value(ui_element_handle element_handle) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     if(!element)
@@ -1001,7 +1001,7 @@ auto internal_m2n_ui_element_wrapper_get_value(std::intptr_t element_handle) -> 
     return element->GetAttribute<Rml::String>("value", "");
 }
 
-void internal_m2n_ui_element_wrapper_set_value(std::intptr_t element_handle, const std::string& value, bool notify)
+void internal_m2n_ui_element_wrapper_set_value(ui_element_handle element_handle, const std::string& value, bool notify)
 {
     auto* element = resolve_for_change(element_handle);
     if(!element)
@@ -1027,13 +1027,13 @@ void internal_m2n_ui_element_wrapper_set_value(std::intptr_t element_handle, con
                          });
 }
 
-auto internal_m2n_ui_element_wrapper_is_disabled(std::intptr_t element_handle) -> bool
+auto internal_m2n_ui_element_wrapper_is_disabled(ui_element_handle element_handle) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element && element->HasAttribute("disabled");
 }
 
-void internal_m2n_ui_element_wrapper_set_disabled(std::intptr_t element_handle, bool disabled)
+void internal_m2n_ui_element_wrapper_set_disabled(ui_element_handle element_handle, bool disabled)
 {
     auto* element = resolve_for_change(element_handle);
     if(!element)
@@ -1054,13 +1054,13 @@ void internal_m2n_ui_element_wrapper_set_disabled(std::intptr_t element_handle, 
     }
 }
 
-auto internal_m2n_ui_element_wrapper_is_checked(std::intptr_t element_handle) -> bool
+auto internal_m2n_ui_element_wrapper_is_checked(ui_element_handle element_handle) -> bool
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element && element->HasAttribute("checked");
 }
 
-void internal_m2n_ui_element_wrapper_set_checked(std::intptr_t element_handle, bool checked, bool notify)
+void internal_m2n_ui_element_wrapper_set_checked(ui_element_handle element_handle, bool checked, bool notify)
 {
     auto* element = resolve_for_change(element_handle);
     if(!element || element->HasAttribute("checked") == checked)
@@ -1083,7 +1083,7 @@ void internal_m2n_ui_element_wrapper_set_checked(std::intptr_t element_handle, b
                          });
 }
 
-void internal_m2n_ui_element_wrapper_select_text(std::intptr_t element_handle, int32_t start, int32_t end)
+void internal_m2n_ui_element_wrapper_select_text(ui_element_handle element_handle, int32_t start, int32_t end)
 {
     auto* element = resolve_ui_element_handle(element_handle);
     const bool is_all = start < 0;
@@ -1097,19 +1097,19 @@ void internal_m2n_ui_element_wrapper_select_text(std::intptr_t element_handle, i
     }
 }
 
-auto resolve_select(std::intptr_t element_handle) -> Rml::ElementFormControlSelect*
+auto resolve_select(ui_element_handle element_handle) -> Rml::ElementFormControlSelect*
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? rmlui_dynamic_cast<Rml::ElementFormControlSelect*>(element) : nullptr;
 }
 
-auto internal_m2n_ui_element_wrapper_get_selected_index(std::intptr_t element_handle) -> int32_t
+auto internal_m2n_ui_element_wrapper_get_selected_index(ui_element_handle element_handle) -> int32_t
 {
     auto* select = resolve_select(element_handle);
     return select ? select->GetSelection() : -1;
 }
 
-void internal_m2n_ui_element_wrapper_set_selected_index(std::intptr_t element_handle, int32_t index, bool notify)
+void internal_m2n_ui_element_wrapper_set_selected_index(ui_element_handle element_handle, int32_t index, bool notify)
 {
     auto* select = resolve_select(element_handle);
     if(!select || select->GetSelection() == index)
@@ -1123,7 +1123,7 @@ void internal_m2n_ui_element_wrapper_set_selected_index(std::intptr_t element_ha
                          [&]() { select->SetSelection(index); });
 }
 
-auto internal_m2n_ui_element_wrapper_get_options(std::intptr_t element_handle) -> handle_list
+auto internal_m2n_ui_element_wrapper_get_options(ui_element_handle element_handle) -> handle_list
 {
     handle_list handles;
     if(auto* select = resolve_select(element_handle))
@@ -1137,7 +1137,7 @@ auto internal_m2n_ui_element_wrapper_get_options(std::intptr_t element_handle) -
     return handles;
 }
 
-auto internal_m2n_ui_element_wrapper_add_option(std::intptr_t element_handle, const std::string& rml, const std::string& value, int32_t before)
+auto internal_m2n_ui_element_wrapper_add_option(ui_element_handle element_handle, const std::string& rml, const std::string& value, int32_t before)
     -> int32_t
 {
     auto* select = resolve_select(element_handle);
@@ -1152,7 +1152,7 @@ auto internal_m2n_ui_element_wrapper_add_option(std::intptr_t element_handle, co
     return index;
 }
 
-void internal_m2n_ui_element_wrapper_remove_option(std::intptr_t element_handle, int32_t index)
+void internal_m2n_ui_element_wrapper_remove_option(ui_element_handle element_handle, int32_t index)
 {
     if(auto* select = resolve_select(element_handle))
     {
@@ -1164,20 +1164,20 @@ void internal_m2n_ui_element_wrapper_remove_option(std::intptr_t element_handle,
     }
 }
 
-auto resolve_progress(std::intptr_t element_handle) -> Rml::ElementProgress*
+auto resolve_progress(ui_element_handle element_handle) -> Rml::ElementProgress*
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? rmlui_dynamic_cast<Rml::ElementProgress*>(element) : nullptr;
 }
 
 /// The progress value (x) and its maximum (y).
-auto internal_m2n_ui_element_wrapper_get_progress(std::intptr_t element_handle) -> math::vec2
+auto internal_m2n_ui_element_wrapper_get_progress(ui_element_handle element_handle) -> math::vec2
 {
     auto* progress = resolve_progress(element_handle);
     return progress ? math::vec2(progress->GetValue(), progress->GetMax()) : math::vec2(0.0f);
 }
 
-void internal_m2n_ui_element_wrapper_set_progress(std::intptr_t element_handle, float value, float max_value)
+void internal_m2n_ui_element_wrapper_set_progress(ui_element_handle element_handle, float value, float max_value)
 {
     if(auto* progress = resolve_progress(element_handle))
     {
@@ -1186,20 +1186,20 @@ void internal_m2n_ui_element_wrapper_set_progress(std::intptr_t element_handle, 
     }
 }
 
-auto resolve_tabset(std::intptr_t element_handle) -> Rml::ElementTabSet*
+auto resolve_tabset(ui_element_handle element_handle) -> Rml::ElementTabSet*
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? rmlui_dynamic_cast<Rml::ElementTabSet*>(element) : nullptr;
 }
 
 /// The active tab (x) and the number of tabs (y).
-auto internal_m2n_ui_element_wrapper_get_tabs(std::intptr_t element_handle) -> math::vec2
+auto internal_m2n_ui_element_wrapper_get_tabs(ui_element_handle element_handle) -> math::vec2
 {
     auto* tabset = resolve_tabset(element_handle);
     return tabset ? math::vec2(float(tabset->GetActiveTab()), float(tabset->GetNumTabs())) : math::vec2(-1.0f, 0.0f);
 }
 
-void internal_m2n_ui_element_wrapper_set_active_tab(std::intptr_t element_handle, int32_t index)
+void internal_m2n_ui_element_wrapper_set_active_tab(ui_element_handle element_handle, int32_t index)
 {
     if(auto* tabset = resolve_tabset(element_handle))
     {
@@ -1208,7 +1208,7 @@ void internal_m2n_ui_element_wrapper_set_active_tab(std::intptr_t element_handle
     }
 }
 
-void internal_m2n_ui_element_wrapper_set_tab(std::intptr_t element_handle, int32_t index, const std::string& tab_rml, const std::string& panel_rml)
+void internal_m2n_ui_element_wrapper_set_tab(ui_element_handle element_handle, int32_t index, const std::string& tab_rml, const std::string& panel_rml)
 {
     if(auto* tabset = resolve_tabset(element_handle))
     {
@@ -1218,7 +1218,7 @@ void internal_m2n_ui_element_wrapper_set_tab(std::intptr_t element_handle, int32
     }
 }
 
-void internal_m2n_ui_element_wrapper_remove_tab(std::intptr_t element_handle, int32_t index)
+void internal_m2n_ui_element_wrapper_remove_tab(ui_element_handle element_handle, int32_t index)
 {
     if(auto* tabset = resolve_tabset(element_handle))
     {
@@ -1231,7 +1231,7 @@ void internal_m2n_ui_element_wrapper_remove_tab(std::intptr_t element_handle, in
 // DOM
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_element_wrapper_get_parent(std::intptr_t element_handle) -> std::intptr_t
+auto internal_m2n_ui_element_wrapper_get_parent(ui_element_handle element_handle) -> ui_element_handle
 {
     auto* element = resolve_ui_element_handle(element_handle);
     // A document's parent is its context's hidden root, not part of any document.
@@ -1242,7 +1242,7 @@ auto internal_m2n_ui_element_wrapper_get_parent(std::intptr_t element_handle) ->
     return get_ui_element_handle(element->GetParentNode());
 }
 
-auto internal_m2n_ui_element_wrapper_get_children(std::intptr_t element_handle) -> handle_list
+auto internal_m2n_ui_element_wrapper_get_children(ui_element_handle element_handle) -> handle_list
 {
     handle_list handles;
     if(auto* element = resolve_ui_element_handle(element_handle))
@@ -1258,13 +1258,13 @@ auto internal_m2n_ui_element_wrapper_get_children(std::intptr_t element_handle) 
     return handles;
 }
 
-auto internal_m2n_ui_element_wrapper_query_selector(std::intptr_t element_handle, const std::string& selector) -> std::intptr_t
+auto internal_m2n_ui_element_wrapper_query_selector(ui_element_handle element_handle, const std::string& selector) -> ui_element_handle
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? get_ui_element_handle(element->QuerySelector(selector)) : 0;
 }
 
-auto internal_m2n_ui_element_wrapper_query_selector_all(std::intptr_t element_handle, const std::string& selector) -> handle_list
+auto internal_m2n_ui_element_wrapper_query_selector_all(ui_element_handle element_handle, const std::string& selector) -> handle_list
 {
     Rml::ElementList elements;
     if(auto* element = resolve_ui_element_handle(element_handle))
@@ -1274,7 +1274,7 @@ auto internal_m2n_ui_element_wrapper_query_selector_all(std::intptr_t element_ha
     return to_handles(elements);
 }
 
-auto internal_m2n_ui_element_wrapper_closest(std::intptr_t element_handle, const std::string& selector) -> std::intptr_t
+auto internal_m2n_ui_element_wrapper_closest(ui_element_handle element_handle, const std::string& selector) -> ui_element_handle
 {
     auto* element = resolve_ui_element_handle(element_handle);
     return element ? get_ui_element_handle(element->Closest(selector)) : 0;
@@ -1312,7 +1312,7 @@ auto can_insert_ui_element(Rml::Element& parent, Rml::Element& child) -> bool
     return true;
 }
 
-auto internal_m2n_ui_element_wrapper_append_child(std::intptr_t parent_handle, std::intptr_t child_handle) -> bool
+auto internal_m2n_ui_element_wrapper_append_child(ui_element_handle parent_handle, ui_element_handle child_handle) -> bool
 {
     auto* parent = resolve_for_change(parent_handle);
     auto* child = resolve_ui_element_handle(child_handle);
@@ -1324,7 +1324,7 @@ auto internal_m2n_ui_element_wrapper_append_child(std::intptr_t parent_handle, s
     return owned && parent->AppendChild(std::move(owned)) != nullptr;
 }
 
-auto internal_m2n_ui_element_wrapper_insert_before(std::intptr_t parent_handle, std::intptr_t child_handle, std::intptr_t before_handle) -> bool
+auto internal_m2n_ui_element_wrapper_insert_before(ui_element_handle parent_handle, ui_element_handle child_handle, ui_element_handle before_handle) -> bool
 {
     auto* parent = resolve_for_change(parent_handle);
     auto* child = resolve_ui_element_handle(child_handle);
@@ -1350,7 +1350,7 @@ auto internal_m2n_ui_element_wrapper_insert_before(std::intptr_t parent_handle, 
     return (before ? parent->InsertBefore(std::move(owned), before) : parent->AppendChild(std::move(owned))) != nullptr;
 }
 
-void internal_m2n_ui_element_wrapper_remove(std::intptr_t element_handle)
+void internal_m2n_ui_element_wrapper_remove(ui_element_handle element_handle)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -1359,7 +1359,7 @@ void internal_m2n_ui_element_wrapper_remove(std::intptr_t element_handle)
     }
 }
 
-auto internal_m2n_ui_element_wrapper_clone(std::intptr_t element_handle) -> std::intptr_t
+auto internal_m2n_ui_element_wrapper_clone(ui_element_handle element_handle) -> ui_element_handle
 {
     auto* element = resolve_ui_element_handle(element_handle);
     if(!element)
@@ -1373,7 +1373,7 @@ auto internal_m2n_ui_element_wrapper_clone(std::intptr_t element_handle) -> std:
 // Style
 //-------------------------------------------------------------------------
 
-auto internal_m2n_ui_element_wrapper_get_inline_style(std::intptr_t element_handle, const std::string& name) -> std::string
+auto internal_m2n_ui_element_wrapper_get_inline_style(ui_element_handle element_handle, const std::string& name) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     const auto id = Rml::StyleSheetSpecification::GetPropertyId(name);
@@ -1386,7 +1386,7 @@ auto internal_m2n_ui_element_wrapper_get_inline_style(std::intptr_t element_hand
     return it != inline_properties.end() ? it->second.ToString() : std::string();
 }
 
-auto internal_m2n_ui_element_wrapper_set_inline_style(std::intptr_t element_handle, const std::string& name, const std::string& value) -> bool
+auto internal_m2n_ui_element_wrapper_set_inline_style(ui_element_handle element_handle, const std::string& name, const std::string& value) -> bool
 {
     auto* element = resolve_for_change(element_handle);
     if(!element)
@@ -1405,7 +1405,7 @@ auto internal_m2n_ui_element_wrapper_set_inline_style(std::intptr_t element_hand
     return true;
 }
 
-void internal_m2n_ui_element_wrapper_remove_inline_style(std::intptr_t element_handle, const std::string& name)
+void internal_m2n_ui_element_wrapper_remove_inline_style(ui_element_handle element_handle, const std::string& name)
 {
     if(auto* element = resolve_for_change(element_handle))
     {
@@ -1413,7 +1413,7 @@ void internal_m2n_ui_element_wrapper_remove_inline_style(std::intptr_t element_h
     }
 }
 
-auto internal_m2n_ui_element_wrapper_get_computed_style(std::intptr_t element_handle, const std::string& name) -> std::string
+auto internal_m2n_ui_element_wrapper_get_computed_style(ui_element_handle element_handle, const std::string& name) -> std::string
 {
     auto* element = resolve_ui_element_handle(element_handle);
     const auto* property = element ? element->GetProperty(name) : nullptr;
@@ -1427,7 +1427,7 @@ enum class ui_style_unit : int32_t
     dp
 };
 
-void internal_m2n_ui_element_wrapper_set_style_number(std::intptr_t element_handle, const std::string& name, float value, int32_t unit)
+void internal_m2n_ui_element_wrapper_set_style_number(ui_element_handle element_handle, const std::string& name, float value, int32_t unit)
 {
     auto* element = resolve_for_change(element_handle);
     const auto id = Rml::StyleSheetSpecification::GetPropertyId(name);
@@ -1439,7 +1439,7 @@ void internal_m2n_ui_element_wrapper_set_style_number(std::intptr_t element_hand
     element->SetProperty(id, Rml::Property(value, rml_unit));
 }
 
-auto internal_m2n_ui_element_wrapper_get_style_number(std::intptr_t element_handle, const std::string& name) -> float
+auto internal_m2n_ui_element_wrapper_get_style_number(ui_element_handle element_handle, const std::string& name) -> float
 {
     auto* element = resolve_ui_element_handle(element_handle);
     const auto* property = element ? element->GetProperty(name) : nullptr;
@@ -1474,7 +1474,7 @@ auto to_rml_box_area(int32_t area) -> Rml::BoxArea
 }
 
 /// The element's box in its document's pixels: x, y of the top left, width, height.
-auto internal_m2n_ui_element_wrapper_get_rect(std::intptr_t element_handle, int32_t area) -> math::vec4
+auto internal_m2n_ui_element_wrapper_get_rect(ui_element_handle element_handle, int32_t area) -> math::vec4
 {
     auto* element = resolve_for_layout(element_handle);
     if(!element)
@@ -1485,7 +1485,7 @@ auto internal_m2n_ui_element_wrapper_get_rect(std::intptr_t element_handle, int3
 }
 
 /// Scroll position (x, y) and scrollable size (z, w) of the element's content.
-auto internal_m2n_ui_element_wrapper_get_scroll(std::intptr_t element_handle) -> math::vec4
+auto internal_m2n_ui_element_wrapper_get_scroll(ui_element_handle element_handle) -> math::vec4
 {
     auto* element = resolve_for_layout(element_handle);
     if(!element)
@@ -1495,7 +1495,7 @@ auto internal_m2n_ui_element_wrapper_get_scroll(std::intptr_t element_handle) ->
     return {element->GetScrollLeft(), element->GetScrollTop(), element->GetScrollWidth(), element->GetScrollHeight()};
 }
 
-void internal_m2n_ui_element_wrapper_scroll_to(std::intptr_t element_handle, const math::vec2& offset, bool smooth)
+void internal_m2n_ui_element_wrapper_scroll_to(ui_element_handle element_handle, const math::vec2& offset, bool smooth)
 {
     if(auto* element = resolve_for_layout(element_handle))
     {
@@ -1562,7 +1562,7 @@ auto start_ui_animation(Rml::Element& element, const ui_animation_request& reque
                            request.delay);
 }
 
-auto internal_m2n_ui_element_wrapper_animate(std::intptr_t element_handle,
+auto internal_m2n_ui_element_wrapper_animate(ui_element_handle element_handle,
                                              const std::string& property,
                                              const std::string& target,
                                              float duration,
@@ -1575,7 +1575,7 @@ auto internal_m2n_ui_element_wrapper_animate(std::intptr_t element_handle,
     return element && start_ui_animation(*element, {property, target, duration, easing, loops, alternate, delay});
 }
 
-void internal_m2n_ui_element_wrapper_stop_animation(std::intptr_t element_handle, const std::string& property)
+void internal_m2n_ui_element_wrapper_stop_animation(ui_element_handle element_handle, const std::string& property)
 {
     auto* element = resolve_ui_element_handle(element_handle);
     const auto id = Rml::StyleSheetSpecification::GetPropertyId(property);
@@ -1588,7 +1588,7 @@ void internal_m2n_ui_element_wrapper_stop_animation(std::intptr_t element_handle
     }
 }
 
-void internal_m2n_ui_element_wrapper_restart_animation(std::intptr_t element_handle)
+void internal_m2n_ui_element_wrapper_restart_animation(ui_element_handle element_handle)
 {
     auto* element = resolve_for_change(element_handle);
     const auto* animation = element ? element->GetProperty(Rml::PropertyId::Animation) : nullptr;

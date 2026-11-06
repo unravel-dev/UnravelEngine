@@ -62,6 +62,12 @@ if(WIN32)
     )
 endif()
 
-if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32 AND NOT ANDROID)
+if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32 AND NOT ANDROID AND NOT EMSCRIPTEN)
   target_link_options(${target_name} PRIVATE -no-pie)
+endif()
+
+# The browser player ships linked into the .NET runtime's wasm module, whose link sets a 5 MB stack and lets the
+# memory grow; the standalone link here matches it.
+if(EMSCRIPTEN)
+    target_link_options(${target_name} PRIVATE "-sSTACK_SIZE=5MB" "-sALLOW_MEMORY_GROWTH=1")
 endif()

@@ -36,11 +36,30 @@
 #include <thread>
 #include <vector>
 
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+#include <emscripten/em_js.h>
+
+// emdawnwebgpu's import of the WebGPU device the page created (Module.preinitializedWebGPUDevice).
+extern "C" void* emscripten_webgpu_get_device(void);
+
+// Counts a submitted frame until the page's device has finished everything submitted so far.
+EM_JS(void, unravel_count_gpu_frame, (), {
+    Module.unravelGpuFramesInFlight = (Module.unravelGpuFramesInFlight || 0) + 1;
+    Module.preinitializedWebGPUDevice.queue.onSubmittedWorkDone().finally(() => {
+        Module.unravelGpuFramesInFlight--;
+    });
+});
+
+EM_JS(int, unravel_get_gpu_frames_in_flight, (), { return Module.unravelGpuFramesInFlight || 0; });
+#endif
+
 namespace unravel
 {
 namespace
 {
 thread_local std::vector<uint32_t> s_bgfx_profiler_scope_stack;
+/// Submitted frames the GPU may still be drawing when the next one starts, in the browser.
+constexpr int MAX_GPU_FRAMES_IN_FLIGHT = 2;
 }
 
 renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
@@ -533,6 +552,12 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // Android's Vulkan surfaces present RGBA8, not bgfx's default BGRA8: a BGRA8 swap chain is
     // created, but every frame it shows is black. Later resizes keep the main swap chain's format.
     init_data.swapChain.formatColor = bgfx::TextureFormat::RGBA8;
+#elif UNRAVEL_PLATFORM_EMSCRIPTEN
+    // The browser renders through WebGPU, on the device the page created before the engine started: bgfx cannot
+    // wait for an adapter or a device itself there (deps/3rdparty/bgfx/patches/0003).
+    init_data.type = bgfx::RendererType::WebGPU;
+    init_data.fallback = false;
+    init_data.platformData.context = emscripten_webgpu_get_device();
 #endif
     std::string video_driver = os::window::get_current_video_driver();
     if(video_driver == "wayland")
@@ -612,6 +637,8 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
                 return "opengles";
             case bgfx::RendererType::Metal:
                 return "metal";
+            case bgfx::RendererType::WebGPU:
+                return "webgpu";
             default:
                 return "other";
         }
@@ -874,6 +901,15 @@ void renderer::frame_begin(rtti::context& ctx, const frame_times& /*times*/)
     // editor's UI). A clear of its own is one more render pass storing the whole window on a tile-based GPU.
 }
 
+auto renderer::is_gpu_behind() const -> bool
+{
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    return is_initialized_ && unravel_get_gpu_frames_in_flight() >= MAX_GPU_FRAMES_IN_FLIGHT;
+#else
+    return false;
+#endif
+}
+
 void renderer::frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
 {
     APP_SCOPE_PERF("Graphics Frame Submit");
@@ -885,6 +921,9 @@ void renderer::frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
     // frame's draws.
     skinning_palettes_->flush();
     gfx::frame();
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    unravel_count_gpu_frame();
+#endif
     if(gpu_pass_log_)
     {
         gpu_pass_log_->collect();

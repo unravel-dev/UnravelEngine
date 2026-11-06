@@ -1,0 +1,106 @@
+WebGPU: use a device the page created, in the browser
+
+bgfx waits for the adapter and the device with wgpuInstanceWaitAny, which a browser allows only through JSPI or
+Asyncify (the instance needs TimedWaitAny). A page that created the device in JavaScript hands it over in
+PlatformData::context (imported with emscripten_webgpu_get_device): bgfx then creates its instance without
+TimedWaitAny, requests no adapter or device, and reads the features, limits and adapter info from the device.
+
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+index 3a4cf85..ee335aa 100644
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -1021,6 +1021,14 @@ WGPU_IMPORT
+ 
+ 			const bool headless = NULL == _init.swapChain.nwh;
+ 
++#if BX_PLATFORM_EMSCRIPTEN
++			// A device the page created and handed over in platformData.context: JavaScript awaited the adapter
++			// and the device, which bgfx can only wait for itself through JSPI or Asyncify.
++			const bool isExternalDevice = NULL != g_platformData.context;
++#else
++			const bool isExternalDevice = false;
++#endif // BX_PLATFORM_EMSCRIPTEN
++
+ 			bool imported = true;
+ 
+ #if !BX_PLATFORM_EMSCRIPTEN
+@@ -1091,7 +1099,7 @@ WGPU_IMPORT
+ 					WGPUInstanceDescriptor instanceDesc =
+ 					{
+ 						.nextInChain          = NULL,
+-						.requiredFeatureCount = BX_COUNTOF(requiredFeatures),
++						.requiredFeatureCount = isExternalDevice ? 0 : BX_COUNTOF(requiredFeatures),
+ 						.requiredFeatures     = requiredFeatures,
+ 						.requiredLimits       = NULL,
+ 					};
+@@ -1107,6 +1115,15 @@ WGPU_IMPORT
+ 					errorState = ErrorState::InstanceCreated;
+ 				}
+ 
++#if BX_PLATFORM_EMSCRIPTEN
++				if (isExternalDevice)
++				{
++					m_device = (WGPUDevice)g_platformData.context;
++					wgpuDeviceAddRef(m_device);
++					errorState = ErrorState::AdapterCreated;
++				}
++				else
++#endif // BX_PLATFORM_EMSCRIPTEN
+ 				{
+ 					WGPURequestAdapterOptions rao =
+ 					{
+@@ -1178,7 +1195,14 @@ WGPU_IMPORT
+ 					BX_TRACE("");
+ 
+ 					WGPUSupportedFeatures supportedFeatures;
+-					wgpuAdapterGetFeatures(m_adapter, &supportedFeatures);
++					if (isExternalDevice)
++					{
++						wgpuDeviceGetFeatures(m_device, &supportedFeatures);
++					}
++					else
++					{
++						wgpuAdapterGetFeatures(m_adapter, &supportedFeatures);
++					}
+ 
+ 					BX_TRACE("Supported features (%d):", supportedFeatures.featureCount);
+ 
+@@ -1210,7 +1234,14 @@ WGPU_IMPORT
+ 					BX_TRACE("");
+ 
+ 					wgpuSupportedFeaturesFreeMembers(supportedFeatures);
++				}
+ 
++				if (isExternalDevice)
++				{
++					errorState = ErrorState::DeviceCreated;
++				}
++				else
++				{
+ 					WGPUFeatureName requiredFeatures[] =
+ 					{
+ 						ifSupported(WGPUFeatureName_TimestampQuery),
+@@ -1389,7 +1420,10 @@ WGPU_IMPORT
+ 					WGPUStatus status;
+ 
+ 					WGPUAdapterInfo adapterInfo = WGPU_ADAPTER_INFO_INIT;
+-					status = wgpuAdapterGetInfo(m_adapter, &adapterInfo);
++					status = isExternalDevice
++						? wgpuDeviceGetAdapterInfo(m_device, &adapterInfo)
++						: wgpuAdapterGetInfo(m_adapter, &adapterInfo)
++						;
+ 
+ 					if (WGPUStatus_Success == status)
+ 					{
+@@ -1425,7 +1459,10 @@ WGPU_IMPORT
+ 					BX_TRACE("");
+ 
+ 					m_limits = WGPU_LIMITS_INIT;
+-					status = wgpuAdapterGetLimits(m_adapter, &m_limits);
++					status = isExternalDevice
++						? wgpuDeviceGetLimits(m_device, &m_limits)
++						: wgpuAdapterGetLimits(m_adapter, &m_limits)
++						;
+ 
+ 					if (WGPUStatus_Success == status)
+ 					{

@@ -13,6 +13,8 @@
  *   - a root spelled with ".." or a trailing separator matches;
  *   - a root only matches whole folder names: "Data" is not a prefix of "DataExtra";
  *   - the longest matching root wins;
+ *   - a protocol path stays as it is, also with a root at the working folder (the browser player's is the
+ *     file system root, which every absolute path lies under);
  *   - a path that does not exist yet converts, and resolve_protocol maps the result back to the same file;
  *   - a path with letters outside the system code page survives to_utf8_string / from_utf8_string.
  *
@@ -193,6 +195,20 @@ void test_longest_root_wins(const fs::path& run_root)
     check_equal(converted(outer / "d.txt"), "outer:/d.txt", "a file only under the outer root converts to it");
 }
 
+void test_protocol_path_unchanged(const fs::path& run_root)
+{
+    std::printf("test_protocol_path_unchanged\n");
+    write_file(run_root / "Keyed" / "a.txt");
+    scoped_protocols protocols;
+    protocols.add("keyed", run_root / "Keyed");
+    fs::error_code err;
+    protocols.add("working", fs::current_path(err));
+    check_equal(converted("keyed:/data/fonts/a.ttf"), "keyed:/data/fonts/a.ttf", "a protocol path converts to itself");
+    check_equal(fs::convert_to_protocol_lexically("keyed:/data/fonts/a.ttf").generic_string(),
+                "keyed:/data/fonts/a.ttf",
+                "lexically too");
+}
+
 void test_missing_file_round_trip(const fs::path& run_root)
 {
     std::printf("test_missing_file_round_trip\n");
@@ -231,6 +247,7 @@ auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
     test_root_spellings(run_root);
     test_whole_folder_names(run_root);
     test_longest_root_wins(run_root);
+    test_protocol_path_unchanged(run_root);
     test_missing_file_round_trip(run_root);
     test_utf8_round_trip(run_root);
     std::printf("fs protocols: %d checks, %d failures\n", g_checks, g_failures);

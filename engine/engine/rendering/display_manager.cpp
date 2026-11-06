@@ -1,4 +1,5 @@
 #include "display_manager.h"
+#include <base/platform/config.hpp>
 
 #include <engine/events.h>
 #include <engine/rendering/renderer.h>
@@ -504,6 +505,12 @@ void display_manager::remember_window(const os::window& window)
 
 void display_manager::apply_window(os::window& window)
 {
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    // In the browser the window is the page, which it fills and follows (ospp): windowed, borderless and exclusive
+    // are the desktop's, and the page goes fullscreen only from a player's gesture.
+    (void)window;
+    return;
+#endif
     options_.display = resolve_display(options_.display);
     switch(options_.mode)
     {

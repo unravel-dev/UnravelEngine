@@ -88,7 +88,7 @@ namespace Unravel.Core
         /// <summary>
         /// Opaque handle of the element that triggered the event (not a pointer); see <see cref="target"/>.
         /// </summary>
-        public IntPtr targetElementPtr = IntPtr.Zero;
+        public long targetElementPtr = 0;
 
         /// <summary>
         /// The ID of the element that received the event.
@@ -98,7 +98,7 @@ namespace Unravel.Core
         /// <summary>
         /// Opaque handle of the element that received the event (not a pointer); see <see cref="currentTarget"/>.
         /// </summary>
-        public IntPtr currentElementPtr = IntPtr.Zero;
+        public long currentElementPtr = 0;
 
         /// <summary>
         /// Current dispatch phase of the event.
@@ -155,9 +155,9 @@ namespace Unravel.Core
             nativePtr = new IntPtr(payload.nativeEvent);
             owner = documentEntity;
             targetElementId = targetId;
-            targetElementPtr = new IntPtr(payload.targetHandle);
+            targetElementPtr = payload.targetHandle;
             currentElementId = currentId;
-            currentElementPtr = new IntPtr(payload.currentHandle);
+            currentElementPtr = payload.currentHandle;
             phase = (EventPhase)payload.phase;
             eventType = type;
         }
@@ -201,7 +201,7 @@ namespace Unravel.Core
     {
         internal sealed class Subscription
         {
-            internal IntPtr handle;
+            internal long handle;
             internal string eventType;
             /// <summary>The callback as given, matched by the unsubscribe calls.</summary>
             internal Delegate callback;
@@ -238,13 +238,13 @@ namespace Unravel.Core
             internal UIDocumentComponent component;
             internal Action<UIDocument> handler;
             internal ScriptComponent script;
-            internal IntPtr documentHandle;
+            internal long documentHandle;
             internal bool removed;
         }
 
         private const string AnimationEndEvent = "animationend";
 
-        private static readonly Dictionary<IntPtr, ElementEntry> entries = new Dictionary<IntPtr, ElementEntry>();
+        private static readonly Dictionary<long, ElementEntry> entries = new Dictionary<long, ElementEntry>();
         private static readonly List<ElementEntry> entriesToCompact = new List<ElementEntry>();
         private static readonly List<DocumentWatcher> documentWatchers = new List<DocumentWatcher>();
         private static readonly Stack<UIEventBase>[] eventPools = CreateEventPools();
@@ -276,9 +276,9 @@ namespace Unravel.Core
         /// <param name="handle">Native element handle.</param>
         /// <param name="owner">Entity that owns the UI document.</param>
         /// <returns>Canonical <see cref="UIElement"/> for this element, or null for a zero handle.</returns>
-        internal static UIElement GetOrCreateWrapper(IntPtr handle, Entity owner)
+        internal static UIElement GetOrCreateWrapper(long handle, Entity owner)
         {
-            if (handle == IntPtr.Zero)
+            if (handle == 0)
             {
                 return null;
             }
@@ -296,7 +296,7 @@ namespace Unravel.Core
             {
                 foreach (long handle in handles)
                 {
-                    elements.Add(GetOrCreateWrapper(new IntPtr(handle), owner));
+                    elements.Add(GetOrCreateWrapper(handle, owner));
                 }
             }
             return elements;
@@ -395,21 +395,21 @@ namespace Unravel.Core
         /// </param>
         public static void UnsubscribeAllForOwner(Entity owner, bool invalidateWrappers)
         {
-            List<IntPtr> owned = null;
-            foreach (KeyValuePair<IntPtr, ElementEntry> kvp in entries)
+            List<long> owned = null;
+            foreach (KeyValuePair<long, ElementEntry> kvp in entries)
             {
                 if (kvp.Value.wrapper != null && kvp.Value.wrapper.Owner == owner)
                 {
                     if (owned == null)
                     {
-                        owned = new List<IntPtr>();
+                        owned = new List<long>();
                     }
                     owned.Add(kvp.Key);
                 }
             }
             if (owned != null)
             {
-                foreach (IntPtr handle in owned)
+                foreach (long handle in owned)
                 {
                     ElementEntry entry = entries[handle];
                     ClearEntry(handle, entry);
@@ -602,8 +602,8 @@ namespace Unravel.Core
         /// </summary>
         internal static void TrackAnimation(UIElement elementWrapper, UIAnimation animation)
         {
-            IntPtr handle = elementWrapper.GetHandle();
-            if (handle == IntPtr.Zero)
+            long handle = elementWrapper.GetHandle();
+            if (handle == 0)
             {
                 return;
             }
@@ -643,7 +643,7 @@ namespace Unravel.Core
         /// </summary>
         internal static void UnsubscribeAllForScript(ScriptComponent script)
         {
-            foreach (KeyValuePair<IntPtr, ElementEntry> kvp in entries)
+            foreach (KeyValuePair<long, ElementEntry> kvp in entries)
             {
                 ElementEntry entry = kvp.Value;
                 List<Subscription> subscriptions = entry.subscriptions;
@@ -681,7 +681,7 @@ namespace Unravel.Core
         internal static void InternalDispatchPayload(UIEventPayload payload, string eventType, string targetId,
                                                      string currentId, string text)
         {
-            if (!entries.TryGetValue(new IntPtr(payload.currentHandle), out ElementEntry entry))
+            if (!entries.TryGetValue(payload.currentHandle, out ElementEntry entry))
             {
                 return;
             }
@@ -730,7 +730,7 @@ namespace Unravel.Core
         /// </summary>
         internal static void ProcessDestroyedElements()
         {
-            for (IntPtr handle = internal_m2n_ui_take_destroyed_handle(); handle != IntPtr.Zero;
+            for (long handle = internal_m2n_ui_take_destroyed_handle(); handle != 0;
                  handle = internal_m2n_ui_take_destroyed_handle())
             {
                 if (entries.TryGetValue(handle, out ElementEntry entry))
@@ -783,7 +783,7 @@ namespace Unravel.Core
             CompactDocumentWatchersIfIdle();
         }
 
-        private static ElementEntry GetOrCreateEntry(IntPtr handle, Entity owner)
+        private static ElementEntry GetOrCreateEntry(long handle, Entity owner)
         {
             if (!entries.TryGetValue(handle, out ElementEntry entry))
             {
@@ -799,8 +799,8 @@ namespace Unravel.Core
             {
                 return UISubscription.Inactive;
             }
-            IntPtr handle = elementWrapper.GetHandle();
-            if (handle == IntPtr.Zero)
+            long handle = elementWrapper.GetHandle();
+            if (handle == 0)
             {
                 return UISubscription.Inactive;
             }
@@ -892,7 +892,7 @@ namespace Unravel.Core
             }
         }
 
-        private static void CompleteAnimation(IntPtr handle, UIEventBase ev)
+        private static void CompleteAnimation(long handle, UIEventBase ev)
         {
             if (ev is UIAnimationEvent animationEvent && entries.TryGetValue(handle, out ElementEntry entry) &&
                 entry.animations != null && entry.animations.TryGetValue(animationEvent.property, out UIAnimation animation))
@@ -916,7 +916,7 @@ namespace Unravel.Core
         }
 
         /// <returns>Whether the entry had any subscription.</returns>
-        private static bool ClearEntry(IntPtr handle, ElementEntry entry)
+        private static bool ClearEntry(long handle, ElementEntry entry)
         {
             bool hadAny = false;
             foreach (Subscription subscription in entry.subscriptions)
@@ -956,7 +956,7 @@ namespace Unravel.Core
             }
         }
 
-        private static void ReleaseNativeListenerIfUnused(IntPtr handle, ElementEntry entry, string eventType, bool capture)
+        private static void ReleaseNativeListenerIfUnused(long handle, ElementEntry entry, string eventType, bool capture)
         {
             foreach (Subscription subscription in entry.subscriptions)
             {
@@ -1063,7 +1063,7 @@ namespace Unravel.Core
             UIDocument document = owner.IsValid() && owner.HasComponent<UIDocumentComponent>()
                 ? watcher.component.document
                 : null;
-            IntPtr handle = document?.GetHandle() ?? IntPtr.Zero;
+            long handle = document?.GetHandle() ?? 0;
             if (handle == watcher.documentHandle)
             {
                 return;
@@ -1125,12 +1125,12 @@ namespace Unravel.Core
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_ensure_native_event_listener(IntPtr elementHandle, string eventType, bool capture);
+        private static extern void internal_m2n_ui_ensure_native_event_listener(long elementHandle, string eventType, bool capture);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_remove_native_event_listener(IntPtr elementHandle, string eventType, bool capture);
+        private static extern void internal_m2n_ui_remove_native_event_listener(long elementHandle, string eventType, bool capture);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_take_destroyed_handle();
+        private static extern long internal_m2n_ui_take_destroyed_handle();
     }
 }

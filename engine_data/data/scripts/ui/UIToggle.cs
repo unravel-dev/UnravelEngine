@@ -8,7 +8,7 @@ namespace Unravel.Core
     /// </summary>
     public class UIToggle : UIElement
     {
-        internal UIToggle(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UIToggle(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
 

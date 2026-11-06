@@ -46,7 +46,7 @@ THE SOFTWARE IN THIS GAME
   cereal-yaml: BSD 3-Clause. All platforms.
   ClrMD and Microsoft.Diagnostics.NETCore.Client: MIT. All platforms.
   concurrentqueue: BSD 2-Clause. All platforms.
-  cpptrace: MIT. All platforms.
+  cpptrace: MIT. Desktop and Android.
   dav1d: BSD 2-Clause. All platforms.
   DirectX Headers: MIT. Windows only.
   dr_flac, dr_mp3, dr_wav: Public domain, or MIT No Attribution. All platforms.
@@ -1779,7 +1779,7 @@ TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF TH
 ==============================================================================
 cpptrace
 https://github.com/jeremy-rifkin/cpptrace
-All platforms. MIT.
+Desktop and Android. MIT.
 ==============================================================================
 
 The MIT License (MIT)

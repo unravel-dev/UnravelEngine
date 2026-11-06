@@ -13,9 +13,9 @@ namespace Unravel.Core
     /// </summary>
     public class UIDocument : NativeObject
     {
-        private static readonly Dictionary<IntPtr, UIDocument> s_cache = new Dictionary<IntPtr, UIDocument>();
+        private static readonly Dictionary<long, UIDocument> s_cache = new Dictionary<long, UIDocument>();
 
-        private IntPtr handle = IntPtr.Zero;
+        private long handle = 0;
         private readonly Entity ownerEntity;
 
         /// <summary>
@@ -23,7 +23,7 @@ namespace Unravel.Core
         /// </summary>
         public override bool IsValid()
         {
-            return handle != IntPtr.Zero && internal_m2n_ui_document_wrapper_is_valid(handle, ownerEntity);
+            return handle != 0 && internal_m2n_ui_document_wrapper_is_valid(handle, ownerEntity);
         }
 
         /// <summary>
@@ -34,7 +34,7 @@ namespace Unravel.Core
         /// <summary>
         /// Internal constructor - use <see cref="GetOrCreate"/>.
         /// </summary>
-        internal UIDocument(IntPtr documentHandle, Entity owner)
+        internal UIDocument(long documentHandle, Entity owner)
         {
             handle = documentHandle;
             ownerEntity = owner;
@@ -46,9 +46,9 @@ namespace Unravel.Core
         /// <param name="documentHandle">Native document handle.</param>
         /// <param name="owner">Owning entity.</param>
         /// <returns>Canonical wrapper, or null when <paramref name="documentHandle"/> is zero.</returns>
-        internal static UIDocument GetOrCreate(IntPtr documentHandle, Entity owner)
+        internal static UIDocument GetOrCreate(long documentHandle, Entity owner)
         {
-            if (documentHandle == IntPtr.Zero)
+            if (documentHandle == 0)
             {
                 return null;
             }
@@ -64,7 +64,7 @@ namespace Unravel.Core
         /// <summary>
         /// Invalidates the wrapper of a destroyed document, if there is one.
         /// </summary>
-        internal static void InvalidateHandle(IntPtr documentHandle)
+        internal static void InvalidateHandle(long documentHandle)
         {
             if (s_cache.TryGetValue(documentHandle, out UIDocument document))
             {
@@ -75,7 +75,7 @@ namespace Unravel.Core
         /// <summary>
         /// Gets the native document handle.
         /// </summary>
-        internal IntPtr GetHandle()
+        internal long GetHandle()
         {
             return handle;
         }
@@ -86,14 +86,14 @@ namespace Unravel.Core
         /// <param name="owner">Entity whose document wrappers should be invalidated.</param>
         internal static void InvalidateForOwner(Entity owner)
         {
-            List<IntPtr> toRemove = null;
-            foreach (KeyValuePair<IntPtr, UIDocument> kvp in s_cache)
+            List<long> toRemove = null;
+            foreach (KeyValuePair<long, UIDocument> kvp in s_cache)
             {
                 if (kvp.Value.ownerEntity == owner)
                 {
                     if (toRemove == null)
                     {
-                        toRemove = new List<IntPtr>();
+                        toRemove = new List<long>();
                     }
                     toRemove.Add(kvp.Key);
                 }
@@ -102,7 +102,7 @@ namespace Unravel.Core
             {
                 return;
             }
-            foreach (IntPtr ptr in toRemove)
+            foreach (long ptr in toRemove)
             {
                 if (s_cache.TryGetValue(ptr, out UIDocument document))
                 {
@@ -125,11 +125,11 @@ namespace Unravel.Core
         /// </summary>
         internal void Invalidate()
         {
-            if (handle != IntPtr.Zero)
+            if (handle != 0)
             {
                 s_cache.Remove(handle);
             }
-            handle = IntPtr.Zero;
+            handle = 0;
         }
 
         /// <summary>
@@ -181,8 +181,8 @@ namespace Unravel.Core
         /// </summary>
         public void Close()
         {
-            IntPtr documentHandle = handle;
-            if (documentHandle == IntPtr.Zero)
+            long documentHandle = handle;
+            if (documentHandle == 0)
             {
                 return;
             }
@@ -199,7 +199,7 @@ namespace Unravel.Core
         /// <returns>A UIElement if found; otherwise, null.</returns>
         public UIElement GetElementById(string elementId)
         {
-            IntPtr elementHandle = internal_m2n_ui_document_wrapper_get_element_by_id(handle, ownerEntity, elementId);
+            long elementHandle = internal_m2n_ui_document_wrapper_get_element_by_id(handle, ownerEntity, elementId);
             return UIEventManager.GetOrCreateWrapper(elementHandle, ownerEntity);
         }
 
@@ -210,7 +210,7 @@ namespace Unravel.Core
         /// <returns>A UIElement if found; otherwise, null.</returns>
         public UIElement QuerySelector(string selector)
         {
-            IntPtr elementHandle = internal_m2n_ui_document_wrapper_query_selector(handle, ownerEntity, selector);
+            long elementHandle = internal_m2n_ui_document_wrapper_query_selector(handle, ownerEntity, selector);
             return UIEventManager.GetOrCreateWrapper(elementHandle, ownerEntity);
         }
 
@@ -255,7 +255,7 @@ namespace Unravel.Core
         /// <param name="tag">The tag, e.g. "div", "img", "button".</param>
         public UIElement CreateElement(string tag)
         {
-            IntPtr elementHandle = internal_m2n_ui_document_wrapper_create_element(handle, ownerEntity, tag ?? "div");
+            long elementHandle = internal_m2n_ui_document_wrapper_create_element(handle, ownerEntity, tag ?? "div");
             return UIEventManager.GetOrCreateWrapper(elementHandle, ownerEntity);
         }
 
@@ -265,7 +265,7 @@ namespace Unravel.Core
         /// <param name="point">In the document's pixels: for a screen-space document, <see cref="Input.mousePosition"/>.</param>
         public UIElement ElementAt(Vector2 point)
         {
-            IntPtr elementHandle = internal_m2n_ui_document_wrapper_element_at(handle, ownerEntity, point);
+            long elementHandle = internal_m2n_ui_document_wrapper_element_at(handle, ownerEntity, point);
             return UIEventManager.GetOrCreateWrapper(elementHandle, ownerEntity);
         }
 
@@ -306,45 +306,45 @@ namespace Unravel.Core
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_document_wrapper_is_valid(IntPtr documentHandle, Entity ownerEntity);
+        private static extern bool internal_m2n_ui_document_wrapper_is_valid(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_document_wrapper_get_title(IntPtr documentHandle, Entity ownerEntity);
+        private static extern string internal_m2n_ui_document_wrapper_get_title(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_set_title(IntPtr documentHandle, Entity ownerEntity, string title);
+        private static extern void internal_m2n_ui_document_wrapper_set_title(long documentHandle, Entity ownerEntity, string title);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_document_wrapper_is_visible(IntPtr documentHandle, Entity ownerEntity);
+        private static extern bool internal_m2n_ui_document_wrapper_is_visible(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_show(IntPtr documentHandle, Entity ownerEntity);
+        private static extern void internal_m2n_ui_document_wrapper_show(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_hide(IntPtr documentHandle, Entity ownerEntity);
+        private static extern void internal_m2n_ui_document_wrapper_hide(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_close(IntPtr documentHandle, Entity ownerEntity);
+        private static extern void internal_m2n_ui_document_wrapper_close(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_wrapper_get_element_by_id(IntPtr documentHandle, Entity ownerEntity, string elementId);
+        private static extern long internal_m2n_ui_document_wrapper_get_element_by_id(long documentHandle, Entity ownerEntity, string elementId);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern long[] internal_m2n_ui_document_wrapper_query_selector_all(IntPtr documentHandle, Entity ownerEntity, string selector);
+        private static extern long[] internal_m2n_ui_document_wrapper_query_selector_all(long documentHandle, Entity ownerEntity, string selector);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_wrapper_create_element(IntPtr documentHandle, Entity ownerEntity, string tag);
+        private static extern long internal_m2n_ui_document_wrapper_create_element(long documentHandle, Entity ownerEntity, string tag);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_wrapper_element_at(IntPtr documentHandle, Entity ownerEntity, Vector2 point);
+        private static extern long internal_m2n_ui_document_wrapper_element_at(long documentHandle, Entity ownerEntity, Vector2 point);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_document_wrapper_update_layout(IntPtr documentHandle, Entity ownerEntity);
+        private static extern void internal_m2n_ui_document_wrapper_update_layout(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_ui_document_wrapper_get_dp_ratio(IntPtr documentHandle, Entity ownerEntity);
+        private static extern float internal_m2n_ui_document_wrapper_get_dp_ratio(long documentHandle, Entity ownerEntity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_wrapper_query_selector(IntPtr documentHandle, Entity ownerEntity, string selector);
+        private static extern long internal_m2n_ui_document_wrapper_query_selector(long documentHandle, Entity ownerEntity, string selector);
     }
 }

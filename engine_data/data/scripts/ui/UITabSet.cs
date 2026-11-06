@@ -10,7 +10,7 @@ namespace Unravel.Core
     {
         private readonly Dictionary<Action<int>, UISubscription> tabChangedHandlers = new Dictionary<Action<int>, UISubscription>();
 
-        internal UITabSet(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UITabSet(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
 

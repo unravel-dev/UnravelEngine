@@ -90,7 +90,8 @@ auto resolve_protocol(const path& _path) -> path;
 /// Oposite of the resolve_protocol this function tries to convert to protocol
 /// path from an absolute one. The longest registered root that is the path or
 /// one of its ancestor folders wins; letter case is ignored on case-insensitive
-/// filesystems. Returns the path unchanged when no root matches.
+/// filesystems. Returns the path unchanged when no root matches, and a path that
+/// already starts with a known protocol as it is.
 /// </summary>
 //-----------------------------------------------------------------------------
 auto convert_to_protocol(const path& _path) -> path;
@@ -98,7 +99,7 @@ auto convert_to_protocol(const path& _path) -> path;
 /**
  * @brief convert_to_protocol by the path's spelling alone: the path is made lexically normal, not
  * canonical, so no file system call is made. For hot lookups of paths built from protocol roots;
- * returns the path unchanged when no root matches as written.
+ * returns the path unchanged when no root matches as written or it already starts with a known protocol.
  */
 auto convert_to_protocol_lexically(const path& _path) -> path;
 

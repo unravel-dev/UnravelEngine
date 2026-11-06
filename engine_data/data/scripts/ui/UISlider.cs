@@ -9,7 +9,7 @@ namespace Unravel.Core
     /// </summary>
     public class UISlider : UIElement
     {
-        internal UISlider(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UISlider(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
 

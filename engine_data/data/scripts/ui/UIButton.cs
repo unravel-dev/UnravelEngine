@@ -8,7 +8,7 @@ namespace Unravel.Core
     /// </summary>
     public class UIButton : UIElement
     {
-        internal UIButton(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UIButton(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
     }

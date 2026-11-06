@@ -140,7 +140,7 @@ namespace Unravel.Core
             {
                 return null;
             }
-            IntPtr documentHandle = internal_m2n_ui_document_get_wrapper(owner);
+            long documentHandle = internal_m2n_ui_document_get_wrapper(owner);
             return UIDocument.GetOrCreate(documentHandle, owner);
         }
 
@@ -174,6 +174,6 @@ namespace Unravel.Core
         private static extern void internal_m2n_ui_document_set_title(Entity eid, string title);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_document_get_wrapper(Entity eid);
+        private static extern long internal_m2n_ui_document_get_wrapper(Entity eid);
     }
 }

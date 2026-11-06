@@ -849,7 +849,8 @@ auto get_renderer_filename_extension(bgfx::RendererType::Enum _type) -> const st
 
                                                                           {bgfx::RendererType::OpenGL, ".gl"},
                                                                           {bgfx::RendererType::OpenGLES, ".essl"},
-                                                                          {bgfx::RendererType::Vulkan, ".spirv"}};
+                                                                          {bgfx::RendererType::Vulkan, ".spirv"},
+                                                                          {bgfx::RendererType::WebGPU, ".wgsl"}};
 
     const auto it = types.find(_type);
     if(it != types.cend())

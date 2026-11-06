@@ -7,7 +7,7 @@ namespace Unravel.Core
     /// </summary>
     public class UIProgress : UIElement
     {
-        internal UIProgress(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UIProgress(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
 

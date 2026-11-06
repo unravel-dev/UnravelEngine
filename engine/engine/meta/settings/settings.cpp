@@ -1353,6 +1353,11 @@ REFLECT_INLINE(target_platform)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "android"},
             entt::attribute{"pretty_name", "Android"},
+        })
+        .data<target_platform::web>("web"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "web"},
+            entt::attribute{"pretty_name", "Web"},
         });
 }
 

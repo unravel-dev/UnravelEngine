@@ -18,8 +18,9 @@ namespace unravel
  * and to nothing afterwards, so a script that keeps a reference to an element a rebuild or a
  * reload destroyed can never reach freed memory, nor a new element that took the freed address
  * (RmlUi pools elements). An element has one handle for its whole life; 0 is no element.
+ * 64 bits on every platform, wasm32 included; scripts hold it as a long.
  */
-using ui_element_handle = std::intptr_t;
+using ui_element_handle = std::int64_t;
 
 /**
  * @brief The handle of @p element, created when the element first crosses into scripts.

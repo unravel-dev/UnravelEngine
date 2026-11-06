@@ -15,6 +15,8 @@ struct linked_libraries
     bool has_openal_soft{};
     /// libdwarf, under the LGPL, when cpptrace is set to read symbols with it.
     bool has_libdwarf{};
+    /// cpptrace, which walks the stacks of the crash logs; the browser build has no crash handlers.
+    bool has_cpptrace{};
     bool has_miniaudio{};
 };
 

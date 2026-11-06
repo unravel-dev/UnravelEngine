@@ -67,6 +67,12 @@ struct ENGINE_EXPORT renderer
     void set_main_window(os::window&& window);
     auto get_main_window() const -> render_window*;
     /**
+     * @brief Whether the GPU still has as many submitted frames to draw as a frame may wait behind. In the browser
+     *        nothing makes a frame wait for the GPU, so the host skips the frame instead: a slow GPU lowers the frame
+     *        rate rather than falling ever further behind. Always false elsewhere, where bgfx waits.
+     */
+    auto is_gpu_behind() const -> bool;
+    /**
      * @brief Closes the main window: get_main_window() returns null from then on. The window
      *        carries the backbuffer, so it is only hidden and lives until the backend shuts down.
      */

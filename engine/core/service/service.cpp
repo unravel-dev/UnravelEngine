@@ -11,13 +11,34 @@
 #include <entt/meta/utility.hpp>
 #include <entt/core/hashed_string.hpp>
 
+#include <base/platform/config.hpp>
 #include <process/process.h>
 #include <process/startup_arguments.h>
+
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+#include <emscripten/emscripten.h>
+#endif
 
 using namespace std::chrono_literals;
 
 namespace
 {
+
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+/// One frame of the browser's animation-frame loop. When the application ends, the loop stops and the runner
+/// unloads it.
+void run_browser_frame(void* user_data)
+{
+    auto* runner = static_cast<service_runner*>(user_data);
+    if(runner->run_frame() == SERVICE_RESULT_RUN)
+    {
+        return;
+    }
+    emscripten_cancel_main_loop();
+    runner->stop();
+    delete runner;
+}
+#endif
 
 auto make_argv_pointers(std::vector<std::string>& storage) -> std::vector<char*>
 {
@@ -241,6 +262,18 @@ auto service_runner::get_service() -> service&
 
 auto service_main(const char* name, int argc, char* argv[]) -> int
 {
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    // A page shows nothing until each frame returns to the browser, so the browser calls the frames, from its
+    // animation frames, after main returns. A browser player neither restarts nor reloads itself.
+    auto* runner = new service_runner(name, std::vector<std::string>(argv, argv + argc));
+    if(!runner->start())
+    {
+        delete runner;
+        return -1;
+    }
+    emscripten_set_main_loop_arg(run_browser_frame, runner, 0, false);
+    return 0;
+#else
     const unravel::process::startup_arguments startup =
         unravel::process::parse_startup_arguments(argc, argv);
     if(startup.has_parse_error)
@@ -309,4 +342,5 @@ auto service_main(const char* name, int argc, char* argv[]) -> int
         break;
     }
     return runner.stop() ? 0 : -1;
+#endif
 }

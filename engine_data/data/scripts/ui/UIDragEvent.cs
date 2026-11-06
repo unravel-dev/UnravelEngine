@@ -9,7 +9,7 @@ namespace Unravel.Core
     /// </summary>
     public class UIDragEvent : UIPointerEvent
     {
-        private IntPtr dragElementHandle = IntPtr.Zero;
+        private long dragElementHandle = 0;
 
         /// <summary>
         /// The dragged element, on the events of the elements it passes over or is dropped on; null otherwise.
@@ -19,7 +19,7 @@ namespace Unravel.Core
         internal override void FillFrom(in UIEventPayload payload, string text)
         {
             base.FillFrom(payload, text);
-            dragElementHandle = new IntPtr(payload.relatedHandle);
+            dragElementHandle = payload.relatedHandle;
         }
     }
 }

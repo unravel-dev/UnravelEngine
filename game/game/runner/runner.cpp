@@ -21,7 +21,8 @@ auto get_window_view_size(rtti::context& ctx) -> usize32_t
 {
     auto& rend = ctx.get_cached<renderer>();
     auto window = rend.get_main_window();
-    auto size = window->get_window().get_size();
+    // In pixels, as the window's surface: on a high-density display the window's size counts points.
+    auto size = window->get_window().get_size_in_pixels();
     return {size.w, size.h};
 }
 

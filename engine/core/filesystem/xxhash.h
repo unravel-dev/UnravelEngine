@@ -241,6 +241,14 @@
  * xxHash prototypes and implementation
  */
 
+/* Emscripten's arm_neon.h (SIMDe, used for wasm SIMD128) brings C++ templates in through emscripten.h, which
+ * cannot be declared inside the extern "C" block below; its include guard makes the include there a no-op. */
+#if defined(__cplusplus) && defined(__wasm_simd128__) && defined(__has_include)
+#  if __has_include(<arm_neon.h>)
+#    include <arm_neon.h>
+#  endif
+#endif
+
 #if defined(__cplusplus) && !defined(XXH_NO_EXTERNC_GUARD)
 extern "C" {
 #endif

@@ -11,15 +11,19 @@ file(READ ${notices_file} notices_hex HEX)
 string(REGEX REPLACE "(................................)" "\\1\n" notices_lines "${notices_hex}")
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," notices_bytes "${notices_lines}")
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/third_party_notices_text.inc CONTENT "${notices_bytes}")
-# libdwarf is under the LGPL, so the notices name it only in builds whose cpptrace reads symbols with it.
-get_target_property(cpptrace_definitions cpptrace-lib COMPILE_DEFINITIONS)
-if("CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF" IN_LIST cpptrace_definitions)
-    set(links_libdwarf true)
-else()
-    set(links_libdwarf false)
+# The notices name cpptrace only in builds that link it (the browser build does not), and libdwarf, under the LGPL,
+# only in builds whose cpptrace reads symbols with it.
+set(links_cpptrace false)
+set(links_libdwarf false)
+if(TARGET cpptrace-lib)
+    set(links_cpptrace true)
+    get_target_property(cpptrace_definitions cpptrace-lib COMPILE_DEFINITIONS)
+    if("CPPTRACE_GET_SYMBOLS_WITH_LIBDWARF" IN_LIST cpptrace_definitions)
+        set(links_libdwarf true)
+    endif()
 endif()
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/third_party_notices_build.inc
-     CONTENT "constexpr bool LINKS_LIBDWARF = ${links_libdwarf};\n")
+     CONTENT "constexpr bool LINKS_LIBDWARF = ${links_libdwarf};\nconstexpr bool LINKS_CPPTRACE = ${links_cpptrace};\n")
 
 include(GenerateExportHeader)
 generate_export_header(${target_name})

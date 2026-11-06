@@ -52,7 +52,8 @@ void render_window::resize(uint32_t w, uint32_t h)
 
 void render_window::prepare_surface()
 {
-    auto size = window_.get_size();
+    // In pixels: on a high-density display the window's size counts points.
+    auto size = window_.get_size_in_pixels();
 
     bool needs_recreate = true;
     if(surface_)

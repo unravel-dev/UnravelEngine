@@ -26,12 +26,14 @@ constexpr const char* OPENAL_SOFT_NAME = "OpenAL Soft";
 constexpr const char* OBOE_NAME = "Oboe";
 constexpr const char* LIBDWARF_NAME = "libdwarf-lite";
 constexpr const char* MINIAUDIO_NAME = "miniaudio";
+constexpr const char* CPPTRACE_NAME = "cpptrace";
 
 constexpr unsigned char NOTICES_TEXT[] = {
 #include <engine/third_party_notices_text.inc>
 };
 
-// LINKS_LIBDWARF: whether cpptrace reads symbols with libdwarf in this build, which only CMake knows.
+// LINKS_LIBDWARF and LINKS_CPPTRACE: whether this build links cpptrace and whether it reads symbols with libdwarf,
+// which only CMake knows.
 #include <engine/third_party_notices_build.inc>
 
 /// The notices in the parts a build keeps or cuts whole.
@@ -164,6 +166,10 @@ auto get_left_out_names(const linked_libraries& libraries) -> std::vector<std::s
     {
         names.emplace_back(MINIAUDIO_NAME);
     }
+    if(!libraries.has_cpptrace)
+    {
+        names.emplace_back(CPPTRACE_NAME);
+    }
     return names;
 }
 } // namespace
@@ -173,6 +179,7 @@ auto get_linked_libraries() -> linked_libraries
     linked_libraries libraries;
     libraries.has_openal_soft = audio::is_backend_available(audio::backend_type::openal);
     libraries.has_libdwarf = LINKS_LIBDWARF;
+    libraries.has_cpptrace = LINKS_CPPTRACE;
     libraries.has_miniaudio = audio::is_backend_available(audio::backend_type::miniaudio);
     return libraries;
 }

@@ -335,6 +335,18 @@
                 "UNRAVEL_BUILD_EDITOR": false,
                 "UNRAVEL_BUILD_TESTS": false
             }
+        },
+        {
+            "name": "web-wasm32",
+            "displayName": "Browser player (wasm32)",
+            "description": "Player-only build for the browser with the Emscripten of the .NET wasm-tools workload, which the player is linked into. UNRAVEL_EMSCRIPTEN names that Emscripten folder; EM_CONFIG names a config with a writable cache, for the emdawnwebgpu port.",
+            "inherits": "ninja-base",
+            "toolchainFile": "$env{UNRAVEL_EMSCRIPTEN}/cmake/Modules/Platform/Emscripten.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "UNRAVEL_BUILD_EDITOR": false,
+                "UNRAVEL_BUILD_TESTS": false
+            }
         }
 
     ],

@@ -10,7 +10,7 @@ namespace Unravel.Core
     /// </summary>
     public class UISelect : UIElement
     {
-        internal UISelect(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UISelect(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
 

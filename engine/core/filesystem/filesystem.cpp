@@ -339,6 +339,11 @@ auto match_protocol_root(const std::string& string_path, const path& fallback) -
 
 path convert_to_protocol(const path& _path)
 {
+    // A protocol path is relative to the file system, which would make it a path under the working folder.
+    if(has_known_protocol(_path))
+    {
+        return _path;
+    }
     fs::error_code ec;
     auto canonical_path = fs::weakly_canonical(_path, ec);
     if(ec || canonical_path.empty())
@@ -350,6 +355,10 @@ path convert_to_protocol(const path& _path)
 
 path convert_to_protocol_lexically(const path& _path)
 {
+    if(has_known_protocol(_path))
+    {
+        return _path;
+    }
     return match_protocol_root(_path.lexically_normal().make_preferred().string(), _path);
 }
 

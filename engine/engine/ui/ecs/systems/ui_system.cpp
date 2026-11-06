@@ -148,7 +148,7 @@ auto ui_system::init(rtti::context& ctx) -> bool
         const auto& window = rend.get_main_window();
         if(window)
         {
-            auto size = window->get_window().get_size();
+            auto size = window->get_window().get_size_in_pixels();
             width = static_cast<int>(size.w);
             height = static_cast<int>(size.h);
         }

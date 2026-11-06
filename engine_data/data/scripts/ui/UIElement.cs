@@ -21,7 +21,7 @@ namespace Unravel.Core
         private const int AreaPadding = 1;
         private const int AreaContent = 2;
 
-        private IntPtr handle = IntPtr.Zero;
+        private long handle = 0;
         private readonly Entity ownerEntity;
         private UIStyle style_;
 
@@ -30,7 +30,7 @@ namespace Unravel.Core
         /// </summary>
         public override bool IsValid()
         {
-            return handle != IntPtr.Zero && internal_m2n_ui_element_wrapper_is_valid(handle);
+            return handle != 0 && internal_m2n_ui_element_wrapper_is_valid(handle);
         }
 
         /// <summary>
@@ -55,7 +55,7 @@ namespace Unravel.Core
         /// <summary>
         /// Internal constructor - use <see cref="UIEventManager.GetOrCreateWrapper"/>.
         /// </summary>
-        internal UIElement(IntPtr elementHandle, Entity owner)
+        internal UIElement(long elementHandle, Entity owner)
         {
             handle = elementHandle;
             ownerEntity = owner;
@@ -65,7 +65,7 @@ namespace Unravel.Core
         /// The wrapper for an element: a control class (<see cref="UISlider"/> for
         /// &lt;input type="range"&gt;...) or a plain <see cref="UIElement"/>.
         /// </summary>
-        internal static UIElement Create(IntPtr elementHandle, Entity owner)
+        internal static UIElement Create(long elementHandle, Entity owner)
         {
             switch (internal_m2n_ui_element_wrapper_get_control_kind(elementHandle))
             {
@@ -85,13 +85,13 @@ namespace Unravel.Core
         /// </summary>
         internal void Invalidate()
         {
-            handle = IntPtr.Zero;
+            handle = 0;
         }
 
         /// <summary>
         /// Gets the native element handle for internal use by the event system.
         /// </summary>
-        internal IntPtr GetHandle()
+        internal long GetHandle()
         {
             return handle;
         }
@@ -391,7 +391,7 @@ namespace Unravel.Core
         /// <returns>The child, or null when it cannot move here.</returns>
         public UIElement InsertBefore(UIElement child, UIElement before)
         {
-            IntPtr beforeHandle = before?.handle ?? IntPtr.Zero;
+            long beforeHandle = before?.handle ?? 0;
             return child != null && internal_m2n_ui_element_wrapper_insert_before(handle, child.handle, beforeHandle) ? child : null;
         }
 
@@ -729,192 +729,192 @@ namespace Unravel.Core
         // ==== Internal Calls ====
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_valid(IntPtr elementHandle);
+        private static extern bool internal_m2n_ui_element_wrapper_is_valid(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_inner_rml(IntPtr elementHandle);
+        private static extern string internal_m2n_ui_element_wrapper_get_inner_rml(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_inner_rml(IntPtr elementHandle, string rml);
+        private static extern void internal_m2n_ui_element_wrapper_set_inner_rml(long elementHandle, string rml);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_text(IntPtr elementHandle, string text);
+        private static extern void internal_m2n_ui_element_wrapper_set_text(long elementHandle, string text);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_visible(IntPtr elementHandle);
+        private static extern bool internal_m2n_ui_element_wrapper_is_visible(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_visible(IntPtr elementHandle, bool visible);
+        private static extern void internal_m2n_ui_element_wrapper_set_visible(long elementHandle, bool visible);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_attribute(IntPtr elementHandle, string attributeName);
+        private static extern string internal_m2n_ui_element_wrapper_get_attribute(long elementHandle, string attributeName);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_attribute(IntPtr elementHandle, string attributeName, string value);
+        private static extern void internal_m2n_ui_element_wrapper_set_attribute(long elementHandle, string attributeName, string value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_remove_attribute(IntPtr elementHandle, string attributeName);
+        private static extern void internal_m2n_ui_element_wrapper_remove_attribute(long elementHandle, string attributeName);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_has_attribute(IntPtr elementHandle, string attributeName);
+        private static extern bool internal_m2n_ui_element_wrapper_has_attribute(long elementHandle, string attributeName);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_class(IntPtr elementHandle, string className, bool activate);
+        private static extern void internal_m2n_ui_element_wrapper_set_class(long elementHandle, string className, bool activate);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_class_set(IntPtr elementHandle, string className);
+        private static extern bool internal_m2n_ui_element_wrapper_is_class_set(long elementHandle, string className);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_sync_transform_to_entity(IntPtr elementHandle, Entity transformEntity);
+        private static extern void internal_m2n_ui_element_wrapper_sync_transform_to_entity(long elementHandle, Entity transformEntity);
         
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_focus(IntPtr elementHandle);
+        private static extern void internal_m2n_ui_element_wrapper_focus(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_blur(IntPtr elementHandle);
+        private static extern void internal_m2n_ui_element_wrapper_blur(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_click(IntPtr elementHandle);
+        private static extern void internal_m2n_ui_element_wrapper_click(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_scroll_into_view(IntPtr elementHandle, bool alignWithTop);
+        private static extern void internal_m2n_ui_element_wrapper_scroll_into_view(long elementHandle, bool alignWithTop);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_id(IntPtr elementHandle);
+        private static extern string internal_m2n_ui_element_wrapper_get_id(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_tag_name(IntPtr elementHandle);
+        private static extern string internal_m2n_ui_element_wrapper_get_tag_name(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern int internal_m2n_ui_element_wrapper_get_control_kind(IntPtr elementHandle);
+        private static extern int internal_m2n_ui_element_wrapper_get_control_kind(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_value(IntPtr elementHandle);
+        private static extern string internal_m2n_ui_element_wrapper_get_value(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_value(IntPtr elementHandle, string value, bool notify);
+        private static extern void internal_m2n_ui_element_wrapper_set_value(long elementHandle, string value, bool notify);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_disabled(IntPtr elementHandle);
+        private static extern bool internal_m2n_ui_element_wrapper_is_disabled(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_disabled(IntPtr elementHandle, bool disabled);
+        private static extern void internal_m2n_ui_element_wrapper_set_disabled(long elementHandle, bool disabled);
 
         // Used by the control classes; internal calls are registered for this class.
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern bool internal_m2n_ui_element_wrapper_is_checked(IntPtr elementHandle);
+        internal static extern bool internal_m2n_ui_element_wrapper_is_checked(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_set_checked(IntPtr elementHandle, bool isChecked, bool notify);
+        internal static extern void internal_m2n_ui_element_wrapper_set_checked(long elementHandle, bool isChecked, bool notify);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_select_text(IntPtr elementHandle, int start, int end);
+        internal static extern void internal_m2n_ui_element_wrapper_select_text(long elementHandle, int start, int end);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern int internal_m2n_ui_element_wrapper_get_selected_index(IntPtr elementHandle);
+        internal static extern int internal_m2n_ui_element_wrapper_get_selected_index(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_set_selected_index(IntPtr elementHandle, int index, bool notify);
+        internal static extern void internal_m2n_ui_element_wrapper_set_selected_index(long elementHandle, int index, bool notify);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern long[] internal_m2n_ui_element_wrapper_get_options(IntPtr elementHandle);
+        internal static extern long[] internal_m2n_ui_element_wrapper_get_options(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern int internal_m2n_ui_element_wrapper_add_option(IntPtr elementHandle, string rml, string value, int before);
+        internal static extern int internal_m2n_ui_element_wrapper_add_option(long elementHandle, string rml, string value, int before);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_remove_option(IntPtr elementHandle, int index);
+        internal static extern void internal_m2n_ui_element_wrapper_remove_option(long elementHandle, int index);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern Vector2 internal_m2n_ui_element_wrapper_get_progress(IntPtr elementHandle);
+        internal static extern Vector2 internal_m2n_ui_element_wrapper_get_progress(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_set_progress(IntPtr elementHandle, float value, float max);
+        internal static extern void internal_m2n_ui_element_wrapper_set_progress(long elementHandle, float value, float max);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern Vector2 internal_m2n_ui_element_wrapper_get_tabs(IntPtr elementHandle);
+        internal static extern Vector2 internal_m2n_ui_element_wrapper_get_tabs(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_set_active_tab(IntPtr elementHandle, int index);
+        internal static extern void internal_m2n_ui_element_wrapper_set_active_tab(long elementHandle, int index);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_set_tab(IntPtr elementHandle, int index, string tabRml, string panelRml);
+        internal static extern void internal_m2n_ui_element_wrapper_set_tab(long elementHandle, int index, string tabRml, string panelRml);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        internal static extern void internal_m2n_ui_element_wrapper_remove_tab(IntPtr elementHandle, int index);
+        internal static extern void internal_m2n_ui_element_wrapper_remove_tab(long elementHandle, int index);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_text(IntPtr elementHandle);
+        private static extern string internal_m2n_ui_element_wrapper_get_text(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_pseudo_class(IntPtr elementHandle, string pseudoClass, bool activate);
+        private static extern void internal_m2n_ui_element_wrapper_set_pseudo_class(long elementHandle, string pseudoClass, bool activate);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_is_pseudo_class_set(IntPtr elementHandle, string pseudoClass);
+        private static extern bool internal_m2n_ui_element_wrapper_is_pseudo_class_set(long elementHandle, string pseudoClass);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_element_wrapper_get_parent(IntPtr elementHandle);
+        private static extern long internal_m2n_ui_element_wrapper_get_parent(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern long[] internal_m2n_ui_element_wrapper_get_children(IntPtr elementHandle);
+        private static extern long[] internal_m2n_ui_element_wrapper_get_children(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_element_wrapper_query_selector(IntPtr elementHandle, string selector);
+        private static extern long internal_m2n_ui_element_wrapper_query_selector(long elementHandle, string selector);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern long[] internal_m2n_ui_element_wrapper_query_selector_all(IntPtr elementHandle, string selector);
+        private static extern long[] internal_m2n_ui_element_wrapper_query_selector_all(long elementHandle, string selector);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_element_wrapper_closest(IntPtr elementHandle, string selector);
+        private static extern long internal_m2n_ui_element_wrapper_closest(long elementHandle, string selector);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_append_child(IntPtr parentHandle, IntPtr childHandle);
+        private static extern bool internal_m2n_ui_element_wrapper_append_child(long parentHandle, long childHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_insert_before(IntPtr parentHandle, IntPtr childHandle, IntPtr beforeHandle);
+        private static extern bool internal_m2n_ui_element_wrapper_insert_before(long parentHandle, long childHandle, long beforeHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_remove(IntPtr elementHandle);
+        private static extern void internal_m2n_ui_element_wrapper_remove(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern IntPtr internal_m2n_ui_element_wrapper_clone(IntPtr elementHandle);
+        private static extern long internal_m2n_ui_element_wrapper_clone(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_inline_style(IntPtr elementHandle, string property);
+        private static extern string internal_m2n_ui_element_wrapper_get_inline_style(long elementHandle, string property);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_set_inline_style(IntPtr elementHandle, string property, string value);
+        private static extern bool internal_m2n_ui_element_wrapper_set_inline_style(long elementHandle, string property, string value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_remove_inline_style(IntPtr elementHandle, string property);
+        private static extern void internal_m2n_ui_element_wrapper_remove_inline_style(long elementHandle, string property);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern string internal_m2n_ui_element_wrapper_get_computed_style(IntPtr elementHandle, string property);
+        private static extern string internal_m2n_ui_element_wrapper_get_computed_style(long elementHandle, string property);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_set_style_number(IntPtr elementHandle, string property, float value, int unit);
+        private static extern void internal_m2n_ui_element_wrapper_set_style_number(long elementHandle, string property, float value, int unit);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_ui_element_wrapper_get_style_number(IntPtr elementHandle, string property);
+        private static extern float internal_m2n_ui_element_wrapper_get_style_number(long elementHandle, string property);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector4 internal_m2n_ui_element_wrapper_get_rect(IntPtr elementHandle, int area);
+        private static extern Vector4 internal_m2n_ui_element_wrapper_get_rect(long elementHandle, int area);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Vector4 internal_m2n_ui_element_wrapper_get_scroll(IntPtr elementHandle);
+        private static extern Vector4 internal_m2n_ui_element_wrapper_get_scroll(long elementHandle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_scroll_to(IntPtr elementHandle, Vector2 offset, bool smooth);
+        private static extern void internal_m2n_ui_element_wrapper_scroll_to(long elementHandle, Vector2 offset, bool smooth);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern bool internal_m2n_ui_element_wrapper_animate(IntPtr elementHandle, string property, string target,
+        private static extern bool internal_m2n_ui_element_wrapper_animate(long elementHandle, string property, string target,
                                                                            float duration, int easing, int loops, bool alternate, float delay);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_stop_animation(IntPtr elementHandle, string property);
+        private static extern void internal_m2n_ui_element_wrapper_stop_animation(long elementHandle, string property);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_ui_element_wrapper_restart_animation(IntPtr elementHandle);
+        private static extern void internal_m2n_ui_element_wrapper_restart_animation(long elementHandle);
     }
 }

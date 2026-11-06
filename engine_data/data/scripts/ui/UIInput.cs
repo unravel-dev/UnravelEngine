@@ -8,7 +8,7 @@ namespace Unravel.Core
     /// </summary>
     public class UIInput : UIElement
     {
-        internal UIInput(IntPtr elementHandle, Entity owner) : base(elementHandle, owner)
+        internal UIInput(long elementHandle, Entity owner) : base(elementHandle, owner)
         {
         }
 

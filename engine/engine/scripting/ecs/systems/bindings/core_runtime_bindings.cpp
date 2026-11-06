@@ -136,16 +136,20 @@ auto internal_m2n_screen_get_safe_area() -> script_rect
     }
     // In the player the game view is the window. The editor's Game panel is a part of its window,
     // and nothing covers it.
-    const auto window_size = window->get_size();
-    if(window_size.w != size.width || window_size.h != size.height)
+    const auto pixel_size = window->get_size_in_pixels();
+    if(pixel_size.w != size.width || pixel_size.h != size.height)
     {
         return area;
     }
+    // The insets are in window coordinates, the game view in pixels.
+    const auto window_size = window->get_size();
+    const float scale_x = window_size.w > 0 ? float(pixel_size.w) / float(window_size.w) : 1.0f;
+    const float scale_y = window_size.h > 0 ? float(pixel_size.h) / float(window_size.h) : 1.0f;
     const auto insets = window->get_safe_area_insets();
-    area.x = float(insets.left);
-    area.y = float(insets.top);
-    area.width = float(int(size.width) - insets.left - insets.right);
-    area.height = float(int(size.height) - insets.top - insets.bottom);
+    area.x = float(insets.left) * scale_x;
+    area.y = float(insets.top) * scale_y;
+    area.width = float(size.width) - float(insets.left + insets.right) * scale_x;
+    area.height = float(size.height) - float(insets.top + insets.bottom) * scale_y;
     return area;
 }
 

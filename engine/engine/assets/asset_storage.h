@@ -106,7 +106,7 @@ struct texture_importer_meta : crtp_meta_type<texture_importer_meta, asset_impor
     } platforms;
 
     /// The quality a texture compiles with on `platform`: the platform's own while it is overridden,
-    /// otherwise the texture's.
+    /// otherwise the texture's. The web takes the desktop's: computers' browsers read its formats.
     auto get_quality(target_platform platform) const -> const quality_meta&
     {
         const auto& own = platform == target_platform::android ? platforms.android : platforms.desktop;
