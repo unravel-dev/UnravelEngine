@@ -226,7 +226,22 @@ struct animation_importer_meta : crtp_meta_type<animation_importer_meta, asset_i
 
 struct audio_importer_meta : crtp_meta_type<audio_importer_meta, asset_importer_meta>
 {
+    /// How a lossless source (WAV, FLAC) is stored in the build: its own bytes, or Ogg Vorbis (decoded when the clip
+    /// loads) at a quality. A compressed source (OGG, MP3) always keeps its own bytes: encoding it again only loses
+    /// quality. The same values as texture_importer_meta::compression_quality.
+    enum class compression_quality
+    {
+        /// The project's default (settings::asset_settings::audio).
+        project_default,
+        /// The source file's own bytes.
+        none,
+        low_quality,
+        normal_quality,
+        high_quality,
+    };
+
     bool force_to_mono{false};
+    compression_quality compression{compression_quality::project_default};
 };
 
 //-----------------------------------------------------------------------------

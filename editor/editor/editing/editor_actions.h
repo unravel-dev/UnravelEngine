@@ -152,6 +152,7 @@ struct editor_actions
 
     static void recompile_shaders(const std::string& group = "");
     static void recompile_textures(const std::string& group = "");
+    static void recompile_audio_clips(const std::string& group = "");
     /// Writes an asset's import settings (@p meta, the asset database's entry) to the .meta file beside
     /// the asset @p key names; the asset watcher then imports the asset again with them.
     static auto save_import_settings(const std::string& key, const asset_meta& meta) -> bool;

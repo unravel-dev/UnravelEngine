@@ -328,7 +328,8 @@ template<>
 inline auto get_format_version<unravel::audio_clip>() -> uint64_t
 {
     // 2: the compiled clip keeps the source codec's bytes (encoded_sound) and decodes at load.
-    return 2;
+    // 3: a lossless source (WAV, FLAC) is stored as Vorbis by its import settings, Vorbis by default.
+    return 3;
 }
 
 template<>

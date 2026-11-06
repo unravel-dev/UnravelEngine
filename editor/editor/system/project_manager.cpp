@@ -8,6 +8,7 @@
 #include <editor/editing/editor_actions.h>
 #include <editor/editing/thumbnail_manager.h>
 #include <editor/imgui/integration/imgui_notify.h>
+#include <asset_compiler/audio_compression.h>
 #include <asset_compiler/texture_target.h>
 #include <deploy/meta/deploy_settings.hpp>
 #include <editor/meta/project/project_editor_settings.hpp>
@@ -221,12 +222,13 @@ auto project_manager::open_project(rtti::context& ctx, const fs::path& project_p
 
     auto& ls = ctx.get_cached<loading_screen>();
     ls.begin_session("Opening project");
-    // The first compiles need the project's texture defaults. The full settings load needs the assets, so the
-    // defaults are read on their own first.
+    // The first compiles need the project's texture and audio defaults. The full settings load needs the assets, so
+    // the defaults are read on their own first.
     {
         settings::asset_settings assets{};
         load_asset_sections_from_file(fs::resolve_protocol(app_settings_cfg).string(), assets);
         apply_texture_defaults(assets.texture, false);
+        apply_audio_defaults(assets.audio, false);
     }
 
     ls.begin_module("Project Assets");
@@ -345,6 +347,7 @@ void project_manager::save_project_settings(rtti::context& ctx)
 {
     asset_writer::atomic_save_to_file(fs::resolve_protocol(app_settings_cfg).string(), project_settings_);
     apply_texture_defaults(project_settings_.assets.texture, true);
+    apply_audio_defaults(project_settings_.assets.audio, true);
     publish_settings(ctx);
 }
 
@@ -374,6 +377,17 @@ void project_manager::apply_texture_defaults(const settings::asset_settings::tex
     {
         // The project's textures left on Project Default compile with the new defaults.
         editor_actions::recompile_textures("app:/data");
+    }
+}
+
+void project_manager::apply_audio_defaults(const settings::asset_settings::audio_importer_settings& defaults, bool is_open)
+{
+    const bool is_changed = asset_compiler::get_editor_audio_defaults() != defaults;
+    asset_compiler::set_editor_audio_defaults(defaults);
+    if(is_open && is_changed)
+    {
+        // The project's audio clips left on Project Default compile with the new default.
+        editor_actions::recompile_audio_clips("app:/data");
     }
 }
 

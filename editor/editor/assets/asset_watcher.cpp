@@ -8,6 +8,7 @@
 #include <asset_compiler/asset_dependencies.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <asset_compiler/asset_manifest.h>
+#include <asset_compiler/audio_compression.h>
 #include <asset_compiler/texture_target.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/assets/asset_dependency_graph.h>
@@ -130,6 +131,15 @@ auto needs_recompilation(const fs::path& source_file_path, const fs::path& compi
         if(manifest.compile_parameters != parameters)
         {
             // Every texture once after an engine update changes the parameters: no warning each.
+            APPLOG_INFO("Compile parameters changed for {}, recompilation needed", compiled_output_path.string());
+            return true;
+        }
+    }
+    // A clip on Project Default compiles again when the project's default changed while the project was closed.
+    if constexpr(std::is_same_v<T, audio_clip>)
+    {
+        if(manifest.compile_parameters != asset_compiler::get_editor_audio_compile_parameters(source_file_path))
+        {
             APPLOG_INFO("Compile parameters changed for {}, recompilation needed", compiled_output_path.string());
             return true;
         }

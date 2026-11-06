@@ -856,8 +856,9 @@ void draw_resolution_settings(rtti::context& ctx, settings_edit_target& target)
     inspect_and_save(ctx, target, "resolution", [](settings& s) -> auto& { return s.resolution; });
 }
 
-void draw_asset_settings(rtti::context& ctx, settings_edit_target& target)
+void draw_texture_defaults(rtti::context& ctx, settings_edit_target& target)
 {
+    deploy_widgets::draw_section_title("Textures");
     inspect_and_save(ctx, target, "assets/texture", [](settings& s) -> auto& { return s.assets.texture; });
     if(!target.profile.empty())
     {
@@ -869,6 +870,27 @@ void draw_asset_settings(rtti::context& ctx, settings_edit_target& target)
     {
         editor_actions::recompile_textures();
     }
+}
+
+/// Audio compiles once, in the editor, for every deploy: its defaults are the project's, which no profile changes.
+void draw_audio_defaults(rtti::context& ctx, settings_edit_target& target)
+{
+    deploy_widgets::draw_section_title("Audio");
+    if(draw_shared_category_note(target, "the audio defaults"))
+    {
+        ImGui::PushReadonly(true);
+        inspect(ctx, ctx.get_cached<project_manager>().get_settings().assets.audio);
+        ImGui::PopReadonly();
+        return;
+    }
+    inspect_and_save(ctx, target, "assets/audio", [](settings& s) -> auto& { return s.assets.audio; });
+}
+
+void draw_asset_settings(rtti::context& ctx, settings_edit_target& target)
+{
+    draw_texture_defaults(ctx, target);
+    ImGui::Spacing();
+    draw_audio_defaults(ctx, target);
 }
 
 void draw_graphics_settings(rtti::context& ctx, settings_edit_target& target)

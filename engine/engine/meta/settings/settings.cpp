@@ -99,6 +99,24 @@ REFLECT_INLINE(settings::asset_settings::texture_importer_settings)
         });
 }
 
+REFLECT_INLINE(settings::asset_settings::audio_importer_settings)
+{
+    entt::meta_factory<settings::asset_settings::audio_importer_settings>{}
+        .type("audio_importer_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio_importer_settings"},
+            entt::attribute{"pretty_name", "Audio Importer Settings"},
+        })
+        .data<&settings::asset_settings::audio_importer_settings::default_compression>("default_compression"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "default_compression"},
+            entt::attribute{"pretty_name", "Default Compression"},
+            entt::attribute{"tooltip",
+                            "The compression of the WAV and FLAC files whose own is Project Default: None keeps "
+                            "their bytes, a quality compresses them to Vorbis."},
+        });
+}
+
 REFLECT_INLINE(settings::asset_settings)
 {
     entt::meta_factory<settings::asset_settings>{}
@@ -112,6 +130,12 @@ REFLECT_INLINE(settings::asset_settings)
             entt::attribute{"name", "texture"},
             entt::attribute{"pretty_name", "Textures"},
             entt::attribute{"tooltip", "Import settings a texture uses while its own are 'project_default'."},
+        })
+        .data<&settings::asset_settings::audio>("audio"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio"},
+            entt::attribute{"pretty_name", "Audio"},
+            entt::attribute{"tooltip", "Import settings an audio clip uses while its own are 'project_default'."},
         });
 }
 
@@ -127,14 +151,26 @@ LOAD_INLINE(settings::asset_settings::texture_importer_settings)
     try_load(ar, ser20::make_nvp("default_compression", obj.default_compression));
 }
 
+SAVE_INLINE(settings::asset_settings::audio_importer_settings)
+{
+    try_save(ar, ser20::make_nvp("default_compression", obj.default_compression));
+}
+
+LOAD_INLINE(settings::asset_settings::audio_importer_settings)
+{
+    try_load(ar, ser20::make_nvp("default_compression", obj.default_compression));
+}
+
 SAVE_INLINE(settings::asset_settings)
 {
     try_save(ar, ser20::make_nvp("texture", obj.texture));
+    try_save(ar, ser20::make_nvp("audio", obj.audio));
 }
 
 LOAD_INLINE(settings::asset_settings)
 {
     try_load(ar, ser20::make_nvp("texture", obj.texture));
+    try_load(ar, ser20::make_nvp("audio", obj.audio));
 }
 
 

@@ -10,7 +10,7 @@
  *   - document paths: within / related, adding and removing paths, leaf paths, changed paths;
  *   - sparse overrides: only the overridden properties are stated, they apply over any base and the
  *     rest follows the base, reverting removes them, a document's unknown paths and the settings every
- *     profile shares (layers, input, the physics backend, the deploy location) are left out;
+ *     profile shares (layers, input, the physics backend, the audio defaults, the deploy location) are left out;
  *   - profile files: a new Android or Web profile's starting values (feature limits included), save / load
  *     round trip, rename, delete;
  *   - a project from before profiles: Desktop and Android made from its deploy.cfg, its releases and its
@@ -271,6 +271,9 @@ void test_sparse_overrides()
                   read.is_unreadable(),
               "a broken document overrides nothing and is marked unreadable");
     }
+    check(!deployment::is_overridable_settings_path("assets/audio/default_compression") &&
+              deployment::is_overridable_settings_path("assets/texture/default_compression"),
+          "the audio defaults are shared, since a deploy compiles audio once; the texture defaults are per profile");
 
     {
         settings before;

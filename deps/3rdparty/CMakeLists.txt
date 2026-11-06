@@ -39,4 +39,7 @@ add_subdirectory(watcher)
 if(UNRAVEL_BUILD_ASSET_TOOLS) # the editor's MCP server only
     add_subdirectory(cpp-httplib)
 endif()
+if(UNRAVEL_BUILD_ASSET_TOOLS) # the asset compiler's audio import only
+    add_subdirectory(vorbis)
+endif()
 add_subdirectory(zstd)

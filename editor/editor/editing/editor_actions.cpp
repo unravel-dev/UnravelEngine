@@ -1198,21 +1198,31 @@ void editor_actions::open_workspace_on_file(const fs::path& file, int line)
         });
 }
 
-void editor_actions::recompile_shaders(const std::string& group)
+namespace
+{
+/// Touches the sources of every asset of type T in `group`, so the asset watcher imports them again.
+template<typename T>
+void touch_assets(const std::string& group)
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
-    auto shaders = am.get_assets<gfx::shader>(group);
+    auto assets = am.get_assets<T>(group);
     fs::watcher::with_paused(
         [&]
         {
-            for(auto& asset : shaders)
+            for(auto& asset : assets)
             {
                 fs::error_code ec;
                 auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
                 fs::watcher::touch(path, false);
             }
         });
+}
+} // namespace
+
+void editor_actions::recompile_shaders(const std::string& group)
+{
+    touch_assets<gfx::shader>(group);
 }
 
 auto editor_actions::save_import_settings(const std::string& key, const asset_meta& meta) -> bool
@@ -1272,19 +1282,12 @@ auto editor_actions::save_entity_as_prefab(rtti::context& ctx,
 
 void editor_actions::recompile_textures(const std::string& group)
 {
-    auto& ctx = engine::context();
-    auto& am = ctx.get_cached<asset_manager>();
-    auto textures = am.get_assets<gfx::texture>(group);
-    fs::watcher::with_paused(
-        [&]
-        {
-            for(auto& asset : textures)
-            {
-                fs::error_code ec;
-                auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
-                fs::watcher::touch(path, false);
-            }
-        });
+    touch_assets<gfx::texture>(group);
+}
+
+void editor_actions::recompile_audio_clips(const std::string& group)
+{
+    touch_assets<audio_clip>(group);
 }
 
 auto editor_actions::migrate_prefabs(rtti::context& ctx, size_t* total_count) -> size_t

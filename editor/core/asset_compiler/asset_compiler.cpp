@@ -1,7 +1,9 @@
 #include "asset_compiler.h"
 #include "asset_dependencies.h"
+#include "audio_compression.h"
 #include "eshader_file.h"
 #include "texture_target.h"
+#include "vorbis_encoder.h"
 #include <engine/assets/impl/asset_writer.h>
 #include "asset_manifest.h"
 #include "generated_asset.h"
@@ -1458,6 +1460,19 @@ auto read_texture_importer(const fs::path& key) -> texture_importer_meta
     return read_texture_importer_settings(resolve_input_file(key));
 }
 
+auto read_audio_importer(const fs::path& key) -> audio_importer_meta
+{
+    asset_meta meta;
+    if(load_from_file(resolve_input_file(key).string() + ".meta", meta) && meta.importer)
+    {
+        if(auto importer = std::dynamic_pointer_cast<audio_importer_meta>(meta.importer))
+        {
+            return *importer;
+        }
+    }
+    return {};
+}
+
 auto is_texture_compiled_for_target(const fs::path& key, const fs::path& output, const texture_target& target) -> bool
 {
     return is_texture_compiled_with(key, output, get_texture_parameters(key, target));
@@ -2530,6 +2545,7 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
     }
 
     auto importer = std::static_pointer_cast<audio_importer_meta>(base_importer);
+    const auto compression = resolve_audio_compression(*importer, get_editor_audio_defaults());
 
     auto absolute_path = resolve_input_file(key);
 
@@ -2537,8 +2553,8 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
 
     fs::error_code err;
 
-    // The source's own bytes are the compiled clip; it is decoded when it loads. Decoding it once
-    // here reports a file that will not play at import, where the rest of the import errors are.
+    // The source's own bytes are the compiled clip, or for a lossless source its Vorbis encoding; it is decoded when it
+    // loads. Decoding it once here reports a file that will not play at import, where the rest of the import errors are.
     encoded_sound clip;
     {
         std::ifstream input(str_input, std::ios::binary);
@@ -2559,6 +2575,12 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
                          clip.bytes.empty() ? std::string("the file could not be read") : error);
             return false;
         }
+        if(is_compressed_to_vorbis(compression, clip.codec) && decoded.info.frames > 0 &&
+           !compress_clip_to_vorbis(decoded, compression, clip, error))
+        {
+            APPLOG_ERROR("Failed compilation of {0}: it could not be compressed to Vorbis ({1}).", str_input, error);
+            return false;
+        }
 
         asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
         {
@@ -2576,7 +2598,7 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
         return false;
     }
 
-    if(!write_manifest_file<audio_clip>(absolute_path, output))
+    if(!write_manifest_file<audio_clip>(absolute_path, output, get_audio_compile_parameters(compression)))
     {
         APPLOG_ERROR("Failed to write manifest for compiled audio_clip: {0}", output.string());
         return false;

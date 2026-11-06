@@ -59,3 +59,9 @@
 [submodule "deps/3rdparty/freetype/freetype"]
 	path = deps/3rdparty/freetype/freetype
 	url = https://github.com/freetype/freetype.git
+[submodule "deps/3rdparty/vorbis/ogg"]
+	path = deps/3rdparty/vorbis/ogg
+	url = https://github.com/xiph/ogg.git
+[submodule "deps/3rdparty/vorbis/vorbis"]
+	path = deps/3rdparty/vorbis/vorbis
+	url = https://github.com/xiph/vorbis.git

@@ -210,6 +210,9 @@ private:
     /// Points the asset compiler at the project's texture defaults; recompiles the project's textures when
     /// they changed while the project is open.
     void apply_texture_defaults(const settings::asset_settings::texture_importer_settings& defaults, bool is_open);
+    /// Points the asset compiler at the project's audio defaults; recompiles the project's audio clips when they
+    /// changed while the project is open.
+    void apply_audio_defaults(const settings::asset_settings::audio_importer_settings& defaults, bool is_open);
     /// Reads the profiles and makes the editor's choices name existing ones.
     void load_profiles();
     /// Keeps the deploy and preview profiles naming existing profiles after a change of the profiles.

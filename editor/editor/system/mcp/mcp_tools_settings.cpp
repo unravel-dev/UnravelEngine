@@ -59,6 +59,7 @@ auto reflected_rows() -> const std::vector<reflected_row>&
         {"splash", "fade_in_sec"},
         {"splash", "fade_out_sec"},
         {"assets", "texture"},
+        {"assets", "audio"},
         {"resolution", "orientation"},
         {"global_illumination", "global_illumination_quality"},
         {"global_illumination", "reflection_quality"},

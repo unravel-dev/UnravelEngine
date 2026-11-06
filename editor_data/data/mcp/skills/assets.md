@@ -61,7 +61,10 @@ inside the project).
   quality.max_size, quality.compression, and platforms.desktop /
   platforms.android: is_overridden with the quality that platform compiles
   with instead), meshes (model, sdf, cards, animations, materials), animations
-  (root_motion), audio (force_to_mono). "schemas" gives the
+  (root_motion), audio (force_to_mono; compression: project_default follows
+  the project settings' assets.audio.default_compression, normal_quality unless
+  changed; none keeps a WAV or FLAC as it is; low/normal/high_quality store it as
+  Ogg Vorbis; OGG and MP3 always keep their bytes). "schemas" gives the
   enum names and ranges; a loaded texture also reports "texture": its compiled
   format, size and mips - the proof a change took.
 - assets_set_import_settings {"items":[{"key":"UI/atlas.png",

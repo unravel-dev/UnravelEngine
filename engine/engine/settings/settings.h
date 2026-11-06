@@ -75,6 +75,13 @@ struct settings
             friend auto operator==(const texture_importer_settings& lhs, const texture_importer_settings& rhs) -> bool = default;
         } texture;
 
+        /// Import settings an audio clip uses while its own are Project Default.
+        struct audio_importer_settings
+        {
+            audio_importer_meta::compression_quality default_compression{audio_importer_meta::compression_quality::normal_quality};
+            friend auto operator==(const audio_importer_settings& lhs, const audio_importer_settings& rhs) -> bool = default;
+        } audio;
+
         struct mesh_settings
         {
             friend auto operator==(const mesh_settings& lhs, const mesh_settings& rhs) -> bool = default;
