@@ -20,8 +20,8 @@ enum class particle_sort_backend : uint8_t
 constexpr uint32_t gpu_group_threads = 64;
 /// Elements one group of cs_particle_sort.eshader sorts in groupshared memory (PARTICLE_SORT_BLOCK).
 constexpr uint32_t gpu_sort_block = 1024;
-/// Threads per group of cs_particle_sort.eshader.
-constexpr uint32_t gpu_sort_threads = 512;
+/// Threads per group of cs_particle_sort.eshader (PARTICLE_SORT_THREADS), each taking two pairs of a step.
+constexpr uint32_t gpu_sort_threads = 256;
 /// uints per task of cs_particle_keygen.eshader (PARTICLE_TASK_UINTS).
 constexpr uint32_t gpu_task_uints = 8;
 /// Indices of the particle quad and of the octagon after it in the particle index buffer.

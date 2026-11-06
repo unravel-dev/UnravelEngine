@@ -76,7 +76,7 @@ auto assao_pass::init(rtti::context& ctx) -> bool
 
     // clang-format off
     load_program(m_prepareDepthsProgram,               "cs_assao_prepare_depths");
-    load_program(m_prepareDepthsAndNormalsProgram,     "cs_assao_prepare_depths_and_normals");
+    load_program(m_prepareNormalsProgram,              "cs_assao_prepare_normals");
     load_program(m_prepareDepthsHalfProgram,           "cs_assao_prepare_depths_half");
     load_program(m_prepareDepthsAndNormalsHalfProgram, "cs_assao_prepare_depths_and_normals_half");
     load_program(m_prepareDepthMipProgram,             "cs_assao_prepare_depth_mip");
@@ -110,7 +110,7 @@ auto assao_pass::init(rtti::context& ctx) -> bool
 auto assao_pass::get_programs() const -> std::array<gpu_program*, PROGRAM_COUNT>
 {
     return {m_prepareDepthsProgram.get(),
-            m_prepareDepthsAndNormalsProgram.get(),
+            m_prepareNormalsProgram.get(),
             m_prepareDepthsHalfProgram.get(),
             m_prepareDepthsAndNormalsHalfProgram.get(),
             m_prepareDepthMipProgram.get(),
@@ -220,13 +220,13 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
         bgfx::setTexture(0, s_depthSource, params.depth->native_handle(), SAMPLER_POINT_CLAMP);
         m_uniforms.submit();
 
-        if(m_settings.generate_normals)
-        {
-            bgfx::setImage(5, normals->native_handle(), 0, bgfx::Access::Write);
-        }
-
         if(m_settings.quality_level < 0)
         {
+            if(m_settings.generate_normals)
+            {
+                bgfx::setImage(5, normals->native_handle(), 0, bgfx::Access::Write);
+            }
+
             for(int32_t j = 0; j < 2; ++j)
             {
                 bgfx::setImage((uint8_t)(j + 1),
@@ -250,10 +250,21 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
             bgfx::setImage(4, halfDepths3->native_handle(), 0, bgfx::Access::Write);
 
             gfx::dispatch(view,
-                           (m_settings.generate_normals ? m_prepareDepthsAndNormalsProgram : m_prepareDepthsProgram)
-                               ->native_handle(),
+                           m_prepareDepthsProgram->native_handle(),
                            compute_group_count(dims.halfSize[0], GROUP_SIZE),
                            compute_group_count(dims.halfSize[1], GROUP_SIZE));
+            // The normals in a pass of their own: the depths take the four storage textures a compute stage may
+            // write on every WebGPU device.
+            if(m_settings.generate_normals)
+            {
+                bgfx::setTexture(0, s_depthSource, params.depth->native_handle(), SAMPLER_POINT_CLAMP);
+                m_uniforms.submit();
+                bgfx::setImage(5, normals->native_handle(), 0, bgfx::Access::Write);
+                gfx::dispatch(view,
+                               m_prepareNormalsProgram->native_handle(),
+                               compute_group_count(dims.halfSize[0], GROUP_SIZE),
+                               compute_group_count(dims.halfSize[1], GROUP_SIZE));
+            }
         }
     }
 
@@ -527,7 +538,7 @@ auto assao_pass::shutdown() -> int32_t
     bgfx::destroy(m_loadCounter);
 
     m_prepareDepthsProgram.reset();
-    m_prepareDepthsAndNormalsProgram.reset();
+    m_prepareNormalsProgram.reset();
     m_prepareDepthsHalfProgram.reset();
     m_prepareDepthsAndNormalsHalfProgram.reset();
     m_prepareDepthMipProgram.reset();

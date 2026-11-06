@@ -224,7 +224,7 @@ private:
     // Resource handles
 
     gpu_program::ptr m_prepareDepthsProgram;
-    gpu_program::ptr m_prepareDepthsAndNormalsProgram;
+    gpu_program::ptr m_prepareNormalsProgram;
     gpu_program::ptr m_prepareDepthsHalfProgram;
     gpu_program::ptr m_prepareDepthsAndNormalsHalfProgram;
     gpu_program::ptr m_prepareDepthMipProgram;

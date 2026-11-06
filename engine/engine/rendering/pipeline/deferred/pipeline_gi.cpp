@@ -173,7 +173,8 @@ auto deferred::get_gi_resolve_scale(gfx::render_view& rview) -> float
 
 auto deferred::is_gi_requested(const run_params& rparams) -> bool
 {
-    return rparams.fill_gi_params && engine::context().get_cached<surface_cache_system>().is_enabled();
+    // Supported, not enabled: the surface cache makes its resources when a camera first asks for global illumination.
+    return rparams.fill_gi_params && engine::context().get_cached<surface_cache_system>().is_supported();
 }
 
 auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool

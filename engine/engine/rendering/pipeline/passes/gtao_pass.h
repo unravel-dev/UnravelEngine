@@ -161,6 +161,9 @@ private:
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } prefilter_program_;
 
+    /// Writes the last depth mip from the one before it; reads only the common uniforms.
+    gpu_program::ptr prefilter_last_mip_program_;
+
     struct main_program : uniforms_cache
     {
         gpu_program::ptr program;

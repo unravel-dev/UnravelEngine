@@ -21,7 +21,9 @@
  *     platform, every declaration type compiles, a failed variant leaves the compiled file and its manifest as
  *     they were and no temp file behind;
  *   - every .eshader the engine and the editor ship compiles on every renderer of this platform, and no two of a file's
- *     variants are the same binary on all of them: a define that changes nothing is what a mistyped one looks like.
+ *     variants are the same binary on all of them: a define that changes nothing is what a mistyped one looks like;
+ *   - every engine shader compiles to WGSL within the limits every WebGPU device grants (invocations per workgroup,
+ *     storage textures per stage), but the global illumination's, which the browser player never runs.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
@@ -45,6 +47,8 @@
 #include <cstdio>
 #include <fstream>
 #include <map>
+#include <regex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -62,6 +66,13 @@ constexpr int FIRST_INSTANCE_TAG_INDEX = 31;
 /// bgfx's numbered vertex attributes.
 constexpr int COLOR_ATTRIBUTE_COUNT = 4;
 constexpr int TEXCOORD_ATTRIBUTE_COUNT = 16;
+
+/// WebGPU's core limits, which every device grants, as the browser player's shaders must fit them.
+constexpr unsigned long WEBGPU_MAX_WORKGROUP_INVOCATIONS = 256;
+constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
+/// The engine's shaders the browser player never runs: global illumination reads and writes RG11B10F storage
+/// textures, which WebGPU allows on no device, so web profiles turn it off.
+constexpr const char* WEBGPU_EXEMPT_FOLDER = "gi";
 
 int g_checks = 0;
 int g_failures = 0;
@@ -651,6 +662,62 @@ void test_failed_loads_are_retried(unravel::asset_manager& am)
     check(!named.begin() && named.get_revision() == 0u, "a shader that failed to load is not refused for a variant it does not have yet");
 }
 
+/// What of WebGPU's core limits a variant's WGSL exceeds, as a sentence part; empty when it fits.
+auto find_webgpu_limit_problems(const unravel::compiled_shader_variant& variant) -> std::string
+{
+    static const std::regex workgroup_size(R"(@workgroup_size\((\d+)[iu]?,\s*(\d+)[iu]?,\s*(\d+)[iu]?\))");
+    static const std::regex storage_texture(R"(var\s+(\w+)\s*:\s*texture_storage_)");
+    const std::string wgsl = as_string(variant);
+    std::string problems;
+    std::smatch size;
+    if(std::regex_search(wgsl, size, workgroup_size))
+    {
+        const unsigned long invocations = std::stoul(size[1]) * std::stoul(size[2]) * std::stoul(size[3]);
+        if(invocations > WEBGPU_MAX_WORKGROUP_INVOCATIONS)
+        {
+            problems += std::to_string(invocations) + " invocations per workgroup ";
+        }
+    }
+    std::set<std::string> storage_textures;
+    for(std::sregex_iterator it(wgsl.begin(), wgsl.end(), storage_texture), end; it != end; ++it)
+    {
+        storage_textures.insert((*it)[1].str());
+    }
+    if(storage_textures.size() > WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE)
+    {
+        problems += std::to_string(storage_textures.size()) + " storage textures";
+    }
+    return problems;
+}
+
+void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& root)
+{
+    std::printf("test_engine_shaders_fit_webgpu\n");
+    const fs::path shaders = fs::path(ENGINE_DATA_DIR) / "data/shaders";
+    const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::WebGPU);
+    std::size_t variant_count = 0;
+    fs::error_code ec;
+    for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
+    {
+        const auto relative = entry.path().lexically_relative(shaders);
+        if(entry.path().extension() != ex::get_format<gfx::shader>() || *relative.begin() == WEBGPU_EXEMPT_FOLDER)
+        {
+            continue;
+        }
+        const auto name = relative.generic_string();
+        const auto compiled = compile_variants(am, entry.path().string(), root / "webgpu", renderer);
+        check(!compiled.empty(), name + " compiles to WGSL");
+        for(const auto& variant : compiled)
+        {
+            const auto problems = find_webgpu_limit_problems(variant);
+            check(problems.empty(), name + " variant " + variant.name + " exceeds WebGPU's core limits: " + problems);
+            ++variant_count;
+        }
+    }
+    std::printf("  %zu WGSL variants\n", variant_count);
+    check(variant_count > 0, "the engine's shaders are found");
+}
+
 void test_shipped_shaders_compile(unravel::asset_manager& am, const fs::path& root)
 {
     std::printf("test_shipped_shaders_compile\n");
@@ -717,6 +784,7 @@ auto run_eshader_files_suite(rtti::context& ctx) -> int
         test_mistyped_define_is_found(am, temp);
         test_failed_loads_are_retried(am);
         test_shipped_shaders_compile(am, temp);
+        test_engine_shaders_fit_webgpu(am, temp);
     }
     else
     {

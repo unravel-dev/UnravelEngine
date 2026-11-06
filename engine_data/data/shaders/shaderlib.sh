@@ -404,51 +404,60 @@ float Dither = ( Dither5 * 5.0f + Noise ) * (1.0f / 6.0f);
 return Dither;
 }
 
+// The rank of a cell of a 2^bitCount square Bayer matrix: the bits of the crossing of its coordinates and of one
+// coordinate, interleaved from the lowest up into the highest. Computed, not looked up (see ign16x16).
+uint bayerRank(uint crossing, uint coordinate, uint bitCount)
+{
+	uint rank = 0u;
+	for(uint bit = 0u; bit < bitCount; ++bit)
+	{
+		rank = (rank << 2u) | (((crossing >> bit) & 1u) << 1u) | ((coordinate >> bit) & 1u);
+	}
+	return rank;
+}
+
+// 16x16 Bayer ordered dithering threshold of the pixel, in steps of 1/256.
 float dither16x16(vec2 fragCoord)
 {
-  int x = int(mod(fragCoord.x, 16));
-  int y = int(mod(fragCoord.y, 16));
-
-CONST_ARRAY_BEGIN(int, bayer_matrix, 16*16)
-     0,192, 48,240, 12,204, 60,252,  3,195, 51,243, 15,207, 63,255, 128, 64,176,112,140, 76,188,124,131, 67,179,115,143, 79,191,127, 32,224, 16,208, 44,236, 28,220, 35,227, 19,211, 47,239, 31,223, 160, 96,144, 80,172,108,156, 92,163, 99,147, 83,175,111,159, 95, 8,200, 56,248,  4,196, 52,244, 11,203, 59,251,  7,199, 55,247, 136, 72,184,120,132, 68,180,116,139, 75,187,123,135, 71,183,119, 40,232, 24,216, 36,228, 20,212, 43,235, 27,219, 39,231, 23,215, 168,104,152, 88,164,100,148, 84,171,107,155, 91,167,103,151, 87, 2,194, 50,242, 14,206, 62,254,  1,193, 49,241, 13,205, 61,253, 130, 66,178,114,142, 78,190,126,129, 65,177,113,141, 77,189,125, 34,226, 18,210, 46,238, 30,222, 33,225, 17,209, 45,237, 29,221, 162, 98,146, 82,174,110,158, 94,161, 97,145, 81,173,109,157, 93, 10,202, 58,250,  6,198, 54,246,  9,201, 57,249,  5,197, 53,245, 138, 74,186,122,134, 70,182,118,137, 73,185,121,133, 69,181,117, 42,234, 26,218, 38,230, 22,214, 41,233, 25,217, 37,229, 21,213, 170,106,154, 90,166,102,150, 86,169,105,153, 89,165,101,149, 85
-ARRAY_END();
-
-
-float limit = (bayer_matrix[x + y * 16])/256.0f;
-return limit;
+	uvec2 cell = uvec2(fragCoord) & 15u;
+	return float(bayerRank(cell.x ^ cell.y, cell.x, 4u)) / 256.0;
 }
 
-// 16x16 tile of interleaved gradient noise (IGN) at integer pixel offsets - same cost as @c dither16x16
-// (mod + const lookup). Repeats on screen like Bayer; values match float IGN at (x,y) in 0..15.
+// The high 32 bits of the 32 x 32 bit product of a and b, from 16-bit halves: not every target has a 64-bit product.
+uint mulHigh32(uint a, uint b)
+{
+	uint aLow = a & 0xFFFFu;
+	uint aHigh = a >> 16u;
+	uint bLow = b & 0xFFFFu;
+	uint bHigh = b >> 16u;
+	uint lowLow = aLow * bLow;
+	uint middleHigh = aHigh * bLow;
+	uint middleLow = aLow * bHigh;
+	uint carry = ((lowLow >> 16u) + (middleHigh & 0xFFFFu) + (middleLow & 0xFFFFu)) >> 16u;
+	return aHigh * bHigh + (middleHigh >> 16u) + (middleLow >> 16u) + carry;
+}
+
+// 16x16 tile of interleaved gradient noise (IGN) at integer pixel offsets, round(255 * IGN) / 256: repeats on screen
+// like Bayer. In 32-bit fixed point, which every GPU computes alike: frac() is the wrap-around of an unsigned integer.
+// Computed, not looked up: compiled through SPIR-V (Vulkan, OpenGL, WebGPU), a table indexed at run time
+// becomes a local array every pixel fills.
 float ign16x16(vec2 fragCoord)
 {
-	int x = int(mod(fragCoord.x, 16));
-	int y = int(mod(fragCoord.y, 16));
-
-CONST_ARRAY_BEGIN(int, ign_matrix_16, 16*16)
-	0,142,28,170,57,199,85,227,114,0,142,29,170,57,199,90,79,221,107,249,136,22,164,51,193,79,221,108,249,136,23,169,158,44,186,73,215,101,243,130,16,158,45,187,73,215,102,248,237,123,10,152,38,180,67,209,95,237,124,10,152,39,180,72,60,202,89,231,117,4,146,32,174,61,203,89,231,118,4,150,139,26,168,54,196,83,225,111,253,140,26,168,55,197,83,229,218,105,247,133,20,162,48,190,77,219,105,247,134,20,162,53,42,184,70,212,99,241,127,14,156,42,184,71,213,99,241,132,121,8,149,36,178,64,206,93,235,121,8,150,36,178,65,211,200,86,228,115,2,143,30,172,58,200,87,229,115,2,144,35,24,165,52,194,80,222,109,251,137,24,166,52,194,81,223,114,103,244,131,18,159,46,188,74,216,103,245,131,18,160,51,192,181,68,210,96,238,125,12,153,40,182,68,210,97,239,130,16,5,147,34,175,62,204,90,232,119,6,147,34,176,62,208,95,84,226,113,254,141,28,169,56,198,84,226,113,255,141,32,174,163,50,191,78,220,106,248,135,22,163,50,192,78,220,111,253
-ARRAY_END();
-
-	return float(ign_matrix_16[x + y * 16]) / 256.0f;
+	uvec2 tile = uvec2(fragCoord) & 15u;
+	// frac(0.06711056 x + 0.00583715 y)
+	uint gradient = tile.x * 288237660u + tile.y * 25070368u;
+	// frac(52.9829189 gradient): 52 gradient, plus 0.9829189 gradient as a high product
+	uint noise = gradient * 52u + mulHigh32(gradient, 4221604530u);
+	// round(255 noise / 2^32), from the top 8 bits and the 24 below them
+	uint rounded = ((noise >> 24u) * 255u + (((noise & 0xFFFFFFu) * 255u) >> 24u) + 128u) >> 8u;
+	return float(rounded) / 256.0;
 }
 
+// 8x8 Bayer ordered dithering threshold of the pixel, in steps of 1/64.
 float dither8x8(vec2 fragCoord)
 {
-
-int x = int(mod(fragCoord.x, 8));
-int y = int(mod(fragCoord.y, 8));
-
-/* 8x8 Bayer ordered dithering */
-/* pattern. Each input pixel */
-/* is scaled to the 0..63 range */
-/* before looking in this table */
-/* to determine the action. */
-CONST_ARRAY_BEGIN(int, bayer_matrix8x8, 8*8)
-0, 32, 8,  40, 2,  34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4,  36, 14, 46, 6,  38, 60, 28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1,  33, 9,  41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7,  39, 13, 45, 5,  37, 63, 31, 55, 23, 61, 29, 53, 21
-ARRAY_END();
-
-float limit = (bayer_matrix8x8[x + y * 8])/64.0f;
-return limit;
+	uvec2 cell = uvec2(fragCoord) & 7u;
+	return float(bayerRank(cell.x ^ cell.y, cell.y, 3u)) / 64.0;
 }
 
 

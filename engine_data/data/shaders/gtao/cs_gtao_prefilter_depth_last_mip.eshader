@@ -1,0 +1,38 @@
+[code]
+/*
+ * GTAO depth prefilter, last mip: each texel of mip 4 is GtaoDepthMipFilter of its 2x2 of mip 3, which
+ * cs_gtao_prefilter_depth wrote. Its own pass: a compute stage writes at most four storage textures on every
+ * WebGPU device. Texels of mip 3 past its edge read as the edge.
+ */
+
+#include "../bgfx_compute.sh"
+#include "../common.sh"
+#include "gtao_common.sh"
+
+IMAGE2D_RO(i_gtao_depth_mip3, r32f, 0);
+IMAGE2D_WO(i_gtao_depth_mip4, r32f, 1);
+
+/// Mip 3's texel at @p texel, clamped to its last row and column.
+float GtaoLoadMip3(ivec2 texel, ivec2 last)
+{
+	return imageLoad(i_gtao_depth_mip3, min(texel, last)).x;
+}
+
+NUM_THREADS(8, 8, 1)
+void main()
+{
+	ivec2 t4 = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size0 = ivec2(u_gtao_size.xy);
+	ivec2 size4 = max(size0 / 16, ivec2(1, 1));
+	if(any(greaterThanEqual(t4, size4)))
+	{
+		return;
+	}
+	ivec2 last = max(size0 / 8, ivec2(1, 1)) - ivec2(1, 1);
+	ivec2 base = t4 * 2;
+	float m4 = GtaoDepthMipFilter(GtaoLoadMip3(base, last),
+	                              GtaoLoadMip3(base + ivec2(1, 0), last),
+	                              GtaoLoadMip3(base + ivec2(0, 1), last),
+	                              GtaoLoadMip3(base + ivec2(1, 1), last));
+	imageStore(i_gtao_depth_mip4, t4, vec4(m4, 0.0, 0.0, 0.0));
+}

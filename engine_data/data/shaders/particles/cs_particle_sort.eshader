@@ -15,8 +15,11 @@
 
 #include <bgfx_compute.sh>
 
-#define PARTICLE_SORT_THREADS 512u
+/// Threads per group, within every WebGPU device's 256: each takes PARTICLE_SORT_PAIRS of a step's pairs.
+#define PARTICLE_SORT_THREADS 256u
 #define PARTICLE_SORT_BLOCK 1024u
+#define PARTICLE_SORT_PAIRS (PARTICLE_SORT_BLOCK / 2u / PARTICLE_SORT_THREADS)
+#define PARTICLE_SORT_ELEMENTS (PARTICLE_SORT_BLOCK / PARTICLE_SORT_THREADS)
 
 BUFFER_RW(s_particle_sort, uint, 0);
 
@@ -28,7 +31,7 @@ SHARED uint shared_values[PARTICLE_SORT_BLOCK];
 
 void load_block(uint block_start, uint thread_index)
 {
-	for(uint k = 0u; k < 2u; ++k)
+	for(uint k = 0u; k < PARTICLE_SORT_ELEMENTS; ++k)
 	{
 		uint local_index = thread_index + k * PARTICLE_SORT_THREADS;
 		uint global_index = block_start + local_index;
@@ -39,7 +42,7 @@ void load_block(uint block_start, uint thread_index)
 
 void store_block(uint block_start, uint thread_index)
 {
-	for(uint k = 0u; k < 2u; ++k)
+	for(uint k = 0u; k < PARTICLE_SORT_ELEMENTS; ++k)
 	{
 		uint local_index = thread_index + k * PARTICLE_SORT_THREADS;
 		uint global_index = block_start + local_index;
@@ -54,10 +57,10 @@ bool is_after(uint key_a, uint value_a, uint key_b, uint value_b)
 	return key_a > key_b || (key_a == key_b && value_a > value_b);
 }
 
-/// One compare-exchange of the pair the thread owns at @p distance within stage @p stage.
-void exchange_shared(uint block_start, uint thread_index, uint stage, uint distance)
+/// One compare-exchange of the block's pair @p pair at @p distance within stage @p stage.
+void exchange_shared(uint block_start, uint pair, uint stage, uint distance)
 {
-	uint low = 2u * distance * (thread_index / distance) + (thread_index % distance);
+	uint low = 2u * distance * (pair / distance) + (pair % distance);
 	uint high = low + distance;
 	bool is_ascending = ((block_start + low) & stage) == 0u;
 	uint low_key = shared_keys[low];
@@ -75,7 +78,37 @@ void exchange_shared(uint block_start, uint thread_index, uint stage, uint dista
 	}
 }
 
-NUM_THREADS(512, 1, 1)
+/// One compare-exchange in the buffer of the pair @p pair at @p distance within stage @p stage.
+void exchange_global(uint pair, uint stage, uint distance)
+{
+	uint low = 2u * distance * (pair / distance) + (pair % distance);
+	uint high = low + distance;
+	bool is_ascending = (low & stage) == 0u;
+	uint low_key = s_particle_sort[low * 2u];
+	uint high_key = s_particle_sort[high * 2u];
+	uint low_value = s_particle_sort[low * 2u + 1u];
+	uint high_value = s_particle_sort[high * 2u + 1u];
+	bool is_low_after = is_after(low_key, low_value, high_key, high_value);
+	bool is_high_after = is_after(high_key, high_value, low_key, low_value);
+	if(is_ascending ? is_low_after : is_high_after)
+	{
+		s_particle_sort[low * 2u] = high_key;
+		s_particle_sort[high * 2u] = low_key;
+		s_particle_sort[low * 2u + 1u] = high_value;
+		s_particle_sort[high * 2u + 1u] = low_value;
+	}
+}
+
+/// The step's pairs in a block, PARTICLE_SORT_PAIRS per thread: they share no element, so one barrier follows.
+void exchange_block_step(uint block_start, uint thread_index, uint stage, uint distance)
+{
+	for(uint k = 0u; k < PARTICLE_SORT_PAIRS; ++k)
+	{
+		exchange_shared(block_start, thread_index + k * PARTICLE_SORT_THREADS, stage, distance);
+	}
+}
+
+NUM_THREADS(256, 1, 1)
 void main()
 {
 	uint mode = uint(u_particle_sort.x);
@@ -85,22 +118,12 @@ void main()
 	uint block_start = gl_WorkGroupID.x * PARTICLE_SORT_BLOCK;
 	if(mode == 1u)
 	{
-		uint pair = gl_GlobalInvocationID.x;
-		uint low = 2u * distance * (pair / distance) + (pair % distance);
-		uint high = low + distance;
-		bool is_ascending = (low & stage) == 0u;
-		uint low_key = s_particle_sort[low * 2u];
-		uint high_key = s_particle_sort[high * 2u];
-		uint low_value = s_particle_sort[low * 2u + 1u];
-		uint high_value = s_particle_sort[high * 2u + 1u];
-		bool is_low_after = is_after(low_key, low_value, high_key, high_value);
-		bool is_high_after = is_after(high_key, high_value, low_key, low_value);
-		if(is_ascending ? is_low_after : is_high_after)
+		// A group takes a block's worth of pairs, as the dispatch counts groups by blocks.
+		for(uint k = 0u; k < PARTICLE_SORT_PAIRS; ++k)
 		{
-			s_particle_sort[low * 2u] = high_key;
-			s_particle_sort[high * 2u] = low_key;
-			s_particle_sort[low * 2u + 1u] = high_value;
-			s_particle_sort[high * 2u + 1u] = low_value;
+			exchange_global(gl_WorkGroupID.x * (PARTICLE_SORT_BLOCK / 2u) + thread_index + k * PARTICLE_SORT_THREADS,
+			                stage,
+			                distance);
 		}
 		return;
 	}
@@ -112,7 +135,7 @@ void main()
 		{
 			for(uint step = block_stage >> 1u; step > 0u; step >>= 1u)
 			{
-				exchange_shared(block_start, thread_index, block_stage, step);
+				exchange_block_step(block_start, thread_index, block_stage, step);
 				barrier();
 			}
 		}
@@ -121,7 +144,7 @@ void main()
 	{
 		for(uint step = PARTICLE_SORT_BLOCK >> 1u; step > 0u; step >>= 1u)
 		{
-			exchange_shared(block_start, thread_index, stage, step);
+			exchange_block_step(block_start, thread_index, stage, step);
 			barrier();
 		}
 	}

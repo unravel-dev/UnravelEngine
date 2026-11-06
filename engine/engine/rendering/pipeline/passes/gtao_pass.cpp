@@ -23,9 +23,12 @@ constexpr const char* DATA_STATE = "GTAO_STATE";
 
 /// Mips of view depth the main pass may read (gtao_common.sh GTAO_DEPTH_MIP_LEVELS).
 constexpr uint8_t depth_mip_levels = 5;
-/// The prefilter writes every mip in one dispatch; a chain follows the longest side, and a target shorter than this
-/// has fewer mips than the prefilter's images.
+/// The prefilter writes every mip; a chain follows the longest side, and a target shorter than this has fewer mips
+/// than the prefilter's images.
 constexpr uint32_t MIN_TARGET_EXTENT = 1u << (depth_mip_levels - 1u);
+/// The prefilter's first dispatch writes the mips before the last; a compute stage writes at most four storage
+/// textures on every WebGPU device, so the last mip has its own dispatch, which reads the one before it.
+constexpr uint8_t last_depth_mip = depth_mip_levels - 1;
 /// Compute group edge for the 8x8 passes.
 constexpr uint32_t group_size = 8;
 /// The prefilter's group covers a 16x16 tile of mip 0.
@@ -75,6 +78,7 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto cs_prefilter = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_prefilter_depth.eshader");
+    auto cs_prefilter_last_mip = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_prefilter_depth_last_mip.eshader");
     auto cs_main = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_main.eshader");
     auto cs_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_denoise.eshader");
     auto cs_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_temporal.eshader");
@@ -89,6 +93,7 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params4, "u_gtao_params4", bgfx::UniformType::Vec4);
     prefilter_program_.cache_uniforms();
     prefilter_program_.program = std::make_unique<gpu_program>(cs_prefilter);
+    prefilter_last_mip_program_ = std::make_unique<gpu_program>(cs_prefilter_last_mip);
     main_program_.cache_uniforms();
     main_program_.program = std::make_unique<gpu_program>(cs_main);
     denoise_program_.cache_uniforms();
@@ -97,7 +102,8 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
     temporal_program_.program = std::make_unique<gpu_program>(cs_temporal);
     upsample_program_.cache_uniforms();
     upsample_program_.program = std::make_unique<gpu_program>(cs_upsample);
-    return prefilter_program_.is_valid() && main_program_.is_valid() && upsample_program_.is_valid();
+    return prefilter_program_.is_valid() && prefilter_last_mip_program_->is_valid() && main_program_.is_valid() &&
+           upsample_program_.is_valid();
 }
 
 auto gtao_pass::create_or_update_texture(gfx::render_view& rview,
@@ -164,7 +170,7 @@ void gtao_pass::run_prefilter(gfx::render_view& rview,
     pass.set_view_proj(ctx.cam->get_view(), ctx.cam->get_projection());
     set_common_uniforms(ctx);
     gfx::set_texture(prefilter_program_.s_gtao_depth, 0, params.g_buffer->get_texture(4));
-    for(uint8_t mip = 0; mip < depth_mip_levels; ++mip)
+    for(uint8_t mip = 0; mip < last_depth_mip; ++mip)
     {
         bgfx::setImage(uint8_t(1 + mip), depth_mips->native_handle(), mip, bgfx::Access::Write);
     }
@@ -172,6 +178,15 @@ void gtao_pass::run_prefilter(gfx::render_view& rview,
                    prefilter_program_.program->native_handle(),
                    compute_group_count(ctx.ao_size.width, prefilter_tile),
                    compute_group_count(ctx.ao_size.height, prefilter_tile),
+                   1);
+    gfx::render_pass last_mip_pass("GTAO/Prefilter Depth Last Mip");
+    set_common_uniforms(ctx);
+    bgfx::setImage(0, depth_mips->native_handle(), uint8_t(last_depth_mip - 1), bgfx::Access::Read);
+    bgfx::setImage(1, depth_mips->native_handle(), last_depth_mip, bgfx::Access::Write);
+    gfx::dispatch(last_mip_pass.id,
+                   prefilter_last_mip_program_->native_handle(),
+                   compute_group_count(std::max(ctx.ao_size.width >> last_depth_mip, 1u), group_size),
+                   compute_group_count(std::max(ctx.ao_size.height >> last_depth_mip, 1u), group_size),
                    1);
 }
 
@@ -308,7 +323,8 @@ auto gtao_pass::run_upsample(gfx::render_view& rview,
 auto gtao_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
     if(!params.g_buffer || !params.cam || !begin_program(prefilter_program_.program) ||
-       !begin_program(main_program_.program) || !begin_program(upsample_program_.program))
+       !begin_program(prefilter_last_mip_program_) || !begin_program(main_program_.program) ||
+       !begin_program(upsample_program_.program))
     {
         return nullptr;
     }

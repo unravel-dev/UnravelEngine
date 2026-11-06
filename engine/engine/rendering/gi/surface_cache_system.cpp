@@ -70,15 +70,28 @@ auto surface_cache_system::init(rtti::context& ctx) -> bool
     // debug views read SSBOs. On a device that cannot run it (no compute, too few compute bindings, a storage
     // format it cannot write) the surface cache, its debug views and every GI pass stay off; the renderer's
     // feature log names the reason.
+    // The resources, the brick atlas above all (hundreds of MB), wait for the first camera that asks for global
+    // illumination (update_world): a project or a profile with it off never makes them.
     supported_ = get_render_feature_support().is_available(render_feature::global_illumination);
-    if(!supported_)
+    has_failed_resources_ = false;
+    return true;
+}
+
+auto surface_cache_system::make_resources() -> bool
+{
+    if(atlas_.is_valid())
     {
         return true;
+    }
+    if(has_failed_resources_)
+    {
+        return false;
     }
     sdf_atlas::settings atlas_settings;
     if(!atlas_.init(atlas_settings))
     {
         APPLOG_WARNING("[SurfaceCache] Atlas initialisation failed. Surface cache GI is unavailable.");
+        has_failed_resources_ = true;
         return false;
     }
     sdf_instance_grid::settings grid_settings;
@@ -1075,7 +1088,7 @@ void surface_cache_system::update_world(scene& scn)
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
     instance_order_hash_ = gi_hash::FNV64_OFFSET_BASIS;
-    if(!is_enabled())
+    if(!is_supported() || !make_resources())
     {
         return;
     }

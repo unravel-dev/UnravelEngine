@@ -30,6 +30,9 @@ uniform vec4 u_shader_print;
 /// A value's field in characters and the most decimals a float prints.
 #define SHADER_PRINT_VALUE_FIELD 12.0
 #define SHADER_PRINT_MAX_DECIMALS 5
+/// A float's exponent bits, all ones for INF (zero mantissa) and NAN; tested on the bits, since WGSL has no isinf.
+#define SHADER_PRINT_EXPONENT_BITS 0x7F800000u
+#define SHADER_PRINT_MAGNITUDE_BITS 0x7FFFFFFFu
 
 /// Character names: the ASCII code of each printable symbol.
 #define _SPC_ 32
@@ -225,11 +228,12 @@ ShaderPrintContext ShaderPrintInt(ShaderPrintContext ctx, int value)
 ShaderPrintContext ShaderPrintFloat(ShaderPrintContext ctx, float value)
 {
 	vec2 field = ctx.position;
-	if(isinf(value))
+	uint magnitude = floatBitsToUint(value) & SHADER_PRINT_MAGNITUDE_BITS;
+	if(magnitude == SHADER_PRINT_EXPONENT_BITS)
 	{
 		ctx = ShaderPrintSymbols(ctx, ivec4(_I_, _N_, _F_, 0));
 	}
-	else if(isnan(value))
+	else if(magnitude > SHADER_PRINT_EXPONENT_BITS)
 	{
 		ctx = ShaderPrintSymbols(ctx, ivec4(_N_, _A_, _N_, 0));
 	}

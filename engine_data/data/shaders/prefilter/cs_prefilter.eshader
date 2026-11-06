@@ -80,8 +80,8 @@ vec3 GetCubemapVector(vec2 uv, int face)
     return dir;
 }
 
-// Optimized workgroup size for cubemap processing
-NUM_THREADS(8, 8, 6)
+// An 8x8 tile of one face per group, the faces along z: 64 threads, within every WebGPU device's 256.
+NUM_THREADS(8, 8, 1)
 void main()
 {
     ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
@@ -90,7 +90,7 @@ void main()
     int cubeSize = int(u_data.z + 0.5);
     float numMips = u_data.w;
     
-    // Face index from Z coordinate
+    // Face index from the group's z.
     int face = coord.z;
     
     // Calculate mip level size

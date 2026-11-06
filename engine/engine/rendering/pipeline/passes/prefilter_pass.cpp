@@ -10,8 +10,10 @@ namespace unravel
 {
 namespace
 {
-/// Threads per group along each axis of cs_prefilter.eshader.
+/// Threads per group along x and y of cs_prefilter.eshader.
 constexpr uint32_t PREFILTER_GROUP_SIZE = 8;
+/// Groups along z: one per cube face.
+constexpr uint32_t CUBE_FACES = 6;
 } // namespace
 
 auto prefilter_pass::init(rtti::context& ctx) -> bool
@@ -108,13 +110,11 @@ auto prefilter_pass::run_compute(const run_params& params) -> gfx::texture::ptr
             float data[4] = {float(mip), 0.0f, float(cube_size), float(max_mips)};
             gfx::set_uniform(cs_.u_data, data);
 
-            // Calculate dispatch size for this mip level
-            // Process all faces in parallel with Z dimension
+            // Every face of this mip level in one dispatch, a face per group along z.
             uint32_t num_groups_x = compute_group_count(dim, PREFILTER_GROUP_SIZE);
             uint32_t num_groups_y = compute_group_count(dim, PREFILTER_GROUP_SIZE);
-            uint32_t num_groups_z = 1; // All 6 faces handled by workgroup size
+            uint32_t num_groups_z = CUBE_FACES;
 
-            // Dispatch compute shader for all faces at once
             gfx::dispatch(pass.id, cs_.program->native_handle(), num_groups_x, num_groups_y, num_groups_z);
 
             cs_.program->end();

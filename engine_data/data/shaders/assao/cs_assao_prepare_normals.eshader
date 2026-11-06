@@ -10,10 +10,8 @@
 
 SAMPLER2D(s_depthSource, 0);
 
-IMAGE2D_WO(s_target0, r16f, 1);
-IMAGE2D_WO(s_target1, r16f, 2);
-IMAGE2D_WO(s_target2, r16f, 3);
-IMAGE2D_WO(s_target3, r16f, 4);
+// The view-space normals the effect generates from the depth, at full resolution. The four deinterleaved depths
+// are cs_assao_prepare_depths': a compute stage writes at most four storage textures on every WebGPU device.
 IMAGE2D_WO(s_normalsOutputUAV, rgba8, 5);
 
 float ScreenSpaceToViewSpaceDepth( float screenDepth )
@@ -80,7 +78,8 @@ void main()
 {
 	uvec2 dtID = uvec2(gl_GlobalInvocationID.xy);
 
-	uvec2 dim = imageSize(s_target0).xy;
+	// The half-resolution size the depths are prepared at, rounded up.
+	uvec2 dim = (uvec2(imageSize(s_normalsOutputUAV).xy) + uvec2(1u, 1u)) / 2u;
 	if (all(lessThan(dtID.xy, dim) ) )
 	{
 		ivec2 baseCoords = ivec2(dtID.xy) * 2;
@@ -102,11 +101,6 @@ void main()
 		float z2 = ScreenSpaceToViewSpaceDepth( texelFetchOffset(s_depthSource, baseCoord, 0, ivec2( 0, 1 ) ).x );
 		float z3 = ScreenSpaceToViewSpaceDepth( texelFetchOffset(s_depthSource, baseCoord, 0, ivec2( 1, 1 ) ).x );
 #endif
-		imageStore(s_target0, ivec2(dtID.xy), z0.xxxx );
-		imageStore(s_target1, ivec2(dtID.xy), z1.xxxx );
-		imageStore(s_target2, ivec2(dtID.xy), z2.xxxx );
-		imageStore(s_target3, ivec2(dtID.xy), z3.xxxx );
-
 		float pixZs[4][4];
 
 		// middle 4

@@ -1,9 +1,10 @@
 [code]
 /*
  * GTAO depth prefilter: converts the G-buffer depth to view-space depth at the AO
- * resolution (mip 0) and builds four coarser mips with the effect's own falloff-weighted
+ * resolution (mip 0) and builds three coarser mips with the effect's own falloff-weighted
  * filter (GtaoDepthMipFilter). One 8x8 group produces a 16x16 tile of mip 0 and its
- * 8x8 / 4x4 / 2x2 / 1x1 reductions through group-shared memory.
+ * 8x8 / 4x4 / 2x2 reductions through group-shared memory. Mip 4 is cs_gtao_prefilter_depth_last_mip's: a
+ * compute stage writes at most four storage textures on every WebGPU device.
  */
 
 #include "../bgfx_compute.sh"
@@ -16,7 +17,6 @@ IMAGE2D_WO(i_gtao_depth_mip0, r32f, 1);
 IMAGE2D_WO(i_gtao_depth_mip1, r32f, 2);
 IMAGE2D_WO(i_gtao_depth_mip2, r32f, 3);
 IMAGE2D_WO(i_gtao_depth_mip3, r32f, 4);
-IMAGE2D_WO(i_gtao_depth_mip4, r32f, 5);
 
 SHARED float s_gtao_tile[8][8];
 
@@ -69,15 +69,5 @@ void main()
 		ivec2 size3 = max(size0 / 8, ivec2(1, 1));
 		ivec2 t3 = ivec2(gl_WorkGroupID.xy) * 2 + local / 4;
 		if(all(lessThan(t3, size3))) imageStore(i_gtao_depth_mip3, t3, vec4(m3, 0.0, 0.0, 0.0));
-		s_gtao_tile[local.x][local.y] = m3;
-	}
-	barrier();
-	// Mip 4: one texel per group.
-	if(local.x == 0 && local.y == 0)
-	{
-		float m4 = GtaoDepthMipFilter(s_gtao_tile[0][0], s_gtao_tile[4][0], s_gtao_tile[0][4], s_gtao_tile[4][4]);
-		ivec2 size4 = max(size0 / 16, ivec2(1, 1));
-		ivec2 t4 = ivec2(gl_WorkGroupID.xy);
-		if(all(lessThan(t4, size4))) imageStore(i_gtao_depth_mip4, t4, vec4(m4, 0.0, 0.0, 0.0));
 	}
 }

@@ -251,7 +251,14 @@ public:
         gi_cards_.release_build_debug();
     }
 
-    /// The device runs global illumination (render_feature_support, checked at init) and the atlas exists.
+    /// The device runs global illumination (render_feature_support, checked at init) and its resources, made when
+    /// a camera first asks for it, did not fail.
+    auto is_supported() const -> bool
+    {
+        return supported_ && !has_failed_resources_;
+    }
+
+    /// The device runs global illumination and its resources exist: a camera has asked for it.
     auto is_enabled() const -> bool
     {
         return supported_ && atlas_.is_valid();
@@ -541,8 +548,12 @@ private:
     float global_sun_ = 0.0f;
     float global_sky_ = 0.0f;
     bool has_global_lighting_change_ = false;
+    /// Makes the brick atlas, the instance grid and the light buffer once; false when they cannot be made.
+    auto make_resources() -> bool;
     /// Backend capability, decided once at init: without compute shaders nothing here can run.
     bool supported_ = false;
+    /// The resources could not be made: global illumination stays off.
+    bool has_failed_resources_ = false;
     /// Frame the world state was last rebuilt in, so several cameras in one frame share one
     /// rebuild. Starts at a value no frame counter produces, so the first call always runs.
     uint64_t world_frame_ = std::numeric_limits<uint64_t>::max();

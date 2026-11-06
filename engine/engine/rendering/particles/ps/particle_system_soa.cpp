@@ -36,6 +36,8 @@ namespace
 
 constexpr float k_standard_gravity = 9.81f;
 constexpr float k_min_particle_lifespan = 1.0e-3f;
+/// The depth of the stand-in for a scene depth: the far plane, behind every particle.
+constexpr float k_no_scene_depth = 1.0f;
 /// Seconds of a particle's path one collision search step covers, with the fewest and most steps per path, and
 /// the halvings that pin a crossing down.
 constexpr double k_contact_step_seconds = 1.0 / 30.0;
@@ -1429,6 +1431,13 @@ public:
         camera_velocity_ = bgfx::createUniform("u_particle_camera_velocity", bgfx::UniformType::Vec4);
         scene_depth_ = bgfx::createUniform("s_sceneDepth", bgfx::UniformType::Sampler);
         particle_params_ = bgfx::createUniform("u_particleParams", bgfx::UniformType::Vec4);
+        no_scene_depth_ = bgfx::createTexture2D(1,
+                                                1,
+                                                false,
+                                                1,
+                                                bgfx::TextureFormat::R32F,
+                                                BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP,
+                                                bgfx::copy(&k_no_scene_depth, sizeof(k_no_scene_depth)));
     }
 
     void init_gpu(rtti::context& ctx)
@@ -1458,6 +1467,11 @@ public:
         destroy_uniform(camera_velocity_);
         destroy_uniform(scene_depth_);
         destroy_uniform(particle_params_);
+        if(bgfx::isValid(no_scene_depth_))
+        {
+            bgfx::destroy(no_scene_depth_);
+            no_scene_depth_ = BGFX_INVALID_HANDLE;
+        }
         if(emitter_alloc_)
         {
             bx::destroyHandleAlloc(allocator_, emitter_alloc_);
@@ -1666,10 +1680,8 @@ public:
                                               has_frame_blending(batch) ? 1.0f : 0.0f};
             bgfx::setTexture(gpu_color_texture_stage, tex_color_, batch.texture, get_sampler_flags(batch));
             bgfx::setTexture(gpu_noise_stage, noise_, gpu_.get_noise_texture());
-            if(has_depth)
-            {
-                bgfx::setTexture(gpu_scene_depth_stage, scene_depth_, params.scene_depth);
-            }
+            // The programs declare the stage whether they fade or not, and WebGPU draws only with every stage bound.
+            bgfx::setTexture(gpu_scene_depth_stage, scene_depth_, has_depth ? params.scene_depth : no_scene_depth_);
             bgfx::setUniform(particle_params_, particle_params);
             bgfx::setUniform(view_camera_, view_camera(params.view_matrix).data());
             const math::vec4 camera_velocity(params.camera_velocity, 0.0f);
@@ -1873,6 +1885,8 @@ private:
     bgfx::UniformHandle view_camera_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle camera_velocity_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle scene_depth_ = BGFX_INVALID_HANDLE;
+    /// Bound for s_sceneDepth where a draw has no scene depth (the fade off).
+    bgfx::TextureHandle no_scene_depth_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle particle_params_ = BGFX_INVALID_HANDLE;
     std::vector<particle_gpu::view_task> tasks_scratch_;
     std::vector<particle_gpu::view_batch> gpu_batches_scratch_;
