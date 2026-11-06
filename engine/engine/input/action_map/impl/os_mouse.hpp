@@ -26,6 +26,8 @@ public:
     auto is_pressed(uint32_t button) const -> bool override;
     auto is_released(uint32_t button) const -> bool override;
 
+    /// Moves the position; the move adds to this frame's motion, so the frame reports the motion from where
+    /// the last frame left the mouse to where this one leaves it.
     void set_position(coord pos);
     /// Moves the position without reporting motion: the cursor was put there, not moved.
     void rebase_position(coord pos);

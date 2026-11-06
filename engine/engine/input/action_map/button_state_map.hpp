@@ -3,17 +3,22 @@
 #include "button_state.hpp"
 #include <iostream>
 #include <map>
+#include <set>
 
 namespace input
 {
 class button_state_map
 {
     std::map<unsigned, button_state> map_;
+    /// Let go in the frame they went down: they read pressed this frame and released the next, so a tap
+    /// shorter than a frame still counts.
+    std::set<unsigned> deferred_releases_;
 
 public:
     void clear()
     {
         map_.clear();
+        deferred_releases_.clear();
     }
 
     auto get_state(uint32_t button) const -> button_state
@@ -38,10 +43,16 @@ public:
 
         if(state == button_state::pressed)
         {
+            deferred_releases_.erase(button);
             if(last_state == button_state::down || last_state == button_state::pressed)
             {
                 state = button_state::down;
             }
+        }
+        else if(state == button_state::released && last_state == button_state::pressed)
+        {
+            deferred_releases_.insert(button);
+            return;
         }
 
         map_[button] = state;
@@ -55,7 +66,7 @@ public:
             switch(p.second)
             {
                 case button_state::pressed:
-                    p.second = button_state::down;
+                    p.second = deferred_releases_.count(p.first) != 0 ? button_state::released : button_state::down;
                     break;
 
                 case button_state::released:
@@ -65,6 +76,7 @@ public:
                     break;
             }
         }
+        deferred_releases_.clear();
     }
 };
 } // namespace input

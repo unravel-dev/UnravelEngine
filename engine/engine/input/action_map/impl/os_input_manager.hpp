@@ -36,6 +36,8 @@ class os_input_manager : public input_manager
     hpp::optional<zone> window_input_zone_;
     hpp::optional<zone> work_input_zone_;
     hpp::optional<input_reference_size> input_reference_size_;
+    /// The main window's size in pixels, which positions in the window zone (counted in points) scale to.
+    hpp::optional<input_reference_size> window_pixel_size_;
 
     bool is_input_allowed_{true};
 
@@ -88,9 +90,14 @@ public:
     void set_window_zone(const zone& window_zone);
     void set_work_zone(const zone& work_zone);
     void set_reference_size(const input_reference_size& reference_size);
+    /// The main window's size in pixels: without a work zone, positions are scaled from the window zone to it,
+    /// since the window's pixels differ from its points on high-density displays and in a browser.
+    void set_window_pixel_size(const input_reference_size& pixel_size);
     auto get_work_zone() const -> zone;
 
     auto remap_to_work_zone(coord global_pos) -> coord;
+    /// The size positions are scaled to: the work zone's reference size, or the window's pixels without a work zone.
+    auto get_reference_size() const -> const hpp::optional<input_reference_size>&;
     /// Inverse of remap_to_work_zone: a position in work-zone space back to global.
     auto remap_from_work_zone(coord work_pos) -> coord;
     auto is_inside_work_zone(coord global_pos) -> bool;
@@ -140,6 +147,10 @@ public:
 
 private:
     void on_finger_event(const os::event& e);
+    /// Puts the mouse where a press of its button happened. The frame reads the pointer once, before its events,
+    /// after it may have moved on: a swipe that starts and ends between two frames would read as a press and a
+    /// release at its end. A cursor the lock holds, or a position set from outside, stays where it is.
+    void place_mouse_at_press(const os::mouse_button_event& button);
     /// Whether a mouse button event is the game's: a zone takes a left press inside it (and that press's
     /// release), and fingers press the mouse only while it is simulated with touches.
     auto is_mouse_button_for_game(const os::event& e) -> bool;

@@ -149,6 +149,7 @@ void update_input_zone(const renderer& rend, input_system& input)
     {
         auto main_pos = window->get_window().get_position();
         auto main_size = window->get_window().get_size();
+        const auto pixel_size = window->get_window().get_size_in_pixels();
 
         input::zone window_zone{};
         window_zone.x = main_pos.x;
@@ -157,6 +158,7 @@ void update_input_zone(const renderer& rend, input_system& input)
         window_zone.h = int(main_size.h);
 
         input.manager.set_window_zone(window_zone);
+        input.manager.set_window_pixel_size({float(pixel_size.w), float(pixel_size.h)});
     }
 }
 
@@ -476,8 +478,8 @@ auto engine::init_systems(const cmd_line::parser& parser) -> bool
     }
 
     ls.begin_module("Surface Cache GI");
-    // A failed init is not fatal: the atlas is unavailable, is_enabled() reports false, and
-    // the renderer simply runs without surface cache GI.
+    // A failed init is not fatal: the renderer runs without surface cache GI. Its atlas is made when a camera first
+    // asks for GI, and a failure there turns it off the same way.
     ctx.get_cached<surface_cache_system>().init(ctx);
 
     ls.begin_module("Transforms");
@@ -736,6 +738,12 @@ auto engine::process() -> int
     auto& rend = ctx.get_cached<renderer>();
     auto& thr = ctx.get_cached<threader>();
     auto& input = ctx.get_cached<input_system>();
+
+    // The GPU still draws earlier frames: this one waits for the next tick (only in the browser).
+    if(rend.is_gpu_behind())
+    {
+        return 1;
+    }
 
     {
         APP_SCOPE_PERF("Frame Loop");

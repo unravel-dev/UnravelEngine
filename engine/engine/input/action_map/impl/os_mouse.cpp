@@ -100,8 +100,8 @@ auto os_mouse::is_released(uint32_t button) const -> bool
 //  ----------------------------------------------------------------------------
 void os_mouse::set_position(coord pos)
 {
-    axis_map_[int(mouse_axis::x)] = float(pos.x - position_.x);
-    axis_map_[int(mouse_axis::y)] = float(position_.y - pos.y);
+    axis_map_[int(mouse_axis::x)] += float(pos.x - position_.x);
+    axis_map_[int(mouse_axis::y)] += float(position_.y - pos.y);
 
     position_ = pos;
 }

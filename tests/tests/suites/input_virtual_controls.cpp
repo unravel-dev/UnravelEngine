@@ -345,6 +345,9 @@ void test_fingers_press_the_mouse_only_while_simulated()
     manager.on_os_event(make_left_button_event(false, true, 200, 150));
 
     next_frame(manager, k_center_global);
+    check(manager.get_mouse().get_button_state(k_left_button) == input::button_state::released,
+          "a tap within a frame reads released in the next");
+    next_frame(manager, k_center_global);
     manager.set_mouse_simulated_with_touches(false);
     manager.on_os_event(make_left_button_event(true, true, 200, 150));
     check(manager.get_mouse().get_button_state(k_left_button) == input::button_state::up,

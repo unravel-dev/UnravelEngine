@@ -146,6 +146,16 @@ void os_input_manager::set_work_zone(const zone& work_zone)
     work_input_zone_ = work_zone;
 }
 
+void os_input_manager::set_window_pixel_size(const input_reference_size& pixel_size)
+{
+    window_pixel_size_ = pixel_size;
+}
+
+auto os_input_manager::get_reference_size() const -> const hpp::optional<input_reference_size>&
+{
+    return work_input_zone_ ? input_reference_size_ : window_pixel_size_;
+}
+
 void os_input_manager::set_reference_size(const input_reference_size& reference_size)
 {
     input_reference_size_ = reference_size;
@@ -188,6 +198,10 @@ void os_input_manager::on_os_event(const os::event& e)
         case os::events::mouse_button:
         {
             is_pointer_from_touch_ = e.button.is_from_touch;
+            if(e.button.state_id == os::state::pressed)
+            {
+                place_mouse_at_press(e.button);
+            }
             if(!is_mouse_button_for_game(e))
             {
                 break;
@@ -328,10 +342,11 @@ auto os_input_manager::remap_to_work_zone(coord global_pos) -> coord
     remapped_pos.x = global_pos.x - work_zone.x;
     remapped_pos.y = global_pos.y - work_zone.y;
 
-    if(input_reference_size_)
+    const auto& reference_size = get_reference_size();
+    if(reference_size && work_zone.w > 0 && work_zone.h > 0)
     {
-        remapped_pos.x *= float(input_reference_size_->w) / float(work_zone.w);
-        remapped_pos.y *= float(input_reference_size_->h) / float(work_zone.h);
+        remapped_pos.x *= float(reference_size->w) / float(work_zone.w);
+        remapped_pos.y *= float(reference_size->h) / float(work_zone.h);
     }
 
     return remapped_pos;
@@ -348,10 +363,11 @@ auto os_input_manager::remap_from_work_zone(coord work_pos) -> coord
     const auto& work_zone = *calc_zone;
 
     coord global_pos = work_pos;
-    if(input_reference_size_ && input_reference_size_->w > 0.0f && input_reference_size_->h > 0.0f)
+    const auto& reference_size = get_reference_size();
+    if(reference_size && reference_size->w > 0.0f && reference_size->h > 0.0f)
     {
-        global_pos.x = int(float(global_pos.x) * float(work_zone.w) / input_reference_size_->w);
-        global_pos.y = int(float(global_pos.y) * float(work_zone.h) / input_reference_size_->h);
+        global_pos.x = int(float(global_pos.x) * float(work_zone.w) / reference_size->w);
+        global_pos.y = int(float(global_pos.y) * float(work_zone.h) / reference_size->h);
     }
 
     global_pos.x += work_zone.x;
@@ -446,6 +462,16 @@ auto os_input_manager::is_mouse_button_for_game(const os::event& e) -> bool
     return !pointer_zones_.end_mouse(mouse_->get_position());
 }
 
+void os_input_manager::place_mouse_at_press(const os::mouse_button_event& button)
+{
+    if(virtual_mouse_position_ || cursor_.is_lock_active())
+    {
+        return;
+    }
+    mouse_->set_position(map_window_position({button.x, button.y}));
+    pointer_zones_.move_mouse(mouse_->get_position());
+}
+
 auto os_input_manager::map_window_position(coord window_position) -> coord
 {
     const zone window = window_input_zone_ ? *window_input_zone_ : get_work_zone();
@@ -525,10 +551,11 @@ auto os_input_manager::is_inside_work_zone(coord pos) -> bool
     auto top = 0;
     auto bottom = work_zone.h;
 
-    if(input_reference_size_)
+    const auto& reference_size = get_reference_size();
+    if(reference_size && work_zone.w > 0 && work_zone.h > 0)
     {
-        float scale_x = float(input_reference_size_->w) / float(work_zone.w);
-        float scale_y = float(input_reference_size_->h) / float(work_zone.h);
+        float scale_x = float(reference_size->w) / float(work_zone.w);
+        float scale_y = float(reference_size->h) / float(work_zone.h);
         left *= scale_x;
         right *= scale_x;
         top *= scale_y;
