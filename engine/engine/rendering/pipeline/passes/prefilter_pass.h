@@ -31,6 +31,11 @@ public:
     auto run_compute(const run_params& params) -> gfx::texture::ptr;
 
 private:
+    /// Copies the faces' mips into @p output_cube; mips the faces lack are made from the ones above them.
+    void copy_faces(const run_params& params, const gfx::texture::ptr& output_cube);
+    /// Makes mips @p first_mip and below of @p cube, each the box average of the mip above it.
+    void generate_cube_mips(const gfx::texture::ptr& cube, std::uint8_t first_mip);
+
     struct cs_prog : uniforms_cache
     {
         void cache_uniforms()
@@ -44,6 +49,22 @@ private:
         std::unique_ptr<gpu_program> program;
     } cs_;
 
+    /// Makes a cube mip from the mip above it, for devices that do not generate the faces' mips themselves.
+    struct downsample_prog : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_source, "s_source", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_downsample, "u_downsample", bgfx::UniformType::Vec4);
+        }
+
+        gfx::program::uniform_ptr s_source;     ///< sampler2DArray: a copy of the cube's faces
+        gfx::program::uniform_ptr u_downsample; ///< vec4: x=target mip size, y=source mip
+        std::unique_ptr<gpu_program> program;
+    } downsample_;
+
+    /// The cube's faces as a 2D array the downsample samples; the size of the last cube it made mips for.
+    gfx::texture::ptr mip_source_;
 };
 
 } // namespace unravel

@@ -1,5 +1,6 @@
 #include "reflection_probe_component.h"
 #include "graphics/render_pass.h"
+#include <graphics/device_caps.h>
 
 namespace unravel
 {
@@ -109,12 +110,15 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
     // keeps a stalled mid-cycle bake's captured faces intact.
     auto& fbo = face_rviews_[face].fbo_acquire("CUBEMAP");
     const uint16_t size = probe_resolution_to_size(resolution_);
+    // A face carries the cube's box mips where the device generates them as the face resolves (not WebGPU's
+    // RGBA16F); elsewhere it has the first mip only, and the prefilter pass makes the rest.
+    const bool generates_mips = gfx::get_device_caps().can_generate_mips(bgfx::TextureFormat::RGBA16F);
     const auto& tex = face_rviews_[face].tex_acquire(
         "CUBEMAP_FACE",
         {.size = {size, size},
          .format = bgfx::TextureFormat::RGBA16F,
          .flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE,
-         .has_mips = true});
+         .has_mips = generates_mips});
     // The fbo gets its own guard, never keyed on the texture's rebuild alone: a collected
     // fbo entry must rebuild around a still-valid texture instead of coming back null.
     if(gfx::needs_recreate(fbo, {tex}))
@@ -122,7 +126,7 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
         gfx::fbo_attachment att;
         att.layer = 0;
         att.texture = tex;
-        att.generate_mips = true;
+        att.generate_mips = generates_mips;
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({att});

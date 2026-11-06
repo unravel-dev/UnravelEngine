@@ -1,0 +1,28 @@
+[code]
+/*
+ * Cube mip from the mip above it: each texel is the box average of its 2x2 texels in the source mip, which a copy of
+ * the cube put in a 2D array: a dispatch cannot sample a texture it writes. One bilinear sample at the corner the
+ * four texels share weighs them alike. Every face in one dispatch, a face per group along z.
+ */
+
+#include "../bgfx_compute.sh"
+
+SAMPLER2DARRAY(s_source, 0);
+IMAGE2D_ARRAY_WO(i_target, rgba16f, 1);
+
+// x: the target mip's size, y: the source mip
+uniform vec4 u_downsample;
+
+NUM_THREADS(8, 8, 1)
+void main()
+{
+	ivec3 texel = ivec3(gl_GlobalInvocationID.xyz);
+	float size = u_downsample.x;
+	if(any(greaterThanEqual(texel.xy, ivec2(size, size))) || texel.z >= 6)
+	{
+		return;
+	}
+	vec2 uv = (vec2(texel.xy) + 0.5) / size;
+	vec4 color = texture2DArrayLod(s_source, vec3(uv, float(texel.z)), u_downsample.y);
+	imageStore(i_target, texel, color);
+}
