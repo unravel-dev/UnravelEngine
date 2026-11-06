@@ -496,6 +496,8 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
     ev.on_play_begin.connect(sentinel_, -1000, this, &script_system::on_play_begin);
     ev.on_play_end.connect(sentinel_, 1000, this, &script_system::on_play_end);
     ev.on_pause.connect(sentinel_, 100, this, &script_system::on_pause);
+    ev.on_app_enter_background.connect(sentinel_, this, &script_system::on_app_enter_background);
+    ev.on_app_enter_foreground.connect(sentinel_, this, &script_system::on_app_enter_foreground);
     ev.on_resume.connect(sentinel_, -100, this, &script_system::on_resume);
 
     auto mono_paths = find_dotnet_paths(ctx);
@@ -660,6 +662,8 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.late_update_invoker = dotnet::make_method_invoker<void()>(cache_.late_update_method);
     cache_.begin_play_invoker =
         dotnet::make_method_invoker<void()>(cache_.update_manager_type.get_method("internal_n2m_begin_play", 0));
+    cache_.application_pause_invoker = dotnet::make_method_invoker<void(int32_t)>(
+        cache_.update_manager_type.get_method("internal_n2m_application_pause", 1));
     cache_.end_play_invoker =
         dotnet::make_method_invoker<void()>(cache_.update_manager_type.get_method("internal_n2m_end_play", 0));
 
@@ -1077,6 +1081,33 @@ void script_system::on_play_end(rtti::context& ctx)
 
 void script_system::on_pause(rtti::context& ctx)
 {
+}
+
+void script_system::on_app_enter_background(rtti::context& ctx)
+{
+    invoke_application_pause(ctx, true);
+}
+
+void script_system::on_app_enter_foreground(rtti::context& ctx)
+{
+    invoke_application_pause(ctx, false);
+}
+
+void script_system::invoke_application_pause(rtti::context& ctx, bool paused)
+{
+    auto& play = ctx.get_cached<play_mode>();
+    if(!app_domain_ || !domain_ || !play.is_simulation_running() || !cache_.application_pause_invoker.valid())
+    {
+        return;
+    }
+    try
+    {
+        cache_.application_pause_invoker(paused ? 1 : 0);
+    }
+    catch(const dotnet::exception& e)
+    {
+        log_exception(e);
+    }
 }
 
 void script_system::on_resume(rtti::context& ctx)

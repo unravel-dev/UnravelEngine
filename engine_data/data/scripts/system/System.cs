@@ -244,6 +244,11 @@ namespace Unravel.Core
         /// </summary>
         public void InvokeLateUpdate() => InvokeInternal(lateUpdateAction);
 
+        /// <summary>
+        /// Invokes <see cref="ScriptComponent.OnApplicationPause"/> for registered components in priority order.
+        /// </summary>
+        public void InvokeApplicationPause(bool paused) => InvokeInternal(c => c.OnApplicationPause(paused));
+
         // The core logic for iteration in priority order, plus deferred add & remove cleanup
         private void InvokeInternal(Action<ScriptComponent> action)
         {
@@ -782,6 +787,15 @@ namespace Unravel.Core
             CoroutineScheduler.Tick();
             AwaitableScheduler.Tick();
             EntityPool.ProcessDelayedReleases();
+        }
+
+        /// <summary>
+        /// Native-to-managed: the application goes into the background (<paramref name="paused"/> not 0) or comes
+        /// back; every enabled script hears it in <see cref="ScriptComponent.OnApplicationPause"/>.
+        /// </summary>
+        public static void internal_n2m_application_pause(int paused)
+        {
+            ScriptManager.InvokeApplicationPause(paused != 0);
         }
 
         /// <summary>

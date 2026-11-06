@@ -27,6 +27,7 @@
 #include <engine/rendering/ecs/systems/skylight_system.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
 #include <ospp/event.h>
+#include <ospp/mouse.h>
 #include <ospp/paths.h>
 
 #include <base/platform/config.hpp>
@@ -175,6 +176,13 @@ void update_cursor_visibility(const renderer& rend, input_system& input)
     {
         window->get_window().show_cursor(*is_shown);
     }
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    // A page cannot hold the cursor: a lock is the browser's pointer lock (ospp's relative mode).
+    if(const auto is_locked = input.manager.get_cursor().take_pointer_lock_change())
+    {
+        os::mouse::set_relative_mode(window->get_window(), *is_locked);
+    }
+#endif
 }
 
 // Engine crash handlers

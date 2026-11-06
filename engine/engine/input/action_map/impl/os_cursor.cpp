@@ -73,6 +73,22 @@ auto os_cursor::take_visibility_change() -> hpp::optional<bool>
     return is_shown;
 }
 
+auto os_cursor::is_pointer_locked() const -> bool
+{
+    return is_lock_active() && lock_mode_ == cursor_lock_mode::locked;
+}
+
+auto os_cursor::take_pointer_lock_change() -> hpp::optional<bool>
+{
+    const bool is_locked = is_pointer_locked();
+    if(is_locked == is_pointer_lock_taken_)
+    {
+        return {};
+    }
+    is_pointer_lock_taken_ = is_locked;
+    return is_locked;
+}
+
 auto os_cursor::get_held_position(coord global_pos, const zone& work_zone) const -> hpp::optional<coord>
 {
     if(!is_lock_active())

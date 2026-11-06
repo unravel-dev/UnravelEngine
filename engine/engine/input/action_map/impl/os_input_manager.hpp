@@ -61,6 +61,8 @@ class os_input_manager : public input_manager
     bool is_mouse_simulated_with_touches_{true};
     /// A finger has touched the screen since the application started.
     bool has_seen_touch_{};
+    /// The pointer lock was read last frame: its first frame drops the motion the platform kept before it.
+    bool was_pointer_locked_{};
 
     /// Stands in for the OS cursor while set. The pointer position is polled rather than
     /// event driven, so synthesized motion has to replace the poll, not add an event.
@@ -151,6 +153,8 @@ private:
     /// after it may have moved on: a swipe that starts and ends between two frames would read as a press and a
     /// release at its end. A cursor the lock holds, or a position set from outside, stays where it is.
     void place_mouse_at_press(const os::mouse_button_event& button);
+    /// The mouse under the browser's pointer lock: at the work zone's center, moved by the lock's motion.
+    void read_locked_pointer();
     /// Whether a mouse button event is the game's: a zone takes a left press inside it (and that press's
     /// release), and fingers press the mouse only while it is simulated with touches.
     auto is_mouse_button_for_game(const os::event& e) -> bool;

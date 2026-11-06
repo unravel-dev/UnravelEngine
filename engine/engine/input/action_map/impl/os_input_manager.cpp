@@ -4,6 +4,7 @@
 #include <base/platform/config.hpp>
 #include <cassert>
 #include <logging/logging.h>
+#include <ospp/touch.h>
 
 namespace input
 {
@@ -96,6 +97,14 @@ void os_input_manager::before_events_update()
         pointer_zones_.move_mouse(mouse_->get_position());
         return;
     }
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    if(cursor_.is_pointer_locked())
+    {
+        read_locked_pointer();
+        return;
+    }
+    was_pointer_locked_ = false;
+#endif
 
     auto pos = os::mouse::get_position();
     mouse_->set_position(remap_to_work_zone({pos.x, pos.y}));
@@ -426,7 +435,7 @@ auto os_input_manager::is_touch_supported() const -> bool
 #if UNRAVEL_PLATFORM_ANDROID || UNRAVEL_PLATFORM_IOS
     return true;
 #else
-    return has_seen_touch_;
+    return has_seen_touch_ || os::touch::has_screen();
 #endif
 }
 
@@ -460,6 +469,22 @@ auto os_input_manager::is_mouse_button_for_game(const os::event& e) -> bool
         return !is_taken;
     }
     return !pointer_zones_.end_mouse(mouse_->get_position());
+}
+
+void os_input_manager::read_locked_pointer()
+{
+    const zone work_zone = get_work_zone();
+    const coord center{work_zone.x + work_zone.w / 2, work_zone.y + work_zone.h / 2};
+    auto motion = os::mouse::get_relative_motion();
+    if(!was_pointer_locked_)
+    {
+        motion = {};
+        was_pointer_locked_ = true;
+    }
+    mouse_->rebase_position(remap_to_work_zone(center));
+    mouse_->set_position(remap_to_work_zone({center.x + motion.x, center.y + motion.y}));
+    mouse_->rebase_position(remap_to_work_zone(center));
+    pointer_zones_.move_mouse(mouse_->get_position());
 }
 
 void os_input_manager::place_mouse_at_press(const os::mouse_button_event& button)

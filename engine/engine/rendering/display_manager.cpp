@@ -345,6 +345,10 @@ auto display_manager::create_main_window(rtti::context& ctx, const cmd_line::par
     load_saved_options();
     options_ = saved_options_;
     apply_command_line(parser);
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    // A page starts in the page: the browser takes it fullscreen only on a request close to a player's input.
+    options_.mode = window_mode::windowed;
+#endif
     auto& rend = ctx.get_cached<renderer>();
     std::string geometry;
     int32_t x = 0;
@@ -482,6 +486,13 @@ void display_manager::on_os_event(rtti::context& ctx, os::event& e)
     auto* main_window = ctx.get_cached<renderer>().get_main_window();
     if(main_window != nullptr && main_window->get_window().get_id() == e.window.window_id)
     {
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+        // The player leaves the page's fullscreen with the browser (Esc): the game is windowed again.
+        if(options_.mode != window_mode::windowed && !main_window->get_window().is_fullscreen())
+        {
+            options_.mode = window_mode::windowed;
+        }
+#endif
         remember_window(main_window->get_window());
     }
 }
@@ -506,9 +517,9 @@ void display_manager::remember_window(const os::window& window)
 void display_manager::apply_window(os::window& window)
 {
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
-    // In the browser the window is the page, which it fills and follows (ospp): windowed, borderless and exclusive
-    // are the desktop's, and the page goes fullscreen only from a player's gesture.
-    (void)window;
+    // In the browser the window is the page, which it fills (ospp): either fullscreen mode takes the page
+    // fullscreen, which the browser grants only close to a player's click, tap or key.
+    window.set_fullscreen(options_.mode != window_mode::windowed);
     return;
 #endif
     options_.display = resolve_display(options_.display);

@@ -172,6 +172,7 @@ struct script_system
         // SystemManager play hooks: awaited script code resumes in the frame loop between them.
         dotnet::method_invoker<void()> begin_play_invoker;
         dotnet::method_invoker<void()> end_play_invoker;
+        dotnet::method_invoker<void(int32_t)> application_pause_invoker;
 
         // Component / ScriptComponent lifecycle (resolved once per engine domain)
         dotnet::method set_entity_method;
@@ -349,6 +350,14 @@ private:
      * @param ctx The context for the playback.
      */
     void on_resume(rtti::context& ctx);
+
+    /// The application goes into the background (a phone's home button, a browser tab hidden): every enabled
+    /// script's OnApplicationPause(true), while the platform still lets the game save.
+    void on_app_enter_background(rtti::context& ctx);
+    /// The application comes back: every enabled script's OnApplicationPause(false).
+    void on_app_enter_foreground(rtti::context& ctx);
+    /// Calls OnApplicationPause(@p paused) on every enabled script while a game runs.
+    void invoke_application_pause(rtti::context& ctx, bool paused);
 
     auto bind_internal_calls(rtti::context& ctx) -> bool;
 
