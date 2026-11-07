@@ -24,7 +24,9 @@
  *     variants are the same binary on all of them: a define that changes nothing is what a mistyped one looks like;
  *   - every engine shader compiles to WGSL within the limits every WebGPU device grants (invocations per workgroup
  *     and along each axis, storage textures per stage), but the global illumination's, which the browser player never
- *     runs; a compute shader whose workgroup size the check cannot read fails it.
+ *     runs; a compute shader whose workgroup size the check cannot read fails it;
+ *   - every language check in the engine's shaders that names SPIR-V names WGSL too: the WebGPU shaders are compiled
+ *     with BGFX_SHADER_LANGUAGE_WGSL in place of BGFX_SHADER_LANGUAGE_SPIRV, through the same HLSL path.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
@@ -76,6 +78,8 @@ constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
 /// The engine's shaders the browser player never runs: global illumination reads and writes RG11B10F storage
 /// textures, which core WebGPU does not allow and only some devices offer, so web profiles turn it off.
 constexpr const char* WEBGPU_EXEMPT_FOLDER = "gi";
+/// bgfx's own shader headers among the engine's, which spell their language checks bgfx's way.
+constexpr std::array<const char*, 2> BGFX_SHADER_HEADERS = {"bgfx_shader.sh", "bgfx_compute.sh"};
 
 int g_checks = 0;
 int g_failures = 0;
@@ -734,6 +738,72 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
     check(variant_count > 0, "the engine's shaders are found");
 }
 
+/// The #if and #elif conditions of a shader source, a line continued with a backslash joined to the next.
+auto read_preprocessor_conditions(const fs::path& file) -> std::vector<std::string>
+{
+    std::ifstream stream(file);
+    std::vector<std::string> conditions;
+    std::string line;
+    std::string pending;
+    while(std::getline(stream, line))
+    {
+        if(!line.empty() && line.back() == '\r')
+        {
+            line.pop_back();
+        }
+        const bool is_continued = !line.empty() && line.back() == '\\';
+        if(is_continued)
+        {
+            line.pop_back();
+        }
+        pending += line;
+        if(is_continued)
+        {
+            continue;
+        }
+        const auto first = pending.find_first_not_of(" \t");
+        if(first != std::string::npos && (pending.compare(first, 3, "#if") == 0 || pending.compare(first, 5, "#elif") == 0))
+        {
+            conditions.push_back(pending);
+        }
+        pending.clear();
+    }
+    return conditions;
+}
+
+void test_language_checks_count_wgsl()
+{
+    std::printf("test_language_checks_count_wgsl\n");
+    const fs::path shaders = fs::path(ENGINE_DATA_DIR) / "data/shaders";
+    std::size_t checked = 0;
+    fs::error_code ec;
+    for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
+    {
+        const auto extension = entry.path().extension();
+        const auto file_name = entry.path().filename().string();
+        const bool is_bgfx_header = std::find(BGFX_SHADER_HEADERS.begin(), BGFX_SHADER_HEADERS.end(), file_name) !=
+                                    BGFX_SHADER_HEADERS.end();
+        if((extension != ".sh" && extension != ex::get_format<gfx::shader>()) || is_bgfx_header)
+        {
+            continue;
+        }
+        for(const auto& condition : read_preprocessor_conditions(entry.path()))
+        {
+            if(condition.find("BGFX_SHADER_LANGUAGE_SPIRV") == std::string::npos)
+            {
+                continue;
+            }
+            ++checked;
+            check(condition.find("BGFX_SHADER_LANGUAGE_WGSL") != std::string::npos,
+                  entry.path().lexically_relative(shaders).generic_string() + ": \"" + condition +
+                      "\" leaves out BGFX_SHADER_LANGUAGE_WGSL, which the WebGPU shaders are compiled with in "
+                      "place of BGFX_SHADER_LANGUAGE_SPIRV, so they take the other branch");
+        }
+    }
+    std::printf("  %zu language checks name SPIR-V\n", checked);
+    check(checked > 0, "the engine's language checks are found");
+}
+
 void test_shipped_shaders_compile(unravel::asset_manager& am, const fs::path& root)
 {
     std::printf("test_shipped_shaders_compile\n");
@@ -791,6 +861,7 @@ auto run_eshader_files_suite(rtti::context& ctx) -> int
     test_varying_mismatches();
     test_dependencies(temp);
     test_compiled_file_reads_from_a_pack(temp);
+    test_language_checks_count_wgsl();
     if(is_shaderc_present())
     {
         auto& am = ctx.get_cached<unravel::asset_manager>();

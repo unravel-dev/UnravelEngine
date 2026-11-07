@@ -495,7 +495,7 @@ mat3 invert_3x3( mat3 M )
 
 mat3 invert_3x3( mat4 M4 )
 {
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
+#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV || BGFX_SHADER_LANGUAGE_WGSL
 	mat3 M = (mat3)M4;
 #else
 	mat3 M = mat3(M4);
@@ -556,7 +556,7 @@ vec3 computeViewSpacePosition(vec2 uv, float z)
 // back into Z_ndc for the backend's depth range, so no depth convention is assumed here.
 float screenSpaceToViewSpaceDepth(float screenDepth)
 {
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
+#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV || BGFX_SHADER_LANGUAGE_WGSL
     float depthLinearizeMul = u_proj[2][2];
     float depthLinearizeAdd = u_proj[2][3];
 #else

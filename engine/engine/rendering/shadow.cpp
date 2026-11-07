@@ -1322,14 +1322,20 @@ void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) 
         bgfx::setUniform(shadow_atlas_rect_, atlas_rect_);
         return;
     }
+    // Every stage gets a map: the programs sample all of them (the directional ones every cascade), and WebGPU rejects
+    // a program whose stage holds no texture. A cascade past the light's split count takes the first one's maps,
+    // which the shader never selects.
+    if(!bgfx::isValid(rt_shadow_map_[0]))
+    {
+        return;
+    }
+    const auto get_map_target = [this](uint8_t index)
+    {
+        return bgfx::isValid(rt_shadow_map_[index]) ? rt_shadow_map_[index] : rt_shadow_map_[0];
+    };
     for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
     {
-        if(!bgfx::isValid(rt_shadow_map_[ii]))
-        {
-            continue;
-        }
-
-        bgfx::setTexture(stage + ii, shadow_map_[ii], bgfx::getTexture(rt_shadow_map_[ii]), sampler_flags);
+        bgfx::setTexture(stage + ii, shadow_map_[ii], bgfx::getTexture(get_map_target(ii)), sampler_flags);
     }
     if(filtered_map || compare_stage == no_compare_stage)
     {
@@ -1338,13 +1344,9 @@ void shadowmap_generator::submit_uniforms(uint8_t stage, uint8_t compare_stage) 
     constexpr uint8_t depth_attachment = 1;
     for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
     {
-        if(!bgfx::isValid(rt_shadow_map_[ii]))
-        {
-            continue;
-        }
         bgfx::setTexture(compare_stage + ii,
                          shadow_depth_[ii],
-                         bgfx::getTexture(rt_shadow_map_[ii], depth_attachment),
+                         bgfx::getTexture(get_map_target(ii), depth_attachment),
                          compare_flags);
     }
 }

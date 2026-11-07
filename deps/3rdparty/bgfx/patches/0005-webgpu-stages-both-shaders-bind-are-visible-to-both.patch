@@ -1,0 +1,35 @@
+WebGPU: a stage both shaders bind is visible to both
+
+A program's bind group layout took a texture stage bound by both the vertex and the fragment shader from the vertex
+shader alone, visible to the vertex stage only. WebGPU validates the fragment shader's declaration against the
+layout too, so the render pipeline was invalid, and so was every command buffer that used it: the whole frame. The
+Vulkan backend already ORs the fragment stage into such a binding.
+
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -5206,13 +5206,21 @@
+ 				ShaderBinding& shaderBind = m_shaderBinding[stage];
+ 				shaderBind.clear();
+ 
+-				if (isValid(m_vsh->m_shaderBinding[stage].uniformHandle) )
++				const bool isVertex   = isValid(m_vsh->m_shaderBinding[stage].uniformHandle);
++				const bool isFragment = NULL != m_fsh && isValid(m_fsh->m_shaderBinding[stage].uniformHandle);
++
++				if (isVertex)
+ 				{
+ 					shaderBind = m_vsh->m_shaderBinding[stage];
+-					shaderBind.shaderStage = WGPUShaderStage_Vertex;
++					// A stage both shaders bind is visible to both, as on Vulkan: the fragment shader's
++					// declaration is validated against the layout too.
++					shaderBind.shaderStage = isFragment
++						? WGPUShaderStage_Vertex | WGPUShaderStage_Fragment
++						: WGPUShaderStage_Vertex
++						;
+ 					numBindings += getNumBindGroupEntries(shaderBind);
+ 				}
+-				else if (NULL != m_fsh && isValid(m_fsh->m_shaderBinding[stage].uniformHandle) )
++				else if (isFragment)
+ 				{
+ 					shaderBind = m_fsh->m_shaderBinding[stage];
+ 					shaderBind.shaderStage = WGPUShaderStage_Fragment;
