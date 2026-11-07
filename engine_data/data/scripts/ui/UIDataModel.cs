@@ -44,7 +44,6 @@ namespace Unravel.Core
         internal readonly Dictionary<string, EventBinding> events = new Dictionary<string, EventBinding>();
         internal readonly Dictionary<string, string> lastScalarValues = new Dictionary<string, string>();
         internal ulong syncedGeneration;
-        internal bool warnedMissing;
         private readonly HashSet<string> sourceVariables = new HashSet<string>();
 
         internal UIDataModel(Entity owner, string name)
