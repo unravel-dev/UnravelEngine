@@ -5,12 +5,6 @@
 
 #include "../common.sh"
 
-#if BGFX_SHADER_LANGUAGE_GLSL
-#	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = _type[](
-#else
-#	define CONST_ARRAY_BEGIN(_type, _name, _count) CONST(_type) _name[_count] = {
-#endif // BGFX_SHADER_LANGUAGE_GLSL
-
 
 #define BLOCKER_SEARCH_NUM_SAMPLES 16
 #define PCF_LOD_OFFSET_NUM_SAMPLES 16

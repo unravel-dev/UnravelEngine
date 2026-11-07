@@ -7,6 +7,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/render_feature_support.h>
 #include <graphics/graphics.h>
+#include <logging/logging.h>
 namespace unravel
 {
 namespace
@@ -17,9 +18,9 @@ constexpr uint32_t PREFILTER_GROUP_SIZE = 8;
 constexpr uint32_t CUBE_FACES = 6;
 /// Threads per group along x and y of cs_cube_downsample.eshader.
 constexpr uint32_t DOWNSAMPLE_GROUP_SIZE = 8;
-/// The downsample samples a mip at the corner of four texels: bilinear within it, never across mips.
-constexpr uint64_t MIP_SOURCE_FLAGS =
-    BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIP_POINT;
+/// The image stages of cs_cube_downsample.eshader: the mip it reads and the one it writes.
+constexpr uint8_t DOWNSAMPLE_SOURCE_STAGE = 0;
+constexpr uint8_t DOWNSAMPLE_TARGET_STAGE = 1;
 } // namespace
 
 auto prefilter_pass::init(rtti::context& ctx) -> bool
@@ -138,43 +139,29 @@ void prefilter_pass::copy_faces(const run_params& params, const gfx::texture::pt
 
 void prefilter_pass::generate_cube_mips(const gfx::texture::ptr& cube, std::uint8_t first_mip)
 {
-    if(first_mip == 0 || !downsample_.program || !downsample_.program->begin())
+    if(first_mip == 0)
     {
         return;
     }
-    const auto& ti = cube->info;
-    if(!mip_source_ || mip_source_->info.width != ti.width || mip_source_->info.numMips != ti.numMips ||
-       mip_source_->info.format != ti.format)
+    if(!downsample_.program || !downsample_.program->begin())
     {
-        mip_source_ = std::make_shared<gfx::texture>(ti.width, ti.height, true, CUBE_FACES, ti.format, MIP_SOURCE_FLAGS);
+        if(!has_reported_missing_downsample_)
+        {
+            APPLOG_ERROR("Reflection probes: cs_cube_downsample did not load, so their cubemaps have no mips below the "
+                         "first and reflect black from rough surfaces.");
+            has_reported_missing_downsample_ = true;
+        }
+        return;
     }
+    const auto& ti = cube->info;
     for(uint8_t mip = first_mip; mip < ti.numMips; ++mip)
     {
-        const uint8_t source_mip = mip - 1;
-        const uint16_t source_size = std::max<uint16_t>(ti.width >> source_mip, 1);
         const uint16_t size = std::max<uint16_t>(ti.width >> mip, 1);
         gfx::render_pass pass("Prefilter/Cube Mip Pass");
         pass.touch();
-        // A view's blits run before its dispatches.
-        for(uint8_t face = 0; face < CUBE_FACES; ++face)
-        {
-            bgfx::blit(pass.id,
-                       bgfx::TextureRegion{.handle = mip_source_->native_handle(),
-                                           .mip = source_mip,
-                                           .z = face,
-                                           .width = source_size,
-                                           .height = source_size,
-                                           .depth = 1},
-                       bgfx::TextureRegion{.handle = cube->native_handle(),
-                                           .mip = source_mip,
-                                           .z = face,
-                                           .width = source_size,
-                                           .height = source_size,
-                                           .depth = 1});
-        }
-        gfx::set_texture(downsample_.s_source, 0, mip_source_);
-        bgfx::setImage(1, cube->native_handle(), mip, bgfx::Access::Write);
-        const float data[4] = {float(size), float(source_mip), 0.0f, 0.0f};
+        bgfx::setImage(DOWNSAMPLE_SOURCE_STAGE, cube->native_handle(), uint8_t(mip - 1), bgfx::Access::Read);
+        bgfx::setImage(DOWNSAMPLE_TARGET_STAGE, cube->native_handle(), mip, bgfx::Access::Write);
+        const float data[4] = {float(size), 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(downsample_.u_downsample, data);
         gfx::dispatch(pass.id,
                       downsample_.program->native_handle(),

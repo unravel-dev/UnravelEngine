@@ -1,28 +1,31 @@
 [code]
 /*
- * Cube mip from the mip above it: each texel is the box average of its 2x2 texels in the source mip, which a copy of
- * the cube put in a 2D array: a dispatch cannot sample a texture it writes. One bilinear sample at the corner the
- * four texels share weighs them alike. Every face in one dispatch, a face per group along z.
+ * Cube mip from the mip above it: each texel is the box average of its 2x2 texels in the source mip. The source mip
+ * is bound as a read-only image of the same cube: a dispatch may read one mip of a texture while it writes another,
+ * but not sample it. Every face in one dispatch, a face per group along z.
  */
 
 #include "../bgfx_compute.sh"
 
-SAMPLER2DARRAY(s_source, 0);
+IMAGE2D_ARRAY_RO(i_source, rgba16f, 0);
 IMAGE2D_ARRAY_WO(i_target, rgba16f, 1);
 
-// x: the target mip's size, y: the source mip
+// x: the target mip's size
 uniform vec4 u_downsample;
 
 NUM_THREADS(8, 8, 1)
 void main()
 {
 	ivec3 texel = ivec3(gl_GlobalInvocationID.xyz);
-	float size = u_downsample.x;
+	int size = int(u_downsample.x);
 	if(any(greaterThanEqual(texel.xy, ivec2(size, size))) || texel.z >= 6)
 	{
 		return;
 	}
-	vec2 uv = (vec2(texel.xy) + 0.5) / size;
-	vec4 color = texture2DArrayLod(s_source, vec3(uv, float(texel.z)), u_downsample.y);
-	imageStore(i_target, texel, color);
+	ivec2 corner = texel.xy * 2;
+	vec4 color = imageLoad(i_source, ivec3(corner, texel.z));
+	color += imageLoad(i_source, ivec3(corner + ivec2(1, 0), texel.z));
+	color += imageLoad(i_source, ivec3(corner + ivec2(0, 1), texel.z));
+	color += imageLoad(i_source, ivec3(corner + ivec2(1, 1), texel.z));
+	imageStore(i_target, texel, color * 0.25);
 }

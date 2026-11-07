@@ -1088,7 +1088,7 @@ void surface_cache_system::update_world(scene& scn)
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
     instance_order_hash_ = gi_hash::FNV64_OFFSET_BASIS;
-    if(!is_supported() || !make_resources())
+    if(!make_resources())
     {
         return;
     }

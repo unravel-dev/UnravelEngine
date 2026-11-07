@@ -26,46 +26,62 @@ q3base_gbuffer_normals  ASSAO_QUALITY=3 ASSAO_ADAPTIVE_BASE=true SSAO_NORMAL_OCT
 
 // progressive poisson-like pattern; x, y are in [-1, 1] range, .z is length( vec2(x,y) ), .w is log2( z )
 #define INTELSSAO_MAIN_DISK_SAMPLE_COUNT (32)
+// Each tap: its index, then x, y, z and w.
+#define INTELSSAO_MAIN_DISK_SAMPLES(_tap) \
+	_tap(0, 0.78488064, 0.56661671, 1.500000, -0.126083) \
+	_tap(1, 0.26022232, -0.29575172, 1.500000, -1.064030) \
+	_tap(2, 0.10459357, 0.08372527, 1.110000, -2.730563) \
+	_tap(3, -0.68286800, 0.04963045, 1.090000, -0.498827) \
+	_tap(4, -0.13570161, -0.64190155, 1.250000, -0.532765) \
+	_tap(5, -0.26193795, -0.08205118, 0.670000, -1.783245) \
+	_tap(6, -0.61177456, 0.66664219, 0.710000, -0.044234) \
+	_tap(7, 0.43675563, 0.25119025, 0.610000, -1.167283) \
+	_tap(8, 0.07884444, 0.86618668, 0.640000, -0.459002) \
+	_tap(9, -0.12790935, -0.29869005, 0.600000, -1.729424) \
+	_tap(10, -0.04031125, 0.02413622, 0.600000, -4.792042) \
+	_tap(11, 0.16201244, -0.52851415, 0.790000, -1.067055) \
+	_tap(12, -0.70991218, 0.47301072, 0.640000, -0.335236) \
+	_tap(13, 0.03277707, -0.22349690, 0.600000, -1.982384) \
+	_tap(14, 0.68921727, 0.36800742, 0.630000, -0.266718) \
+	_tap(15, 0.29251814, 0.37775412, 0.610000, -1.422520) \
+	_tap(16, -0.12224089, 0.96582592, 0.600000, -0.426142) \
+	_tap(17, 0.11071457, -0.16131058, 0.600000, -2.165947) \
+	_tap(18, 0.46562141, -0.59747696, 0.600000, -0.189760) \
+	_tap(19, -0.51548797, 0.11804193, 0.600000, -1.246800) \
+	_tap(20, 0.89141309, -0.42090443, 0.600000, 0.028192) \
+	_tap(21, -0.32402530, -0.01591529, 0.600000, -1.543018) \
+	_tap(22, 0.60771245, 0.41635221, 0.600000, -0.605411) \
+	_tap(23, 0.02379565, -0.08239821, 0.600000, -3.809046) \
+	_tap(24, 0.48951152, -0.23657045, 0.600000, -1.189011) \
+	_tap(25, -0.17611565, -0.81696892, 0.600000, -0.513724) \
+	_tap(26, -0.33930185, -0.20732205, 0.600000, -1.698047) \
+	_tap(27, -0.91974425, 0.05403209, 0.600000, 0.062246) \
+	_tap(28, -0.15064627, -0.14949332, 0.600000, -1.896062) \
+	_tap(29, 0.53180975, -0.35210401, 0.600000, -0.758838) \
+	_tap(30, 0.41487166, 0.81442589, 0.600000, -0.505648) \
+	_tap(31, -0.24106961, -0.32721516, 0.600000, -1.665244)
+
+#if BGFX_SHADER_LANGUAGE_HLSL
+// A table: fxc and DXC keep it as constants, one indexed load a tap.
+#define INTELSSAO_TABLE_TAP(_index, _x, _y, _z, _w) vec4(_x, _y, _z, _w),
+CONST(vec4 g_samplePatternMain[INTELSSAO_MAIN_DISK_SAMPLE_COUNT]) = { INTELSSAO_MAIN_DISK_SAMPLES(INTELSSAO_TABLE_TAP) };
+vec4 samplePatternMain(int tapIndex)
+{
+	return g_samplePatternMain[tapIndex];
+}
+#else
 // A switch, not a table: compiled through SPIR-V (Vulkan, OpenGL, WebGPU), a table indexed at run time
 // becomes a local array every pixel fills.
+#define INTELSSAO_SWITCH_TAP(_index, _x, _y, _z, _w) case _index: return vec4(_x, _y, _z, _w);
 vec4 samplePatternMain(int tapIndex)
 {
 	switch(tapIndex)
 	{
-	case 0: return vec4(0.78488064, 0.56661671, 1.500000, -0.126083);
-	case 1: return vec4(0.26022232, -0.29575172, 1.500000, -1.064030);
-	case 2: return vec4(0.10459357, 0.08372527, 1.110000, -2.730563);
-	case 3: return vec4(-0.68286800, 0.04963045, 1.090000, -0.498827);
-	case 4: return vec4(-0.13570161, -0.64190155, 1.250000, -0.532765);
-	case 5: return vec4(-0.26193795, -0.08205118, 0.670000, -1.783245);
-	case 6: return vec4(-0.61177456, 0.66664219, 0.710000, -0.044234);
-	case 7: return vec4(0.43675563, 0.25119025, 0.610000, -1.167283);
-	case 8: return vec4(0.07884444, 0.86618668, 0.640000, -0.459002);
-	case 9: return vec4(-0.12790935, -0.29869005, 0.600000, -1.729424);
-	case 10: return vec4(-0.04031125, 0.02413622, 0.600000, -4.792042);
-	case 11: return vec4(0.16201244, -0.52851415, 0.790000, -1.067055);
-	case 12: return vec4(-0.70991218, 0.47301072, 0.640000, -0.335236);
-	case 13: return vec4(0.03277707, -0.22349690, 0.600000, -1.982384);
-	case 14: return vec4(0.68921727, 0.36800742, 0.630000, -0.266718);
-	case 15: return vec4(0.29251814, 0.37775412, 0.610000, -1.422520);
-	case 16: return vec4(-0.12224089, 0.96582592, 0.600000, -0.426142);
-	case 17: return vec4(0.11071457, -0.16131058, 0.600000, -2.165947);
-	case 18: return vec4(0.46562141, -0.59747696, 0.600000, -0.189760);
-	case 19: return vec4(-0.51548797, 0.11804193, 0.600000, -1.246800);
-	case 20: return vec4(0.89141309, -0.42090443, 0.600000, 0.028192);
-	case 21: return vec4(-0.32402530, -0.01591529, 0.600000, -1.543018);
-	case 22: return vec4(0.60771245, 0.41635221, 0.600000, -0.605411);
-	case 23: return vec4(0.02379565, -0.08239821, 0.600000, -3.809046);
-	case 24: return vec4(0.48951152, -0.23657045, 0.600000, -1.189011);
-	case 25: return vec4(-0.17611565, -0.81696892, 0.600000, -0.513724);
-	case 26: return vec4(-0.33930185, -0.20732205, 0.600000, -1.698047);
-	case 27: return vec4(-0.91974425, 0.05403209, 0.600000, 0.062246);
-	case 28: return vec4(-0.15064627, -0.14949332, 0.600000, -1.896062);
-	case 29: return vec4(0.53180975, -0.35210401, 0.600000, -0.758838);
-	case 30: return vec4(0.41487166, 0.81442589, 0.600000, -0.505648);
-	default: return vec4(-0.24106961, -0.32721516, 0.600000, -1.665244);
+	INTELSSAO_MAIN_DISK_SAMPLES(INTELSSAO_SWITCH_TAP)
+	default: return vec4_splat(0.0);
 	}
 }
+#endif // BGFX_SHADER_LANGUAGE_HLSL
 
 // these values can be changed (up to SSAO_MAX_TAPS) with no changes required elsewhere; values for 4th and 5th preset are ignored but array needed to avoid compilation errors
 // the actual number of texture samples is two times this value (each "tap" has two symmetrical depth texture samples)

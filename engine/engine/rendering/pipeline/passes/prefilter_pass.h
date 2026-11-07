@@ -54,17 +54,15 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_source, "s_source", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_downsample, "u_downsample", bgfx::UniformType::Vec4);
         }
 
-        gfx::program::uniform_ptr s_source;     ///< sampler2DArray: a copy of the cube's faces
-        gfx::program::uniform_ptr u_downsample; ///< vec4: x=target mip size, y=source mip
+        gfx::program::uniform_ptr u_downsample; ///< vec4: x=target mip size
         std::unique_ptr<gpu_program> program;
     } downsample_;
 
-    /// The cube's faces as a 2D array the downsample samples; the size of the last cube it made mips for.
-    gfx::texture::ptr mip_source_;
+    /// Whether the log already says the downsample program is missing: once, not once per capture.
+    bool has_reported_missing_downsample_{};
 };
 
 } // namespace unravel

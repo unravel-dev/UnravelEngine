@@ -404,25 +404,6 @@ float Dither = ( Dither5 * 5.0f + Noise ) * (1.0f / 6.0f);
 return Dither;
 }
 
-// The rank of a cell of a 2^bitCount square Bayer matrix: the bits of the crossing of its coordinates and of one
-// coordinate, interleaved from the lowest up into the highest. Computed, not looked up (see ign16x16).
-uint bayerRank(uint crossing, uint coordinate, uint bitCount)
-{
-	uint rank = 0u;
-	for(uint bit = 0u; bit < bitCount; ++bit)
-	{
-		rank = (rank << 2u) | (((crossing >> bit) & 1u) << 1u) | ((coordinate >> bit) & 1u);
-	}
-	return rank;
-}
-
-// 16x16 Bayer ordered dithering threshold of the pixel, in steps of 1/256.
-float dither16x16(vec2 fragCoord)
-{
-	uvec2 cell = uvec2(fragCoord) & 15u;
-	return float(bayerRank(cell.x ^ cell.y, cell.x, 4u)) / 256.0;
-}
-
 // The high 32 bits of the 32 x 32 bit product of a and b, from 16-bit halves: not every target has a 64-bit product.
 uint mulHigh32(uint a, uint b)
 {
@@ -451,13 +432,6 @@ float ign16x16(vec2 fragCoord)
 	// round(255 noise / 2^32), from the top 8 bits and the 24 below them
 	uint rounded = ((noise >> 24u) * 255u + (((noise & 0xFFFFFFu) * 255u) >> 24u) + 128u) >> 8u;
 	return float(rounded) / 256.0;
-}
-
-// 8x8 Bayer ordered dithering threshold of the pixel, in steps of 1/64.
-float dither8x8(vec2 fragCoord)
-{
-	uvec2 cell = uvec2(fragCoord) & 7u;
-	return float(bayerRank(cell.x ^ cell.y, cell.y, 3u)) / 64.0;
 }
 
 

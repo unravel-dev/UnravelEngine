@@ -58,8 +58,10 @@ namespace unravel
 namespace
 {
 thread_local std::vector<uint32_t> s_bgfx_profiler_scope_stack;
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
 /// Submitted frames the GPU may still be drawing when the next one starts, in the browser.
 constexpr int MAX_GPU_FRAMES_IN_FLIGHT = 2;
+#endif
 }
 
 renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)

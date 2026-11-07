@@ -22,8 +22,9 @@
  *     they were and no temp file behind;
  *   - every .eshader the engine and the editor ship compiles on every renderer of this platform, and no two of a file's
  *     variants are the same binary on all of them: a define that changes nothing is what a mistyped one looks like;
- *   - every engine shader compiles to WGSL within the limits every WebGPU device grants (invocations per workgroup,
- *     storage textures per stage), but the global illumination's, which the browser player never runs.
+ *   - every engine shader compiles to WGSL within the limits every WebGPU device grants (invocations per workgroup
+ *     and along each axis, storage textures per stage), but the global illumination's, which the browser player never
+ *     runs; a compute shader whose workgroup size the check cannot read fails it.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
@@ -44,6 +45,7 @@
 #include <graphics/shader.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -69,9 +71,10 @@ constexpr int TEXCOORD_ATTRIBUTE_COUNT = 16;
 
 /// WebGPU's core limits, which every device grants, as the browser player's shaders must fit them.
 constexpr unsigned long WEBGPU_MAX_WORKGROUP_INVOCATIONS = 256;
+constexpr std::array<unsigned long, 3> WEBGPU_MAX_WORKGROUP_SIZE = {256, 256, 64};
 constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
 /// The engine's shaders the browser player never runs: global illumination reads and writes RG11B10F storage
-/// textures, which WebGPU allows on no device, so web profiles turn it off.
+/// textures, which core WebGPU does not allow and only some devices offer, so web profiles turn it off.
 constexpr const char* WEBGPU_EXEMPT_FOLDER = "gi";
 
 int g_checks = 0;
@@ -672,11 +675,24 @@ auto find_webgpu_limit_problems(const unravel::compiled_shader_variant& variant)
     std::smatch size;
     if(std::regex_search(wgsl, size, workgroup_size))
     {
-        const unsigned long invocations = std::stoul(size[1]) * std::stoul(size[2]) * std::stoul(size[3]);
+        unsigned long invocations = 1;
+        for(std::size_t axis = 0; axis < WEBGPU_MAX_WORKGROUP_SIZE.size(); ++axis)
+        {
+            const unsigned long axis_size = std::stoul(size[axis + 1]);
+            invocations *= axis_size;
+            if(axis_size > WEBGPU_MAX_WORKGROUP_SIZE[axis])
+            {
+                problems += std::to_string(axis_size) + " invocations along axis " + std::to_string(axis) + " ";
+            }
+        }
         if(invocations > WEBGPU_MAX_WORKGROUP_INVOCATIONS)
         {
             problems += std::to_string(invocations) + " invocations per workgroup ";
         }
+    }
+    else if(wgsl.find("@compute") != std::string::npos)
+    {
+        problems += "a workgroup size this check cannot read ";
     }
     std::set<std::string> storage_textures;
     for(std::sregex_iterator it(wgsl.begin(), wgsl.end(), storage_texture), end; it != end; ++it)
