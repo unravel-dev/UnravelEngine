@@ -17,8 +17,6 @@ namespace unravel::deployment
 {
 namespace
 {
-/// The editor's folder of player templates.
-constexpr const char* PLAYERS_FOLDER = "binary:/players/";
 /// How long a problems_cache answer is kept while the settings stay the same.
 constexpr auto PROBLEMS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
 
@@ -173,7 +171,7 @@ auto get_player_file() -> fs::path
 
 auto get_web_template() -> web_template_lookup
 {
-    return find_web_template(fs::resolve_protocol(std::string(PLAYERS_FOLDER) + WEB_TEMPLATE_NAME), version::get_full());
+    return find_web_template(fs::resolve_protocol(std::string(PLAYER_TEMPLATES_FOLDER) + WEB_TEMPLATE_NAME), version::get_full());
 }
 
 auto get_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>

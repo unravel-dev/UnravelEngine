@@ -20,7 +20,7 @@ struct tree_node
     int entry{-1};
     /// Folders first, then assets, each by name.
     std::vector<std::size_t> children;
-    /// Nesting below the data folder: 0 for its children.
+    /// Nesting below the data folder: 0 for its children and the engine's folder.
     std::size_t depth{};
     // Recomputed by content_tree::update.
     std::size_t asset_count{};
@@ -51,7 +51,8 @@ struct tree_view
 };
 
 /**
- * @brief The project's assets as a folder tree, counted and filtered by the deploy settings.
+ * @brief The project's assets as a folder tree, counted and filtered by the deploy settings, and the engine's
+ * under one more top row after them.
  *
  * Built once per detection; update is cheap to call every frame, recounting only when the settings or
  * the view changed.
@@ -68,7 +69,7 @@ public:
         return nodes_;
     }
 
-    /// The data folder; its children are the top rows.
+    /// The project's data folder; its children are the top rows. Its counts cover the engine's assets too.
     auto get_root() const -> const tree_node&
     {
         return nodes_.front();
@@ -93,6 +94,8 @@ public:
 
 private:
     void sort_children();
+    /// Moves a top row after the others.
+    void place_last(std::size_t top_folder);
     auto is_entry_shown(const deploy_settings& params, const content_entry& entry, const tree_view& view) const -> bool;
     void collect_rows_under(std::size_t index, const std::function<bool(const tree_node&)>& is_open, std::vector<std::size_t>& rows) const;
 

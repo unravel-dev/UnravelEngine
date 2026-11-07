@@ -19,7 +19,7 @@ class project_manager;
 namespace unravel::mcp
 {
 
-/// A platform's name in tool arguments and results: "desktop" or "android".
+/// A platform's name in tool arguments and results: "desktop", "android" or "web".
 auto get_platform_name(target_platform platform) -> const char*;
 /// The platform `name` names; false for a name that names none.
 auto parse_platform_name(hpp::string_view name, target_platform& platform) -> bool;

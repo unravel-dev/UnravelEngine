@@ -14,6 +14,8 @@ auto is_previous_deploy(const fs::path& folder) -> bool;
 
 /// How the name of the native debug symbols a release Android deploy writes beside its package ends.
 constexpr const char* NATIVE_SYMBOLS_FILE_SUFFIX = "-native-debug-symbols.zip";
+/// The folder of player templates beside the editor (the Android package's, the browser player's).
+constexpr const char* PLAYER_TEMPLATES_FOLDER = "binary:/players/";
 
 /// Whether `folder` holds nothing but Android packages (.apk, .aab), their native debug symbols, and the
 /// data/ an earlier Android deploy left beside them: what an Android deploy may replace. True for an empty
@@ -25,7 +27,7 @@ auto is_android_package_folder(const fs::path& folder) -> bool;
 auto is_inside(const fs::path& path, const fs::path& folder) -> bool;
 
 /// The folder of the project that `path` lies in, when the editor manages that folder: the assets, their
-/// compiled files, the settings and profiles, the kept releases, the texture cache or the scripts' build.
+/// compiled files, the settings and profiles, the kept releases, the profiles' cache or the scripts' build.
 /// Empty for any other path. A
 /// deploy folder in the project stays out of them, since the deploy replaces and removes files in it.
 auto get_managed_project_folder(const fs::path& path, const fs::path& project_root) -> std::string;

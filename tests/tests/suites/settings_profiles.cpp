@@ -10,7 +10,7 @@
  *   - document paths: within / related, adding and removing paths, leaf paths, changed paths;
  *   - sparse overrides: only the overridden properties are stated, they apply over any base and the
  *     rest follows the base, reverting removes them, a document's unknown paths and the settings every
- *     profile shares (layers, input, the physics backend, the audio defaults, the deploy location) are left out;
+ *     profile shares (layers, input, the physics backend, the deploy location) are left out;
  *   - profile files: a new Android or Web profile's starting values (feature limits included), save / load
  *     round trip, rename, delete;
  *   - a project from before profiles: Desktop and Android made from its deploy.cfg, its releases and its
@@ -27,18 +27,28 @@
  *   - texture parameters: a platform's own quality, defaults, fallbacks, one family for uncompressed textures;
  *   - sRGB textures: a texture tagged sRGB never compiles to a format without an sRGB view (one and two
  *     channel formats), for any format family and uncompressed;
+ *   - the engine's texture plan: the profile's formats with the defaults every project shares;
  *   - texture variants, compiled with texturec: ASTC, ETC2 and BC formats (blocks that keep a texture's size),
  *     a variant reused while current, compiled again in place when a setting changes (never a second
  *     file), stray and unneeded files swept, a texture the profile compiles as the editor does shipping the
  *     editor's file once it is current and a variant until then, left-out textures kept;
  *   - cooked shaders, compiled with shaderc: a web profile's WGSL with its manifest, reused while current,
- *     stray files swept and left-out shaders' files kept.
+ *     stray files swept and left-out shaders' files kept;
+ *   - audio variants: a profile's audio default and a clip's own compression for its platform (another
+ *     platform's not), a variant reused while current, compiled again in place, stray and unneeded files swept,
+ *     left-out clips kept, a clip the profile compiles as the editor does shipping the editor's file once it is
+ *     current; an OGG clip shipping the editor's file at any default, a WAV libvorbis refuses keeping its bytes,
+ *     a clip that does not compile stopping the deploy, the parameters the watcher compares with recorded.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
 #include "../tests.h"
 
+#include <asset_compiler/asset_manifest.h>
+#include <asset_compiler/audio_compression.h>
 #include <asset_compiler/texture_target.h>
+#include <asset_compiler/vorbis_encoder.h>
+#include <deploy/audio_variants.h>
 #include <deploy/profile.h>
 #include <deploy/profile_cache.h>
 #include <deploy/project_profiles.h>
@@ -46,6 +56,8 @@
 #include <deploy/shader_cook.h>
 #include <deploy/texture_variants.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/audio/audio_clip.h>
+#include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <filesystem/filesystem.h>
@@ -59,6 +71,8 @@
 #include <bx/file.h>
 #include <bx/hash.h>
 
+#include <array>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -73,10 +87,21 @@ using unravel::settings;
 using unravel::settings_profile;
 using unravel::target_platform;
 using unravel::texture_importer_meta;
+using unravel::audio_importer_meta;
 namespace ac = unravel::asset_compiler;
 
 /// The folder under the tests' app protocol the texture sources are written to.
 constexpr const char* TEXTURE_FOLDER = "data/profile_tests";
+/// The test clips: a second of a tone, mono 16-bit.
+constexpr std::uint32_t CLIP_SAMPLE_RATE = 22050;
+constexpr std::uint32_t CLIP_FRAMES = 22050;
+constexpr double CLIP_TONE_HZ = 440.0;
+constexpr double CLIP_AMPLITUDE = 16000.0;
+constexpr double CLIP_TWO_PI = 6.283185307179586;
+/// Above the 200 kHz libvorbis encodes: a WAV at this rate keeps its own bytes.
+constexpr std::uint32_t UNENCODABLE_SAMPLE_RATE = 384000;
+/// libvorbis' quality for the OGG source the tests write.
+constexpr float OGG_SOURCE_QUALITY = 0.4f;
 /// The low quality max size the wall texture is capped to in the variants test.
 constexpr std::uint32_t LOW_QUALITY_SIDE = 64;
 /// A side ASTC 6x6 blocks divide.
@@ -271,9 +296,9 @@ void test_sparse_overrides()
                   read.is_unreadable(),
               "a broken document overrides nothing and is marked unreadable");
     }
-    check(!deployment::is_overridable_settings_path("assets/audio/default_compression") &&
+    check(deployment::is_overridable_settings_path("assets/audio/default_compression") &&
               deployment::is_overridable_settings_path("assets/texture/default_compression"),
-          "the audio defaults are shared, since a deploy compiles audio once; the texture defaults are per profile");
+          "the audio and texture defaults are per profile: a profile's deploys cook their own variants");
 
     {
         settings before;
@@ -816,6 +841,38 @@ struct cook_fixture
     }
 };
 
+void test_engine_texture_plan(const fs::path& root)
+{
+    std::printf("test_engine_texture_plan\n");
+    deploy_settings params;
+    params.profile = "Phone";
+    params.deploy_target = target_platform::android;
+    params.android.texture_compression = unravel::deploy_texture_compression::etc2;
+    settings runtime;
+    runtime.assets.texture.default_max_size = texture_importer_meta::texture_size::size_256;
+    unravel::asset_database::database_t database;
+    const std::array<const char*, 3> keys = {"engine:/data/textures/a.png", "engine:/data/textures/b.png",
+                                             "engine:/data/shaders/fs_a.eshader"};
+    for(std::size_t i = 0; i < keys.size(); ++i)
+    {
+        unravel::asset_database::meta entry;
+        entry.location = keys[i];
+        entry.meta.uid = hpp::uuid::from_string("60000000-0000-4000-8000-00000000000" + std::to_string(i + 1)).value();
+        database.emplace(entry.meta.uid, entry);
+    }
+    const auto editor_target = ac::get_editor_texture_target_for(keys[0]);
+    const auto plan = deployment::make_texture_cook_plan(root, params, runtime, "engine", database,
+                                                         {fs::make_path_key(keys[1])}, editor_target);
+    check(plan.target.platform == target_platform::android &&
+              plan.target.family == ac::texture_compression_family::etc2,
+          "the engine's textures cook to the profile's formats");
+    check(plan.target.defaults == editor_target.defaults && !(plan.target.defaults == runtime.assets.texture),
+          "with the defaults every project shares, not the profile's");
+    check(plan.variants == deployment::get_profile_variants_folder(root, "Phone", "engine"), "into the profile's engine folder");
+    check(plan.shipped == std::vector<std::string>{keys[0]} && plan.left_out == std::vector<std::string>{keys[1]},
+          "its shipped and left out textures, and no other asset");
+}
+
 void test_texture_variants(const fs::path& root)
 {
     std::printf("test_texture_variants\n");
@@ -936,6 +993,243 @@ void test_texture_variants(const fs::path& root)
     fs::remove_all(editor_compiled, ec);
 }
 
+/// A mono 16-bit WAV of a tone.
+void write_wav(const fs::path& file, std::uint32_t sample_rate = CLIP_SAMPLE_RATE)
+{
+    const auto append_u16 = [](std::string& out, std::uint16_t value)
+    {
+        out.push_back(char(value & 0xFF));
+        out.push_back(char(value >> 8));
+    };
+    const auto append_u32 = [&](std::string& out, std::uint32_t value)
+    {
+        append_u16(out, std::uint16_t(value & 0xFFFF));
+        append_u16(out, std::uint16_t(value >> 16));
+    };
+    const std::uint32_t data_size = CLIP_FRAMES * 2;
+    std::string bytes = "RIFF";
+    append_u32(bytes, 36 + data_size);
+    bytes += "WAVEfmt ";
+    append_u32(bytes, 16);
+    append_u16(bytes, 1);
+    append_u16(bytes, 1);
+    append_u32(bytes, sample_rate);
+    append_u32(bytes, sample_rate * 2);
+    append_u16(bytes, 2);
+    append_u16(bytes, 16);
+    bytes += "data";
+    append_u32(bytes, data_size);
+    for(std::uint32_t frame = 0; frame < CLIP_FRAMES; ++frame)
+    {
+        append_u16(bytes, std::uint16_t(std::int16_t(CLIP_AMPLITUDE * std::sin(CLIP_TWO_PI * CLIP_TONE_HZ * frame / sample_rate))));
+    }
+    write_text(file, bytes);
+}
+
+/// The codec of a compiled clip ("ogg", "wav"); empty when it does not read.
+auto read_clip_codec(const fs::path& file) -> std::string
+{
+    unravel::encoded_sound clip;
+    return unravel::load_from_file_bin(file.string(), clip) ? clip.codec : std::string{};
+}
+
+void save_audio_importer(const fs::path& file, const char* uid, const audio_importer_meta& importer)
+{
+    unravel::asset_meta meta;
+    meta.uid = hpp::uuid::from_string(uid).value();
+    meta.type = ".wav";
+    meta.importer = std::make_shared<audio_importer_meta>(importer);
+    unravel::save_to_file(file.string() + ".meta", meta);
+}
+
+/// An audio cook plan over the tests' app protocol for one profile.
+struct audio_cook_fixture
+{
+    fs::path project;
+    std::vector<std::string> keys;
+    unravel::asset_database::database_t database;
+    deploy_settings params;
+    settings runtime;
+    settings::asset_settings::audio_importer_settings editor_defaults;
+
+    auto make_plan(const std::unordered_set<std::string>& left_out = {}) const -> deployment::audio_cook_plan
+    {
+        return deployment::make_audio_cook_plan(project, params, runtime, database, left_out, editor_defaults);
+    }
+};
+
+void test_audio_variants(const fs::path& root)
+{
+    std::printf("test_audio_variants\n");
+    using quality = audio_importer_meta::compression_quality;
+    constexpr std::array<const char*, 2> uids = {"50000000-0000-4000-8000-000000000001", "50000000-0000-4000-8000-000000000002"};
+    audio_cook_fixture fixture;
+    fixture.project = root;
+    const auto app_root = fs::resolve_protocol("app:/");
+    fs::error_code ec;
+    fs::remove_all(app_root / TEXTURE_FOLDER, ec);
+    const auto editor_compiled = fs::resolve_protocol(ex::get_compiled_directory("app")) / "profile_tests";
+    fs::remove_all(editor_compiled, ec);
+    for(const auto* name : {"music.wav", "jingle.wav"})
+    {
+        write_wav(app_root / TEXTURE_FOLDER / name);
+        const auto key = std::string("app:/") + TEXTURE_FOLDER + "/" + name;
+        unravel::asset_database::meta entry;
+        entry.location = key;
+        entry.meta.uid = hpp::uuid::from_string(uids[fixture.keys.size()]).value();
+        fixture.database.emplace(entry.meta.uid, entry);
+        fixture.keys.push_back(key);
+    }
+    const auto music_source = app_root / TEXTURE_FOLDER / "music.wav";
+    fixture.params.profile = "Web";
+    fixture.params.deploy_target = target_platform::web;
+    fixture.runtime.assets.audio.default_compression = quality::low_quality;
+    fixture.editor_defaults.default_compression = quality::normal_quality;
+    const auto variants = deployment::get_profile_audio_folder(root, "Web", "app");
+    const auto music = variants / "profile_tests" / "music.wav.asset";
+    const auto jingle = variants / "profile_tests" / "jingle.wav.asset";
+
+    auto report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.failed.empty() && report.variants == 2 && report.compiled == 2,
+          "a profile whose audio default is not the editor's cooks a variant per clip");
+    check(ac::is_audio_compiled_with(fixture.keys[0], music, quality::low_quality) && read_clip_codec(music) == "ogg",
+          "at the profile's default, as Vorbis");
+    check(!is_present(fs::path(music_source).concat(".meta")), "cooking reads a clip's settings without writing them");
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.compiled == 0 && report.variants == 2 && report.removed == 0, "a current variant is reused");
+
+    fixture.runtime.assets.audio.default_compression = quality::none;
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.compiled == 2 && read_clip_codec(music) == "wav" && count_files(variants) == 4,
+          "a changed default compiles the variants again in place: None keeps the WAV");
+
+    audio_importer_meta own;
+    own.platforms.web.is_overridden = true;
+    own.platforms.web.compression = quality::high_quality;
+    own.platforms.android.is_overridden = true;
+    own.platforms.android.compression = quality::low_quality;
+    save_audio_importer(music_source, uids[0], own);
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.compiled == 1 && ac::is_audio_compiled_with(fixture.keys[0], music, quality::high_quality),
+          "a clip's own compression for the profile's platform compiles its variant again, and another platform's "
+          "is not used");
+
+    write_text(variants / "profile_tests" / "stray.wav.asset", "stray");
+    write_text(variants / "elsewhere" / "old.wav.asset.manifest", "stray");
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.compiled == 0 && report.removed == 2 && count_files(variants) == 4 && !is_present(variants / "elsewhere"),
+          "files nothing needs are swept, with their folders");
+
+    report = deployment::cook_audio_variants(fixture.make_plan({fs::make_path_key(fixture.keys[1])}));
+    check(report.variants == 1 && is_present(jingle), "a left-out clip is not cooked, and its variant is kept for a deploy that ships it");
+    fixture.database.erase(hpp::uuid::from_string(uids[1]).value());
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.removed == 2 && !is_present(jingle), "the variant of a clip the project no longer has is deleted");
+
+    // A desktop profile with the editor's default ships the editor's own file, once it is current.
+    fixture.params.profile = "Desktop";
+    fixture.params.deploy_target = target_platform::desktop;
+    fixture.runtime.assets.audio = fixture.editor_defaults;
+    const auto desktop_variants = deployment::get_profile_audio_folder(root, "Desktop", "app");
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.variants == 1 && report.compiled == 1,
+          "a profile that compiles like the editor gets a variant while the editor's file is missing");
+    check(ac::compile_audio_clip(fixture.keys[0], editor_compiled / "music.wav.asset", ac::read_audio_importer(fixture.keys[0]),
+                                 quality::normal_quality),
+          "the editor's file compiles");
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.variants == 0 && report.compiled == 0 && count_files(desktop_variants) == 0,
+          "and ships the editor's current file, its variant deleted");
+    fs::remove_all(app_root / TEXTURE_FOLDER, ec);
+    fs::remove_all(editor_compiled, ec);
+}
+
+/// An OGG file of the tone write_wav writes.
+void write_ogg(const fs::path& wav, const fs::path& file)
+{
+    write_wav(wav);
+    unravel::encoded_sound source;
+    source.codec = "wav";
+    std::ifstream stream(wav, std::ios::binary);
+    source.bytes.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+    audio::sound_data decoded;
+    std::string error;
+    std::vector<std::uint8_t> encoded;
+    check(unravel::decode_sound(source, decoded, error) && ac::encode_vorbis(decoded, OGG_SOURCE_QUALITY, encoded, error),
+          "the OGG source encodes: " + error);
+    write_text(file, std::string(encoded.begin(), encoded.end()));
+}
+
+/// Clips that are no lossless source, that do not compile, or that libvorbis refuses.
+void test_audio_cook_other_sources(const fs::path& root)
+{
+    std::printf("test_audio_cook_other_sources\n");
+    using quality = audio_importer_meta::compression_quality;
+    audio_cook_fixture fixture;
+    fixture.project = root;
+    const auto app_root = fs::resolve_protocol("app:/");
+    const auto folder = app_root / TEXTURE_FOLDER;
+    const auto editor_compiled = fs::resolve_protocol(ex::get_compiled_directory("app")) / "profile_tests";
+    fs::error_code ec;
+    fs::remove_all(folder, ec);
+    fs::remove_all(editor_compiled, ec);
+    const std::string theme = std::string("app:/") + TEXTURE_FOLDER + "/theme.ogg";
+    write_ogg(root / "source.wav", folder / "theme.ogg");
+    unravel::asset_database::meta entry;
+    entry.location = theme;
+    entry.meta.uid = hpp::uuid::from_string("50000000-0000-4000-8000-000000000003").value();
+    fixture.database.emplace(entry.meta.uid, entry);
+    fixture.params.profile = "Web";
+    fixture.params.deploy_target = target_platform::web;
+    fixture.runtime.assets.audio.default_compression = quality::low_quality;
+    fixture.editor_defaults.default_compression = quality::normal_quality;
+    const auto theme_compiled = editor_compiled / "theme.ogg.asset";
+    check(ac::compile_audio_clip(theme, theme_compiled, ac::read_audio_importer(theme), quality::normal_quality) &&
+              read_clip_codec(theme_compiled) == "ogg",
+          "an OGG clip compiles to its own bytes");
+    auto report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.failed.empty() && report.variants == 0 && report.compiled == 0,
+          "a profile whose audio default is not the editor's ships the OGG clip's own compiled file");
+    fixture.runtime.assets.audio.default_compression = quality::high_quality;
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.variants == 0 && report.compiled == 0, "whatever its default");
+
+    const auto previous_defaults = ac::get_editor_audio_defaults();
+    ac::set_editor_audio_defaults(fixture.editor_defaults);
+    const auto importer = ac::read_audio_importer(theme);
+    check(ac::compile_audio_clip(theme, theme_compiled, importer, ac::resolve_editor_audio_compression(theme, importer)) &&
+              ac::is_compiled_with_parameters(theme_compiled, ac::get_editor_audio_compile_parameters(theme)),
+          "a clip compiled as the editor compiles it records the parameters the watcher compares with");
+    ac::set_editor_audio_defaults(previous_defaults);
+
+    const std::string loud = std::string("app:/") + TEXTURE_FOLDER + "/loud.wav";
+    write_wav(folder / "loud.wav", UNENCODABLE_SAMPLE_RATE);
+    const auto loud_compiled = editor_compiled / "loud.wav.asset";
+    check(ac::compile_audio_clip(loud, loud_compiled, ac::read_audio_importer(loud), quality::normal_quality) &&
+              read_clip_codec(loud_compiled) == "wav",
+          "a WAV libvorbis cannot encode (384 kHz) compiles to its own bytes, with a warning");
+
+    const std::string broken = std::string("app:/") + TEXTURE_FOLDER + "/broken.wav";
+    write_text(folder / "broken.wav", "not a sound");
+    entry.location = broken;
+    entry.meta.uid = hpp::uuid::from_string("50000000-0000-4000-8000-000000000004").value();
+    fixture.database.emplace(entry.meta.uid, entry);
+    report = deployment::cook_audio_variants(fixture.make_plan());
+    check(report.failed == std::vector<std::string>{broken}, "a clip that does not decode is reported as failed");
+    bool has_thrown = false;
+    try
+    {
+        deployment::cook_audio(fixture.make_plan());
+    }
+    catch(const std::exception& error)
+    {
+        has_thrown = std::string(error.what()).find("broken.wav") != std::string::npos;
+    }
+    check(has_thrown, "and the deploy step stops on it, naming it");
+    fs::remove_all(folder, ec);
+    fs::remove_all(editor_compiled, ec);
+}
+
 void test_shader_cook(const fs::path& root)
 {
     std::printf("test_shader_cook\n");
@@ -1008,7 +1302,10 @@ auto run_settings_profiles_suite(rtti::context&) -> int
         test_astc_blocks();
         test_texture_parameters();
         test_srgb_textures(temp / "srgb");
+        test_engine_texture_plan(temp / "engine_texture_plan");
         test_texture_variants(temp / "variants");
+        test_audio_variants(temp / "audio_variants");
+        test_audio_cook_other_sources(temp / "audio_sources");
         test_shader_cook(temp / "shaders");
         test_web_profile(temp / "web");
     }

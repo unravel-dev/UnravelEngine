@@ -3,30 +3,14 @@
 #include "keys.h"
 #include "profile_cache.h"
 
-#include <concurrency/parallel.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <graphics/texture.h>
-#include <logging/logging.h>
-
-#include <cstdint>
-#include <stdexcept>
 
 namespace unravel::deployment
 {
 namespace
 {
-/// Failed textures named in the step's error before "and N more".
-constexpr std::size_t LISTED_FAILURES_MAX = 10;
-constexpr const char* MANIFEST_SUFFIX = ".manifest";
-
-/// What cooking one texture did.
-struct cook_outcome
-{
-    /// The variant's path key under the variants folder; empty when the texture ships the editor's file.
-    std::string variant;
-    bool is_compiled{};
-    bool has_failed{};
-};
+constexpr cook_wording TEXTURE_WORDING{"texture(s)", "texture variant(s)", "texture cache"};
 
 auto is_texture_key(const std::string& key) -> bool
 {
@@ -53,17 +37,6 @@ auto get_parameters(const texture_cook_plan& plan, const std::string& key) -> te
             asset_compiler::resolve_texture_parameters(importer, plan.editor_target)};
 }
 
-auto get_variant_key(const fs::path& relative) -> std::string
-{
-    return fs::make_path_key(relative.generic_string());
-}
-
-void keep_variant(std::unordered_set<std::string>& kept, const std::string& variant)
-{
-    kept.insert(variant);
-    kept.insert(variant + MANIFEST_SUFFIX);
-}
-
 auto cook_texture(const texture_cook_plan& plan, const std::string& key) -> cook_outcome
 {
     cook_outcome outcome;
@@ -80,30 +53,21 @@ auto cook_texture(const texture_cook_plan& plan, const std::string& key) -> cook
     {
         return outcome;
     }
-    outcome.variant = get_variant_key(relative);
+    outcome.files.push_back(get_cache_file_key(relative));
     const auto variant = plan.variants / relative;
     if(asset_compiler::is_texture_compiled_with(key, variant, parameters.profile))
     {
         return outcome;
     }
-    outcome.is_compiled = true;
-    outcome.has_failed = !asset_compiler::compile_texture_for_target(key, variant, plan.target);
+    if(asset_compiler::compile_texture_for_target(key, variant, plan.target))
+    {
+        ++outcome.compiled;
+    }
+    else
+    {
+        outcome.has_failed = true;
+    }
     return outcome;
-}
-
-auto get_source_size(const std::string& key) -> std::uintmax_t
-{
-    fs::error_code ec;
-    const auto size = fs::file_size(fs::resolve_protocol(key), ec);
-    return ec ? 0 : size;
-}
-
-auto describe_failures(const std::vector<std::string>& failed, const std::string& profile) -> std::string
-{
-    return fmt::format("{} texture(s) could not be compiled for profile {} (the log says why): {}",
-                       failed.size(),
-                       profile,
-                       list_keys(failed, LISTED_FAILURES_MAX));
 }
 
 /// The formats an Android or web profile's textures compile to.
@@ -169,40 +133,18 @@ auto make_texture_cook_plan(const fs::path& project_root,
     return plan;
 }
 
-auto cook_texture_variants(const texture_cook_plan& plan) -> texture_cook_report
+auto cook_texture_variants(const texture_cook_plan& plan) -> cook_report
 {
-    std::vector<cook_outcome> outcomes(plan.shipped.size());
-    std::vector<std::uintmax_t> costs;
-    costs.reserve(plan.shipped.size());
-    for(const auto& key : plan.shipped)
-    {
-        costs.push_back(get_source_size(key));
-    }
-    {
-        // A compile can hold every thread it gets for seconds: never the pool the frame's loops wait for.
-        const poolstl::background_scope background;
-        poolstl::for_each_costliest_first_par_if(true,
-                                                 costs,
-                                                 [&](std::size_t index)
-                                                 {
-                                                     outcomes[index] = cook_texture(plan, plan.shipped[index]);
-                                                 });
-    }
-    texture_cook_report report;
+    const auto outcomes = cook_all(plan.shipped,
+                                   [&plan](std::size_t index)
+                                   {
+                                       return cook_texture(plan, plan.shipped[index]);
+                                   });
+    cook_report report;
     std::unordered_set<std::string> kept;
     for(std::size_t i = 0; i < outcomes.size(); ++i)
     {
-        const auto& outcome = outcomes[i];
-        if(!outcome.variant.empty())
-        {
-            keep_variant(kept, outcome.variant);
-            ++report.variants;
-        }
-        report.compiled += outcome.is_compiled && !outcome.has_failed ? 1 : 0;
-        if(outcome.has_failed)
-        {
-            report.failed.push_back(plan.shipped[i]);
-        }
+        add_outcome(plan.shipped[i], outcomes[i], kept, report);
     }
     // A left-out texture's variant stays for a deploy that ships it, which checks it first.
     for(const auto& key : plan.left_out)
@@ -210,37 +152,16 @@ auto cook_texture_variants(const texture_cook_plan& plan) -> texture_cook_report
         const auto relative = get_compiled_relative_path(key);
         if(!relative.empty() && get_parameters(plan, key).needs_variant())
         {
-            keep_variant(kept, get_variant_key(relative));
+            keep_cache_file(kept, get_cache_file_key(relative));
         }
     }
-    auto swept = sweep_folder(plan.variants, kept);
-    report.removed = swept.removed;
-    report.undeletable = std::move(swept.failed);
+    sweep_cache_folder(plan.variants, kept, report);
     return report;
 }
 
 void cook_textures(const texture_cook_plan& plan)
 {
-    const auto report = cook_texture_variants(plan);
-    APPLOG_INFO("Deploy: profile {} ships {} texture variant(s), {} compiled now; {} file(s) of its cache that nothing needs "
-                "were deleted.",
-                plan.profile,
-                report.variants,
-                report.compiled,
-                report.removed);
-    if(!report.failed.empty())
-    {
-        throw std::runtime_error(describe_failures(report.failed, plan.profile));
-    }
-    if(!report.undeletable.empty())
-    {
-        throw std::runtime_error(fmt::format("{} file(s) of profile {}'s texture cache that no texture needs could not be "
-                                             "deleted, and the deploy would ship them, for example {}. Close the program "
-                                             "that holds them, then deploy again.",
-                                             report.undeletable.size(),
-                                             plan.profile,
-                                             report.undeletable.front().generic_string()));
-    }
+    report_cook_or_throw(plan.profile, cook_texture_variants(plan), TEXTURE_WORDING);
 }
 
 } // namespace unravel::deployment

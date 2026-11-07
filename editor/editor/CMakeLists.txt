@@ -49,6 +49,9 @@ if(UNRAVEL_UNITY_BUILD AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
     )
+    # cpp-httplib includes winsock2.h, which breaks after the windows.h another file of a batch brought in first.
+    set_source_files_properties(system/mcp_manager.cpp system/local_http.cpp deploy/web_preview_server.cpp
+                                PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 
 if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32)

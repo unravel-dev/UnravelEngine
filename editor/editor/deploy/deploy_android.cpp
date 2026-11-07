@@ -33,7 +33,6 @@ namespace unravel::deployment
 {
 namespace
 {
-constexpr const char* TEMPLATE_FOLDER = "binary:/players/";
 /// Where Gradle builds, per project, under the system's temporary folder: kept between deploys so Gradle
 /// rebuilds only what changed, and outside the project so its thousands of files stay out of the editor's
 /// watchers.
@@ -770,7 +769,7 @@ void fail_device_steps(const android_package_plan& plan, const std::string& reas
 
 auto get_android_template() -> const android_template_lookup&
 {
-    static const auto lookup = find_android_template(fs::resolve_protocol(std::string(TEMPLATE_FOLDER) + ANDROID_TEMPLATE_NAME),
+    static const auto lookup = find_android_template(fs::resolve_protocol(std::string(PLAYER_TEMPLATES_FOLDER) + ANDROID_TEMPLATE_NAME),
                                                      version::get_full(),
                                                      UNRAVEL_BUILD_CONFIGURATION);
     return lookup;

@@ -1056,7 +1056,7 @@ void deploy_panel::draw_profile_picker(rtti::context& ctx)
     draw_rename_profile_popup(ctx);
     if(draw_confirmation(REMOVE_PROFILE_POPUP,
                          fmt::format("Delete profile {}?", current),
-                         "Its settings, its kept releases and its texture cache are deleted. Its builds in the deploy "
+                         "Its settings, its kept releases and its cache are deleted. Its builds in the deploy "
                          "folder stay.",
                          ICON_MDI_DELETE_OUTLINE " Delete"))
     {
@@ -1175,7 +1175,7 @@ void deploy_panel::draw_rename_profile_popup(rtti::context& ctx)
     ImGui::TextUnformatted(fmt::format("Rename {}", current).c_str());
     ImGui::PopFont();
     ImGui::PushStyleColor(ImGuiCol_Text, widgets::get_muted_color());
-    ImGui::TextUnformatted("Its kept releases and texture cache move with it. Its builds in the deploy folder keep the old name.");
+    ImGui::TextUnformatted("Its kept releases and its cache move with it. Its builds in the deploy folder keep the old name.");
     ImGui::PopStyleColor();
     widgets::draw_gap(widgets::LINE_GAP);
     if(ImGui::IsWindowAppearing())
@@ -1598,10 +1598,10 @@ void deploy_panel::draw_releases_tab(rtti::context& ctx)
     auto& pm = ctx.get_cached<project_manager>();
     const auto request = pm.get_deploy_request();
     widgets::draw_section_title(fmt::format("Patching {}", request.profile).c_str());
-    if(request.deploy_target == deploy_platform::android)
+    if(request.deploy_target != deploy_platform::desktop)
     {
-        widgets::draw_muted_text("Patches and releases are for desktop profiles. An Android package always carries every "
-                                 "pack whole.");
+        widgets::draw_muted_text("Patches and releases are for desktop profiles. An Android package and a web build "
+                                 "always carry every pack whole.");
         return;
     }
     draw_patch_release_picker(ctx);

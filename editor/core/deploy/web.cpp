@@ -5,6 +5,7 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <vector>
 
@@ -21,6 +22,14 @@ constexpr const char* RUNTIME_LOADER_FILE = "_framework/dotnet.js";
 /// The first character JSON escapes as a code point: the control characters are below it.
 constexpr unsigned char JSON_FIRST_PLAIN_CHARACTER = 0x20;
 constexpr const char* REBUILD_ADVICE = "Rebuild the editor.";
+/// SDL's preferences root in the browser (SDL_GetPrefPath on Emscripten).
+constexpr const char* WEB_PREFERENCES_ROOT = "/libsdl";
+/// The program name the browser player starts the engine as (game/web/Program.cs ProgramPath), which names a game's
+/// folder when its project names no product.
+constexpr const char* WEB_PROGRAM_NAME = "app";
+constexpr const char* URL_HEX_DIGITS = "0123456789ABCDEF";
+constexpr unsigned char URL_HIGH_NIBBLE_SHIFT = 4;
+constexpr unsigned char URL_LOW_NIBBLE_MASK = 0xF;
 
 auto is_present(const fs::path& path) -> bool
 {
@@ -50,32 +59,47 @@ auto to_json_string(const std::string& text) -> std::string
     return quoted + "\"";
 }
 
-/// The page's path of a file under `site`: '/' separated, relative to it.
-auto get_site_path(const fs::path& file, const fs::path& site) -> std::string
+/// A file of a web build's data, as the page fetches it.
+struct data_file
 {
-    auto path = fs::to_utf8_string(file.lexically_relative(site));
-    std::replace(path.begin(), path.end(), '\\', '/');
-    return path;
-}
+    fs::path file;
+    /// The page's path of the file: '/' separated, relative to the site, UTF-8.
+    std::string site_path;
+};
 
-auto list_data_files(const fs::path& site) -> std::vector<std::string>
+auto list_data_files(const fs::path& site) -> std::vector<data_file>
 {
-    std::vector<std::string> files;
+    std::vector<data_file> files;
     const auto data = site / DATA_FOLDER;
     fs::error_code ec;
     for(fs::recursive_directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec))
     {
         if(it->is_regular_file(ec))
         {
-            files.push_back(get_site_path(it->path(), site));
+            files.push_back({it->path(), fs::to_utf8_string(it->path().lexically_relative(site))});
         }
     }
     if(ec)
     {
         throw std::runtime_error(fmt::format("Listing {} failed: {}", data.generic_string(), ec.message()));
     }
-    std::sort(files.begin(), files.end());
+    std::sort(files.begin(),
+              files.end(),
+              [](const data_file& lhs, const data_file& rhs)
+              {
+                  return lhs.site_path < rhs.site_path;
+              });
     return files;
+}
+
+auto read_fingerprint(const fs::path& file) -> std::string
+{
+    auto fingerprint = fs::hash_file_fingerprint(file, false);
+    if(fingerprint.empty())
+    {
+        throw std::runtime_error(fmt::format("{} could not be read for the web build's data manifest.", file.generic_string()));
+    }
+    return fingerprint;
 }
 } // namespace
 
@@ -114,19 +138,24 @@ auto find_web_template(const fs::path& root, const std::string& engine_version) 
     return lookup;
 }
 
-auto make_web_data_manifest(const fs::path& site) -> std::string
+auto get_web_user_folder(const std::string& company, const std::string& product) -> std::string
 {
-    std::string manifest = "[";
-    const auto files = list_data_files(site);
-    for(std::size_t i = 0; i < files.size(); ++i)
+    const auto& name = product.empty() ? std::string(WEB_PROGRAM_NAME) : product;
+    return company.empty() ? fmt::format("{}/{}", WEB_PREFERENCES_ROOT, name)
+                           : fmt::format("{}/{}/{}", WEB_PREFERENCES_ROOT, company, name);
+}
+
+auto make_web_data_manifest(const fs::path& site, const std::string& user_folder) -> std::string
+{
+    std::string files_json;
+    for(const auto& data : list_data_files(site))
     {
-        const std::string hash = fs::hash_file_fingerprint(site / files[i], false);
-        manifest += fmt::format("{}{{\"path\": {}, \"hash\": {}}}",
-                                i == 0 ? "\n  " : ",\n  ",
-                                to_json_string(files[i]),
-                                to_json_string(hash));
+        files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}}}",
+                                  files_json.empty() ? "\n    " : ",\n    ",
+                                  to_json_string(data.site_path),
+                                  to_json_string(read_fingerprint(data.file)));
     }
-    return manifest + "\n]\n";
+    return fmt::format("{{\n  \"user_folder\": {},\n  \"files\": [{}\n  ]\n}}\n", to_json_string(user_folder), files_json);
 }
 
 void copy_web_player(const web_template& player, const fs::path& site)
@@ -151,9 +180,50 @@ void copy_web_player(const web_template& player, const fs::path& site)
     }
 }
 
-void write_web_data_manifest(const fs::path& site)
+void write_web_data_manifest(const fs::path& site, const std::string& user_folder)
 {
-    write_text_or_throw(site / WEB_DATA_MANIFEST_NAME, make_web_data_manifest(site));
+    write_text_or_throw(site / WEB_DATA_MANIFEST_NAME, make_web_data_manifest(site, user_folder));
+}
+
+auto encode_url_part(const std::string& text) -> std::string
+{
+    std::string encoded;
+    for(const unsigned char c : text)
+    {
+        if(std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            encoded += char(c);
+            continue;
+        }
+        encoded += '%';
+        encoded += URL_HEX_DIGITS[c >> URL_HIGH_NIBBLE_SHIFT];
+        encoded += URL_HEX_DIGITS[c & URL_LOW_NIBBLE_MASK];
+    }
+    return encoded;
+}
+
+auto make_web_site_path(const std::string& project, const std::string& profile) -> std::string
+{
+    return "/" + project + "/" + profile + "/";
+}
+
+auto make_web_page_address(const std::string& origin, const std::string& site_path, const std::vector<std::string>& arguments)
+    -> std::string
+{
+    std::string address = origin;
+    std::size_t start = 0;
+    for(std::size_t slash = site_path.find('/'); slash != std::string::npos; slash = site_path.find('/', start))
+    {
+        address += encode_url_part(site_path.substr(start, slash - start)) + "/";
+        start = slash + 1;
+    }
+    address += encode_url_part(site_path.substr(start));
+    std::string query;
+    for(const auto& argument : arguments)
+    {
+        query += (query.empty() ? "?arg=" : "&arg=") + encode_url_part(argument);
+    }
+    return address + query;
 }
 
 } // namespace unravel::deployment

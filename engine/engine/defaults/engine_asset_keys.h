@@ -1,14 +1,15 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 
 namespace unravel
 {
 
 /**
- * The engine folders whose assets a deploy that ships only used assets ships only when something uses them:
- * the game's assets reference them, or the engine loads them by one of the keys below. Every other engine
- * asset always ships, so an asset in these folders that the engine loads by path must be listed here.
+ * The engine folders a deploy decides asset by asset when it ships only used assets: their assets ship when the game
+ * uses them or the engine loads them by path (ENGINE_LOADED_KEYS). Every other engine asset always ships. An asset in
+ * these folders that the engine loads by path must therefore be listed below, or such a deploy leaves it out.
  */
 inline constexpr std::array<const char*, 2> ENGINE_FOLDERS_SHIPPED_WHEN_USED = {
     "engine:/data/fonts",
@@ -34,18 +35,27 @@ inline constexpr const char* UI_BASE_STYLE_SHEET_KEY = "engine:/data/ui/rml.rcss
 /// The splash screen's document when the project names none.
 inline constexpr const char* SPLASH_DOCUMENT_KEY = "engine:/data/ui/splash.rhtml";
 
-/// Every key above: what the engine loads by path from those folders.
-inline constexpr auto ENGINE_LOADED_KEYS = []
+namespace detail
 {
-    std::array<const char*, UI_FONT_KEYS.size() + 3> keys{};
-    for(std::size_t i = 0; i < UI_FONT_KEYS.size(); ++i)
+template<std::size_t HeadSize, std::size_t TailSize>
+constexpr auto join_keys(const std::array<const char*, HeadSize>& head, const std::array<const char*, TailSize>& tail)
+    -> std::array<const char*, HeadSize + TailSize>
+{
+    std::array<const char*, HeadSize + TailSize> keys{};
+    for(std::size_t i = 0; i < HeadSize; ++i)
     {
-        keys[i] = UI_FONT_KEYS[i];
+        keys[i] = head[i];
     }
-    keys[UI_FONT_KEYS.size()] = TEXT_DEFAULT_FONT_KEY;
-    keys[UI_FONT_KEYS.size() + 1] = UI_BASE_STYLE_SHEET_KEY;
-    keys[UI_FONT_KEYS.size() + 2] = SPLASH_DOCUMENT_KEY;
+    for(std::size_t i = 0; i < TailSize; ++i)
+    {
+        keys[HeadSize + i] = tail[i];
+    }
     return keys;
-}();
+}
+} // namespace detail
+
+/// Every key above: what the engine loads by path from those folders.
+inline constexpr auto ENGINE_LOADED_KEYS =
+    detail::join_keys(UI_FONT_KEYS, std::array{TEXT_DEFAULT_FONT_KEY, UI_BASE_STYLE_SHEET_KEY, SPLASH_DOCUMENT_KEY});
 
 } // namespace unravel

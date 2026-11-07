@@ -1,11 +1,11 @@
 #pragma once
 
 #include "deploy_settings.h"
+#include "variant_cook.h"
 
 #include <engine/assets/asset_storage.h>
 #include <filesystem/filesystem.h>
 
-#include <cstddef>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -55,7 +55,8 @@ struct shader_cook_plan
 /**
  * @brief What a deploy with `params` cooks: the engine's shaders and the project's, for the renderers the profile
  * ships and the editor does not compile for itself; nothing for a profile whose renderers it compiles.
- * @param engine_database The engine's asset index, which ships whole.
+ * @param engine_database The engine's asset index. Every engine shader ships: the content selection decides only
+ * the engine's fonts and UI files.
  * @param app_database The project's asset index.
  * @param left_out The path keys (fs::make_path_key) of the project assets the content selection leaves out.
  */
@@ -65,27 +66,12 @@ auto make_shader_cook_plan(const fs::path& project_root,
                            const asset_database::database_t& app_database,
                            const std::unordered_set<std::string>& left_out) -> shader_cook_plan;
 
-/// What cooking did, for the log and the tests.
-struct shader_cook_report
-{
-    /// Cooked files the deploy ships: one per shipped shader and renderer.
-    std::size_t variants{};
-    /// Cooked files compiled because none was current.
-    std::size_t compiled{};
-    /// Files of the profile's shader cache deleted because nothing needed them.
-    std::size_t removed{};
-    /// Files of the profile's shader cache nothing needs that could not be deleted: a deploy would ship them.
-    std::vector<fs::path> undeletable;
-    /// The keys of the shaders that did not compile.
-    std::vector<std::string> failed;
-};
-
 /**
  * @brief Brings the profile's cooked shaders in step with the project: every shipped shader gets a file per
  * renderer whose manifest proves it current (compiled again when it is not), and every other file in the
  * profile's shader cache is deleted, so it never holds a shader that could ship stale.
  */
-auto cook_shader_variants(const shader_cook_plan& plan) -> shader_cook_report;
+auto cook_shader_variants(const shader_cook_plan& plan) -> cook_report;
 
 /// cook_shader_variants for a deploy step: logs what it did and throws with the shaders that did not compile.
 void cook_shaders(const shader_cook_plan& plan);

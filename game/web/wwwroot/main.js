@@ -6,21 +6,23 @@
 // web deploy writes next to this page, into the module's file system at the paths the engine reads them from. The
 // engine's arguments come from the page's address, one per arg= (index.html?arg=--log-level&arg=trace).
 //
-// The player's own files (user:/ and cache:/, which SDL puts under /libsdl) are kept in the browser's IndexedDB:
-// read in before the engine starts, and stored again whenever a written file is closed.
+// The player's own files (user:/ and cache:/, in the game's folder the manifest names, where SDL puts them) are kept in
+// the browser's IndexedDB, in a database of that folder, so games on one site keep their saves apart: read in before
+// the engine starts, stored again whenever a written file is closed, and at once when the page is hidden or closed.
 //
 // The game's files and the runtime's are kept in the browser's Cache Storage, so a later visit downloads only what a
 // new deploy changed: a data file under its fingerprint from the manifest, a runtime file under its name, which
 // carries its own. Each page keeps its own caches, and drops what its deploy no longer lists once the game started.
-// A page without Cache Storage (plain HTTP from another computer) downloads everything.
+// WebGPU and Cache Storage are only given to secure pages: the page is served over HTTPS, or from this computer.
 import { dotnet } from './_framework/dotnet.js';
 
 const status = document.getElementById('status');
-/// Where SDL_GetPrefPath puts the player's folders in the browser.
-const USER_ROOT = '/libsdl';
 /// What the page shows when the browser draws WebGPU on the processor (such as SwiftShader).
 const SOFTWARE_ADAPTER_NOTICE = 'This browser draws without the graphics card, so the game runs very slowly. Turn on '
   + 'hardware acceleration in the browser settings, or play in a browser that gives WebGPU the graphics card.';
+/// Data files downloaded at once: each is held twice while it goes into the cache and the file system, so fewer keep
+/// the page's memory low on a large game.
+const LOAD_CONCURRENCY = 4;
 
 function report(text) {
   status.textContent = text;
@@ -28,6 +30,9 @@ function report(text) {
 }
 
 async function createDevice() {
+  if (!globalThis.isSecureContext) {
+    throw new Error('The game needs a secure page: serve it over HTTPS, or open it from this computer.');
+  }
   if (!navigator.gpu) {
     throw new Error('This browser has no WebGPU.');
   }
@@ -69,21 +74,41 @@ async function openCache(kind) {
   }
 }
 
-/// The response for `url` from `cache` under `key`, or from the network, which then goes into the cache.
+async function download(url) {
+  const response = await fetch(url, { cache: 'no-cache' });
+  if (!response.ok) {
+    throw new Error(`${url} could not be downloaded (${response.status}).`);
+  }
+  return response;
+}
+
+/// The runtime's response for `url` from `cache` under `key`, or from the network, which then goes into the cache.
 async function fetchCached(cache, url, key, used) {
   used.add(key);
   const cached = cache ? await cache.match(key) : undefined;
   if (cached) {
     return cached;
   }
-  const response = await fetch(url, { cache: 'no-cache' });
-  if (!response.ok) {
-    throw new Error(`${url} could not be downloaded (${response.status}).`);
-  }
+  const response = await download(url);
   if (cache) {
     await cache.put(key, response.clone()).catch(() => {});
   }
   return response;
+}
+
+/// The bytes of a data file from `cache` under `key`, or from the network, then stored in the cache from the same
+/// bytes: the download is read once.
+async function fetchDataFile(cache, url, key, used) {
+  used.add(key);
+  const cached = cache ? await cache.match(key) : undefined;
+  if (cached) {
+    return new Uint8Array(await cached.arrayBuffer());
+  }
+  const bytes = new Uint8Array(await (await download(url)).arrayBuffer());
+  if (cache) {
+    await cache.put(key, new Response(bytes)).catch(() => {});
+  }
+  return bytes;
 }
 
 /// Drops what `cache` holds that this start did not use: files an older deploy had.
@@ -98,20 +123,28 @@ async function dropUnused(cache, used) {
   }
 }
 
-async function loadFiles(module, cache, used) {
-  const files = await (await fetch('data_manifest.json', { cache: 'no-cache' })).json();
+/// Runs `action` on every item, at most `limit` at a time.
+async function forEachLimited(items, limit, action) {
+  let next = 0;
+  const work = async () => {
+    while (next < items.length) {
+      await action(items[next++]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, work));
+}
+
+async function loadFiles(module, cache, used, files) {
   let loaded = 0;
-  await Promise.all(files.map(async ({ path, hash }) => {
+  await forEachLimited(files, LOAD_CONCURRENCY, async ({ path, hash }) => {
     const url = new URL(path, location.href);
-    const key = `${url.href}?fingerprint=${hash}`;
-    const bytes = new Uint8Array(await (await fetchCached(cache, url.href, key, used)).arrayBuffer());
+    const bytes = await fetchDataFile(cache, url.href, `${url.href}?fingerprint=${hash}`, used);
     const slash = path.lastIndexOf('/');
-    const folder = '/' + path.substring(0, slash);
     module.FS_createPath('/', path.substring(0, slash), true, true);
-    module.FS_createDataFile(folder, path.substring(slash + 1), bytes, true, true, true);
+    module.FS_createDataFile('/' + path.substring(0, slash), path.substring(slash + 1), bytes, true, true, true);
     loaded++;
     report(`Loading ${loaded} / ${files.length}`);
-  }));
+  });
 }
 
 /// The runtime's binary files (assemblies, the wasm module, globalization data) from the cache; its JavaScript
@@ -132,23 +165,48 @@ function syncFiles(module, populate) {
   return new Promise((resolve, reject) => module.FS.syncfs(populate, (error) => (error ? reject(error) : resolve())));
 }
 
-async function mountUserFiles(module) {
-  module.FS.mkdirTree(USER_ROOT);
-  module.FS.mount(module.FS.filesystems.IDBFS, { autoPersist: true }, USER_ROOT);
+/// Keeps the game's folder in IndexedDB and reads the stored files in. When they cannot be read, the folder stays in
+/// memory only: storing it would replace the saves it could not read. True when the folder is stored.
+async function mountUserFiles(module, folder) {
+  module.FS.mkdirTree(folder);
+  module.FS.mount(module.FS.filesystems.IDBFS, { autoPersist: true }, folder);
   try {
     await syncFiles(module, true);
+    return true;
   } catch (e) {
-    console.warn('[player] The saved files could not be read, and the game starts without them: ' + e.message);
+    console.warn('[player] The saved files could not be read, so the game starts without them and keeps what it '
+      + 'writes in memory only: ' + e.message);
+    module.FS.unmount(folder);
+    module.FS.mkdirTree(folder);
+    return false;
   }
 }
 
-// miniaudio starts the sound on the page's first click or touch, as browsers require; the first key starts it too,
-// for a game played with the keyboard.
-function unlockAudioOnKey() {
-  document.addEventListener('keydown', () => globalThis.miniaudio?.unlock(), { capture: true, once: true });
+/// A written file is stored on a timer: going hidden (another tab, the browser minimized, a phone switching apps)
+/// stores the files at once, in case the browser ends the page from there. Registered after the engine's own listener,
+/// which lets the game save first (OnApplicationPause). A tab that closes or reloads goes hidden as it unloads, after
+/// pagehide, and an unloading page cannot finish the store, which IndexedDB makes asynchronous: both try, no more.
+function storeUserFilesWhenHidden(module) {
+  const store = () => module.FS.syncfs(false, (error) => error && console.warn('[player] ' + error));
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && store());
+  window.addEventListener('pagehide', store);
 }
 
-try {
+/// miniaudio starts the sound on the page's first click or touch, as browsers require; a key starts it too, for a game
+/// played with the keyboard. A key that is no user activation (Escape) cannot start it, so the page keeps listening
+/// until one does.
+function unlockAudioOnKey() {
+  const unlock = () => {
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      return;
+    }
+    globalThis.miniaudio?.unlock();
+    document.removeEventListener('keydown', unlock, true);
+  };
+  document.addEventListener('keydown', unlock, true);
+}
+
+async function start() {
   report('Starting WebGPU');
   const { device, isSoftware } = await createDevice();
   report('Starting .NET');
@@ -161,22 +219,34 @@ try {
     .withResourceLoader(loadRuntimeResource(runtimeCache, usedRuntime))
     .withApplicationArgumentsFromQuery()
     .create();
-  const module = runtime.Module ?? globalThis.getDotnetRuntime(0).Module;
-  await loadFiles(module, dataCache, usedData);
-  await mountUserFiles(module);
+  const module = runtime.Module;
+  const manifest = await (await download('data_manifest.json')).json();
+  await loadFiles(module, dataCache, usedData, manifest.files);
+  const isStored = await mountUserFiles(module, manifest.user_folder);
   report('Starting the engine');
   const result = await runtime.runMain();
   if (result !== 0) {
     throw new Error(`The engine did not start (${result}).`);
   }
   status.remove();
+  if (isStored) {
+    storeUserFilesWhenHidden(module);
+  }
   unlockAudioOnKey();
   if (isSoftware) {
     showNotice(SOFTWARE_ADAPTER_NOTICE);
   }
   console.log('[player] started');
-  await Promise.all([dropUnused(runtimeCache, usedRuntime), dropUnused(dataCache, usedData)]);
+  return () => Promise.all([dropUnused(runtimeCache, usedRuntime), dropUnused(dataCache, usedData)]);
+}
+
+let dropUnusedFiles = null;
+try {
+  dropUnusedFiles = await start();
 } catch (e) {
   report('The game could not start: ' + e.message);
   console.error(e);
+}
+if (dropUnusedFiles) {
+  dropUnusedFiles().catch((e) => console.warn('[player] Older cached files could not be dropped: ' + e.message));
 }

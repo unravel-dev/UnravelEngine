@@ -37,6 +37,15 @@ auto make_signature(const deploy_settings& params, const tree_view& view, const 
     return seed;
 }
 
+/// The name of the top row that holds the engine's assets.
+constexpr const char* ENGINE_FOLDER_NAME = "Engine";
+
+/// Whether `key` lies inside the data folder `folder_key` (a key without a trailing slash).
+auto is_under_data_folder(const std::string& key, const std::string& folder_key) -> bool
+{
+    return key.size() > folder_key.size() && key.compare(0, folder_key.size(), folder_key) == 0 && key[folder_key.size()] == '/';
+}
+
 void reset_counts(tree_node& node)
 {
     node.asset_count = 0;
@@ -63,17 +72,26 @@ void content_tree::build(const content& found)
     nodes_.clear();
     signature_ = 0;
     const std::string root_key = ex::get_data_directory(CONTENT_PROTOCOL);
+    const std::string engine_key = ex::get_data_directory(ENGINE_PROTOCOL);
     nodes_.push_back({get_key_name(root_key), root_key});
     std::unordered_map<std::string, std::size_t> folders{{root_key, 0}};
+    std::size_t engine_folder = 0;
     for(std::size_t i = 0; i < found.entries.size(); ++i)
     {
         const auto& key = found.entries[i].key;
-        if(key.compare(0, root_key.size() + 1, root_key + "/") != 0)
+        const bool is_project_key = is_under_data_folder(key, root_key);
+        if(!is_project_key && !is_under_data_folder(key, engine_key))
         {
             continue;
         }
-        std::size_t parent = 0;
-        std::size_t start = root_key.size() + 1;
+        if(!is_project_key && engine_folder == 0)
+        {
+            nodes_.push_back({ENGINE_FOLDER_NAME, engine_key});
+            engine_folder = nodes_.size() - 1;
+            nodes_.front().children.push_back(engine_folder);
+        }
+        std::size_t parent = is_project_key ? 0 : engine_folder;
+        std::size_t start = (is_project_key ? root_key : engine_key).size() + 1;
         for(std::size_t slash = key.find('/', start); slash != std::string::npos; slash = key.find('/', start))
         {
             const auto folder_key = key.substr(0, slash);
@@ -91,6 +109,17 @@ void content_tree::build(const content& found)
         nodes_[parent].children.push_back(nodes_.size() - 1);
     }
     sort_children();
+    place_last(engine_folder);
+}
+
+void content_tree::place_last(std::size_t top_folder)
+{
+    auto& top_rows = nodes_.front().children;
+    const auto found = std::find(top_rows.begin(), top_rows.end(), top_folder);
+    if(found != top_rows.end())
+    {
+        std::rotate(found, std::next(found), top_rows.end());
+    }
 }
 
 void content_tree::sort_children()

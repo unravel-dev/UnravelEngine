@@ -433,8 +433,8 @@ REFLECT(web_deploy_settings)
                             "computers read. Other computers decode the textures when they load, into\n"
                             "four times the memory.\n"
                             "ETC2: read by Android phones, at a lower quality.\n\n"
-                            "The deploy compresses the project's textures for this profile and keeps\n"
-                            "them in the project's cache/profiles folder; the engine's own stay BC."},
+                            "The deploy compresses the project's textures and the engine's for this\n"
+                            "profile and keeps them in the project's cache/profiles folder."},
         });
 }
 

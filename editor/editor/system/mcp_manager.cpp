@@ -1,6 +1,7 @@
 #include "mcp_manager.h"
 
 #include "mcp/mcp_protocol.h"
+#include "local_http.h"
 
 #include <logging/logging.h>
 #include <version/version.h>
@@ -14,7 +15,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <utility>
 #include <vector>
 
@@ -37,50 +37,14 @@ namespace
 /// revision when it is one of these, else with the newest.
 constexpr std::array<hpp::string_view, 3> k_protocol_versions{"2025-06-18", "2025-03-26", "2024-11-05"};
 
-/// The host part of an Origin ("http://localhost:3000") or Host ("127.0.0.1:27182") value.
-auto host_of(std::string value) -> std::string
-{
-    const auto scheme = value.find("://");
-    if(scheme != std::string::npos)
-    {
-        value = value.substr(scheme + 3);
-    }
-    if(!value.empty() && value.front() == '[')
-    {
-        return value.substr(0, value.find(']') + 1);
-    }
-    return value.substr(0, value.find_first_of(":/"));
-}
-
-auto is_local_host(const std::string& host) -> bool
-{
-    std::string lower(host);
-    std::transform(lower.begin(),
-                   lower.end(),
-                   lower.begin(),
-                   [](unsigned char c)
-                   {
-                       return static_cast<char>(std::tolower(c));
-                   });
-    return lower == "127.0.0.1" || lower == "localhost" || lower == "[::1]";
-}
-
 /**
- * @brief Whether a request may reach the tools. Local MCP clients send no Origin and name the
- *        loopback host; a web page sends its own Origin, and a DNS-rebinding page its own Host,
- *        so both are refused - otherwise any site open in a browser could call every tool.
- *        A JSON content type keeps plain HTML forms out as well.
+ * @brief Whether a request may reach the tools: it comes from this computer (is_loopback_request), and a JSON content
+ *        type keeps plain HTML forms out as well.
  */
 auto is_allowed_request(const httplib::Request& req, std::string& refusal) -> bool
 {
-    if(req.has_header("Origin") && !is_local_host(host_of(req.get_header_value("Origin"))))
+    if(!is_loopback_request(req, refusal))
     {
-        refusal = "Requests from web pages are refused (Origin " + req.get_header_value("Origin") + ")";
-        return false;
-    }
-    if(req.has_header("Host") && !is_local_host(host_of(req.get_header_value("Host"))))
-    {
-        refusal = "Requests must address the loopback host (Host " + req.get_header_value("Host") + ")";
         return false;
     }
     if(req.get_header_value("Content-Type").rfind("application/json", 0) != 0)

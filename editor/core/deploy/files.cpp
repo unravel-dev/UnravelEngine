@@ -29,6 +29,33 @@ auto get_data_prefix(const std::string& protocol) -> std::string
     return ex::get_data_directory(protocol) + "/";
 }
 
+using file_visitor = std::function<void(const fs::path& file, const fs::path& relative)>;
+
+/// Calls `visit` with each regular file under `folder` and its path relative to `folder`; throws when the listing
+/// fails.
+void for_each_file_or_throw(const fs::path& folder, const file_visitor& visit)
+{
+    fs::error_code ec;
+    for(fs::recursive_directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_regular_file(ec))
+        {
+            visit(it->path(), it->path().lexically_relative(folder));
+        }
+    }
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("Listing {} failed: {}", folder.generic_string(), ec.message()));
+    }
+}
+
+/// Whether a cooked folder may hold files: a deploy names one for each kind of variant, made or not.
+auto is_cooked_folder_present(const fs::path& folder) -> bool
+{
+    fs::error_code ec;
+    return !folder.empty() && fs::exists(folder, ec);
+}
+
 /// The cooked files `is_shipped` keeps that have no compiled file to stand in for, each named once: an earlier
 /// folder's wins.
 void add_cooked_only_inputs(const fs::path& compiled,
@@ -40,19 +67,21 @@ void add_cooked_only_inputs(const fs::path& compiled,
     std::set<std::string> added;
     for(const auto& folder : cooked)
     {
-        fs::error_code ec;
-        for(fs::recursive_directory_iterator it(folder, ec), end; !folder.empty() && !ec && it != end; it.increment(ec))
+        if(!is_cooked_folder_present(folder))
         {
-            const auto& file = it->path();
-            const auto relative = file.lexically_relative(folder);
-            fs::error_code exists_ec;
-            if(!it->is_regular_file(ec) || is_loose_only_file(file) || !is_shipped(file, relative) ||
-               fs::exists(compiled / relative, exists_ec) || !added.insert(relative.generic_string()).second)
-            {
-                continue;
-            }
-            inputs.push_back({compiled_folder + "/" + relative.generic_string(), file});
+            continue;
         }
+        for_each_file_or_throw(folder,
+                               [&](const fs::path& file, const fs::path& relative)
+                               {
+                                   fs::error_code ec;
+                                   if(is_loose_only_file(file) || !is_shipped(file, relative) ||
+                                      fs::exists(compiled / relative, ec) || !added.insert(relative.generic_string()).second)
+                                   {
+                                       return;
+                                   }
+                                   inputs.push_back({compiled_folder + "/" + relative.generic_string(), file});
+                               });
     }
 }
 } // namespace
@@ -185,22 +214,16 @@ auto collect_pack_inputs(const fs::path& compiled,
                          const compiled_file_filter& is_shipped) -> std::vector<fs::pack_input>
 {
     std::vector<fs::pack_input> inputs;
-    fs::error_code ec;
     const auto compiled_folder = ex::get_compiled_directory_no_slash();
-    for(fs::recursive_directory_iterator it(compiled, ec), end; !ec && it != end; it.increment(ec))
-    {
-        const auto& file = it->path();
-        const auto relative = file.lexically_relative(compiled);
-        if(!it->is_regular_file(ec) || is_loose_only_file(file) || !is_shipped(file, relative))
-        {
-            continue;
-        }
-        inputs.push_back({compiled_folder + "/" + relative.generic_string(), get_shipped_variant(cooked, relative, file)});
-    }
-    if(ec)
-    {
-        throw std::runtime_error(fmt::format("Listing {} failed: {}", compiled.generic_string(), ec.message()));
-    }
+    for_each_file_or_throw(compiled,
+                           [&](const fs::path& file, const fs::path& relative)
+                           {
+                               if(!is_loose_only_file(file) && is_shipped(file, relative))
+                               {
+                                   inputs.push_back({compiled_folder + "/" + relative.generic_string(),
+                                                     get_shipped_variant(cooked, relative, file)});
+                               }
+                           });
     add_cooked_only_inputs(compiled, cooked, is_shipped, inputs);
     inputs.push_back({ex::get_asset_index_file_name(), index});
     std::sort(inputs.begin(),
@@ -293,19 +316,18 @@ void copy_cooked_or_throw(const cooked_folders& cooked, const fs::path& destinat
     // The last folder first, so an earlier folder's variant is the one copied last.
     for(auto folder = cooked.rbegin(); folder != cooked.rend(); ++folder)
     {
-        if(folder->empty())
+        if(!is_cooked_folder_present(*folder))
         {
             continue;
         }
-        fs::error_code ec;
-        for(fs::recursive_directory_iterator it(*folder, ec), end; !ec && it != end; it.increment(ec))
-        {
-            const auto relative = it->path().lexically_relative(*folder);
-            if(it->is_regular_file(ec) && is_shipped(it->path(), relative))
-            {
-                copy_file_or_throw(it->path(), destination / relative);
-            }
-        }
+        for_each_file_or_throw(*folder,
+                               [&](const fs::path& file, const fs::path& relative)
+                               {
+                                   if(is_shipped(file, relative))
+                                   {
+                                       copy_file_or_throw(file, destination / relative);
+                                   }
+                               });
     }
 }
 

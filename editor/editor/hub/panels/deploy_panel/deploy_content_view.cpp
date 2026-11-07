@@ -937,6 +937,7 @@ void deploy_content_view::draw_status_cell(const deployment::tree_node& node, co
             break;
         case deployment::content_reason::engine:
             draw_cell_label(ICON_MDI_COG_OUTLINE, widgets::get_accent_u32(), "Loaded by the engine", text);
+            draw_tooltip_text("The engine needs it, whatever the game uses.");
             break;
         case deployment::content_reason::included:
             draw_cell_label(ICON_MDI_PLUS_CIRCLE_OUTLINE, ADDED_COLOR, "Added by you", text);

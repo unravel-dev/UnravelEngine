@@ -4,6 +4,8 @@
 #include "deploy_runtime.h"
 #include "web_preview_server.h"
 
+#include <asset_compiler/audio_compression.h>
+#include <deploy/audio_variants.h>
 #include <deploy/content.h>
 #include <deploy/dependencies.h>
 #include <deploy/files.h>
@@ -22,7 +24,6 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/meta/settings/settings.hpp>
-#include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <ospp/url.h>
 #include <process/process.h>
@@ -31,7 +32,6 @@
 #include <engine/assets/impl/asset_writer.h>
 
 #include <algorithm>
-#include <cctype>
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -47,6 +47,7 @@ namespace
 constexpr const char* STEP_CHECK_ASSETS = "Checking Assets";
 constexpr const char* STEP_COOK = "Cooking Prefabs";
 constexpr const char* STEP_COOK_TEXTURES = "Cooking Textures";
+constexpr const char* STEP_COOK_AUDIO = "Cooking Audio";
 constexpr const char* STEP_COOK_SHADERS = "Cooking Shaders";
 constexpr const char* STEP_DEPENDENCIES = "Dependencies";
 constexpr const char* STEP_SETTINGS = "Project Settings";
@@ -93,6 +94,8 @@ struct deploy_plan
     /// The project's textures and the engine's, each cooked to the profile's formats.
     texture_cook_plan textures;
     texture_cook_plan engine_textures;
+    /// The project's audio clips the profile compiles differently from the editor.
+    audio_cook_plan audio;
     shader_cook_plan shaders;
     /// Android deploys only: the package built from the deployed data.
     android_package_plan android;
@@ -286,26 +289,36 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
                                                   am.get_database_snapshot("engine:/"),
                                                   left_out,
                                                   asset_compiler::get_editor_texture_target_for("engine:/"));
+    plan.audio = make_audio_cook_plan(get_project_root(),
+                                      params,
+                                      plan.runtime_settings,
+                                      am.get_database_snapshot("app:/"),
+                                      left_out,
+                                      asset_compiler::get_editor_audio_defaults());
     plan.shaders = make_shader_cook_plan(get_project_root(),
                                          params,
                                          am.get_database_snapshot("engine:/"),
                                          am.get_database_snapshot("app:/"),
                                          left_out);
-    // The cooked prefabs, the texture variants and the cooked shaders: no file is in two of them, so their order
-    // does not matter.
+    // The cooked prefabs, the texture and audio variants and the cooked shaders: no file is in two of them, so their
+    // order does not matter.
     const auto engine_shaders = plan.shaders.has_work() ? plan.shaders.protocols.front().variants : fs::path{};
     const auto app_shaders = plan.shaders.has_work() ? plan.shaders.protocols.back().variants : fs::path{};
     plan.app = make_protocol_job(am,
                                  data_params,
                                  CONTENT_PROTOCOL,
-                                 {staging / CONTENT_PROTOCOL, plan.textures.variants, app_shaders},
+                                 {staging / CONTENT_PROTOCOL, plan.textures.variants, plan.audio.variants, app_shaders},
                                  left_out);
     plan.engine = make_protocol_job(am,
                                     data_params,
                                     ENGINE_PROTOCOL,
                                     {staging / ENGINE_PROTOCOL, plan.engine_textures.variants, engine_shaders},
                                     std::move(left_out));
-    plan.runtime = make_runtime_plan(ctx, data_params);
+    // The browser player carries its .NET runtime and the script bridge.
+    if(!is_web(plan))
+    {
+        plan.runtime = make_runtime_plan(ctx, data_params);
+    }
     plan.cook_staging = staging;
     if(is_android(plan))
     {
@@ -446,7 +459,8 @@ void deploy_web_site(const deploy_plan& plan)
     {
         copy_web_player(plan.web_player, plan.output);
     }
-    write_web_data_manifest(plan.output);
+    const auto& app = plan.runtime_settings.app;
+    write_web_data_manifest(plan.output, get_web_user_folder(app.company, app.product));
 }
 
 auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<void>
@@ -462,13 +476,9 @@ auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<
         .share();
 }
 
-/// A step that packs what cooking steps made, so it starts once they all succeeded; at once without any.
-auto schedule_after_cooks(threader& th, const deploy_step& step, const deploy_jobs& cooks) -> tpp::shared_future<void>
+/// A step that packs what cooking steps made, so it starts once they all succeeded.
+auto schedule_after_cooks(const deploy_step& step, const deploy_jobs& cooks) -> tpp::shared_future<void>
 {
-    if(cooks.empty())
-    {
-        return schedule_step(th, step);
-    }
     std::vector<tpp::shared_future<void>> futures;
     for(const auto& cook : cooks)
     {
@@ -502,43 +512,21 @@ auto has_failed_step(const std::vector<tpp::shared_future<void>>& steps) -> bool
                        });
 }
 
-/// The page's address with the run arguments the page hands the engine, one per arg= (game/web/wwwroot/main.js).
-auto make_web_address(const std::string& address, const std::vector<std::string>& arguments) -> std::string
-{
-    constexpr const char* HEX_DIGITS = "0123456789ABCDEF";
-    std::string query;
-    for(const auto& argument : arguments)
-    {
-        query += query.empty() ? "?arg=" : "&arg=";
-        for(const unsigned char c : argument)
-        {
-            if(std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
-            {
-                query += char(c);
-                continue;
-            }
-            query += '%';
-            query += HEX_DIGITS[c >> 4];
-            query += HEX_DIGITS[c & 0xF];
-        }
-    }
-    return address + query;
-}
-
-/// A browser loads the game only from a web server: the editor serves the deploy's folder on this computer and opens
-/// the page in the default browser.
+/// A browser loads the game only from a web server: the editor serves the deploy's folder on this computer, under a
+/// path of the project and profile, and opens the page in the default browser.
 void open_web_deploy(const deploy_plan& plan)
 {
-    const auto address = get_web_preview_server().serve(plan.output);
-    if(address.empty())
+    const auto site_path = make_web_site_path(fs::to_utf8_string(get_project_root().filename()), plan.params.profile);
+    const auto origin = get_web_preview_server().serve(plan.output, site_path);
+    if(origin.empty())
     {
         APPLOG_ERROR("Deploy and Run could not serve {}: no port on this computer could be opened.",
                      plan.output.generic_string());
         fs::show_in_graphical_env(plan.output);
         return;
     }
-    const auto page = make_web_address(address, split_run_arguments(plan.params.deploy_run_arguments));
-    APPLOG_INFO("Serving {} at {} until the editor closes.", plan.output.generic_string(), address);
+    const auto page = make_web_page_address(origin, site_path, split_run_arguments(plan.params.deploy_run_arguments));
+    APPLOG_INFO("Serving {} at {} until the editor closes.", plan.output.generic_string(), page);
     if(!os::url::open(page))
     {
         APPLOG_WARNING("Open {} in a browser to play the deploy.", page);
@@ -667,7 +655,7 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
         jobs.push_back({name, job});
         futures.push_back(job);
     };
-    // Each data step packs what the cooks of its protocol made: its textures and its shaders.
+    // Each data step packs what the cooks of its protocol made: its textures, the project's audio, and its shaders.
     const auto textures_cook = schedule_step(th,
                                              {STEP_COOK_TEXTURES,
                                               [plan]()
@@ -675,14 +663,16 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
                                                   cook_textures(plan->textures);
                                                   cook_textures(plan->engine_textures);
                                               }});
+    const auto audio_cook = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
     deploy_jobs engine_cooks{{STEP_COOK_TEXTURES, textures_cook}};
-    deploy_jobs app_cooks{{STEP_COOK_TEXTURES, textures_cook}};
+    deploy_jobs app_cooks{{STEP_COOK_TEXTURES, textures_cook}, {STEP_COOK_AUDIO, audio_cook}};
     if(plan->shaders.has_work())
     {
         engine_cooks.push_back({STEP_COOK_SHADERS, schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }})});
         app_cooks.push_back(engine_cooks.back());
     }
     add_job(STEP_COOK_TEXTURES, textures_cook);
+    add_job(STEP_COOK_AUDIO, audio_cook);
     if(plan->shaders.has_work())
     {
         add_job(STEP_COOK_SHADERS, engine_cooks.back().job);
@@ -691,8 +681,8 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
     {
         add_job(step.name, schedule_step(th, step));
     }
-    add_job(STEP_ENGINE_DATA, schedule_after_cooks(th, {STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, engine_cooks));
-    add_job(STEP_PROJECT_DATA, schedule_after_cooks(th, {STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, app_cooks));
+    add_job(STEP_ENGINE_DATA, schedule_after_cooks({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, engine_cooks));
+    add_job(STEP_PROJECT_DATA, schedule_after_cooks({STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, app_cooks));
     if(is_web(*plan))
     {
         add_job(STEP_WEB_PLAYER, schedule_web_player(plan, futures));

@@ -18,7 +18,7 @@ namespace unravel::deployment
  * @brief A project's settings profiles, kept in step with their files: every change is written at once.
  *
  * Changing a profile's name moves everything named after it: its folder, its kept releases
- * (releases/<profile>) and its texture cache (cache/profiles/<profile>). Its build folder under the deploy
+ * (releases/<profile>) and its cache (cache/profiles/<profile>). Its build folder under the deploy
  * location keeps its name, since it holds the user's builds.
  */
 class project_profiles
@@ -30,7 +30,7 @@ public:
      * A project from before profiles gets its first ones from deploy/deploy.cfg (make_profiles_from_legacy),
      * and deploy.cfg is kept as deploy.cfg.before-profiles. A project with no profile gets Desktop. Releases
      * kept before profiles, and the release their deploys patched, become the first desktop profile's
-     * whenever they are found (a teammate's project from before profiles merged in, say). The texture caches
+     * whenever they are found (a teammate's project from before profiles merged in, say). The caches
      * of profiles that no longer exist are deleted.
      * @param base_deploy The shared deploy settings as loaded; their patch release from before profiles
      * moves into a profile. The caller saves them, unless has_unkept_legacy_settings.
@@ -66,13 +66,14 @@ public:
     auto create(const std::string& name, target_platform platform, const settings& base_settings, const std::string& copy_from = {})
         -> result;
     auto rename(const std::string& name, const std::string& new_name) -> result;
-    /// Deletes a profile, its kept releases and its texture cache. The last profile cannot be deleted.
+    /// Deletes a profile, its kept releases and its cache. The last profile cannot be deleted.
     auto remove(const std::string& name) -> result;
 
     /// Replaces an Android profile's identity, signing and texture formats.
     auto set_android(const std::string& name, const android_deploy_settings& android) -> result;
     /// Replaces a desktop profile's icon and Steam settings.
     auto set_desktop(const std::string& name, const desktop_deploy_settings& desktop) -> result;
+    /// Replaces a web profile's texture formats.
     auto set_web(const std::string& name, const web_deploy_settings& web) -> result;
 
     /**

@@ -16,7 +16,9 @@
  *     binary files not read, missing scenes reported, compiled sizes;
  *   - the walk over the engine's assets: those outside the folders it decides and those the engine loads
  *     always ship; engine fonts and UI files ship when a scene, a style sheet or a script uses them;
- *     relative links stay in the engine; the content tree lists the project's assets only;
+ *     relative links stay in the engine, and one that leaves it is not followed; rules reach engine assets;
+ *     scripts building paths in engine folders that always ship raise no note; the content tree lists the
+ *     engine's assets under a last top row; every key the engine loads by path is a file of engine_data;
  *   - the content tree: counts, folders first, rows of open folders only, search and filter rows,
  *     left out but used assets counted;
  *   - files: classification, compiled paths, a target's shader variants, pack inputs with cooked
@@ -519,7 +521,82 @@ void test_walk_engine(const fs::path& root)
     deployment::content_tree tree;
     tree.build(found);
     tree.update(params, {});
-    check(tree.get_root().asset_count == 2, "the content tree lists the project's assets only");
+    std::vector<std::size_t> rows;
+    tree.collect_rows([](const deployment::tree_node&) { return false; }, rows);
+    const auto engine_count = std::size_t(std::count_if(found.entries.begin(),
+                                                        found.entries.end(),
+                                                        [](const deployment::content_entry& entry)
+                                                        {
+                                                            return entry.key.rfind("engine:/data/", 0) == 0;
+                                                        }));
+    const auto& engine_row = tree.get_nodes()[rows.back()];
+    check(engine_row.name == "Engine" && engine_row.key == "engine:/data" && engine_row.asset_count == engine_count &&
+              engine_row.shipped_count + 2 == engine_count && tree.get_root().asset_count == 2 + engine_count,
+          "the content tree lists the engine's assets under a last top row, the unused fonts and UI files left out");
+}
+
+/// What the engine walk does at its edges: links out of the engine, rules on engine keys, paths scripts build.
+void test_walk_engine_edges(const fs::path& root)
+{
+    std::printf("test_walk_engine_edges\n");
+    using reason = deployment::content_reason;
+    auto project = make_engine_walk_project(root);
+    const auto engine_root = root / "engine";
+    add_asset(project.source.database, make_uid("30000000-0000-4000-8000-000000000010"), "app:/data/ui/lost.rcss");
+    write_text(engine_root / "data/ui/splash.rhtml",
+               "<rml><head><link type=\"text/rcss\" href=\"splash.rcss\"/>"
+               "<link type=\"text/rcss\" href=\"../../../project/data/ui/lost.rcss\"/></head></rml>");
+    write_text(engine_root / "data/scripts/SampleHud.cs",
+               "class SampleHud { const string Layout = \"engine:/data/ui/sample_hud.rhtml\";\n"
+               "string Texture(string name) => $\"engine:/data/textures/{name}.dds\";\n"
+               "string Font(string style) => $\"engine:/data/fonts/Inter/static/{style}.ttf\"; }");
+    const auto found = deployment::detect_content(project.source, {}, project.startup_scene);
+    check(is_unused(found, "app:/data/ui/lost.rcss") &&
+              is_used_by(found, "engine:/data/ui/splash.rcss", reason::referenced, unravel::SPLASH_DOCUMENT_KEY),
+          "an engine document's relative link that leaves the engine is not followed");
+    const bool names_textures = std::any_of(found.named_folders.begin(),
+                                            found.named_folders.end(),
+                                            [](const deployment::named_folder& named)
+                                            {
+                                                return named.key == "engine:/data/textures";
+                                            });
+    check(!names_textures, "a script building paths in an engine folder that always ships raises no note");
+    check(is_named_by(found, "engine:/data/fonts/Inter/static", "engine:/data/scripts/SampleHud.cs"),
+          "in one the walk decides, it does");
+    deploy_settings params;
+    params.deploy_only_used_assets = true;
+    params.deploy_excluded = {"engine:/data/textures/default_color.dds"};
+    params.deploy_included = {"engine:/data/fonts/Inter/static/Inter-Thin.ttf"};
+    const auto left_out = deployment::get_left_out_keys(params, found);
+    check(left_out.contains(fs::make_path_key("engine:/data/textures/default_color.dds")) &&
+              !left_out.contains(fs::make_path_key("engine:/data/fonts/Inter/static/Inter-Thin.ttf")),
+          "rules reach engine assets: an exclude leaves out one that always ships, an include ships an unused font");
+}
+
+/// The keys the engine loads by path are files of engine_data, in the folders the walk decides.
+void test_engine_loaded_keys()
+{
+    std::printf("test_engine_loaded_keys\n");
+#if !defined(ENGINE_DATA_DIR)
+    std::printf("  SKIP: the engine_data location is not configured\n");
+#else
+    const fs::path engine_data = ENGINE_DATA_DIR;
+    const std::string engine_root = "engine:/";
+    for(const char* key : unravel::ENGINE_LOADED_KEYS)
+    {
+        const std::string text = key;
+        check(text.compare(0, engine_root.size(), engine_root) == 0 &&
+                  fs::exists(engine_data / fs::from_utf8_string(text.substr(engine_root.size()))),
+              text + " is a file of engine_data");
+        const bool is_decided = std::any_of(unravel::ENGINE_FOLDERS_SHIPPED_WHEN_USED.begin(),
+                                            unravel::ENGINE_FOLDERS_SHIPPED_WHEN_USED.end(),
+                                            [&text](const char* folder)
+                                            {
+                                                return deployment::is_key_under(text, folder);
+                                            });
+        check(is_decided, text + " lies in a folder the walk decides, which is why it is listed");
+    }
+#endif
 }
 
 void test_tree(const deployment::content& found)
@@ -967,17 +1044,45 @@ void test_web_site(const fs::path& root)
           "the page and the runtime are copied beside the data");
     check(!is_present(site / "_framework/stale.wasm"), "runtime files an older player had are removed");
     check(read_text(site / "data/engine/content.pak") == "engine pack", "the deployed data stays");
-    deployment::write_web_data_manifest(site);
+    const auto user_folder = deployment::get_web_user_folder("Studio", "Game");
+    deployment::write_web_data_manifest(site, user_folder);
     const auto settings_hash = fs::hash_file_fingerprint(site / "data/app/settings/settings.cfg", false);
     const auto pack_hash = fs::hash_file_fingerprint(site / "data/engine/content.pak", false);
     check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME) ==
-              "[\n  {\"path\": \"data/app/settings/settings.cfg\", \"hash\": \"" + settings_hash +
-                  "\"},\n  {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash + "\"}\n]\n",
-          "the manifest lists the data's files by name with their content's fingerprint, as the page fetches and "
-          "caches them");
+              "{\n  \"user_folder\": \"/libsdl/Studio/Game\",\n  \"files\": [\n    {\"path\": \"data/app/settings/settings.cfg\", "
+              "\"hash\": \"" + settings_hash + "\"},\n    {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash +
+                  "\"}\n  ]\n}\n",
+          "the manifest names the game's folder and lists the data's files by name with their content's fingerprint, as "
+          "the page fetches and caches them");
     write_text(site / "data/engine/content.pak", "another engine pack");
-    check(deployment::make_web_data_manifest(site).find(pack_hash) == std::string::npos,
+    check(deployment::make_web_data_manifest(site, user_folder).find(pack_hash) == std::string::npos,
           "a changed file has another fingerprint, so the page fetches it again");
+    const std::string accented = "data/app/compiled/men\xc3\xbc.asset";
+    write_text(site / fs::from_utf8_string(accented), "menu");
+    const auto accented_hash = fs::hash_file_fingerprint(site / fs::from_utf8_string(accented), false);
+    check(!accented_hash.empty() &&
+              deployment::make_web_data_manifest(site, user_folder).find("\"" + accented + "\", \"hash\": \"" + accented_hash) !=
+                  std::string::npos,
+          "a file named outside ASCII is listed in UTF-8 with its own fingerprint");
+}
+
+void test_web_addresses()
+{
+    std::printf("test_web_addresses\n");
+    check(deployment::get_web_user_folder("Studio", "Game") == "/libsdl/Studio/Game" &&
+              deployment::get_web_user_folder("", "Game") == "/libsdl/Game",
+          "the game's folder is SDL's preferences folder in the browser");
+    check(deployment::get_web_user_folder("Studio", "") == "/libsdl/Studio/app",
+          "a project without a product takes the player's program name, as the deployed game does");
+    check(deployment::encode_url_part("a-z_0.9~") == "a-z_0.9~" && deployment::encode_url_part("a b/\xc3\xbc") == "a%20b%2F%C3%BC",
+          "unreserved characters stay; every other byte is %XX");
+    const auto site = deployment::make_web_site_path("My Game", "Web");
+    check(site == "/My Game/Web/", "a site path is the project and the profile");
+    check(deployment::make_web_page_address("http://127.0.0.1:8742", site, {}) == "http://127.0.0.1:8742/My%20Game/Web/",
+          "the page's address encodes each part of the path, slashes kept");
+    check(deployment::make_web_page_address("http://127.0.0.1:8742", site, {"--log-level", "a&b c"}) ==
+              "http://127.0.0.1:8742/My%20Game/Web/?arg=--log-level&arg=a%26b%20c",
+          "run arguments go one per arg=, encoded");
 }
 
 void test_write_text(const fs::path& root)
@@ -1975,6 +2080,8 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_walk(walked);
         test_walk_shipped_settings(project);
         test_walk_engine(temp / "walk_engine");
+        test_walk_engine_edges(temp / "walk_engine_edges");
+        test_engine_loaded_keys();
         test_tree(walked);
         test_file_classification(temp / "files");
         test_shader_variants(temp / "variants");
@@ -1994,6 +2101,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_player_version(temp / "player");
         test_web_template(temp / "web_template");
         test_web_site(temp / "web_site");
+        test_web_addresses();
         test_write_text(temp / "write_text");
         test_gradle_arguments();
         test_android_permissions();

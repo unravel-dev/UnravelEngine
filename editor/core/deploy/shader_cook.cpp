@@ -4,36 +4,20 @@
 #include "profile_cache.h"
 
 #include <asset_compiler/asset_compiler.h>
-#include <concurrency/parallel.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <graphics/graphics.h>
-#include <logging/logging.h>
-
-#include <cstdint>
-#include <stdexcept>
 
 namespace unravel::deployment
 {
 namespace
 {
-/// Failed shaders named in the step's error before "and N more".
-constexpr std::size_t LISTED_FAILURES_MAX = 10;
-constexpr const char* MANIFEST_SUFFIX = ".manifest";
+constexpr cook_wording SHADER_WORDING{"shader(s)", "cooked shader file(s)", "shader cache"};
 
 /// One shader of one protocol to cook.
 struct shader_job
 {
     const shader_cook_protocol* protocol{};
     std::string key;
-};
-
-/// What cooking one shader did.
-struct shader_outcome
-{
-    /// The path keys of its cooked files under the protocol's folder, one per renderer.
-    std::vector<std::string> variants;
-    std::size_t compiled{};
-    bool has_failed{};
 };
 
 auto is_shader_key(const std::string& key) -> bool
@@ -50,14 +34,10 @@ auto get_cooked_relative_path(const fs::path& relative, const std::string& rende
     return cooked;
 }
 
-auto get_variant_key(const fs::path& relative) -> std::string
+/// Cooks one shader for each renderer: its files ship from the cache, one per renderer.
+auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_outcome
 {
-    return fs::make_path_key(relative.generic_string());
-}
-
-auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> shader_outcome
-{
-    shader_outcome outcome;
+    cook_outcome outcome;
     const auto relative = get_compiled_relative_path(job.key);
     if(relative.empty())
     {
@@ -66,7 +46,7 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> shader_
     for(const auto& renderer : plan.renderers)
     {
         const auto cooked = get_cooked_relative_path(relative, renderer);
-        outcome.variants.push_back(get_variant_key(cooked));
+        outcome.files.push_back(get_cache_file_key(cooked));
         const auto output = job.protocol->variants / cooked;
         if(asset_compiler::is_shader_compiled(job.key, output))
         {
@@ -87,12 +67,6 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> shader_
     return outcome;
 }
 
-void keep_variant(std::unordered_set<std::string>& kept, const std::string& variant)
-{
-    kept.insert(variant);
-    kept.insert(variant + MANIFEST_SUFFIX);
-}
-
 /// A left-out shader's cooked files stay for a deploy that ships it, which checks them first.
 void keep_left_out(const shader_cook_plan& plan, const shader_cook_protocol& protocol, std::unordered_set<std::string>& kept)
 {
@@ -105,7 +79,7 @@ void keep_left_out(const shader_cook_plan& plan, const shader_cook_protocol& pro
         }
         for(const auto& renderer : plan.renderers)
         {
-            keep_variant(kept, get_variant_key(get_cooked_relative_path(relative, renderer)));
+            keep_cache_file(kept, get_cache_file_key(get_cooked_relative_path(relative, renderer)));
         }
     }
 }
@@ -123,43 +97,29 @@ auto make_jobs(const shader_cook_plan& plan) -> std::vector<shader_job>
     return jobs;
 }
 
-auto get_source_size(const std::string& key) -> std::uintmax_t
+auto cook_jobs(const shader_cook_plan& plan, const std::vector<shader_job>& jobs) -> std::vector<cook_outcome>
 {
-    fs::error_code ec;
-    const auto size = fs::file_size(fs::resolve_protocol(key), ec);
-    return ec ? 0 : size;
-}
-
-auto cook_jobs(const shader_cook_plan& plan, const std::vector<shader_job>& jobs) -> std::vector<shader_outcome>
-{
-    std::vector<shader_outcome> outcomes(jobs.size());
-    std::vector<std::uintmax_t> costs;
-    costs.reserve(jobs.size());
+    std::vector<std::string> keys;
+    keys.reserve(jobs.size());
     for(const auto& job : jobs)
     {
-        costs.push_back(get_source_size(job.key));
+        keys.push_back(job.key);
     }
-    // A compile can hold every thread it gets for seconds: never the pool the frame's loops wait for.
-    const poolstl::background_scope background;
-    poolstl::for_each_costliest_first_par_if(true,
-                                             costs,
-                                             [&](std::size_t index)
-                                             {
-                                                 outcomes[index] = cook_shader(plan, jobs[index]);
-                                             });
-    return outcomes;
+    return cook_all(keys,
+                    [&](std::size_t index)
+                    {
+                        return cook_shader(plan, jobs[index]);
+                    });
 }
 
 /// Deletes what no shader of the protocol needs from its folder.
 void sweep_protocol(const shader_cook_plan& plan,
                     const shader_cook_protocol& protocol,
                     std::unordered_set<std::string> kept,
-                    shader_cook_report& report)
+                    cook_report& report)
 {
     keep_left_out(plan, protocol, kept);
-    auto swept = sweep_folder(protocol.variants, kept);
-    report.removed += swept.removed;
-    report.undeletable.insert(report.undeletable.end(), swept.failed.begin(), swept.failed.end());
+    sweep_cache_folder(protocol.variants, kept, report);
 }
 
 auto make_shader_cook_protocol(const fs::path& variants,
@@ -179,13 +139,6 @@ auto make_shader_cook_protocol(const fs::path& variants,
     return protocol;
 }
 
-auto describe_failures(const std::vector<std::string>& failed, const std::string& profile) -> std::string
-{
-    return fmt::format("{} shader(s) could not be compiled for profile {} (the log says why): {}",
-                       failed.size(),
-                       profile,
-                       list_keys(failed, LISTED_FAILURES_MAX));
-}
 } // namespace
 
 auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>
@@ -236,9 +189,9 @@ auto make_shader_cook_plan(const fs::path& project_root,
     return plan;
 }
 
-auto cook_shader_variants(const shader_cook_plan& plan) -> shader_cook_report
+auto cook_shader_variants(const shader_cook_plan& plan) -> cook_report
 {
-    shader_cook_report report;
+    cook_report report;
     if(!plan.has_work())
     {
         return report;
@@ -248,18 +201,7 @@ auto cook_shader_variants(const shader_cook_plan& plan) -> shader_cook_report
     std::vector<std::unordered_set<std::string>> kept(plan.protocols.size());
     for(std::size_t i = 0; i < outcomes.size(); ++i)
     {
-        const auto& outcome = outcomes[i];
-        auto& protocol_kept = kept[std::size_t(jobs[i].protocol - plan.protocols.data())];
-        for(const auto& variant : outcome.variants)
-        {
-            keep_variant(protocol_kept, variant);
-        }
-        report.variants += outcome.variants.size();
-        report.compiled += outcome.compiled;
-        if(outcome.has_failed)
-        {
-            report.failed.push_back(jobs[i].key);
-        }
+        add_outcome(jobs[i].key, outcomes[i], kept[std::size_t(jobs[i].protocol - plan.protocols.data())], report);
     }
     for(std::size_t i = 0; i < plan.protocols.size(); ++i)
     {
@@ -270,26 +212,7 @@ auto cook_shader_variants(const shader_cook_plan& plan) -> shader_cook_report
 
 void cook_shaders(const shader_cook_plan& plan)
 {
-    const auto report = cook_shader_variants(plan);
-    APPLOG_INFO("Deploy: profile {} ships {} cooked shader file(s), {} compiled now; {} file(s) of its shader cache that "
-                "nothing needs were deleted.",
-                plan.profile,
-                report.variants,
-                report.compiled,
-                report.removed);
-    if(!report.failed.empty())
-    {
-        throw std::runtime_error(describe_failures(report.failed, plan.profile));
-    }
-    if(!report.undeletable.empty())
-    {
-        throw std::runtime_error(fmt::format("{} file(s) of profile {}'s shader cache that no shader needs could not be "
-                                             "deleted, and the deploy would ship them, for example {}. Close the program "
-                                             "that holds them, then deploy again.",
-                                             report.undeletable.size(),
-                                             plan.profile,
-                                             report.undeletable.front().generic_string()));
-    }
+    report_cook_or_throw(plan.profile, cook_shader_variants(plan), SHADER_WORDING);
 }
 
 } // namespace unravel::deployment

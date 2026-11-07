@@ -63,6 +63,18 @@ auto is_shipped_when_used(const std::string& key) -> bool
                        });
 }
 
+/// Whether every engine asset under `folder` ships whatever the game uses, so a script naming it asks for nothing.
+auto is_engine_folder_always_shipped(const std::string& folder) -> bool
+{
+    return get_key_protocol(folder) == ENGINE_PROTOCOL && !is_shipped_when_used(folder) &&
+           std::none_of(ENGINE_FOLDERS_SHIPPED_WHEN_USED.begin(),
+                        ENGINE_FOLDERS_SHIPPED_WHEN_USED.end(),
+                        [&folder](const char* decided)
+                        {
+                            return is_key_under(decided, folder);
+                        });
+}
+
 /// Reads a text file whole; false for a binary, missing or oversized file. The first bytes are read
 /// first, so a binary source costs one small read.
 auto read_scannable_text_file(const fs::path& file, std::string& text) -> bool
@@ -92,10 +104,11 @@ auto read_scannable_text_file(const fs::path& file, std::string& text) -> bool
     return true;
 }
 
-auto get_compiled_size(const std::string& key, const fs::path& project_root) -> std::uint64_t
+/// The size of an asset's compiled files under `protocol_root`, the project's or the engine's folder.
+auto get_compiled_size(const std::string& key, const fs::path& protocol_root) -> std::uint64_t
 {
     std::uint64_t size = 0;
-    for(const auto& path : get_compiled_paths(key, project_root))
+    for(const auto& path : get_compiled_paths(key, protocol_root))
     {
         fs::error_code ec;
         const auto file_size = fs::file_size(path, ec);
@@ -319,7 +332,8 @@ private:
 
     void add_named_folder(const std::string& folder, const std::string& script_key)
     {
-        if(folder.empty() || is_same_key(folder, ex::get_data_directory(get_key_protocol(folder))))
+        if(folder.empty() || is_same_key(folder, ex::get_data_directory(get_key_protocol(folder))) ||
+           is_engine_folder_always_shipped(folder))
         {
             return;
         }

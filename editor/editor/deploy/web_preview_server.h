@@ -2,6 +2,7 @@
 
 #include <filesystem/filesystem.h>
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -10,14 +11,21 @@
 namespace httplib
 {
 class Server;
-}
+struct Request;
+struct Response;
+} // namespace httplib
 
 namespace unravel::deployment
 {
 /**
- * @brief Serves a web deploy's folder on this computer, as a static web host does, for Deploy and Run: a browser
- * loads the game only from a web server. A file's .br or .gz beside it goes compressed to a browser that accepts that
- * encoding, nothing is kept in the browser's cache, and only this computer can connect.
+ * @brief Serves web deploys on this computer, as a static web host does, for Deploy and Run: a browser loads the game
+ * only from a web server.
+ *
+ * Each deploy is served under a path of its own (make_web_site_path), beside the ones served before, so a page left
+ * open keeps working and keeps its own caches in the browser. The server prefers one port, so the pages keep their
+ * address - and with it their saves and caches - from one editor session to the next. A file's .br or .gz beside it
+ * goes compressed to a browser that accepts that encoding, every file is checked again on each visit (the page keeps
+ * the game's files in its own caches by content), and only this computer can connect.
  */
 class web_preview_server
 {
@@ -27,19 +35,27 @@ public:
     web_preview_server(const web_preview_server&) = delete;
     auto operator=(const web_preview_server&) -> web_preview_server& = delete;
 
-    /// Serves @p folder from now on, starting the server the first time. Returns the page's address, or an empty
-    /// string when no port on this computer could be opened.
-    auto serve(const fs::path& folder) -> std::string;
-    /// Stops serving; the next serve starts again.
+    /**
+     * @brief Serves @p folder under @p site_path ("/<project>/<profile>/") from now on, starting the server the
+     * first time.
+     * @return The server's origin ("http://127.0.0.1:8742"), or an empty string when no port on this computer could
+     * be opened.
+     */
+    auto serve(const fs::path& folder, const std::string& site_path) -> std::string;
+    /// Stops serving every site; the next serve starts again.
     void stop();
 
 private:
-    auto get_folder() -> fs::path;
+    auto start() -> bool;
+    void handle(const httplib::Request& request, httplib::Response& response);
+    /// The folder of the site @p request_path lies in, and the path below the site in @p relative; empty when none.
+    auto find_site(const std::string& request_path, std::string& relative) -> fs::path;
 
     std::unique_ptr<httplib::Server> server_;
     std::thread thread_;
-    std::mutex folder_mutex_;
-    fs::path folder_;
+    std::mutex sites_mutex_;
+    /// The folder of each site path served.
+    std::map<std::string, fs::path> sites_;
     int port_{-1};
 };
 

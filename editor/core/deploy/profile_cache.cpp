@@ -12,6 +12,7 @@ namespace
 {
 constexpr const char* PROFILE_CACHES_FOLDER = "profiles";
 constexpr const char* SHADERS_FOLDER = "shaders";
+constexpr const char* AUDIO_FOLDER = "audio";
 
 auto get_profile_caches_folder(const fs::path& project_root) -> fs::path
 {
@@ -61,6 +62,11 @@ auto get_profile_shaders_folder(const fs::path& project_root, const std::string&
     return get_profile_cache_folder(project_root, profile) / SHADERS_FOLDER / protocol;
 }
 
+auto get_profile_audio_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path
+{
+    return get_profile_cache_folder(project_root, profile) / AUDIO_FOLDER / protocol;
+}
+
 auto get_profile_symbols_folder(const fs::path& project_root, const std::string& profile) -> fs::path
 {
     return get_profile_cache_folder(project_root, profile) / SYMBOLS_FOLDER;
@@ -102,7 +108,7 @@ auto remove_profile_cache(const fs::path& project_root, const std::string& profi
 {
     fs::error_code ec;
     fs::remove_all(get_profile_cache_folder(project_root, profile), ec);
-    return ec ? result::failure(fmt::format("Deleting the texture cache of profile {} failed: {}", profile, ec.message()))
+    return ec ? result::failure(fmt::format("Deleting the cache of profile {} failed: {}", profile, ec.message()))
               : result{};
 }
 
@@ -155,7 +161,7 @@ auto remove_unknown_profile_caches(const fs::path& project_root, const std::vect
     }
     if(!removed.empty())
     {
-        APPLOG_INFO("Deleted the texture caches of {} profile(s) the project no longer has", removed.size());
+        APPLOG_INFO("Deleted the caches of {} profile(s) the project no longer has", removed.size());
     }
     return removed;
 }

@@ -134,7 +134,7 @@ void register_profile_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "settings_profiles_rename",
-         .description = "Rename a settings profile. Its kept releases and texture cache move with it, and it stays the "
+         .description = "Rename a settings profile. Its kept releases and its cache move with it, and it stays the "
                         "deploy or preview profile where it was one. Its builds in the deploy folder keep the old name.",
          .input_schema_json =
              R"json({"type":"object","properties":{"name":{"type":"string"},"new_name":{"type":"string"}},"required":["name","new_name"]})json",
@@ -163,7 +163,7 @@ void register_profile_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "settings_profiles_delete",
-         .description = "Delete a settings profile with its kept releases and texture cache. Its builds in the deploy "
+         .description = "Delete a settings profile with its kept releases and its cache. Its builds in the deploy "
                         "folder stay. The last profile cannot be deleted.",
          .input_schema_json = R"json({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]})json",
          .handler =

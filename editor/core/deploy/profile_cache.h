@@ -9,10 +9,10 @@
 #include <unordered_set>
 #include <vector>
 
-/// The profiles' cooked texture variants in the project: cache/profiles/<profile>/<protocol>/, laid out
-/// as the protocol's compiled folder, one file per asset and profile; and their cooked shaders, in
-/// cache/profiles/<profile>/shaders/<protocol>/. Derived data: any of it can be deleted and is compiled
-/// again by the next deploy that needs it.
+/// The profiles' cache in the project, cache/profiles/<profile>/: the cooked texture variants in <protocol>/,
+/// laid out as the protocol's compiled folder, one file per asset and profile; the cooked shaders in
+/// shaders/<protocol>/; the audio variants in audio/<protocol>/; the last deploy's debug files in symbols/.
+/// Derived data: any of it can be deleted and is made again by the next deploy that needs it.
 namespace unravel::deployment
 {
 
@@ -27,6 +27,10 @@ auto get_profile_variants_folder(const fs::path& project_root, const std::string
 
 /// The folder of a profile's cooked shaders of a protocol: cache/profiles/<profile>/shaders/<protocol>.
 auto get_profile_shaders_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path;
+
+/// The folder of a profile's audio variants of a protocol, laid out as its compiled folder:
+/// cache/profiles/<profile>/audio/<protocol>.
+auto get_profile_audio_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path;
 
 /// The debug files of the profile's last deploy: its executable and the player's symbols, which a kept
 /// release takes along (cache/profiles/<profile>/symbols).

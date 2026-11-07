@@ -3,6 +3,7 @@
 #include <filesystem/filesystem.h>
 
 #include <string>
+#include <vector>
 
 /// The browser player and what a web deploy writes beside it.
 namespace unravel::deployment
@@ -49,12 +50,21 @@ struct web_template_lookup
 auto find_web_template(const fs::path& root, const std::string& engine_version) -> web_template_lookup;
 
 /**
- * @brief The data_manifest.json of a web build in `site`: every file under its data/ folder, as the page fetches
- * it ("data/engine/content.pak"), with a fingerprint of its content, in name order. The page writes each one to
- * that path in the player's file system, which the engine reads as its own folder, and keeps it in the browser's
- * cache under its fingerprint, so a later visit fetches only the files a new deploy changed.
+ * @brief The folder the browser player keeps its own files in (user:/ and cache:/): SDL's preferences folder in the
+ * browser, /libsdl/<company>/<product>, with the product the deployed game uses - the project's, else the player's
+ * program name (game/web/Program.cs). The page keeps that folder in the browser's IndexedDB, in a database of its
+ * own, so games on one site never mix their saves.
  */
-auto make_web_data_manifest(const fs::path& site) -> std::string;
+auto get_web_user_folder(const std::string& company, const std::string& product) -> std::string;
+
+/**
+ * @brief The data_manifest.json of a web build in `site`: `user_folder` (get_web_user_folder), and every file
+ * under its data/ folder, as the page fetches it ("data/engine/content.pak"), with a fingerprint of its content, in
+ * name order. The page writes each one to that path in the player's file system, which the engine reads as its own
+ * folder, and keeps it in the browser's cache under its fingerprint, so a later visit fetches only the files a new
+ * deploy changed. Throws when a file cannot be listed or read.
+ */
+auto make_web_data_manifest(const fs::path& site, const std::string& user_folder) -> std::string;
 
 /**
  * @brief Copies the template's page and runtime into `site`, the profile's folder, beside the data/ the other steps
@@ -63,6 +73,20 @@ auto make_web_data_manifest(const fs::path& site) -> std::string;
 void copy_web_player(const web_template& player, const fs::path& site);
 
 /// Writes make_web_data_manifest's list into `site` once its data/ is deployed. Throws on failure.
-void write_web_data_manifest(const fs::path& site);
+void write_web_data_manifest(const fs::path& site, const std::string& user_folder);
+
+/// `text` for a part of a URL: every byte but the unreserved characters of RFC 3986 as %XX.
+auto encode_url_part(const std::string& text) -> std::string;
+
+/// The path a local server serves a project's web build under, "/<project>/<profile>/": each build has a page path
+/// of its own, and with it caches of its own in the browser.
+auto make_web_site_path(const std::string& project, const std::string& profile) -> std::string;
+
+/**
+ * @brief The address of a web build's page: `origin` ("http://127.0.0.1:8742"), the site path with each part
+ * encoded, and the run arguments, one arg= each, which the page hands the game (game/web/wwwroot/main.js).
+ */
+auto make_web_page_address(const std::string& origin, const std::string& site_path, const std::vector<std::string>& arguments)
+    -> std::string;
 
 } // namespace unravel::deployment

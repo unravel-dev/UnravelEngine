@@ -28,7 +28,8 @@ auto keep_project_release(const deploy_settings& params, const std::string& name
 {
     if(params.deploy_target != deploy_platform::desktop)
     {
-        return result::failure("Releases are kept of desktop profiles: an Android package always carries every pack whole.");
+        return result::failure("Releases are kept of desktop profiles: an Android package and a web build always carry "
+                               "every pack whole.");
     }
     // Releases are desktop builds: their packs ship beside the player, and patches update them. The debug files
     // of the profile's last deploy go with them, so crash dumps of the release can be read later.
