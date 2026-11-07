@@ -19,7 +19,8 @@
  *   - a profile file that does not read: reported, overriding nothing, never written back, its overrides
  *     locked until it is mended; a file not edited stored again byte for byte, unknown entries included;
  *   - releases from before profiles adopted by Desktop whenever they turn up, with the release patched;
- *   - project profiles: create (copies too), names refused in any letter case, rename moving releases and
+ *   - project profiles: a new project's Desktop, Android and Web with their starting values, deploying Desktop;
+ *     create (copies too), names refused in any letter case, rename moving releases and
  *     the texture cache, the last profile kept, overrides of shared settings (the Game view resolutions
  *     included) refused with their dotted paths, an edit merged over overrides changed meanwhile, a revert
  *     of nothing writing nothing, caches of profiles that no longer exist deleted;
@@ -514,9 +515,16 @@ void test_project_profiles(const fs::path& root)
     std::string deploy_profile;
     write_text(deployment::get_profile_cache_folder(root, "Gone") / "app" / "a.png.asset", "stale");
     profiles.load(root, base, deploy_base, deploy_profile);
-    check(profiles.get_names() == std::vector<std::string>{"Desktop"}, "a new project gets Desktop");
+    check(profiles.get_names() == std::vector<std::string>{"Android", "Desktop", "Web"}, "a new project gets a profile per platform");
+    check(profiles.find("Android")->platform == target_platform::android && profiles.find("Desktop")->platform == target_platform::desktop &&
+              profiles.find("Web")->platform == target_platform::web,
+          "each for its platform");
+    check(!profiles.resolve_settings("Web", base)->graphics.limits.global_illumination &&
+              !profiles.find("Android")->settings.get_paths().empty() && profiles.find("Desktop")->settings.get_paths().empty(),
+          "with its platform's starting values");
+    check(deploy_profile == "Desktop", "and deploys Desktop first");
     check(!is_present(deployment::get_profile_cache_folder(root, "Gone")), "the cache of a profile that does not exist is deleted");
-    check(profiles.create("Android", target_platform::android, base).is_ok(), "a profile is created");
+    check(profiles.create("Tablet", target_platform::android, base).is_ok(), "a profile is created");
     check(!profiles.create("android", target_platform::android, base).is_ok(), "a name in use is refused in any letter case");
     check(profiles.create("Android Low", target_platform::android, base, "Android").is_ok() &&
               profiles.find("Android Low")->settings.get_paths() == profiles.find("Android")->settings.get_paths(),
@@ -579,7 +587,8 @@ void test_project_profiles(const fs::path& root)
     check(profiles.remove("phone").is_ok() && !is_present(deployment::get_profile_cache_folder(root, "phone")) &&
               !is_present(deployment::get_profile_releases_folder(root, "phone")),
           "a deleted profile takes its cache and releases");
-    check(profiles.remove("Android Low").is_ok() && !profiles.remove("Desktop").is_ok() && profiles.get_names().size() == 1,
+    check(profiles.remove("Android Low").is_ok() && profiles.remove("Tablet").is_ok() && profiles.remove("Web").is_ok() &&
+              !profiles.remove("Desktop").is_ok() && profiles.get_names().size() == 1,
           "the last profile stays");
 }
 

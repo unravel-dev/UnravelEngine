@@ -12,6 +12,7 @@
 #include "deploy_settings_editor.h"
 
 #include <editor/hub/panels/inspector_panel/inspectors/property_override_view.h>
+#include <editor/hub/panels/new_profile_dialog.h>
 
 #include <array>
 #include <initializer_list>
@@ -105,7 +106,6 @@ private:
     void draw_profile_section(rtti::context& ctx);
     /// The deploy profile as a pick of the project's profiles, with New, Rename and Delete.
     void draw_profile_picker(rtti::context& ctx);
-    void draw_new_profile_popup(rtti::context& ctx);
     void draw_rename_profile_popup(rtti::context& ctx);
     /// What a desktop profile builds: the player, its icon and where it goes on Steam, saved with the profile once
     /// an edit is finished.
@@ -183,11 +183,7 @@ private:
         /// Checks the name once it changes: whether `profiles` take it, for a rename of `renamed` when set.
         void check(const deployment::project_profiles& profiles, const std::string& renamed = {});
     };
-    /// The New Profile popup's fields.
-    profile_name_field new_profile_name_;
-    target_platform new_profile_platform_{target_platform::desktop};
-    /// The profile the new one copies; empty: the platform's starting values.
-    std::string new_profile_source_;
+    new_profile_dialog new_profile_dialog_;
     /// The Rename Profile popup's field.
     profile_name_field rename_profile_name_;
     /// What the last profile action did, shown under the profile picker.

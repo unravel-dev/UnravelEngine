@@ -4,6 +4,7 @@
 #include <context/context.hpp>
 
 #include <editor/editing/editor_actions.h>
+#include <editor/hub/panels/new_profile_dialog.h>
 #include <editor/hub/panels/settings_view.h>
 #include <engine/settings/settings.h>
 
@@ -49,5 +50,7 @@ private:
     /// Owned here, at one address: the categories' draws refer to it.
     std::unique_ptr<settings_edit_target> edit_target_;
     settings_view view_;
+    /// Opened from beside Settings Of; the window then edits the profile it created.
+    new_profile_dialog new_profile_dialog_;
 };
 } // namespace unravel

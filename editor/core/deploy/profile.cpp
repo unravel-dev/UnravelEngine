@@ -566,4 +566,11 @@ auto make_profiles_from_legacy(const legacy_deploy_target& legacy, const setting
     return profiles;
 }
 
+auto make_default_profiles(const settings& base_settings) -> std::vector<settings_profile>
+{
+    return {make_profile(DEFAULT_PROFILE_NAME, target_platform::desktop, base_settings),
+            make_profile(DEFAULT_ANDROID_PROFILE_NAME, target_platform::android, base_settings),
+            make_profile(DEFAULT_WEB_PROFILE_NAME, target_platform::web, base_settings)};
+}
+
 } // namespace unravel::deployment

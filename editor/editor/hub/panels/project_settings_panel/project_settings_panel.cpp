@@ -1043,8 +1043,34 @@ auto get_target_label(const settings_profile& profile) -> std::string
     return fmt::format("{}   ({} override{})", profile_labels::get_label(profile), count, count == 1 ? "" : "s");
 }
 
-/// Picks what the window edits; returns the profile edited, or null for the project settings.
-auto draw_edit_target_combo(rtti::context& ctx, settings_edit_target& target) -> const settings_profile*
+/// Edits `profile` from now on.
+void set_edited_profile(settings_edit_target& target, const std::string& profile)
+{
+    target.profile = profile;
+    target.missing_profile.clear();
+    target.error.clear();
+}
+
+/// The button beside Settings Of that opens the New Profile dialog; the window then edits the profile it creates.
+void draw_new_profile_button(rtti::context& ctx, settings_edit_target& target, new_profile_dialog& dialog, const settings_profile* edited)
+{
+    const float side = ImGui::GetFrameHeight();
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const ImRect rect(min, min + ImVec2(side, side));
+    ImGui::ItemSize(rect);
+    if(container_widgets::draw_icon_button({"##settings_new_profile", ICON_MDI_PLUS, "Create a profile."}, rect))
+    {
+        dialog.open(edited != nullptr ? edited->platform : target_platform::desktop);
+    }
+    if(const auto created = dialog.draw(ctx); !created.empty())
+    {
+        set_edited_profile(target, created);
+    }
+}
+
+/// Picks what the window edits, with a button that creates a profile; returns the profile edited, or null for the
+/// project settings.
+auto draw_edit_target_combo(rtti::context& ctx, settings_edit_target& target, new_profile_dialog& dialog) -> const settings_profile*
 {
     const auto& profiles = ctx.get_cached<project_manager>().get_profiles();
     const auto* edited = profiles.find(target.profile);
@@ -1053,6 +1079,8 @@ auto draw_edit_target_combo(rtti::context& ctx, settings_edit_target& target) ->
                            "change becomes an override of that profile, and the rest follows the project settings.");
     const std::string project_label = std::string(ICON_MDI_COG " ") + PROJECT_SETTINGS_LABEL;
     const std::string preview = edited != nullptr ? get_target_label(*edited) : project_label;
+    const float button_width = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x;
+    ImGui::SetNextItemWidth(ImMax(1.0f, ImGui::GetContentRegionAvail().x - button_width));
     if(ImGui::BeginCombo("##settings_of", preview.c_str()))
     {
         if(ImGui::Selectable(project_label.c_str(), edited == nullptr))
@@ -1065,18 +1093,18 @@ auto draw_edit_target_combo(rtti::context& ctx, settings_edit_target& target) ->
         {
             if(ImGui::Selectable(get_target_label(profile).c_str(), &profile == edited))
             {
-                target.profile = profile.name;
-                target.missing_profile.clear();
-                target.error.clear();
+                set_edited_profile(target, profile.name);
             }
         }
         ImGui::EndCombo();
     }
+    ImGui::SameLine();
+    draw_new_profile_button(ctx, target, dialog, edited);
     return profiles.find(target.profile);
 }
 
 /// Which settings the window edits: the project's, or a profile's; with a profile, how to preview it.
-void draw_edit_target(rtti::context& ctx, settings_edit_target& target)
+void draw_edit_target(rtti::context& ctx, settings_edit_target& target, new_profile_dialog& dialog)
 {
     auto& pm = ctx.get_cached<project_manager>();
     if(!target.profile.empty() && pm.get_profiles().find(target.profile) == nullptr)
@@ -1085,7 +1113,7 @@ void draw_edit_target(rtti::context& ctx, settings_edit_target& target)
         target.missing_profile = target.profile;
         target.profile.clear();
     }
-    const auto* edited = draw_edit_target_combo(ctx, target);
+    const auto* edited = draw_edit_target_combo(ctx, target, dialog);
     if(edited == nullptr)
     {
         if(!target.missing_profile.empty())
@@ -1132,9 +1160,7 @@ void project_settings_panel::show(bool s, const std::string& hint)
 void project_settings_panel::show_profile(const std::string& profile)
 {
     visible_ = true;
-    edit_target_->profile = profile;
-    edit_target_->missing_profile.clear();
-    edit_target_->error.clear();
+    set_edited_profile(*edit_target_, profile);
 }
 
 void project_settings_panel::on_frame_ui_render(rtti::context& ctx, const char* name)
@@ -1146,7 +1172,7 @@ void project_settings_panel::on_frame_ui_render(rtti::context& ctx, const char* 
     ImGui::SetNextWindowSize(ImGui::GetMainViewport()->Size * 0.5f, ImGuiCond_FirstUseEver);
     if(ImGui::Begin(name, &visible_))
     {
-        draw_edit_target(ctx, *edit_target_);
+        draw_edit_target(ctx, *edit_target_, new_profile_dialog_);
         ImGui::Separator();
         view_.draw(ctx);
     }

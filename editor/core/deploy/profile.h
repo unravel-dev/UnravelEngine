@@ -215,10 +215,12 @@ namespace unravel::deployment
 
 /// The project's folder of profiles, one subfolder per profile.
 constexpr const char* PROFILES_FOLDER = "profiles";
-/// The profile a project gets when it has none.
+/// The desktop profile a project gets when it has none, which its deploys build first.
 constexpr const char* DEFAULT_PROFILE_NAME = "Desktop";
-/// The Android profile a project from before profiles gets when it deployed to Android.
+/// The Android profile a project without profiles gets, and one from before profiles when it deployed to Android.
 constexpr const char* DEFAULT_ANDROID_PROFILE_NAME = "Android";
+/// The web profile a project without profiles gets.
+constexpr const char* DEFAULT_WEB_PROFILE_NAME = "Web";
 
 /// A profile name is a folder name, as a release name is (is_valid_release_name).
 auto is_valid_profile_name(const std::string& name) -> bool;
@@ -290,5 +292,8 @@ auto read_legacy_deploy_target(const fs::path& deploy_cfg) -> hpp::optional<lega
  */
 auto make_profiles_from_legacy(const legacy_deploy_target& legacy, const settings& base_settings, std::string& deploy_profile)
     -> std::vector<settings_profile>;
+
+/// The profiles a new project starts with: Desktop, Android and Web, each with its platform's starting values.
+auto make_default_profiles(const settings& base_settings) -> std::vector<settings_profile>;
 
 } // namespace unravel::deployment

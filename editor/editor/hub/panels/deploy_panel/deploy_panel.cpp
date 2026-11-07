@@ -74,7 +74,6 @@ constexpr float EDIT_SCOPE_LABEL_MARGIN = 3.0f;
 constexpr const char* REVERT_TO_SHARED_LABEL = "Revert to Shared Value";
 // The Releases tab picks the release a profile patches, always in the profile: no override the switch shows.
 constexpr const char* PATCH_RELEASE_PATH = "deploy_patch_release";
-constexpr const char* NEW_PROFILE_POPUP = "##new_profile";
 constexpr const char* RENAME_PROFILE_POPUP = "##rename_profile";
 constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
 constexpr const char* STEAM_UPLOAD_POPUP = "##steam_upload_confirm";
@@ -330,17 +329,6 @@ void set_field_text(std::array<char, Capacity>& field, const std::string& text)
 {
     field.fill('\0');
     std::copy_n(text.begin(), std::min(text.size(), field.size() - 1), field.begin());
-}
-
-/// A row of a profile popup: its label, then the field the caller draws next, at the popup's field width.
-void begin_popup_row(const char* label)
-{
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(widgets::to_pixels(PROFILE_POPUP_WIDTH));
 }
 
 /// The deploy profile's overrides the Build and Content tabs edit.
@@ -1116,10 +1104,7 @@ void deploy_panel::draw_profile_picker(rtti::context& ctx)
     ImGui::SameLine();
     if(draw_inline_icon_button("##new_profile_button", ICON_MDI_PLUS, "Create a profile.", true))
     {
-        new_profile_name_ = {};
-        new_profile_platform_ = selected != nullptr ? selected->platform : target_platform::desktop;
-        new_profile_source_.clear();
-        ImGui::OpenPopup(NEW_PROFILE_POPUP);
+        new_profile_dialog_.open(selected != nullptr ? selected->platform : target_platform::desktop);
     }
     ImGui::SameLine();
     if(draw_inline_icon_button("##rename_profile_button", ICON_MDI_PENCIL_OUTLINE, "Rename this profile.", selected != nullptr))
@@ -1138,7 +1123,15 @@ void deploy_panel::draw_profile_picker(rtti::context& ctx)
     {
         ImGui::OpenPopup(REMOVE_PROFILE_POPUP);
     }
-    draw_new_profile_popup(ctx);
+    if(const auto created = new_profile_dialog_.draw(ctx); !created.empty())
+    {
+        set_profile_message({}, fmt::format("Created profile {}. Deploys build it now.", created));
+        pm.set_deploy_profile(created);
+        settings_editor_.sync(ctx);
+        problems_.invalidate();
+        content_view_.invalidate();
+        refresh_releases();
+    }
     draw_rename_profile_popup(ctx);
     if(draw_confirmation(REMOVE_PROFILE_POPUP,
                          fmt::format("Delete profile {}?", current),
@@ -1153,100 +1146,6 @@ void deploy_panel::draw_profile_picker(rtti::context& ctx)
         content_view_.invalidate();
         refresh_releases();
     }
-}
-
-void deploy_panel::draw_new_profile_popup(rtti::context& ctx)
-{
-    if(!ImGui::BeginPopup(NEW_PROFILE_POPUP))
-    {
-        return;
-    }
-    auto& pm = ctx.get_cached<project_manager>();
-    ImGui::PushFont(ImGui::Font::Bold);
-    ImGui::TextUnformatted("New Profile");
-    ImGui::PopFont();
-    widgets::draw_gap(widgets::LINE_GAP);
-    bool is_entered = false;
-    if(ImGui::BeginTable("##new_profile_fields", 2, ImGuiTableFlags_SizingFixedFit))
-    {
-        begin_popup_row("Name");
-        if(ImGui::IsWindowAppearing())
-        {
-            ImGui::SetKeyboardFocusHere();
-        }
-        is_entered = ImGui::InputTextWithHint("##new_profile_name",
-                                              "Such as Android or Demo",
-                                              new_profile_name_.text.data(),
-                                              new_profile_name_.text.size(),
-                                              ImGuiInputTextFlags_EnterReturnsTrue);
-        begin_popup_row("Platform");
-        for(const auto platform : profile_labels::PLATFORMS)
-        {
-            if(platform != profile_labels::PLATFORMS[0])
-            {
-                ImGui::SameLine();
-            }
-            const auto label = fmt::format("{} {}", profile_labels::get_platform_icon(platform), profile_labels::get_platform_name(platform));
-            if(ImGui::RadioButton(label.c_str(), new_profile_platform_ == platform) && new_profile_platform_ != platform)
-            {
-                new_profile_platform_ = platform;
-                new_profile_source_.clear();
-            }
-        }
-        begin_popup_row("Start From");
-        const std::string defaults_label = fmt::format("{} starting values", profile_labels::get_platform_name(new_profile_platform_));
-        const std::string source_label = new_profile_source_.empty() ? defaults_label : "A copy of " + new_profile_source_;
-        if(ImGui::BeginCombo("##new_profile_source", source_label.c_str()))
-        {
-            if(ImGui::Selectable(defaults_label.c_str(), new_profile_source_.empty()))
-            {
-                new_profile_source_.clear();
-            }
-            for(const auto& profile : pm.get_profiles().get_all())
-            {
-                if(profile.platform == new_profile_platform_ &&
-                   ImGui::Selectable(("A copy of " + profile.name).c_str(), profile.name == new_profile_source_))
-                {
-                    new_profile_source_ = profile.name;
-                }
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SetItemTooltipEx("%s", "Start from the values a new profile of the platform gets, or from a copy of a profile.");
-        ImGui::EndTable();
-    }
-    new_profile_name_.check(pm.get_profiles());
-    const auto name = get_field_text(new_profile_name_.text);
-    draw_message(new_profile_name_.error, true);
-    widgets::draw_gap(widgets::LINE_GAP);
-    const bool can_create = !name.empty() && new_profile_name_.error.empty();
-    ImGui::BeginDisabled(!can_create);
-    const bool is_created = ImGui::Button(ICON_MDI_PLUS " Create") || (is_entered && can_create);
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if(ImGui::Button("Cancel"))
-    {
-        ImGui::CloseCurrentPopup();
-    }
-    if(is_created)
-    {
-        const auto created = pm.create_profile(ctx, name, new_profile_platform_, new_profile_source_);
-        if(created.is_ok())
-        {
-            set_profile_message(created, fmt::format("Created profile {}. Deploys build it now.", name));
-            pm.set_deploy_profile(name);
-            settings_editor_.sync(ctx);
-            problems_.invalidate();
-            content_view_.invalidate();
-            refresh_releases();
-            ImGui::CloseCurrentPopup();
-        }
-        else
-        {
-            new_profile_name_.error = created.error;
-        }
-    }
-    ImGui::EndPopup();
 }
 
 void deploy_panel::draw_rename_profile_popup(rtti::context& ctx)

@@ -54,7 +54,8 @@ Building a scene is not shipping a game. The rest of the chain:
   the project can be deployed at all.
 - Settings profiles are the targets a project builds for: each has a platform
   (desktop, android or web) and overrides only what differs from the project
-  settings. settings_profiles_list lists them (a project starts with Desktop);
+  settings. settings_profiles_list lists them (a new project starts with
+  Desktop, Android and Web, and deploys Desktop);
   settings_profiles_create / _rename / _delete manage them. settings_get and
   settings_set with profile read and override a profile's values (overridden
   lists what it changes), settings_revert stops overriding paths. Layers,
@@ -98,8 +99,8 @@ Building a scene is not shipping a game. The rest of the chain:
   every project asset with whether it ships and why, named_folders points at
   folders scripts build asset paths in (with the scripts that do), and
   orphan_rules lists rules on paths that are gone. While a deploy runs, project and settings changes are refused.
-- Android: project_deploy with an Android profile (settings_profiles_create
-  platform android makes one) builds <project>.apk; with run_after_deploy it is
+- Android: project_deploy with an Android profile (a new project has one;
+  settings_profiles_create platform android makes more) builds <project>.apk; with run_after_deploy it is
   installed and started on android_device, and the game's log reaches the
   editor log as [Device] lines (logs_get_recent include_device_system adds the device system's own
   [Device System] lines). android_device_action acts without a new deploy: run_last_build,

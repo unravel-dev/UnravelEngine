@@ -28,13 +28,15 @@ public:
      * @brief Reads the profiles of the project at `project_root`.
      *
      * A project from before profiles gets its first ones from deploy/deploy.cfg (make_profiles_from_legacy),
-     * and deploy.cfg is kept as deploy.cfg.before-profiles. A project with no profile gets Desktop. Releases
+     * and deploy.cfg is kept as deploy.cfg.before-profiles. A project with no profile gets Desktop, Android and
+     * Web (make_default_profiles), and deploys Desktop. Releases
      * kept before profiles, and the release their deploys patched, become the first desktop profile's
      * whenever they are found (a teammate's project from before profiles merged in, say). The caches
      * of profiles that no longer exist are deleted.
      * @param base_deploy The shared deploy settings as loaded; their patch release from before profiles
      * moves into a profile. The caller saves them, unless has_unkept_legacy_settings.
-     * @param deploy_profile Set to the profile of the old target by a migration; otherwise left as it is.
+     * @param deploy_profile Set to the profile of the old target by a migration, and to Desktop when the project
+     * gets its first profiles; otherwise left as it is.
      * @return What was wrong with the profiles' files, one sentence each.
      */
     auto load(const fs::path& project_root,
@@ -106,7 +108,8 @@ public:
 private:
     /// Reads every profile folder; a folder that cannot be read is left out with a warning.
     void read_profile_folders(const settings& base_settings, const deploy_settings& base_deploy, std::vector<std::string>& warnings);
-    /// The first profiles of a project without profile folders: from its settings from before profiles, or Desktop.
+    /// The first profiles of a project without profile folders: from its settings from before profiles, or Desktop,
+    /// Android and Web.
     void make_first_profiles(const hpp::optional<legacy_deploy_target>& legacy,
                              const settings& base_settings,
                              std::string& deploy_profile,

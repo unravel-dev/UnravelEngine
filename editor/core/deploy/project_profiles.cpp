@@ -206,8 +206,11 @@ void project_profiles::make_first_profiles(const hpp::optional<legacy_deploy_tar
                                            std::string& deploy_profile,
                                            std::vector<std::string>& warnings)
 {
-    auto first = legacy ? make_profiles_from_legacy(*legacy, base_settings, deploy_profile)
-                        : std::vector<settings_profile>{make_profile(DEFAULT_PROFILE_NAME, target_platform::desktop, base_settings)};
+    auto first = legacy ? make_profiles_from_legacy(*legacy, base_settings, deploy_profile) : make_default_profiles(base_settings);
+    if(!legacy)
+    {
+        deploy_profile = DEFAULT_PROFILE_NAME;
+    }
     for(auto& profile : first)
     {
         add_profile(std::move(profile), warnings);
