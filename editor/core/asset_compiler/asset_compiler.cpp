@@ -945,6 +945,35 @@ auto write_manifest_file(const fs::path& input_path, const fs::path& output_path
     return write_manifest(output_path, make_manifest<T>(input_path, compile_parameters));
 }
 
+/**
+ * @brief Whether `output` holds the source at `key` as a compile would write it now: the file and its manifest
+ *        exist, the manifest is of the current format and records `compile_parameters`, and the source and its
+ *        dependencies have the fingerprint it records.
+ */
+template<typename T>
+auto is_compiled_with(const fs::path& key, const fs::path& output, const std::string& compile_parameters) -> bool
+{
+    fs::error_code err;
+    const auto manifest_path = get_manifest_path(output);
+    if(!fs::exists(output, err) || !fs::exists(manifest_path, err))
+    {
+        return false;
+    }
+    asset_manifest manifest;
+    if(!load_manifest(manifest_path, manifest))
+    {
+        return false;
+    }
+    const auto source = resolve_input_file(key);
+    if(is_compiled_format_changed(source, manifest) || manifest.compile_parameters != compile_parameters)
+    {
+        return false;
+    }
+    std::vector<fs::path> deps;
+    resolve_dependencies<T>(source, deps);
+    return !is_source_file_changed(source, manifest, deps);
+}
+
 auto write_manifest(const fs::path& output_path, const asset_manifest& manifest) -> bool
 {
     auto manifest_path = get_manifest_path(output_path);
@@ -1396,25 +1425,7 @@ auto compile_shader(const fs::path& key, const fs::path& output) -> bool
 
 auto is_shader_compiled(const fs::path& key, const fs::path& output) -> bool
 {
-    fs::error_code err;
-    const auto manifest_path = get_manifest_path(output);
-    if(!fs::exists(output, err) || !fs::exists(manifest_path, err))
-    {
-        return false;
-    }
-    asset_manifest manifest;
-    if(!load_manifest(manifest_path, manifest))
-    {
-        return false;
-    }
-    const auto source = resolve_input_file(key);
-    if(is_compiled_format_changed(source, manifest))
-    {
-        return false;
-    }
-    std::vector<fs::path> deps;
-    resolve_dependencies<gfx::shader>(source, deps);
-    return !is_source_file_changed(source, manifest, deps);
+    return is_compiled_with<gfx::shader>(key, output, {});
 }
 
 template<>
@@ -1455,6 +1466,11 @@ auto get_texture_parameters(const fs::path& key, const texture_target& target) -
     return resolve_texture_parameters(read_texture_importer(key), target);
 }
 
+auto get_editor_texture_compile_parameters(const fs::path& key) -> std::string
+{
+    return to_string(get_texture_parameters(key, get_editor_texture_target_for(key)));
+}
+
 auto read_texture_importer(const fs::path& key) -> texture_importer_meta
 {
     return read_texture_importer_settings(resolve_input_file(key));
@@ -1480,25 +1496,7 @@ auto is_texture_compiled_for_target(const fs::path& key, const fs::path& output,
 
 auto is_texture_compiled_with(const fs::path& key, const fs::path& output, const texture_compile_parameters& parameters) -> bool
 {
-    fs::error_code err;
-    const auto manifest_path = get_manifest_path(output);
-    if(!fs::exists(output, err) || !fs::exists(manifest_path, err))
-    {
-        return false;
-    }
-    asset_manifest manifest;
-    if(!load_manifest(manifest_path, manifest))
-    {
-        return false;
-    }
-    const auto source = resolve_input_file(key);
-    if(is_compiled_format_changed(source, manifest) || manifest.compile_parameters != to_string(parameters))
-    {
-        return false;
-    }
-    std::vector<fs::path> deps;
-    resolve_dependencies<gfx::texture>(source, deps);
-    return !is_source_file_changed(source, manifest, deps);
+    return is_compiled_with<gfx::texture>(key, output, to_string(parameters));
 }
 
 template<>
@@ -2532,79 +2530,100 @@ auto read_importer<audio_clip>(asset_manager& am, const fs::path& key) -> std::s
     return read_or_create_importer(am, key);
 }
 
+namespace
+{
+/// The clip's source as its own codec's bytes, and decoded with its import settings; false with the reason when the
+/// file does not read or decode.
+auto read_audio_source(const fs::path& absolute_path,
+                       const audio_importer_meta& importer,
+                       encoded_sound& clip,
+                       audio::sound_data& decoded,
+                       std::string& error) -> bool
+{
+    std::ifstream input(absolute_path, std::ios::binary);
+    clip.bytes = fs::read_stream(input);
+    clip.codec = get_audio_codec(absolute_path);
+    clip.force_to_mono = importer.force_to_mono;
+    if(clip.bytes.empty())
+    {
+        error = "the file could not be read";
+        return false;
+    }
+    return decode_sound(clip, decoded, error);
+}
+} // namespace
+
+auto compile_audio_clip(const fs::path& key,
+                        const fs::path& output,
+                        const audio_importer_meta& importer,
+                        audio_importer_meta::compression_quality compression) -> bool
+{
+    // The source's own bytes are the compiled clip, or for a lossless source its Vorbis encoding; it is decoded when it
+    // loads. Decoding it once here reports a file that will not play at import, where the rest of the import errors are.
+    const auto absolute_path = resolve_input_file(key);
+    const std::string str_input = absolute_path.string();
+    // Before the source is read: an edit during the encode leaves a manifest the source no longer matches.
+    const auto manifest = make_manifest<audio_clip>(absolute_path, get_audio_compile_parameters(compression, get_audio_codec(absolute_path)));
+    encoded_sound clip;
+    audio::sound_data decoded;
+    std::string error;
+    if(!read_audio_source(absolute_path, importer, clip, decoded, error))
+    {
+        APPLOG_ERROR("Failed compilation of {0} with error: {1}", str_input, error);
+        return false;
+    }
+    // A sound libvorbis has no encoding for, or one its stream would not play back whole, still plays from its source.
+    if(is_compressed_to_vorbis(compression, clip.codec) && !compress_clip_to_vorbis(decoded, compression, clip, error))
+    {
+        APPLOG_WARNING("{0} could not be compressed to Vorbis ({1}): it keeps its own bytes.", str_input, error);
+    }
+    fs::error_code folder_error;
+    fs::create_directories(output.parent_path(), folder_error);
+    fs::error_code err;
+    asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
+    {
+        if(!save_to_file_bin(temp.string(), clip))
+        {
+            throw std::runtime_error("could not write " + temp.string());
+        }
+    }, err);
+    if(err)
+    {
+        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", str_input, output.filename().string(), err.message());
+        return false;
+    }
+    if(!write_manifest(output, manifest))
+    {
+        APPLOG_ERROR("Failed to write manifest for compiled audio_clip: {0}", output.string());
+        return false;
+    }
+    return true;
+}
+
+auto is_audio_compiled_with(const fs::path& key, const fs::path& output, audio_importer_meta::compression_quality compression)
+    -> bool
+{
+    return is_compiled_with<audio_clip>(key, output, get_audio_compile_parameters(compression, get_audio_codec(resolve_input_file(key))));
+}
+
+auto get_editor_audio_compile_parameters(const fs::path& key) -> std::string
+{
+    const auto source = resolve_input_file(key);
+    return get_audio_compile_parameters(resolve_editor_audio_compression(key, read_audio_importer(source)), get_audio_codec(source));
+}
+
 template<>
 auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path& output, uint32_t flags) -> bool
 {
     APP_SCOPE_PERF("Compile Audio Clip");
     // Try to import first.
     auto base_importer = read_importer<audio_clip>(am, key);
-
     if(!base_importer)
     {
         return true;
     }
-
-    auto importer = std::static_pointer_cast<audio_importer_meta>(base_importer);
-    const auto compression = resolve_audio_compression(*importer, get_editor_audio_defaults());
-
-    auto absolute_path = resolve_input_file(key);
-
-    std::string str_input = absolute_path.string();
-
-    fs::error_code err;
-
-    // The source's own bytes are the compiled clip, or for a lossless source its Vorbis encoding; it is decoded when it
-    // loads. Decoding it once here reports a file that will not play at import, where the rest of the import errors are.
-    encoded_sound clip;
-    {
-        std::ifstream input(str_input, std::ios::binary);
-        clip.bytes = fs::read_stream(input);
-        clip.codec = string_utils::to_lower(absolute_path.extension().generic_string());
-        if(!clip.codec.empty() && clip.codec.front() == '.')
-        {
-            clip.codec.erase(0, 1);
-        }
-        clip.force_to_mono = importer->force_to_mono;
-
-        audio::sound_data decoded;
-        std::string error;
-        if(clip.bytes.empty() || !decode_sound(clip, decoded, error))
-        {
-            APPLOG_ERROR("Failed compilation of {0} with error: {1}",
-                         str_input,
-                         clip.bytes.empty() ? std::string("the file could not be read") : error);
-            return false;
-        }
-        if(is_compressed_to_vorbis(compression, clip.codec) && decoded.info.frames > 0 &&
-           !compress_clip_to_vorbis(decoded, compression, clip, error))
-        {
-            APPLOG_ERROR("Failed compilation of {0}: it could not be compressed to Vorbis ({1}).", str_input, error);
-            return false;
-        }
-
-        asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
-        {
-            if(!save_to_file_bin(temp.string(), clip))
-            {
-                throw std::runtime_error("could not write " + temp.string());
-            }
-        }, err);
-    }
-
-    if(err)
-    {
-        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
-            str_input, output.filename().string(), err.message());
-        return false;
-    }
-
-    if(!write_manifest_file<audio_clip>(absolute_path, output, get_audio_compile_parameters(compression)))
-    {
-        APPLOG_ERROR("Failed to write manifest for compiled audio_clip: {0}", output.string());
-        return false;
-    }
-
-    return true;
+    const auto& importer = *std::static_pointer_cast<audio_importer_meta>(base_importer);
+    return compile_audio_clip(key, output, importer, resolve_editor_audio_compression(key, importer));
 }
 namespace
 {

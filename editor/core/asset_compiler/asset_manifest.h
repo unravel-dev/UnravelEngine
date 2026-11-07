@@ -78,6 +78,10 @@ auto is_compiled_format_changed(const fs::path& source_path, const asset_manifes
 
 auto is_fingerprint_algorithm_current(const asset_manifest& manifest) -> bool;
 
+/// Whether the manifest beside the compiled file at `output` records `compile_parameters`; false without a manifest.
+/// Reads only the manifest: whether the source changed since is the watcher's to see.
+auto is_compiled_with_parameters(const fs::path& output, const std::string& compile_parameters) -> bool;
+
 } // namespace asset_compiler
 
 } // namespace unravel

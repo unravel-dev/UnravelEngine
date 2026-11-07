@@ -152,7 +152,12 @@ struct editor_actions
 
     static void recompile_shaders(const std::string& group = "");
     static void recompile_textures(const std::string& group = "");
-    static void recompile_audio_clips(const std::string& group = "");
+    /// Recompiles the textures in @p group whose manifest records other compile parameters than they resolve to now:
+    /// after the project's texture defaults changed, the ones those defaults reach.
+    static void recompile_outdated_textures(const std::string& group);
+    /// Recompiles the audio clips in @p group whose manifest records other compile parameters than they resolve to
+    /// now: after the project's audio default changed, the ones it reaches.
+    static void recompile_outdated_audio_clips(const std::string& group);
     /// Writes an asset's import settings (@p meta, the asset database's entry) to the .meta file beside
     /// the asset @p key names; the asset watcher then imports the asset again with them.
     static auto save_import_settings(const std::string& key, const asset_meta& meta) -> bool;

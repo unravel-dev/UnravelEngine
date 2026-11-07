@@ -242,6 +242,36 @@ struct audio_importer_meta : crtp_meta_type<audio_importer_meta, asset_importer_
 
     bool force_to_mono{false};
     compression_quality compression{compression_quality::project_default};
+
+    /// A platform's own compression, used on that platform instead of `compression` while overridden.
+    struct platform_compression_meta
+    {
+        bool is_overridden{false};
+        compression_quality compression{compression_quality::project_default};
+
+        friend auto operator==(const platform_compression_meta& lhs, const platform_compression_meta& rhs) -> bool = default;
+    };
+
+    /// Per-platform compression, keyed by platform (not by profile, so renaming a profile leaves every clip's
+    /// settings alone). The web has its own: its downloads are what audio size matters most for.
+    struct platforms_meta
+    {
+        platform_compression_meta desktop;
+        platform_compression_meta android;
+        platform_compression_meta web;
+
+        friend auto operator==(const platforms_meta& lhs, const platforms_meta& rhs) -> bool = default;
+    } platforms;
+
+    /// The compression a clip compiles with on `platform`: the platform's own while it is overridden, otherwise the
+    /// clip's.
+    auto get_compression(target_platform platform) const -> compression_quality
+    {
+        const auto& own = platform == target_platform::android ? platforms.android
+                          : platform == target_platform::web   ? platforms.web
+                                                               : platforms.desktop;
+        return own.is_overridden ? own.compression : compression;
+    }
 };
 
 //-----------------------------------------------------------------------------

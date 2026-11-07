@@ -212,6 +212,15 @@ auto is_source_file_changed(const fs::path& source_path,
     return current_manifest.source_fingerprint != manifest.source_fingerprint;
 }
 
+auto is_compiled_with_parameters(const fs::path& output, const std::string& compile_parameters) -> bool
+{
+    const auto manifest_path = get_manifest_path(output);
+    fs::error_code ec;
+    asset_manifest manifest;
+    return fs::exists(manifest_path, ec) && load_manifest(manifest_path, manifest) &&
+           manifest.compile_parameters == compile_parameters;
+}
+
 auto is_compiled_format_changed(const fs::path& source_path, const asset_manifest& manifest) -> bool
 {
     auto source_key = resolve_manifest_input_file(source_path);

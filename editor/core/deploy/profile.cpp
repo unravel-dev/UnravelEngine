@@ -368,7 +368,7 @@ auto is_overridable_settings_path(hpp::string_view path) -> bool
 {
     return !serialization::is_path_within(path, "layer") && !serialization::is_path_within(path, "input") &&
            !serialization::is_path_within(path, "resolution") && !serialization::is_path_within(path, "build") &&
-           !serialization::is_path_within(path, "physics/backend") && !serialization::is_path_within(path, "assets/audio");
+           !serialization::is_path_within(path, "physics/backend");
 }
 
 auto is_overridable_deploy_path(hpp::string_view path) -> bool

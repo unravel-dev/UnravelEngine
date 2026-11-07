@@ -12,10 +12,11 @@
  *   - Vorbis at import: a stream decodes to exactly the source's frames at any length (a loop has no gap), a
  *     tone keeps its shape, the stream is several times smaller and larger at a higher quality, the same sound
  *     encodes to the same bytes, a clip mixed to mono stays mono, and sounds the encoder cannot take are refused
- *     with a reason;
+ *     with a reason; mono to six channels at 8 to 48 kHz, and WAVs of 8-bit, 24-bit and float samples, round-trip;
  *   - the compression setting: a new clip follows the project's default (Normal Quality), its own setting wins, a
- *     project default of Project Default falls back to Normal Quality, only WAV and FLAC at a quality compress, and
- *     each setting records its own compile parameters;
+ *     platform's own wins on that platform while overridden, a project default of Project Default falls back to
+ *     Normal Quality, only WAV and FLAC at a quality compress, and each setting records its own compile parameters
+ *     for a lossless clip, with the encoder's version, while an OGG or MP3 clip records the same at every setting;
  *   - an unknown codec and undecodable bytes fail with a reason instead of yielding a sound;
  *   - the compiled file round-trips, and a file in another format (an older cache) is refused;
  *   - asset_manager::save_database keeps only the entries its filter accepts, without changing the
@@ -77,6 +78,21 @@ constexpr double MIN_TONE_SNR_DB = 20.0;
 /// Vorbis at normal quality is about a tenth of 16-bit stereo PCM; a fourth leaves room for any tone.
 constexpr std::size_t MIN_COMPRESSION_RATIO = 4;
 constexpr std::uint8_t UNSUPPORTED_BITS_PER_SAMPLE = 8;
+/// The channel counts and rates a clip may come in.
+constexpr std::array<std::uint8_t, 3> FORMAT_CHANNEL_COUNTS = {1, 2, 6};
+constexpr std::array<std::uint32_t, 4> FORMAT_SAMPLE_RATES = {8000, 11025, 22050, 48000};
+/// A quarter of a second at 48 kHz, and a bit.
+constexpr std::uint64_t FORMAT_FRAMES = 12007;
+/// WAV sample formats besides 16-bit PCM: a format tag and the bits of a sample.
+constexpr std::uint16_t WAV_FORMAT_FLOAT = 3;
+struct wav_sample_format
+{
+    std::uint16_t tag{};
+    std::uint16_t bits{};
+};
+constexpr std::array<wav_sample_format, 3> OTHER_WAV_FORMATS = {{{WAV_FORMAT_PCM, 8}, {WAV_FORMAT_PCM, 24}, {WAV_FORMAT_FLOAT, 32}}};
+/// 8-bit WAV samples are unsigned around this middle.
+constexpr int WAV_8_BIT_MIDDLE = 128;
 
 void check(bool condition, const std::string& what)
 {
@@ -142,11 +158,64 @@ auto make_wav_clip() -> encoded_sound
     return clip;
 }
 
+/// One sample of a WAV of `format`: `value` from -1 to 1, little-endian.
+void append_wav_sample(std::vector<std::uint8_t>& out, const wav_sample_format& format, double value)
+{
+    if(format.tag == WAV_FORMAT_FLOAT)
+    {
+        const auto sample = float(value);
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &sample, sizeof(bits));
+        append_u32(out, bits);
+        return;
+    }
+    if(format.bits == 8)
+    {
+        out.push_back(std::uint8_t(WAV_8_BIT_MIDDLE + std::lround(value * (WAV_8_BIT_MIDDLE - 1))));
+        return;
+    }
+    const auto sample = std::int32_t(std::lround(value * double((1 << (format.bits - 1)) - 1)));
+    for(std::uint16_t byte = 0; byte < format.bits / 8; ++byte)
+    {
+        out.push_back(std::uint8_t((std::uint32_t(sample) >> (byte * 8)) & 0xFF));
+    }
+}
+
+/// A WAV file of `format`: a sine on each channel, as make_tone's.
+auto make_other_wav_bytes(const wav_sample_format& format) -> std::vector<std::uint8_t>
+{
+    const std::uint32_t block_align = TEST_CHANNELS * (format.bits / 8);
+    const std::uint32_t data_size = TEST_FRAMES * block_align;
+    std::vector<std::uint8_t> bytes;
+    append_tag(bytes, "RIFF");
+    append_u32(bytes, WAV_RIFF_HEADER_REMAINDER + data_size);
+    append_tag(bytes, "WAVE");
+    append_tag(bytes, "fmt ");
+    append_u32(bytes, WAV_FMT_CHUNK_SIZE);
+    append_u16(bytes, format.tag);
+    append_u16(bytes, TEST_CHANNELS);
+    append_u32(bytes, TEST_SAMPLE_RATE);
+    append_u32(bytes, TEST_SAMPLE_RATE * block_align);
+    append_u16(bytes, std::uint16_t(block_align));
+    append_u16(bytes, format.bits);
+    append_tag(bytes, "data");
+    append_u32(bytes, data_size);
+    for(std::uint32_t frame = 0; frame < TEST_FRAMES; ++frame)
+    {
+        for(std::uint16_t channel = 0; channel < TEST_CHANNELS; ++channel)
+        {
+            const double phase = TWO_PI * TONE_FREQUENCIES[channel % TONE_FREQUENCIES.size()] * double(frame) / TEST_SAMPLE_RATE;
+            append_wav_sample(bytes, format, TONE_AMPLITUDE * std::sin(phase));
+        }
+    }
+    return bytes;
+}
+
 /// 16-bit PCM of a sine on each channel (440 Hz, 660 Hz), as audiopp's decoders give a sound.
-auto make_tone(std::uint8_t channels, std::uint64_t frames) -> audio::sound_data
+auto make_tone(std::uint8_t channels, std::uint64_t frames, std::uint32_t sample_rate = TONE_SAMPLE_RATE) -> audio::sound_data
 {
     audio::sound_data tone;
-    tone.info.sample_rate = TONE_SAMPLE_RATE;
+    tone.info.sample_rate = sample_rate;
     tone.info.bits_per_sample = TEST_BITS_PER_SAMPLE;
     tone.info.channels = channels;
     tone.info.frames = frames;
@@ -155,7 +224,7 @@ auto make_tone(std::uint8_t channels, std::uint64_t frames) -> audio::sound_data
     {
         for(std::uint8_t channel = 0; channel < channels; ++channel)
         {
-            const double phase = TWO_PI * TONE_FREQUENCIES[channel % TONE_FREQUENCIES.size()] * double(frame) / TONE_SAMPLE_RATE;
+            const double phase = TWO_PI * TONE_FREQUENCIES[channel % TONE_FREQUENCIES.size()] * double(frame) / sample_rate;
             samples[frame * channels + channel] = std::int16_t(std::lround(TONE_AMPLITUDE * PCM_FULL_SCALE * std::sin(phase)));
         }
     }
@@ -323,6 +392,43 @@ void test_vorbis_lengths()
     }
 }
 
+void test_vorbis_formats()
+{
+    std::printf("test_vorbis_formats\n");
+    for(const auto channels : FORMAT_CHANNEL_COUNTS)
+    {
+        for(const auto sample_rate : FORMAT_SAMPLE_RATES)
+        {
+            const auto tone = make_tone(channels, FORMAT_FRAMES, sample_rate);
+            const auto decoded = decode_vorbis(encode_tone(tone, audio_importer_meta::compression_quality::normal_quality));
+            check(decoded.info.frames == FORMAT_FRAMES && decoded.info.channels == channels &&
+                      decoded.info.sample_rate == sample_rate,
+                  std::to_string(channels) + " channel(s) at " + std::to_string(sample_rate) +
+                      " Hz decode to every frame, channel and the rate");
+        }
+    }
+}
+
+void test_wav_sample_formats()
+{
+    std::printf("test_wav_sample_formats\n");
+    for(const auto& format : OTHER_WAV_FORMATS)
+    {
+        const std::string name = std::to_string(format.bits) + (format.tag == WAV_FORMAT_FLOAT ? "-bit float" : "-bit");
+        encoded_sound clip;
+        clip.codec = "wav";
+        clip.bytes = make_other_wav_bytes(format);
+        audio::sound_data decoded;
+        std::string error;
+        check(decode_sound(clip, decoded, error) && decoded.info.frames == TEST_FRAMES &&
+                  decoded.info.channels == TEST_CHANNELS && decoded.info.bits_per_sample == TEST_BITS_PER_SAMPLE,
+              "a " + name + " WAV decodes to 16-bit PCM of every frame: " + error);
+        check(asset_compiler::compress_clip_to_vorbis(decoded, audio_importer_meta::compression_quality::normal_quality, clip, error) &&
+                  clip.codec == "ogg",
+              "and compresses to Vorbis: " + error);
+    }
+}
+
 void test_vorbis_quality_order()
 {
     std::printf("test_vorbis_quality_order\n");
@@ -341,26 +447,53 @@ void test_compression_setting()
     using asset_compiler::get_audio_compile_parameters;
     using asset_compiler::is_compressed_to_vorbis;
     using asset_compiler::resolve_audio_compression;
+    constexpr auto desktop = target_platform::desktop;
     settings::asset_settings::audio_importer_settings defaults;
     audio_importer_meta importer;
-    check(importer.compression == quality::project_default && resolve_audio_compression(importer, defaults) == quality::normal_quality,
+    check(importer.compression == quality::project_default &&
+              resolve_audio_compression(importer, desktop, defaults) == quality::normal_quality,
           "a new clip follows the project's default, Normal Quality");
     defaults.default_compression = quality::none;
-    check(resolve_audio_compression(importer, defaults) == quality::none, "it follows a changed project default");
+    check(resolve_audio_compression(importer, desktop, defaults) == quality::none, "it follows a changed project default");
     defaults.default_compression = quality::project_default;
-    check(resolve_audio_compression(importer, defaults) == quality::normal_quality,
+    check(resolve_audio_compression(importer, desktop, defaults) == quality::normal_quality,
           "a project default of Project Default falls back to Normal Quality");
     importer.compression = quality::high_quality;
     defaults.default_compression = quality::none;
-    check(resolve_audio_compression(importer, defaults) == quality::high_quality, "a clip's own setting wins");
+    check(resolve_audio_compression(importer, desktop, defaults) == quality::high_quality, "a clip's own setting wins");
+    importer.platforms.web.is_overridden = true;
+    importer.platforms.web.compression = quality::low_quality;
+    importer.platforms.android.compression = quality::none;
+    check(resolve_audio_compression(importer, target_platform::web, defaults) == quality::low_quality &&
+              resolve_audio_compression(importer, desktop, defaults) == quality::high_quality,
+          "a platform's own compression wins on that platform only");
+    check(resolve_audio_compression(importer, target_platform::android, defaults) == quality::high_quality,
+          "a platform's compression counts only while it is overridden");
+    importer.platforms.web.compression = quality::project_default;
+    defaults.default_compression = quality::low_quality;
+    check(resolve_audio_compression(importer, target_platform::web, defaults) == quality::low_quality,
+          "a platform overridden to Project Default takes the deployed profile's default");
+    importer.platforms.desktop.is_overridden = true;
+    importer.platforms.desktop.compression = quality::none;
+    check(resolve_audio_compression(importer, desktop, defaults) == quality::none &&
+              resolve_audio_compression(importer, target_platform::web, defaults) == quality::low_quality,
+          "a Desktop override is what the editor and desktop profiles compile with, and no other platform");
     check(is_compressed_to_vorbis(quality::normal_quality, "wav") && is_compressed_to_vorbis(quality::low_quality, "flac"),
           "WAV and FLAC sources at a quality compress to Vorbis");
     check(!is_compressed_to_vorbis(quality::high_quality, "ogg") && !is_compressed_to_vorbis(quality::high_quality, "mp3"),
           "OGG and MP3 sources keep their own bytes");
     check(!is_compressed_to_vorbis(quality::none, "wav"), "None keeps a WAV's bytes");
-    check(get_audio_compile_parameters(quality::none) != get_audio_compile_parameters(quality::normal_quality) &&
-              get_audio_compile_parameters(quality::low_quality) != get_audio_compile_parameters(quality::high_quality),
-          "each setting records its own compile parameters, so a changed default compiles the clips again");
+    check(get_audio_compile_parameters(quality::none, "wav") != get_audio_compile_parameters(quality::normal_quality, "wav") &&
+              get_audio_compile_parameters(quality::low_quality, "flac") !=
+                  get_audio_compile_parameters(quality::high_quality, "flac"),
+          "each setting records its own compile parameters for a lossless clip, so a changed default compiles it again");
+    check(get_audio_compile_parameters(quality::normal_quality, "ogg") == get_audio_compile_parameters(quality::none, "ogg") &&
+              get_audio_compile_parameters(quality::high_quality, "mp3") == get_audio_compile_parameters(quality::none, "wav"),
+          "an OGG or MP3 clip records the same parameters at every setting: a changed default leaves it as it is");
+    check(get_audio_compile_parameters(quality::normal_quality, "wav").find(asset_compiler::get_vorbis_encoder_version()) !=
+              std::string::npos,
+          "a Vorbis clip records the encoder's version, so another encoder compiles it again");
+    check(asset_compiler::get_audio_codec("app:/data/Music/Theme.WAV") == "wav", "a source's codec is its extension in lower case");
 }
 
 void test_clip_compression()
@@ -435,6 +568,8 @@ auto run_audio_clip_encoding_suite(rtti::context& ctx) -> int
     test_other_format_is_refused();
     test_vorbis_round_trip();
     test_vorbis_lengths();
+    test_vorbis_formats();
+    test_wav_sample_formats();
     test_vorbis_quality_order();
     test_compression_setting();
     test_clip_compression();

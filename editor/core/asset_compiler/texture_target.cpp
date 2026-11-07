@@ -1,4 +1,5 @@
 #include "texture_target.h"
+#include "import_defaults.h"
 
 #include <bimg/bimg.h>
 #include <logging/logging.h>
@@ -15,8 +16,6 @@ namespace
 /// Raised when a change to the texture compiler (texturec, the format choice) changes what a texture
 /// compiles to with the same parameters, so that every compiled texture is compiled again.
 constexpr int TEXTURE_COMPILER_VERSION = 4;
-/// The protocol of the project's own files.
-constexpr const char* PROJECT_PROTOCOL = "app";
 /// What a texture compiles with when neither it nor the target sets a value.
 constexpr auto FALLBACK_MAX_SIZE = texture_importer_meta::texture_size::size_2048;
 constexpr auto FALLBACK_COMPRESSION = texture_importer_meta::compression_quality::normal_quality;
@@ -206,8 +205,7 @@ auto get_editor_texture_target() -> texture_target
 
 auto get_editor_texture_target_for(const fs::path& key) -> texture_target
 {
-    const auto protocol = fs::extract_protocol(fs::convert_to_protocol(key)).generic_string();
-    return protocol == PROJECT_PROTOCOL ? get_editor_texture_target() : texture_target{};
+    return follows_project_defaults(key) ? get_editor_texture_target() : texture_target{};
 }
 
 } // namespace unravel::asset_compiler

@@ -14,6 +14,8 @@ namespace
 constexpr float LOW_QUALITY = 0.2f;
 constexpr float NORMAL_QUALITY = 0.4f;
 constexpr float HIGH_QUALITY = 0.6f;
+/// Raised when a change here changes what a sound encodes to: the qualities above, the stream's layout.
+constexpr int ENCODING_REVISION = 1;
 /// Frames handed to the encoder at a time.
 constexpr std::uint64_t FRAMES_PER_WRITE = 1024;
 /// A file holds one logical stream: a fixed serial number keeps the output the same for the same sound.
@@ -54,9 +56,9 @@ public:
     auto operator=(const vorbis_stream&) -> vorbis_stream& = delete;
 
     /// False when libvorbis has no mode for the channel count, rate and quality.
-    auto start(int channels, long sample_rate, float quality) -> bool
+    auto start(int channels, long sample_rate, float vorbis_quality) -> bool
     {
-        if(vorbis_encode_init_vbr(&info_, channels, sample_rate, quality) != 0)
+        if(vorbis_encode_init_vbr(&info_, channels, sample_rate, vorbis_quality) != 0)
         {
             return false;
         }
@@ -80,18 +82,25 @@ public:
         flush_pages(out);
     }
 
-    void write_frames(const std::vector<std::int16_t>& samples, int channels, std::vector<std::uint8_t>& out)
+    /// The frames of 16-bit interleaved PCM, read in place: each sample is copied out, since the bytes need not be
+    /// aligned for int16.
+    void write_frames(const audio::sound_data& pcm, std::vector<std::uint8_t>& out)
     {
-        const std::uint64_t frames = samples.size() / std::size_t(channels);
+        const auto channels = std::uint64_t(pcm.info.channels);
+        const std::uint64_t frames = pcm.data.size() / (sizeof(std::int16_t) * channels);
+        const auto* bytes = pcm.data.data();
         for(std::uint64_t first = 0; first < frames; first += FRAMES_PER_WRITE)
         {
             const int count = int(std::min(FRAMES_PER_WRITE, frames - first));
             float** buffer = vorbis_analysis_buffer(&dsp_, count);
             for(int frame = 0; frame < count; ++frame)
             {
-                for(int channel = 0; channel < channels; ++channel)
+                for(std::uint64_t channel = 0; channel < channels; ++channel)
                 {
-                    buffer[channel][frame] = float(samples[(first + std::uint64_t(frame)) * channels + channel]) * PCM_SCALE;
+                    const std::uint64_t index = (first + std::uint64_t(frame)) * channels + channel;
+                    std::int16_t sample{};
+                    std::memcpy(&sample, bytes + index * sizeof(std::int16_t), sizeof(sample));
+                    buffer[channel][frame] = float(sample) * PCM_SCALE;
                 }
             }
             vorbis_analysis_wrote(&dsp_, count);
@@ -144,13 +153,6 @@ private:
     bool is_started_{};
 };
 
-auto read_samples(const audio::sound_data& pcm) -> std::vector<std::int16_t>
-{
-    std::vector<std::int16_t> samples(pcm.data.size() / sizeof(std::int16_t));
-    std::memcpy(samples.data(), pcm.data.data(), samples.size() * sizeof(std::int16_t));
-    return samples;
-}
-
 auto describe_mismatch(const audio::sound_data& expected, const audio::sound_data& actual) -> std::string
 {
     return "the Vorbis stream decodes to " + std::to_string(actual.info.frames) + " frames of " +
@@ -159,9 +161,9 @@ auto describe_mismatch(const audio::sound_data& expected, const audio::sound_dat
 }
 } // namespace
 
-auto get_vorbis_quality(audio_importer_meta::compression_quality quality) -> float
+auto get_vorbis_quality(audio_importer_meta::compression_quality compression) -> float
 {
-    switch(quality)
+    switch(compression)
     {
         case audio_importer_meta::compression_quality::low_quality:
             return LOW_QUALITY;
@@ -173,7 +175,12 @@ auto get_vorbis_quality(audio_importer_meta::compression_quality quality) -> flo
     }
 }
 
-auto encode_vorbis(const audio::sound_data& pcm, float quality, std::vector<std::uint8_t>& encoded, std::string& error)
+auto get_vorbis_encoder_version() -> std::string
+{
+    return std::to_string(ENCODING_REVISION) + " " + vorbis_version_string();
+}
+
+auto encode_vorbis(const audio::sound_data& pcm, float vorbis_quality, std::vector<std::uint8_t>& encoded, std::string& error)
     -> bool
 {
     const int channels = pcm.info.channels;
@@ -183,7 +190,7 @@ auto encode_vorbis(const audio::sound_data& pcm, float quality, std::vector<std:
         return false;
     }
     vorbis_stream stream;
-    if(!stream.start(channels, long(pcm.info.sample_rate), quality))
+    if(!stream.start(channels, long(pcm.info.sample_rate), vorbis_quality))
     {
         error = "libvorbis has no encoding for " + std::to_string(channels) + " channel(s) at " +
                 std::to_string(pcm.info.sample_rate) + " Hz";
@@ -191,19 +198,19 @@ auto encode_vorbis(const audio::sound_data& pcm, float quality, std::vector<std:
     }
     encoded.clear();
     stream.write_headers(encoded);
-    stream.write_frames(read_samples(pcm), channels, encoded);
+    stream.write_frames(pcm, encoded);
     stream.finish(encoded);
     return true;
 }
 
 auto compress_clip_to_vorbis(const audio::sound_data& decoded,
-                             audio_importer_meta::compression_quality quality,
+                             audio_importer_meta::compression_quality compression,
                              encoded_sound& clip,
                              std::string& error) -> bool
 {
     encoded_sound compressed;
     compressed.codec = VORBIS_CODEC;
-    if(!encode_vorbis(decoded, get_vorbis_quality(quality), compressed.bytes, error))
+    if(!encode_vorbis(decoded, get_vorbis_quality(compression), compressed.bytes, error))
     {
         return false;
     }

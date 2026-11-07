@@ -335,13 +335,39 @@ auto is_same_import_settings(const Settings& lhs, const Settings& rhs) -> bool
     return save_import_settings_bytes(lhs) == save_import_settings_bytes(rhs);
 }
 
-/// The texture's properties `names`, in rows as the inspector draws them.
-auto inspect_texture_import_properties(rtti::context& ctx,
-                                       texture_importer_meta& importer,
-                                       std::initializer_list<entt::id_type> names) -> inspect_result
+/**
+ * @brief The Revert and Apply buttons under an asset's import settings, enabled while `edited` differs from
+ * `applied`: Revert drops the edits, Apply writes them to the asset's .meta, which imports it again.
+ */
+template<typename Settings>
+void draw_import_buttons(const std::string& key,
+                         const asset_meta& meta,
+                         const std::shared_ptr<Settings>& applied,
+                         std::shared_ptr<Settings>& edited)
 {
-    entt::meta_any object = entt::forward_as_meta(importer);
-    const auto type = entt::resolve<texture_importer_meta>();
+    ImGui::Spacing();
+    const bool has_unapplied_edits = applied && edited && !is_same_import_settings(*edited, *applied);
+    ImGui::BeginDisabled(!has_unapplied_edits);
+    if(ImGui::Button("Revert"))
+    {
+        edited = {};
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("Apply"))
+    {
+        *applied = *edited;
+        editor_actions::save_import_settings(key, meta);
+    }
+    ImGui::EndDisabled();
+}
+
+/// The properties `names` of import settings (or a part of them), in rows as the inspector draws them.
+template<typename Settings>
+auto inspect_import_properties(rtti::context& ctx, Settings& settings, std::initializer_list<entt::id_type> names)
+    -> inspect_result
+{
+    entt::meta_any object = entt::forward_as_meta(settings);
+    const auto type = entt::resolve<Settings>();
     inspect_result result;
     for(const auto name : names)
     {
@@ -351,6 +377,25 @@ auto inspect_texture_import_properties(rtti::context& ctx,
         }
     }
     return result;
+}
+
+/// Opens a platform's tab of import settings; its label is bold while the platform overrides the Default tab, as an
+/// overridden setting is. False when the tab is not the open one.
+auto begin_platform_tab(target_platform platform, bool is_overridden) -> bool
+{
+    const auto label = fmt::format("{} {}", profile_labels::get_platform_icon(platform), profile_labels::get_platform_name(platform));
+    if(is_overridden)
+    {
+        ImGui::PushFont(ImGui::Font::ExtraBold);
+        // The tab bar sizes its tabs in its own font: the bold label keeps a width measured in bold.
+        ImGui::SetNextItemWidth(ImGui::TabItemCalcSize(label.c_str(), false).x);
+    }
+    const bool is_open = ImGui::BeginTabItem(label.c_str());
+    if(is_overridden)
+    {
+        ImGui::PopFont();
+    }
+    return is_open;
 }
 
 /**
@@ -364,19 +409,7 @@ auto inspect_platform_quality_tab(rtti::context& ctx,
                                   const texture_importer_meta::quality_meta& fallback) -> inspect_result
 {
     inspect_result result;
-    const auto label = fmt::format("{} {}", profile_labels::get_platform_icon(platform), profile_labels::get_platform_name(platform));
-    if(own.is_overridden)
-    {
-        ImGui::PushFont(ImGui::Font::ExtraBold);
-        // The tab bar sizes its tabs in its own font: the bold label keeps a width measured in bold.
-        ImGui::SetNextItemWidth(ImGui::TabItemCalcSize(label.c_str(), false).x);
-    }
-    const bool is_open = ImGui::BeginTabItem(label.c_str());
-    if(own.is_overridden)
-    {
-        ImGui::PopFont();
-    }
-    if(!is_open)
+    if(!begin_platform_tab(platform, own.is_overridden))
     {
         return result;
     }
@@ -408,7 +441,7 @@ auto inspect_platform_quality_tab(rtti::context& ctx,
 auto inspect_texture_import_settings(rtti::context& ctx, texture_importer_meta& importer) -> inspect_result
 {
     inspect_result result =
-        inspect_texture_import_properties(ctx, importer, {"type"_hs, "colorspace"_hs, "generate_mipmaps"_hs, "invert_normal_y"_hs});
+        inspect_import_properties(ctx, importer, {"type"_hs, "colorspace"_hs, "generate_mipmaps"_hs, "invert_normal_y"_hs});
     ImGui::SeparatorText("Quality");
     if(!ImGui::BeginTabBar("##texture_quality"))
     {
@@ -427,6 +460,70 @@ auto inspect_texture_import_settings(rtti::context& ctx, texture_importer_meta& 
     }
     result |= inspect_platform_quality_tab(ctx, target_platform::desktop, importer.platforms.desktop, importer.quality);
     result |= inspect_platform_quality_tab(ctx, target_platform::android, importer.platforms.android, importer.quality);
+    ImGui::EndTabBar();
+    return result;
+}
+
+/**
+ * @brief A platform's compression tab of an audio clip: whether the platform overrides the Default tab's
+ * compression, then its own while it does, or the Default tab's, read-only, while it does not.
+ */
+auto inspect_platform_compression_tab(rtti::context& ctx,
+                                      target_platform platform,
+                                      audio_importer_meta::platform_compression_meta& own,
+                                      audio_importer_meta::compression_quality fallback) -> inspect_result
+{
+    inspect_result result;
+    if(!begin_platform_tab(platform, own.is_overridden))
+    {
+        return result;
+    }
+    const bool was_overridden = own.is_overridden;
+    result |= inspect_import_properties(ctx, own, {"is_overridden"_hs});
+    // An override starts from the compression the platform had, the Default tab's.
+    if(own.is_overridden && !was_overridden && own.compression == audio_importer_meta::compression_quality::project_default)
+    {
+        own.compression = fallback;
+    }
+    if(own.is_overridden)
+    {
+        result |= inspect_import_properties(ctx, own, {"compression"_hs});
+    }
+    else
+    {
+        auto inherited = own;
+        inherited.compression = fallback;
+        ImGui::BeginDisabled();
+        inspect_import_properties(ctx, inherited, {"compression"_hs});
+        ImGui::EndDisabled();
+    }
+    ImGui::EndTabItem();
+    return result;
+}
+
+/// The audio clip's import settings: Force To Mono, then its compression, by default and per platform, in tabs.
+auto inspect_audio_import_settings(rtti::context& ctx, audio_importer_meta& importer) -> inspect_result
+{
+    inspect_result result = inspect_import_properties(ctx, importer, {"force_to_mono"_hs});
+    ImGui::SeparatorText("Compression");
+    if(!ImGui::BeginTabBar("##audio_compression"))
+    {
+        return result;
+    }
+    if(ImGui::BeginTabItem("Default"))
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::TextWrapped("%s",
+                           "Every platform compiles with this compression unless its tab overrides it. Project Default "
+                           "is the audio default of the profile deployed. The editor compiles with the Desktop tab and "
+                           "the project settings' default.");
+        ImGui::PopStyleColor();
+        result |= inspect_import_properties(ctx, importer, {"compression"_hs});
+        ImGui::EndTabItem();
+    }
+    result |= inspect_platform_compression_tab(ctx, target_platform::desktop, importer.platforms.desktop, importer.compression);
+    result |= inspect_platform_compression_tab(ctx, target_platform::android, importer.platforms.android, importer.compression);
+    result |= inspect_platform_compression_tab(ctx, target_platform::web, importer.platforms.web, importer.compression);
     ImGui::EndTabBar();
     return result;
 }
@@ -539,21 +636,7 @@ auto inspector_asset_handle_texture::inspect(rtti::context& ctx,
 
                 result |= inspect_texture_import_settings(ctx, *importer_);
             }
-
-            ImGui::Spacing();
-            const bool has_unapplied_edits = importer && importer_ && !is_same_import_settings(*importer_, *importer);
-            ImGui::BeginDisabled(!has_unapplied_edits);
-            if(ImGui::Button("Revert"))
-            {
-                importer_ = {};
-            }
-            ImGui::SameLine();
-            if(ImGui::Button("Apply"))
-            {
-                *importer = *importer_;
-                editor_actions::save_import_settings(data.id(), meta.meta);
-            }
-            ImGui::EndDisabled();
+            draw_import_buttons(data.id(), meta.meta, importer, importer_);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -1799,24 +1882,9 @@ auto inspector_asset_handle_audio_clip::inspect(rtti::context& ctx,
                     importer_ = std::make_shared<audio_importer_meta>(*importer);
                 }
 
-                result |= ::unravel::inspect(ctx, *importer_);
+                result |= inspect_audio_import_settings(ctx, *importer_);
             }
-
-            if(ImGui::Button("Revert"))
-            {
-                importer_ = {};
-            }
-            ImGui::SameLine();
-            if(ImGui::Button("Apply"))
-            {
-                if(importer_)
-                {
-                    *importer = *importer_;
-                }
-
-                editor_actions::save_import_settings(data.id(), meta.meta);
-            }
-
+            draw_import_buttons(data.id(), meta.meta, importer, importer_);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

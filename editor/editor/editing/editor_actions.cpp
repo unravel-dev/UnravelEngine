@@ -4,6 +4,9 @@
 #include "engine/ui/ui_tree.h"
 #include "threadpp/thread.h"
 
+#include <asset_compiler/asset_manifest.h>
+#include <asset_compiler/audio_compression.h>
+#include <asset_compiler/texture_target.h>
 #include <editor/assets/asset_watcher.h>
 #include <editor/deploy/deploy_pipeline.h>
 #include <editor/editing/prefab_bake.h>
@@ -60,6 +63,7 @@
 #include <string_utils/utils.h>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <set>
 
@@ -1200,9 +1204,10 @@ void editor_actions::open_workspace_on_file(const fs::path& file, int line)
 
 namespace
 {
-/// Touches the sources of every asset of type T in `group`, so the asset watcher imports them again.
+/// Touches the sources of every asset of type T in `group` (that `is_wanted` keeps, when given), so the asset watcher
+/// imports them again.
 template<typename T>
-void touch_assets(const std::string& group)
+void touch_assets(const std::string& group, const std::function<bool(const std::string& key)>& is_wanted = {})
 {
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
@@ -1212,6 +1217,10 @@ void touch_assets(const std::string& group)
         {
             for(auto& asset : assets)
             {
+                if(is_wanted && !is_wanted(asset.id()))
+                {
+                    continue;
+                }
                 fs::error_code ec;
                 auto path = fs::absolute(fs::resolve_protocol(asset.id()).string(), ec);
                 fs::watcher::touch(path, false);
@@ -1285,9 +1294,26 @@ void editor_actions::recompile_textures(const std::string& group)
     touch_assets<gfx::texture>(group);
 }
 
-void editor_actions::recompile_audio_clips(const std::string& group)
+void editor_actions::recompile_outdated_textures(const std::string& group)
 {
-    touch_assets<audio_clip>(group);
+    touch_assets<gfx::texture>(group,
+                               [](const std::string& key)
+                               {
+                                   return !asset_compiler::is_compiled_with_parameters(
+                                       asset_reader::resolve_compiled_path(key),
+                                       asset_compiler::get_editor_texture_compile_parameters(key));
+                               });
+}
+
+void editor_actions::recompile_outdated_audio_clips(const std::string& group)
+{
+    touch_assets<audio_clip>(group,
+                             [](const std::string& key)
+                             {
+                                 return !asset_compiler::is_compiled_with_parameters(
+                                     asset_reader::resolve_compiled_path(key),
+                                     asset_compiler::get_editor_audio_compile_parameters(key));
+                             });
 }
 
 auto editor_actions::migrate_prefabs(rtti::context& ctx, size_t* total_count) -> size_t

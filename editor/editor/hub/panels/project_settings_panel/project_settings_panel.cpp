@@ -872,18 +872,14 @@ void draw_texture_defaults(rtti::context& ctx, settings_edit_target& target)
     }
 }
 
-/// Audio compiles once, in the editor, for every deploy: its defaults are the project's, which no profile changes.
 void draw_audio_defaults(rtti::context& ctx, settings_edit_target& target)
 {
     deploy_widgets::draw_section_title("Audio");
-    if(draw_shared_category_note(target, "the audio defaults"))
-    {
-        ImGui::PushReadonly(true);
-        inspect(ctx, ctx.get_cached<project_manager>().get_settings().assets.audio);
-        ImGui::PopReadonly();
-        return;
-    }
     inspect_and_save(ctx, target, "assets/audio", [](settings& s) -> auto& { return s.assets.audio; });
+    if(!target.profile.empty())
+    {
+        draw_muted_text("The profile's deploys compile its audio with this default, into its own cache.");
+    }
 }
 
 void draw_asset_settings(rtti::context& ctx, settings_edit_target& target)

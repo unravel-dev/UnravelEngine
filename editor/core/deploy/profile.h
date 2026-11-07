@@ -229,7 +229,7 @@ auto get_profile_folder(const fs::path& project_root, const std::string& name) -
 /// Whether a project settings property may differ per profile. Layers and input actions may not, since
 /// scenes and scripts name them; nor the physics backend, which gameplay is tuned to; nor the Game view's
 /// list of resolutions, an editor setting the Game view keeps a choice from; nor the build section, which
-/// the deploy writes; nor the audio defaults, since audio compiles once, in the editor, for every deploy.
+/// the deploy writes.
 auto is_overridable_settings_path(hpp::string_view path) -> bool;
 /// Whether a deploy settings property may differ per profile: every one but the deploy location, which
 /// all profiles share (each builds into a folder of its own in it).

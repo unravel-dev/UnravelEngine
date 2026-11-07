@@ -43,6 +43,47 @@ REFLECT(audio_importer_meta)
             entt::attribute{"pretty_name", "High Quality"},
         });
 
+    entt::meta_factory<audio_importer_meta::platform_compression_meta>{}
+        .type("audio_platform_compression_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio_platform_compression_meta"},
+            entt::attribute{"pretty_name", "Platform Compression"},
+        })
+        .data<&audio_importer_meta::platform_compression_meta::is_overridden>("is_overridden"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "is_overridden"},
+            entt::attribute{"pretty_name", "Override"},
+            entt::attribute{"tooltip", "Compile with the compression below on this platform instead of the Default tab's."},
+        })
+        .data<&audio_importer_meta::platform_compression_meta::compression>("compression"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "compression"},
+            entt::attribute{"pretty_name", "Compression"},
+            entt::attribute{"tooltip", "Project Default here means the audio default of the profile being deployed."},
+        });
+
+    entt::meta_factory<audio_importer_meta::platforms_meta>{}
+        .type("audio_platforms_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "audio_platforms_meta"},
+            entt::attribute{"pretty_name", "Platforms"},
+        })
+        .data<&audio_importer_meta::platforms_meta::desktop>("desktop"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "desktop"},
+            entt::attribute{"pretty_name", "Desktop"},
+        })
+        .data<&audio_importer_meta::platforms_meta::android>("android"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "android"},
+            entt::attribute{"pretty_name", "Android"},
+        })
+        .data<&audio_importer_meta::platforms_meta::web>("web"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "web"},
+            entt::attribute{"pretty_name", "Web"},
+        });
+
     // Register audio_importer_meta with entt
     entt::meta_factory<audio_importer_meta>{}
         .type("audio_importer_meta"_hs)
@@ -67,7 +108,41 @@ REFLECT(audio_importer_meta)
                             "which makes it several times smaller and is decoded when the clip loads. A higher quality "
                             "keeps more detail and makes a larger file. Project Default uses the project settings' "
                             "default. OGG and MP3 files always keep their own bytes."},
+        })
+        .data<&audio_importer_meta::platforms>("platforms"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "platforms"},
+            entt::attribute{"pretty_name", "Platforms"},
+            entt::attribute{"tooltip",
+                            "A platform's own compression, used instead of the compression above while it is "
+                            "overridden. Desktop is also what the editor compiles with."},
         });
+}
+
+SAVE_INLINE(audio_importer_meta::platform_compression_meta)
+{
+    try_save(ar, ser20::make_nvp("is_overridden", obj.is_overridden));
+    try_save(ar, ser20::make_nvp("compression", obj.compression));
+}
+
+LOAD_INLINE(audio_importer_meta::platform_compression_meta)
+{
+    try_load(ar, ser20::make_nvp("is_overridden", obj.is_overridden));
+    try_load(ar, ser20::make_nvp("compression", obj.compression));
+}
+
+SAVE_INLINE(audio_importer_meta::platforms_meta)
+{
+    try_save(ar, ser20::make_nvp("desktop", obj.desktop));
+    try_save(ar, ser20::make_nvp("android", obj.android));
+    try_save(ar, ser20::make_nvp("web", obj.web));
+}
+
+LOAD_INLINE(audio_importer_meta::platforms_meta)
+{
+    try_load(ar, ser20::make_nvp("desktop", obj.desktop));
+    try_load(ar, ser20::make_nvp("android", obj.android));
+    try_load(ar, ser20::make_nvp("web", obj.web));
 }
 
 SAVE(audio_importer_meta)
@@ -75,6 +150,7 @@ SAVE(audio_importer_meta)
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_save(ar, ser20::make_nvp("force_to_mono", obj.force_to_mono));
     try_save(ar, ser20::make_nvp("compression", obj.compression));
+    try_save(ar, ser20::make_nvp("platforms", obj.platforms));
 }
 SAVE_INSTANTIATE(audio_importer_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(audio_importer_meta, ser20::oarchive_binary_t);
@@ -84,6 +160,7 @@ LOAD(audio_importer_meta)
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_load(ar, ser20::make_nvp("force_to_mono", obj.force_to_mono));
     try_load(ar, ser20::make_nvp("compression", obj.compression));
+    try_load(ar, ser20::make_nvp("platforms", obj.platforms));
 }
 LOAD_INSTANTIATE(audio_importer_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(audio_importer_meta, ser20::iarchive_binary_t);

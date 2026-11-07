@@ -375,8 +375,8 @@ void project_manager::apply_texture_defaults(const settings::asset_settings::tex
     asset_compiler::set_editor_texture_target(target);
     if(is_open && is_changed)
     {
-        // The project's textures left on Project Default compile with the new defaults.
-        editor_actions::recompile_textures("app:/data");
+        // The project's textures the defaults reach compile with the new ones.
+        editor_actions::recompile_outdated_textures("app:/data");
     }
 }
 
@@ -386,8 +386,8 @@ void project_manager::apply_audio_defaults(const settings::asset_settings::audio
     asset_compiler::set_editor_audio_defaults(defaults);
     if(is_open && is_changed)
     {
-        // The project's audio clips left on Project Default compile with the new default.
-        editor_actions::recompile_audio_clips("app:/data");
+        // The project's audio clips the default reaches compile with the new one.
+        editor_actions::recompile_outdated_audio_clips("app:/data");
     }
 }
 

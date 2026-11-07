@@ -62,9 +62,13 @@ inside the project).
   platforms.android: is_overridden with the quality that platform compiles
   with instead), meshes (model, sdf, cards, animations, materials), animations
   (root_motion), audio (force_to_mono; compression: project_default follows
-  the project settings' assets.audio.default_compression, normal_quality unless
-  changed; none keeps a WAV or FLAC as it is; low/normal/high_quality store it as
-  Ogg Vorbis; OGG and MP3 always keep their bytes). "schemas" gives the
+  the project settings' assets.audio.default_compression, or the deployed
+  profile's override of it, normal_quality unless changed; changing it
+  recompiles the project's clips it reaches; none keeps a WAV or FLAC as it is;
+  low/normal/high_quality store it as
+  Ogg Vorbis; OGG and MP3 always keep their bytes; platforms.desktop /
+  platforms.android / platforms.web: is_overridden with the compression that
+  platform compiles with instead, the editor using desktop's). "schemas" gives the
   enum names and ranges; a loaded texture also reports "texture": its compiled
   format, size and mips - the proof a change took.
 - assets_set_import_settings {"items":[{"key":"UI/atlas.png",
@@ -74,12 +78,13 @@ inside the project).
 - "project_default" follows the project's settings assets.texture
   (default_compression, default_max_size; settings_get {"group":"assets"}), or
   the deployed profile's override of them. Changing them recompiles the
-  project's textures in the editor; assets_recompile_textures (prefix, default
-  app:/data; wait_ms to wait for each) compiles them again on demand.
+  project's textures they reach in the editor; assets_recompile_textures
+  (prefix, default app:/data; wait_ms to wait for each) compiles them again on
+  demand.
 - assets_reimport_batch imports keys again and waits until each has reloaded.
-- Only app:/ textures are compressed. Use compression "none" for UI atlases and
-  pixel art that must stay exact, colorspace "srgb" for color maps, "linear" for
-  data maps.
+- The engine's and the editor's assets follow a new project's defaults, never
+  the project's. Use compression "none" for UI atlases and pixel art that must
+  stay exact, colorspace "srgb" for color maps, "linear" for data maps.
 
 ## Readiness
 

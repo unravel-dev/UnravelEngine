@@ -1,4 +1,8 @@
 #include "audio_compression.h"
+#include "import_defaults.h"
+#include "vorbis_encoder.h"
+
+#include <string_utils/utils.h>
 
 #include <mutex>
 
@@ -17,9 +21,10 @@ auto is_lossless_codec(const std::string& codec) -> bool
     return codec == "wav" || codec == "wave" || codec == "flac";
 }
 
-auto get_compression_name(audio_importer_meta::compression_quality compression) -> const char*
+/// The name of a stored compression (get_stored_compression) in the compile parameters.
+auto get_stored_compression_name(audio_importer_meta::compression_quality stored) -> const char*
 {
-    switch(compression)
+    switch(stored)
     {
         case audio_importer_meta::compression_quality::none:
             return "none";
@@ -36,12 +41,14 @@ auto get_compression_name(audio_importer_meta::compression_quality compression) 
 } // namespace
 
 auto resolve_audio_compression(const audio_importer_meta& importer,
+                               target_platform platform,
                                const settings::asset_settings::audio_importer_settings& defaults)
     -> audio_importer_meta::compression_quality
 {
-    if(importer.compression != audio_importer_meta::compression_quality::project_default)
+    const auto own = importer.get_compression(platform);
+    if(own != audio_importer_meta::compression_quality::project_default)
     {
-        return importer.compression;
+        return own;
     }
     if(defaults.default_compression != audio_importer_meta::compression_quality::project_default)
     {
@@ -50,14 +57,37 @@ auto resolve_audio_compression(const audio_importer_meta& importer,
     return FALLBACK_COMPRESSION;
 }
 
-auto is_compressed_to_vorbis(audio_importer_meta::compression_quality compression, const std::string& codec) -> bool
+auto get_audio_codec(const fs::path& source) -> std::string
 {
-    return compression != audio_importer_meta::compression_quality::none && is_lossless_codec(codec);
+    auto codec = string_utils::to_lower(source.extension().generic_string());
+    if(!codec.empty() && codec.front() == '.')
+    {
+        codec.erase(0, 1);
+    }
+    return codec;
 }
 
-auto get_audio_compile_parameters(audio_importer_meta::compression_quality compression) -> std::string
+auto get_stored_compression(audio_importer_meta::compression_quality compression, const std::string& codec)
+    -> audio_importer_meta::compression_quality
 {
-    return std::string("compression_") + get_compression_name(compression);
+    return is_lossless_codec(codec) ? compression : audio_importer_meta::compression_quality::none;
+}
+
+auto is_compressed_to_vorbis(audio_importer_meta::compression_quality compression, const std::string& codec) -> bool
+{
+    return get_stored_compression(compression, codec) != audio_importer_meta::compression_quality::none;
+}
+
+auto get_audio_compile_parameters(audio_importer_meta::compression_quality compression, const std::string& codec)
+    -> std::string
+{
+    const auto stored = get_stored_compression(compression, codec);
+    std::string parameters = std::string("compression_") + get_stored_compression_name(stored);
+    if(stored != audio_importer_meta::compression_quality::none)
+    {
+        parameters += " encoder_" + get_vorbis_encoder_version();
+    }
+    return parameters;
 }
 
 void set_editor_audio_defaults(const settings::asset_settings::audio_importer_settings& defaults)
@@ -72,9 +102,15 @@ auto get_editor_audio_defaults() -> settings::asset_settings::audio_importer_set
     return editor_defaults;
 }
 
-auto get_editor_audio_compile_parameters(const fs::path& key) -> std::string
+auto get_editor_audio_defaults_for(const fs::path& key) -> settings::asset_settings::audio_importer_settings
 {
-    return get_audio_compile_parameters(resolve_audio_compression(read_audio_importer(key), get_editor_audio_defaults()));
+    return follows_project_defaults(key) ? get_editor_audio_defaults() : settings::asset_settings::audio_importer_settings{};
+}
+
+auto resolve_editor_audio_compression(const fs::path& key, const audio_importer_meta& importer)
+    -> audio_importer_meta::compression_quality
+{
+    return resolve_audio_compression(importer, target_platform::desktop, get_editor_audio_defaults_for(key));
 }
 
 } // namespace unravel::asset_compiler

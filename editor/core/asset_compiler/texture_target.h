@@ -119,6 +119,10 @@ auto is_texture_compiled_for_target(const fs::path& key, const fs::path& output,
 /// The parameters of the texture at `key` for `target`, read from its importer settings.
 auto get_texture_parameters(const fs::path& key, const texture_target& target) -> texture_compile_parameters;
 
+/// The compile parameters the texture at `key` (its source or its .meta) compiles with in the editor now, as its
+/// manifest records them.
+auto get_editor_texture_compile_parameters(const fs::path& key) -> std::string;
+
 /// The importer settings of the texture at `key`, without writing them: the defaults a new texture gets when
 /// it has none.
 auto read_texture_importer(const fs::path& key) -> texture_importer_meta;
