@@ -36,10 +36,8 @@ add_subdirectory(freetype)
 add_subdirectory(RmlUi)
 add_subdirectory(watcher)
 # add_subdirectory(openssl)
-if(UNRAVEL_BUILD_ASSET_TOOLS) # the editor's MCP server only
-    add_subdirectory(cpp-httplib)
-endif()
-if(UNRAVEL_BUILD_ASSET_TOOLS) # the asset compiler's audio import only
-    add_subdirectory(vorbis)
+if(UNRAVEL_BUILD_ASSET_TOOLS)
+    add_subdirectory(cpp-httplib) # the editor's MCP and preview servers only
+    add_subdirectory(vorbis) # the asset compiler's audio import only
 endif()
 add_subdirectory(zstd)

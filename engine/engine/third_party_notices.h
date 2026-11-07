@@ -18,6 +18,8 @@ struct linked_libraries
     /// cpptrace, which walks the stacks of the crash logs; the browser build has no crash handlers.
     bool has_cpptrace{};
     bool has_miniaudio{};
+    /// What Emscripten links into the browser player: Dawn's WebGPU, its own runtime and musl.
+    bool has_web_runtime{};
 };
 
 /**

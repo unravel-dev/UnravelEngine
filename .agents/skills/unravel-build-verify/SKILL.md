@@ -84,11 +84,13 @@ way; run the rest suite by suite.
 The browser player template web deploys copy (`<bin>/players/web`) is the `web_player`
 target (`cmake/web_player.cmake`): an Emscripten sub-build in `<build>/web` with the
 Emscripten of a .NET SDK that has the wasm-tools workload (`UNRAVEL_WEB_DOTNET`, default the
-build's dotnet), then the .NET browser relink. It skips the relink while its inputs are
-unchanged. Start the editor from a shell without that SDK's `DOTNET_ROOT`: the editor would
-look for its runtime there. Its Emscripten needs Python 3.10 or newer (the configure says so
-when it is older); `-DUNRAVEL_WEB_PYTHON=<python>` names another one, as the release workflow
-does with a prebuilt standalone Python on Ubuntu 20.04. Both player sub-builds (`web_player`, `android_player`) wait for the editor
+build's dotnet), then the .NET browser relink, which links the objects and libraries the
+sub-build lists as the game's (`<build>/web/web_link_inputs.txt`). It skips the relink while
+its inputs are unchanged. Start the editor from a shell without that SDK's `DOTNET_ROOT`: the
+editor would look for its runtime there. Emscripten runs on the workload's Python and Node.js
+(Windows) or the PATH's; `-DUNRAVEL_WEB_PYTHON=<python>` and `-DUNRAVEL_WEB_NODE=<node>` name
+others, on every platform. Its Python must be 3.10 or newer (the configure says so when it is
+older), which is why the release workflow names a prebuilt standalone Python on Ubuntu 20.04. Both player sub-builds (`web_player`, `android_player`) wait for the editor
 so their compiles do not compete for memory; `-DUNRAVEL_PLAYERS_AFTER_EDITOR=OFF` builds one
 alone without the editor, as the release workflow's shared players do.
 

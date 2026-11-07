@@ -7,9 +7,13 @@
 # so a downloaded editor deploys to the web without the workload.
 #
 # UNRAVEL_WEB_PLAYER: AUTO builds the template when the tools are found and says why not otherwise, ON fails the
-# configure when a tool is missing, OFF skips it.
+# configure when a tool or the script bridge is missing, OFF skips it.
 # UNRAVEL_WEB_DOTNET: the dotnet of a .NET SDK with the wasm-tools workload (dotnet workload install wasm-tools);
 # empty: the dotnet the build found.
+# UNRAVEL_WEB_PYTHON, UNRAVEL_WEB_NODE: the Python (3.10 or newer) and the Node.js Emscripten runs on; empty: the
+# workload's (Windows), else the ones on the PATH.
+# UNRAVEL_WEB_PLAYER_JOBS: the sub-build's parallel jobs.
+# The workload's tools are taken for the .NET major below, a release before its previews.
 
 set(UNRAVEL_WEB_PLAYER "AUTO" CACHE STRING
     "Build the browser player template beside the editor: AUTO (when a .NET SDK with wasm-tools is found), ON or OFF.")
@@ -18,22 +22,50 @@ set(UNRAVEL_WEB_DOTNET "" CACHE FILEPATH
     "The dotnet of a .NET SDK with the wasm-tools workload for the browser player; empty: the build's dotnet.")
 set(UNRAVEL_WEB_PLAYER_JOBS "3" CACHE STRING
     "Parallel jobs of the browser player sub-build (unity builds need about 3 GB per job).")
+set(UNRAVEL_WEB_PYTHON "" CACHE FILEPATH
+    "The Python (3.10 or newer) Emscripten runs on for the browser player; empty: the workload's, else the PATH's.")
+set(UNRAVEL_WEB_NODE "" CACHE FILEPATH
+    "The Node.js Emscripten runs on for the browser player; empty: the workload's, else the PATH's.")
 
 # The .NET the browser player runs on (game/web/UnravelWebPlayer.csproj).
 set(UNRAVEL_WEB_DOTNET_MAJOR "11")
 # The oldest Python the Emscripten of that .NET's wasm-tools workload runs on (emcc.py checks it).
 set(UNRAVEL_WEB_PYTHON_MIN "3.10")
 
-# The newest folder or file `pattern` matches, by version-aware name order; "" when none does.
+# The newest folder or file `pattern` matches, by version-aware name order, a release before its previews (11.0.0
+# before 11.0.0-rc.2); "" when none does.
 function(unravel_find_newest out_var pattern)
     file(GLOB candidates LIST_DIRECTORIES true ${pattern})
-    if(NOT candidates)
+    set(keyed "")
+    foreach(candidate IN LISTS candidates)
+        # A preview's "-" ranks below the "/" or "." that follows a release's version.
+        string(REPLACE "-" "!" key "${candidate}")
+        list(APPEND keyed "${key}|${candidate}")
+    endforeach()
+    if(NOT keyed)
         set(${out_var} "" PARENT_SCOPE)
         return()
     endif()
-    list(SORT candidates COMPARE NATURAL ORDER DESCENDING)
-    list(GET candidates 0 newest)
+    list(SORT keyed COMPARE NATURAL ORDER DESCENDING)
+    list(GET keyed 0 newest)
+    string(REGEX REPLACE "^[^|]*\\|" "" newest "${newest}")
     set(${out_var} "${newest}" PARENT_SCOPE)
+endfunction()
+
+# The tool the user named (`named`), else the newest the workload brings (`pattern`), else `names` on the PATH.
+function(unravel_find_web_tool out_var named pattern)
+    set(tool "${named}")
+    if(NOT tool)
+        unravel_find_newest(tool "${pattern}")
+    endif()
+    if(NOT tool)
+        find_program(unravel_web_tool_on_path NAMES ${ARGN})
+        if(unravel_web_tool_on_path)
+            set(tool "${unravel_web_tool_on_path}")
+        endif()
+        unset(unravel_web_tool_on_path CACHE)
+    endif()
+    set(${out_var} "${tool}" PARENT_SCOPE)
 endfunction()
 
 # Sets web_player_reason to why the template cannot be built here, or to "" when it can, and the tools it found:
@@ -57,7 +89,8 @@ function(unravel_check_web_player_tools)
     get_filename_component(dotnet "${dotnet}" REALPATH)
     get_filename_component(root "${dotnet}" DIRECTORY)
     set(major "${UNRAVEL_WEB_DOTNET_MAJOR}")
-    unravel_find_newest(emscripten "${root}/packs/Microsoft.NET.Runtime.Emscripten.*.Sdk.*/*/tools/emscripten")
+    set(emscripten_packs "${root}/packs/Microsoft.NET.Runtime.Emscripten")
+    unravel_find_newest(emscripten "${emscripten_packs}.*.Sdk.*/${major}.*/tools/emscripten")
     unravel_find_newest(runtime_lib "${root}/packs/Microsoft.NETCore.App.Runtime.Mono.browser-wasm/${major}.*/runtimes/browser-wasm/lib/net${major}.0")
     if(NOT emscripten OR NOT runtime_lib)
         set(web_player_reason
@@ -72,30 +105,27 @@ function(unravel_check_web_player_tools)
         return()
     endif()
     get_filename_component(tools "${emscripten}" DIRECTORY)
-    set(node_name "node${CMAKE_EXECUTABLE_SUFFIX}")
-    set(python_name "python${CMAKE_EXECUTABLE_SUFFIX}")
-    unravel_find_newest(node "${root}/packs/Microsoft.NET.Runtime.Emscripten.*.Node.*/*/tools/bin/${node_name}")
-    if(NOT node)
-        find_program(UNRAVEL_WEB_NODE node)
-        set(node "${UNRAVEL_WEB_NODE}")
-    endif()
-    # The workload brings Python on Windows only; elsewhere Emscripten runs on the system's.
-    unravel_find_newest(python "${root}/packs/Microsoft.NET.Runtime.Emscripten.*.Python.*/*/tools/${python_name}")
-    if(NOT python)
-        find_program(UNRAVEL_WEB_PYTHON NAMES python3 python)
-        set(python "${UNRAVEL_WEB_PYTHON}")
-    endif()
+    # The workload brings Node.js and Python on Windows only; elsewhere Emscripten runs on the system's.
+    unravel_find_web_tool(node "${UNRAVEL_WEB_NODE}"
+                          "${emscripten_packs}.*.Node.*/${major}.*/tools/bin/node${CMAKE_EXECUTABLE_SUFFIX}" node)
+    unravel_find_web_tool(python "${UNRAVEL_WEB_PYTHON}"
+                          "${emscripten_packs}.*.Python.*/${major}.*/tools/python${CMAKE_EXECUTABLE_SUFFIX}" python3 python)
     if(NOT node OR NOT python)
-        set(web_player_reason "Node.js or Python for Emscripten was not found" PARENT_SCOPE)
+        set(web_player_reason "Node.js or Python for Emscripten was not found (set UNRAVEL_WEB_NODE or UNRAVEL_WEB_PYTHON)"
+            PARENT_SCOPE)
         return()
     endif()
     execute_process(COMMAND "${python}" -c "import sys; print('%d.%d' % sys.version_info[:2])"
                     OUTPUT_VARIABLE python_version
                     OUTPUT_STRIP_TRAILING_WHITESPACE
                     RESULT_VARIABLE python_result)
-    if(NOT python_result EQUAL 0 OR python_version VERSION_LESS UNRAVEL_WEB_PYTHON_MIN)
+    if(NOT python_result EQUAL 0)
+        set(web_player_reason "the Python for Emscripten, ${python}, does not run (set UNRAVEL_WEB_PYTHON)" PARENT_SCOPE)
+        return()
+    endif()
+    if(python_version VERSION_LESS UNRAVEL_WEB_PYTHON_MIN)
         set(web_player_reason
-            "Emscripten needs Python ${UNRAVEL_WEB_PYTHON_MIN} or newer, and ${python} is ${python_version}"
+            "Emscripten needs Python ${UNRAVEL_WEB_PYTHON_MIN} or newer, and ${python} is ${python_version} (set UNRAVEL_WEB_PYTHON)"
             PARENT_SCOPE)
         return()
     endif()
@@ -149,6 +179,9 @@ if(NOT UNRAVEL_WEB_PLAYER STREQUAL "OFF")
         endif()
         message(STATUS "Web player: off, ${web_player_reason}.")
     elseif(NOT TARGET clrpp_managed)
+        if(UNRAVEL_WEB_PLAYER STREQUAL "ON")
+            message(FATAL_ERROR "Web player: the script bridge is not built here (BUILD_CLRPP_MANAGED).")
+        endif()
         message(STATUS "Web player: off, the script bridge is not built here (BUILD_CLRPP_MANAGED).")
     else()
         message(STATUS "Web player: on (Emscripten at ${web_emscripten}).")

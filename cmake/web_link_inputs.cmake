@@ -1,0 +1,50 @@
+# What the .NET browser runtime's relink links of the engine (cmake/web_player_template.cmake): the game's objects and
+# every static library it links, through the libraries they link. Only the current ones: objects and libraries an
+# earlier build left in the folder (a renamed target, a unity build turned off) are never linked.
+
+# Appends to `out_var` the objects and static libraries `target` links, as generator expressions.
+function(unravel_collect_link_inputs target out_var)
+    set(pending ${target})
+    set(visited "")
+    set(inputs "")
+    while(pending)
+        list(POP_FRONT pending current)
+        if(current IN_LIST visited)
+            continue()
+        endif()
+        list(APPEND visited ${current})
+        get_target_property(aliased ${current} ALIASED_TARGET)
+        if(aliased)
+            list(APPEND pending ${aliased})
+            continue()
+        endif()
+        get_target_property(type ${current} TYPE)
+        if(type STREQUAL "EXECUTABLE" OR type STREQUAL "OBJECT_LIBRARY")
+            # Its objects name its precompiled header too, which is no object a link takes.
+            list(APPEND inputs "$<FILTER:$<TARGET_OBJECTS:${current}>,INCLUDE,\\.o(bj)?$>")
+        elseif(type STREQUAL "STATIC_LIBRARY")
+            list(APPEND inputs "$<TARGET_FILE:${current}>")
+        endif()
+        set(links "")
+        foreach(property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(values ${current} ${property})
+            if(values)
+                list(APPEND links ${values})
+            endif()
+        endforeach()
+        foreach(link IN LISTS links)
+            string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" link "${link}")
+            if(TARGET "${link}")
+                list(APPEND pending "${link}")
+            endif()
+        endforeach()
+    endwhile()
+    set(${out_var} ${inputs} PARENT_SCOPE)
+endfunction()
+
+# Writes the link inputs of `target` to `file`, one path a line. Called once every target links what it links (at
+# the end of the configure).
+function(unravel_write_link_inputs target file)
+    unravel_collect_link_inputs(${target} inputs)
+    file(GENERATE OUTPUT "${file}" CONTENT "$<JOIN:${inputs},\n>\n")
+endfunction()

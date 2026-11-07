@@ -10,6 +10,8 @@
 # DllImport each (game/web/tools/CalliSignatures). The scripts are compiled here as the editor compiles them (a
 # library, unsafe, no defines) for the scan only; deploys ship the editor's own build of them.
 #
+# The relink links what the Emscripten build lists as the game's link inputs (cmake/web_link_inputs.cmake).
+#
 # Nothing is redone while every input is as the last run left it: the relink takes minutes.
 cmake_minimum_required(VERSION 3.16)
 
@@ -25,15 +27,40 @@ math(EXPR language_version "${DOTNET_MAJOR} + 4")
 set(stamp_file "${OUTPUT}/template.stamp")
 set(stamp "engine_version=${ENGINE_VERSION}\n")
 set(inputs_file "${WORK_DIR}/inputs.txt")
+set(link_inputs_file "${WEB_BUILD}/web_link_inputs.txt")
+set(link_inputs_project "${WORK_DIR}/link_inputs.props")
 
-# Every input as path, size and time, so a changed file changes the list.
-function(describe_inputs out_var)
+# The objects and static libraries the relink links. A library the game links that this build did not make is an
+# error: the relink would fail on its symbols.
+function(read_link_inputs out_var)
+    if(NOT EXISTS "${link_inputs_file}")
+        message(FATAL_ERROR "Web player: ${link_inputs_file} is missing; the Emscripten build writes it as it configures.")
+    endif()
+    file(STRINGS "${link_inputs_file}" link_inputs)
+    foreach(link_input IN LISTS link_inputs)
+        if(NOT EXISTS "${link_input}")
+            message(FATAL_ERROR "Web player: the Emscripten build did not make ${link_input}, which the game links.")
+        endif()
+    endforeach()
+    set(${out_var} ${link_inputs} PARENT_SCOPE)
+endfunction()
+
+# The project file the player's project imports: a NativeFileReference item for each link input.
+function(write_link_inputs_project link_inputs)
+    set(project "<Project>\n  <ItemGroup>\n")
+    foreach(link_input IN LISTS link_inputs)
+        string(APPEND project "    <NativeFileReference Include=\"${link_input}\" />\n")
+    endforeach()
+    string(APPEND project "  </ItemGroup>\n</Project>\n")
+    file(WRITE "${link_inputs_project}" "${project}")
+endfunction()
+
+# Every input as path, size and time, so a changed file changes the list; the SDK's packs by their versioned folders.
+function(describe_inputs out_var link_inputs)
     file(GLOB_RECURSE scripts "${SCRIPTS_DIR}/*.cs")
-    file(GLOB libraries "${WEB_BUILD}/lib/*.a")
-    file(GLOB_RECURSE objects "${WEB_BUILD}/game/game/CMakeFiles/game.dir/*.o")
     file(GLOB_RECURSE player_files "${PLAYER_DIR}/*.cs" "${PLAYER_DIR}/*.csproj" "${PLAYER_DIR}/wwwroot/*")
-    set(description "${stamp}${DOTNET}\n")
-    foreach(file IN LISTS scripts libraries objects player_files BRIDGE)
+    set(description "${stamp}${DOTNET}\n${CSC}\n${REFERENCE_DIR}\n${RUNTIME_LIB}\n${EM_CACHE}\n")
+    foreach(file IN LISTS scripts link_inputs player_files BRIDGE CMAKE_CURRENT_LIST_FILE)
         file(SIZE "${file}" size)
         file(TIMESTAMP "${file}" time "%Y%m%d%H%M%S" UTC)
         string(APPEND description "${file} ${size} ${time}\n")
@@ -64,7 +91,8 @@ function(compile_engine_scripts assembly)
     run_step("compiling the engine scripts" "${DOTNET}" exec "${CSC}" "@${WORK_DIR}/engine-script.rsp")
 endfunction()
 
-describe_inputs(inputs)
+read_link_inputs(link_inputs)
+describe_inputs(inputs "${link_inputs}")
 set(previous_inputs "")
 if(EXISTS "${inputs_file}")
     file(READ "${inputs_file}" previous_inputs)
@@ -79,6 +107,7 @@ if(inputs STREQUAL previous_inputs AND previous_stamp STREQUAL stamp)
 endif()
 
 file(MAKE_DIRECTORY "${WORK_DIR}")
+write_link_inputs_project("${link_inputs}")
 set(scripts_assembly "${WORK_DIR}/scripts/engine-script.dll")
 file(MAKE_DIRECTORY "${WORK_DIR}/scripts")
 compile_engine_scripts("${scripts_assembly}")
@@ -90,7 +119,7 @@ run_step("finding the native call signatures"
 file(REMOVE_RECURSE "${WORK_DIR}/obj/UnravelWebPlayer/release/wasm" "${WORK_DIR}/publish")
 run_step("relinking the .NET browser runtime with the engine"
          "${DOTNET}" publish "${PLAYER_DIR}/UnravelWebPlayer.csproj" -c Release --artifacts-path "${WORK_DIR}"
-         -o "${WORK_DIR}/publish" "-p:UnravelWebBuild=${WEB_BUILD}" "-p:UnravelBridge=${BRIDGE}"
+         -o "${WORK_DIR}/publish" "-p:UnravelLinkInputs=${link_inputs_project}" "-p:UnravelBridge=${BRIDGE}"
          "-p:UnravelCalliSignatures=${anchors}" "-p:WasmCachePath=${EM_CACHE}")
 
 file(REMOVE_RECURSE "${OUTPUT}")

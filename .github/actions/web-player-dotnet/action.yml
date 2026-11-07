@@ -1,6 +1,8 @@
 # The .NET SDK the browser player builds with (game/web/UnravelWebPlayer.csproj) and its wasm-tools workload, which
 # brings the Emscripten the player compiles with. It goes into a folder of its own, beside the .NET the rest of the
-# build uses, and WEB_DOTNET names its dotnet for the steps after it (UNRAVEL_WEB_DOTNET).
+# build uses, and WEB_DOTNET names its dotnet for the steps after it (UNRAVEL_WEB_DOTNET). The workload comes from the
+# manifests the SDK version carries (--skip-manifest-update), so a pinned SDK builds with the same Emscripten and
+# runtime packs every time.
 name: Browser player .NET
 description: Installs the browser player's .NET SDK with its wasm-tools workload and sets WEB_DOTNET.
 inputs:
@@ -21,7 +23,7 @@ runs:
         curl.exe --fail --silent --show-error --location --retry 3 --output "$env:RUNNER_TEMP\dotnet-install.ps1" https://dot.net/v1/dotnet-install.ps1
         if ($LASTEXITCODE -ne 0) { throw 'Downloading dotnet-install.ps1 failed.' }
         & "$env:RUNNER_TEMP\dotnet-install.ps1" -Version $env:SDK_VERSION -InstallDir $dotnet -NoPath
-        & "$dotnet\dotnet.exe" workload install wasm-tools
+        & "$dotnet\dotnet.exe" workload install wasm-tools --skip-manifest-update
         if ($LASTEXITCODE -ne 0) { throw 'Installing the wasm-tools workload failed.' }
         "WEB_DOTNET=$dotnet\dotnet.exe" | Out-File -Append -Encoding ascii -FilePath $env:GITHUB_ENV
     - name: Install .NET for the browser player (Linux)
@@ -34,5 +36,5 @@ runs:
         dotnet_dir="${RUNNER_TEMP}/dotnet-web"
         curl -fsSL --retry 3 -o "${RUNNER_TEMP}/dotnet-install.sh" https://dot.net/v1/dotnet-install.sh
         bash "${RUNNER_TEMP}/dotnet-install.sh" --version "$SDK_VERSION" --install-dir "$dotnet_dir" --no-path
-        "${dotnet_dir}/dotnet" workload install wasm-tools
+        "${dotnet_dir}/dotnet" workload install wasm-tools --skip-manifest-update
         echo "WEB_DOTNET=${dotnet_dir}/dotnet" >> "$GITHUB_ENV"

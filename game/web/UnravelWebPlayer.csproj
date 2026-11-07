@@ -6,7 +6,8 @@
     (os_main_from_host, in libospp); the engine runs its frames from the browser's animation frames. The engine comes
     from an Emscripten build of the player made with this SDK's own Emscripten; cmake/web_player.cmake drives it all.
 
-    UnravelWebBuild     the engine's Emscripten build folder (its lib/ and the game's objects)
+    UnravelLinkInputs   a project file of NativeFileReference items: the engine's Emscripten build's objects and
+                        static libraries the game links (cmake/web_player_template.cmake writes it)
     UnravelBridge       Clrpp.Managed.dll, the script bridge the engine was built with
     UnravelCalliSignatures  the anchors tools/CalliSignatures wrote for the script assemblies
   -->
@@ -23,8 +24,9 @@
     <RunAOTCompilation>false</RunAOTCompilation>
     <!-- Game scripts are loaded from bytes at run time and may call any framework API: nothing is trimmed. -->
     <PublishTrimmed>false</PublishTrimmed>
-    <!-- bgfx's WebGPU backend needs Dawn's emdawnwebgpu port, fetched into a writable Emscripten cache; the page keeps
-         the player's own files in IndexedDB (IDBFS). -->
+    <!-- bgfx's own link options, which its static library cannot carry into this link: Dawn's emdawnwebgpu port for
+         its WebGPU backend (fetched into a writable Emscripten cache) and WebGL 2 for its OpenGL ES backend. The page
+         keeps the player's own files in IndexedDB (IDBFS). -->
     <EmccExtraLDFlags>--use-port=emdawnwebgpu -sMAX_WEBGL_VERSION=2 -lidbfs.js</EmccExtraLDFlags>
   </PropertyGroup>
 
@@ -37,10 +39,9 @@
       <HintPath>$(UnravelBridge)</HintPath>
     </Reference>
     <Compile Include="$(UnravelCalliSignatures)" />
-    <NativeFileReference Include="$(UnravelWebBuild)/lib/*.a" />
-    <NativeFileReference Include="$(UnravelWebBuild)/game/game/CMakeFiles/game.dir/**/*.o" />
     <!-- calli through unmanaged pointers needs Mono's IL wrapper builder; the SDK only links it for marshalling
          DllImports. -->
     <_MonoComponent Include="marshal-ilgen" />
   </ItemGroup>
+  <Import Project="$(UnravelLinkInputs)" />
 </Project>

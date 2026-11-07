@@ -70,4 +70,10 @@ endif()
 # memory grow; the standalone link here matches it.
 if(EMSCRIPTEN)
     target_link_options(${target_name} PRIVATE "-sSTACK_SIZE=5MB" "-sALLOW_MEMORY_GROWTH=1")
+    # What that link takes of this build, once every target links what it links. A deferred call reads its
+    # arguments when it runs, in another scope: EVAL fixes them now.
+    include("${CMAKE_SOURCE_DIR}/cmake/web_link_inputs.cmake")
+    cmake_language(EVAL CODE "
+        cmake_language(DEFER DIRECTORY [[${CMAKE_SOURCE_DIR}]]
+                       CALL unravel_write_link_inputs [[${target_name}]] [[${CMAKE_BINARY_DIR}/web_link_inputs.txt]])")
 endif()

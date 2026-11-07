@@ -11,8 +11,9 @@ file(READ ${notices_file} notices_hex HEX)
 string(REGEX REPLACE "(................................)" "\\1\n" notices_lines "${notices_hex}")
 string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," notices_bytes "${notices_lines}")
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/third_party_notices_text.inc CONTENT "${notices_bytes}")
-# The notices name cpptrace only in builds that link it (the browser build does not), and libdwarf, under the LGPL,
-# only in builds whose cpptrace reads symbols with it.
+# The notices name cpptrace only in builds that link it (the browser build does not), libdwarf, under the LGPL,
+# only in builds whose cpptrace reads symbols with it, and what Emscripten links (Dawn, its runtime, musl) only in the
+# browser build.
 set(links_cpptrace false)
 set(links_libdwarf false)
 if(TARGET cpptrace-lib)
@@ -22,8 +23,12 @@ if(TARGET cpptrace-lib)
         set(links_libdwarf true)
     endif()
 endif()
+set(links_web_runtime false)
+if(EMSCRIPTEN)
+    set(links_web_runtime true)
+endif()
 file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/third_party_notices_build.inc
-     CONTENT "constexpr bool LINKS_LIBDWARF = ${links_libdwarf};\nconstexpr bool LINKS_CPPTRACE = ${links_cpptrace};\n")
+     CONTENT "constexpr bool LINKS_LIBDWARF = ${links_libdwarf};\nconstexpr bool LINKS_CPPTRACE = ${links_cpptrace};\nconstexpr bool LINKS_WEB_RUNTIME = ${links_web_runtime};\n")
 
 include(GenerateExportHeader)
 generate_export_header(${target_name})

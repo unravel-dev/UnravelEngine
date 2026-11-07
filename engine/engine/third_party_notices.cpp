@@ -27,13 +27,16 @@ constexpr const char* OBOE_NAME = "Oboe";
 constexpr const char* LIBDWARF_NAME = "libdwarf-lite";
 constexpr const char* MINIAUDIO_NAME = "miniaudio";
 constexpr const char* CPPTRACE_NAME = "cpptrace";
+constexpr const char* DAWN_NAME = "Dawn";
+constexpr const char* EMSCRIPTEN_NAME = "Emscripten";
+constexpr const char* MUSL_NAME = "musl";
 
 constexpr unsigned char NOTICES_TEXT[] = {
 #include <engine/third_party_notices_text.inc>
 };
 
-// LINKS_LIBDWARF and LINKS_CPPTRACE: whether this build links cpptrace and whether it reads symbols with libdwarf,
-// which only CMake knows.
+// LINKS_LIBDWARF, LINKS_CPPTRACE and LINKS_WEB_RUNTIME: whether this build links cpptrace, whether it reads symbols
+// with libdwarf and whether it is the browser's, which only CMake knows.
 #include <engine/third_party_notices_build.inc>
 
 /// The notices in the parts a build keeps or cuts whole.
@@ -170,6 +173,10 @@ auto get_left_out_names(const linked_libraries& libraries) -> std::vector<std::s
     {
         names.emplace_back(CPPTRACE_NAME);
     }
+    if(!libraries.has_web_runtime)
+    {
+        names.insert(names.end(), {DAWN_NAME, EMSCRIPTEN_NAME, MUSL_NAME});
+    }
     return names;
 }
 } // namespace
@@ -181,6 +188,7 @@ auto get_linked_libraries() -> linked_libraries
     libraries.has_libdwarf = LINKS_LIBDWARF;
     libraries.has_cpptrace = LINKS_CPPTRACE;
     libraries.has_miniaudio = audio::is_backend_available(audio::backend_type::miniaudio);
+    libraries.has_web_runtime = LINKS_WEB_RUNTIME;
     return libraries;
 }
 

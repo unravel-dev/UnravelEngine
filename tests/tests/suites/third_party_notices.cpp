@@ -9,6 +9,7 @@
  *   - the text carries the libraries under the LGPL, with their license texts and source addresses;
  *   - a build without them carries no word of the LGPL, and only their own lines and license texts go;
  *   - this build links no library under the LGPL, and its text names only the libraries it links;
+ *   - what Emscripten links into the browser player is named in the browser build only;
  *   - it names the engine version of this binary instead of the file's placeholder;
  *   - it stays ASCII, as every text in the repository does.
  */
@@ -67,6 +68,7 @@ auto make_libraries(bool has_openal_soft, bool has_libdwarf, bool has_miniaudio)
     libraries.has_libdwarf = has_libdwarf;
     libraries.has_miniaudio = has_miniaudio;
     libraries.has_cpptrace = true;
+    libraries.has_web_runtime = true;
     return libraries;
 }
 
@@ -145,6 +147,19 @@ void test_leaves_out_cpptrace_without_it()
     check(has_text(actual, "  miniaudio 0.11.26:"), "a build without cpptrace keeps the other libraries");
 }
 
+void test_names_the_web_runtime_in_the_browser_only(const std::string& all)
+{
+    check(has_text(all, "  Dawn (emdawnwebgpu):") && has_text(all, "  Emscripten 6.0.3:") && has_text(all, "  musl: MIT.") &&
+              has_text(all, "The Dawn & Tint Authors") && has_text(all, "Rich Felker"),
+          "the browser build names Dawn, Emscripten and musl, with their licenses");
+    auto libraries = make_libraries(false, false, true);
+    libraries.has_web_runtime = false;
+    const auto actual = get_third_party_notices(libraries);
+    check(!has_text(actual, "Dawn") && !has_text(actual, "Emscripten") && !has_text(actual, "musl"),
+          "another build leaves out their lines and license texts");
+    check(has_text(actual, "  miniaudio 0.11.26:"), "and keeps the other libraries");
+}
+
 void test_follows_this_build()
 {
     const auto libraries = get_linked_libraries();
@@ -158,6 +173,7 @@ void test_follows_this_build()
     check(has_text(actual, "  miniaudio 0.11.26:") == libraries.has_miniaudio,
           "this binary's notices name miniaudio only when it links it");
     check(libraries.has_cpptrace && has_text(actual, "  cpptrace:"), "a desktop build links cpptrace and names it");
+    check(!libraries.has_web_runtime && !has_text(actual, "  Emscripten"), "a desktop build names no browser runtime");
 }
 
 void test_names_the_engine_version(const std::string& all)
@@ -183,6 +199,7 @@ auto run_third_party_notices_suite(rtti::context& /*ctx*/) -> int
     test_keeps_the_lgpl_library_a_build_links();
     test_leaves_out_miniaudio_without_it();
     test_leaves_out_cpptrace_without_it();
+    test_names_the_web_runtime_in_the_browser_only(all);
     test_follows_this_build();
     test_names_the_engine_version(all);
     test_is_ascii(all);
