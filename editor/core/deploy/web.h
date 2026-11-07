@@ -57,14 +57,25 @@ auto find_web_template(const fs::path& root, const std::string& engine_version) 
  */
 auto get_web_user_folder(const std::string& company, const std::string& product) -> std::string;
 
+/// What a web build's page shows and keeps, written into its data_manifest.json.
+struct web_page_info
+{
+    /// The game's name: the page's title, shown while the game loads.
+    std::string title;
+    /// Where the player keeps the game's own files (get_web_user_folder).
+    std::string user_folder;
+};
+
 /**
- * @brief The data_manifest.json of a web build in `site`: `user_folder` (get_web_user_folder), and every file
- * under its data/ folder, as the page fetches it ("data/engine/content.pak"), with a fingerprint of its content, in
- * name order. The page writes each one to that path in the player's file system, which the engine reads as its own
- * folder, and keeps it in the browser's cache under its fingerprint, so a later visit fetches only the files a new
- * deploy changed. Throws when a file cannot be listed or read.
+ * @brief The data_manifest.json of a web build in `site`: the page's `title` and `user_folder`, the size of the
+ * runtime it downloads first (runtime_size: its _framework/ folder, uncompressed, which weighs the runtime's part of
+ * the loading bar against the data's), and every file under its data/ folder, as the page fetches it
+ * ("data/engine/content.pak"), with a fingerprint of its content and its size, in name order. The page writes each
+ * one to that path in the player's file system, which the engine reads as its own folder, and keeps it in the
+ * browser's cache under its fingerprint, so a later visit fetches only the files a new deploy changed. Throws when a
+ * file cannot be listed or read.
  */
-auto make_web_data_manifest(const fs::path& site, const std::string& user_folder) -> std::string;
+auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> std::string;
 
 /**
  * @brief Copies the template's page and runtime into `site`, the profile's folder, beside the data/ the other steps
@@ -72,8 +83,8 @@ auto make_web_data_manifest(const fs::path& site, const std::string& user_folder
  */
 void copy_web_player(const web_template& player, const fs::path& site);
 
-/// Writes make_web_data_manifest's list into `site` once its data/ is deployed. Throws on failure.
-void write_web_data_manifest(const fs::path& site, const std::string& user_folder);
+/// Writes make_web_data_manifest's list into `site` once its data/ and the player are deployed. Throws on failure.
+void write_web_data_manifest(const fs::path& site, const web_page_info& page);
 
 /// `text` for a part of a URL: every byte but the unreserved characters of RFC 3986 as %XX.
 auto encode_url_part(const std::string& text) -> std::string;

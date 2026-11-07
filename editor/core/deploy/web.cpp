@@ -5,7 +5,9 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -19,6 +21,10 @@ constexpr const char* SITE_FOLDER = "wwwroot";
 /// The page, and the .NET runtime's loader it imports, without which the template is incomplete.
 constexpr const char* PAGE_FILE = "index.html";
 constexpr const char* RUNTIME_LOADER_FILE = "_framework/dotnet.js";
+/// The .NET runtime's folder in the site.
+constexpr const char* RUNTIME_FOLDER = "_framework";
+/// The precompressed copies a web server may send instead of a file: not downloaded besides it.
+constexpr std::array<const char*, 2> PRECOMPRESSED_EXTENSIONS = {".br", ".gz"};
 /// The first character JSON escapes as a code point: the control characters are below it.
 constexpr unsigned char JSON_FIRST_PLAIN_CHARACTER = 0x20;
 constexpr const char* REBUILD_ADVICE = "Rebuild the editor.";
@@ -101,6 +107,43 @@ auto read_fingerprint(const fs::path& file) -> std::string
     }
     return fingerprint;
 }
+
+auto read_size(const fs::path& file) -> std::uintmax_t
+{
+    fs::error_code ec;
+    const auto size = fs::file_size(file, ec);
+    if(ec)
+    {
+        throw std::runtime_error(fmt::format("{} could not be read for the web build's data manifest.", file.generic_string()));
+    }
+    return size;
+}
+
+auto is_precompressed(const fs::path& file) -> bool
+{
+    const auto extension = file.extension().string();
+    return std::any_of(PRECOMPRESSED_EXTENSIONS.begin(),
+                       PRECOMPRESSED_EXTENSIONS.end(),
+                       [&extension](const char* precompressed)
+                       {
+                           return extension == precompressed;
+                       });
+}
+
+/// The bytes of the runtime's files in `site`, without their precompressed copies; 0 without a runtime.
+auto get_runtime_size(const fs::path& site) -> std::uintmax_t
+{
+    std::uintmax_t size = 0;
+    fs::error_code ec;
+    for(fs::recursive_directory_iterator it(site / RUNTIME_FOLDER, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_regular_file(ec) && !is_precompressed(it->path()))
+        {
+            size += read_size(it->path());
+        }
+    }
+    return size;
+}
 } // namespace
 
 auto web_template::get_site_dir() const -> fs::path
@@ -145,17 +188,22 @@ auto get_web_user_folder(const std::string& company, const std::string& product)
                            : fmt::format("{}/{}/{}", WEB_PREFERENCES_ROOT, company, name);
 }
 
-auto make_web_data_manifest(const fs::path& site, const std::string& user_folder) -> std::string
+auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> std::string
 {
     std::string files_json;
     for(const auto& data : list_data_files(site))
     {
-        files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}}}",
+        files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}, \"size\": {}}}",
                                   files_json.empty() ? "\n    " : ",\n    ",
                                   to_json_string(data.site_path),
-                                  to_json_string(read_fingerprint(data.file)));
+                                  to_json_string(read_fingerprint(data.file)),
+                                  read_size(data.file));
     }
-    return fmt::format("{{\n  \"user_folder\": {},\n  \"files\": [{}\n  ]\n}}\n", to_json_string(user_folder), files_json);
+    return fmt::format("{{\n  \"title\": {},\n  \"user_folder\": {},\n  \"runtime_size\": {},\n  \"files\": [{}\n  ]\n}}\n",
+                       to_json_string(page.title),
+                       to_json_string(page.user_folder),
+                       get_runtime_size(site),
+                       files_json);
 }
 
 void copy_web_player(const web_template& player, const fs::path& site)
@@ -180,9 +228,9 @@ void copy_web_player(const web_template& player, const fs::path& site)
     }
 }
 
-void write_web_data_manifest(const fs::path& site, const std::string& user_folder)
+void write_web_data_manifest(const fs::path& site, const web_page_info& page)
 {
-    write_text_or_throw(site / WEB_DATA_MANIFEST_NAME, make_web_data_manifest(site, user_folder));
+    write_text_or_throw(site / WEB_DATA_MANIFEST_NAME, make_web_data_manifest(site, page));
 }
 
 auto encode_url_part(const std::string& text) -> std::string

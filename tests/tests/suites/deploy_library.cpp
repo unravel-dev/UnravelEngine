@@ -1044,24 +1044,27 @@ void test_web_site(const fs::path& root)
           "the page and the runtime are copied beside the data");
     check(!is_present(site / "_framework/stale.wasm"), "runtime files an older player had are removed");
     check(read_text(site / "data/engine/content.pak") == "engine pack", "the deployed data stays");
-    const auto user_folder = deployment::get_web_user_folder("Studio", "Game");
-    deployment::write_web_data_manifest(site, user_folder);
+    // A server's precompressed copy of a runtime file is no download of its own.
+    write_text(site / "_framework/dotnet.js.br", "packed");
+    const deployment::web_page_info page{"Game \"Two\"", deployment::get_web_user_folder("Studio", "Game")};
+    deployment::write_web_data_manifest(site, page);
     const auto settings_hash = fs::hash_file_fingerprint(site / "data/app/settings/settings.cfg", false);
     const auto pack_hash = fs::hash_file_fingerprint(site / "data/engine/content.pak", false);
     check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME) ==
-              "{\n  \"user_folder\": \"/libsdl/Studio/Game\",\n  \"files\": [\n    {\"path\": \"data/app/settings/settings.cfg\", "
-              "\"hash\": \"" + settings_hash + "\"},\n    {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash +
-                  "\"}\n  ]\n}\n",
-          "the manifest names the game's folder and lists the data's files by name with their content's fingerprint, as "
-          "the page fetches and caches them");
+              "{\n  \"title\": \"Game \\\"Two\\\"\",\n  \"user_folder\": \"/libsdl/Studio/Game\",\n  \"runtime_size\": 6,\n"
+              "  \"files\": [\n    {\"path\": \"data/app/settings/settings.cfg\", \"hash\": \"" + settings_hash +
+                  "\", \"size\": 8},\n    {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash +
+                  "\", \"size\": 11}\n  ]\n}\n",
+          "the manifest names the game and its folder, weighs the runtime without its precompressed copies, and lists the "
+          "data's files by name with their content's fingerprint and size, as the page fetches, caches and counts them");
     write_text(site / "data/engine/content.pak", "another engine pack");
-    check(deployment::make_web_data_manifest(site, user_folder).find(pack_hash) == std::string::npos,
+    check(deployment::make_web_data_manifest(site, page).find(pack_hash) == std::string::npos,
           "a changed file has another fingerprint, so the page fetches it again");
     const std::string accented = "data/app/compiled/men\xc3\xbc.asset";
     write_text(site / fs::from_utf8_string(accented), "menu");
     const auto accented_hash = fs::hash_file_fingerprint(site / fs::from_utf8_string(accented), false);
     check(!accented_hash.empty() &&
-              deployment::make_web_data_manifest(site, user_folder).find("\"" + accented + "\", \"hash\": \"" + accented_hash) !=
+              deployment::make_web_data_manifest(site, page).find("\"" + accented + "\", \"hash\": \"" + accented_hash) !=
                   std::string::npos,
           "a file named outside ASCII is listed in UTF-8 with its own fingerprint");
 }

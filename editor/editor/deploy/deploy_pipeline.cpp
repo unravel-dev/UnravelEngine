@@ -460,7 +460,7 @@ void deploy_web_site(const deploy_plan& plan)
         copy_web_player(plan.web_player, plan.output);
     }
     const auto& app = plan.runtime_settings.app;
-    write_web_data_manifest(plan.output, get_web_user_folder(app.company, app.product));
+    write_web_data_manifest(plan.output, {plan.version_info.product_name, get_web_user_folder(app.company, app.product)});
 }
 
 auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<void>

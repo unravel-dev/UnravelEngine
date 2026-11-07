@@ -1,18 +1,160 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>Unravel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Loading</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    :root {
+      /* The engine's splash screen's background: the loading screen fades into it without a step. */
+      --loader-background: #101014;
+      --loader-text: #f2f4f8;
+      --loader-muted: rgba(242, 244, 248, 0.58);
+      --loader-faint: rgba(242, 244, 248, 0.30);
+      --loader-track: rgba(255, 255, 255, 0.09);
+      --loader-fill-start: rgba(214, 226, 255, 0.70);
+      --loader-fill-end: #ffffff;
+      --loader-glow: rgba(150, 180, 255, 0.10);
+      --loader-error: #ff8a80;
+      --loader-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    html, body { margin: 0; height: 100%; background: var(--loader-background); overflow: hidden; }
     canvas { display: block; }
-    #status { position: absolute; left: 16px; bottom: 16px; color: #ccc; font: 14px sans-serif; }
+
+    /* The loading screen covers the canvas until the game's first frames, then fades out. */
+    .loader {
+      position: fixed; inset: 0; z-index: 2;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--loader-background);
+      color: var(--loader-text);
+      font-family: var(--loader-font);
+      -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+      transition: opacity 0.6s ease, visibility 0.6s;
+      user-select: none;
+    }
+    .loader::before {
+      content: ""; position: absolute; left: 50%; top: 46%;
+      width: 110vmax; height: 110vmax; transform: translate(-50%, -50%);
+      background: radial-gradient(closest-side, var(--loader-glow), transparent 70%);
+      animation: loader-breathe 6s ease-in-out infinite;
+      will-change: opacity; pointer-events: none;
+    }
+    /* A faint grain over the glow: a dark gradient bands in 8 bits per channel. */
+    .loader::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.045;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    .loader.is-done { opacity: 0; visibility: hidden; pointer-events: none; }
+    .loader-panel {
+      position: relative; width: min(440px, 84vw);
+      display: flex; flex-direction: column;
+      animation: loader-enter 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .loader-title {
+      margin: 0 0 28px; min-height: 1.2em;
+      font-size: clamp(24px, 4.6vw, 38px); font-weight: 600; line-height: 1.2;
+      letter-spacing: 0.01em; text-align: center;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      opacity: 0; transition: opacity 0.5s ease;
+    }
+    .loader-title.is-shown { opacity: 1; }
+    .loader-bar {
+      position: relative; height: 4px; border-radius: 999px;
+      background: var(--loader-track); overflow: hidden;
+    }
+    /* The fill slides in from the left by a transform, which the browser animates even while the page is held:
+       the engine's start holds it, and the bar creeps on meanwhile (main.js). */
+    .loader-fill {
+      position: absolute; inset: 0;
+      border-radius: inherit; overflow: hidden;
+      background: linear-gradient(90deg, var(--loader-fill-start), var(--loader-fill-end));
+      transform: translateX(-100%);
+      transition: transform 0.4s cubic-bezier(0.2, 0.7, 0.2, 1);
+      will-change: transform;
+    }
+    .loader-sheen {
+      position: absolute; top: 0; bottom: 0; left: 0; width: 30%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+      transform: translateX(-100%);
+      animation: loader-sheen 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      will-change: transform;
+    }
+    .loader-row {
+      display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+      margin-top: 14px; font-size: 13px; letter-spacing: 0.02em;
+    }
+    .loader-stage { color: var(--loader-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .loader-percent {
+      color: var(--loader-text); font-variant-numeric: tabular-nums; font-weight: 500;
+      transition: opacity 0.3s ease;
+    }
+    .loader.is-starting .loader-percent { opacity: 0; }
+    .loader-detail {
+      min-height: 1.4em; margin-top: 6px;
+      font-size: 12px; color: var(--loader-faint); font-variant-numeric: tabular-nums; letter-spacing: 0.02em;
+    }
+    .loader-error { margin-top: 4px; text-align: center; }
+    .loader-error[hidden] { display: none; }
+    .loader-error-title { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--loader-error); }
+    .loader-error-text { margin: 0 0 20px; font-size: 13px; line-height: 1.5; color: var(--loader-muted); user-select: text; }
+    .loader-button {
+      font: inherit; font-size: 13px; font-weight: 500; letter-spacing: 0.02em;
+      color: var(--loader-text); background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 999px;
+      padding: 9px 22px; cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+    .loader-button:hover { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.30); }
+    .loader-button:focus-visible { outline: 2px solid var(--loader-fill-end); outline-offset: 3px; }
+    .loader.has-error .loader-bar, .loader.has-error .loader-row, .loader.has-error .loader-detail { display: none; }
+    .loader-credit {
+      position: absolute; left: 0; right: 0; bottom: max(22px, env(safe-area-inset-bottom));
+      margin: 0; text-align: center;
+      font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--loader-faint);
+    }
+
+    /* Above the canvas once the game runs. */
+    .notice {
+      position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); z-index: 1;
+      transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); box-sizing: border-box;
+      padding: 12px 16px; border-radius: 10px;
+      background: rgba(10, 12, 16, 0.86); border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--loader-muted); font: 13px/1.5 var(--loader-font);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    @keyframes loader-sheen { to { transform: translateX(340%); } }
+    @keyframes loader-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    @keyframes loader-breathe { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) {
+      .loader::before, .loader-sheen, .loader-panel { animation: none; }
+      .loader-sheen { display: none; }
+    }
   </style>
   <script type="module" src="./main.js"></script>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-  <div id="status">Loading</div>
+  <div id="loader" class="loader">
+    <div class="loader-panel">
+      <h1 id="loader-title" class="loader-title"></h1>
+      <div id="loader-bar" class="loader-bar" role="progressbar" aria-label="Loading" aria-valuemin="0"
+           aria-valuemax="100" aria-valuenow="0">
+        <div id="loader-fill" class="loader-fill"><div class="loader-sheen"></div></div>
+      </div>
+      <div class="loader-row">
+        <span id="loader-stage" class="loader-stage" role="status" aria-live="polite">Getting ready</span>
+        <span id="loader-percent" class="loader-percent">0%</span>
+      </div>
+      <div id="loader-detail" class="loader-detail"></div>
+      <div id="loader-error" class="loader-error" role="alert" hidden>
+        <p class="loader-error-title">The game could not start.</p>
+        <p id="loader-error-text" class="loader-error-text"></p>
+        <button id="loader-retry" class="loader-button" type="button">Try again</button>
+      </div>
+    </div>
+    <p class="loader-credit">Made with Unravel Engine</p>
+  </div>
 </body>
 </html>
