@@ -21,6 +21,8 @@ struct editor_settings
         fs::path vscode_executable;
         /// The steamcmd Upload to Steam runs; empty: the one on PATH.
         fs::path steamcmd_executable;
+        /// The cloudflared a web profile's public link runs; empty: the one on PATH or where its installer puts it.
+        fs::path cloudflared_executable;
     } external_tools;
 
     struct scripting_settings

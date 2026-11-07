@@ -104,6 +104,11 @@ Building a scene is not shipping a game. The rest of the chain:
   editor log as [Device] lines (logs_get_recent include_device_system adds the device system's own
   [Device System] lines). android_device_action acts without a new deploy: run_last_build,
   follow_log, clear_data, uninstall.
+- Web: project_deploy with a web profile builds a folder for a web server; with
+  run_after_deploy the editor serves it on this computer and opens the page.
+  deploy_share_web shares the profile's last deploy at a public HTTPS link (a
+  Cloudflare quick tunnel; needs cloudflared) for a phone or a tester, until
+  action stop or the editor closes.
 - Driving and verifying the game needs synthesized input - see the
   verification skill.
 

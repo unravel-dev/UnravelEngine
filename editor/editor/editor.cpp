@@ -15,6 +15,7 @@
 #include "assets/asset_watcher.h"
 #include "deploy/deploy_runtime.h"
 #include "deploy/web_preview_server.h"
+#include "deploy/web_public_link.h"
 #include "editing/editing_manager.h"
 #include "editing/picking_manager.h"
 #include "editing/thumbnail_manager.h"
@@ -291,6 +292,7 @@ auto editor::deinit() -> bool
 {
     auto& ctx = engine::context();
 
+    deployment::stop_public_link();
     deployment::get_web_preview_server().stop();
 
     if(!ctx.get_cached<mcp_manager>().deinit(ctx))

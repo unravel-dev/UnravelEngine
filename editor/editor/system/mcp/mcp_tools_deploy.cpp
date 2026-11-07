@@ -11,6 +11,7 @@
 #include <editor/deploy/deploy_preflight.h>
 #include <editor/deploy/deploy_steam.h>
 #include <editor/deploy/project_releases.h>
+#include <editor/deploy/web_public_link.h>
 #include <engine/assets/asset_manager.h>
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/deploy_panel/deploy_panel.h>
@@ -33,6 +34,12 @@ namespace
 constexpr int64_t k_default_deploy_timeout_ms = 180000;
 constexpr int64_t k_max_deploy_timeout_ms = 900000;
 constexpr auto k_deploy_poll_interval = std::chrono::milliseconds(250);
+/// cloudflared connects its tunnel within seconds; longer means the network blocks it.
+constexpr int64_t k_default_share_timeout_ms = 30000;
+constexpr int64_t k_max_share_timeout_ms = 120000;
+constexpr const char* k_share_action = "share";
+constexpr const char* k_stop_action = "stop";
+constexpr const char* k_status_action = "status";
 
 /// The Deploy window owns the editor's deploy state - the toolbar's Deploy and Run shows the same
 /// progress - so a deploy started here is the one the user sees, and two cannot overlap.
@@ -721,6 +728,60 @@ struct content_request
     deploy_settings params;
     std::string startup_scene;
 };
+
+auto get_public_link_state_name(deployment::public_link_state state) -> const char*
+{
+    switch(state)
+    {
+        case deployment::public_link_state::starting:
+            return "starting";
+        case deployment::public_link_state::running:
+            return "running";
+        case deployment::public_link_state::failed:
+            return "failed";
+        case deployment::public_link_state::stopped:
+            break;
+    }
+    return "stopped";
+}
+
+/// A JSON string, or null for an empty one.
+auto make_json_string_or_null(const std::string& value) -> std::string
+{
+    return value.empty() ? std::string("null") : make_json_string(value);
+}
+
+auto public_link_to_json(const deployment::public_link_status& status) -> std::string
+{
+    return fmt::format(R"({{"state":{},"profile":{},"address":{},"error":{}}})",
+                       make_json_string(get_public_link_state_name(status.state)),
+                       make_json_string_or_null(status.profile),
+                       make_json_string_or_null(status.page_address),
+                       make_json_string_or_null(status.error));
+}
+
+/// deploy_share_web's action on the main thread: share the profile's deploy, stop sharing, or nothing for status.
+auto run_public_link_action(rtti::context& ctx, const simdjson::dom::object& args, const std::string& action) -> tool_result
+{
+    if(action == k_stop_action)
+    {
+        deployment::stop_public_link();
+        return {.text = "stopped", .is_error = false};
+    }
+    if(action != k_share_action)
+    {
+        return {.text = "status", .is_error = false};
+    }
+    std::string error;
+    auto* pm = get_open_project(ctx, error);
+    std::string profile;
+    if(pm == nullptr || !read_target_profile(*pm, args, "profile", profile, error))
+    {
+        return {.text = error, .is_error = true};
+    }
+    error = deployment::start_public_link(ctx, *pm->get_profile_deploy_settings(profile));
+    return {.text = error.empty() ? std::string("started") : error, .is_error = !error.empty()};
+}
 
 } // namespace
 
@@ -1446,6 +1507,67 @@ void register_deploy_tools(mcp_tool_registry& registry)
          .mutates_scene = false,
          .requires_main_thread = false,
          .effect = tool_effect::destructive});
+
+    registry.add(
+        {.name = "deploy_share_web",
+         .description =
+             "Share a web profile's last deploy at a public HTTPS link, as the Deploy window's Share Public Link does: "
+             "the editor serves the profile's folder (deploy it first, project_deploy) and cloudflared (Editor Settings "
+             "> External Tools, else the one on PATH or where its installer puts it) opens a Cloudflare quick tunnel to "
+             "it, a new https://<name>.trycloudflare.com address each time. Anyone with the link can play until action "
+             "stop or the editor closes; a new address may take a few seconds to resolve. action share (default) waits "
+             "up to timeout_ms (default 30000) for the tunnel to connect, stop ends it, status reports it. profile "
+             "defaults to the deploy profile. Returns state (stopped, starting, running or failed), profile, address "
+             "(the page's public address) and error.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"action":{"type":"string","enum":["share","stop","status"],"description":"Default share"},"profile":{"type":"string","description":"The web profile to share; default the deploy profile"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":120000}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             std::string action = k_share_action;
+             read_string(args, "action", action);
+             if(action != k_share_action && action != k_stop_action && action != k_status_action)
+             {
+                 return {.text = "action is share, stop or status", .is_error = true};
+             }
+             const auto timeout = read_timeout_ms(args, k_default_share_timeout_ms, k_max_share_timeout_ms, "timeout_ms");
+             const auto deadline = std::chrono::steady_clock::now() + timeout;
+             auto acted = mcp.invoke_on_main(
+                 [&ctx, &args, &action]() -> tool_result
+                 {
+                     return run_public_link_action(ctx, args, action);
+                 },
+                 std::chrono::milliseconds(30000));
+             if(!acted || acted->is_error)
+             {
+                 return acted ? *acted : tool_result{.text = "Timed out on the main thread", .is_error = true};
+             }
+             const auto read_status = [&mcp]()
+             {
+                 return mcp.invoke_on_main(
+                     []()
+                     {
+                         return deployment::get_public_link_status();
+                     });
+             };
+             auto status = read_status();
+             while(action == k_share_action && status && status->state == deployment::public_link_state::starting &&
+                   std::chrono::steady_clock::now() < deadline)
+             {
+                 std::this_thread::sleep_for(k_deploy_poll_interval);
+                 status = read_status();
+             }
+             if(!status)
+             {
+                 return {.text = "Timed out reading the link on the main thread", .is_error = true};
+             }
+             return {.text = public_link_to_json(*status),
+                     .is_error = status->state == deployment::public_link_state::failed};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false,
+         .effect = tool_effect::changes});
 
     registry.add(
         {.name = "android_device_action",

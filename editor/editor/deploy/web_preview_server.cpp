@@ -3,6 +3,7 @@
 #include <httplib.h>
 
 #include "web_preview_server.h"
+#include "deploy_preflight.h"
 
 #include <deploy/web.h>
 #include <editor/system/local_http.h>
@@ -229,10 +230,22 @@ auto web_preview_server::start() -> bool
     return false;
 }
 
+void web_preview_server::set_tunnel_origin(const std::string& origin)
+{
+    std::lock_guard<std::mutex> lock(sites_mutex_);
+    tunnel_origin_ = origin;
+}
+
+auto web_preview_server::is_tunnel_request(const httplib::Request& request) -> bool
+{
+    std::lock_guard<std::mutex> lock(sites_mutex_);
+    return is_web_tunnel_request(request.get_header_value("Host"), request.get_header_value("Origin"), tunnel_origin_);
+}
+
 void web_preview_server::handle(const httplib::Request& request, httplib::Response& response)
 {
     std::string refusal;
-    if(!is_loopback_request(request, refusal))
+    if(!is_tunnel_request(request) && !is_loopback_request(request, refusal))
     {
         APPLOG_WARNING("Web deploy server: {}.", refusal);
         response.status = httplib::StatusCode::Forbidden_403;
@@ -286,6 +299,11 @@ auto get_web_preview_server() -> web_preview_server&
 {
     static web_preview_server server;
     return server;
+}
+
+auto get_project_site_path(const std::string& profile) -> std::string
+{
+    return make_web_site_path(fs::to_utf8_string(get_project_root().filename()), profile);
 }
 
 } // namespace unravel::deployment

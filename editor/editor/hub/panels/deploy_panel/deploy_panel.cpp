@@ -9,6 +9,7 @@
 #include <editor/deploy/deploy_android.h>
 #include <editor/deploy/deploy_steam.h>
 #include <editor/deploy/project_releases.h>
+#include <editor/deploy/web_public_link.h>
 #include <editor/format/format_bytes.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
@@ -82,6 +83,10 @@ const std::string DEPLOY_RUNNING_PROBLEM = "A deploy is running.";
 // The space between a device's name and its details, in item spacings.
 constexpr float DEVICE_DETAILS_GAP = 2.0f;
 constexpr const char* CHOOSE_DEVICE_LABEL = "Choose a device";
+constexpr const char* SHARE_LINK_LABEL = ICON_MDI_EARTH " Share Public Link";
+constexpr const char* COPY_LINK_LABEL = ICON_MDI_CONTENT_COPY " Copy Link";
+constexpr const char* STOP_SHARING_LABEL = ICON_MDI_STOP " Stop Sharing";
+constexpr const char* CLOUDFLARED_RELEASES_URL = "https://github.com/cloudflare/cloudflared/releases";
 
 void draw_header()
 {
@@ -409,6 +414,87 @@ void draw_message(const std::string& message, bool is_error)
                             is_error ? widgets::WARNING_COLOR : widgets::get_accent_u32(),
                             message.c_str(),
                             ImGui::GetColorU32(ImGuiCol_Text));
+}
+
+/// How to get cloudflared, which a public link runs.
+void draw_cloudflared_install_note()
+{
+    widgets::draw_muted_text("Install cloudflared once: winget install --id Cloudflare.cloudflared on Windows, brew "
+                             "install cloudflared on macOS, or a download from its releases page. Editor Settings > "
+                             "External Tools can name where it is.");
+    ImGui::TextLinkOpenURL("cloudflared releases", CLOUDFLARED_RELEASES_URL);
+}
+
+/// Share Public Link for the deploy profile; disabled with the reason while its deploy cannot be shared.
+void draw_share_link_button(rtti::context& ctx)
+{
+    const auto params = ctx.get_cached<project_manager>().get_deploy_request();
+    const auto problem = deployment::get_public_link_problem(params);
+    if(widgets::draw_button(SHARE_LINK_LABEL, false, problem.empty()))
+    {
+        // A failure to start shows as the link's status.
+        deployment::start_public_link(ctx, params);
+    }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("%s",
+                          problem.empty() ? "Serve the profile's last deploy and open a public link to it." : problem.c_str());
+    }
+}
+
+/// The link while it is shared: the address, which opens it, Copy Link and Stop Sharing.
+void draw_shared_link(const deployment::public_link_status& status)
+{
+    if(status.state == deployment::public_link_state::running)
+    {
+        ImGui::TextLinkOpenURL(status.page_address.c_str());
+        ImGui::SetItemTooltipEx("%s", "Open the link in the default browser.");
+        if(widgets::draw_button(COPY_LINK_LABEL, false, true))
+        {
+            ImGui::SetClipboardText(status.page_address.c_str());
+        }
+        ImGui::SameLine();
+    }
+    else
+    {
+        widgets::draw_icon_line(ICON_MDI_PROGRESS_CLOCK,
+                                widgets::get_muted_color(),
+                                "Opening the tunnel...",
+                                ImGui::GetColorU32(ImGuiCol_Text));
+    }
+    if(widgets::draw_button(STOP_SHARING_LABEL, false, true))
+    {
+        deployment::stop_public_link();
+    }
+    widgets::draw_muted_text(fmt::format("Anyone with the link can play the last deploy of {} until you stop sharing or "
+                                         "close the editor, and a new deploy updates what it plays. A new link takes a "
+                                         "few seconds to work, and each share gets a new one. Quick tunnels are for "
+                                         "testing: for players, host the folder.",
+                                         status.profile)
+                                 .c_str());
+}
+
+/// A public link to the deploy profile's last build, through a Cloudflare quick tunnel to the editor's web server.
+void draw_public_link(rtti::context& ctx)
+{
+    ImGui::SeparatorText("Public Link");
+    widgets::draw_muted_text("Deploy and Run plays the build on this computer only. A public link lets a phone, or "
+                             "anyone you send it to, play the profile's last deploy over HTTPS, through a Cloudflare "
+                             "quick tunnel to the editor. It needs cloudflared, Cloudflare's free tunnel tool, and no "
+                             "Cloudflare account.");
+    const auto status = deployment::get_public_link_status();
+    if(status.state == deployment::public_link_state::starting || status.state == deployment::public_link_state::running)
+    {
+        draw_shared_link(status);
+        return;
+    }
+    if(status.state == deployment::public_link_state::failed)
+    {
+        draw_message(status.error, true);
+        widgets::draw_gap(widgets::LINE_GAP);
+    }
+    draw_share_link_button(ctx);
+    draw_cloudflared_install_note();
 }
 
 /// Draws text from `pos`, cut with an ellipsis at `max_x`. The end is given, so ImGui draws the text as it is
@@ -1375,6 +1461,7 @@ void deploy_panel::draw_web_section(rtti::context& ctx)
         set_profile_message(pm.set_profile_web(ctx, settings_editor_.get_profile(), web), {});
         problems_.invalidate();
     }
+    draw_public_link(ctx);
     ImGui::SeparatorText("Hosting");
     widgets::draw_muted_text("Upload the whole folder to any static web host. Browsers offer WebGPU only to pages served "
                              "over HTTPS or from this computer. The game runs on one thread, so the page needs no "

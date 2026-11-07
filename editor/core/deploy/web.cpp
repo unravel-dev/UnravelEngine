@@ -3,6 +3,7 @@
 
 #include <filesystem/file_fingerprint.h>
 #include <logging/logging.h>
+#include <string_utils/utils.h>
 
 #include <algorithm>
 #include <array>
@@ -36,6 +37,9 @@ constexpr const char* WEB_PROGRAM_NAME = "app";
 constexpr const char* URL_HEX_DIGITS = "0123456789ABCDEF";
 constexpr unsigned char URL_HIGH_NIBBLE_SHIFT = 4;
 constexpr unsigned char URL_LOW_NIBBLE_MASK = 0xF;
+/// The domain cloudflared names a quick tunnel's address under.
+constexpr const char* QUICK_TUNNEL_DOMAIN = ".trycloudflare.com";
+constexpr const char* HTTPS_SCHEME = "https://";
 
 auto is_present(const fs::path& path) -> bool
 {
@@ -143,6 +147,12 @@ auto get_runtime_size(const fs::path& site) -> std::uintmax_t
         }
     }
     return size;
+}
+
+/// A letter, digit or hyphen: what the labels of a tunnel's host name are made of.
+auto is_host_character(char character) -> bool
+{
+    return std::isalnum(static_cast<unsigned char>(character)) != 0 || character == '-';
 }
 } // namespace
 
@@ -272,6 +282,53 @@ auto make_web_page_address(const std::string& origin, const std::string& site_pa
         query += (query.empty() ? "?arg=" : "&arg=") + encode_url_part(argument);
     }
     return address + query;
+}
+
+auto make_web_tunnel_arguments(const fs::path& cloudflared, const std::string& local_origin) -> std::vector<std::string>
+{
+    return {cloudflared.empty() ? std::string(DEFAULT_CLOUDFLARED) : fs::to_utf8_string(cloudflared),
+            "tunnel",
+            "--no-autoupdate",
+            "--url",
+            local_origin};
+}
+
+auto find_web_tunnel_origin(const std::string& line) -> std::string
+{
+    const auto domain = line.find(QUICK_TUNNEL_DOMAIN);
+    if(domain == std::string::npos)
+    {
+        return {};
+    }
+    const auto end = domain + std::char_traits<char>::length(QUICK_TUNNEL_DOMAIN);
+    if(end < line.size() && (is_host_character(line[end]) || line[end] == '.' || line[end] == '/'))
+    {
+        return {};
+    }
+    auto name = domain;
+    while(name > 0 && is_host_character(line[name - 1]))
+    {
+        --name;
+    }
+    const auto scheme_length = std::char_traits<char>::length(HTTPS_SCHEME);
+    if(name == domain || name < scheme_length || line.compare(name - scheme_length, scheme_length, HTTPS_SCHEME) != 0)
+    {
+        return {};
+    }
+    return line.substr(name - scheme_length, end - (name - scheme_length));
+}
+
+auto is_web_tunnel_request(const std::string& host, const std::string& origin, const std::string& tunnel_origin) -> bool
+{
+    const auto scheme_length = std::char_traits<char>::length(HTTPS_SCHEME);
+    if(tunnel_origin.compare(0, scheme_length, HTTPS_SCHEME) != 0 || tunnel_origin.size() == scheme_length)
+    {
+        return false;
+    }
+    const auto tunnel_host = string_utils::to_lower(tunnel_origin.substr(scheme_length));
+    const auto request_host = string_utils::to_lower(host.substr(0, host.find(':')));
+    return request_host == tunnel_host &&
+           (origin.empty() || string_utils::to_lower(origin) == string_utils::to_lower(tunnel_origin));
 }
 
 } // namespace unravel::deployment

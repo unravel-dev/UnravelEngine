@@ -100,4 +100,26 @@ auto make_web_site_path(const std::string& project, const std::string& profile) 
 auto make_web_page_address(const std::string& origin, const std::string& site_path, const std::vector<std::string>& arguments)
     -> std::string;
 
+/// The tunnel tool a public link runs when Editor Settings names none: Cloudflare's cloudflared on PATH.
+constexpr const char* DEFAULT_CLOUDFLARED = "cloudflared";
+
+/**
+ * @brief The command that opens a Cloudflare quick tunnel to `local_origin` ("http://127.0.0.1:8742"): a new
+ * https://<name>.trycloudflare.com address forwards to it, without a Cloudflare account, until the process ends.
+ * `cloudflared` empty: the one on PATH.
+ */
+auto make_web_tunnel_arguments(const fs::path& cloudflared, const std::string& local_origin) -> std::vector<std::string>;
+
+/// The quick tunnel's public origin ("https://<name>.trycloudflare.com") a line of cloudflared's output announces;
+/// empty when it announces none. Addresses with a path, such as the API's it reports failures of, or under a longer
+/// domain are not one.
+auto find_web_tunnel_origin(const std::string& line) -> std::string;
+
+/**
+ * @brief Whether a request with these Host and Origin values (empty when absent) came through the tunnel whose public
+ * origin is `tunnel_origin`: its Host names the tunnel and its Origin, when it has one, is the tunnel's page. A page
+ * elsewhere sends its own Origin, and a name rebound to this computer is not the tunnel's.
+ */
+auto is_web_tunnel_request(const std::string& host, const std::string& origin, const std::string& tunnel_origin) -> bool;
+
 } // namespace unravel::deployment

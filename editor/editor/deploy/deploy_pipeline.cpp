@@ -516,7 +516,7 @@ auto has_failed_step(const std::vector<tpp::shared_future<void>>& steps) -> bool
 /// path of the project and profile, and opens the page in the default browser.
 void open_web_deploy(const deploy_plan& plan)
 {
-    const auto site_path = make_web_site_path(fs::to_utf8_string(get_project_root().filename()), plan.params.profile);
+    const auto site_path = get_project_site_path(plan.params.profile);
     const auto origin = get_web_preview_server().serve(plan.output, site_path);
     if(origin.empty())
     {

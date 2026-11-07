@@ -26,7 +26,8 @@
  *     binaries, older runtime versions;
  *   - cooked shaders: the renderers a web build ships and cooks, the plan of what a deploy cooks;
  *   - web: the browser player template's stamp checks, the player copied beside the deployed data, and
- *     the list of the data's files the page loads;
+ *     the list of the data's files the page loads; a public link's cloudflared command, the tunnel address
+ *     its output announces, and the requests that count as the tunnel's;
  *   - profile folders under the deploy folder; deploy locations relative to the project, and the
  *     project folders the editor manages;
  *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
@@ -38,7 +39,7 @@
  *     back as Windows reads them; the window icon file written beside executables that carry no icon;
  *   - run arguments: split on whitespace, quoted for a device shell;
  *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
- *     its process at once;
+ *     its process at once, and reports a program that does not exist as not started;
  *   - a protocol shipped packed, loose, packed again, as a patch over a kept release and full again,
  *     with left out assets;
  *   - the content walk over a profile's shipped settings instead of the settings file;
@@ -1088,6 +1089,42 @@ void test_web_addresses()
           "run arguments go one per arg=, encoded");
 }
 
+void test_web_tunnel()
+{
+    std::printf("test_web_tunnel\n");
+    const std::vector<std::string> expected{"cloudflared", "tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:8742"};
+    check(deployment::make_web_tunnel_arguments({}, "http://127.0.0.1:8742") == expected,
+          "without a set path the tunnel runs the cloudflared on PATH, to the local server");
+    check(deployment::make_web_tunnel_arguments("C:/tools/cloudflared.exe", "http://127.0.0.1:8742").front() ==
+              "C:/tools/cloudflared.exe",
+          "a set path runs that cloudflared");
+    const std::string announced = "2026-11-07T14:36:16Z INF |  https://address-rhythm-dean-attorneys.trycloudflare.com"
+                                  "                                   |";
+    check(deployment::find_web_tunnel_origin(announced) == "https://address-rhythm-dean-attorneys.trycloudflare.com",
+          "the line that announces the tunnel gives its origin");
+    check(deployment::find_web_tunnel_origin("ERR failed to request quick Tunnel: Post \"https://api.trycloudflare.com/"
+                                             "tunnel\": dial tcp: no such host")
+              .empty(),
+          "the API address a failure names is not the tunnel's");
+    check(deployment::find_web_tunnel_origin("INF Requesting new quick Tunnel on trycloudflare.com...").empty() &&
+              deployment::find_web_tunnel_origin("https://www.cloudflare.com/website-terms/").empty() &&
+              deployment::find_web_tunnel_origin("https://name.trycloudflare.com.example.org").empty(),
+          "lines without a tunnel address, or with another domain, give none");
+    const std::string tunnel = "https://address-rhythm-dean-attorneys.trycloudflare.com";
+    const std::string host = "address-rhythm-dean-attorneys.trycloudflare.com";
+    check(deployment::is_web_tunnel_request(host, "", tunnel) && deployment::is_web_tunnel_request(host, tunnel, tunnel),
+          "the tunnel's requests come in, with or without the page as their Origin");
+    check(deployment::is_web_tunnel_request("Address-Rhythm-Dean-Attorneys.trycloudflare.com:443", "", tunnel),
+          "host names compare without case, and a port is not part of the name");
+    check(!deployment::is_web_tunnel_request(host, "https://evil.example", tunnel),
+          "a page elsewhere is refused through the tunnel too");
+    check(!deployment::is_web_tunnel_request("evil.example", "", tunnel) &&
+              !deployment::is_web_tunnel_request("127.0.0.1:8742", tunnel, tunnel),
+          "another host name is not the tunnel's");
+    check(!deployment::is_web_tunnel_request(host, "", "") && !deployment::is_web_tunnel_request("", "", "https://"),
+          "without a tunnel nothing counts as its request");
+}
+
 void test_write_text(const fs::path& root)
 {
     std::printf("test_write_text\n");
@@ -1527,6 +1564,8 @@ void test_subprocess(const fs::path& root)
     stream.stop();
     check(!stream.is_running() && std::chrono::steady_clock::now() - stop_begin < std::chrono::seconds(20),
           "stopping ends it at once");
+    check(!stream.start({(root / "no_such_program.exe").string()}, {}) && !stream.is_running(),
+          "a stream of a program that does not exist does not start, so the next program can be tried");
 }
 
 void test_pack_inputs(const fs::path& root)
@@ -2105,6 +2144,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_web_template(temp / "web_template");
         test_web_site(temp / "web_site");
         test_web_addresses();
+        test_web_tunnel();
         test_write_text(temp / "write_text");
         test_gradle_arguments();
         test_android_permissions();

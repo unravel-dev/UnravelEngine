@@ -60,6 +60,16 @@ REFLECT_INLINE(editor_settings::external_tools_settings)
                             "SDK (tools/ContentBuilder/builder) or Valve's standalone download.\n"
                             "Empty: the steamcmd on PATH."},
             entt::attribute{"type", "file"},
+        })
+        .data<&editor_settings::external_tools_settings::cloudflared_executable>("cloudflared_executable"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloudflared_executable"},
+            entt::attribute{"pretty_name", "cloudflared"},
+            entt::attribute{"tooltip",
+                            "Full path to cloudflared, Cloudflare's tunnel tool, which a web profile's\n"
+                            "Share Public Link runs.\n"
+                            "Empty: the cloudflared on PATH, or where its installer puts it."},
+            entt::attribute{"type", "file"},
         });
 }
 
@@ -67,6 +77,7 @@ SAVE_INLINE(editor_settings::external_tools_settings)
 {
     try_save(ar, ser20::make_nvp("vscode_executable", obj.vscode_executable.generic_string()));
     try_save(ar, ser20::make_nvp("steamcmd_executable", fs::to_utf8_string(obj.steamcmd_executable)));
+    try_save(ar, ser20::make_nvp("cloudflared_executable", fs::to_utf8_string(obj.cloudflared_executable)));
 }
 
 LOAD_INLINE(editor_settings::external_tools_settings)
@@ -80,6 +91,11 @@ LOAD_INLINE(editor_settings::external_tools_settings)
     if(try_load(ar, ser20::make_nvp("steamcmd_executable", steamcmd_executable)))
     {
         obj.steamcmd_executable = fs::from_utf8_string(steamcmd_executable);
+    }
+    std::string cloudflared_executable;
+    if(try_load(ar, ser20::make_nvp("cloudflared_executable", cloudflared_executable)))
+    {
+        obj.cloudflared_executable = fs::from_utf8_string(cloudflared_executable);
     }
 }
 

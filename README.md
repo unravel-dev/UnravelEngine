@@ -137,6 +137,29 @@ Enable **Developer options > USB debugging** on the phone, connect it and accept
 (`adb devices` lists it). In the editor, deploy an Android settings profile from
 **Deploy > Deploy Project**, or use **Deploy and Run** in the toolbar.
 
+## Browser
+
+A web settings profile builds a folder for any static web host: the browser player, which
+renders with WebGPU, with the game's data beside it. **Deploy and Run** serves that folder on
+this computer and opens it in the default browser.
+
+**Public link for testing**
+
+To play the build on a phone, or send it to someone, the Deploy window's web profile has
+**Share Public Link**: the editor serves the profile's last deploy and opens a Cloudflare quick
+tunnel to it, a `https://<name>.trycloudflare.com` address that works until you stop sharing or
+close the editor. Browsers allow WebGPU only over HTTPS, which the tunnel provides. It needs no
+Cloudflare account, only `cloudflared`, installed once:
+
+```powershell
+winget install --id Cloudflare.cloudflared
+```
+
+On macOS run `brew install cloudflared`; elsewhere download it from its
+[releases](https://github.com/cloudflare/cloudflared/releases). The editor looks for it on
+`PATH` and, on Windows, where its installer puts it; **Editor Settings > External Tools** can name
+another one. Quick tunnels are for testing; for players, upload the folder to a web host.
+
 ## Editor MCP server
 
 While the editor runs, it serves MCP (JSON-RPC over HTTP) at `http://127.0.0.1:27182/mcp`,
