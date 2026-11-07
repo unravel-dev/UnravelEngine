@@ -161,7 +161,8 @@ auto find_constant_filled_tables(const std::vector<std::uint32_t>& words) -> std
         {
             break;
         }
-        const std::uint32_t elements = read_instruction(words[at] & 0xFFFFu, &words[at + 1], word_count - 1, ids);
+        // data() + at + 1, not &words[at + 1]: a one-word instruction ends the module (OpFunctionEnd).
+        const std::uint32_t elements = read_instruction(words[at] & 0xFFFFu, words.data() + at + 1, word_count - 1, ids);
         if(elements != 0)
         {
             tables.push_back(elements);
