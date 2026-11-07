@@ -16,7 +16,8 @@ struct threader
     threader(cmd_line::parser& parser);
 
     /// Turns the single-threaded mode on when the command line asks for it (always on in the browser) and starts
-    /// the job pool: one worker per performance core, or none in that mode.
+    /// the job pool: one worker per performance core, or none in that mode, where tpp::async and then without a
+    /// thread id become jobs too.
     auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 

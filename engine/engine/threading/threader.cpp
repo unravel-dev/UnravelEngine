@@ -60,6 +60,12 @@ auto threader::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
         std::map<tpp::priority::category, size_t>{{tpp::priority::category::low, worker_count}});
     if(is_single_threaded())
     {
+        // tpp::async and then without a thread id would start a thread each: they become jobs, as in the browser.
+        tpp::set_detached_executor(
+            [this](tpp::task work)
+            {
+                pool->schedule("Running detached work", std::move(work));
+            });
         APPLOG_INFO("Threading: single-threaded, every job runs on the main thread.");
     }
     return true;
@@ -69,6 +75,7 @@ auto threader::deinit(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
+    tpp::set_detached_executor(nullptr);
     pool.reset();
     if(is_tpp_initialized_)
     {

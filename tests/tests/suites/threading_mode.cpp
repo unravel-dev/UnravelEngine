@@ -10,6 +10,8 @@
  * These pin the contract:
  *   - the runner's job pool has no workers exactly in the mode (--single-threaded), and a job then runs on
  *     the thread that waits for it, or in the threader's per-frame pump;
+ *   - in either mode a wait on work made from jobs returns: a continuation on the main thread (the script
+ *     compile wait), when_all, a polling sleep, async without a thread id (a job in the mode);
  *   - in the mode, parallel loops run inline on the calling thread, in order, and start no pool;
  *     background work runs before run_in_background returns, and background_scope changes nothing;
  *   - a frame longer than the minimum fps allows counts as the longest frame it allows, unless the
@@ -23,9 +25,13 @@
 #include <engine/threading/threader.h>
 #include <simulation/simulation.h>
 
+#include <threadpp/when_all_any.hpp>
+
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -91,14 +97,83 @@ void test_runner_pool_follows_the_switch(rtti::context& ctx)
             return 7;
         });
     check(waited.get() == 7 && ran_on == std::this_thread::get_id(), "a waited job runs on the waiting thread");
-    bool is_pumped = false;
+    // Earlier suites leave jobs no one waits for, and the runner has no frame between suites: run them first so the
+    // pump's budget goes to the job below.
+    for(const auto& [name, count] : pool.get_jobs_count_detailed())
+    {
+        std::printf("  queued by earlier suites: %zu x '%s'\n", count, name.c_str());
+    }
+    ctx.get_cached<threader>().run_queued_jobs();
+    // Shared, not on this stack: a job the pump does not run outlives this function.
+    auto is_pumped = std::make_shared<std::atomic<bool>>(false);
     auto polled = pool.schedule(
-        [&is_pumped]()
+        [is_pumped]()
         {
-            is_pumped = true;
+            *is_pumped = true;
         });
     ctx.get_cached<threader>().process();
-    check(is_pumped && polled.is_ready(), "the threader's frame pump runs a job no one waits for");
+    check(*is_pumped && polled.is_ready(), "the threader's frame pump runs a job no one waits for");
+}
+
+void test_waits_on_work_made_from_jobs(rtti::context& ctx)
+{
+    std::printf("test_waits_on_work_made_from_jobs\n");
+    auto& pool = *ctx.get_cached<threader>().pool;
+    const auto main_id = tpp::this_thread::get_id();
+    // The script compile wait: compile jobs, continuations on the main thread, a wait on the continuations.
+    std::vector<tpp::future<int>> continuations;
+    for(int i = 0; i < 3; ++i)
+    {
+        continuations.push_back(pool.schedule(
+                                        [i]()
+                                        {
+                                            return i;
+                                        })
+                                    .then(main_id,
+                                          [](tpp::future<int> compiled)
+                                          {
+                                              return compiled.get() + 1;
+                                          }));
+    }
+    int sum = 0;
+    for(auto& continuation : continuations)
+    {
+        continuation.wait();
+        sum += continuation.get();
+    }
+    check(sum == 6, "a wait on a continuation of a job on the main thread returns");
+    auto first = pool.schedule(
+        []()
+        {
+            return 2;
+        });
+    auto second = pool.schedule(
+        []()
+        {
+            return 3;
+        });
+    auto both = tpp::when_all(std::move(first), std::move(second)).get();
+    check(std::get<0>(both).get() + std::get<1>(both).get() == 5, "a wait on when_all of jobs returns");
+    auto polled = pool.schedule(
+        []()
+        {
+            return 4;
+        });
+    while(!polled.is_ready())
+    {
+        tpp::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(polled.get() == 4, "a polling loop with sleep_for sees the job finish");
+    std::thread::id ran_on{};
+    auto detached = tpp::async(
+        [&ran_on]()
+        {
+            ran_on = std::this_thread::get_id();
+            return 5;
+        });
+    check(detached.get() == 5, "a wait on async without a thread id returns");
+    check((ran_on == std::this_thread::get_id()) == is_single_threaded(),
+          "async without a thread id runs as a job on the main thread exactly in the mode");
 }
 
 void test_loops_run_inline_on_the_calling_thread()
@@ -180,6 +255,7 @@ auto run_threading_mode_suite(rtti::context& ctx) -> int
     g_checks = 0;
     g_failures = 0;
     test_runner_pool_follows_the_switch(ctx);
+    test_waits_on_work_made_from_jobs(ctx);
     test_loops_run_inline_on_the_calling_thread();
     test_background_work_runs_before_returning();
     test_long_frame_counts_as_the_longest_allowed();
