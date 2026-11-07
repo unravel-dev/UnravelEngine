@@ -18,7 +18,7 @@
 #include "../common.sh"
 #include "../sampling.sh"
 
-IMAGE2D_RW(s_gi_indirect, rg11b10f, 0);
+IMAGE2D_RW(s_gi_indirect, GI_BOUNCE_ATLAS_FORMAT, 0);
 IMAGE2D_WO(s_gi_final_out, rgba16f, 1);
 IMAGE2D_RW(i_gi_radiosity_frames, r32f, 2);
 SAMPLER2D(s_gi_card_depth, 3);
@@ -137,7 +137,7 @@ void main()
 	vec3 irradiance = sum.w > 0.0 ? max(sum.xyz / sum.w, vec3_splat(0.0)) : vec3_splat(0.0);
 	float alpha = 1.0 / max(s_frames, 1.0);
 	vec3 indirect = mix(imageLoad(s_gi_indirect, texel).xyz, irradiance, alpha);
-	imageStore(s_gi_indirect, texel, vec4(GiQuantizeCardLighting(indirect, texel, u_gi_card_lighting.w), 0.0));
+	imageStore(s_gi_indirect, texel, vec4(GiQuantizeBounceLighting(indirect, texel, u_gi_card_lighting.w), 0.0));
 	vec3 albedo_encoded = texelFetch(s_gi_card_albedo, texel, 0).xyz;
 	vec3 direct = texelFetch(s_gi_card_direct, texel, 0).xyz;
 	vec3 emissive = texelFetch(s_gi_card_emissive, texel, 0).xyz;

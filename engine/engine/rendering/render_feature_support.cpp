@@ -21,7 +21,11 @@ constexpr image_need GI_IMAGES[] = {
     {bgfx::TextureFormat::RGBA16F},
     {bgfx::TextureFormat::RGBA32F},
     {bgfx::TextureFormat::RG11B10F},
-    {bgfx::TextureFormat::RG11B10F, gfx::texture_dimension::two_d, image_access::read_write},
+    // The surface cache's direct and indirect atlases: RGBA16F under WebGPU (gi_surface_cache.cpp).
+    {bgfx::TextureFormat::RG11B10F,
+     gfx::texture_dimension::two_d,
+     image_access::read_write,
+     bgfx::TextureFormat::RGBA16F},
     {bgfx::TextureFormat::R32F, gfx::texture_dimension::two_d, image_access::read_write},
     {bgfx::TextureFormat::R8, gfx::texture_dimension::three_d},
     {bgfx::TextureFormat::RGBA16, gfx::texture_dimension::three_d},
@@ -261,19 +265,20 @@ auto find_missing_image(const gfx::device_caps& caps, const render_feature_requi
 {
     for(const auto& image : needs.images)
     {
-        if(image.access == image_access::read_write && !caps.can_read_write_image(image.format))
+        const auto format = image.get_format(caps.renderer);
+        if(image.access == image_access::read_write && !caps.can_read_write_image(format))
         {
-            return "This GPU cannot read and write " + get_texture_format_name(image.format) +
+            return "This GPU cannot read and write " + get_texture_format_name(format) +
                    " images through one compute binding.";
         }
-        if(image.access == image_access::read && !caps.can_read_image(image.format, image.dimension))
+        if(image.access == image_access::read && !caps.can_read_image(format, image.dimension))
         {
-            return "This GPU cannot load " + get_texture_format_name(image.format) + " " +
+            return "This GPU cannot load " + get_texture_format_name(format) + " " +
                    get_texture_dimension_text(image.dimension) + "images in compute shaders.";
         }
-        if(image.access != image_access::read && !caps.can_write_image(image.format, image.dimension))
+        if(image.access != image_access::read && !caps.can_write_image(format, image.dimension))
         {
-            return "This GPU cannot write " + get_texture_format_name(image.format) + " " +
+            return "This GPU cannot write " + get_texture_format_name(format) + " " +
                    get_texture_dimension_text(image.dimension) + "images from compute shaders.";
         }
     }

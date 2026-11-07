@@ -108,6 +108,16 @@ constexpr auto lighting_atlas_format = bgfx::TextureFormat::RG11B10F;
 constexpr auto depth_atlas_format = bgfx::TextureFormat::R16;
 constexpr auto normal_atlas_format = bgfx::TextureFormat::RG8;
 constexpr auto final_atlas_format = bgfx::TextureFormat::RGBA16F;
+/// The direct and indirect atlases' format under WebGPU, which reads and writes rg11b10f through no binding: the card
+/// copy and the radiosity integrate do (render_feature_support asks for it).
+constexpr auto webgpu_bounce_atlas_format = bgfx::TextureFormat::RGBA16F;
+
+/// The direct and indirect atlases' format: the shaders declare the same (gi_image_formats.sh GI_BOUNCE_ATLAS_FORMAT).
+auto get_bounce_atlas_format() -> bgfx::TextureFormat::Enum
+{
+    return gfx::get_device_caps().renderer == bgfx::RendererType::WebGPU ? webgpu_bounce_atlas_format
+                                                                         : lighting_atlas_format;
+}
 
 /// The frame index the atlas stores dither by (GiQuantizeCardLighting).
 auto get_store_frame_index() -> float
@@ -414,8 +424,8 @@ void gi_surface_cache::create_targets()
     normal_atlas_ = make_atlas(s.atlas_size, normal_atlas_format);
     emissive_atlas_ = make_atlas(s.atlas_size, lighting_atlas_format);
     depth_atlas_ = make_atlas(s.atlas_size, depth_atlas_format);
-    direct_atlas_ = make_atlas(s.atlas_size, lighting_atlas_format);
-    indirect_atlas_ = make_atlas(s.atlas_size, lighting_atlas_format);
+    direct_atlas_ = make_atlas(s.atlas_size, get_bounce_atlas_format());
+    indirect_atlas_ = make_atlas(s.atlas_size, get_bounce_atlas_format());
     final_atlas_ = make_atlas(s.atlas_size, final_atlas_format);
     // New radiosity atlases at the current layout.
     radiosity_trace_atlas_.reset();
@@ -1003,9 +1013,9 @@ void gi_surface_cache::copy_captures()
     bind_atlas_image(3, depth_atlas_, bgfx::Access::Write, depth_atlas_format);
     bind_atlas_image(4, final_atlas_, bgfx::Access::Write, final_atlas_format);
     // Direct and indirect read-write: a page refreshed in place reads its own lighting back for the final lighting.
-    bind_atlas_image(5, indirect_atlas_, bgfx::Access::ReadWrite, lighting_atlas_format);
+    bind_atlas_image(5, indirect_atlas_, bgfx::Access::ReadWrite, get_bounce_atlas_format());
     bind_atlas_image(6, radiosity_frames_, bgfx::Access::Write, bgfx::TextureFormat::R32F);
-    bind_atlas_image(7, direct_atlas_, bgfx::Access::ReadWrite, lighting_atlas_format);
+    bind_atlas_image(7, direct_atlas_, bgfx::Access::ReadWrite, get_bounce_atlas_format());
     gfx::set_texture(uniforms_.s_gi_capture_rt0, 8, capture_target_->get_texture(0));
     gfx::set_texture(uniforms_.s_gi_capture_rt1, 9, capture_target_->get_texture(1));
     gfx::set_texture(uniforms_.s_gi_capture_rt2, 10, capture_target_->get_texture(2));
@@ -1049,7 +1059,7 @@ void gi_surface_cache::dispatch_direct(const lighting_inputs& inputs, uint32_t f
     const auto& clipmap_gpu = inputs.view_cache->get_clipmap_gpu();
     const auto& light_buffer = inputs.gi_scene->get_light_buffer();
     gfx::render_pass pass("GI/Card Direct Lighting");
-    bind_atlas_image(0, direct_atlas_, bgfx::Access::Write, lighting_atlas_format);
+    bind_atlas_image(0, direct_atlas_, bgfx::Access::Write, get_bounce_atlas_format());
     bind_atlas_image(1, final_atlas_, bgfx::Access::Write, final_atlas_format);
     gfx::set_texture(uniforms_.s_gi_card_albedo, 11, albedo_atlas_);
     gfx::set_texture(uniforms_.s_gi_card_emissive, 12, emissive_atlas_);
@@ -1144,7 +1154,7 @@ void gi_surface_cache::dispatch_radiosity(const lighting_inputs& inputs, uint32_
     }
     {
         gfx::render_pass pass("GI/Radiosity Integrate");
-        bind_atlas_image(0, indirect_atlas_, bgfx::Access::ReadWrite, lighting_atlas_format);
+        bind_atlas_image(0, indirect_atlas_, bgfx::Access::ReadWrite, get_bounce_atlas_format());
         bind_atlas_image(1, final_atlas_, bgfx::Access::Write, final_atlas_format);
         bind_atlas_image(2, radiosity_frames_, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32F);
         gfx::set_texture(uniforms_.s_gi_card_depth, 3, depth_atlas_);

@@ -10,7 +10,8 @@
  * turns into world space through the card's current axes.
  *
  * The atlas formats: albedo RGBA8, normal RG8, depth R16, emissive, direct and indirect lighting R11G11B10 float,
- * stored through GiQuantizeCardLighting. The final lighting stays RGBA16F with the card depth in alpha: a hit
+ * stored through GiQuantizeCardLighting (direct and indirect: RGBA16F under WebGPU, GiQuantizeBounceLighting). The
+ * final lighting stays RGBA16F with the card depth in alpha: a hit
  * reads its lighting and its depth test from one texel, and the hit tracers have no stage left for a depth atlas of
  * their own.
  */
@@ -24,6 +25,18 @@
 vec3 GiQuantizeCardLighting(vec3 lighting, ivec2 texel, float frame_index)
 {
 	return GiQuantizeForRg11b10f(lighting, InterleavedGradientNoise(vec2(texel), mod(frame_index, 8.0)));
+}
+
+/// @p lighting ready for a store to the direct or indirect atlas (GI_BOUNCE_ATLAS_FORMAT). An rgba16f atlas takes it
+/// as it is: the dither's one rg11b10f step would brighten every store, and the radiosity's running blend would
+/// compound that, while rgba16f's own step is 16 times finer and drifts the blend by under half a percent.
+vec3 GiQuantizeBounceLighting(vec3 lighting, ivec2 texel, float frame_index)
+{
+#if BGFX_SHADER_LANGUAGE_WGSL
+	return lighting;
+#else
+	return GiQuantizeCardLighting(lighting, texel, frame_index);
+#endif
 }
 
 /// Copy tiles per dispatch row (the copy and the resample run rows of tiles: a full capture atlas has more tiles than

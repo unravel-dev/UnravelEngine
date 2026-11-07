@@ -17,6 +17,15 @@
 #	define format_rg11b10f format_r11fg11fb10f
 #endif
 
+/// The surface cache's direct and indirect atlases, which the card copy and the radiosity integrate read and write
+/// through one binding: rg11b10f, but rgba16f in WGSL, since WebGPU reads and writes rg11b10f through no binding
+/// (gi_surface_cache.cpp get_bounce_atlas_format creates the same).
+#if BGFX_SHADER_LANGUAGE_WGSL
+#	define GI_BOUNCE_ATLAS_FORMAT rgba16f
+#else
+#	define GI_BOUNCE_ATLAS_FORMAT rg11b10f
+#endif
+
 /// R11G11B10's relative precision per channel: 6, 6 and 5 mantissa bits, a step of 2^-6, 2^-6 and 2^-5 of the value.
 #define GI_RG11B10F_QUANTIZATION_ERROR vec3(0.015625, 0.015625, 0.03125)
 

@@ -30,9 +30,9 @@ IMAGE2D_WO(s_gi_normal_out, rg8, 1);
 IMAGE2D_WO(s_gi_emissive_out, rg11b10f, 2);
 IMAGE2D_WO(s_gi_depth_out, r16, 3);
 IMAGE2D_WO(s_gi_final_out, rgba16f, 4);
-IMAGE2D_RW(s_gi_indirect_out, rg11b10f, 5);
+IMAGE2D_RW(s_gi_indirect_out, GI_BOUNCE_ATLAS_FORMAT, 5);
 IMAGE2D_WO(s_gi_radiosity_frames_out, r32f, 6);
-IMAGE2D_RW(s_gi_direct_out, rg11b10f, 7);
+IMAGE2D_RW(s_gi_direct_out, GI_BOUNCE_ATLAS_FORMAT, 7);
 SAMPLER2D(s_gi_capture_rt0, 8);
 SAMPLER2D(s_gi_capture_rt1, 9);
 SAMPLER2D(s_gi_capture_rt2, 10);
@@ -117,8 +117,8 @@ void main()
 	BRANCH
 	if(!keeps_lighting)
 	{
-		imageStore(s_gi_direct_out, atlas_texel, vec4(GiQuantizeCardLighting(direct, atlas_texel, u_gi_card_copy.z), 0.0));
-		imageStore(s_gi_indirect_out, atlas_texel, vec4(GiQuantizeCardLighting(indirect, atlas_texel, u_gi_card_copy.z), 0.0));
+		imageStore(s_gi_direct_out, atlas_texel, vec4(GiQuantizeBounceLighting(direct, atlas_texel, u_gi_card_copy.z), 0.0));
+		imageStore(s_gi_indirect_out, atlas_texel, vec4(GiQuantizeBounceLighting(indirect, atlas_texel, u_gi_card_copy.z), 0.0));
 		if(local.x == 0 && local.y == 0)
 		{
 			imageStore(s_gi_radiosity_frames_out, ivec2(tile.zw) / GI_CARD_TILE_SIZE, vec4(frames, 0.0, 0.0, 0.0));

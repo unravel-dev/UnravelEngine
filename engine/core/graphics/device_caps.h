@@ -59,7 +59,8 @@ struct device_caps
     /// Whether a compute shader can load @p format from a storage image of @p dimension.
     auto can_read_image(bgfx::TextureFormat::Enum format, texture_dimension dimension = texture_dimension::two_d) const
         -> bool;
-    /// Whether a compute shader can read and write @p format through one image binding.
+    /// Whether a compute shader can read and write @p format through one image binding (under WebGPU: only the
+    /// formats texture-formats-tier2 lists, besides the 32-bit single-channel ones).
     auto can_read_write_image(bgfx::TextureFormat::Enum format) const -> bool;
     /// Whether a pass can render to @p format with @p samples per pixel.
     auto can_render_to(bgfx::TextureFormat::Enum format, std::uint8_t samples = 1) const -> bool;

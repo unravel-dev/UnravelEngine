@@ -1,0 +1,19 @@
+WebGPU: read-write images only with texture-formats-tier2
+
+BGFX_CAPS_IMAGE_RW was always set. Core WebGPU allows read-write storage textures in r32float, r32uint and
+r32sint only, and texture-formats-tier2 adds a list of formats; an application that checked the cap bound
+read-write images WebGPU refused. Formats outside tier2's list, such as rg11b10ufloat, stay read-only or
+write-only: the cap has no per-format form.
+
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -1516,7 +1516,7 @@ WGPU_IMPORT
+ 							| BGFX_CAPS_BLEND_INDEPENDENT
+ 							| BGFX_CAPS_COMPUTE
+ 							| BGFX_CAPS_DRAW_INDIRECT
+-							| BGFX_CAPS_IMAGE_RW
++							| (isFeatureSupported(WGPUFeatureName_TextureFormatsTier2) ? BGFX_CAPS_IMAGE_RW : 0)
+ 							| BGFX_CAPS_INDEX32
+ 							| BGFX_CAPS_PRIMITIVE_ID
+ 							| BGFX_CAPS_RENDERER_MULTITHREADED

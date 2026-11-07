@@ -10,6 +10,7 @@
  *   - a D3D11 feature level 11_0 device (8 compute bindings, no typed loads) loses the features that bind more;
  *   - a Vulkan device without multi-draw indirect (the S21) loses only the GPU particle culling;
  *   - a device without Vulkan's extended storage formats loses the features that write them;
+ *   - WebGPU reads and writes only texture-formats-tier2's list (never rg11b10f), and GI asks for its WebGPU format;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
  *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one;
  *   - a feature whose dependency is unavailable is unavailable, and says why;
@@ -174,6 +175,26 @@ void test_extended_storage_formats()
     check(support.get_device_limits().ambient_occlusion, "no extended formats: GTAO keeps the ambient occlusion on");
 }
 
+void test_webgpu_read_write_formats()
+{
+    std::printf("WebGPU reads and writes only its own list of formats through one binding\n");
+    auto caps = make_desktop_caps();
+    caps.renderer = bgfx::RendererType::WebGPU;
+    check(!caps.can_read_write_image(bgfx::TextureFormat::RG11B10F), "WebGPU: rg11b10f is never read-write");
+    check(caps.can_read_write_image(bgfx::TextureFormat::RGBA16F) && caps.can_read_write_image(bgfx::TextureFormat::R32F),
+          "WebGPU with texture-formats-tier2: rgba16f and r32f are read-write");
+    const auto support = render_feature_support::resolve(caps);
+    check_available(support, render_feature::global_illumination, true, "WebGPU with tier2");
+    caps.has_image_read_write = false;
+    check(!caps.can_read_write_image(bgfx::TextureFormat::RGBA16F) && caps.can_read_write_image(bgfx::TextureFormat::R32F),
+          "WebGPU without tier2: only the 32-bit single-channel formats are read-write");
+    const auto core_support = render_feature_support::resolve(caps);
+    check_available(core_support, render_feature::global_illumination, false, "WebGPU without tier2");
+    check(core_support.get_status(render_feature::global_illumination).reason.find("RGBA16F") != std::string::npos,
+          "WebGPU without tier2: GI names the format it binds there");
+    check(make_desktop_caps().can_read_write_image(bgfx::TextureFormat::RG11B10F), "Direct3D 12: rg11b10f is read-write");
+}
+
 void test_no_compute()
 {
     std::printf("a device without compute loses every compute feature\n");
@@ -297,6 +318,7 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_feature_level_11_0();
     test_vulkan_without_multi_draw();
     test_extended_storage_formats();
+    test_webgpu_read_write_formats();
     test_no_compute();
     test_no_vertex_storage_buffers();
     test_dependency_reason();

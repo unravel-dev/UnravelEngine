@@ -70,6 +70,15 @@ struct image_need
     bgfx::TextureFormat::Enum format{};
     gfx::texture_dimension dimension{gfx::texture_dimension::two_d};
     image_access access{image_access::write};
+    /// The format the feature binds under WebGPU instead, whose shaders declare another; Count: @ref format.
+    bgfx::TextureFormat::Enum webgpu_format{bgfx::TextureFormat::Count};
+
+    /// The format the feature binds on a device with @p renderer.
+    constexpr auto get_format(bgfx::RendererType::Enum renderer) const -> bgfx::TextureFormat::Enum
+    {
+        return renderer == bgfx::RendererType::WebGPU && webgpu_format != bgfx::TextureFormat::Count ? webgpu_format
+                                                                                                    : format;
+    }
 };
 
 /// A render target format a feature's passes render to.

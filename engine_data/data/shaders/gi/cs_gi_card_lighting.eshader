@@ -24,7 +24,7 @@
 #include "gi/gi_global_sdf.sh"
 #include "gi/gpu_lights.sh"
 
-IMAGE2D_WO(s_gi_direct_out, rg11b10f, 0);
+IMAGE2D_WO(s_gi_direct_out, GI_BOUNCE_ATLAS_FORMAT, 0);
 IMAGE2D_WO(s_gi_final_out, rgba16f, 1);
 SAMPLER2D(s_gi_card_normal, 3);
 SAMPLER2D(s_gi_card_depth, 7);
@@ -201,7 +201,7 @@ void main()
 			direct += GiCardLightIrradiance(GpuLoadLight(i), position, normal);
 		}
 	}
-	imageStore(s_gi_direct_out, texel, vec4(GiQuantizeCardLighting(direct, texel, u_gi_card_lighting.w), 0.0));
+	imageStore(s_gi_direct_out, texel, vec4(GiQuantizeBounceLighting(direct, texel, u_gi_card_lighting.w), 0.0));
 	vec3 final_lighting = GiCombineFinalLighting(texelFetch(s_gi_card_albedo, texel, 0).xyz,
 	                                                texelFetch(s_gi_card_emissive, texel, 0).xyz,
 	                                                direct,

@@ -61,6 +61,35 @@ auto is_single_channel_32_bit(bgfx::TextureFormat::Enum format) -> bool
            format == bgfx::TextureFormat::R32I;
 }
 
+/// The formats WebGPU's texture-formats-tier2 lets one binding read and write, besides the 32-bit single-channel
+/// ones core WebGPU allows: every other format stays read-only or write-only there, whatever BGFX_CAPS_IMAGE_RW
+/// says (bgfx reports it once for all formats).
+constexpr std::array<bgfx::TextureFormat::Enum, 15> WEBGPU_READ_WRITE_FORMATS = {
+    bgfx::TextureFormat::R8,
+    bgfx::TextureFormat::R8U,
+    bgfx::TextureFormat::R8I,
+    bgfx::TextureFormat::RGBA8,
+    bgfx::TextureFormat::RGBA8U,
+    bgfx::TextureFormat::RGBA8I,
+    bgfx::TextureFormat::R16U,
+    bgfx::TextureFormat::R16I,
+    bgfx::TextureFormat::R16F,
+    bgfx::TextureFormat::RGBA16U,
+    bgfx::TextureFormat::RGBA16I,
+    bgfx::TextureFormat::RGBA16F,
+    bgfx::TextureFormat::RGBA32U,
+    bgfx::TextureFormat::RGBA32I,
+    bgfx::TextureFormat::RGBA32F,
+};
+
+/// Whether @p renderer reads and writes @p format through one binding once read-write images are available.
+auto allows_read_write_format(bgfx::RendererType::Enum renderer, bgfx::TextureFormat::Enum format) -> bool
+{
+    return renderer != bgfx::RendererType::WebGPU ||
+           std::find(WEBGPU_READ_WRITE_FORMATS.begin(), WEBGPU_READ_WRITE_FORMATS.end(), format) !=
+               WEBGPU_READ_WRITE_FORMATS.end();
+}
+
 auto get_dimension_caps(texture_dimension dimension) -> std::uint32_t
 {
     switch(dimension)
@@ -244,7 +273,8 @@ auto device_caps::can_read_write_image(bgfx::TextureFormat::Enum format) const -
 {
     const bool has_access =
         has_format_caps(format, BGFX_CAPS_FORMAT_TEXTURE_IMAGE_READ | BGFX_CAPS_FORMAT_TEXTURE_IMAGE_WRITE);
-    return has_compute && has_access && (is_single_channel_32_bit(format) || has_image_read_write);
+    return has_compute && has_access &&
+           (is_single_channel_32_bit(format) || (has_image_read_write && allows_read_write_format(renderer, format)));
 }
 
 auto device_caps::can_render_to(bgfx::TextureFormat::Enum format, std::uint8_t samples) const -> bool
