@@ -34,6 +34,7 @@ class os_input_manager : public input_manager
     std::vector<std::shared_ptr<input_device>> devices_;
 
     hpp::optional<zone> window_input_zone_;
+    uint32_t input_window_id_{};
     hpp::optional<zone> work_input_zone_;
     hpp::optional<input_reference_size> input_reference_size_;
     /// The main window's size in pixels, which positions in the window zone (counted in points) scale to.
@@ -61,8 +62,10 @@ class os_input_manager : public input_manager
     bool is_mouse_simulated_with_touches_{true};
     /// A finger has touched the screen since the application started.
     bool has_seen_touch_{};
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
     /// The pointer lock was read last frame: its first frame drops the motion the platform kept before it.
     bool was_pointer_locked_{};
+#endif
 
     /// Stands in for the OS cursor while set. The pointer position is polled rather than
     /// event driven, so synthesized motion has to replace the poll, not add an event.
@@ -90,6 +93,9 @@ public:
     void on_os_event(const os::event& e);
 
     void set_window_zone(const zone& window_zone);
+    /// The OS window the window zone is of. A press in another window (the editor's floating panels) is not placed
+    /// by its coordinates, which are that window's; 0, the default, takes presses from any window.
+    void set_input_window(uint32_t window_id);
     void set_work_zone(const zone& work_zone);
     void set_reference_size(const input_reference_size& reference_size);
     /// The main window's size in pixels: without a work zone, positions are scaled from the window zone to it,
@@ -151,10 +157,13 @@ private:
     void on_finger_event(const os::event& e);
     /// Puts the mouse where a press of its button happened. The frame reads the pointer once, before its events,
     /// after it may have moved on: a swipe that starts and ends between two frames would read as a press and a
-    /// release at its end. A cursor the lock holds, or a position set from outside, stays where it is.
+    /// release at its end. A cursor the lock holds, a position set from outside, or a press in another window stays
+    /// where it is.
     void place_mouse_at_press(const os::mouse_button_event& button);
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
     /// The mouse under the browser's pointer lock: at the work zone's center, moved by the lock's motion.
     void read_locked_pointer();
+#endif
     /// Whether a mouse button event is the game's: a zone takes a left press inside it (and that press's
     /// release), and fingers press the mouse only while it is simulated with touches.
     auto is_mouse_button_for_game(const os::event& e) -> bool;

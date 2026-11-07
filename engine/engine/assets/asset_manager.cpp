@@ -28,6 +28,7 @@ asset_manager::asset_manager(rtti::context& ctx) : threader_(ctx.get_cached<thre
 
 auto asset_manager::get_pool() const -> tpp::thread_pool&
 {
+    assert(threader_.pool && "The job pool starts in threader::init, before any asset loads.");
     return *threader_.pool;
 }
 

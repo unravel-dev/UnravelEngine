@@ -193,6 +193,12 @@ public:
 };
 
 /**
+ * @brief The threads a backend steps a world on, the calling one included: one per performance core but one, at
+ * least one; one in the single-threaded mode, where a backend starts no threads.
+ */
+auto get_physics_worker_count() -> int;
+
+/**
  * @brief Create a physics backend instance.
  * @param type Backend to create. auto_detect resolves to the engine default.
  * @return Backend instance, or nullptr if the type is unavailable in this build.

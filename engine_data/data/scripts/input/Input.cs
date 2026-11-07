@@ -33,9 +33,10 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Whether the game runs on a touch screen: on a phone or a tablet, or a finger has touched the
-        /// screen since the application started. In the editor, also while the Game view shows a phone or a
-        /// tablet resolution preset (the mouse then drives the touch controls).
+        /// Whether the game runs on a touch screen: the device has one (a phone, a tablet, a touch-screen
+        /// computer or a browser on one; a touchpad does not count), or a finger has touched the screen since the
+        /// application started. In the editor, also while the Game view shows a phone or a tablet resolution
+        /// preset (the mouse then drives the touch controls).
         /// </summary>
         public static bool touchSupported
         {

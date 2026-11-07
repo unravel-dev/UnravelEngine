@@ -128,21 +128,6 @@ auto is_main_window_shown(const renderer& rend) -> bool
     return window == nullptr || !window->get_window().is_minimized();
 }
 
-/// Restarts the frame clock when the main window is shown again. A browser stops calling the frames of a tab in
-/// the background and reports it hidden, then shown; the time in between is not a frame.
-void reset_frame_clock_when_shown(const renderer& rend, simulation& sim, const os::event& e)
-{
-    if(e.type != os::events::window || e.window.type != os::window_event_id::shown)
-    {
-        return;
-    }
-    auto* window = rend.get_main_window();
-    if(window != nullptr && window->get_window().get_id() == e.window.window_id)
-    {
-        sim.reset_delta_clock();
-    }
-}
-
 void update_input_zone(const renderer& rend, input_system& input)
 {
     const auto& window = rend.get_main_window();
@@ -159,6 +144,7 @@ void update_input_zone(const renderer& rend, input_system& input)
         window_zone.h = int(main_size.h);
 
         input.manager.set_window_zone(window_zone);
+        input.manager.set_input_window(window->get_window().get_id());
         input.manager.set_window_pixel_size({float(pixel_size.w), float(pixel_size.h)});
     }
 }
@@ -260,7 +246,8 @@ void on_app_event(os::events type)
             break;
         case os::events::app_did_enter_foreground:
             APPLOG_INFO("The application is back in the foreground.");
-            // The time spent in the background is not a frame.
+            // The time spent in the background is not a frame: a phone's, or a browser tab's hidden, whose frames
+            // stop until it is shown.
             ctx->get_cached<simulation>().reset_delta_clock();
             ev.on_app_enter_foreground(*ctx);
             break;
@@ -335,7 +322,10 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
         .write_minidump = true,
     });
 
+#if !UNRAVEL_PLATFORM_EMSCRIPTEN
+    // The browser player has none (crash_web.cpp).
     APPLOG_INFO("Engine crash handlers installed (CrashLog.txt / minidump enabled)");
+#endif
 
     ctx.add<simulation>();
     ctx.add<events>();
@@ -579,6 +569,7 @@ auto engine::deinit() -> bool
 {
     auto& ctx = engine::context();
     os::set_app_event_callback({});
+    ctx.get_cached<threader>().run_queued_jobs();
 
     if(!defaults::deinit(ctx))
     {
@@ -798,8 +789,6 @@ auto engine::process() -> int
             os::event e{};
             while(!should_quit && os::poll_event(e))
             {
-                reset_frame_clock_when_shown(rend, sim, e);
-
                 ev.on_os_event(ctx, e);
 
                 input.manager.on_os_event(e);

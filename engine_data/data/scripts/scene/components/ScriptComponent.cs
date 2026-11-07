@@ -218,18 +218,20 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Called on every frame update. Override this method to implement frame-based logic.
-        /// </summary>
-        /// <summary>
-        /// Called on every enabled script when the application goes into the background (<paramref name="paused"/>
-        /// true) and when it comes back: a phone's home button, a browser tab hidden or closed. Save here what must
-        /// outlive the session: a phone or a browser may end the application in the background without another call.
+        /// Called on every enabled script that has started when the application goes into the background
+        /// (<paramref name="paused"/> true) and when it comes back: a phone's home button, a browser tab hidden or
+        /// closed. Save here what must outlive the session: a phone or a browser may end the application in the
+        /// background without another call. A browser tab that closes or reloads gets this call as it unloads, when
+        /// the browser no longer stores files, so in the browser save what must outlive the page when it changes too.
         /// </summary>
         /// <param name="paused">True as the application goes into the background, false as it comes back.</param>
         public virtual void OnApplicationPause(bool paused)
         {
         }
 
+        /// <summary>
+        /// Called on every frame update. Override this method to implement frame-based logic.
+        /// </summary>
         public virtual void OnUpdate()
         {
         }

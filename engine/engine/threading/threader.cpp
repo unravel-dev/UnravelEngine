@@ -14,6 +14,8 @@ namespace
 /// How long each frame runs the queued jobs no one waits for, in the single-threaded mode. Loads that the
 /// frame waits for run in that wait instead; this only moves the rest along without stalling the frame.
 constexpr auto PENDING_JOBS_FRAME_BUDGET = std::chrono::milliseconds(4);
+/// Runs the queue until it is empty, the jobs the queued ones add included.
+constexpr auto UNLIMITED_BUDGET = std::chrono::steady_clock::duration::max();
 } // namespace
 
 threader::threader(cmd_line::parser& parser)
@@ -75,6 +77,14 @@ auto threader::deinit(rtti::context& ctx) -> bool
     }
 
     return true;
+}
+
+void threader::run_queued_jobs()
+{
+    if(pool && pool->get_workers_count() == 0)
+    {
+        pool->run_pending(UNLIMITED_BUDGET);
+    }
 }
 
 void threader::process()

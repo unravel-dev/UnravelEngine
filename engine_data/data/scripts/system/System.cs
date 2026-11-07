@@ -152,6 +152,8 @@ namespace Unravel.Core
         private static readonly Action<ScriptComponent> updateAction = c => c.OnUpdate();
         private static readonly Action<ScriptComponent> fixedUpdateAction = c => c.OnFixedUpdate();
         private static readonly Action<ScriptComponent> lateUpdateAction = c => c.OnLateUpdate();
+        private static readonly Action<ScriptComponent> pauseAction = c => c.OnApplicationPause(true);
+        private static readonly Action<ScriptComponent> resumeAction = c => c.OnApplicationPause(false);
         
         // Base ScriptComponent type for override detection
         private static readonly Type scriptComponentBaseType = typeof(ScriptComponent);
@@ -232,33 +234,29 @@ namespace Unravel.Core
         /// <summary>
         /// Invokes <see cref="ScriptComponent.OnUpdate"/> for registered components in priority order.
         /// </summary>
-        public void InvokeUpdate() => InvokeInternal(updateAction);
+        public void InvokeUpdate() => InvokeInternal(updateAction, ScriptMethod.Update);
 
         /// <summary>
         /// Invokes <see cref="ScriptComponent.OnFixedUpdate"/> for registered components in priority order.
         /// </summary>
-        public void InvokeFixedUpdate() => InvokeInternal(fixedUpdateAction);
+        public void InvokeFixedUpdate() => InvokeInternal(fixedUpdateAction, ScriptMethod.FixedUpdate);
 
         /// <summary>
         /// Invokes <see cref="ScriptComponent.OnLateUpdate"/> for registered components in priority order.
         /// </summary>
-        public void InvokeLateUpdate() => InvokeInternal(lateUpdateAction);
+        public void InvokeLateUpdate() => InvokeInternal(lateUpdateAction, ScriptMethod.LateUpdate);
 
         /// <summary>
         /// Invokes <see cref="ScriptComponent.OnApplicationPause"/> for registered components in priority order.
         /// </summary>
-        public void InvokeApplicationPause(bool paused) => InvokeInternal(c => c.OnApplicationPause(paused));
+        public void InvokeApplicationPause(bool paused) =>
+            InvokeInternal(paused ? pauseAction : resumeAction, ScriptMethod.ApplicationPause);
 
         // The core logic for iteration in priority order, plus deferred add & remove cleanup
-        private void InvokeInternal(Action<ScriptComponent> action)
+        private void InvokeInternal(Action<ScriptComponent> action, ScriptMethod method)
         {
             isInvoking = true;
             // Don't clear removedDuringInvoke - it's already empty or will be cleared at end
-
-            // Determine which method we're calling
-            bool isUpdate = ReferenceEquals(action, updateAction);
-            bool isFixedUpdate = ReferenceEquals(action, fixedUpdateAction);
-            bool isLateUpdate = ReferenceEquals(action, lateUpdateAction);
 
             try
             {
@@ -268,9 +266,7 @@ namespace Unravel.Core
                     var bucket = sortedBuckets[i];
 
                     // Skip bucket if it doesn't override the method we're calling
-                    if (isUpdate && !bucket.overrides.hasUpdate) continue;
-                    if (isFixedUpdate && !bucket.overrides.hasFixedUpdate) continue;
-                    if (isLateUpdate && !bucket.overrides.hasLateUpdate) continue;
+                    if (!bucket.overrides.Has(method)) continue;
 
                     var slots = bucket.slots;
 
@@ -348,7 +344,7 @@ namespace Unravel.Core
             }
         }
 
-        // Inserts component into appropriate type bucket, only if it overrides at least one update method
+        // Inserts component into appropriate type bucket, only if it overrides at least one method the manager invokes
         private void InsertComponent(ScriptComponent comp)
         {
             Type t = comp.GetType();
@@ -356,8 +352,8 @@ namespace Unravel.Core
             // Check which methods this type overrides (cached per type)
             MethodOverrides overrides = GetMethodOverrides(t);
             
-            // Skip components that don't override any update methods
-            if (!overrides.hasUpdate && !overrides.hasFixedUpdate && !overrides.hasLateUpdate)
+            // Skip components that override none of them
+            if (!overrides.HasAny)
             {
                 return;
             }
@@ -407,7 +403,8 @@ namespace Unravel.Core
             {
                 hasUpdate = IsMethodOverridden(t, "OnUpdate"),
                 hasFixedUpdate = IsMethodOverridden(t, "OnFixedUpdate"),
-                hasLateUpdate = IsMethodOverridden(t, "OnLateUpdate")
+                hasLateUpdate = IsMethodOverridden(t, "OnLateUpdate"),
+                hasApplicationPause = IsMethodOverridden(t, "OnApplicationPause")
             };
 
             methodOverrideCache[t] = overrides;
@@ -623,6 +620,17 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// The methods the manager invokes on registered components.
+        /// </summary>
+        private enum ScriptMethod
+        {
+            Update,
+            FixedUpdate,
+            LateUpdate,
+            ApplicationPause,
+        }
+
+        /// <summary>
         /// Cached information about which methods a type overrides.
         /// </summary>
         private struct MethodOverrides
@@ -630,6 +638,21 @@ namespace Unravel.Core
             public bool hasUpdate;
             public bool hasFixedUpdate;
             public bool hasLateUpdate;
+            public bool hasApplicationPause;
+
+            public bool HasAny => hasUpdate || hasFixedUpdate || hasLateUpdate || hasApplicationPause;
+
+            public bool Has(ScriptMethod method)
+            {
+                switch (method)
+                {
+                    case ScriptMethod.Update: return hasUpdate;
+                    case ScriptMethod.FixedUpdate: return hasFixedUpdate;
+                    case ScriptMethod.LateUpdate: return hasLateUpdate;
+                    case ScriptMethod.ApplicationPause: return hasApplicationPause;
+                    default: return false;
+                }
+            }
         }
 
         private struct PendingOp
@@ -791,7 +814,7 @@ namespace Unravel.Core
 
         /// <summary>
         /// Native-to-managed: the application goes into the background (<paramref name="paused"/> not 0) or comes
-        /// back; every enabled script hears it in <see cref="ScriptComponent.OnApplicationPause"/>.
+        /// back; every enabled script that has started hears it in <see cref="ScriptComponent.OnApplicationPause"/>.
         /// </summary>
         public static void internal_n2m_application_pause(int paused)
         {

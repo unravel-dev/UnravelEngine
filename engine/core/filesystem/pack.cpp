@@ -35,7 +35,7 @@ struct entry_lookup
 /// a protocol root matches without touching the disk; any other spelling is made canonical first.
 auto split_into_protocol_and_name(const path& file, std::string& protocol, std::string& name) -> bool
 {
-    path key = has_known_protocol(file) ? file : convert_to_protocol_lexically(file);
+    path key = convert_to_protocol_lexically(file);
     if(!has_known_protocol(key))
     {
         key = convert_to_protocol(file);

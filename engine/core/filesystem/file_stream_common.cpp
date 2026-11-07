@@ -1,5 +1,8 @@
 #include "file_stream_common.h"
 
+#include <cstring>
+#include <string>
+
 namespace fs::file_stream_detail
 {
 
@@ -50,6 +53,16 @@ auto stdio_file_size(FILE* file) -> long long
         return -1;
     }
     return size;
+}
+
+auto open_stdio_file(const path& file, const char* stdio_mode) -> FILE*
+{
+#if defined(_WIN32)
+    const std::wstring wide_mode(stdio_mode, stdio_mode + std::strlen(stdio_mode));
+    return _wfopen(file.c_str(), wide_mode.c_str());
+#else
+    return std::fopen(file.c_str(), stdio_mode);
+#endif
 }
 
 auto openmode_to_stdio_mode(std::ios_base::openmode mode, char (&out)[4]) -> bool

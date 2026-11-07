@@ -12,8 +12,6 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/settings/settings.h>
 
-#include <base/platform/thread.hpp>
-#include <concurrency/threading_mode.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 #include <math/transform.hpp>
@@ -1372,9 +1370,7 @@ auto create_world() -> world
 
     // Box3D spins up its own scheduler when no task callbacks are provided. One worker is the calling thread
     // alone: the scheduler starts no threads, as the single-threaded mode needs.
-    const uint32_t hardware_threads = unravel::is_single_threaded() ? 1 : platform::get_performance_core_count();
-    const int workers = static_cast<int>(hardware_threads > 1 ? hardware_threads - 1 : 1);
-    def.workerCount = static_cast<uint32_t>(std::clamp(workers, 1, B3_MAX_WORKERS));
+    def.workerCount = static_cast<uint32_t>(std::clamp(unravel::get_physics_worker_count(), 1, B3_MAX_WORKERS));
 
     result.id = b3CreateWorld(&def);
     if(b3World_IsValid(result.id))

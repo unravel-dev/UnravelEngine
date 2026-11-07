@@ -1,5 +1,7 @@
 #pragma once
 
+#include "filesystem.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +35,10 @@ auto stdio_file_size(FILE* file) -> long long;
 /// Maps std::ios open flags to a stdio mode string (e.g. "rb", "w+b"). Returns false for invalid
 /// combinations (neither in nor out).
 auto openmode_to_stdio_mode(std::ios_base::openmode mode, char (&out)[4]) -> bool;
+
+/// Opens `file` with a stdio mode string by its native name, UTF-16 on Windows, so a name outside the ANSI code page
+/// opens too. Null when it does not open.
+auto open_stdio_file(const path& file, const char* stdio_mode) -> FILE*;
 
 } // namespace file_stream_detail
 

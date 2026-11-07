@@ -487,11 +487,14 @@ void display_manager::on_os_event(rtti::context& ctx, os::event& e)
     if(main_window != nullptr && main_window->get_window().get_id() == e.window.window_id)
     {
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
-        // The player leaves the page's fullscreen with the browser (Esc): the game is windowed again.
-        if(options_.mode != window_mode::windowed && !main_window->get_window().is_fullscreen())
+        // The player leaves the page's fullscreen with the browser (Esc): the game is windowed again. A request the
+        // browser has not granted yet is no leave.
+        const bool is_page_fullscreen = main_window->get_window().is_fullscreen();
+        if(was_page_fullscreen_ && !is_page_fullscreen)
         {
             options_.mode = window_mode::windowed;
         }
+        was_page_fullscreen_ = is_page_fullscreen;
 #endif
         remember_window(main_window->get_window());
     }
@@ -520,8 +523,7 @@ void display_manager::apply_window(os::window& window)
     // In the browser the window is the page, which it fills (ospp): either fullscreen mode takes the page
     // fullscreen, which the browser grants only close to a player's click, tap or key.
     window.set_fullscreen(options_.mode != window_mode::windowed);
-    return;
-#endif
+#else
     options_.display = resolve_display(options_.display);
     switch(options_.mode)
     {
@@ -535,6 +537,7 @@ void display_manager::apply_window(os::window& window)
             apply_exclusive_fullscreen(window);
             return;
     }
+#endif
 }
 
 void display_manager::apply_exclusive_fullscreen(os::window& window)

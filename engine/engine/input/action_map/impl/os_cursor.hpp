@@ -2,6 +2,8 @@
 
 #include "../coord.hpp"
 
+#include <base/platform/config.hpp>
+
 #include <hpp/optional.hpp>
 
 #include <cstdint>
@@ -55,11 +57,13 @@ public:
     auto is_hidden() const -> bool;
     /// The visibility the window should take, when it changed since the last call.
     auto take_visibility_change() -> hpp::optional<bool>;
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
     /// The lock holds the cursor at the work zone's center now. A page cannot move the cursor, so there the lock is
     /// the browser's pointer lock, and the mouse moves by its motion.
     auto is_pointer_locked() const -> bool;
     /// The pointer lock the window should take, when it changed since the last call.
     auto take_pointer_lock_change() -> hpp::optional<bool>;
+#endif
 
     /**
      * @brief Where the hold puts a cursor found at @p global_pos (global pixels) inside @p work_zone, or
@@ -84,8 +88,10 @@ private:
     bool is_pointer_overridden_{};
     /// The visibility last handed out by take_visibility_change.
     bool is_shown_{true};
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
     /// The pointer lock last handed out by take_pointer_lock_change.
     bool is_pointer_lock_taken_{};
+#endif
 };
 
 } // namespace input

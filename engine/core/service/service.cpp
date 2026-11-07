@@ -25,18 +25,28 @@ namespace
 {
 
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
+/// The application the browser's animation frames run, from service_main until it ends.
+std::unique_ptr<service_runner> browser_runner;
+
 /// One frame of the browser's animation-frame loop. When the application ends, the loop stops and the runner
-/// unloads it.
-void run_browser_frame(void* user_data)
+/// unloads it. A browser player neither restarts nor reloads itself: asked to, it ends.
+void run_browser_frame()
 {
-    auto* runner = static_cast<service_runner*>(user_data);
-    if(runner->run_frame() == SERVICE_RESULT_RUN)
+    const int result = browser_runner->run_frame();
+    if(result == SERVICE_RESULT_RUN)
     {
         return;
     }
     emscripten_cancel_main_loop();
-    runner->stop();
-    delete runner;
+    if(result != SERVICE_RESULT_EXIT)
+    {
+        std::cerr << "The application asked to restart or reload, which a browser player cannot: it ends." << std::endl;
+    }
+    if(!browser_runner->stop())
+    {
+        std::cerr << "The application did not unload cleanly." << std::endl;
+    }
+    browser_runner.reset();
 }
 #endif
 
@@ -264,14 +274,14 @@ auto service_main(const char* name, int argc, char* argv[]) -> int
 {
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
     // A page shows nothing until each frame returns to the browser, so the browser calls the frames, from its
-    // animation frames, after main returns. A browser player neither restarts nor reloads itself.
-    auto* runner = new service_runner(name, std::vector<std::string>(argv, argv + argc));
-    if(!runner->start())
+    // animation frames, after main returns.
+    browser_runner = std::make_unique<service_runner>(name, std::vector<std::string>(argv, argv + argc));
+    if(!browser_runner->start())
     {
-        delete runner;
+        browser_runner.reset();
         return -1;
     }
-    emscripten_set_main_loop_arg(run_browser_frame, runner, 0, false);
+    emscripten_set_main_loop(run_browser_frame, 0, false);
     return 0;
 #else
     const unravel::process::startup_arguments startup =

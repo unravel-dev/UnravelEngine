@@ -481,12 +481,14 @@ bool init(bgfx::Init init_data)
         init_data.callback = &callback;
     }
     s_context.frame = 0;
+#if !UNRAVEL_PLATFORM_EMSCRIPTEN
     // Called before init, renderFrame keeps bgfx from starting its render thread: bgfx::frame then renders on
-    // the calling thread, as the single-threaded mode needs.
+    // the calling thread, as the single-threaded mode needs. The browser's bgfx is built without a render thread.
     if(unravel::is_single_threaded())
     {
         bgfx::renderFrame();
     }
+#endif
     s_context.initted = bgfx::init(init_data);
     if(!s_context.initted)
     {

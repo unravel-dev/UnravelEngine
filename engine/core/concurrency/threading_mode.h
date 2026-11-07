@@ -25,7 +25,7 @@ inline auto get_single_threaded_flag() -> std::atomic<bool>&
 /// any of the work above starts; it is not meant to change afterwards.
 inline auto is_single_threaded() -> bool
 {
-#if UNRAVEL_PLATFORM_OS_WEB
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
     return true;
 #else
     return detail::get_single_threaded_flag().load(std::memory_order_relaxed);

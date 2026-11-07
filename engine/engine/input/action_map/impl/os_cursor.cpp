@@ -73,6 +73,7 @@ auto os_cursor::take_visibility_change() -> hpp::optional<bool>
     return is_shown;
 }
 
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
 auto os_cursor::is_pointer_locked() const -> bool
 {
     return is_lock_active() && lock_mode_ == cursor_lock_mode::locked;
@@ -88,6 +89,7 @@ auto os_cursor::take_pointer_lock_change() -> hpp::optional<bool>
     is_pointer_lock_taken_ = is_locked;
     return is_locked;
 }
+#endif
 
 auto os_cursor::get_held_position(coord global_pos, const zone& work_zone) const -> hpp::optional<coord>
 {

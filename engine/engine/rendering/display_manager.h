@@ -2,6 +2,7 @@
 #include <engine/engine_export.h>
 
 #include <base/basetypes.hpp>
+#include <base/platform/config.hpp>
 #include <cmd_line/parser.h>
 #include <context/context.hpp>
 #include <filesystem/filesystem.h>
@@ -175,6 +176,11 @@ private:
     bool has_unsaved_window_{};
     /// The window options the command line set and no script has chosen since.
     window_option_sources window_sources_{};
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    /// Whether the page was fullscreen at its last resize: it is windowed again only once it was fullscreen, not
+    /// while a request waits for the player's next click.
+    bool was_page_fullscreen_{};
+#endif
 };
 
 } // namespace unravel

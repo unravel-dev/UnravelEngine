@@ -88,7 +88,7 @@ namespace Unravel.Core
         /// <summary>
         /// Opaque handle of the element that triggered the event (not a pointer); see <see cref="target"/>.
         /// </summary>
-        public long targetElementPtr = 0;
+        internal long targetElementPtr = 0;
 
         /// <summary>
         /// The ID of the element that received the event.
@@ -98,7 +98,7 @@ namespace Unravel.Core
         /// <summary>
         /// Opaque handle of the element that received the event (not a pointer); see <see cref="currentTarget"/>.
         /// </summary>
-        public long currentElementPtr = 0;
+        internal long currentElementPtr = 0;
 
         /// <summary>
         /// Current dispatch phase of the event.

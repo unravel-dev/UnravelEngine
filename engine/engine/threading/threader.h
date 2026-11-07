@@ -24,6 +24,10 @@ struct threader
     /// part of the frame, since no worker ever takes them.
     void process();
 
+    /// In the single-threaded mode, runs every job still queued, as workers would have taken them by now: called as
+    /// the engine shuts down, while the systems the jobs use are still up. Nothing with workers.
+    void run_queued_jobs();
+
     /// Null until init.
     std::unique_ptr<tpp::thread_pool> pool{};
 

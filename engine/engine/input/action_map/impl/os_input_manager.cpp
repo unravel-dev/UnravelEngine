@@ -103,10 +103,18 @@ void os_input_manager::before_events_update()
         read_locked_pointer();
         return;
     }
+    // The lock held the mouse at the center; where the platform puts the cursor once it ends is no motion.
+    const bool is_lock_ending = was_pointer_locked_;
     was_pointer_locked_ = false;
 #endif
 
     auto pos = os::mouse::get_position();
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    if(is_lock_ending)
+    {
+        mouse_->rebase_position(remap_to_work_zone({pos.x, pos.y}));
+    }
+#endif
     mouse_->set_position(remap_to_work_zone({pos.x, pos.y}));
     pointer_zones_.move_mouse(mouse_->get_position());
     // This frame's motion is read; the next one is measured from where the cursor is now. A platform
@@ -148,6 +156,11 @@ void os_input_manager::after_events_update()
 void os_input_manager::set_window_zone(const zone& window_zone)
 {
     window_input_zone_ = window_zone;
+}
+
+void os_input_manager::set_input_window(uint32_t window_id)
+{
+    input_window_id_ = window_id;
 }
 
 void os_input_manager::set_work_zone(const zone& work_zone)
@@ -471,6 +484,7 @@ auto os_input_manager::is_mouse_button_for_game(const os::event& e) -> bool
     return !pointer_zones_.end_mouse(mouse_->get_position());
 }
 
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
 void os_input_manager::read_locked_pointer()
 {
     const zone work_zone = get_work_zone();
@@ -486,10 +500,12 @@ void os_input_manager::read_locked_pointer()
     mouse_->rebase_position(remap_to_work_zone(center));
     pointer_zones_.move_mouse(mouse_->get_position());
 }
+#endif
 
 void os_input_manager::place_mouse_at_press(const os::mouse_button_event& button)
 {
-    if(virtual_mouse_position_ || cursor_.is_lock_active())
+    const bool is_other_window = input_window_id_ != 0 && button.window_id != input_window_id_;
+    if(virtual_mouse_position_ || cursor_.is_lock_active() || is_other_window)
     {
         return;
     }

@@ -41,7 +41,7 @@ public:
         reset_put_area();
     }
 
-    auto open(const std::string& absolute_path, std::ios_base::openmode mode) -> bool
+    auto open(const path& file_path, std::ios_base::openmode mode) -> bool
     {
         close_file();
         mode |= std::ios_base::out;
@@ -50,7 +50,7 @@ public:
         {
             return false;
         }
-        file_ = std::fopen(absolute_path.c_str(), stdio_mode);
+        file_ = file_stream_detail::open_stdio_file(file_path, stdio_mode);
         owns_file_ = file_ != nullptr;
         reset_put_area();
         return file_ != nullptr;
@@ -282,11 +282,10 @@ private:
     std::array<char, file_stream_detail::default_buffer_size> buffer_{};
 };
 
-auto open_write_buffer(const std::string& absolute_path, std::ios_base::openmode mode)
-    -> std::unique_ptr<file_ostreambuf>
+auto open_write_buffer(const path& file_path, std::ios_base::openmode mode) -> std::unique_ptr<file_ostreambuf>
 {
     auto buffer = std::make_unique<file_ostreambuf>();
-    if(!buffer->open(absolute_path, mode))
+    if(!buffer->open(file_path, mode))
     {
         return nullptr;
     }
@@ -312,15 +311,15 @@ file_ostream::file_ostream()
     rdbuf(impl_->buffer.get());
 }
 
-file_ostream::file_ostream(const path& file_path, std::ios_base::openmode mode)
-    : file_ostream(file_path.string(), mode)
+file_ostream::file_ostream(const std::string& absolute_path, std::ios_base::openmode mode)
+    : file_ostream(path(absolute_path), mode)
 {
 }
 
-file_ostream::file_ostream(const std::string& absolute_path, std::ios_base::openmode mode)
+file_ostream::file_ostream(const path& file_path, std::ios_base::openmode mode)
     : std::ostream(nullptr)
 {
-    auto buffer = open_write_buffer(absolute_path, mode);
+    auto buffer = open_write_buffer(file_path, mode);
     if(!buffer)
     {
         buffer = std::make_unique<file_ostreambuf>();
@@ -333,19 +332,19 @@ file_ostream::file_ostream(const std::string& absolute_path, std::ios_base::open
     }
 }
 
-void file_ostream::open(const path& file_path, std::ios_base::openmode mode)
+void file_ostream::open(const std::string& absolute_path, std::ios_base::openmode mode)
 {
-    open(file_path.string(), mode);
+    open(path(absolute_path), mode);
 }
 
-void file_ostream::open(const std::string& absolute_path, std::ios_base::openmode mode)
+void file_ostream::open(const path& file_path, std::ios_base::openmode mode)
 {
     if(!impl_)
     {
         impl_ = std::make_unique<impl>(std::make_unique<file_ostreambuf>());
         rdbuf(impl_->buffer.get());
     }
-    if(!impl_->buffer->open(absolute_path, mode))
+    if(!impl_->buffer->open(file_path, mode))
     {
         setstate(std::ios::failbit);
         return;

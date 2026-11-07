@@ -59,7 +59,7 @@ public:
         return *this;
     }
 
-    auto open(const std::string& absolute_path, std::ios_base::openmode mode) -> bool
+    auto open(const path& file_path, std::ios_base::openmode mode) -> bool
     {
         close_file();
         mode |= std::ios_base::in;
@@ -68,7 +68,7 @@ public:
         {
             return false;
         }
-        file_ = std::fopen(absolute_path.c_str(), stdio_mode);
+        file_ = file_stream_detail::open_stdio_file(file_path, stdio_mode);
         owns_file_ = file_ != nullptr;
         cached_size_ = -1;
         invalidate_get_area();
@@ -272,11 +272,10 @@ private:
     char underflow_char_ = '\0';
 };
 
-auto open_read_buffer(const std::string& absolute_path, std::ios_base::openmode mode)
-    -> std::unique_ptr<file_istreambuf>
+auto open_read_buffer(const path& file_path, std::ios_base::openmode mode) -> std::unique_ptr<file_istreambuf>
 {
     auto buffer = std::make_unique<file_istreambuf>();
-    if(!buffer->open(absolute_path, mode))
+    if(!buffer->open(file_path, mode))
     {
         return nullptr;
     }
@@ -302,15 +301,15 @@ file_istream::file_istream()
     rdbuf(impl_->buffer.get());
 }
 
-file_istream::file_istream(const path& file_path, std::ios_base::openmode mode)
-    : file_istream(file_path.string(), mode)
+file_istream::file_istream(const std::string& absolute_path, std::ios_base::openmode mode)
+    : file_istream(path(absolute_path), mode)
 {
 }
 
-file_istream::file_istream(const std::string& absolute_path, std::ios_base::openmode mode)
+file_istream::file_istream(const path& file_path, std::ios_base::openmode mode)
     : std::istream(nullptr)
 {
-    auto buffer = open_read_buffer(absolute_path, mode);
+    auto buffer = open_read_buffer(file_path, mode);
     if(!buffer)
     {
         buffer = std::make_unique<file_istreambuf>();
@@ -323,19 +322,19 @@ file_istream::file_istream(const std::string& absolute_path, std::ios_base::open
     }
 }
 
-void file_istream::open(const path& file_path, std::ios_base::openmode mode)
+void file_istream::open(const std::string& absolute_path, std::ios_base::openmode mode)
 {
-    open(file_path.string(), mode);
+    open(path(absolute_path), mode);
 }
 
-void file_istream::open(const std::string& absolute_path, std::ios_base::openmode mode)
+void file_istream::open(const path& file_path, std::ios_base::openmode mode)
 {
     if(!impl_)
     {
         impl_ = std::make_unique<impl>(std::make_unique<file_istreambuf>());
         rdbuf(impl_->buffer.get());
     }
-    if(!impl_->buffer->open(absolute_path, mode))
+    if(!impl_->buffer->open(file_path, mode))
     {
         setstate(std::ios::failbit);
         return;

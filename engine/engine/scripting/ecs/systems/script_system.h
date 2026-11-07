@@ -351,12 +351,12 @@ private:
      */
     void on_resume(rtti::context& ctx);
 
-    /// The application goes into the background (a phone's home button, a browser tab hidden): every enabled
-    /// script's OnApplicationPause(true), while the platform still lets the game save.
+    /// The application goes into the background (a phone's home button, a browser tab hidden): every enabled script
+    /// that has started gets OnApplicationPause(true), while the platform still lets the game save.
     void on_app_enter_background(rtti::context& ctx);
-    /// The application comes back: every enabled script's OnApplicationPause(false).
+    /// The application comes back: every enabled script that has started gets OnApplicationPause(false).
     void on_app_enter_foreground(rtti::context& ctx);
-    /// Calls OnApplicationPause(@p paused) on every enabled script while a game runs.
+    /// Calls OnApplicationPause(@p paused) on every enabled script that has started while a game runs.
     void invoke_application_pause(rtti::context& ctx, bool paused);
 
     auto bind_internal_calls(rtti::context& ctx) -> bool;
