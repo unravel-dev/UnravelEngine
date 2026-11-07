@@ -51,11 +51,11 @@ on:
       share_android_player:
         description: 'Build the Android player once and put that copy in every package. Unchecked, each platform builds its own.'
         type: boolean
-        default: false
+        default: true
       share_web_player:
         description: 'Build the browser player once and put that copy in every package. Unchecked, each platform builds its own.'
         type: boolean
-        default: false
+        default: true
       replace_previous_builds:
         description: 'Remove the older builds of the same platforms from the release after the upload.'
         type: boolean
