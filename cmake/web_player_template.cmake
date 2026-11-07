@@ -22,6 +22,11 @@ foreach(required DOTNET CSC REFERENCE_DIR RUNTIME_LIB SCRIPTS_DIR BRIDGE PLAYER_
     endif()
 endforeach()
 
+# A Visual Studio developer environment (vcvars, as CI sets up) defines Platform=x64, which MSBuild takes as a property:
+# the browser player would target x64, which the browser-wasm runtime identifier refuses (NETSDK1032). It names the
+# native toolchain's platform only, so the .NET steps run without it.
+unset(ENV{Platform})
+
 # C# the version the editor compiles the scripts with: the .NET major plus 4 (clrpp csharp_language_version).
 math(EXPR language_version "${DOTNET_MAJOR} + 4")
 set(stamp_file "${OUTPUT}/template.stamp")
