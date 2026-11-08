@@ -68,7 +68,7 @@ auto gi_surface_cache_feedback::init(rtti::context& ctx) -> bool
     copy_.cache_uniforms();
     copy_.program = std::make_unique<gpu_program>(am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_feedback_copy.eshader"));
     clear_.init(ctx);
-    if(!is_ready())
+    if(!is_ready() && get_render_feature_support().is_available(render_feature::gi_page_feedback))
     {
         APPLOG_WARNING("[GI] Surface cache feedback programs failed to load; reflections read the locked pages only.");
     }

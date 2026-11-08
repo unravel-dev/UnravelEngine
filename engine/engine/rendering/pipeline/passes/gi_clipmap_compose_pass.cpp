@@ -40,7 +40,7 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_mip = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_mip.eshader");
     mip_program_.cache_uniforms();
     mip_program_.program = std::make_unique<gpu_program>(cs_mip);
-    if(!mip_program_.is_valid())
+    if(!mip_program_.is_valid() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] The global distance field mip program failed to load; rays step through empty space by "
                        "each level alone.");

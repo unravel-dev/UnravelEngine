@@ -290,7 +290,7 @@ auto gi_surface_cache::init(rtti::context& ctx) -> bool
     feedback_.init(ctx);
     // The atlases come with the first update with a user (has_targets).
     scene_.init(gi_scene::settings{});
-    if(!is_ready())
+    if(!is_ready() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Surface cache programs failed to load; the surface cache is unavailable.");
     }

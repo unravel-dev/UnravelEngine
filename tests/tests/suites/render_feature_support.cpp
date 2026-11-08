@@ -11,6 +11,8 @@
  *   - a Vulkan device without multi-draw indirect (the S21) loses only the GPU particle culling;
  *   - a device without Vulkan's extended storage formats loses the features that write them;
  *   - WebGPU reads and writes only texture-formats-tier2's list (never rg11b10f), and GI asks for its WebGPU format;
+ *   - the engine compute shaders of a feature the device does not run are left empty (the longest shader prefix
+ *     decides the feature), every other shader is created;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
  *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one;
  *   - a feature whose dependency is unavailable is unavailable, and says why;
@@ -195,6 +197,39 @@ void test_webgpu_read_write_formats()
     check(make_desktop_caps().can_read_write_image(bgfx::TextureFormat::RG11B10F), "Direct3D 12: rg11b10f is read-write");
 }
 
+void test_shaders_of_unavailable_features()
+{
+    std::printf("the compute shaders of a feature the device does not run are left empty, and only those\n");
+    check(find_shader_render_feature("gi/cs_gi_card_copy") == render_feature::global_illumination,
+          "gi/cs_gi_card_copy belongs to GI");
+    check(find_shader_render_feature("gi/cs_gi_feedback_copy") == render_feature::gi_page_feedback,
+          "the longest prefix decides: gi/cs_gi_feedback_copy belongs to the page feedback");
+    check(find_shader_render_feature("ssr/cs_hiz_downsample") == render_feature::hiz, "ssr/cs_hiz_downsample belongs to Hi-Z");
+    check(find_shader_render_feature("cs_clear_uints") == render_feature::count, "cs_clear_uints belongs to no feature");
+    // A WebGPU device without texture-formats-tier1 has no 16-bit normalized formats, which GI writes.
+    auto caps = make_desktop_caps();
+    caps.renderer = bgfx::RendererType::WebGPU;
+    caps.formats[bgfx::TextureFormat::R16] = 0;
+    caps.formats[bgfx::TextureFormat::RGBA16] = 0;
+    const auto support = render_feature_support::resolve(caps);
+    const char* device = "WebGPU without tier1";
+    check_available(support, render_feature::global_illumination, false, device);
+    check(!support.runs_shader("engine:/data/shaders/gi/cs_gi_card_copy.eshader"),
+          std::string(device) + ": GI's compute shaders stay empty");
+    check(!support.runs_shader("engine:/data/shaders/gi/cs_gi_feedback_copy.eshader"),
+          std::string(device) + ": so do those of the features that depend on GI");
+    check(support.runs_shader("engine:/data/shaders/gi/fs_gi_scene_debug.eshader"),
+          std::string(device) + ": GI's fragment shaders are created");
+    check(support.runs_shader("engine:/data/shaders/ssr/cs_hiz_downsample.eshader"),
+          std::string(device) + ": the features it runs keep their compute shaders");
+    check(support.runs_shader("engine:/data/shaders/cs_clear_uints.eshader"),
+          std::string(device) + ": a compute shader of no feature is created");
+    check(support.runs_shader("app:/data/shaders/gi/cs_gi_card_copy.eshader"),
+          std::string(device) + ": a project's shaders are created");
+    check(render_feature_support{}.runs_shader("engine:/data/shaders/gi/cs_gi_card_copy.eshader"),
+          "without a renderer every shader is created");
+}
+
 void test_no_compute()
 {
     std::printf("a device without compute loses every compute feature\n");
@@ -319,6 +354,7 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_vulkan_without_multi_draw();
     test_extended_storage_formats();
     test_webgpu_read_write_formats();
+    test_shaders_of_unavailable_features();
     test_no_compute();
     test_no_vertex_storage_buffers();
     test_dependency_reason();

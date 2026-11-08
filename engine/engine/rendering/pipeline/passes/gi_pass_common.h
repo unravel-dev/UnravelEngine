@@ -7,6 +7,7 @@
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/gpu_resource_utils.h>
+#include <engine/rendering/render_feature_support.h>
 
 #include <graphics/graphics.h>
 #include <graphics/render_view.h>
@@ -88,6 +89,13 @@ inline constexpr uint32_t high_short_range_ao_downsample_factor = 2;
 inline constexpr float high_short_range_ao_foreground_reject_power = 1.5f;
 
 using quality_level = gi_project_settings::quality_level;
+
+/// Whether the device runs GI. Where it does not, the GI shaders stay empty (render_feature_support::runs_shader), so
+/// a pass whose programs did not load says nothing: the renderer's feature log already names GI as off.
+inline auto is_supported() -> bool
+{
+    return get_render_feature_support().is_available(render_feature::global_illumination);
+}
 
 /// The farthest a GI ray travels under the setting @p setting, clamped to the trace distance range.
 inline auto get_max_trace_distance(float setting) -> float

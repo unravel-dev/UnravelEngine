@@ -209,27 +209,6 @@ auto get_format_name(bgfx::TextureFormat::Enum format) -> std::string
     return bimg::getName(static_cast<bimg::TextureFormat::Enum>(format));
 }
 
-/// The feature whose longest shader prefix matches @p shader, or render_feature::count.
-auto find_feature(const std::string& shader) -> render_feature
-{
-    render_feature best = render_feature::count;
-    std::size_t best_length = 0;
-    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
-    {
-        const auto feature = static_cast<render_feature>(index);
-        for(const char* prefix : get_render_feature_requirements(feature).shader_prefixes)
-        {
-            const std::size_t length = std::strlen(prefix);
-            if(length > best_length && shader.compare(0, length, prefix) == 0)
-            {
-                best = feature;
-                best_length = length;
-            }
-        }
-    }
-    return best;
-}
-
 /// Whether the table's 2D or cube dimension covers a shader image of @p dimension.
 auto is_dimension_covered(gfx::texture_dimension listed, std::uint8_t dimension) -> bool
 {
@@ -279,7 +258,7 @@ void check_shader(const std::string& shader,
               shader + " stays a utility: no images, at most 8 bindings");
         return;
     }
-    const auto feature = find_feature(shader);
+    const auto feature = find_shader_render_feature(shader);
     check(feature != render_feature::count, shader + " belongs to a rendering feature");
     if(feature == render_feature::count)
     {

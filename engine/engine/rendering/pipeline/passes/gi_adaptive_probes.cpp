@@ -62,7 +62,7 @@ auto gi_adaptive_probes::init(rtti::context& ctx) -> bool
     mark_program_ = load("cs_gi_adaptive_mark");
     spawn_program_ = load("cs_gi_adaptive_spawn");
     args_program_ = load("cs_gi_adaptive_args");
-    if(!has_programs())
+    if(!has_programs() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Adaptive probe programs failed to load; the screen probe gather cannot run.");
     }

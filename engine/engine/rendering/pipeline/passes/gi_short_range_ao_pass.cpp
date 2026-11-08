@@ -69,7 +69,7 @@ auto gi_short_range_ao_pass::init(rtti::context& ctx) -> bool
     };
     search_program_ = load("cs_gi_short_range_ao");
     screen_program_ = load("cs_gi_short_range_ao_screen");
-    if(!has_programs())
+    if(!has_programs() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Short-range AO programs failed to load; the views keep the screen-space AO.");
     }

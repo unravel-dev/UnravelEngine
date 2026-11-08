@@ -5,7 +5,6 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/gpu_resource_utils.h>
 #include <engine/rendering/render_feature_support.h>
-#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <logging/logging.h>
@@ -148,8 +147,8 @@ auto load_compute(asset_manager& assets, const char* key, const char* label) -> 
         return {};
     }
     auto program = std::make_shared<gpu_program>(shader);
-    // Without compute the program is never built; the renderer's feature log says so once.
-    if(!program->is_valid() && gfx::get_device_caps().has_compute)
+    // On a device without GPU particles the program is never built; the renderer's feature log says so once.
+    if(!program->is_valid() && get_render_feature_support().is_available(render_feature::gpu_particles))
     {
         APPLOG_WARNING("Particles: {} does not compile yet", label);
     }

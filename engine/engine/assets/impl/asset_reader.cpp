@@ -17,6 +17,7 @@
 
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/threading/main_thread_shared.h>
 #include <cstdint>
 #include <filesystem/filesystem.h>
@@ -189,9 +190,14 @@ auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::s
     return true;
 }
 
-/// One compiled variant as a GPU shader, named so a GPU capture tells the variants apart.
-auto create_shader_variant(const compiled_shader_variant& variant, const std::string& key) -> std::shared_ptr<gfx::shader>
+/// One compiled variant as a GPU shader, named so a GPU capture tells the variants apart; empty unless @p is_used.
+auto create_shader_variant(const compiled_shader_variant& variant, const std::string& key, bool is_used)
+    -> std::shared_ptr<gfx::shader>
 {
+    if(!is_used)
+    {
+        return std::make_shared<gfx::shader>();
+    }
     auto shader = std::make_shared<gfx::shader>(bgfx::copy(variant.bytes.data(), static_cast<std::uint32_t>(variant.bytes.size())));
     shader->varyings = variant.varyings;
     if(shader->is_valid())
@@ -216,12 +222,16 @@ auto create_shader_with_variants(const std::string& path, const std::string& key
         APPLOG_ERROR("Compiled shader {0} holds no default variant.", path);
         return nullptr;
     }
-    auto result = create_shader_variant(*default_variant, key);
+    // A compute shader of a feature the device does not run stays empty, as its program does without compute: it may
+    // declare storage formats the device lacks, which WebGPU rejects as soon as the shader is created. Its variants
+    // keep their names, so a program that picks one finds an empty shader rather than none.
+    const bool is_used = get_render_feature_support().runs_shader(key);
+    auto result = create_shader_variant(*default_variant, key, is_used);
     for(const auto& variant : compiled)
     {
         if(!is_default(variant))
         {
-            result->variants.emplace(variant.name, create_shader_variant(variant, key));
+            result->variants.emplace(variant.name, create_shader_variant(variant, key, is_used));
         }
     }
     return result;

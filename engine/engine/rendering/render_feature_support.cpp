@@ -338,12 +338,51 @@ auto find_missing_capability(const gfx::device_caps& caps, const render_feature_
     return missing;
 }
 
+/// The engine's shader assets: the folder of the paths the shader prefixes list, the extension and the file name
+/// start of a compute shader.
+constexpr hpp::string_view ENGINE_SHADER_FOLDER = "engine:/data/shaders/";
+constexpr hpp::string_view SHADER_EXTENSION = ".eshader";
+constexpr hpp::string_view COMPUTE_SHADER_FILE_PREFIX = "cs_";
+
+/// The path of the engine compute shader asset @p key under the shader folder without the extension, or empty for
+/// any other asset.
+auto get_engine_compute_shader(hpp::string_view key) -> hpp::string_view
+{
+    if(!key.starts_with(ENGINE_SHADER_FOLDER) || !key.ends_with(SHADER_EXTENSION))
+    {
+        return {};
+    }
+    key.remove_prefix(ENGINE_SHADER_FOLDER.size());
+    key.remove_suffix(SHADER_EXTENSION.size());
+    const std::size_t folder_end = key.find_last_of('/');
+    const hpp::string_view file_name = folder_end == hpp::string_view::npos ? key : key.substr(folder_end + 1);
+    return file_name.starts_with(COMPUTE_SHADER_FILE_PREFIX) ? key : hpp::string_view{};
+}
+
 render_feature_support resolved_render_feature_support;
 } // namespace
 
 auto get_render_feature_requirements(render_feature feature) -> const render_feature_requirements&
 {
     return RENDER_FEATURE_REQUIREMENTS[get_render_feature_index(feature)];
+}
+
+auto find_shader_render_feature(hpp::string_view shader) -> render_feature
+{
+    render_feature best = render_feature::count;
+    std::size_t best_length = 0;
+    for(std::size_t index = 0; index < RENDER_FEATURE_COUNT; ++index)
+    {
+        for(const hpp::string_view prefix : RENDER_FEATURE_REQUIREMENTS[index].shader_prefixes)
+        {
+            if(prefix.size() > best_length && shader.starts_with(prefix))
+            {
+                best = static_cast<render_feature>(index);
+                best_length = prefix.size();
+            }
+        }
+    }
+    return best;
 }
 
 auto render_feature_support::resolve(const gfx::device_caps& caps) -> render_feature_support
@@ -382,6 +421,17 @@ auto render_feature_support::is_available(render_feature feature) const -> bool
 auto render_feature_support::get_status(render_feature feature) const -> const render_feature_status&
 {
     return statuses_[get_render_feature_index(feature)];
+}
+
+auto render_feature_support::runs_shader(hpp::string_view key) const -> bool
+{
+    const hpp::string_view shader = get_engine_compute_shader(key);
+    if(shader.empty())
+    {
+        return true;
+    }
+    const render_feature feature = find_shader_render_feature(shader);
+    return feature == render_feature::count || is_available(feature);
 }
 
 auto render_feature_support::get_device_limits() const -> feature_limits

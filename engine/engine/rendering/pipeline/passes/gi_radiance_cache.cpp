@@ -107,7 +107,7 @@ auto gi_radiance_cache::init(rtti::context& ctx) -> bool
     tiles_program_ = load("cs_gi_rc_tiles");
     trace_program_ = load("cs_gi_rc_trace");
     filter_program_ = load("cs_gi_rc_filter");
-    if(!has_programs())
+    if(!has_programs() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Radiance cache programs failed to load; the gather traces without it.");
     }

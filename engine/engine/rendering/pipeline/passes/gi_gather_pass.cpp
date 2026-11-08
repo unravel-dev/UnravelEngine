@@ -190,7 +190,7 @@ auto gi_gather_pass::init(rtti::context& ctx) -> bool
     }
     adaptive_probes_.init(ctx);
     ray_count_clear_.init(ctx);
-    if(!has_programs())
+    if(!has_programs() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Screen probe gather programs failed to load; the screen probe gather is "
                        "unavailable for this run.");

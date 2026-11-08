@@ -5,6 +5,7 @@
 
 #include <base/platform/config.hpp>
 #include <graphics/device_caps.h>
+#include <hpp/string_view.hpp>
 
 #include <array>
 #include <cstdint>
@@ -122,6 +123,13 @@ struct render_feature_requirements
 /// The device needs of @p feature.
 ENGINE_EXPORT auto get_render_feature_requirements(render_feature feature) -> const render_feature_requirements&;
 
+/**
+ * @brief The feature an engine compute shader belongs to, or render_feature::count for one of no feature.
+ * @param shader The shader's path under the shader folder without the extension (gi/cs_gi_card_copy): the longest
+ * matching prefix of render_feature_requirements::shader_prefixes decides.
+ */
+ENGINE_EXPORT auto find_shader_render_feature(hpp::string_view shader) -> render_feature;
+
 /// Whether a feature runs on the device, and the reason when it does not.
 struct render_feature_status
 {
@@ -143,6 +151,15 @@ public:
 
     auto is_available(render_feature feature) const -> bool;
     auto get_status(render_feature feature) const -> const render_feature_status&;
+
+    /**
+     * @brief Whether the shader asset @p key is for something the device runs: false for an engine compute shader
+     * of a feature it does not run, true for every other shader.
+     *
+     * Such a shader may declare storage formats the device lacks, which WebGPU rejects as soon as the shader is
+     * created: the shader loader leaves it empty, as a program without compute is.
+     */
+    auto runs_shader(hpp::string_view key) const -> bool;
 
     /// The feature limits the device allows: what the project's limits are ANDed with.
     auto get_device_limits() const -> feature_limits;

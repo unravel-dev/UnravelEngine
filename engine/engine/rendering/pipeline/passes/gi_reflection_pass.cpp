@@ -99,7 +99,7 @@ auto gi_reflection_pass::init(rtti::context& ctx) -> bool
     resolve_program_ = load("cs_gi_reflection_resolve");
     temporal_program_ = load("cs_gi_reflection_temporal");
     spatial_program_ = load("cs_gi_reflection_spatial");
-    if(!has_programs())
+    if(!has_programs() && gi_pass::is_supported())
     {
         APPLOG_WARNING("[GI] Reflection programs failed to load; traced reflections are unavailable for this run.");
     }

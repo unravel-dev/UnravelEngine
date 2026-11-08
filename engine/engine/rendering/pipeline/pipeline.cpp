@@ -733,30 +733,36 @@ auto pipeline::init(rtti::context& ctx) -> bool
     {
         report_pass(name, is_loaded || !has_compute);
     };
-    report_compute_pass("reflection probe prefilter", prefilter_pass_.init(ctx));
+    // Nor do the compute shaders of a feature the device does not run (render_feature_support::runs_shader).
+    const auto& support = get_render_feature_support();
+    const auto report_feature_pass = [&](const char* name, render_feature feature, bool is_loaded)
+    {
+        report_pass(name, is_loaded || !support.is_available(feature));
+    };
+    report_feature_pass("reflection probe prefilter", render_feature::reflection_probe_prefilter, prefilter_pass_.init(ctx));
     report_pass("blit", blit_pass_.init(ctx));
     report_pass("upscale", upscale_pass_.init(ctx));
     report_pass("Perez sky", atmospheric_pass_perez_.init(ctx));
     report_pass("skybox", atmospheric_pass_skybox_.init(ctx));
-    report_compute_pass("auto exposure", auto_exposure_pass_.init(ctx));
+    report_feature_pass("auto exposure", render_feature::auto_exposure, auto_exposure_pass_.init(ctx));
     report_pass("bloom", bloom_pass_.init(ctx));
     report_pass("FXAA", fxaa_pass_.init(ctx));
     // Before the particle programs: they read the fog's uniforms, which it creates.
     report_pass("fog", fog_pass_.init(ctx));
     report_pass("TAA", taa_pass_.init(ctx));
     report_pass("tonemapping", tonemapping_pass_.init(ctx));
-    report_compute_pass("ASSAO", assao_pass_.init(ctx));
-    report_compute_pass("SSR", ssr_pass_.init(ctx));
-    report_compute_pass("Hi-Z", hiz_pass_.init(ctx));
-    report_compute_pass("SSIL", ssil_pass_.init(ctx));
-    report_compute_pass("GTAO", gtao_pass_.init(ctx));
-    report_compute_pass("GI distance field", gi_clipmap_compose_pass_.init(ctx));
-    report_compute_pass("temporal probe", temporal_probe_pass_.init(ctx));
-    report_compute_pass("GI gather", gi_gather_pass_.init(ctx));
-    report_compute_pass("GI surface cache", gi_surface_cache_pass_.init(ctx));
-    report_compute_pass("GI visualization", gi_visualize_pass_.init(ctx));
+    report_feature_pass("ASSAO", render_feature::assao, assao_pass_.init(ctx));
+    report_feature_pass("SSR", render_feature::screen_space_reflections, ssr_pass_.init(ctx));
+    report_feature_pass("Hi-Z", render_feature::hiz, hiz_pass_.init(ctx));
+    report_feature_pass("SSIL", render_feature::screen_space_indirect_lighting, ssil_pass_.init(ctx));
+    report_feature_pass("GTAO", render_feature::gtao, gtao_pass_.init(ctx));
+    report_feature_pass("GI distance field", render_feature::global_illumination, gi_clipmap_compose_pass_.init(ctx));
+    report_feature_pass("temporal probe", render_feature::temporal_probe, temporal_probe_pass_.init(ctx));
+    report_feature_pass("GI gather", render_feature::global_illumination, gi_gather_pass_.init(ctx));
+    report_feature_pass("GI surface cache", render_feature::global_illumination, gi_surface_cache_pass_.init(ctx));
+    report_feature_pass("GI visualization", render_feature::global_illumination, gi_visualize_pass_.init(ctx));
     report_compute_pass("shader print", shader_print_.init(ctx));
-    report_compute_pass("GI reflection", gi_reflection_pass_.init(ctx));
+    report_feature_pass("GI reflection", render_feature::global_illumination, gi_reflection_pass_.init(ctx));
     report_pass("scene history", scene_history_pass_.init(ctx));
     report_pass("half-resolution particle", particle_half_res_pass_.init(ctx));
 
