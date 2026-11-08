@@ -92,13 +92,27 @@ file(READ ${CMAKE_CURRENT_SOURCE_DIR}/bgfx/CMakeLists.txt bgfx_cmake_lists)
 if(NOT bgfx_cmake_lists MATCHES "FetchContent_Declare\\([ \t\r\n]*bgfx[ \t\r\n]+[^)]*GIT_TAG[ \t\r\n]+([0-9a-fA-F]+)")
     message(FATAL_ERROR "Could not find the bgfx commit that bgfx/CMakeLists.txt pins.")
 endif()
+set(bgfx_pin "${CMAKE_MATCH_1}")
 FetchContent_Declare(
     bgfx
     GIT_REPOSITORY https://github.com/bkaradzic/bgfx.git
-    GIT_TAG ${CMAKE_MATCH_1}
+    GIT_TAG ${bgfx_pin}
     PATCH_COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=<SOURCE_DIR> -DPATCH_DIR=${CMAKE_CURRENT_SOURCE_DIR}/patches
                   -P ${CMAKE_CURRENT_SOURCE_DIR}/apply_patches.cmake
 )
+
+# A pin move updates the patched checkout, and FetchContent's update cannot carry the patches over: the checkout is
+# reset first (reset_moved_checkout.cmake). Disconnected builds never update it, and a checkout of one's own
+# (FETCHCONTENT_SOURCE_DIR_BGFX) is not touched.
+if(NOT FETCHCONTENT_FULLY_DISCONNECTED AND NOT FETCHCONTENT_UPDATES_DISCONNECTED
+   AND NOT FETCHCONTENT_UPDATES_DISCONNECTED_BGFX AND NOT FETCHCONTENT_SOURCE_DIR_BGFX)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${FETCHCONTENT_BASE_DIR}/bgfx-src -DPIN=${bgfx_pin}
+                            -P ${CMAKE_CURRENT_SOURCE_DIR}/reset_moved_checkout.cmake
+                    RESULT_VARIABLE bgfx_reset_result)
+    if(NOT bgfx_reset_result EQUAL 0)
+        message(FATAL_ERROR "Could not prepare the bgfx checkout for ${bgfx_pin}.")
+    endif()
+endif()
 
 add_subdirectory(bgfx)
 
