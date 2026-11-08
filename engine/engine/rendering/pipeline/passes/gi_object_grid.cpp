@@ -216,7 +216,7 @@ void gi_object_grid::update(const surface_cache_system& gi_scene, const surface_
         const auto& clipmap_gpu = view_cache.get_clipmap_gpu();
         gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
         gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-        gfx::set_image_3d(5, texture_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16);
+        bgfx::setImage(5, texture_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16);
         bgfx::setBuffer(7, boxes_, bgfx::Access::Read);
         const math::vec4 params(float(entry.level), float(resolution), cell_size, reach);
         gfx::set_uniform(uniforms_.u_gi_object_grid, params);

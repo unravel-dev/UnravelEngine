@@ -59,9 +59,10 @@ Use `unravel-shader-change` for step-by-step shader edits.
 - **GL uniform order:** on OpenGL, create bgfx uniforms BEFORE programs. Symptom of
   breaking it: "uniform not found" warnings, samplers silently landing on unit 0
   (black passes / invalid draws).
-- **GL 3D image binds:** plain `setImage` binds 3D textures non-layered on GL (Mesa
-  drops image3D stores, NVIDIA hides it). Always use `gfx::set_image_3d`
-  (`engine/core/graphics/graphics.h`).
+- **3D image binds:** bind 3D images with the plain `bgfx::setImage`, without a layer range.
+  The GL backend binds a 3D texture layered. A layer range such as (0, 1) makes it bind
+  slice 0 alone for a one-mip volume: image3D stores to the other slices are undefined
+  (NVIDIA renders correctly anyway, so test on another driver).
 - **GL image names:** never name an image (`IMAGE*`) like any sampler uniform - use `i_`
   names. The GL backend uploads every registered uniform a program declares, so the image
   is rebound to that sampler's last stage (unit 0 if never set) and reads / writes another
@@ -104,8 +105,8 @@ Use `unravel-shader-change` for step-by-step shader edits.
 - Use bgfx types directly too (`bgfx::TextureHandle`, `bgfx::ViewId`, `bgfx::Memory`,
   `bgfx::Access::Write`, ...); do not add `using` aliases for bgfx types to `gfx::`.
 - `gfx::` free functions are engine code only: they add behavior or change the API, e.g.
-  `gfx::init` / `gfx::frame` / `gfx::shutdown` (eviction bookkeeping), `gfx::set_image_3d`,
-  `gfx::clip_quad`. The prefix tells whether a call is ours or bgfx's.
+  `gfx::init` / `gfx::frame` / `gfx::shutdown` (eviction bookkeeping), `gfx::clip_quad`.
+  The prefix tells whether a call is ours or bgfx's.
 - Advance frames through `gfx::frame()` / `gfx::frames()` so eviction sees every frame.
 - The last argument of `bgfx::submit` / `gfx::dispatch` is a `BGFX_DISCARD_*` mask, not a
   bool: `true` compiles as `BGFX_DISCARD_BINDINGS` and `false` as `BGFX_DISCARD_NONE`. Model

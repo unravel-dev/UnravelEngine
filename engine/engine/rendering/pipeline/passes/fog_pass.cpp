@@ -654,7 +654,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
     }
     {
         gfx::render_pass pass("Fog/Froxel Lighting");
-        gfx::set_image_3d(LIGHTING_OUTPUT_STAGE, lit->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+        bgfx::setImage(LIGHTING_OUTPUT_STAGE, lit->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         gfx::set_texture(volumetric_.s_fog_history, LIGHTING_HISTORY_STAGE, history);
         gfx::set_texture(volumetric_.s_fog_environment, LIGHTING_ENVIRONMENT_STAGE, params.environment);
         const auto& white = default_textures::get().white_texture();
@@ -723,7 +723,7 @@ auto fog_pass::run_volumetric(const camera& camera, gfx::render_view& rview, con
     }
     {
         gfx::render_pass pass("Fog/Froxel Integration");
-        gfx::set_image_3d(INTEGRATE_OUTPUT_STAGE, integrated->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+        bgfx::setImage(INTEGRATE_OUTPUT_STAGE, integrated->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
         gfx::set_texture(volumetric_.s_fog_lit, INTEGRATE_LIT_STAGE, lit);
         gfx::set_uniform(volumetric_.u_fog_grid, grid_uniform);
         gfx::set_uniform(volumetric_.u_fog_rays, rays.data(), std::uint16_t(rays.size()));

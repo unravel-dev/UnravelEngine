@@ -280,7 +280,7 @@ void gi_clipmap_compose_pass::build_level_mip(const global_sdf_clipmap_gpu& clip
         const auto& destination = writes_slab ? mip : scratch;
         gfx::set_texture(mip_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
         gfx::set_texture(mip_program_.s_clipmap_mip_prev, 1, source);
-        gfx::set_image_3d(2, destination->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
+        bgfx::setImage(2, destination->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
         gfx::set_uniform(mip_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
         const float params[4] = {float(level), float(mip_resolution), writes_slab ? 0.0f : slab_z, writes_slab ? slab_z : 0.0f};
         gfx::set_uniform(mip_program_.u_clipmap_mip_params, params);
@@ -307,8 +307,8 @@ void gi_clipmap_compose_pass::dispatch_compose_bricks(gfx::render_pass& pass,
     // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
     // stage 4. Writing the level in place is what avoids a staging copy and the per-level
     // update_texture_3d the CPU path pays.
-    gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
-    gfx::set_image_3d(6, clipmap_gpu.get_coverage_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
+    bgfx::setImage(5, clipmap_gpu.get_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
+    bgfx::setImage(6, clipmap_gpu.get_coverage_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
     gfx::set_uniform(compose_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     // The reach is what the CPU composer seeds `nearest` with, and it must be the same value:
     // it is simultaneously the cheap-reject bound and the saturated output, so a mismatch
