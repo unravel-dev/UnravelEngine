@@ -80,6 +80,7 @@
 #include <filesystem/pack.h>
 #include <graphics/graphics.h>
 #include <process/process.h>
+#include <string_utils/utils.h>
 #include <subprocess/subprocess.hpp>
 
 #include <bimg/bimg.h>
@@ -239,6 +240,13 @@ void test_keys()
     check(deployment::get_key_name("app:/data/levels/") == "levels", "a folder's name");
     check(deployment::get_display_path("app:/data/levels/one.spfb") == "levels/one.spfb", "display paths drop the data folder");
     check(deployment::get_display_path("engine:/data/x.png") == "engine:/data/x.png", "other protocols keep their key");
+    const deployment::left_out_assets left_out{"app:/data/Textures/Floor.png"};
+    check(left_out.contains("app:/data\\Textures\\Floor.png") && !left_out.contains("app:/data/textures/wall.png"),
+          "left-out keys compare whatever their separators");
+    check(left_out.contains("app:/data/textures/floor.png") == is_case_folded(),
+          "and their letter case only where the file system counts it");
+    check(deployment::is_asset_key<gfx::texture>("app:/data/a.png") && !deployment::is_asset_key<gfx::texture>("app:/data/a.ogg"),
+          "an asset's kind is told by its extension");
 }
 
 //-----------------------------------------------------------------------------
@@ -651,7 +659,8 @@ void test_tree(const deployment::content& found)
 void test_file_classification(const fs::path& root)
 {
     std::printf("test_file_classification\n");
-    check(deployment::is_script_key("app:/data/scripts/game.cs") && !deployment::is_script_key("app:/data/a.png"),
+    check(deployment::is_asset_key<unravel::script>("app:/data/scripts/game.cs") &&
+              !deployment::is_asset_key<unravel::script>("app:/data/a.png"),
           "scripts are told by their extension");
     const auto compiled = deployment::get_compiled_paths("app:/data/a/b.png", root);
     check(compiled == std::vector<fs::path>{root / "compiled/a/b.png.asset"}, "an asset compiles to one file");
@@ -709,7 +718,7 @@ void test_shader_cook_plan(const fs::path& root)
     asset_database::database_t app;
     add_asset(app, make_uid("50000000-0000-4000-8000-000000000003"), "app:/data/shaders/fs_b.eshader");
     add_asset(app, make_uid("50000000-0000-4000-8000-000000000004"), "app:/data/shaders/fs_c.eshader");
-    const std::unordered_set<std::string> left_out{fs::make_path_key("app:/data/shaders/fs_c.eshader")};
+    const deployment::left_out_assets left_out{"app:/data/shaders/fs_c.eshader"};
     deploy_settings params;
     params.profile = "Web";
     params.deploy_target = unravel::deploy_platform::web;
@@ -717,11 +726,11 @@ void test_shader_cook_plan(const fs::path& root)
     check(plan.has_work() && plan.renderers == std::set<std::string>{".wgsl"} && plan.protocols.size() == 2,
           "a web deploy cooks WGSL for the engine and the project");
     check(plan.protocols.size() == 2 && plan.protocols[0].variants == deployment::get_profile_shaders_folder(root, "Web", "engine") &&
-              plan.protocols[0].shipped == std::vector<std::string>{"engine:/data/shaders/fs_a.eshader"} &&
-              plan.protocols[0].left_out.empty(),
+              plan.protocols[0].shaders.shipped == std::vector<std::string>{"engine:/data/shaders/fs_a.eshader"} &&
+              plan.protocols[0].shaders.left_out.empty(),
           "the engine's shaders ship whole into the profile's shader cache");
-    check(plan.protocols.size() == 2 && plan.protocols[1].shipped == std::vector<std::string>{"app:/data/shaders/fs_b.eshader"} &&
-              plan.protocols[1].left_out == std::vector<std::string>{"app:/data/shaders/fs_c.eshader"},
+    check(plan.protocols.size() == 2 && plan.protocols[1].shaders.shipped == std::vector<std::string>{"app:/data/shaders/fs_b.eshader"} &&
+              plan.protocols[1].shaders.left_out == std::vector<std::string>{"app:/data/shaders/fs_c.eshader"},
           "the project's shaders the content selection leaves out are not cooked");
     params.deploy_target = unravel::deploy_platform::desktop;
     const auto desktop = deployment::make_shader_cook_plan(root, params, engine, app, left_out);
@@ -1001,6 +1010,12 @@ void test_player_version(const fs::path& root)
     check(deployment::get_player_version_problem(player, "v1").empty(), "a player of the editor's version ships");
     check(deployment::get_player_version_problem(player, "v2").find("v1") != std::string::npos,
           "a player of another version is refused, naming its version");
+    const deployment::player_wording wording{"The test player", "Mend it."};
+    check(deployment::get_version_problem("", "v1", wording) == "The test player does not say which engine version built it. Mend it.",
+          "a stamp without a version is named so");
+    check(deployment::get_version_problem("v1", "v2", wording) ==
+              "The test player comes from engine version v1, and the editor is v2. Mend it.",
+          "another version names both");
 }
 
 //-----------------------------------------------------------------------------
@@ -1158,6 +1173,24 @@ void test_write_text(const fs::path& root)
         has_thrown = true;
     }
     check(has_thrown, "a file that cannot be written throws");
+    const std::string bytes = "png bytes";
+    check(deployment::write_file(file, bytes.data(), bytes.size()) && read_text(file) == bytes, "bytes replace the file");
+    check(!deployment::write_file(root, bytes.data(), bytes.size()), "a file that cannot be written reports it");
+}
+
+/// The text helpers the deploy steps quote tool output and write JSON with.
+void test_text_helpers()
+{
+    std::printf("test_text_helpers\n");
+    check(string_utils::get_last_lines("a\nb\nc", 2) == "b\nc", "the last lines of output without a final line break");
+    check(string_utils::get_last_lines("a\nb\nc\n", 1) == "c", "the line break that ends the output is no line of its own");
+    check(string_utils::get_last_lines("a\r\nb\r\n", 1) == "b", "Windows line breaks end the output too");
+    check(string_utils::get_last_lines("a\nb", 5) == "a\nb", "all of a shorter output");
+    check(string_utils::get_last_lines("a\nb", 0).empty() && string_utils::get_last_lines("\n\n", 2).empty(),
+          "no lines asked for or none there: empty");
+    check(string_utils::make_json_string("say \"hi\"\\ok") == "\"say \\\"hi\\\"\\\\ok\"", "quotes and backslashes are escaped");
+    check(string_utils::escape_json("a\nb\tc\x01") == "a\\nb\\tc\\u0001", "control characters are escaped");
+    check(string_utils::escape_json("caf\xc3\xa9") == "caf\xc3\xa9", "UTF-8 passes as it is");
 }
 
 auto contains_argument(const std::vector<std::string>& arguments, const std::string& argument) -> bool
@@ -1531,17 +1564,17 @@ void test_run_arguments()
           "options split on any whitespace");
     check(deployment::quote_for_shell("--gfx-stats -n") == "'--gfx-stats -n'", "a shell word in single quotes");
     check(deployment::quote_for_shell("it's $HOME") == "'it'\\''s $HOME'", "a single quote is escaped outside the quotes");
-    deployment::android_toolchain tools;
-    tools.adb = "/sdk/platform-tools/adb";
-    const auto plain = deployment::make_start_arguments(tools, "serial", "com.company.game", {});
+    const auto plain = deployment::make_start_arguments("com.company.game", {});
     check(!plain.empty() && plain.back() == "com.company.game/com.unravel.player.UnravelActivity" &&
               !contains_argument(plain, "--es"),
           "a start without options sets no extra");
-    const auto with_options =
-        deployment::make_start_arguments(tools, "serial", "com.company.game", {"--gfx-stats", "--novsync"});
+    const auto with_options = deployment::make_start_arguments("com.company.game", {"--gfx-stats", "--novsync"});
     check(with_options.size() == plain.size() + 3 && with_options[plain.size()] == "--es" &&
               with_options[plain.size() + 1] == "arguments" && with_options.back() == "'--gfx-stats --novsync'",
           "the options go in one quoted extra of the start intent");
+    const auto adb_command = deployment::make_adb_command("/sdk/platform-tools/adb", "serial", {"logcat", "-c"});
+    check(adb_command == std::vector<std::string>{fs::path("/sdk/platform-tools/adb").string(), "-s", "serial", "logcat", "-c"},
+          "an adb command names its device before its arguments");
 }
 
 //-----------------------------------------------------------------------------
@@ -1681,6 +1714,46 @@ void test_stale_binaries(const fs::path& root)
     deployment::remove_siblings(root / "runtime/2.0");
     check(is_present(root / "runtime/2.0/a.txt") && !is_present(root / "runtime/1.0") && !is_present(root / "runtime/stray.txt"),
           "remove_siblings keeps only the current version");
+    deployment::prune_folder_or_throw(root / "missing",
+                                      [](const fs::path&)
+                                      {
+                                          return false;
+                                      });
+    check(!is_present(root / "missing"), "a missing folder has nothing to prune");
+    for(const auto* name : {"a.txt", "b.txt", "c.txt", "d.txt", "keep.txt"})
+    {
+        write_text(root / "pruned" / name, name);
+    }
+    deployment::prune_folder_or_throw(root / "pruned",
+                                      [](const fs::path& name)
+                                      {
+                                          return name == "keep.txt";
+                                      });
+    fs::error_code ec;
+    check(is_present(root / "pruned/keep.txt") &&
+              std::distance(fs::directory_iterator(root / "pruned", ec), fs::directory_iterator()) == 1,
+          "pruning removes every entry the filter refuses, and keeps the others");
+#ifdef _WIN32
+    // Windows refuses to delete a file a program holds open without sharing its deletion.
+    write_text(root / "pruned/held.txt", "held");
+    bool has_thrown = false;
+    {
+        std::ifstream held(root / "pruned/held.txt");
+        try
+        {
+            deployment::prune_folder_or_throw(root / "pruned",
+                                              [](const fs::path& name)
+                                              {
+                                                  return name == "keep.txt";
+                                              });
+        }
+        catch(const std::runtime_error&)
+        {
+            has_thrown = true;
+        }
+    }
+    check(has_thrown, "an entry that cannot be removed fails the prune");
+#endif
 }
 
 //-----------------------------------------------------------------------------
@@ -2208,6 +2281,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_web_addresses();
         test_web_tunnel();
         test_write_text(temp / "write_text");
+        test_text_helpers();
         test_gradle_arguments();
         test_android_permissions();
         test_android_icon(temp / "icon");

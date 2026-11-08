@@ -848,7 +848,7 @@ struct cook_fixture
     settings runtime;
     ac::texture_target editor_target;
 
-    auto make_plan(const std::unordered_set<std::string>& left_out = {}) const -> deployment::texture_cook_plan
+    auto make_plan(const deployment::left_out_assets& left_out = {}) const -> deployment::texture_cook_plan
     {
         return deployment::make_texture_cook_plan(project, params, runtime, "app", database, left_out, editor_target);
     }
@@ -882,7 +882,7 @@ void test_engine_texture_plan(const fs::path& root)
     check(plan.target.defaults == editor_target.defaults && !(plan.target.defaults == runtime.assets.texture),
           "with the defaults every project shares, not the profile's");
     check(plan.variants == deployment::get_profile_variants_folder(root, "Phone", "engine"), "into the profile's engine folder");
-    check(plan.shipped == std::vector<std::string>{keys[0]} && plan.left_out == std::vector<std::string>{keys[1]},
+    check(plan.textures.shipped == std::vector<std::string>{keys[0]} && plan.textures.left_out == std::vector<std::string>{keys[1]},
           "its shipped and left out textures, and no other asset");
 }
 
@@ -1132,7 +1132,7 @@ struct audio_cook_fixture
     settings runtime;
     settings::asset_settings::audio_importer_settings editor_defaults;
 
-    auto make_plan(const std::unordered_set<std::string>& left_out = {}) const -> deployment::audio_cook_plan
+    auto make_plan(const deployment::left_out_assets& left_out = {}) const -> deployment::audio_cook_plan
     {
         return deployment::make_audio_cook_plan(project, params, runtime, database, left_out, editor_defaults);
     }
@@ -1320,8 +1320,8 @@ void test_shader_cook(const fs::path& root)
     }
     deployment::shader_cook_protocol engine;
     engine.variants = deployment::get_profile_shaders_folder(root, "Web", "engine");
-    engine.shipped = {"engine:/data/shaders/fs_blit.eshader"};
-    engine.left_out = {"engine:/data/shaders/fs_left_out.eshader"};
+    engine.shaders.shipped = {"engine:/data/shaders/fs_blit.eshader"};
+    engine.shaders.left_out = {"engine:/data/shaders/fs_left_out.eshader"};
     deployment::shader_cook_plan plan;
     plan.profile = "Web";
     plan.renderers = {".wgsl"};

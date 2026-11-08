@@ -10,6 +10,7 @@
 #include <math/math.h>
 #include <serialization/associative_archive.h>
 #include <serialization/serialization.h>
+#include <string_utils/utils.h>
 #include <uuid/uuid.h>
 
 #include <algorithm>
@@ -22,47 +23,7 @@ namespace unravel
 namespace
 {
 
-auto json_escape(const std::string& value) -> std::string
-{
-    std::string out;
-    out.reserve(value.size() + 8);
-    for(char c : value)
-    {
-        switch(c)
-        {
-            case '\\':
-                out += "\\\\";
-                break;
-            case '"':
-                out += "\\\"";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                out += c;
-                break;
-        }
-    }
-    return out;
-}
-
-auto make_json_string(const std::string& value) -> std::string
-{
-    return "\"" + json_escape(value) + "\"";
-}
+using string_utils::make_json_string;
 
 auto entity_name_tag(entt::handle entity, std::string& name, std::string& tag) -> void
 {

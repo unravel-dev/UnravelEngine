@@ -26,10 +26,9 @@ constexpr const char* SCRIPT_BUILD_FOLDER = "temp";
 
 auto is_previous_deploy(const fs::path& folder) -> bool
 {
-    fs::error_code ec;
     const auto app_root = folder / DATA_FOLDER / "app";
-    return fs::exists(app_root / ex::get_asset_index_file_name(), ec) || fs::exists(app_root / ex::get_pack_file_name(), ec) ||
-           fs::exists(app_root / LEGACY_ASSET_INDEX_NAME, ec);
+    return is_present(app_root / ex::get_asset_index_file_name()) || is_present(app_root / ex::get_pack_file_name()) ||
+           is_present(app_root / LEGACY_ASSET_INDEX_NAME);
 }
 
 auto is_android_package_folder(const fs::path& folder) -> bool
@@ -147,8 +146,7 @@ void rename_folder(const fs::path& from, const fs::path& to, fs::error_code& ec)
 auto is_executable_in_use(const fs::path& executable) -> bool
 {
 #ifdef _WIN32
-    fs::error_code ec;
-    if(!fs::exists(executable, ec))
+    if(!is_present(executable))
     {
         return false;
     }

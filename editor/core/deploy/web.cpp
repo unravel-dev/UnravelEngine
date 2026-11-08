@@ -27,9 +27,7 @@ constexpr const char* RUNTIME_LOADER_FILE = "_framework/dotnet.js";
 constexpr const char* RUNTIME_FOLDER = "_framework";
 /// The precompressed copies a web server may send instead of a file: not downloaded besides it.
 constexpr std::array<const char*, 2> PRECOMPRESSED_EXTENSIONS = {".br", ".gz"};
-/// The first character JSON escapes as a code point: the control characters are below it.
-constexpr unsigned char JSON_FIRST_PLAIN_CHARACTER = 0x20;
-constexpr const char* REBUILD_ADVICE = "Rebuild the editor.";
+constexpr player_wording WEB_PLAYER_WORDING{"The browser player beside this editor", "Rebuild the editor."};
 /// SDL's preferences root in the browser (SDL_GetPrefPath on Emscripten).
 constexpr const char* WEB_PREFERENCES_ROOT = "/libsdl";
 /// The program name the browser player starts the engine as (game/web/Program.cs ProgramPath), which names a game's
@@ -41,34 +39,6 @@ constexpr unsigned char URL_LOW_NIBBLE_MASK = 0xF;
 /// The domain cloudflared names a quick tunnel's address under.
 constexpr const char* QUICK_TUNNEL_DOMAIN = ".trycloudflare.com";
 constexpr const char* HTTPS_SCHEME = "https://";
-
-auto is_present(const fs::path& path) -> bool
-{
-    fs::error_code ec;
-    return fs::exists(path, ec);
-}
-
-auto to_json_string(const std::string& text) -> std::string
-{
-    std::string quoted = "\"";
-    for(const char character : text)
-    {
-        if(character == '"' || character == '\\')
-        {
-            quoted += '\\';
-            quoted += character;
-        }
-        else if(static_cast<unsigned char>(character) < JSON_FIRST_PLAIN_CHARACTER)
-        {
-            quoted += fmt::format("\\u{:04x}", static_cast<unsigned char>(character));
-        }
-        else
-        {
-            quoted += character;
-        }
-    }
-    return quoted + "\"";
-}
 
 /// A file of a web build's data, as the page fetches it.
 struct data_file
@@ -173,7 +143,7 @@ auto make_texture_sets_json(const std::vector<std::string>& sets) -> std::string
     std::string listed;
     for(const auto& set : sets)
     {
-        listed += (listed.empty() ? "" : ", ") + to_json_string(set);
+        listed += (listed.empty() ? "" : ", ") + string_utils::make_json_string(set);
     }
     return fmt::format("  \"texture_sets\": [{}],\n", listed);
 }
@@ -202,20 +172,14 @@ auto find_web_template(const fs::path& root, const std::string& engine_version) 
     auto& found = lookup.found;
     found.root = root;
     found.engine_version = read_stamp(root / TEMPLATE_STAMP_NAME)["engine_version"];
-    const bool is_complete = !found.engine_version.empty() && is_present(found.get_site_dir() / PAGE_FILE) &&
-                             is_present(found.get_site_dir() / RUNTIME_LOADER_FILE);
-    if(!is_complete)
+    lookup.error = get_version_problem(found.engine_version, engine_version, WEB_PLAYER_WORDING);
+    if(!lookup.error.empty())
     {
-        lookup.error = fmt::format("The browser player beside this editor is incomplete. {}", REBUILD_ADVICE);
         return lookup;
     }
-    if(found.engine_version != engine_version)
+    if(!is_present(found.get_site_dir() / PAGE_FILE) || !is_present(found.get_site_dir() / RUNTIME_LOADER_FILE))
     {
-        lookup.error = fmt::format("The browser player beside this editor comes from engine version {}, and the editor "
-                                   "is {}. {}",
-                                   found.engine_version,
-                                   engine_version,
-                                   REBUILD_ADVICE);
+        lookup.error = fmt::format("{} is incomplete. {}", WEB_PLAYER_WORDING.player, WEB_PLAYER_WORDING.advice);
     }
     return lookup;
 }
@@ -235,14 +199,14 @@ auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> 
         const auto set = get_texture_set_of(data.file, page.texture_sets);
         files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}, \"size\": {}{}}}",
                                   files_json.empty() ? "\n    " : ",\n    ",
-                                  to_json_string(data.site_path),
-                                  to_json_string(read_fingerprint(data.file)),
+                                  string_utils::make_json_string(data.site_path),
+                                  string_utils::make_json_string(read_fingerprint(data.file)),
                                   read_size(data.file),
-                                  set.empty() ? std::string() : ", \"texture_set\": " + to_json_string(set));
+                                  set.empty() ? std::string() : ", \"texture_set\": " + string_utils::make_json_string(set));
     }
     return fmt::format("{{\n  \"title\": {},\n  \"user_folder\": {},\n  \"runtime_size\": {},\n{}  \"files\": [{}\n  ]\n}}\n",
-                       to_json_string(page.title),
-                       to_json_string(page.user_folder),
+                       string_utils::make_json_string(page.title),
+                       string_utils::make_json_string(page.user_folder),
                        get_runtime_size(site),
                        make_texture_sets_json(page.texture_sets),
                        files_json);

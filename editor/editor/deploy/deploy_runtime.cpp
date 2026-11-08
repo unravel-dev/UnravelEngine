@@ -137,8 +137,7 @@ void deploy_runtime(const runtime_plan& plan)
 {
     for(const auto& name : plan.library_names)
     {
-        fs::error_code ec;
-        if(fs::exists(plan.host_source / name, ec))
+        if(is_present(plan.host_source / name))
         {
             copy_file_or_throw(plan.host_source / name, plan.host_destination / name);
         }
@@ -146,17 +145,11 @@ void deploy_runtime(const runtime_plan& plan)
     mirror_or_throw(plan.managed_source, plan.managed_destination);
     mirror_or_throw(plan.framework_source, plan.framework_destination);
     // An older class library version beside the current one goes, the cache next to it stays.
-    const auto libraries_root = plan.managed_destination.parent_path();
-    fs::error_code ec;
-    for(const auto& entry : fs::directory_iterator(libraries_root, ec))
-    {
-        const auto name = entry.path().filename();
-        if(name != plan.managed_destination.filename() && name != plan.framework_destination.filename())
-        {
-            fs::error_code remove_ec;
-            fs::remove_all(entry.path(), remove_ec);
-        }
-    }
+    prune_folder_or_throw(plan.managed_destination.parent_path(),
+                          [&plan](const fs::path& name)
+                          {
+                              return name == plan.managed_destination.filename() || name == plan.framework_destination.filename();
+                          });
     mirror_or_throw(plan.config_source, plan.config_destination);
 }
 

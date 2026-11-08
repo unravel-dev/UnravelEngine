@@ -22,8 +22,8 @@ constexpr const char* LEGACY_ASSET_INDEX_NAME = "assets.pack";
 /// The folder of a deployed build that holds one folder per protocol.
 constexpr const char* DATA_FOLDER = "data";
 
-/// Whether `key` is a script source: scripts ship as their library, not as assets.
-auto is_script_key(const std::string& key) -> bool;
+/// Whether a file or folder is at `path`; one that cannot be checked counts as missing.
+auto is_present(const fs::path& path) -> bool;
 
 /// Where the compiled file of the asset at `key` lies in its protocol's compiled folder ("app:/data/a/b.png"
 /// -> "a/b.png.asset"); empty for keys outside the protocol's data folder.
@@ -83,13 +83,31 @@ auto collect_pack_inputs(const fs::path& compiled,
 void mirror_or_throw(const fs::path& from, const fs::path& to, const fs::mirror_filter& include = {});
 /// fs::copy_file_if_changed that throws on failure.
 void copy_file_or_throw(const fs::path& from, const fs::path& to);
+/// Writes the `size` bytes at `data` to `file`, replacing it; whether all of them reached the file, which only
+/// closing the file shows (a full disk fails the final flush).
+auto write_file(const fs::path& file, const void* data, std::size_t size) -> bool;
 /// Writes `text` to `file` byte for byte, replacing it; throws when any of it did not reach the file.
 void write_text_or_throw(const fs::path& file, const std::string& text);
 
 /// The key=value lines of a stamp the build left beside what it made; empty for a missing file.
 auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>;
-/// Why the desktop player at `player` cannot ship from an editor of `engine_version`, in one sentence, or empty.
-/// A player of another build may not read the data this editor deploys.
+
+/// How a player's version problem names the player and what mends it.
+struct player_wording
+{
+    /// The player as a sentence starts with it: "The Android player beside this editor".
+    const char* player;
+    /// What mends it, as a sentence: "Rebuild the editor."
+    const char* advice;
+};
+
+/**
+ * @brief Why a player whose stamp gives `player_version` (its engine_version) cannot ship from an editor of
+ * `engine_version`, in one sentence, or empty. A player of another build may not read the data this editor deploys.
+ */
+auto get_version_problem(const std::string& player_version, const std::string& engine_version, const player_wording& wording)
+    -> std::string;
+/// get_version_problem for the desktop player at `player`, from the stamp beside it.
 auto get_player_version_problem(const fs::path& player, const std::string& engine_version) -> std::string;
 /// Overlays the cooked variants the filter keeps onto loose compiled files in `destination`; an earlier
 /// folder's variant wins.
@@ -107,6 +125,12 @@ auto get_binary_key(const fs::path& file) -> std::string;
 /// Removes the executables and libraries at the top of `deploy_root` this build no longer ships. `shipped`
 /// holds get_binary_key names.
 void remove_stale_binaries(const fs::path& deploy_root, const std::set<std::string>& shipped);
+/// Decides by its name whether an entry of a folder stays when the folder is pruned.
+using kept_entry_filter = std::function<bool(const fs::path& name)>;
+/// Removes every entry of `folder` that `is_kept` refuses; a missing folder holds none. Throws when the folder
+/// cannot be listed or an entry cannot be removed (a file another program holds open), so nothing a build no
+/// longer ships stays behind unnoticed.
+void prune_folder_or_throw(const fs::path& folder, const kept_entry_filter& is_kept);
 /// Removes everything next to `kept` in its folder: an older runtime version beside the current one.
 void remove_siblings(const fs::path& kept);
 

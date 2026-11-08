@@ -242,7 +242,7 @@ private:
     {
         for(const auto& [uid, meta] : database)
         {
-            if(is_script_key(meta.location))
+            if(is_asset_key<script>(meta.location))
             {
                 script_keys_.push_back(meta.location);
                 continue;
@@ -664,14 +664,14 @@ auto needs_walk(const deploy_settings& params) -> bool
     return params.deploy_only_used_assets;
 }
 
-auto get_left_out_keys(const deploy_settings& params, const content& content) -> std::unordered_set<std::string>
+auto get_left_out_keys(const deploy_settings& params, const content& content) -> left_out_assets
 {
-    std::unordered_set<std::string> left_out;
+    left_out_assets left_out;
     for(const auto& entry : content.entries)
     {
         if(!is_shipped(params, entry))
         {
-            left_out.insert(fs::make_path_key(entry.key));
+            left_out.insert(entry.key);
         }
     }
     return left_out;

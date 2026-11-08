@@ -8,6 +8,7 @@
 #include <deploy/web.h>
 #include <editor/system/local_http.h>
 #include <logging/logging.h>
+#include <string_utils/utils.h>
 
 #include <algorithm>
 #include <array>
@@ -66,16 +67,6 @@ auto get_content_type(const fs::path& file) -> const char*
     return DEFAULT_CONTENT_TYPE;
 }
 
-auto trim(const std::string& text) -> std::string
-{
-    const auto first = text.find_first_not_of(" \t");
-    if(first == std::string::npos)
-    {
-        return {};
-    }
-    return text.substr(first, text.find_last_not_of(" \t") - first + 1);
-}
-
 auto is_same_token(const std::string& lhs, const std::string& rhs) -> bool
 {
     return lhs.size() == rhs.size() && std::equal(lhs.begin(),
@@ -106,8 +97,8 @@ auto accepts_encoding(const httplib::Request& request, const std::string& encodi
     while(start <= header.size())
     {
         const auto end = std::min(header.find(',', start), header.size());
-        const auto item = trim(header.substr(start, end - start));
-        const auto name = trim(item.substr(0, item.find(';')));
+        const auto item = string_utils::trim(header.substr(start, end - start));
+        const auto name = string_utils::trim(item.substr(0, item.find(';')));
         if(is_same_token(name, encoding) || name == "*")
         {
             return get_quality(item) > 0.0;
@@ -149,7 +140,21 @@ auto is_file(const fs::path& path) -> bool
     return fs::is_regular_file(path, ec);
 }
 
-/// Sends @p file as it is, or its compressed copy the browser accepts; the server streams it from the disk.
+/// Whether @p compressed holds what @p file holds: it was written no earlier than the file, or the file is not there.
+/// A file changed after its copy was made (a page edited in the site) is sent as it is, not as its old copy.
+auto is_current_copy(const fs::path& compressed, const fs::path& file) -> bool
+{
+    fs::error_code ec;
+    const auto copy_time = fs::last_write_time(compressed, ec);
+    if(ec)
+    {
+        return false;
+    }
+    const auto file_time = fs::last_write_time(file, ec);
+    return ec || copy_time >= file_time;
+}
+
+/// Sends @p file as it is, or its current compressed copy the browser accepts; the server streams it from the disk.
 void serve_file(const fs::path& file, const httplib::Request& request, httplib::Response& response)
 {
     response.set_header("Cache-Control", "no-cache");
@@ -158,7 +163,7 @@ void serve_file(const fs::path& file, const httplib::Request& request, httplib::
     {
         auto compressed = file;
         compressed += variant.extension;
-        if(accepts_encoding(request, variant.encoding) && is_file(compressed))
+        if(accepts_encoding(request, variant.encoding) && is_file(compressed) && is_current_copy(compressed, file))
         {
             response.set_header("Content-Encoding", variant.encoding);
             response.set_file_content(fs::to_utf8_string(compressed), get_content_type(file));

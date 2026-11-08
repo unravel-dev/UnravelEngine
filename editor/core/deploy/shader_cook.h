@@ -8,7 +8,6 @@
 
 #include <set>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 /// A deploy's cooked shaders: the compiled shaders a profile's renderer reads and the editor does not compile
@@ -30,11 +29,8 @@ struct shader_cook_protocol
 {
     /// cache/profiles/<profile>/shaders/<protocol>: the cooked shaders, laid out as the compiled folder.
     fs::path variants;
-    /// The keys ("engine:/data/shaders/...") of the protocol's shaders the deploy ships.
-    std::vector<std::string> shipped;
-    /// The keys of the shaders the content selection leaves out: their cooked files are kept for a later
-    /// deploy, which checks them again before shipping them.
-    std::vector<std::string> left_out;
+    /// The protocol's shaders, by whether the deploy ships them.
+    asset_split shaders;
 };
 
 /// What cooking a profile's shaders reads, resolved before it runs.
@@ -58,13 +54,13 @@ struct shader_cook_plan
  * @param engine_database The engine's asset index. Every engine shader ships: the content selection decides only
  * the engine's fonts and UI files.
  * @param app_database The project's asset index.
- * @param left_out The path keys (fs::make_path_key) of the project assets the content selection leaves out.
+ * @param left_out The project assets the content selection leaves out.
  */
 auto make_shader_cook_plan(const fs::path& project_root,
                            const deploy_settings& params,
                            const asset_database::database_t& engine_database,
                            const asset_database::database_t& app_database,
-                           const std::unordered_set<std::string>& left_out) -> shader_cook_plan;
+                           const left_out_assets& left_out) -> shader_cook_plan;
 
 /**
  * @brief Brings the profile's cooked shaders in step with the project: every shipped shader gets a file per

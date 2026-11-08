@@ -45,15 +45,15 @@ auto get_folder_problem(const fs::path& location, const fs::path& output, bool i
                            managed,
                            DEFAULT_DEPLOY_LOCATION);
     }
-    if(fs::exists(location, ec) && !fs::is_directory(location, ec))
+    if(is_present(location) && !fs::is_directory(location, ec))
     {
         return fmt::format("The deploy location {} is a file, not a folder.", location.generic_string());
     }
-    if(!fs::exists(location, ec) && !fs::is_directory(location.parent_path(), ec))
+    if(!is_present(location) && !fs::is_directory(location.parent_path(), ec))
     {
         return fmt::format("The deploy folder's parent {} does not exist.", location.parent_path().generic_string());
     }
-    if(!fs::exists(output, ec))
+    if(!is_present(output))
     {
         return {};
     }
@@ -83,8 +83,7 @@ auto get_desktop_icon_problem(const deploy_settings& params) -> std::string
         return {};
     }
     const auto image = fs::resolve_protocol(params.desktop.icon.id());
-    fs::error_code ec;
-    if(fs::exists(image, ec))
+    if(is_present(image))
     {
         return {};
     }

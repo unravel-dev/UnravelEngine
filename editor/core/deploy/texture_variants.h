@@ -9,7 +9,6 @@
 #include <filesystem/filesystem.h>
 
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 /// A deploy's texture variants: textures a profile compiles differently from the editor (its platform's
@@ -21,9 +20,6 @@ namespace unravel::deployment
 /// The texture target a profile deploys for: its platform, the formats its GPUs read and its texture
 /// defaults.
 auto get_profile_texture_target(const deploy_settings& params, const settings& runtime_settings) -> asset_compiler::texture_target;
-
-/// Whether the asset at `key` ("app:/data/...") is a texture.
-auto is_texture_key(const std::string& key) -> bool;
 
 /// The name a texture set's pack, cache folder and page call the set compressed to `compression` by: one of
 /// ex::TEXTURE_SET_NAMES.
@@ -45,17 +41,14 @@ struct texture_cook_plan
     fs::path compiled;
     /// cache/profiles/<profile>/<protocol>: the variants, laid out as the compiled folder.
     fs::path variants;
-    /// The keys ("app:/data/...", "engine:/data/...") of the protocol's textures the deploy ships.
-    std::vector<std::string> shipped;
-    /// The keys of the protocol's textures the content selection leaves out: their variants are kept for a
-    /// later deploy, which checks them again before shipping them.
-    std::vector<std::string> left_out;
+    /// The protocol's textures, by whether the deploy ships them.
+    asset_split textures;
 };
 
 /**
  * @param protocol The protocol whose textures are cooked: the project's (app) or the engine's.
  * @param database The protocol's asset index.
- * @param left_out The path keys (fs::make_path_key) of the assets the content selection leaves out.
+ * @param left_out The assets the content selection leaves out.
  * @param editor_target What the editor compiles the protocol's files for in its cache
  * (asset_compiler::get_editor_texture_target_for).
  */
@@ -64,7 +57,7 @@ auto make_texture_cook_plan(const fs::path& project_root,
                             const settings& runtime_settings,
                             const std::string& protocol,
                             const asset_database::database_t& database,
-                            const std::unordered_set<std::string>& left_out,
+                            const left_out_assets& left_out,
                             const asset_compiler::texture_target& editor_target) -> texture_cook_plan;
 
 /**

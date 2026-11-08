@@ -1312,8 +1312,9 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "builds a folder for a web server: the browser player from the editor's players/web (the engine build "
              "makes it) beside the data and data_manifest.json; run_after_deploy serves that folder on this computer "
              "until the editor closes and opens it in the default browser. Textures the profile compiles differently "
-             "from the editor (its formats, its defaults) are cooked first (Cooking Textures), so are audio clips (Cooking "
-             "Audio: its audio default, a clip's own compression for its platform) and shaders for a renderer the "
+             "from the editor (its formats, its defaults) are cooked first (Cooking Textures and Cooking Engine "
+             "Textures), so are audio clips (Cooking Audio: its audio default, a clip's own compression for its "
+             "platform) and shaders for a renderer the "
              "editor does not compile for (Cooking Shaders: WGSL for the web); all are kept in the project's "
              "cache/profiles/<profile> for its next deploys.",
          .input_schema_json =

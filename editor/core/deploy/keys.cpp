@@ -8,6 +8,34 @@
 namespace unravel::deployment
 {
 
+left_out_assets::left_out_assets(std::initializer_list<std::string> keys)
+{
+    for(const auto& key : keys)
+    {
+        insert(key);
+    }
+}
+
+void left_out_assets::insert(const std::string& key)
+{
+    path_keys_.insert(fs::make_path_key(key));
+}
+
+auto left_out_assets::contains(const std::string& key) const -> bool
+{
+    return path_keys_.contains(fs::make_path_key(key));
+}
+
+auto left_out_assets::size() const -> std::size_t
+{
+    return path_keys_.size();
+}
+
+auto left_out_assets::empty() const -> bool
+{
+    return path_keys_.empty();
+}
+
 auto normalize_key(std::string key) -> std::string
 {
     std::replace(key.begin(), key.end(), '\\', '/');

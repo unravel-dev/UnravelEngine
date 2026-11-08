@@ -317,11 +317,13 @@ auto get_bundle_path(const fs::path& package) -> fs::path;
 /// The native debug symbols a deploy writes beside `package`: <package name>-native-debug-symbols.zip.
 auto get_native_symbols_path(const fs::path& package) -> fs::path;
 
-/// The command line that starts the game's activity on `device`. The game's `run_arguments` go in an
-/// extra of the start intent, which the player's activity hands to the game as its command line.
-auto make_start_arguments(const android_toolchain& tools,
-                          const std::string& device,
-                          const std::string& application_id,
-                          const std::vector<std::string>& run_arguments) -> std::vector<std::string>;
+/// The command line that runs the adb at `adb` with `arguments` on the device whose serial is `device`.
+auto make_adb_command(const fs::path& adb, const std::string& device, std::vector<std::string> arguments)
+    -> std::vector<std::string>;
+
+/// The adb arguments that start the game's activity. The game's `run_arguments` go in an extra of the start
+/// intent, which the player's activity hands to the game as its command line.
+auto make_start_arguments(const std::string& application_id, const std::vector<std::string>& run_arguments)
+    -> std::vector<std::string>;
 
 } // namespace unravel::deployment

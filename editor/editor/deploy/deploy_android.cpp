@@ -8,6 +8,7 @@
 #include <editor/system/project_manager.h>
 #include <engine/threading/threader.h>
 #include <logging/logging.h>
+#include <string_utils/utils.h>
 #include <subprocess/subprocess.hpp>
 #include <hpp/finally.hpp>
 #include <version/version.h>
@@ -94,7 +95,7 @@ void remove_earlier_data(const fs::path& output_folder)
 {
     fs::error_code ec;
     const auto data = output_folder / DATA_FOLDER;
-    if(!fs::exists(data, ec) || !is_android_package_folder(output_folder))
+    if(!is_present(data) || !is_android_package_folder(output_folder))
     {
         return;
     }
@@ -118,39 +119,17 @@ void update_gradle_project(const fs::path& source, const fs::path& destination)
     }
 }
 
-void copy_built_file_or_throw(const fs::path& built, const fs::path& destination)
-{
-    fs::error_code ec;
-    fs::copy_file(built, destination, fs::copy_options::overwrite_existing, ec);
-    if(ec)
-    {
-        throw std::runtime_error(fmt::format("Copying {} to {} failed: {}.", built.generic_string(), destination.generic_string(), ec.message()));
-    }
-}
-
-auto trim(std::string text) -> std::string
-{
-    const auto begin = text.find_first_not_of(" \t\r\n");
-    if(begin == std::string::npos)
-    {
-        return {};
-    }
-    const auto end = text.find_last_not_of(" \t\r\n");
-    return text.substr(begin, end - begin + 1);
-}
-
 /// adb with the device chosen.
 auto run_adb(const android_toolchain& tools, const std::string& device, std::vector<std::string> arguments)
     -> subprocess::call_result
 {
-    arguments.insert(arguments.begin(), {tools.adb.string(), "-s", device});
-    return subprocess::call(arguments);
+    return subprocess::call(make_adb_command(tools.adb, device, std::move(arguments)));
 }
 
 auto get_game_process(const android_toolchain& tools, const std::string& device, const std::string& application_id)
     -> std::string
 {
-    return trim(run_adb(tools, device, {"shell", "pidof", application_id}).out_output);
+    return string_utils::trim(run_adb(tools, device, {"shell", "pidof", application_id}).out_output);
 }
 
 /// Logs a line of the game's process: the game's own as [Device], the device system's as [Device System],
@@ -192,7 +171,7 @@ auto find_ndk_stack(const fs::path& sdk) -> fs::path
     fs::error_code ec;
     for(const auto& entry : fs::directory_iterator(sdk / "ndk", ec))
     {
-        if(fs::exists(entry.path() / name, ec))
+        if(is_present(entry.path() / name))
         {
             return entry.path() / name;
         }
@@ -203,10 +182,9 @@ auto find_ndk_stack(const fs::path& sdk) -> fs::path
 /// Logs the crash report again with source lines, when the unstripped player and ndk-stack are here.
 void symbolize_crash(const android_package_plan& plan, const std::vector<std::string>& report)
 {
-    fs::error_code ec;
     const auto& symbols = plan.package.player.symbols_dir;
     const auto ndk_stack = find_ndk_stack(plan.tools.sdk);
-    if(symbols.empty() || !fs::exists(symbols / "libmain.so", ec) || ndk_stack.empty())
+    if(symbols.empty() || !is_present(symbols / "libmain.so") || ndk_stack.empty())
     {
         APPLOG_INFO("Deploy: the crash report above has no source lines. They need the unstripped player and the "
                     "Android NDK, which only an editor built from source has.");
@@ -370,19 +348,19 @@ private:
         }
         if(install.retcode != 0 || install.out_output.find("Success") == std::string::npos)
         {
-            fail_steps(plan, trim(install.out_output));
-            APPLOG_ERROR("Deploy: installing on {} failed: {}", device, trim(install.out_output));
+            fail_steps(plan, string_utils::trim(install.out_output));
+            APPLOG_ERROR("Deploy: installing on {} failed: {}", device, string_utils::trim(install.out_output));
             return;
         }
         complete_step(plan.install_step);
         run_adb(tools, device, {"shell", "am", "force-stop", application_id});
         run_adb(tools, device, {"logcat", "-c"});
-        const auto started = subprocess::call(make_start_arguments(tools, device, application_id, plan.run_arguments));
+        const auto started = run_adb(tools, device, make_start_arguments(application_id, plan.run_arguments));
         const auto process = wait_for_process(tools, device, application_id);
         if(process.empty())
         {
             fail_device_steps(plan, "The game did not start on the device.");
-            APPLOG_ERROR("Deploy: the game did not start on {}. {}", device, trim(started.out_output));
+            APPLOG_ERROR("Deploy: the game did not start on {}. {}", device, string_utils::trim(started.out_output));
             return;
         }
         complete_step(plan.start_step);
@@ -464,7 +442,7 @@ private:
         std::mutex report_mutex;
         std::vector<std::string> crash_report;
         subprocess::stream log;
-        log.start({tools.adb.string(), "-s", plan.device, "logcat", "-v", "threadtime"},
+        log.start(make_adb_command(tools.adb, plan.device, {"logcat", "-v", "threadtime"}),
                   [&process, &report_mutex, &crash_report](const std::string& text)
                   {
                       logcat_line line;
@@ -637,7 +615,8 @@ auto merge_connections(const std::string& adb, std::vector<android_device> devic
     {
         if(device.is_ready())
         {
-            read_android_device_properties(subprocess::call({adb, "-s", device.serial, "shell", command}).out_output, device);
+            read_android_device_properties(subprocess::call(make_adb_command(adb, device.serial, {"shell", command})).out_output,
+                                           device);
         }
     }
     return merge_android_devices(std::move(devices));
@@ -693,7 +672,7 @@ void schedule_device_command(rtti::context& ctx, const android_package_plan& pla
                       [plan, arguments = std::move(arguments), done = std::move(done)]()
                       {
                           const auto result = run_adb(plan.tools, plan.device, arguments);
-                          const auto answer = trim(result.out_output);
+                          const auto answer = string_utils::trim(result.out_output);
                           if(result.retcode == 0 && answer.find("Success") != std::string::npos)
                           {
                               APPLOG_INFO("Deploy: {}", done);
@@ -846,15 +825,14 @@ auto get_android_problems(rtti::context& ctx, const deploy_settings& params) -> 
             problems.push_back(permission_problem);
         }
     }
-    fs::error_code ec;
-    if(!fs::exists(get_icon_image(params), ec))
+    if(!is_present(get_icon_image(params)))
     {
         problems.push_back(fmt::format("The icon image {} is missing. Choose another one, or none for the engine's logo.",
                                        get_icon_image(params).generic_string()));
     }
     if(params.android.release)
     {
-        if(params.android.keystore.empty() || !fs::exists(params.android.keystore, ec))
+        if(params.android.keystore.empty() || !is_present(params.android.keystore))
         {
             problems.push_back("A release build needs the keystore that signs it. Choose one, or turn off Release Build.");
         }
@@ -910,8 +888,7 @@ auto get_android_package_path(rtti::context& ctx, const deploy_settings& params)
 
 auto has_android_package(rtti::context& ctx, const deploy_settings& params) -> bool
 {
-    fs::error_code ec;
-    return fs::exists(get_android_package_path(ctx, params), ec);
+    return is_present(get_android_package_path(ctx, params));
 }
 
 auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params) -> android_package_plan
@@ -980,16 +957,16 @@ void build_android_package(const android_package_plan& plan)
     {
         throw std::runtime_error(fmt::format("Gradle failed with exit code {}. Its last output:\n{}",
                                              result.retcode,
-                                             get_last_lines(result.out_output, GRADLE_ERROR_LINES)));
+                                             string_utils::get_last_lines(result.out_output, GRADLE_ERROR_LINES)));
     }
-    copy_built_file_or_throw(get_built_package(package.project_dir, package.is_release), plan.output);
+    copy_file_or_throw(get_built_package(package.project_dir, package.is_release), plan.output);
     APPLOG_INFO("Deploy: built {} ({} MB).", plan.output.generic_string(), fs::file_size(plan.output, ec) / (1024 * 1024));
     const auto bundle = get_bundle_path(plan.output);
     const auto symbols = get_native_symbols_path(plan.output);
     if(package.is_release)
     {
-        copy_built_file_or_throw(get_built_bundle(package.project_dir), bundle);
-        copy_built_file_or_throw(get_built_native_symbols(package.project_dir), symbols);
+        copy_file_or_throw(get_built_bundle(package.project_dir), bundle);
+        copy_file_or_throw(get_built_native_symbols(package.project_dir), symbols);
         APPLOG_INFO("Deploy: built {} ({} MB) with version code {}. Upload it to Google Play, and {} as its native debug "
                     "symbols.",
                     bundle.generic_string(),

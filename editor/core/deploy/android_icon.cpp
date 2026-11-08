@@ -1,9 +1,9 @@
 #include "android_icon.h"
+#include "files.h"
 #include "icon_image.h"
 
 #include <array>
 #include <cstdio>
-#include <fstream>
 
 namespace unravel::deployment
 {
@@ -38,9 +38,7 @@ auto make_foreground(const icon_image& image, std::uint32_t scale_percent) -> ic
 
 auto write_text(const fs::path& file, const std::string& text) -> bool
 {
-    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
-    stream << text;
-    return stream.good();
+    return write_file(file, text.data(), text.size());
 }
 
 auto make_adaptive_icon_xml() -> std::string

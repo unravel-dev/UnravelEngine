@@ -34,35 +34,23 @@ auto get_parameters(const texture_cook_plan& plan, const std::string& key) -> te
 
 auto cook_texture(const texture_cook_plan& plan, const std::string& key) -> cook_outcome
 {
-    cook_outcome outcome;
-    const auto relative = get_compiled_relative_path(key);
-    if(relative.empty())
-    {
-        return outcome;
-    }
-    // The editor's file ships where the profile compiles the texture as the editor does, once that file is
-    // current: settings changed while the editor was closed leave it compiled with the old ones until the
-    // editor compiles it again, and a deploy never ships those.
     const auto parameters = get_parameters(plan, key);
-    if(!parameters.needs_variant() && asset_compiler::is_texture_compiled_with(key, plan.compiled / relative, parameters.editor))
-    {
-        return outcome;
-    }
-    outcome.files.push_back(get_cache_file_key(relative));
-    const auto variant = plan.variants / relative;
-    if(asset_compiler::is_texture_compiled_with(key, variant, parameters.profile))
-    {
-        return outcome;
-    }
-    if(asset_compiler::compile_texture_for_target(key, variant, plan.target))
-    {
-        ++outcome.compiled;
-    }
-    else
-    {
-        outcome.has_failed = true;
-    }
-    return outcome;
+    return cook_variant(key,
+                        plan.compiled,
+                        plan.variants,
+                        {parameters.needs_variant(),
+                         [&](const fs::path& file)
+                         {
+                             return asset_compiler::is_texture_compiled_with(key, file, parameters.editor);
+                         },
+                         [&](const fs::path& file)
+                         {
+                             return asset_compiler::is_texture_compiled_with(key, file, parameters.profile);
+                         },
+                         [&](const fs::path& file)
+                         {
+                             return asset_compiler::compile_texture_for_target(key, file, plan.target);
+                         }});
 }
 
 /// The formats an Android or web profile's textures compile to.
@@ -97,11 +85,6 @@ auto get_profile_texture_target(const deploy_settings& params, const settings& r
     return target;
 }
 
-auto is_texture_key(const std::string& key) -> bool
-{
-    return ex::is_format<gfx::texture>(fs::path(key).extension().generic_string());
-}
-
 auto get_texture_set_name(deploy_texture_compression compression) -> std::string
 {
     return asset_compiler::get_family_name(get_compression_family(compression));
@@ -132,10 +115,11 @@ auto make_texture_cook_plan(const fs::path& project_root,
                             const settings& runtime_settings,
                             const std::string& protocol,
                             const asset_database::database_t& database,
-                            const std::unordered_set<std::string>& left_out,
+                            const left_out_assets& left_out,
                             const asset_compiler::texture_target& editor_target) -> texture_cook_plan
 {
     texture_cook_plan plan;
+    plan.textures = split_assets(database, is_asset_key<gfx::texture>, left_out);
     plan.profile = params.profile;
     plan.target = get_profile_texture_target(params, runtime_settings);
     if(protocol != CONTENT_PROTOCOL)
@@ -147,41 +131,22 @@ auto make_texture_cook_plan(const fs::path& project_root,
     plan.editor_target = editor_target;
     plan.variants = get_profile_variants_folder(project_root, params.profile, protocol);
     plan.compiled = fs::resolve_protocol(ex::get_compiled_directory(protocol));
-    for(const auto& [uid, meta] : database)
-    {
-        if(!is_texture_key(meta.location))
-        {
-            continue;
-        }
-        (left_out.contains(fs::make_path_key(meta.location)) ? plan.left_out : plan.shipped).push_back(meta.location);
-    }
     return plan;
 }
 
 auto cook_texture_variants(const texture_cook_plan& plan) -> cook_report
 {
-    const auto outcomes = cook_all(plan.shipped,
-                                   [&plan](std::size_t index)
-                                   {
-                                       return cook_texture(plan, plan.shipped[index]);
-                                   });
-    cook_report report;
-    std::unordered_set<std::string> kept;
-    for(std::size_t i = 0; i < outcomes.size(); ++i)
-    {
-        add_outcome(plan.shipped[i], outcomes[i], kept, report);
-    }
-    // A left-out texture's variant stays for a deploy that ships it, which checks it first.
-    for(const auto& key : plan.left_out)
-    {
-        const auto relative = get_compiled_relative_path(key);
-        if(!relative.empty() && get_parameters(plan, key).needs_variant())
+    return cook_variants(
+        plan.textures,
+        plan.variants,
+        [&plan](const std::string& key)
         {
-            keep_cache_file(kept, get_cache_file_key(relative));
-        }
-    }
-    sweep_cache_folder(plan.variants, kept, report);
-    return report;
+            return cook_texture(plan, key);
+        },
+        [&plan](const std::string& key)
+        {
+            return get_parameters(plan, key).needs_variant();
+        });
 }
 
 void cook_textures(const texture_cook_plan& plan)

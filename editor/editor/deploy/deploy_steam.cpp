@@ -1,13 +1,14 @@
 #include "deploy_steam.h"
 #include "deploy_preflight.h"
 
+#include <deploy/files.h>
 #include <deploy/steam.h>
 #include <editor/system/project_manager.h>
 #include <engine/threading/threader.h>
 #include <logging/logging.h>
+#include <string_utils/utils.h>
 #include <subprocess/subprocess.hpp>
 
-#include <fstream>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -53,21 +54,12 @@ void write_script(const steam_upload_plan& plan)
 {
     fs::error_code ec;
     fs::create_directories(plan.build.build_output, ec);
-    std::ofstream stream(plan.script, std::ios::binary | std::ios::trunc);
-    stream << make_steam_app_build_script(plan.build);
-    if(!stream.good())
-    {
-        throw std::runtime_error(fmt::format("Writing {} failed.", plan.script.generic_string()));
-    }
+    write_text_or_throw(plan.script, make_steam_app_build_script(plan.build));
 }
 
 auto describe_failure(const steam_upload_plan& plan, const subprocess::call_result& result) -> std::string
 {
-    auto output = get_last_lines(result.out_output, STEAMCMD_ERROR_LINES);
-    while(!output.empty() && (output.back() == '\n' || output.back() == '\r'))
-    {
-        output.pop_back();
-    }
+    const auto output = string_utils::get_last_lines(result.out_output, STEAMCMD_ERROR_LINES);
     auto message = fmt::format("steamcmd did not finish the build (exit code {}). Its last output:\n{}", result.retcode, output);
     if(is_steam_login_failure(result.out_output))
     {
@@ -132,8 +124,7 @@ auto get_steam_upload_problem(rtti::context& ctx, const deploy_settings& params)
     {
         return problem;
     }
-    fs::error_code ec;
-    if(!fs::exists(get_deployed_executable(ctx, params), ec))
+    if(!is_present(get_deployed_executable(ctx, params)))
     {
         return fmt::format("Deploy {} first: {} holds no build of it.", params.profile, get_output_location(params).generic_string());
     }

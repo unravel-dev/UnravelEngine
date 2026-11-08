@@ -27,6 +27,17 @@ auto capitalize(const std::string& word) -> std::string;
 // Returns the first substring between "from - to" without trailing spaces
 auto extract_substring(const std::string& str, const std::string& from, const std::string& to) -> std::string;
 
+/// The last `count` lines of `text` (a tool's output), without the line breaks that end it; all of it when it
+/// has fewer lines.
+auto get_last_lines(const std::string& text, std::size_t count) -> std::string;
+
+/// `text` escaped for the inside of a JSON string: quotes, backslashes and control characters. Bytes from 0x80 up
+/// pass as they are, so UTF-8 stays UTF-8.
+auto escape_json(const std::string& text) -> std::string;
+
+/// `text` as a JSON string literal, quotes included.
+auto make_json_string(const std::string& text) -> std::string;
+
 namespace alterable
 {
 void ltrim(std::string& str);

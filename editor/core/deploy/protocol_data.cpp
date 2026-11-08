@@ -14,7 +14,7 @@ namespace
 /// Whether the compiled file at `relative` in the protocol's compiled folder is a texture's.
 auto is_texture_file(const std::string& protocol, const fs::path& relative) -> bool
 {
-    return is_texture_key(get_source_key(protocol, relative));
+    return is_asset_key<gfx::texture>(get_source_key(protocol, relative));
 }
 
 /// Removes the texture set packs (ex::get_texture_pack_file_name) of the sets `job` does not ship, left by an earlier
@@ -61,7 +61,7 @@ auto make_shipped_filter(const protocol_job& job) -> compiled_file_filter
     return [&job](const fs::path& file, const fs::path& relative)
     {
         return is_shipped_compiled_file(file, job.with_debug_symbols) && !is_other_shader_variant(file, job.shader_variants) &&
-               !job.left_out.contains(fs::make_path_key(get_source_key(job.protocol, relative)));
+               !job.left_out.contains(get_source_key(job.protocol, relative));
     };
 }
 
@@ -119,7 +119,7 @@ void deploy_protocol_data(const protocol_job& job)
                       index,
                       [&job](const std::string& location)
                       {
-                          return !is_script_key(location) && !job.left_out.contains(fs::make_path_key(location));
+                          return !is_asset_key<script>(location) && !job.left_out.contains(location);
                       });
     const auto is_shipped = make_shipped_filter(job);
     remove_unshipped_texture_packs(job);

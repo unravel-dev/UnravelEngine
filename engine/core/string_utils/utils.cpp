@@ -1,8 +1,44 @@
 #include "utils.h"
 #include <algorithm>
+#include <array>
+#include <cstdio>
 
 namespace string_utils
 {
+namespace
+{
+/// The first character JSON writes as it is: the control characters below it are escaped.
+constexpr unsigned char JSON_FIRST_PLAIN_CHARACTER = 0x20;
+/// Room for "\uXXXX" and its terminator.
+constexpr std::size_t JSON_UNICODE_ESCAPE_SIZE = 7;
+/// What an escaped string usually grows by, reserved up front.
+constexpr std::size_t JSON_ESCAPE_RESERVE = 8;
+
+/// The two-character escape JSON has for `character` ("\n" for a line feed), or null.
+auto get_json_short_escape(char character) -> const char*
+{
+    switch(character)
+    {
+        case '"':
+            return "\\\"";
+        case '\\':
+            return "\\\\";
+        case '\b':
+            return "\\b";
+        case '\f':
+            return "\\f";
+        case '\n':
+            return "\\n";
+        case '\r':
+            return "\\r";
+        case '\t':
+            return "\\t";
+        default:
+            return nullptr;
+    }
+}
+} // namespace
+
 
 auto ltrim(const std::string& str) -> std::string
 {
@@ -69,6 +105,56 @@ auto extract_substring(const std::string& str, const std::string& from, const st
     }
 
     return {};
+}
+
+auto get_last_lines(const std::string& text, std::size_t count) -> std::string
+{
+    const auto last = text.find_last_not_of("\r\n");
+    if(count == 0 || last == std::string::npos)
+    {
+        return {};
+    }
+    const auto end = last + 1;
+    auto begin = end;
+    for(std::size_t found = 0; begin > 0; --begin)
+    {
+        if(text[begin - 1] == '\n' && ++found == count)
+        {
+            break;
+        }
+    }
+    return text.substr(begin, end - begin);
+}
+
+auto escape_json(const std::string& text) -> std::string
+{
+    std::string escaped;
+    escaped.reserve(text.size() + JSON_ESCAPE_RESERVE);
+    for(const char character : text)
+    {
+        const auto byte = static_cast<unsigned char>(character);
+        const char* short_escape = get_json_short_escape(character);
+        if(short_escape)
+        {
+            escaped += short_escape;
+        }
+        else if(byte < JSON_FIRST_PLAIN_CHARACTER)
+        {
+            std::array<char, JSON_UNICODE_ESCAPE_SIZE> unicode{};
+            std::snprintf(unicode.data(), unicode.size(), "\\u%04x", byte);
+            escaped += unicode.data();
+        }
+        else
+        {
+            escaped += character;
+        }
+    }
+    return escaped;
+}
+
+auto make_json_string(const std::string& text) -> std::string
+{
+    return "\"" + escape_json(text) + "\"";
 }
 
 namespace alterable

@@ -3,6 +3,8 @@
 #include "folders.h"
 #include "run_arguments.h"
 
+#include <logging/logging.h>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -72,11 +74,11 @@ constexpr const char* SDL_TAG_PREFIX = "SDL";
 /// The tag of Java's uncaught exceptions.
 constexpr const char* JAVA_CRASH_TAG = "AndroidRuntime";
 constexpr char FATAL_LEVEL = 'F';
+constexpr player_wording ANDROID_PLAYER_WORDING{"The Android player beside this editor", "Rebuild the editor."};
 
-auto is_present(const fs::path& path) -> bool
+auto get_incomplete_problem() -> std::string
 {
-    fs::error_code ec;
-    return fs::exists(path, ec);
+    return fmt::format("{} is incomplete. {}", ANDROID_PLAYER_WORDING.player, ANDROID_PLAYER_WORDING.advice);
 }
 
 auto is_letter(char c) -> bool
@@ -211,7 +213,7 @@ auto find_android_template(const fs::path& root, const std::string& engine_versi
     }
     if(!is_present(stamp_file))
     {
-        lookup.error = "The Android player beside this editor is incomplete. Rebuild the editor.";
+        lookup.error = get_incomplete_problem();
         return lookup;
     }
     auto values = read_stamp(stamp_file);
@@ -222,16 +224,18 @@ auto find_android_template(const fs::path& root, const std::string& engine_versi
     found.abi = values["abi"];
     found.dotnet_runtime = values["dotnet_runtime"];
     found.symbols_dir = values["symbols"];
-    if(found.engine_version != engine_version)
+    lookup.error = get_version_problem(found.engine_version, engine_version, ANDROID_PLAYER_WORDING);
+    if(!lookup.error.empty())
     {
-        lookup.error = "The Android player beside this editor comes from engine version " + found.engine_version +
-                       ", and the editor is " + engine_version + ". Rebuild the editor.";
         return lookup;
     }
     if(found.configuration != configuration)
     {
-        lookup.error = "The Android player beside this editor is a " + found.configuration + " build, and the editor is " +
-                       configuration + ". Rebuild the editor.";
+        lookup.error = fmt::format("{} is a {} build, and the editor is {}. {}",
+                                   ANDROID_PLAYER_WORDING.player,
+                                   found.configuration,
+                                   configuration,
+                                   ANDROID_PLAYER_WORDING.advice);
         return lookup;
     }
     const bool is_complete = !found.abi.empty() && !found.dotnet_runtime.empty() &&
@@ -241,7 +245,7 @@ auto find_android_template(const fs::path& root, const std::string& engine_versi
                              is_present(found.get_sdl_java_dir()) && is_present(found.get_dotnet_dir() / "native");
     if(!is_complete)
     {
-        lookup.error = "The Android player beside this editor is incomplete. Rebuild the editor.";
+        lookup.error = get_incomplete_problem();
     }
     return lookup;
 }
@@ -804,13 +808,17 @@ auto get_native_symbols_path(const fs::path& package) -> fs::path
     return package.parent_path() / (package.stem().string() + NATIVE_SYMBOLS_FILE_SUFFIX);
 }
 
-auto make_start_arguments(const android_toolchain& tools,
-                          const std::string& device,
-                          const std::string& application_id,
-                          const std::vector<std::string>& run_arguments) -> std::vector<std::string>
+auto make_adb_command(const fs::path& adb, const std::string& device, std::vector<std::string> arguments)
+    -> std::vector<std::string>
 {
-    std::vector<std::string> arguments{
-        tools.adb.string(), "-s", device, "shell", "am", "start", "-W", "-n", application_id + "/" + PLAYER_ACTIVITY};
+    arguments.insert(arguments.begin(), {adb.string(), "-s", device});
+    return arguments;
+}
+
+auto make_start_arguments(const std::string& application_id, const std::vector<std::string>& run_arguments)
+    -> std::vector<std::string>
+{
+    std::vector<std::string> arguments{"shell", "am", "start", "-W", "-n", application_id + "/" + PLAYER_ACTIVITY};
     if(run_arguments.empty())
     {
         return arguments;

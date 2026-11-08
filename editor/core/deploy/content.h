@@ -1,6 +1,7 @@
 #pragma once
 
 #include "deploy_settings.h"
+#include "keys.h"
 
 #include <engine/assets/asset_storage.h>
 #include <engine/settings/settings.h>
@@ -160,8 +161,8 @@ auto is_filtered(const deploy_settings& params) -> bool;
 /// Whether what ships depends on the walk (only used assets ship), not just on the rules.
 auto needs_walk(const deploy_settings& params) -> bool;
 
-/// The path keys (fs::make_path_key) of the assets that do not ship.
-auto get_left_out_keys(const deploy_settings& params, const content& content) -> std::unordered_set<std::string>;
+/// The assets that do not ship.
+auto get_left_out_keys(const deploy_settings& params, const content& content) -> left_out_assets;
 
 /// Rules on keys that name no asset and no folder of the content.
 auto find_orphan_rules(const deploy_settings& params, const content& content) -> std::vector<std::string>;

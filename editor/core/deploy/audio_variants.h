@@ -8,7 +8,6 @@
 #include <filesystem/filesystem.h>
 
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 /// A deploy's audio variants: clips a profile compiles differently from the editor (its audio default, a clip's own
@@ -32,16 +31,13 @@ struct audio_cook_plan
     fs::path compiled;
     /// cache/profiles/<profile>/audio/app: the variants, laid out as the compiled folder.
     fs::path variants;
-    /// The keys ("app:/data/...") of the clips the deploy ships.
-    std::vector<std::string> shipped;
-    /// The keys of the clips the content selection leaves out: their variants are kept for a later deploy, which
-    /// checks them again before shipping them.
-    std::vector<std::string> left_out;
+    /// The project's clips, by whether the deploy ships them.
+    asset_split clips;
 };
 
 /**
  * @param database The project's asset index.
- * @param left_out The path keys (fs::make_path_key) of the assets the content selection leaves out.
+ * @param left_out The assets the content selection leaves out.
  * @param editor_defaults The project's audio defaults the editor compiles with
  * (asset_compiler::get_editor_audio_defaults).
  */
@@ -49,7 +45,7 @@ auto make_audio_cook_plan(const fs::path& project_root,
                           const deploy_settings& params,
                           const settings& runtime_settings,
                           const asset_database::database_t& database,
-                          const std::unordered_set<std::string>& left_out,
+                          const left_out_assets& left_out,
                           const settings::asset_settings::audio_importer_settings& editor_defaults) -> audio_cook_plan;
 
 /**

@@ -47,6 +47,7 @@ namespace
 constexpr const char* STEP_CHECK_ASSETS = "Checking Assets";
 constexpr const char* STEP_COOK = "Cooking Prefabs";
 constexpr const char* STEP_COOK_TEXTURES = "Cooking Textures";
+constexpr const char* STEP_COOK_ENGINE_TEXTURES = "Cooking Engine Textures";
 constexpr const char* STEP_COOK_AUDIO = "Cooking Audio";
 constexpr const char* STEP_COOK_SHADERS = "Cooking Shaders";
 constexpr const char* STEP_DEPENDENCIES = "Dependencies";
@@ -91,12 +92,11 @@ struct deploy_plan
     protocol_job engine;
     runtime_plan runtime;
     fs::path cook_staging;
-    /// The project's textures and the engine's, each cooked to the profile's formats.
-    texture_cook_plan textures;
-    texture_cook_plan engine_textures;
-    /// Packed web deploys with a phone texture format of their own: the project's and the engine's textures cooked
-    /// to it, a second set the page downloads where the browser's GPU does not read the first.
-    std::vector<texture_cook_plan> texture_set_cooks;
+    /// The project's textures and the engine's, one plan per texture set: the first cooked to the profile's formats.
+    /// A packed web deploy with a phone texture format of its own adds the textures cooked to it, a second set the page
+    /// downloads where the browser's GPU does not read the first.
+    std::vector<texture_cook_plan> textures;
+    std::vector<texture_cook_plan> engine_textures;
     /// The project's audio clips the profile compiles differently from the editor.
     audio_cook_plan audio;
     shader_cook_plan shaders;
@@ -141,14 +141,14 @@ auto make_failed_step(threader& th, const std::string& name, const std::string& 
 /// deploy cooks have no compiled file: cooking them checks them.
 void find_uncompiled_assets(const asset_database::database_t& database,
                             const fs::path& protocol_root,
-                            const std::unordered_set<std::string>& left_out,
+                            const left_out_assets& left_out,
                             const std::set<std::string>& shader_variants,
                             std::vector<std::string>& uncompiled)
 {
     const auto cooked_variants = get_cooked_shader_variants(shader_variants);
     for(const auto& [uid, meta] : database)
     {
-        if(left_out.contains(fs::make_path_key(meta.location)))
+        if(left_out.contains(meta.location))
         {
             continue;
         }
@@ -157,9 +157,8 @@ void find_uncompiled_assets(const asset_database::database_t& database,
                                             paths.end(),
                                             [&cooked_variants](const fs::path& path)
                                             {
-                                                fs::error_code ec;
                                                 return !cooked_variants.contains(path.extension().generic_string()) &&
-                                                       !fs::exists(path, ec);
+                                                       !is_present(path);
                                             });
         if(is_missing)
         {
@@ -184,9 +183,9 @@ auto make_cook_staging() -> fs::path
            fmt::format("{}{}-{:08x}", COOK_STAGING_PREFIX, process::get_current_process_id(), device());
 }
 
-/// The path keys of the project and engine assets the content selection leaves out; empty when everything ships.
+/// The project and engine assets the content selection leaves out; none when everything ships.
 auto find_left_out_assets(asset_manager& am, const deploy_settings& params, const settings& shipped_settings)
-    -> std::unordered_set<std::string>
+    -> left_out_assets
 {
     if(!is_filtered(params))
     {
@@ -225,7 +224,7 @@ auto make_protocol_job(asset_manager& am,
                        const deploy_settings& params,
                        const std::string& protocol,
                        cooked_folders cooked,
-                       std::unordered_set<std::string> left_out) -> protocol_job
+                       left_out_assets left_out) -> protocol_job
 {
     protocol_job job;
     job.protocol = protocol;
@@ -268,8 +267,9 @@ void add_texture_sets(deploy_plan& plan)
         return;
     }
     const auto second = sets.back();
-    plan.texture_set_cooks.push_back(make_texture_set_cook_plan(plan.textures, get_project_root(), CONTENT_PROTOCOL, second));
-    plan.texture_set_cooks.push_back(make_texture_set_cook_plan(plan.engine_textures, get_project_root(), ENGINE_PROTOCOL, second));
+    plan.textures.push_back(make_texture_set_cook_plan(plan.textures.front(), get_project_root(), CONTENT_PROTOCOL, second));
+    plan.engine_textures.push_back(
+        make_texture_set_cook_plan(plan.engine_textures.front(), get_project_root(), ENGINE_PROTOCOL, second));
     const auto first_name = get_texture_set_name(sets.front());
     const auto second_name = get_texture_set_name(second);
     APPLOG_INFO("Deploy: profile {} ships two texture sets, {} for the browsers of computers and {} for the phones and "
@@ -277,12 +277,11 @@ void add_texture_sets(deploy_plan& plan)
                 plan.params.profile,
                 first_name,
                 second_name);
-    plan.app.texture_sets = {{first_name, {plan.textures.variants}}, {second_name, {plan.texture_set_cooks[0].variants}}};
-    plan.engine.texture_sets = {{first_name, {plan.engine_textures.variants}},
-                                {second_name, {plan.texture_set_cooks[1].variants}}};
+    plan.app.texture_sets = {{first_name, {plan.textures[0].variants}}, {second_name, {plan.textures[1].variants}}};
+    plan.engine.texture_sets = {{first_name, {plan.engine_textures[0].variants}}, {second_name, {plan.engine_textures[1].variants}}};
 }
 
-auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path& staging, std::unordered_set<std::string> left_out)
+auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path& staging, left_out_assets left_out)
     -> deploy_plan
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -302,20 +301,20 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     plan.version_info = make_version_info(plan.runtime_settings.app, plan.executable);
     plan.dependency_scanner = fs::resolve_protocol(DEPENDENCY_SCANNER);
     plan.settings_folder = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
-    plan.textures = make_texture_cook_plan(get_project_root(),
-                                           params,
-                                           plan.runtime_settings,
-                                           CONTENT_PROTOCOL,
-                                           am.get_database_snapshot("app:/"),
-                                           left_out,
-                                           asset_compiler::get_editor_texture_target());
-    plan.engine_textures = make_texture_cook_plan(get_project_root(),
-                                                  params,
-                                                  plan.runtime_settings,
-                                                  ENGINE_PROTOCOL,
-                                                  am.get_database_snapshot("engine:/"),
-                                                  left_out,
-                                                  asset_compiler::get_editor_texture_target_for("engine:/"));
+    plan.textures = {make_texture_cook_plan(get_project_root(),
+                                            params,
+                                            plan.runtime_settings,
+                                            CONTENT_PROTOCOL,
+                                            am.get_database_snapshot("app:/"),
+                                            left_out,
+                                            asset_compiler::get_editor_texture_target())};
+    plan.engine_textures = {make_texture_cook_plan(get_project_root(),
+                                                   params,
+                                                   plan.runtime_settings,
+                                                   ENGINE_PROTOCOL,
+                                                   am.get_database_snapshot("engine:/"),
+                                                   left_out,
+                                                   asset_compiler::get_editor_texture_target_for("engine:/"))};
     plan.audio = make_audio_cook_plan(get_project_root(),
                                       params,
                                       plan.runtime_settings,
@@ -334,12 +333,12 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     plan.app = make_protocol_job(am,
                                  data_params,
                                  CONTENT_PROTOCOL,
-                                 {staging / CONTENT_PROTOCOL, plan.textures.variants, plan.audio.variants, app_shaders},
+                                 {staging / CONTENT_PROTOCOL, plan.textures.front().variants, plan.audio.variants, app_shaders},
                                  left_out);
     plan.engine = make_protocol_job(am,
                                     data_params,
                                     ENGINE_PROTOCOL,
-                                    {staging / ENGINE_PROTOCOL, plan.engine_textures.variants, engine_shaders},
+                                    {staging / ENGINE_PROTOCOL, plan.engine_textures.front().variants, engine_shaders},
                                     std::move(left_out));
     add_texture_sets(plan);
     // The browser player carries its .NET runtime and the script bridge.
@@ -411,8 +410,7 @@ void write_executable_resources(const deploy_plan& plan)
 void keep_build_debug_files(const deploy_plan& plan)
 {
     std::vector<fs::path> files{plan.executable};
-    fs::error_code ec;
-    if(fs::exists(plan.player_symbols, ec))
+    if(is_present(plan.player_symbols))
     {
         files.push_back(plan.player_symbols);
     }
@@ -452,13 +450,11 @@ void deploy_settings_file(const deploy_plan& plan)
     {
         throw std::runtime_error(fmt::format("Writing {} failed", file.generic_string()));
     }
-    for(const auto& entry : fs::directory_iterator(plan.settings_folder, ec))
-    {
-        if(entry.path().filename() != SETTINGS_FILE)
-        {
-            fs::remove_all(entry.path(), ec);
-        }
-    }
+    prune_folder_or_throw(plan.settings_folder,
+                          [](const fs::path& name)
+                          {
+                              return name == SETTINGS_FILE;
+                          });
 }
 
 /// The steps that need nothing but the plan; the data steps wait for the cooks instead.
@@ -497,43 +493,89 @@ void deploy_web_site(const deploy_plan& plan)
                             {plan.version_info.product_name, get_web_user_folder(app.company, app.product), texture_sets});
 }
 
-auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<void>
+/// Runs `step` here, between its log lines.
+void run_step(const deploy_step& step)
 {
-    return th.pool
-        ->schedule("Deploying " + step.name,
-                   [step]()
-                   {
-                       APPLOG_INFO("Deploying {}...", step.name);
-                       step.run();
-                       APPLOG_INFO("Deploying {} - Done", step.name);
-                   })
-        .share();
+    APPLOG_INFO("Deploying {}...", step.name);
+    step.run();
+    APPLOG_INFO("Deploying {} - Done", step.name);
 }
 
-/// A step that packs what cooking steps made, so it starts once they all succeeded.
-auto schedule_after_cooks(const deploy_step& step, const deploy_jobs& cooks) -> tpp::shared_future<void>
+auto schedule_step(threader& th, const deploy_step& step) -> deploy_job
+{
+    return {step.name,
+            th.pool
+                ->schedule("Deploying " + step.name,
+                           [step]()
+                           {
+                               run_step(step);
+                           })
+                .share()};
+}
+
+auto get_futures(const deploy_jobs& jobs) -> std::vector<tpp::shared_future<void>>
 {
     std::vector<tpp::shared_future<void>> futures;
-    for(const auto& cook : cooks)
+    futures.reserve(jobs.size());
+    for(const auto& job : jobs)
     {
-        futures.push_back(cook.job);
+        futures.push_back(job.job);
     }
-    return tpp::when_all(futures.begin(), futures.end())
-        .then(
-            [step, cooks](auto)
-            {
-                for(const auto& cook : cooks)
-                {
-                    if(!get_step_error(cook.job).empty())
+    return futures;
+}
+
+/// Why a step that waits for `prerequisites` is skipped: the first of them that failed; empty when none did.
+auto get_skip_reason(const deploy_jobs& prerequisites) -> std::string
+{
+    for(const auto& prerequisite : prerequisites)
+    {
+        if(!get_step_error(prerequisite.job).empty())
+        {
+            return fmt::format("Skipped: {} failed.", prerequisite.name);
+        }
+    }
+    return {};
+}
+
+/// Tells work that waits for a step outside the step list (Android's device steps) that the step did not finish, and
+/// why.
+using dependents_skip = std::function<void(const std::string& reason)>;
+
+/// Runs `step` once `prerequisites` ended, or skips it when one failed.
+void run_step_after(const deploy_step& step, const deploy_jobs& prerequisites, const dependents_skip& skip_dependents)
+{
+    const auto skip_reason = get_skip_reason(prerequisites);
+    if(!skip_reason.empty())
+    {
+        skip_dependents(skip_reason);
+        throw std::runtime_error(skip_reason);
+    }
+    try
+    {
+        run_step(step);
+    }
+    catch(...)
+    {
+        skip_dependents(fmt::format("Skipped: {} failed.", step.name));
+        throw;
+    }
+}
+
+/// A step that builds on what `prerequisites` made: it starts once they all ended, and is skipped when one failed.
+auto schedule_step_after(
+    const deploy_step& step,
+    const deploy_jobs& prerequisites,
+    const dependents_skip& skip_dependents = [](const std::string&) {}) -> deploy_job
+{
+    const auto futures = get_futures(prerequisites);
+    return {step.name,
+            tpp::when_all(futures.begin(), futures.end())
+                .then(
+                    [step, prerequisites, skip_dependents](auto)
                     {
-                        throw std::runtime_error(fmt::format("Skipped: {} failed.", cook.name));
-                    }
-                }
-                APPLOG_INFO("Deploying {}...", step.name);
-                step.run();
-                APPLOG_INFO("Deploying {} - Done", step.name);
-            })
-        .share();
+                        run_step_after(step, prerequisites, skip_dependents);
+                    })
+                .share()};
 }
 
 auto has_failed_step(const std::vector<tpp::shared_future<void>>& steps) -> bool
@@ -595,59 +637,80 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
     fs::show_in_graphical_env(get_output_location(plan.params));
 }
 
-/// The browser player step: the list of files it writes is the deployed data's, so it starts once every other
-/// step succeeded.
-auto schedule_web_player(const std::shared_ptr<const deploy_plan>& plan, const std::vector<tpp::shared_future<void>>& steps)
-    -> tpp::shared_future<void>
+/// The Android package, built from what the other steps deployed. Deploy and Run then installs and starts the game,
+/// and that session finishes the device steps.
+void deploy_android_package(const deploy_plan& plan)
 {
-    return tpp::when_all(steps.begin(), steps.end())
-        .then(
-            [plan](auto all)
-            {
-                if(has_failed_step(all.get()))
-                {
-                    throw std::runtime_error("Skipped: an earlier step failed.");
-                }
-                APPLOG_INFO("Deploying {}...", STEP_WEB_PLAYER);
-                deploy_web_site(*plan);
-                APPLOG_INFO("Deploying {} - Done", STEP_WEB_PLAYER);
-            })
-        .share();
+    build_android_package(plan.android);
+    if(plan.params.deploy_and_run)
+    {
+        run_android_game(plan.android);
+    }
 }
 
-/// The Android package step: it builds from what the other steps deployed, so it starts once they all
-/// succeeded.
-auto schedule_android_package(const std::shared_ptr<const deploy_plan>& plan, const std::vector<tpp::shared_future<void>>& steps)
-    -> tpp::shared_future<void>
+/// Cooks a protocol's textures, one set after the other.
+void cook_texture_sets(const std::vector<texture_cook_plan>& sets)
 {
-    return tpp::when_all(steps.begin(), steps.end())
-        .then(
-            [plan](auto all)
-            {
-                const std::string skipped = "Skipped: an earlier step failed.";
-                if(has_failed_step(all.get()))
-                {
-                    fail_device_steps(plan->android, skipped);
-                    throw std::runtime_error(skipped);
-                }
-                APPLOG_INFO("Deploying {}...", STEP_ANDROID_PACKAGE);
-                try
-                {
-                    build_android_package(plan->android);
-                }
-                catch(...)
-                {
-                    fail_device_steps(plan->android, skipped);
-                    throw;
-                }
-                APPLOG_INFO("Deploying {} - Done", STEP_ANDROID_PACKAGE);
-                // Deploy and Run: the session installs and starts the game and finishes the device steps.
-                if(plan->params.deploy_and_run)
-                {
-                    run_android_game(plan->android);
-                }
-            })
-        .share();
+    std::for_each(sets.begin(), sets.end(), cook_textures);
+}
+
+/// The cooks of a deploy, and the ones each data step packs the results of.
+struct cook_jobs
+{
+    /// Every cook, in the order the step list shows them.
+    deploy_jobs all;
+    /// The engine's textures and the shaders.
+    deploy_jobs engine;
+    /// The project's textures, its audio and the shaders.
+    deploy_jobs app;
+};
+
+auto schedule_cooks(threader& th, const std::shared_ptr<const deploy_plan>& plan) -> cook_jobs
+{
+    const auto textures = schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_texture_sets(plan->textures); }});
+    const auto engine_textures =
+        schedule_step(th, {STEP_COOK_ENGINE_TEXTURES, [plan]() { cook_texture_sets(plan->engine_textures); }});
+    const auto audio = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
+    cook_jobs cooks{{textures, engine_textures, audio}, {engine_textures}, {textures, audio}};
+    if(plan->shaders.has_work())
+    {
+        const auto shaders = schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }});
+        cooks.all.push_back(shaders);
+        cooks.engine.push_back(shaders);
+        cooks.app.push_back(shaders);
+    }
+    return cooks;
+}
+
+/// Schedules every step of the plan: the cooks and the steps that need only the plan at once, each data step after its
+/// protocol's cooks, the browser player and the Android package after all of those.
+auto schedule_steps(threader& th, const std::shared_ptr<const deploy_plan>& plan) -> deploy_jobs
+{
+    const auto cooks = schedule_cooks(th, plan);
+    deploy_jobs jobs = cooks.all;
+    for(const auto& step : make_steps(plan))
+    {
+        jobs.push_back(schedule_step(th, step));
+    }
+    jobs.push_back(schedule_step_after({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, cooks.engine));
+    jobs.push_back(schedule_step_after({STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, cooks.app));
+    // The browser player's list of files is the deployed data's.
+    if(is_web(*plan))
+    {
+        jobs.push_back(schedule_step_after({STEP_WEB_PLAYER, [plan]() { deploy_web_site(*plan); }}, jobs));
+    }
+    if(is_android(*plan))
+    {
+        jobs.push_back(schedule_step_after({STEP_ANDROID_PACKAGE, [plan]() { deploy_android_package(*plan); }},
+                                           jobs,
+                                           [plan](const std::string& reason)
+                                           {
+                                               fail_device_steps(plan->android, reason);
+                                           }));
+        const auto device_jobs = get_device_jobs(plan->android);
+        jobs.insert(jobs.end(), device_jobs.begin(), device_jobs.end());
+    }
+    return jobs;
 }
 } // namespace
 
@@ -682,58 +745,8 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
     }
     const auto plan = std::make_shared<const deploy_plan>(make_plan(ctx, params, staging, std::move(left_out)));
     ++running_deploys;
-    deploy_jobs jobs;
-    std::vector<tpp::shared_future<void>> futures;
-    const auto add_job = [&](const std::string& name, const tpp::shared_future<void>& job)
-    {
-        jobs.push_back({name, job});
-        futures.push_back(job);
-    };
-    // Each data step packs what the cooks of its protocol made: its textures, the project's audio, and its shaders.
-    const auto textures_cook = schedule_step(th,
-                                             {STEP_COOK_TEXTURES,
-                                              [plan]()
-                                              {
-                                                  cook_textures(plan->textures);
-                                                  cook_textures(plan->engine_textures);
-                                                  for(const auto& set : plan->texture_set_cooks)
-                                                  {
-                                                      cook_textures(set);
-                                                  }
-                                              }});
-    const auto audio_cook = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
-    deploy_jobs engine_cooks{{STEP_COOK_TEXTURES, textures_cook}};
-    deploy_jobs app_cooks{{STEP_COOK_TEXTURES, textures_cook}, {STEP_COOK_AUDIO, audio_cook}};
-    if(plan->shaders.has_work())
-    {
-        engine_cooks.push_back({STEP_COOK_SHADERS, schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }})});
-        app_cooks.push_back(engine_cooks.back());
-    }
-    add_job(STEP_COOK_TEXTURES, textures_cook);
-    add_job(STEP_COOK_AUDIO, audio_cook);
-    if(plan->shaders.has_work())
-    {
-        add_job(STEP_COOK_SHADERS, engine_cooks.back().job);
-    }
-    for(const auto& step : make_steps(plan))
-    {
-        add_job(step.name, schedule_step(th, step));
-    }
-    add_job(STEP_ENGINE_DATA, schedule_after_cooks({STEP_ENGINE_DATA, [plan]() { deploy_protocol_data(plan->engine); }}, engine_cooks));
-    add_job(STEP_PROJECT_DATA, schedule_after_cooks({STEP_PROJECT_DATA, [plan]() { deploy_protocol_data(plan->app); }}, app_cooks));
-    if(is_web(*plan))
-    {
-        add_job(STEP_WEB_PLAYER, schedule_web_player(plan, futures));
-    }
-    if(is_android(*plan))
-    {
-        add_job(STEP_ANDROID_PACKAGE, schedule_android_package(plan, futures));
-        for(auto& device_job : get_device_jobs(plan->android))
-        {
-            futures.push_back(device_job.job);
-            jobs.push_back(std::move(device_job));
-        }
-    }
+    auto jobs = schedule_steps(th, plan);
+    const auto futures = get_futures(jobs);
     tpp::when_all(futures.begin(), futures.end())
         .then(tpp::this_thread::get_id(),
               [plan](auto all)
@@ -746,19 +759,6 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
 auto is_deploy_running() -> bool
 {
     return running_deploys.load() > 0;
-}
-
-auto get_last_lines(const std::string& output, std::size_t count) -> std::string
-{
-    std::size_t begin = output.size();
-    for(std::size_t found = 0; begin > 0 && found <= count; --begin)
-    {
-        if(output[begin - 1] == '\n')
-        {
-            ++found;
-        }
-    }
-    return output.substr(begin);
 }
 
 /// A ready future rethrows its job's exception.

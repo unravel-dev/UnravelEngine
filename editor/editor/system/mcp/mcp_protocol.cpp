@@ -4,6 +4,7 @@
 
 #include <logging/logging.h>
 #include <ser20/external/simdjson/simdjson.h>
+#include <string_utils/utils.h>
 
 #include <array>
 #include <cstring>
@@ -72,51 +73,12 @@ auto replace_non_finite_numbers(const std::string& json) -> std::string
 
 auto json_escape(const std::string& value) -> std::string
 {
-    std::string out;
-    out.reserve(value.size() + 8);
-    for(char c : value)
-    {
-        switch(c)
-        {
-            case '\\':
-                out += "\\\\";
-                break;
-            case '"':
-                out += "\\\"";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if(static_cast<unsigned char>(c) < 0x20)
-                {
-                    out += fmt::format("\\u{:04x}", static_cast<unsigned char>(c));
-                }
-                else
-                {
-                    out.push_back(c);
-                }
-                break;
-        }
-    }
-    return out;
+    return string_utils::escape_json(value);
 }
 
 auto make_json_string(const std::string& value) -> std::string
 {
-    return "\"" + json_escape(value) + "\"";
+    return string_utils::make_json_string(value);
 }
 
 auto make_json_rpc_result(const hpp::optional<std::string>& id_json, const std::string& result_json) -> std::string

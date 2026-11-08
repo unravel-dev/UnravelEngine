@@ -1,6 +1,7 @@
 #pragma once
 
 #include "files.h"
+#include "keys.h"
 
 #include <engine/assets/asset_storage.h>
 #include <filesystem/filesystem.h>
@@ -36,8 +37,8 @@ struct protocol_job
     fs::path protocol_root;
     /// The protocol's asset index.
     asset_database::database_t database;
-    /// The path keys (fs::make_path_key) of the assets the content selection leaves out.
-    std::unordered_set<std::string> left_out;
+    /// The assets the content selection leaves out.
+    left_out_assets left_out;
     bool is_packed{true};
     bool with_debug_symbols{};
     /// The renderer extensions of the compiled shaders to ship (".spirv" for Android); empty ships every

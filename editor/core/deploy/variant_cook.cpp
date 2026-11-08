@@ -1,5 +1,5 @@
 #include "variant_cook.h"
-#include "keys.h"
+#include "files.h"
 #include "profile_cache.h"
 
 #include <concurrency/parallel.h>
@@ -23,6 +23,72 @@ auto get_source_size(const std::string& key) -> std::uintmax_t
     return ec ? 0 : size;
 }
 } // namespace
+
+auto split_assets(const asset_database::database_t& database, const asset_kind_filter& is_kind, const left_out_assets& left_out)
+    -> asset_split
+{
+    asset_split split;
+    for(const auto& [uid, meta] : database)
+    {
+        if(is_kind(meta.location))
+        {
+            (left_out.contains(meta.location) ? split.left_out : split.shipped).push_back(meta.location);
+        }
+    }
+    return split;
+}
+
+auto cook_variant(const std::string& key, const fs::path& compiled, const fs::path& variants, const variant_compiler& compiler)
+    -> cook_outcome
+{
+    cook_outcome outcome;
+    const auto relative = get_compiled_relative_path(key);
+    if(relative.empty() || (!compiler.needs_variant && compiler.is_editor_compiled(compiled / relative)))
+    {
+        return outcome;
+    }
+    outcome.files.push_back(get_cache_file_key(relative));
+    const auto variant = variants / relative;
+    if(compiler.is_profile_compiled(variant))
+    {
+        return outcome;
+    }
+    if(compiler.compile(variant))
+    {
+        ++outcome.compiled;
+    }
+    else
+    {
+        outcome.has_failed = true;
+    }
+    return outcome;
+}
+
+auto cook_variants(const asset_split& assets, const fs::path& variants, const asset_cook& cook, const variant_need& needs_variant)
+    -> cook_report
+{
+    const auto outcomes = cook_all(assets.shipped,
+                                   [&](std::size_t index)
+                                   {
+                                       return cook(assets.shipped[index]);
+                                   });
+    cook_report report;
+    std::unordered_set<std::string> kept;
+    for(std::size_t i = 0; i < outcomes.size(); ++i)
+    {
+        add_outcome(assets.shipped[i], outcomes[i], kept, report);
+    }
+    for(const auto& key : assets.left_out)
+    {
+        const auto relative = get_compiled_relative_path(key);
+        if(!relative.empty() && needs_variant(key))
+        {
+            keep_cache_file(kept, get_cache_file_key(relative));
+        }
+    }
+    sweep_cache_folder(variants, kept, report);
+    return report;
+}
 
 auto get_cache_file_key(const fs::path& relative) -> std::string
 {

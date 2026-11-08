@@ -1,4 +1,5 @@
 #include "icon_image.h"
+#include "files.h"
 
 #include <bimg/bimg.h>
 #include <bimg/decode.h>
@@ -183,13 +184,7 @@ auto encode_png(const icon_image& image) -> std::vector<std::uint8_t>
 auto write_png(const fs::path& file, const icon_image& image) -> bool
 {
     const auto bytes = encode_png(image);
-    if(bytes.empty())
-    {
-        return false;
-    }
-    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
-    stream.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
-    return stream.good();
+    return !bytes.empty() && write_file(file, bytes.data(), bytes.size());
 }
 
 auto write_window_icon(const fs::path& file, const icon_image& image) -> bool

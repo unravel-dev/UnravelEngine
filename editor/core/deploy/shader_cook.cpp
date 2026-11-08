@@ -20,11 +20,6 @@ struct shader_job
     std::string key;
 };
 
-auto is_shader_key(const std::string& key) -> bool
-{
-    return ex::is_format<gfx::shader>(fs::path(key).extension().generic_string());
-}
-
 /// The cooked file of the shader compiled to `relative` for the renderer of `renderer_extension`, relative to
 /// the protocol's folder, as the compiled folder names it ("shaders/a.eshader.asset.wgsl").
 auto get_cooked_relative_path(const fs::path& relative, const std::string& renderer_extension) -> fs::path
@@ -70,7 +65,7 @@ auto cook_shader(const shader_cook_plan& plan, const shader_job& job) -> cook_ou
 /// A left-out shader's cooked files stay for a deploy that ships it, which checks them first.
 void keep_left_out(const shader_cook_plan& plan, const shader_cook_protocol& protocol, std::unordered_set<std::string>& kept)
 {
-    for(const auto& key : protocol.left_out)
+    for(const auto& key : protocol.shaders.left_out)
     {
         const auto relative = get_compiled_relative_path(key);
         if(relative.empty())
@@ -89,7 +84,7 @@ auto make_jobs(const shader_cook_plan& plan) -> std::vector<shader_job>
     std::vector<shader_job> jobs;
     for(const auto& protocol : plan.protocols)
     {
-        for(const auto& key : protocol.shipped)
+        for(const auto& key : protocol.shaders.shipped)
         {
             jobs.push_back({&protocol, key});
         }
@@ -124,18 +119,11 @@ void sweep_protocol(const shader_cook_plan& plan,
 
 auto make_shader_cook_protocol(const fs::path& variants,
                                const asset_database::database_t& database,
-                               const std::unordered_set<std::string>& left_out) -> shader_cook_protocol
+                               const left_out_assets& left_out) -> shader_cook_protocol
 {
     shader_cook_protocol protocol;
     protocol.variants = variants;
-    for(const auto& [uid, meta] : database)
-    {
-        if(!is_shader_key(meta.location))
-        {
-            continue;
-        }
-        (left_out.contains(fs::make_path_key(meta.location)) ? protocol.left_out : protocol.shipped).push_back(meta.location);
-    }
+    protocol.shaders = split_assets(database, is_asset_key<gfx::shader>, left_out);
     return protocol;
 }
 
@@ -173,7 +161,7 @@ auto make_shader_cook_plan(const fs::path& project_root,
                            const deploy_settings& params,
                            const asset_database::database_t& engine_database,
                            const asset_database::database_t& app_database,
-                           const std::unordered_set<std::string>& left_out) -> shader_cook_plan
+                           const left_out_assets& left_out) -> shader_cook_plan
 {
     shader_cook_plan plan;
     plan.profile = params.profile;

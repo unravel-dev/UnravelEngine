@@ -1,4 +1,5 @@
 #include "files.h"
+#include "keys.h"
 
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/meta/assets/asset_database.hpp>
@@ -17,6 +18,7 @@ namespace
 constexpr const char* COMPILED_SUFFIX = ".asset";
 /// What the build adds to the player's file name for its stamp.
 constexpr const char* PLAYER_STAMP_SUFFIX = ".stamp";
+constexpr player_wording DESKTOP_PLAYER_WORDING{"The player beside this editor", "Build the game target too."};
 
 auto make_copy_error(const char* action, const fs::path& from, const fs::path& to, const fs::error_code& ec) -> std::runtime_error
 {
@@ -49,13 +51,6 @@ void for_each_file_or_throw(const fs::path& folder, const file_visitor& visit)
     }
 }
 
-/// Whether a cooked folder may hold files: a deploy names one for each kind of variant, made or not.
-auto is_cooked_folder_present(const fs::path& folder) -> bool
-{
-    fs::error_code ec;
-    return !folder.empty() && fs::exists(folder, ec);
-}
-
 /// The cooked files `is_shipped` keeps that have no compiled file to stand in for, each named once: an earlier
 /// folder's wins.
 void add_cooked_only_inputs(const fs::path& compiled,
@@ -67,16 +62,15 @@ void add_cooked_only_inputs(const fs::path& compiled,
     std::set<std::string> added;
     for(const auto& folder : cooked)
     {
-        if(!is_cooked_folder_present(folder))
+        if(!is_present(folder))
         {
             continue;
         }
         for_each_file_or_throw(folder,
                                [&](const fs::path& file, const fs::path& relative)
                                {
-                                   fs::error_code ec;
                                    if(is_loose_only_file(file) || !is_shipped(file, relative) ||
-                                      fs::exists(compiled / relative, ec) || !added.insert(relative.generic_string()).second)
+                                      is_present(compiled / relative) || !added.insert(relative.generic_string()).second)
                                    {
                                        return;
                                    }
@@ -86,9 +80,10 @@ void add_cooked_only_inputs(const fs::path& compiled,
 }
 } // namespace
 
-auto is_script_key(const std::string& key) -> bool
+auto is_present(const fs::path& path) -> bool
 {
-    return ex::is_format<script>(fs::path(key).extension().generic_string());
+    fs::error_code ec;
+    return fs::exists(path, ec);
 }
 
 auto get_compiled_relative_path(const std::string& key) -> fs::path
@@ -108,12 +103,13 @@ auto get_compiled_paths(const std::string& key, const fs::path& protocol_root, c
     -> std::vector<fs::path>
 {
     const auto relative = get_compiled_relative_path(key);
-    if(relative.empty() || is_script_key(key))
+    // Scripts ship as their library, not as assets.
+    if(relative.empty() || is_asset_key<script>(key))
     {
         return {};
     }
     const auto compiled = protocol_root / ex::get_compiled_directory_no_slash() / relative;
-    if(!ex::is_format<gfx::shader>(fs::path(key).extension().generic_string()))
+    if(!is_asset_key<gfx::shader>(key))
     {
         return {compiled};
     }
@@ -167,8 +163,7 @@ auto is_debug_companion_file(const fs::path& file) -> bool
     }
     auto library = file;
     library.replace_extension(".dll");
-    fs::error_code ec;
-    return fs::exists(library, ec);
+    return is_present(library);
 }
 
 auto is_loose_only_file(const fs::path& file) -> bool
@@ -199,8 +194,7 @@ auto get_shipped_variant(const cooked_folders& cooked, const fs::path& relative,
             continue;
         }
         auto variant = folder / relative;
-        fs::error_code ec;
-        if(fs::exists(variant, ec))
+        if(is_present(variant))
         {
             return variant;
         }
@@ -261,13 +255,17 @@ void copy_file_or_throw(const fs::path& from, const fs::path& to)
     }
 }
 
-void write_text_or_throw(const fs::path& file, const std::string& text)
+auto write_file(const fs::path& file, const void* data, std::size_t size) -> bool
 {
     std::ofstream stream(file, std::ios::binary | std::ios::trunc);
-    stream << text;
-    // Closing flushes, which is where a full disk shows.
+    stream.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     stream.close();
-    if(!stream)
+    return !stream.fail();
+}
+
+void write_text_or_throw(const fs::path& file, const std::string& text)
+{
+    if(!write_file(file, text.data(), text.size()))
     {
         throw std::runtime_error(fmt::format("Writing {} failed.", file.generic_string()));
     }
@@ -293,22 +291,29 @@ auto read_stamp(const fs::path& file) -> std::map<std::string, std::string>
     return values;
 }
 
+auto get_version_problem(const std::string& player_version, const std::string& engine_version, const player_wording& wording)
+    -> std::string
+{
+    if(player_version.empty())
+    {
+        return fmt::format("{} does not say which engine version built it. {}", wording.player, wording.advice);
+    }
+    if(player_version != engine_version)
+    {
+        return fmt::format("{} comes from engine version {}, and the editor is {}. {}",
+                           wording.player,
+                           player_version,
+                           engine_version,
+                           wording.advice);
+    }
+    return {};
+}
+
 auto get_player_version_problem(const fs::path& player, const std::string& engine_version) -> std::string
 {
     auto stamp_file = player;
     stamp_file += PLAYER_STAMP_SUFFIX;
-    const auto player_version = read_stamp(stamp_file)["engine_version"];
-    if(player_version.empty())
-    {
-        return "The player beside this editor does not say which engine version built it. Build the game target too.";
-    }
-    if(player_version != engine_version)
-    {
-        return fmt::format("The player beside this editor comes from engine version {}, and the editor is {}. Build the game target too.",
-                           player_version,
-                           engine_version);
-    }
-    return {};
+    return get_version_problem(read_stamp(stamp_file)["engine_version"], engine_version, DESKTOP_PLAYER_WORDING);
 }
 
 void copy_cooked_or_throw(const cooked_folders& cooked, const fs::path& destination, const compiled_file_filter& is_shipped)
@@ -316,7 +321,7 @@ void copy_cooked_or_throw(const cooked_folders& cooked, const fs::path& destinat
     // The last folder first, so an earlier folder's variant is the one copied last.
     for(auto folder = cooked.rbegin(); folder != cooked.rend(); ++folder)
     {
-        if(!is_cooked_folder_present(*folder))
+        if(!is_present(*folder))
         {
             continue;
         }
@@ -397,25 +402,39 @@ void remove_stale_binaries(const fs::path& deploy_root, const std::set<std::stri
     }
 }
 
-void remove_siblings(const fs::path& kept)
+void prune_folder_or_throw(const fs::path& folder, const kept_entry_filter& is_kept)
 {
+    // Listed in full first: removing entries while a directory iterator walks them may skip some.
+    std::vector<fs::path> removed;
     fs::error_code ec;
-    std::vector<fs::path> siblings;
-    for(const auto& entry : fs::directory_iterator(kept.parent_path(), ec))
+    for(fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
     {
-        if(entry.path().filename() != kept.filename())
+        if(!is_kept(it->path().filename()))
         {
-            siblings.push_back(entry.path());
+            removed.push_back(it->path());
         }
     }
-    for(const auto& sibling : siblings)
+    if(ec && ec != std::errc::no_such_file_or_directory)
     {
-        fs::remove_all(sibling, ec);
+        throw std::runtime_error(fmt::format("Listing {} failed: {}", folder.generic_string(), ec.message()));
+    }
+    for(const auto& entry : removed)
+    {
+        fs::remove_all(entry, ec);
         if(ec)
         {
-            throw std::runtime_error(fmt::format("Removing {} failed: {}", sibling.generic_string(), ec.message()));
+            throw std::runtime_error(fmt::format("Removing {} failed: {}", entry.generic_string(), ec.message()));
         }
     }
+}
+
+void remove_siblings(const fs::path& kept)
+{
+    prune_folder_or_throw(kept.parent_path(),
+                          [&kept](const fs::path& name)
+                          {
+                              return name == kept.filename();
+                          });
 }
 
 } // namespace unravel::deployment

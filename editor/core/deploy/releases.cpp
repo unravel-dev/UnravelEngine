@@ -55,15 +55,14 @@ auto get_deployed_pack(const fs::path& deploy_location, const std::string& proto
 /// The packs of a protocol's full build that keep_release copies; an error when the folder holds none.
 auto check_full_packed_build(const fs::path& deploy_location) -> result
 {
-    fs::error_code ec;
     for(const auto& protocol : PACKED_PROTOCOLS)
     {
         const auto root = deploy_location / DATA_FOLDER / protocol;
-        if(!fs::exists(root / ex::get_pack_file_name(), ec))
+        if(!is_present(root / ex::get_pack_file_name()))
         {
             return result::failure("The deploy folder holds no packed build: deploy with Pack Assets on first.");
         }
-        if(fs::exists(root / ex::get_patch_pack_file_name(1), ec))
+        if(is_present(root / ex::get_patch_pack_file_name(1)))
         {
             return result::failure("The deploy folder holds a patch: keep a release from a full deploy (no Patch "
                                    "Against Release).");
@@ -118,12 +117,11 @@ auto get_release_pack(const fs::path& releases, const std::string& name, const s
 
 auto is_kept_release(const fs::path& releases, const std::string& name) -> bool
 {
-    fs::error_code ec;
     return is_valid_release_name(name) && std::all_of(PACKED_PROTOCOLS.begin(),
                                                       PACKED_PROTOCOLS.end(),
                                                       [&](const char* protocol)
                                                       {
-                                                          return fs::exists(get_release_pack(releases, name, protocol), ec);
+                                                          return is_present(get_release_pack(releases, name, protocol));
                                                       });
 }
 
@@ -181,7 +179,7 @@ auto keep_release(const fs::path& releases, const fs::path& deploy_location, con
     }
     const auto release = get_release_folder(releases, name);
     fs::error_code ec;
-    if(fs::exists(release, ec))
+    if(is_present(release))
     {
         return result::failure(fmt::format("A release named {} is already kept in {}.", name, release.generic_string()));
     }
@@ -228,13 +226,17 @@ auto keep_debug_files(const std::vector<fs::path>& files, const fs::path& folder
         }
         kept.insert(fs::make_path_key(file.filename().generic_string()));
     }
-    for(const auto& entry : fs::directory_iterator(folder, ec))
+    try
     {
-        if(!kept.contains(fs::make_path_key(entry.path().filename().generic_string())))
-        {
-            fs::error_code remove_ec;
-            fs::remove_all(entry.path(), remove_ec);
-        }
+        prune_folder_or_throw(folder,
+                              [&kept](const fs::path& name)
+                              {
+                                  return kept.contains(fs::make_path_key(name.generic_string()));
+                              });
+    }
+    catch(const std::exception& e)
+    {
+        return result::failure(e.what());
     }
     return {};
 }
@@ -260,7 +262,7 @@ auto remove_release(const fs::path& releases, const std::string& name) -> result
 void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level)
 {
     fs::error_code ec;
-    for(std::uint32_t level = first_level; fs::exists(protocol_root / ex::get_patch_pack_file_name(level), ec); ++level)
+    for(std::uint32_t level = first_level; is_present(protocol_root / ex::get_patch_pack_file_name(level)); ++level)
     {
         fs::remove(protocol_root / ex::get_patch_pack_file_name(level), ec);
     }
