@@ -1,13 +1,9 @@
 #pragma once
 #include <cstdint>
 
-#if !defined(DEBUG) && !defined(_DEBUG)
-#ifndef NDEBUG
-#define NDEBUG
-#endif
-#ifndef _NDEBUG
-#define _NDEBUG
-#endif
+// NDEBUG comes from the build configuration only (CMake sets it for every configuration but Debug),
+// so assert() and UNRAVEL_DEBUG mean the same in every file, whatever its include order.
+#if defined(NDEBUG)
 #define UNRAVEL_DEBUG 0
 #define UNRAVEL_RELEASE 1
 #else
@@ -15,6 +11,9 @@
 #define UNRAVEL_RELEASE 0
 #endif
 
+/// Expands a macro argument, then turns it into a string literal.
+#define UNRAVEL_STRINGIZE(x) UNRAVEL_STRINGIZE_DETAIL(x)
+#define UNRAVEL_STRINGIZE_DETAIL(x) #x
 
 // Architecture
 #define UNRAVEL_ARCH_32BIT 0
@@ -35,6 +34,7 @@
 #define UNRAVEL_CPU_JIT   0
 #define UNRAVEL_CPU_MIPS  0
 #define UNRAVEL_CPU_PPC   0
+#define UNRAVEL_CPU_LOONGARCH64 0
 #define UNRAVEL_CPU_RISCV 0
 #define UNRAVEL_CPU_X86   0
 
@@ -95,7 +95,8 @@
 // http://sourceforge.net/apps/mediawiki/predef/index.php?title=Architectures
 #if defined(__arm__)     \
  || defined(__aarch64__) \
- || defined(_M_ARM)
+ || defined(_M_ARM)      \
+ || defined(_M_ARM64)
 #	undef  UNRAVEL_CPU_ARM
 #	define UNRAVEL_CPU_ARM 1
 #	define UNRAVEL_CACHE_LINE_SIZE 64
@@ -117,6 +118,10 @@
 #	undef  UNRAVEL_CPU_RISCV
 #	define UNRAVEL_CPU_RISCV 1
 #	define UNRAVEL_CACHE_LINE_SIZE 64
+#elif defined(__loongarch__) && (__loongarch_grlen == 64)
+#	undef  UNRAVEL_CPU_LOONGARCH64
+#	define UNRAVEL_CPU_LOONGARCH64 1
+#	define UNRAVEL_CACHE_LINE_SIZE 64
 #elif defined(_M_IX86)    \
  ||   defined(_M_X64)     \
  ||   defined(__i386__)   \
@@ -133,6 +138,8 @@
 #if defined(__x86_64__)    \
  || defined(_M_X64)        \
  || defined(__aarch64__)   \
+ || defined(_M_ARM64)      \
+ || defined(_M_ARM64EC)    \
  || defined(__64BIT__)     \
  || defined(__mips64)      \
  || defined(__powerpc64__) \
@@ -180,9 +187,9 @@
 #				define WINVER 0x0601
 #				define _WIN32_WINNT 0x0601
 #			else
-//				Windows Server 2003 with SP1, Windows XP with SP2 and above
-#				define WINVER 0x0502
-#				define _WIN32_WINNT 0x0502
+//				When building 32-bit target Win7 and above.
+#				define WINVER 0x0601
+#				define _WIN32_WINNT 0x0601
 #			endif // UNRAVEL_ARCH_64BIT
 #		endif // !defined(WINVER) && !defined(_WIN32_WINNT)
 #		define UNRAVEL_PLATFORM_WINDOWS _WIN32_WINNT
@@ -258,15 +265,19 @@
 #	elif defined(__GLIBC__)
 #		undef  UNRAVEL_CRT_GLIBC
 #		define UNRAVEL_CRT_GLIBC (__GLIBC__ * 10000 + __GLIBC_MINOR__ * 100)
-#	elif defined(__apple_build_version__) || defined(__ORBIS__) || defined(__EMSCRIPTEN__) || defined(__llvm__) || defined(__HAIKU__)
-#		undef  UNRAVEL_CRT_LIBCXX
-#		define UNRAVEL_CRT_LIBCXX 1
-#	elif defined(__MINGW32__) || defined(__MINGW64__)
+#	elif defined(__MINGW32__) \
+    ||   defined(__MINGW64__)
 #		undef  UNRAVEL_CRT_MINGW
 #		define UNRAVEL_CRT_MINGW 1
 #	elif defined(_MSC_VER)
 #		undef  UNRAVEL_CRT_MSVC
 #		define UNRAVEL_CRT_MSVC 1
+#	elif defined(__apple_build_version__) \
+    ||   UNRAVEL_PLATFORM_PS4             \
+    ||   UNRAVEL_PLATFORM_EMSCRIPTEN      \
+    ||   defined(__llvm__)
+#		undef  UNRAVEL_CRT_LIBCXX
+#		define UNRAVEL_CRT_LIBCXX 1
 #	endif //
 #endif // !UNRAVEL_CRT_NONE
 
@@ -358,18 +369,6 @@
 #		define UNRAVEL_COMPILER_NAME "MSVC 17.0"
 #	elif UNRAVEL_COMPILER_MSVC >= 1920 // Visual Studio 2019
 #		define UNRAVEL_COMPILER_NAME "MSVC 16.0"
-#	elif UNRAVEL_COMPILER_MSVC >= 1910 // Visual Studio 2017
-#		define UNRAVEL_COMPILER_NAME "MSVC 15.0"
-#	elif UNRAVEL_COMPILER_MSVC >= 1900 // Visual Studio 2015
-#		define UNRAVEL_COMPILER_NAME "MSVC 14.0"
-#	elif UNRAVEL_COMPILER_MSVC >= 1800 // Visual Studio 2013
-#		define UNRAVEL_COMPILER_NAME "MSVC 12.0"
-#	elif UNRAVEL_COMPILER_MSVC >= 1700 // Visual Studio 2012
-#		define UNRAVEL_COMPILER_NAME "MSVC 11.0"
-#	elif UNRAVEL_COMPILER_MSVC >= 1600 // Visual Studio 2010
-#		define UNRAVEL_COMPILER_NAME "MSVC 10.0"
-#	elif UNRAVEL_COMPILER_MSVC >= 1500 // Visual Studio 2008
-#		define UNRAVEL_COMPILER_NAME "MSVC 9.0"
 #	else
 #		define UNRAVEL_COMPILER_NAME "MSVC"
 #	endif //
@@ -425,6 +424,8 @@
 #	define UNRAVEL_CPU_NAME "MIPS"
 #elif UNRAVEL_CPU_PPC
 #	define UNRAVEL_CPU_NAME "PowerPC"
+#elif UNRAVEL_CPU_LOONGARCH64
+#	define UNRAVEL_CPU_NAME "LoongArch64"
 #elif UNRAVEL_CPU_RISCV
 #	define UNRAVEL_CPU_NAME "RISC-V"
 #elif UNRAVEL_CPU_X86
@@ -474,6 +475,10 @@
 #	define UNRAVEL_CPP_NAME "C++Unknown"
 #endif // defined(__cplusplus)
 
+#if UNRAVEL_COMPILER_MSVC && (!defined(_MSVC_TRADITIONAL) || _MSVC_TRADITIONAL)
+#	error "When using MSVC you must set /Zc:preprocessor compiler option."
+#endif // UNRAVEL_COMPILER_MSVC && (!defined(_MSVC_TRADITIONAL) || _MSVC_TRADITIONAL)
+
 #if defined(__cplusplus)
 
 static_assert(__cplusplus >= UNRAVEL_LANGUAGE_CPP20, "\n\n"
@@ -488,9 +493,21 @@ static_assert(!UNRAVEL_COMPILER_CLANG || UNRAVEL_COMPILER_CLANG >= 110000, "\n\n
     "\t\n");
 
 // https://gcc.gnu.org/releases.html
-static_assert(!UNRAVEL_COMPILER_GCC || UNRAVEL_COMPILER_GCC >= 80400, "\n\n"
+static_assert(!UNRAVEL_COMPILER_GCC || UNRAVEL_COMPILER_GCC >= 110000, "\n\n"
     "\t** IMPORTANT! **\n\n"
-    "\tMinimum supported GCC version is 8.4 (March 4, 2020).\n"
+    "\tMinimum supported GCC version is 11.0 (April 27, 2021).\n"
+    "\t\n");
+
+// https://www.sourceware.org/glibc/wiki/Glibc%20Timeline
+static_assert(!UNRAVEL_CRT_GLIBC || UNRAVEL_CRT_GLIBC >= 23100, "\n\n"
+    "\t** IMPORTANT! **\n\n"
+    "\tMinimum supported GLIBC version is 2.31.0 (February 1, 2020).\n"
+    "\t\n");
+
+// https://learn.microsoft.com/en-us/cpp/overview/compiler-versions
+static_assert(!UNRAVEL_COMPILER_MSVC || UNRAVEL_COMPILER_MSVC >= 1935, "\n\n"
+    "\t** IMPORTANT! **\n\n"
+    "\tMinimum supported MSVC 19.35 / Visual Studio 2022 version 17.5 (February 21, 2023).\n"
     "\t\n");
 
 static_assert(!UNRAVEL_CPU_ENDIAN_BIG, "\n\n"

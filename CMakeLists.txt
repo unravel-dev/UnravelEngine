@@ -224,6 +224,11 @@ add_subdirectory(deps)
 if(WIN32)
     add_compile_definitions(WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 endif()
+# base/platform/config.hpp, like bx/platform.h, requires MSVC's standard-conforming preprocessor. Files that
+# never include bx (the logging library, for one) do not get bx's own /Zc:preprocessor.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>)
+endif()
 add_subdirectory(engine)
 if(UNRAVEL_BUILD_ASSET_TOOLS)
     add_subdirectory(editor)
