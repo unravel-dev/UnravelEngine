@@ -1,36 +1,38 @@
-WebGPU: GPU timer results in the browser
+WebGPU: GPU timer results in the browser with a device from PlatformData::context
 
-A device the page created reaches bgfx through emscripten_webgpu_get_device, which imports it into no instance:
-emdawnwebgpu queues the callbacks of its objects under the null instance. bgfx waits for the timer readback with
-an AllowProcessEvents callback and calls wgpuInstanceProcessEvents on the instance it created itself, so the
-callback never ran, the readback stayed pending, and no timer query was resolved again: every GPU time stayed 0.
-In the browser the callback is now spontaneous; the page has one thread, so it runs from the event loop, between
-frames.
+In the browser, bgfx creates an instance of its own for a device the application passes in
+PlatformData::context, and emdawnwebgpu files that device's callbacks under the instance it was imported
+into: none, for emscripten_webgpu_get_device. bgfx waits for the timer readback with an AllowProcessEvents
+callback and processes only its own instance, so the callback never ran, the readback stayed pending, and no
+timer query was resolved again: every GPU time stayed 0. For such a device the callback is now spontaneous;
+bgfx is single-threaded in the browser, so it runs from the event loop, between frames. A device bgfx
+creates itself is on bgfx's instance, which submit() processes every frame, and keeps AllowProcessEvents.
 
 diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
 --- a/src/renderer_webgpu.cpp
 +++ b/src/renderer_webgpu.cpp
-@@ -6996,6 +6996,14 @@ WGPU_IMPORT
+@@ -6996,6 +6996,12 @@ WGPU_IMPORT
  		m_resolved   = false;
  		m_mapPending = true;
  
-+		// In the browser a device the page created belongs to no instance: wgpuInstanceProcessEvents on bgfx's
-+		// own instance never runs its callbacks. The page has one thread, so a spontaneous callback runs from the
-+		// event loop, between frames.
-+		const WGPUCallbackMode callbackMode = BX_ENABLED(BX_PLATFORM_EMSCRIPTEN)
-+			? WGPUCallbackMode_AllowSpontaneous
-+			: WGPUCallbackMode_AllowProcessEvents
-+			;
++		// In the browser bgfx creates an instance of its own for a device the application created
++		// (PlatformData::context), and that device's callbacks are not on it: emdawnwebgpu files them under
++		// the instance the device was imported into (none, for emscripten_webgpu_get_device). bgfx is
++		// single-threaded there, so a spontaneous callback runs from the browser's event loop, between frames.
++		const bool externalBrowserDevice = BX_ENABLED(BX_PLATFORM_EMSCRIPTEN) && NULL != g_platformData.context;
 +
  		WGPU_CHECK(wgpuBufferMapAsync(
  			  m_readback
  			, WGPUMapMode_Read
-@@ -7003,7 +7011,7 @@ WGPU_IMPORT
+@@ -7003,7 +7009,10 @@ WGPU_IMPORT
  			, size_t(getBufferSize() )
  			, {
  				.nextInChain = NULL,
 -				.mode        = WGPUCallbackMode_AllowProcessEvents,
-+				.mode        = callbackMode,
++				.mode        = externalBrowserDevice
++					? WGPUCallbackMode_AllowSpontaneous
++					: WGPUCallbackMode_AllowProcessEvents
++					,
  				.callback    = readTimestampResultsCb,
  				.userdata1   = this,
  				.userdata2   = NULL,
