@@ -324,6 +324,20 @@ auto get_format_info(bgfx::TextureFormat::Enum fmt) -> format_details
             // More advanced block compression for RGBA
             return {true, false, 4};
 
+            // --- ETC2 and EAC, the formats every OpenGL ES 3 and Vulkan Android GPU reads ---
+        case bgfx::TextureFormat::ETC2:
+            return {false, false, 3};
+        case bgfx::TextureFormat::ETC2A:
+        case bgfx::TextureFormat::ETC2A1:
+            return {true, false, 4};
+        case bgfx::TextureFormat::EACR11:
+        case bgfx::TextureFormat::EACR11S:
+            return {false, false, 1};
+        case bgfx::TextureFormat::EACRG11:
+        case bgfx::TextureFormat::EACRG11S:
+            // Two-channel, the ETC2 profiles' normal map XY
+            return {false, false, 2};
+
             // --- Common uncompressed “RGBA” forms you might care about ---
         case bgfx::TextureFormat::RGBA8:
         case bgfx::TextureFormat::BGRA8:
@@ -403,6 +417,16 @@ auto is_compressed_format(bgfx::TextureFormat::Enum fmt) -> bool
 auto normal_map_needs_z_reconstruction(bgfx::TextureFormat::Enum fmt) -> bool
 {
     return get_format_info(fmt).num_channels == 2;
+}
+
+auto get_normal_map_channels(bgfx::TextureFormat::Enum fmt, bool is_normal_map) -> normal_map_channels
+{
+    const bool is_astc = fmt >= bgfx::TextureFormat::ASTC4x4 && fmt <= bgfx::TextureFormat::ASTC12x12;
+    if(is_normal_map && is_astc)
+    {
+        return normal_map_channels::x_red_y_alpha;
+    }
+    return normal_map_needs_z_reconstruction(fmt) ? normal_map_channels::xy : normal_map_channels::xyz;
 }
 
 auto to_string(bgfx::TextureFormat::Enum fmt) -> std::string

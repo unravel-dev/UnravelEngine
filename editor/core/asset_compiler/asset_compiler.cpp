@@ -522,6 +522,31 @@ auto select_compressed_format(const input_texture_info& input,
     }
 }
 
+/**
+ * @brief The format a normal map compiles to: its X and Y in two channels, from which the shaders rebuild Z
+ * (gfx::normal_map_channels). BC5 and EAC RG11 hold just those two; ASTC has no two-channel format, so a normal
+ * map takes the block its size and quality take (select_astc_ldr_format) and texturec's normal map mode fills it
+ * with X in red, green and blue and Y in alpha, the layout ASTC compresses best. The runtime reads it so from the
+ * texture's import settings (gfx::get_normal_map_channels).
+ */
+auto select_normal_map_format(const input_texture_info& input, const texture_compile_parameters& parameters)
+    -> bgfx::TextureFormat::Enum
+{
+    switch(parameters.family)
+    {
+        case texture_compression_family::astc:
+            return select_astc_ldr_format(input.width,
+                                          input.height,
+                                          texture_size_to_pixel_limit(parameters.max_size),
+                                          parameters.compression);
+        case texture_compression_family::etc2:
+            return bgfx::TextureFormat::EACRG11;
+        case texture_compression_family::bc:
+        default:
+            return bgfx::TextureFormat::BC5;
+    }
+}
+
 auto bake_normal_map_input_if_needed(const fs::path& input_path,
                                      const texture_importer_meta& importer,
                                      fs::path& temp_baked_path) -> fs::path
@@ -619,7 +644,10 @@ auto compile_texture_to_file(const fs::path& input_path,
                                !is_normal_map && !source_is_float;
     // A texture sampled through an sRGB view needs a format that has one (select_srgb_format). The project's
     // textures take the family's color format; the others keep their source's format, RGBA8 when it has none.
-    auto format = select_compressed_format(input_info, compile_input.extension(), parameters);
+    const bool compresses_normal_map =
+        is_normal_map && parameters.compression != texture_importer_meta::compression_quality::none;
+    auto format = compresses_normal_map ? select_normal_map_format(input_info, parameters)
+                                        : select_compressed_format(input_info, compile_input.extension(), parameters);
     if(resolved_srgb)
     {
         format = select_srgb_format(format, parameters.family);
@@ -712,12 +740,7 @@ auto compile_texture_to_file(const fs::path& input_path,
 
             case texture_importer_meta::texture_type::normal_map:
             {
-                // texturec's normal map mode stores an ASTC normal as XXXY (Y in alpha), and the shaders read
-                // the normal's XYZ, so ASTC normal maps are encoded as color.
-                if(parameters.family != texture_compression_family::astc)
-                {
-                    args_array.emplace_back("--normalmap");
-                }
+                args_array.emplace_back("--normalmap");
                 break;
             }
 

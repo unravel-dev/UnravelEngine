@@ -1,5 +1,6 @@
 #pragma once
 
+#include "format.h"
 #include "handle_impl.h"
 #include <base/basetypes.hpp>
 #include <memory>
@@ -140,6 +141,12 @@ struct texture : public handle_impl<texture, bgfx::TextureHandle>
     //-----------------------------------------------------------------------------
     auto get_size() const -> usize32_t;
 
+    /// Where the texture keeps a normal map's vector, read as one (gfx::get_normal_map_channels).
+    auto get_normal_map_channels() const -> normal_map_channels;
+
+    /// Marks the texture as a normal map, as its import settings say, which decides how an ASTC one is read.
+    void set_normal_map(bool is_normal_map);
+
     //-----------------------------------------------------------------------------
     //  Name : is_render_target ()
     /// <summary>
@@ -186,6 +193,8 @@ private:
                                const char* label);
 
     texture_desc desc_{};
+    /// Whether the texture's import settings call it a normal map.
+    bool is_normal_map_{false};
 };
 
 

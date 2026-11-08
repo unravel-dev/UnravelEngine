@@ -492,8 +492,8 @@ public:
         surface_data2[0] = metalness_roughness_combined() ? 1.0f : 0.0f;
         const auto& normal_map = normal_map_ ? normal_map_ : default_normal_map();
         const auto normal_texture = normal_map.get();
-        surface_data2[1] =
-            normal_texture && gfx::normal_map_needs_z_reconstruction(normal_texture->info.format) ? 1.0f : 0.0f;
+        // Where the normal map keeps its vector (gfx::normal_map_channels), which the shader reads it by.
+        surface_data2[1] = normal_texture ? static_cast<float>(normal_texture->get_normal_map_channels()) : 0.0f;
         // Two-sided (no culling): back faces shade with their normal turned toward the viewer.
         surface_data2[2] = get_cull_type() == cull_type::none ? 1.0f : 0.0f;
         // Alpha cutout (alpha_mode::mask): the surface cache's card capture keeps the cut-out texels (a masked

@@ -221,10 +221,12 @@ vec3 particle_pixel_light(vec3 ambient, vec4 sun, vec3 sun_local, vec2 quad_uv, 
 	vec2 uv_dy = dFdy(uv);
 	if(u_particle_lighting.z > 0.5)
 	{
-		vec3 mapped = mix(texture2DGrad(s_particle_normal, uv, uv_dx, uv_dy).xyz,
-		                  texture2DGrad(s_particle_normal, next_uv, uv_dx, uv_dy).xyz,
-		                  blend) * 2.0 - 1.0;
-		// A two-channel format (u_particle_lighting.w) stores x and y only.
+		vec4 texel = mix(texture2DGrad(s_particle_normal, uv, uv_dx, uv_dy),
+		                 texture2DGrad(s_particle_normal, next_uv, uv_dx, uv_dy),
+		                 blend);
+		// u_particle_lighting.w: where the map keeps its vector (gfx::normal_map_channels): 0 xyz, 1 xy, 2 x in
+		// red and y in alpha; z is rebuilt for 1 and 2.
+		vec3 mapped = vec3(u_particle_lighting.w > 1.5 ? texel.ra : texel.rg, texel.b) * 2.0 - 1.0;
 		if(u_particle_lighting.w > 0.5)
 		{
 			mapped.z = sqrt(max(0.0, 1.0 - dot(mapped.xy, mapped.xy)));

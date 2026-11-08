@@ -239,15 +239,26 @@ auto create_shader_with_variants(const std::string& path, const std::string& key
 
 } // namespace detail
 
+auto load_texture_from_file(tpp::thread_pool& pool,
+                            asset_handle<gfx::texture>& output,
+                            const std::string& key,
+                            load_mode mode,
+                            bool is_normal_map) -> bool
+{
+    return detail::schedule_load<gfx::texture>(pool, output, key, {}, source_fallback::allowed,
+        [is_normal_map](const std::string& path)
+        {
+            auto texture = std::make_shared<gfx::texture>(path.c_str());
+            texture->set_normal_map(is_normal_map);
+            return texture;
+        }, mode);
+}
+
 template<>
 auto load_from_file<gfx::texture>(tpp::thread_pool& pool, asset_handle<gfx::texture>& output,
                                    const std::string& key, load_mode mode) -> bool
 {
-    return detail::schedule_load<gfx::texture>(pool, output, key, {}, source_fallback::allowed,
-        [](const std::string& path)
-        {
-            return std::make_shared<gfx::texture>(path.c_str());
-        }, mode);
+    return load_texture_from_file(pool, output, key, mode, false);
 }
 
 template<>

@@ -46,6 +46,10 @@ struct device_caps
     bool has_vertex_storage_buffers{};
     /// The resources a compute dispatch binds: stages at or above it are not bound.
     std::uint8_t max_compute_bindings{};
+    /// The storage images one shader stage binds. bgfx reports no such limit (its WebGPU backend reports 16 compute
+    /// bindings whatever the device allows), so a native device takes its compute bindings and a browser's comes from
+    /// the page's WebGPU device.
+    std::uint8_t max_storage_textures_per_stage{};
     std::uint32_t max_texture_size{};
     std::uint8_t max_frame_buffer_attachments{};
     /// BGFX_CAPS_FORMAT_TEXTURE_* per texture format.
@@ -66,6 +70,10 @@ struct device_caps
     auto can_render_to(bgfx::TextureFormat::Enum format, std::uint8_t samples = 1) const -> bool;
     /// Whether the backend can build the mip chain of a @p format render target.
     auto can_generate_mips(bgfx::TextureFormat::Enum format) const -> bool;
+    /// Whether shaders can sample @p format with linear filtering. Only 32-bit float formats can lack it: bgfx's
+    /// WebGPU backend samples them unfiltered, OpenGL ES needs an extension bgfx does not report, and about a third of
+    /// Android Vulkan GPUs cannot filter them.
+    auto can_filter(bgfx::TextureFormat::Enum format) const -> bool;
 };
 
 /**

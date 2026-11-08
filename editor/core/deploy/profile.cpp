@@ -253,8 +253,10 @@ void set_android_starting_values(settings& resolved)
     limits.per_frame_exposure_metering = false;
 }
 
-/// The values a new Web profile starts with. Global illumination is off: its surface cache reads and writes
-/// RG11B10F storage textures, which WebGPU allows on no device.
+/// The values a new Web profile starts with. Global illumination is off: it runs only where the browser's GPU has
+/// texture-formats-tier2 (its read-write atlases are RGBA16F there) and binds 8 storage images per shader stage, and
+/// its memory and GPU time are a desktop's (the default atlas alone is about 538 MB). A profile for capable computers
+/// can turn it on; a browser that cannot run it lights with probes and sky.
 void set_web_starting_values(settings& resolved)
 {
     resolved.graphics.limits.global_illumination = false;

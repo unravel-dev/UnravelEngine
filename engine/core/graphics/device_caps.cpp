@@ -1,10 +1,22 @@
 #include "device_caps.h"
 
+#include <base/platform/config.hpp>
 #include <bimg/bimg.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+#include <emscripten/em_js.h>
+
+// The storage textures per shader stage of the WebGPU device the page created (Module.preinitializedWebGPUDevice);
+// 0 when there is none.
+EM_JS(int, unravel_get_webgpu_storage_textures_per_stage, (), {
+    const device = Module.preinitializedWebGPUDevice;
+    return device ? device.limits.maxStorageTexturesPerShaderStage : 0;
+});
+#endif
 
 namespace gfx
 {
@@ -287,6 +299,29 @@ auto device_caps::can_generate_mips(bgfx::TextureFormat::Enum format) const -> b
     return has_format_caps(format, BGFX_CAPS_FORMAT_TEXTURE_MIP_AUTOGEN);
 }
 
+auto device_caps::can_filter(bgfx::TextureFormat::Enum format) const -> bool
+{
+    const bool is_32_bit_float = format == bgfx::TextureFormat::R32F || format == bgfx::TextureFormat::RG32F ||
+                                 format == bgfx::TextureFormat::RGBA32F;
+    if(!is_32_bit_float)
+    {
+        return true;
+    }
+    switch(renderer)
+    {
+        case bgfx::RendererType::WebGPU:
+        case bgfx::RendererType::OpenGLES:
+            // bgfx's WebGPU backend samples them unfiltered; OpenGL ES filters them only with
+            // OES_texture_float_linear, which bgfx does not report.
+            return false;
+        case bgfx::RendererType::Vulkan:
+            // bgfx reports no filtering cap; it drops mip generation from a format without linear filtering.
+            return can_generate_mips(format);
+        default:
+            return true;
+    }
+}
+
 auto device_caps_mask::is_empty() const -> bool
 {
     return !drops_compute && !drops_draw_indirect && !drops_dispatch_indirect && !drops_image_read_write &&
@@ -330,6 +365,7 @@ auto make_device_caps(const bgfx::Caps& caps) -> device_caps
     result.has_vertex_storage_buffers = caps.rendererType != bgfx::RendererType::OpenGLES;
     result.max_compute_bindings =
         static_cast<std::uint8_t>(std::min<std::uint32_t>(caps.limits.maxComputeBindings, UINT8_MAX));
+    result.max_storage_textures_per_stage = result.max_compute_bindings;
     result.max_texture_size = caps.limits.maxTextureSize;
     result.max_frame_buffer_attachments = caps.limits.maxFBAttachments;
     std::copy(std::begin(caps.formats), std::end(caps.formats), result.formats.begin());
@@ -347,6 +383,7 @@ auto apply_device_caps_mask(device_caps caps, const device_caps_mask& mask) -> d
     if(mask.max_compute_bindings != 0)
     {
         caps.max_compute_bindings = std::min(caps.max_compute_bindings, mask.max_compute_bindings);
+        caps.max_storage_textures_per_stage = std::min(caps.max_storage_textures_per_stage, caps.max_compute_bindings);
     }
     if(mask.drops_typed_image_loads)
     {
@@ -386,6 +423,14 @@ auto get_device_caps_mask() -> const device_caps_mask&
 void init_device_caps()
 {
     real_device_caps_ = make_device_caps(*bgfx::getCaps());
+#if UNRAVEL_PLATFORM_EMSCRIPTEN
+    const int browser_limit = unravel_get_webgpu_storage_textures_per_stage();
+    if(browser_limit > 0)
+    {
+        real_device_caps_.max_storage_textures_per_stage =
+            static_cast<std::uint8_t>(std::min<int>(browser_limit, real_device_caps_.max_storage_textures_per_stage));
+    }
+#endif
     device_caps_ = apply_device_caps_mask(real_device_caps_, device_caps_mask_);
 }
 
@@ -460,7 +505,8 @@ auto describe_device_caps(const device_caps& caps) -> std::string
     std::snprintf(device_id, sizeof(device_id), "0x%04x", caps.device_id);
     std::string text = std::string(bgfx::getRendererName(caps.renderer)) + " on " + get_vendor_name(caps.vendor_id) +
                        " (device " + device_id + "): compute " + (caps.has_compute ? "yes" : "no") +
-                       ", compute bindings " + std::to_string(caps.max_compute_bindings) + ", read-write images " +
+                       ", compute bindings " + std::to_string(caps.max_compute_bindings) + ", storage images per stage " +
+                       std::to_string(caps.max_storage_textures_per_stage) + ", read-write images " +
                        (caps.has_image_read_write ? "yes" : "no") + ", indirect draws " +
                        (caps.has_draw_indirect ? "yes" : "no") + ", indirect dispatches " +
                        (caps.has_dispatch_indirect ? "yes" : "no") + ", independent blend " +

@@ -547,7 +547,7 @@ auto make_particle_batch(const particle_draw_key& key,
     {
         const auto normal_texture = key.component->get_normal_texture().get();
         batch.normal_texture = normal_texture->native_handle();
-        batch.is_normal_texture_two_channel = gfx::normal_map_needs_z_reconstruction(normal_texture->info.format);
+        batch.normal_channels = normal_texture->get_normal_map_channels();
     }
     return batch;
 }
@@ -1661,7 +1661,7 @@ void pipeline::bind_particle_lighting(const particle_scene_lighting& lighting, c
     const float lighting_params[4] = {float(light_count),
                                       lighting.pre_exposure,
                                       has_normal_map ? 1.0f : 0.0f,
-                                      has_normal_map && batch.is_normal_texture_two_channel ? 1.0f : 0.0f};
+                                      has_normal_map ? static_cast<float>(batch.normal_channels) : 0.0f};
     // Without a normal map the stage still holds a texture: the shader does not read it then.
     bgfx::setTexture(k_particle_normal_stage,
                      particle_normal_sampler_->native_handle(),

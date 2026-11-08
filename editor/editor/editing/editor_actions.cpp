@@ -1370,7 +1370,10 @@ auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> s
     auto& ctx = engine::context();
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto tag = [&](const asset_handle<gfx::texture>& tex, texture_importer_meta::color_space colorspace) -> bool
+    // A normal map is also tagged as one, so it compiles to two channels (BC5, EAC RG11, ASTC's X and Y layout).
+    auto tag = [&](const asset_handle<gfx::texture>& tex,
+                   texture_importer_meta::color_space colorspace,
+                   texture_importer_meta::texture_type type = texture_importer_meta::texture_type::automatic) -> bool
     {
         if(!tex)
         {
@@ -1389,12 +1392,22 @@ auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> s
         {
             return false;
         }
-        if(importer->colorspace != texture_importer_meta::color_space::automatic)
+        // Explicit user choices win over the migration.
+        const bool tags_colorspace = importer->colorspace == texture_importer_meta::color_space::automatic;
+        const bool tags_type = type != texture_importer_meta::texture_type::automatic &&
+                               importer->type == texture_importer_meta::texture_type::automatic;
+        if(!tags_colorspace && !tags_type)
         {
-            // Explicit user choice wins over the migration.
             return false;
         }
-        importer->colorspace = colorspace;
+        if(tags_colorspace)
+        {
+            importer->colorspace = colorspace;
+        }
+        if(tags_type)
+        {
+            importer->type = type;
+        }
         fs::error_code err;
         asset_writer::atomic_write_file(meta_path,
                                         [&](const fs::path& temp)
@@ -1429,7 +1442,9 @@ auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> s
         const auto& pbr = static_cast<const pbr_material&>(*mat);
         tagged += size_t(tag(pbr.get_color_map(), texture_importer_meta::color_space::srgb));
         tagged += size_t(tag(pbr.get_emissive_map(), texture_importer_meta::color_space::srgb));
-        tagged += size_t(tag(pbr.get_normal_map(), texture_importer_meta::color_space::linear));
+        tagged += size_t(tag(pbr.get_normal_map(),
+                             texture_importer_meta::color_space::linear,
+                             texture_importer_meta::texture_type::normal_map));
         tagged += size_t(tag(pbr.get_roughness_map(), texture_importer_meta::color_space::linear));
         tagged += size_t(tag(pbr.get_metalness_map(), texture_importer_meta::color_space::linear));
         tagged += size_t(tag(pbr.get_ao_map(), texture_importer_meta::color_space::linear));

@@ -54,13 +54,15 @@ struct material_import_context
 
 // Writes/updates the texture's .meta so the asset compiler knows the authored
 // color space of the texels bound to this material slot (base color/emissive are
-// sRGB-encoded; normal/metal/rough/AO are linear data). An explicit user setting
-// wins: only a meta still at `automatic` is tagged, and the file is rewritten
-// only when something actually changed.
+// sRGB-encoded; normal/metal/rough/AO are linear data), and the type of a normal
+// map, which compiles to two channels. An explicit user setting wins: only a
+// meta still at `automatic` is tagged, and the file is rewritten only when
+// something actually changed.
 void tag_texture_colorspace(asset_manager& am,
                             const fs::path& output_dir,
                             const std::string& relative,
-                            texture_importer_meta::color_space colorspace)
+                            texture_importer_meta::color_space colorspace,
+                            texture_importer_meta::texture_type type)
 {
     const auto absolute = resolve_texture_on_disk(output_dir, normalize_assimp_path(relative));
     if(!absolute)
@@ -91,6 +93,11 @@ void tag_texture_colorspace(asset_manager& am,
        importer->colorspace != colorspace)
     {
         importer->colorspace = colorspace;
+        changed = true;
+    }
+    if(importer->type == texture_importer_meta::texture_type::automatic && importer->type != type)
+    {
+        importer->type = type;
         changed = true;
     }
     if(meta.uid.is_nil())
@@ -503,7 +510,9 @@ private:
     /// The texture asset for @p relative, its .meta tagged with @p colorspace; nullopt (logged) when unbindable.
     auto load_texture_map(const std::string& relative,
                           texture_importer_meta::color_space colorspace,
-                          const char* label) -> hpp::optional<texture_handle_t>
+                          const char* label,
+                          texture_importer_meta::texture_type type = texture_importer_meta::texture_type::automatic)
+        -> hpp::optional<texture_handle_t>
     {
         const auto key = try_make_texture_asset_key(ctx_.output_dir, relative);
         if(!key)
@@ -511,7 +520,7 @@ private:
             APPLOG_WARNING("Mesh Importer: Could not bind {} texture '{}'", label, relative);
             return std::nullopt;
         }
-        tag_texture_colorspace(ctx_.am, ctx_.output_dir, relative, colorspace);
+        tag_texture_colorspace(ctx_.am, ctx_.output_dir, relative, colorspace, type);
         return ctx_.am.get_asset<gfx::texture>(*key, load_flags::standard, load_mode::deferred);
     }
 
@@ -830,7 +839,10 @@ private:
             process_texture(texture);
             if(is_binding())
             {
-                if(const auto map = load_texture_map(texture.name, texture_importer_meta::color_space::linear, "normal"))
+                if(const auto map = load_texture_map(texture.name,
+                                                     texture_importer_meta::color_space::linear,
+                                                     "normal",
+                                                     texture_importer_meta::texture_type::normal_map))
                 {
                     mat_.set_normal_map(*map);
                 }

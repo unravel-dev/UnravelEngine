@@ -125,6 +125,8 @@ public:
     auto get_metadata(const hpp::uuid& uid) const -> asset_database::meta;
     auto get_metadata_for_path(const fs::path& path) const -> asset_database::meta;
     auto get_metadata_for_key(const std::string& key) const -> asset_database::meta;
+    /// Whether the import settings of the texture at `key` call it a normal map.
+    auto is_normal_map_texture(const std::string& key) const -> bool;
     auto generate_metadata(const fs::path& p) const -> asset_meta;
 
     /**

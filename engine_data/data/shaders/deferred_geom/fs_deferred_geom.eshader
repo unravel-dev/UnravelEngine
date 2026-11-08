@@ -58,7 +58,7 @@ uniform vec4 u_dither_threshold; //.x = alpha threshold .y = distance threshold
 #define u_surface_bumpiness u_surface_data.z
 #define u_surface_alpha_test_value u_surface_data.w
 #define u_surface_metalness_roughness_combined u_surface_data2.x
-#define u_surface_normal_reconstruct_z u_surface_data2.y
+#define u_surface_normal_channels u_surface_data2.y
 #define u_surface_two_sided (u_surface_data2.z > 0.5f)
 #define u_surface_alpha_cutout (u_surface_data2.w > 0.5f)
 
@@ -100,7 +100,7 @@ void main()
 	float alpha_test_value = u_surface_alpha_test_value;
 
 	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
-	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_reconstruct_z, u_material_mip_bias );
+	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_channels, u_material_mip_bias );
 
 	// A two-sided material's back face turns its normal toward the viewer (a sign flip of the tangent frame's
 	// normal axis). The triangle's normal from the position derivatives tells which side the viewer is on and which

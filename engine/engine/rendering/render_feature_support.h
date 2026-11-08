@@ -88,6 +88,8 @@ struct render_target_need
     bgfx::TextureFormat::Enum format{};
     std::uint8_t samples{1};
     bool needs_mips{};
+    /// Whether the feature samples the target with linear filtering.
+    bool needs_filtering{};
 };
 
 /**
@@ -112,6 +114,9 @@ struct render_feature_requirements
     bool needs_vertex_storage_buffers{};
     /// The highest binding stage of the feature's compute shaders, plus one.
     std::uint8_t compute_bindings{};
+    /// The most storage images one of the feature's shaders binds; 0 for a feature that fits WebGPU's core limit
+    /// (the "eshader files" suite checks both against the compiled WGSL).
+    std::uint8_t storage_textures_per_stage{};
     std::span<const image_need> images;
     std::span<const render_target_need> render_targets;
     std::span<const render_feature> depends_on;

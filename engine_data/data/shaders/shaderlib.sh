@@ -374,10 +374,12 @@ vec3 fixCubeLookup(vec3 _v, float _lod, float _topLevelCubeSize)
 #if BGFX_SHADER_TYPE_FRAGMENT
 // Fragment stage only: a mip bias needs the implicit derivatives, and GLSL rejects biased sampling in
 // every other stage even in a function nobody calls.
-vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpiness, float reconstructZ, float mipBias )
+// channels: where the map keeps its vector (gfx::normal_map_channels): 0 xyz, 1 xy, 2 x in red and y in alpha;
+// Z is rebuilt for 1 and 2.
+vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpiness, float channels, float mipBias )
 {
-    vec3 normal = texture2DBias(bumpTexture, texCoords, mipBias).xyz;
-  	normal = normal * 2.0f - 1.0f;
+    vec4 texel = texture2DBias(bumpTexture, texCoords, mipBias);
+    vec3 normal = vec3(channels > 1.5f ? texel.ra : texel.rg, texel.b) * 2.0f - 1.0f;
 
 #if NORMAL_MAP_Y_UP
     normal.y = -normal.y;
@@ -386,7 +388,7 @@ vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpine
 	normal.xy *= bumpiness;
 
 	BRANCH
-	if(reconstructZ > 0.5f)
+	if(channels > 0.5f)
 	{
   		normal.z = sqrt(max(0.0f, 1.0f - dot(normal.xy, normal.xy)));
 	}

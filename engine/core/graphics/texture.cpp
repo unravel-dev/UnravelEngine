@@ -361,6 +361,16 @@ auto texture::get_size() const -> usize32_t
     return {static_cast<std::uint32_t>(info.width), static_cast<std::uint32_t>(info.height)};
 }
 
+auto texture::get_normal_map_channels() const -> normal_map_channels
+{
+    return gfx::get_normal_map_channels(info.format, is_normal_map_);
+}
+
+void texture::set_normal_map(bool is_normal_map)
+{
+    is_normal_map_ = is_normal_map;
+}
+
 auto texture::is_render_target() const -> bool
 {
     return 0 != (flags & BGFX_TEXTURE_RT_MASK);

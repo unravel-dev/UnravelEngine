@@ -11,6 +11,8 @@
  *   - a Vulkan device without multi-draw indirect (the S21) loses only the GPU particle culling;
  *   - a device without Vulkan's extended storage formats loses the features that write them;
  *   - WebGPU reads and writes only texture-formats-tier2's list (never rg11b10f), and GI asks for its WebGPU format;
+ *   - soft shadows need 32-bit float filtering: never on WebGPU or OpenGL ES, on Vulkan where the format builds mips;
+ *   - GI needs more storage images per shader stage than WebGPU's core 4;
  *   - the engine compute shaders of a feature the device does not run are left empty (the longest shader prefix
  *     decides the feature), every other shader is created;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
@@ -54,6 +56,8 @@ constexpr std::uint32_t ALL_FORMAT_CAPS =
 constexpr std::uint8_t ALL_COMPUTE_BINDINGS = 16;
 constexpr std::uint8_t FEATURE_LEVEL_11_0_BINDINGS = 8;
 constexpr std::uint8_t DESKTOP_ATTACHMENTS = 8;
+/// The storage images per shader stage every WebGPU device grants.
+constexpr std::uint8_t WEBGPU_CORE_STORAGE_TEXTURES = 4;
 
 auto make_desktop_caps() -> gfx::device_caps
 {
@@ -66,6 +70,7 @@ auto make_desktop_caps() -> gfx::device_caps
     caps.has_blend_independent = true;
     caps.has_vertex_storage_buffers = true;
     caps.max_compute_bindings = ALL_COMPUTE_BINDINGS;
+    caps.max_storage_textures_per_stage = ALL_COMPUTE_BINDINGS;
     caps.max_texture_size = 16384;
     caps.max_frame_buffer_attachments = DESKTOP_ATTACHMENTS;
     caps.formats.fill(ALL_FORMAT_CAPS);
@@ -195,6 +200,47 @@ void test_webgpu_read_write_formats()
     check(core_support.get_status(render_feature::global_illumination).reason.find("RGBA16F") != std::string::npos,
           "WebGPU without tier2: GI names the format it binds there");
     check(make_desktop_caps().can_read_write_image(bgfx::TextureFormat::RG11B10F), "Direct3D 12: rg11b10f is read-write");
+}
+
+void test_float_filtering()
+{
+    std::printf("soft shadows run only where 32-bit floats filter\n");
+    auto caps = make_desktop_caps();
+    check(caps.can_filter(bgfx::TextureFormat::RG32F), "Direct3D 12 filters rg32f");
+    check_available(render_feature_support::resolve(caps), render_feature::soft_shadows, true, "Direct3D 12");
+    caps.renderer = bgfx::RendererType::WebGPU;
+    check(!caps.can_filter(bgfx::TextureFormat::R32F) && caps.can_filter(bgfx::TextureFormat::RGBA16F),
+          "WebGPU filters no 32-bit float format, every other one");
+    const auto webgpu_support = render_feature_support::resolve(caps);
+    check_available(webgpu_support, render_feature::soft_shadows, false, "WebGPU");
+    caps.renderer = bgfx::RendererType::OpenGLES;
+    check(!caps.can_filter(bgfx::TextureFormat::RG32F), "OpenGL ES: rg32f filters only with an extension bgfx does not report");
+    check(webgpu_support.get_status(render_feature::soft_shadows).reason.find("filter") != std::string::npos,
+          "WebGPU: soft shadows say they need filtering");
+    auto vulkan = make_s21_caps();
+    check_available(render_feature_support::resolve(vulkan), render_feature::soft_shadows, true, "Vulkan with filtering");
+    gfx::device_caps_mask mask;
+    mask.dropped_format_caps.emplace_back(bgfx::TextureFormat::RG32F, BGFX_CAPS_FORMAT_TEXTURE_MIP_AUTOGEN);
+    vulkan = gfx::apply_device_caps_mask(vulkan, mask);
+    check_available(render_feature_support::resolve(vulkan), render_feature::soft_shadows, false, "Vulkan without rg32f filtering");
+}
+
+void test_storage_textures_per_stage()
+{
+    std::printf("GI runs only where a shader stage binds its storage images\n");
+    auto caps = make_desktop_caps();
+    caps.renderer = bgfx::RendererType::WebGPU;
+    caps.max_storage_textures_per_stage = WEBGPU_CORE_STORAGE_TEXTURES;
+    const auto support = render_feature_support::resolve(caps);
+    check_available(support, render_feature::global_illumination, false, "WebGPU with the core 4 storage images");
+    check(support.get_status(render_feature::global_illumination).reason.find("storage images") != std::string::npos,
+          "WebGPU with 4: GI says it needs more storage images per stage");
+    caps.max_storage_textures_per_stage = get_render_feature_requirements(render_feature::global_illumination).storage_textures_per_stage;
+    check_available(render_feature_support::resolve(caps), render_feature::global_illumination, true, "WebGPU with GI's storage images");
+    gfx::device_caps_mask mask;
+    mask.max_compute_bindings = FEATURE_LEVEL_11_0_BINDINGS;
+    check(gfx::apply_device_caps_mask(make_desktop_caps(), mask).max_storage_textures_per_stage == FEATURE_LEVEL_11_0_BINDINGS,
+          "fewer simulated compute bindings bind fewer storage images too");
 }
 
 void test_shaders_of_unavailable_features()
@@ -354,6 +400,8 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_vulkan_without_multi_draw();
     test_extended_storage_formats();
     test_webgpu_read_write_formats();
+    test_float_filtering();
+    test_storage_textures_per_stage();
     test_shaders_of_unavailable_features();
     test_no_compute();
     test_no_vertex_storage_buffers();

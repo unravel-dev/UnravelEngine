@@ -381,7 +381,8 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             }
             ImGui::SetItemTooltip(
                 "One-time: tag the textures referenced by material slots with their authored color\n"
-                "space (base color / emissive = sRGB, data maps = linear) and recompile the changed ones.");
+                "space (base color / emissive = sRGB, data maps = linear), tag normal maps as normal\n"
+                "maps, which compile to two channels, and recompile the changed ones.");
             ImGui::EndMenu();
         }
 

@@ -176,9 +176,10 @@ struct editor_actions
     static auto save_entity_as_prefab(rtti::context& ctx, entt::handle entity, const fs::path& prefab_path, bool attach)
         -> asset_handle<prefab>;
     /// One-time migration: tags textures referenced by material slots with their
-    /// authored color space (base color/emissive = sRGB, data maps = linear) and
-    /// recompiles the changed ones. Metas with an explicit (non-automatic) color
-    /// space are left untouched. Returns the number of textures tagged.
+    /// authored color space (base color/emissive = sRGB, data maps = linear), and
+    /// normal maps as normal maps (two channels), and recompiles the changed ones.
+    /// An explicit (non-automatic) color space or type is left untouched. Returns
+    /// the number of textures tagged.
     static auto migrate_texture_color_spaces(const std::string& group = "") -> size_t;
     /// Re-saves every prefab and scene in the project in the current format: nested prefabs
     /// before the prefabs that contain them (a container must never name a nested asset's

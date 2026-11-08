@@ -51,7 +51,12 @@ auto asset_manager::init(rtti::context& ctx) -> bool
     }
     {
         auto& storage = add_storage<gfx::texture>();
-        storage.load_from_file = asset_reader::load_from_file<gfx::texture>;
+        // A normal map's import settings travel in the asset index, also in a deployed game.
+        storage.load_from_file =
+            [this](tpp::thread_pool& pool, asset_handle<gfx::texture>& output, const std::string& key, load_mode mode)
+        {
+            return asset_reader::load_texture_from_file(pool, output, key, mode, is_normal_map_texture(key));
+        };
         storage.load_from_instance = asset_reader::load_from_instance<gfx::texture>;
     }
 
@@ -305,6 +310,12 @@ auto asset_manager::get_metadata_for_key(const std::string& key) const -> asset_
         return empty;
     }
     return it->second.get_metadata(key);
+}
+
+auto asset_manager::is_normal_map_texture(const std::string& key) const -> bool
+{
+    const auto importer = std::dynamic_pointer_cast<texture_importer_meta>(get_metadata_for_key(key).meta.importer);
+    return importer && importer->type == texture_importer_meta::texture_type::normal_map;
 }
 
 auto asset_manager::generate_metadata(const fs::path& p) const -> asset_meta

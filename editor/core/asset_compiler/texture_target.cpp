@@ -15,7 +15,7 @@ namespace
 {
 /// Raised when a change to the texture compiler (texturec, the format choice) changes what a texture
 /// compiles to with the same parameters, so that every compiled texture is compiled again.
-constexpr int TEXTURE_COMPILER_VERSION = 4;
+constexpr int TEXTURE_COMPILER_VERSION = 5;
 /// What a texture compiles with when neither it nor the target sets a value.
 constexpr auto FALLBACK_MAX_SIZE = texture_importer_meta::texture_size::size_2048;
 constexpr auto FALLBACK_COMPRESSION = texture_importer_meta::compression_quality::normal_quality;
@@ -64,6 +64,7 @@ auto get_astc_formats(texture_importer_meta::compression_quality quality) -> std
             return {bgfx::TextureFormat::ASTC6x6, bgfx::TextureFormat::ASTC5x5, bgfx::TextureFormat::ASTC4x4};
     }
 }
+} // namespace
 
 auto get_family_name(texture_compression_family family) -> const char*
 {
@@ -78,7 +79,6 @@ auto get_family_name(texture_compression_family family) -> const char*
             return "bc";
     }
 }
-} // namespace
 
 auto resolve_texture_parameters(const texture_importer_meta& importer, const texture_target& target) -> texture_compile_parameters
 {

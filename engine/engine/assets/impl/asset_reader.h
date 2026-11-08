@@ -71,6 +71,16 @@ auto load_from_file<T>(tpp::thread_pool& pool, asset_handle<T>& output, const st
 
 DECLARE_LOADER_SPEC(gfx::shader);
 DECLARE_LOADER_SPEC(gfx::texture);
+
+/**
+ * @brief load_from_file for a texture whose import settings call it a normal map or not (`is_normal_map`), which
+ * decides how an ASTC one is read (gfx::get_normal_map_channels).
+ */
+auto load_texture_from_file(tpp::thread_pool& pool,
+                            asset_handle<gfx::texture>& output,
+                            const std::string& key,
+                            load_mode mode,
+                            bool is_normal_map) -> bool;
 DECLARE_LOADER_SPEC(material);
 DECLARE_LOADER_SPEC(mesh);
 DECLARE_LOADER_SPEC(animation_clip);

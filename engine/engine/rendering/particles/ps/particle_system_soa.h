@@ -8,6 +8,7 @@
 #include "particle_types.h"
 #include <bgfx/bgfx.h>
 #include <engine/rendering/pipeline/pre_exposure.h>
+#include <graphics/format.h>
 #include <context/context.hpp>
 #include <math/bbox.h>
 #include <math/math.h>
@@ -276,10 +277,10 @@ struct render_batch
     particle_primitive primitive = particle_primitive::quad;
     /// Lit batches draw with the lit programs and bind_lighting before each draw.
     particle_lighting lighting = particle_lighting::unlit;
-    /// Surface-lit batches: the normal map their pixels light with (invalid: a sphere's normal), and whether its
-    /// format stores x and y only (z is rebuilt).
+    /// Surface-lit batches: the normal map their pixels light with (invalid: a sphere's normal), and where it keeps
+    /// its vector.
     bgfx::TextureHandle normal_texture = BGFX_INVALID_HANDLE;
-    bool is_normal_texture_two_channel = false;
+    gfx::normal_map_channels normal_channels = gfx::normal_map_channels::xyz;
 };
 
 /// The reactive target's blend (the second render target) under BGFX_STATE_BLEND_INDEPENDENT, as bgfx::setState's

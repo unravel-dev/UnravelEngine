@@ -23,8 +23,10 @@
  *   - every .eshader the engine and the editor ship compiles on every renderer of this platform, and no two of a file's
  *     variants are the same binary on all of them: a define that changes nothing is what a mistyped one looks like;
  *   - every engine shader compiles to WGSL within the limits every WebGPU device grants (invocations per workgroup
- *     and along each axis, storage textures per stage), but the global illumination's, which the browser player never
- *     runs; a compute shader whose workgroup size the check cannot read fails it;
+ *     and along each axis, storage textures per stage); the global illumination's, which runs only on devices with
+ *     texture-formats-tier2, within the workgroup limits and the storage textures its feature requirements declare,
+ *     which devices with fewer storage textures a stage turn it off by; a compute shader whose workgroup size the
+ *     check cannot read fails it;
  *   - every language check in the engine's shaders that names SPIR-V names WGSL too: the WebGPU shaders are compiled
  *     with BGFX_SHADER_LANGUAGE_WGSL in place of BGFX_SHADER_LANGUAGE_SPIRV, through the same HLSL path.
  * Everything lives in a temp folder and the tests' app protocol.
@@ -41,6 +43,7 @@
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/meta/rendering/shader_variants.hpp>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/render_feature_support.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <graphics/graphics.h>
@@ -75,9 +78,10 @@ constexpr int TEXCOORD_ATTRIBUTE_COUNT = 16;
 constexpr unsigned long WEBGPU_MAX_WORKGROUP_INVOCATIONS = 256;
 constexpr std::array<unsigned long, 3> WEBGPU_MAX_WORKGROUP_SIZE = {256, 256, 64};
 constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
-/// The engine's shaders the browser player never runs: global illumination reads and writes RG11B10F storage
-/// textures, which core WebGPU does not allow and only some devices offer, so web profiles turn it off.
-constexpr const char* WEBGPU_EXEMPT_FOLDER = "gi";
+/// The engine's shaders that run only on WebGPU devices beyond the core limits: global illumination needs
+/// texture-formats-tier2 and binds more storage textures a stage than core WebGPU grants. Its workgroups are held to
+/// the core limits; its storage textures to what its feature requirements declare.
+constexpr const char* WEBGPU_TIER_FOLDER = "gi";
 /// bgfx's own shader headers among the engine's, which spell their language checks bgfx's way.
 constexpr std::array<const char*, 2> BGFX_SHADER_HEADERS = {"bgfx_shader.sh", "bgfx_compute.sh"};
 
@@ -669,11 +673,23 @@ void test_failed_loads_are_retried(unravel::asset_manager& am)
     check(!named.begin() && named.get_revision() == 0u, "a shader that failed to load is not refused for a variant it does not have yet");
 }
 
-/// What of WebGPU's core limits a variant's WGSL exceeds, as a sentence part; empty when it fits.
-auto find_webgpu_limit_problems(const unravel::compiled_shader_variant& variant) -> std::string
+/// The storage textures a variant's WGSL declares.
+auto count_storage_textures(const std::string& wgsl) -> std::size_t
+{
+    static const std::regex storage_texture(R"(var\s+(\w+)\s*:\s*texture_storage_)");
+    std::set<std::string> storage_textures;
+    for(std::sregex_iterator it(wgsl.begin(), wgsl.end(), storage_texture), end; it != end; ++it)
+    {
+        storage_textures.insert((*it)[1].str());
+    }
+    return storage_textures.size();
+}
+
+/// What of WebGPU's core limits a variant's WGSL exceeds, as a sentence part; empty when it fits. A shader of
+/// WEBGPU_TIER_FOLDER is held to the workgroup limits only.
+auto find_webgpu_limit_problems(const unravel::compiled_shader_variant& variant, bool is_tier_shader) -> std::string
 {
     static const std::regex workgroup_size(R"(@workgroup_size\((\d+)[iu]?,\s*(\d+)[iu]?,\s*(\d+)[iu]?\))");
-    static const std::regex storage_texture(R"(var\s+(\w+)\s*:\s*texture_storage_)");
     const std::string wgsl = as_string(variant);
     std::string problems;
     std::smatch size;
@@ -698,14 +714,10 @@ auto find_webgpu_limit_problems(const unravel::compiled_shader_variant& variant)
     {
         problems += "a workgroup size this check cannot read ";
     }
-    std::set<std::string> storage_textures;
-    for(std::sregex_iterator it(wgsl.begin(), wgsl.end(), storage_texture), end; it != end; ++it)
+    const auto storage_textures = count_storage_textures(wgsl);
+    if(!is_tier_shader && storage_textures > WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE)
     {
-        storage_textures.insert((*it)[1].str());
-    }
-    if(storage_textures.size() > WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE)
-    {
-        problems += std::to_string(storage_textures.size()) + " storage textures";
+        problems += std::to_string(storage_textures) + " storage textures";
     }
     return problems;
 }
@@ -716,26 +728,40 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
     const fs::path shaders = fs::path(ENGINE_DATA_DIR) / "data/shaders";
     const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::WebGPU);
     std::size_t variant_count = 0;
+    std::size_t tier_storage_textures = 0;
     fs::error_code ec;
     for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
     {
         const auto relative = entry.path().lexically_relative(shaders);
-        if(entry.path().extension() != ex::get_format<gfx::shader>() || *relative.begin() == WEBGPU_EXEMPT_FOLDER)
+        if(entry.path().extension() != ex::get_format<gfx::shader>())
         {
             continue;
         }
+        const bool is_tier_shader = *relative.begin() == WEBGPU_TIER_FOLDER;
         const auto name = relative.generic_string();
         const auto compiled = compile_variants(am, entry.path().string(), root / "webgpu", renderer);
         check(!compiled.empty(), name + " compiles to WGSL");
         for(const auto& variant : compiled)
         {
-            const auto problems = find_webgpu_limit_problems(variant);
+            const auto problems = find_webgpu_limit_problems(variant, is_tier_shader);
             check(problems.empty(), name + " variant " + variant.name + " exceeds WebGPU's core limits: " + problems);
+            if(is_tier_shader)
+            {
+                tier_storage_textures = std::max(tier_storage_textures, count_storage_textures(as_string(variant)));
+            }
             ++variant_count;
         }
     }
-    std::printf("  %zu WGSL variants\n", variant_count);
+    std::printf("  %zu WGSL variants; global illumination binds up to %zu storage textures a stage\n",
+                variant_count,
+                tier_storage_textures);
     check(variant_count > 0, "the engine's shaders are found");
+    const auto declared =
+        unravel::get_render_feature_requirements(unravel::render_feature::global_illumination).storage_textures_per_stage;
+    check(tier_storage_textures > WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE && tier_storage_textures <= declared,
+          "global illumination's shaders bind at most the storage textures its feature requirements declare (" +
+              std::to_string(tier_storage_textures) + " of " + std::to_string(declared) +
+              "), so devices with fewer turn it off");
 }
 
 /// The #if and #elif conditions of a shader source, a line continued with a backslash joined to the next.

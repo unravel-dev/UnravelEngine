@@ -34,6 +34,8 @@ constexpr render_target_need GI_TARGETS[] = {{bgfx::TextureFormat::RGBA8},
                                              {bgfx::TextureFormat::RGBA16F},
                                              {bgfx::TextureFormat::D32F}};
 constexpr const char* GI_SHADERS[] = {"gi/"};
+/// The most storage images one GI shader binds, above WebGPU's core 4.
+constexpr std::uint8_t GI_STORAGE_TEXTURES_PER_STAGE = 8;
 
 constexpr image_need GI_PAGE_FEEDBACK_IMAGES[] = {{bgfx::TextureFormat::RG32U}};
 constexpr render_feature GI_PAGE_FEEDBACK_DEPENDS[] = {render_feature::global_illumination};
@@ -90,7 +92,9 @@ constexpr render_target_need CLOUD_SHADOW_TARGETS[] = {{bgfx::TextureFormat::R8,
 constexpr const char* PARTICLE_SHADERS[] = {"particles/"};
 constexpr render_feature PARTICLES_INDIRECT_DEPENDS[] = {render_feature::gpu_particles};
 
-constexpr render_target_need SOFT_SHADOW_TARGETS[] = {{bgfx::TextureFormat::RG32F}, {bgfx::TextureFormat::R32F}};
+/// Variance (RG32F) and exponential (R32F) shadow maps are blurred and sampled filtered.
+constexpr render_target_need SOFT_SHADOW_TARGETS[] = {{.format = bgfx::TextureFormat::RG32F, .needs_filtering = true},
+                                                      {.format = bgfx::TextureFormat::R32F, .needs_filtering = true}};
 
 constexpr render_target_need UI_MSAA_TARGETS[] = {{bgfx::TextureFormat::RGBA8, UI_LAYER_MSAA_SAMPLES},
                                                   {bgfx::TextureFormat::D24S8, UI_LAYER_MSAA_SAMPLES}};
@@ -110,6 +114,7 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
      .needs_compute = true,
      .needs_dispatch_indirect = true,
      .compute_bindings = ALL_COMPUTE_BINDINGS,
+     .storage_textures_per_stage = GI_STORAGE_TEXTURES_PER_STAGE,
      .images = GI_IMAGES,
      .render_targets = GI_TARGETS,
      .shader_prefixes = GI_SHADERS},
@@ -298,6 +303,10 @@ auto find_missing_render_target(const gfx::device_caps& caps, const render_featu
         {
             return "This GPU cannot build the mips of " + get_texture_format_name(target.format) + " render targets.";
         }
+        if(target.needs_filtering && !caps.can_filter(target.format))
+        {
+            return "This GPU cannot filter " + get_texture_format_name(target.format) + " textures.";
+        }
     }
     return {};
 }
@@ -329,6 +338,12 @@ auto find_missing_capability(const gfx::device_caps& caps, const render_feature_
         return "This GPU binds " + std::to_string(caps.max_compute_bindings) +
                " resources per compute dispatch, and this feature needs " + std::to_string(needs.compute_bindings) +
                ".";
+    }
+    if(needs.storage_textures_per_stage > caps.max_storage_textures_per_stage)
+    {
+        return "This GPU binds " + std::to_string(caps.max_storage_textures_per_stage) +
+               " storage images per shader stage, and this feature needs " +
+               std::to_string(needs.storage_textures_per_stage) + ".";
     }
     std::string missing = find_missing_image(caps, needs);
     if(missing.empty())

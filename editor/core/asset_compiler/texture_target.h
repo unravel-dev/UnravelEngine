@@ -26,6 +26,9 @@ enum class texture_compression_family : std::uint8_t
 
 using texture_import_defaults = settings::asset_settings::texture_importer_settings;
 
+/// The family's name, as manifests, texture set packs and the web page call it: "bc", "astc" or "etc2".
+auto get_family_name(texture_compression_family family) -> const char*;
+
 /// What a texture is compiled for: the platform whose per-platform quality applies, the formats its GPUs
 /// read, and the defaults a texture left on Project Default takes.
 struct texture_target
