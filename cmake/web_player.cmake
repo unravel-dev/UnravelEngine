@@ -9,9 +9,10 @@
 # UNRAVEL_WEB_PLAYER: AUTO builds the template when the tools are found and says why not otherwise, ON fails the
 # configure when a tool or the script bridge is missing, OFF skips it.
 # UNRAVEL_WEB_DOTNET: the dotnet of a .NET SDK with the wasm-tools workload (dotnet workload install wasm-tools);
-# empty: the dotnet the build found.
+# empty: the one in .dotnet-web in the home folder (install_web_tools.sh or .ps1) when it is there, else the dotnet
+# the build found.
 # UNRAVEL_WEB_PYTHON, UNRAVEL_WEB_NODE: the Python (3.10 or newer) and the Node.js Emscripten runs on; empty: the
-# workload's (Windows), else the ones on the PATH.
+# workload's, else the ones on the PATH.
 # UNRAVEL_WEB_PLAYER_JOBS: the sub-build's parallel jobs.
 # The workload's tools are taken for the .NET major below, a release before its previews.
 
@@ -19,7 +20,7 @@ set(UNRAVEL_WEB_PLAYER "AUTO" CACHE STRING
     "Build the browser player template beside the editor: AUTO (when a .NET SDK with wasm-tools is found), ON or OFF.")
 set_property(CACHE UNRAVEL_WEB_PLAYER PROPERTY STRINGS AUTO ON OFF)
 set(UNRAVEL_WEB_DOTNET "" CACHE FILEPATH
-    "The dotnet of a .NET SDK with the wasm-tools workload for the browser player; empty: the build's dotnet.")
+    "The dotnet of a .NET SDK with the wasm-tools workload for the browser player; empty: ~/.dotnet-web's, else the build's.")
 set(UNRAVEL_WEB_PLAYER_JOBS "3" CACHE STRING
     "Parallel jobs of the browser player sub-build (unity builds need about 3 GB per job).")
 set(UNRAVEL_WEB_PYTHON "" CACHE FILEPATH
@@ -29,6 +30,12 @@ set(UNRAVEL_WEB_NODE "" CACHE FILEPATH
 
 # The .NET the browser player runs on (game/web/UnravelWebPlayer.csproj).
 set(UNRAVEL_WEB_DOTNET_MAJOR "11")
+# Where install_web_tools.sh and install_web_tools.ps1 put that SDK.
+if(WIN32)
+    file(TO_CMAKE_PATH "$ENV{USERPROFILE}/.dotnet-web/dotnet.exe" UNRAVEL_WEB_DOTNET_DEFAULT)
+else()
+    set(UNRAVEL_WEB_DOTNET_DEFAULT "$ENV{HOME}/.dotnet-web/dotnet")
+endif()
 # The oldest Python the Emscripten of that .NET's wasm-tools workload runs on (emcc.py checks it).
 set(UNRAVEL_WEB_PYTHON_MIN "3.10")
 
@@ -78,6 +85,9 @@ function(unravel_check_web_player_tools)
         return()
     endif()
     set(dotnet "${UNRAVEL_WEB_DOTNET}")
+    if(NOT dotnet AND EXISTS "${UNRAVEL_WEB_DOTNET_DEFAULT}")
+        set(dotnet "${UNRAVEL_WEB_DOTNET_DEFAULT}")
+    endif()
     if(NOT dotnet)
         set(dotnet "${DOTNET_EXECUTABLE}")
     endif()
@@ -105,7 +115,7 @@ function(unravel_check_web_player_tools)
         return()
     endif()
     get_filename_component(tools "${emscripten}" DIRECTORY)
-    # The workload brings Node.js and Python on Windows only; elsewhere Emscripten runs on the system's.
+    # The workload brings Node.js everywhere and Python on Windows and macOS; on Linux Emscripten runs on the system's.
     unravel_find_web_tool(node "${UNRAVEL_WEB_NODE}"
                           "${emscripten_packs}.*.Node.*/${major}.*/tools/bin/node${CMAKE_EXECUTABLE_SUFFIX}" node)
     unravel_find_web_tool(python "${UNRAVEL_WEB_PYTHON}"

@@ -29,6 +29,8 @@ if [ ! -x "$ANDROID_CLI" ]; then
     echo "$CMDLINE_TOOLS_SHA256  $zip" | sha256sum -c -
     unzip -q "$zip" -d "$download_dir"
     mkdir -p "$SDK_DIR/cmdline-tools"
+    # Command-line tools already there are older than the android CLI; this build replaces them.
+    rm -rf "$SDK_DIR/cmdline-tools/latest"
     mv "$download_dir/cmdline-tools" "$SDK_DIR/cmdline-tools/latest"
     rm -rf "$download_dir"
 fi
