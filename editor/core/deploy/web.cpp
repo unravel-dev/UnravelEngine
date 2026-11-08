@@ -1,6 +1,7 @@
 #include "web.h"
 #include "files.h"
 
+#include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/file_fingerprint.h>
 #include <logging/logging.h>
 #include <string_utils/utils.h>
@@ -149,6 +150,34 @@ auto get_runtime_size(const fs::path& site) -> std::uintmax_t
     return size;
 }
 
+/// The texture set among `sets` whose pack `file` is (ex::get_texture_pack_file_name); empty for any other file.
+auto get_texture_set_of(const fs::path& file, const std::vector<std::string>& sets) -> std::string
+{
+    const auto name = fs::to_utf8_string(file.filename());
+    const auto found = std::find_if(sets.begin(),
+                                    sets.end(),
+                                    [&name](const std::string& set)
+                                    {
+                                        return name == ex::get_texture_pack_file_name(set);
+                                    });
+    return found != sets.end() ? *found : std::string();
+}
+
+/// The manifest's line listing `sets`, the one computers read first; empty without sets.
+auto make_texture_sets_json(const std::vector<std::string>& sets) -> std::string
+{
+    if(sets.empty())
+    {
+        return {};
+    }
+    std::string listed;
+    for(const auto& set : sets)
+    {
+        listed += (listed.empty() ? "" : ", ") + to_json_string(set);
+    }
+    return fmt::format("  \"texture_sets\": [{}],\n", listed);
+}
+
 /// A letter, digit or hyphen: what the labels of a tunnel's host name are made of.
 auto is_host_character(char character) -> bool
 {
@@ -203,16 +232,19 @@ auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> 
     std::string files_json;
     for(const auto& data : list_data_files(site))
     {
-        files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}, \"size\": {}}}",
+        const auto set = get_texture_set_of(data.file, page.texture_sets);
+        files_json += fmt::format("{}{{\"path\": {}, \"hash\": {}, \"size\": {}{}}}",
                                   files_json.empty() ? "\n    " : ",\n    ",
                                   to_json_string(data.site_path),
                                   to_json_string(read_fingerprint(data.file)),
-                                  read_size(data.file));
+                                  read_size(data.file),
+                                  set.empty() ? std::string() : ", \"texture_set\": " + to_json_string(set));
     }
-    return fmt::format("{{\n  \"title\": {},\n  \"user_folder\": {},\n  \"runtime_size\": {},\n  \"files\": [{}\n  ]\n}}\n",
+    return fmt::format("{{\n  \"title\": {},\n  \"user_folder\": {},\n  \"runtime_size\": {},\n{}  \"files\": [{}\n  ]\n}}\n",
                        to_json_string(page.title),
                        to_json_string(page.user_folder),
                        get_runtime_size(site),
+                       make_texture_sets_json(page.texture_sets),
                        files_json);
 }
 

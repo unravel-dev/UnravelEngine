@@ -25,6 +25,13 @@ auto get_profile_cache_folder(const fs::path& project_root, const std::string& p
 /// The folder of a profile's variants of a protocol's compiled files: cache/profiles/<profile>/<protocol>.
 auto get_profile_variants_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path;
 
+/// The folder of a web profile's second texture set of a protocol, compressed for the set `set` (one of
+/// ex::TEXTURE_SET_NAMES): cache/profiles/<profile>/textures_<set>/<protocol>.
+auto get_profile_texture_set_folder(const fs::path& project_root,
+                                    const std::string& profile,
+                                    const std::string& set,
+                                    const std::string& protocol) -> fs::path;
+
 /// The folder of a profile's cooked shaders of a protocol: cache/profiles/<profile>/shaders/<protocol>.
 auto get_profile_shaders_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path;
 

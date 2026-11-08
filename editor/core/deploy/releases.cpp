@@ -266,6 +266,11 @@ void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level
     }
 }
 
+void write_pack_file(const fs::path& pack_file, const std::vector<fs::pack_input>& inputs)
+{
+    write_pack_or_throw(pack_file, inputs, {});
+}
+
 void write_full_pack(const fs::path& protocol_root, const std::vector<fs::pack_input>& inputs)
 {
     write_pack_or_throw(protocol_root / ex::get_pack_file_name(), inputs, {});

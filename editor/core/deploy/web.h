@@ -64,6 +64,9 @@ struct web_page_info
     std::string title;
     /// Where the player keeps the game's own files (get_web_user_folder).
     std::string user_folder;
+    /// The texture sets the build ships in packs of their own (ex::get_texture_pack_file_name), the one computers read
+    /// first; empty when its textures ship in the protocols' packs.
+    std::vector<std::string> texture_sets;
 };
 
 /**
@@ -72,8 +75,10 @@ struct web_page_info
  * the loading bar against the data's), and every file under its data/ folder, as the page fetches it
  * ("data/engine/content.pak"), with a fingerprint of its content and its size, in name order. The page writes each
  * one to that path in the player's file system, which the engine reads as its own folder, and keeps it in the
- * browser's cache under its fingerprint, so a later visit fetches only the files a new deploy changed. Throws when a
- * file cannot be listed or read.
+ * browser's cache under its fingerprint, so a later visit fetches only the files a new deploy changed. With texture
+ * sets, the manifest lists them (texture_sets) and names the set of each set's pack (texture_set): the page downloads
+ * the packs of the first set the browser's GPU reads, the first set's when it reads none. Throws when a file cannot be
+ * listed or read.
  */
 auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> std::string;
 

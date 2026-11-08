@@ -61,6 +61,10 @@ auto move_releases_into_profile(const fs::path& project_root, const std::string&
 /// not made for.
 void remove_patch_packs(const fs::path& protocol_root, std::uint32_t first_level);
 
+/// A pack at `pack_file` holding `inputs`, its entries reused from the pack it replaces; a failed write leaves that
+/// pack as it was. Throws on failure.
+void write_pack_file(const fs::path& pack_file, const std::vector<fs::pack_input>& inputs);
+
 /// A full pack: protocol_root/content.pak, and no patch over it. Entries are reused from the pack it
 /// replaces; a failed write leaves that pack as it was. Throws on failure.
 void write_full_pack(const fs::path& protocol_root, const std::vector<fs::pack_input>& inputs);

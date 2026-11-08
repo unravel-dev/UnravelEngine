@@ -17,6 +17,11 @@
 //
 // The loading screen (index.html) shows the game's title from the manifest and a bar that the downloads move by
 // their bytes: the runtime's, weighed by the manifest's runtime_size, then the game's files by their sizes.
+//
+// A deploy with several texture sets lists them in the manifest (texture_sets, the one computers read first) and
+// names each set's packs (texture_set): the page downloads the packs of the first set the device's GPU reads (it lists
+// the set's feature and creates a texture of its format), the first set's when it reads none, and the engine mounts
+// them over the game's packs.
 import { dotnet } from './_framework/dotnet.js';
 
 /// What the page shows when the browser draws WebGPU on the processor (such as SwiftShader).
@@ -44,6 +49,25 @@ const FALLBACK_RUNTIME_SIZE = 40 * 1024 * 1024;
 const BYTES_PER_MEGABYTE = 1024 * 1024;
 /// How long the loading screen takes to fade out (index.html, .loader), with a frame to spare.
 const LOADER_FADE_MS = 650;
+/// The WebGPU feature a GPU reads each texture set's formats with, by the manifest's set names, and a format of the
+/// feature the page creates a texture of before it trusts it: a device can list a feature whose formats it refuses
+/// (Safari on an iPhone 15 Pro lists texture-compression-bc and fails every BC texture).
+const TEXTURE_SET_FEATURES = {
+  bc: { feature: 'texture-compression-bc', format: 'bc1-rgba-unorm' },
+  astc: { feature: 'texture-compression-astc', format: 'astc-4x4-unorm' },
+  etc2: { feature: 'texture-compression-etc2', format: 'etc2-rgb8unorm' },
+};
+/// The side of the texture the page tries a format with: one compression block.
+const TEXTURE_SET_TEST_SIDE = 4;
+/// The adapter information a device gets when the browser has none: the engine's WebGPU bindings read every field.
+const EMPTY_ADAPTER_INFO = {
+  vendor: '',
+  architecture: '',
+  device: '',
+  description: '',
+  subgroupMinSize: 0,
+  subgroupMaxSize: 0,
+};
 
 const loader = {
   root: document.getElementById('loader'),
@@ -185,6 +209,61 @@ function createDownloadProgress(manifest, downloadsEnd) {
   };
 }
 
+async function requestAdapter() {
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) {
+    throw new Error('The browser could not reach the graphics card through WebGPU. Turn on hardware acceleration in '
+      + 'the browser settings, then try again.');
+  }
+  return adapter;
+}
+
+/// A device of `adapter` with every limit it offers and every feature but `excludedFeatures`.
+async function requestDeviceFrom(adapter, excludedFeatures) {
+  const requiredLimits = {};
+  for (const key in adapter.limits) {
+    requiredLimits[key] = adapter.limits[key];
+  }
+  const requiredFeatures = [...adapter.features].filter((feature) => !excludedFeatures.includes(feature));
+  const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
+  // The engine's WebGPU bindings read the device's adapterInfo, which Safari's devices lack: they get the adapter's.
+  if (!device.adapterInfo) {
+    Object.defineProperty(device, 'adapterInfo', { value: adapter.info ?? EMPTY_ADAPTER_INFO, configurable: true });
+  }
+  return device;
+}
+
+/// Whether `device` creates a texture of `format`; a creation that throws counts as refused.
+async function canCreateTexture(device, format) {
+  device.pushErrorScope('validation');
+  let texture = null;
+  try {
+    texture = device.createTexture({
+      size: [TEXTURE_SET_TEST_SIDE, TEXTURE_SET_TEST_SIDE],
+      format,
+      usage: GPUTextureUsage.TEXTURE_BINDING,
+    });
+  } catch {
+    texture = null;
+  }
+  const error = await device.popErrorScope();
+  texture?.destroy();
+  return texture !== null && !error;
+}
+
+/// The compression features `device` lists whose formats it refuses to create textures of.
+async function findRefusedCompressionFeatures(device) {
+  const refused = [];
+  for (const { feature, format } of Object.values(TEXTURE_SET_FEATURES)) {
+    if (device.features.has(feature) && !(await canCreateTexture(device, format))) {
+      refused.push(feature);
+    }
+  }
+  return refused;
+}
+
+/// The page's WebGPU device. A compression feature the device lists but refuses textures of is left out of a second
+/// device, so the engine decodes those formats when they load instead of failing every texture of them.
 async function createDevice() {
   if (!globalThis.isSecureContext) {
     throw new Error('The game needs a secure page: serve it over HTTPS, or open it from this computer.');
@@ -193,11 +272,7 @@ async function createDevice() {
     throw new Error('This browser has no WebGPU, which is required. Play the game in a browser that supports WebGPU '
       + 'and is up to date.');
   }
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) {
-    throw new Error('The browser could not reach the graphics card through WebGPU. Turn on hardware acceleration in '
-      + 'the browser settings, then try again.');
-  }
+  const adapter = await requestAdapter();
   const info = adapter.info ?? {};
   const isSoftware = Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter);
   const name = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' ');
@@ -205,13 +280,29 @@ async function createDevice() {
   if (isSoftware) {
     console.warn('[player] ' + SOFTWARE_ADAPTER_NOTICE);
   }
-  const requiredLimits = {};
-  for (const key in adapter.limits) {
-    requiredLimits[key] = adapter.limits[key];
+  let device = await requestDeviceFrom(adapter, []);
+  const refused = await findRefusedCompressionFeatures(device);
+  if (refused.length > 0) {
+    console.warn(`[player] The GPU lists ${refused.join(', ')} but refuses its textures: they are decoded when they load.`);
+    device.destroy();
+    device = await requestDeviceFrom(await requestAdapter(), refused);
   }
-  const requiredFeatures = [...adapter.features];
-  const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
   return { device, isSoftware };
+}
+
+/// The texture set the page downloads: the first of the manifest's sets whose feature the device has (createDevice
+/// leaves out the features it refuses), the first one when it has none (the engine decodes those textures when they
+/// load); null for a deploy with one set.
+function chooseTextureSet(sets, features) {
+  if (!sets || sets.length === 0) {
+    return null;
+  }
+  return sets.find((set) => features.has(TEXTURE_SET_FEATURES[set]?.feature)) ?? sets[0];
+}
+
+/// The manifest's files the page downloads: every file but the packs of the texture sets it did not choose.
+function selectDataFiles(files, textureSet) {
+  return files.filter((file) => !file.texture_set || file.texture_set === textureSet);
 }
 
 // Above the canvas, which takes the page once the engine starts.
@@ -422,9 +513,14 @@ async function start() {
     ? Math.min(MAX_ENGINE_SHARE, Math.max(MIN_ENGINE_SHARE, last.engine_ms / (last.engine_ms + last.downloads_ms)))
     : DEFAULT_ENGINE_SHARE;
   const downloadsEnd = 1 - engineShare;
-  const progress = createDownloadProgress(manifest, downloadsEnd);
   report('Starting the graphics');
   const { device, isSoftware } = await createDevice();
+  const textureSet = chooseTextureSet(manifest.texture_sets, device.features);
+  if (textureSet) {
+    console.log(`[player] textures: ${textureSet}`);
+  }
+  manifest.files = selectDataFiles(manifest.files, textureSet);
+  const progress = createDownloadProgress(manifest, downloadsEnd);
   setProgress(PROGRESS_DOWNLOADS_START);
   report('Loading the runtime');
   const runtimeCache = await openCache('runtime');

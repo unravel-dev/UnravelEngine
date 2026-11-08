@@ -1068,6 +1068,20 @@ void test_web_site(const fs::path& root)
               deployment::make_web_data_manifest(site, page).find("\"" + accented + "\", \"hash\": \"" + accented_hash) !=
                   std::string::npos,
           "a file named outside ASCII is listed in UTF-8 with its own fingerprint");
+    write_text(site / "data/app/content_astc.pak", "phone textures");
+    write_text(site / "data/app/content_bc.pak", "computer textures");
+    const deployment::web_page_info sets_page{"Game", "/libsdl/Game", {"bc", "astc"}};
+    const auto sets_manifest = deployment::make_web_data_manifest(site, sets_page);
+    check(sets_manifest.find("\"texture_sets\": [\"bc\", \"astc\"],") != std::string::npos &&
+              sets_manifest.find("content_astc.pak\", \"hash\": \"" +
+                                 fs::hash_file_fingerprint(site / "data/app/content_astc.pak", false) +
+                                 "\", \"size\": 14, \"texture_set\": \"astc\"}") != std::string::npos &&
+              sets_manifest.find("content_bc.pak\", \"hash\": \"" +
+                                 fs::hash_file_fingerprint(site / "data/app/content_bc.pak", false) +
+                                 "\", \"size\": 17, \"texture_set\": \"bc\"}") != std::string::npos,
+          "with texture sets the manifest lists them, the computers' first, and names each set's pack");
+    check(deployment::make_web_data_manifest(site, page).find("texture_set") == std::string::npos,
+          "a build with one set names none");
 }
 
 void test_web_addresses()
@@ -1743,6 +1757,54 @@ void test_packed_protocol(deployment::protocol_job& job)
     fs::unmount_packs();
 }
 
+/// Mounts the protocol's pack and, over it, the texture pack of `set`.
+auto mount_texture_set(const fs::path& protocol_root, const std::string& set) -> bool
+{
+    std::string error;
+    fs::unmount_packs();
+    const bool is_mounted = fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_pack_file_name(), error) &&
+                            fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_texture_pack_file_name(set), error);
+    check(is_mounted, "the protocol's pack and the " + set + " texture pack mount: " + error);
+    return is_mounted;
+}
+
+void test_texture_set_packs(const fs::path& root)
+{
+    std::printf("test_texture_set_packs\n");
+    auto job = make_protocol_job(root);
+    const auto astc = root / "cooked/textures_astc";
+    write_text(astc / "textures/wall.png.asset", "astc wall");
+    job.texture_sets = {{"bc", job.cooked}, {"astc", {astc}}};
+    deployment::deploy_protocol_data(job);
+    const auto& protocol_root = job.protocol_root;
+    fs::add_path_protocol(TEST_PROTOCOL, protocol_root);
+    if(mount_deployed(protocol_root, false))
+    {
+        check(!is_packed("compiled/textures/wall.png.asset") && read_packed_text("compiled/prefabs/a.pfb.asset") == "cooked prefab",
+              "with texture sets the protocol's pack holds every shipped asset but the textures");
+    }
+    if(mount_texture_set(protocol_root, "bc"))
+    {
+        check(read_packed_text("compiled/textures/wall.png.asset") == "wall", "the first set's pack holds its textures");
+    }
+    if(mount_texture_set(protocol_root, "astc"))
+    {
+        check(read_packed_text("compiled/textures/wall.png.asset") == "astc wall" && !is_packed("compiled/textures/floor.png.asset"),
+              "the second set's pack holds its own variants and no left out texture");
+    }
+    fs::unmount_packs();
+    std::string error;
+    check(fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_texture_pack_file_name("astc"), error) &&
+              !is_packed(ex::get_asset_index_file_name()) && !is_packed("compiled/prefabs/a.pfb.asset"),
+          "a texture pack holds textures only, no index");
+    fs::unmount_packs();
+    job.texture_sets.clear();
+    deployment::deploy_protocol_data(job);
+    check(!is_present(protocol_root / ex::get_texture_pack_file_name("bc")) &&
+              !is_present(protocol_root / ex::get_texture_pack_file_name("astc")),
+          "a build with one set removes the texture packs an earlier build left");
+}
+
 void test_loose_protocol(deployment::protocol_job& job)
 {
     std::printf("test_loose_protocol\n");
@@ -2164,6 +2226,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_packed_protocol(job);
         test_loose_protocol(job);
         test_patch_over_release(job, temp / "protocol");
+        test_texture_set_packs(temp / "texture_sets");
         test_release_names();
         test_keep_and_remove_release(temp / "releases");
         test_debug_files(temp / "debug_files");

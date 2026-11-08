@@ -29,7 +29,8 @@
  *   - sRGB textures: a texture tagged sRGB never compiles to a format without an sRGB view (one and two
  *     channel formats), for any format family and uncompressed;
  *   - the engine's texture plan: the profile's formats with the defaults every project shares;
- *   - texture variants, compiled with texturec: ASTC, ETC2 and BC formats (blocks that keep a texture's size),
+ *   - texture variants, compiled with texturec: ASTC, ETC2 and BC formats (blocks that keep a texture's size; a normal map
+ *     takes two channels: BC5, EAC RG11, or ASTC with X in red and Y in alpha),
  *     a variant reused while current, compiled again in place when a setting changes (never a second
  *     file), stray and unneeded files swept, a texture the profile compiles as the editor does shipping the
  *     editor's file once it is current and a variant until then, left-out textures kept;
@@ -56,12 +57,14 @@
 #include <deploy/releases.h>
 #include <deploy/shader_cook.h>
 #include <deploy/texture_variants.h>
+#include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/audio/audio_clip.h>
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <filesystem/filesystem.h>
+#include <graphics/format.h>
 #include <graphics/utils/bgfx_utils.h>
 #include <serialization/document_paths.h>
 #include <serialization/sparse_document.h>
@@ -692,6 +695,7 @@ auto is_texture_srgb(const fs::path& file) -> bool
 }
 
 /// The format and width of a compiled texture as the engine reads it; Count when it cannot be read.
+
 auto read_texture_format(const fs::path& file, std::uint32_t& width) -> bimg::TextureFormat::Enum
 {
     const auto bytes = read_text(file);
@@ -880,6 +884,73 @@ void test_engine_texture_plan(const fs::path& root)
     check(plan.variants == deployment::get_profile_variants_folder(root, "Phone", "engine"), "into the profile's engine folder");
     check(plan.shipped == std::vector<std::string>{keys[0]} && plan.left_out == std::vector<std::string>{keys[1]},
           "its shipped and left out textures, and no other asset");
+}
+
+void test_normal_map_variants(rtti::context& ctx, const fs::path& root)
+{
+    std::printf("test_normal_map_variants\n");
+    if(!is_present(fs::resolve_protocol(std::string("binary:/texturec") + fs::executable_extension())))
+    {
+        check(false, "texturec is beside the tests: the normal map variants need it");
+        return;
+    }
+    cook_fixture fixture;
+    fixture.project = root;
+    const auto app_root = fs::resolve_protocol("app:/");
+    fs::error_code ec;
+    fs::remove_all(app_root / TEXTURE_FOLDER, ec);
+    write_texture(app_root / TEXTURE_FOLDER / "bumps.png", FLOOR_SIDE);
+    const auto key = std::string("app:/") + TEXTURE_FOLDER + "/bumps.png";
+    fixture.keys.push_back(key);
+    unravel::asset_database::meta entry;
+    entry.location = key;
+    entry.meta.uid = hpp::uuid::from_string("40000000-0000-4000-8000-000000000003").value();
+    fixture.database.emplace(entry.meta.uid, entry);
+    unravel::asset_meta meta;
+    meta.uid = entry.meta.uid;
+    meta.type = ".png";
+    auto importer = std::make_shared<texture_importer_meta>();
+    importer->type = texture_importer_meta::texture_type::normal_map;
+    meta.importer = importer;
+    unravel::save_to_file((app_root / TEXTURE_FOLDER / "bumps.png.meta").string(), meta);
+    fixture.params.profile = "Phone";
+    fixture.params.deploy_target = unravel::deploy_platform::android;
+    fixture.runtime.assets.texture.default_compression = texture_importer_meta::compression_quality::normal_quality;
+    fixture.editor_target.defaults = fixture.runtime.assets.texture;
+    const auto bumps = deployment::get_profile_variants_folder(root, "Phone", "app") / "profile_tests" / "bumps.png.asset";
+    struct family_case
+    {
+        unravel::deploy_texture_compression compression;
+        bimg::TextureFormat::Enum format;
+        gfx::normal_map_channels channels;
+        const char* what;
+    };
+    const family_case cases[] = {
+        {unravel::deploy_texture_compression::astc, bimg::TextureFormat::ASTC4x4, gfx::normal_map_channels::x_red_y_alpha,
+         "ASTC: the block that keeps its size, read as X in red and Y in alpha"},
+        {unravel::deploy_texture_compression::etc2, bimg::TextureFormat::EACRG11, gfx::normal_map_channels::xy,
+         "ETC2: two-channel EAC RG11"},
+        {unravel::deploy_texture_compression::bc, bimg::TextureFormat::BC5, gfx::normal_map_channels::xy, "BC: two-channel BC5"},
+    };
+    for(const auto& entry_case : cases)
+    {
+        fixture.params.android.texture_compression = entry_case.compression;
+        const auto report = deployment::cook_texture_variants(fixture.make_plan());
+        std::uint32_t width = 0;
+        const auto format = read_texture_format(bumps, width);
+        check(report.failed.empty() && format == entry_case.format &&
+                  gfx::get_normal_map_channels(bgfx::TextureFormat::Enum(format), true) == entry_case.channels,
+              std::string("a normal map compiles to two channels the runtime reads by its import settings. ") +
+                  entry_case.what);
+    }
+    check(gfx::get_normal_map_channels(bgfx::TextureFormat::ASTC4x4, false) == gfx::normal_map_channels::xyz &&
+              gfx::get_normal_map_channels(bgfx::TextureFormat::RGBA8, true) == gfx::normal_map_channels::xyz,
+          "an ASTC texture not imported as a normal map, and an uncompressed normal map, read X, Y and Z");
+    auto& am = ctx.get_cached<unravel::asset_manager>();
+    am.add_asset_info_for_path(app_root / TEXTURE_FOLDER / "bumps.png", meta, true);
+    check(am.is_normal_map_texture(key), "the asset index tells the texture loader a normal map is one");
+    am.remove_asset_info_for_key(key);
+    check(!am.is_normal_map_texture(key), "and an unknown texture is none");
 }
 
 void test_texture_variants(const fs::path& root)
@@ -1277,13 +1348,20 @@ void test_web_profile(const fs::path& root)
     deploy_settings deploy_base;
     auto web = deployment::make_profile("Web", target_platform::web, base);
     check(web.web.texture_compression == unravel::deploy_texture_compression::bc, "a web profile cooks BC textures by default");
+    using compression = unravel::deploy_texture_compression;
+    check(deployment::get_web_texture_sets(web.web) == std::vector<compression>{compression::bc, compression::astc},
+          "and an ASTC set for the phones that read no BC");
     web.web.texture_compression = unravel::deploy_texture_compression::astc;
+    check(deployment::get_web_texture_sets(web.web) == std::vector<compression>{compression::astc},
+          "a phone format the same as the texture format ships one set");
+    web.web.phone_texture_compression = unravel::deploy_texture_compression::etc2;
     check(deployment::save_profile(root, web).is_ok(), "a web profile saves");
     const auto list = deployment::load_profiles(root, base, deploy_base);
     check(list.warnings.empty() && list.profiles.size() == 1 && list.profiles.front().platform == target_platform::web &&
               list.profiles.front().settings.is_overridden("graphics/limits/global_illumination"),
           "and loads as a web profile with its starting values");
-    check(list.profiles.size() == 1 && list.profiles.front().web.texture_compression == unravel::deploy_texture_compression::astc,
+    check(list.profiles.size() == 1 && list.profiles.front().web.texture_compression == unravel::deploy_texture_compression::astc &&
+              list.profiles.front().web.phone_texture_compression == unravel::deploy_texture_compression::etc2,
           "with its texture formats");
     deploy_settings params;
     params.deploy_target = target_platform::web;
@@ -1293,7 +1371,7 @@ void test_web_profile(const fs::path& root)
           "a web deploy cooks its textures to the profile's formats");
 }
 
-auto run_settings_profiles_suite(rtti::context&) -> int
+auto run_settings_profiles_suite(rtti::context& ctx) -> int
 {
     g_checks = 0;
     g_failures = 0;
@@ -1313,6 +1391,7 @@ auto run_settings_profiles_suite(rtti::context&) -> int
         test_srgb_textures(temp / "srgb");
         test_engine_texture_plan(temp / "engine_texture_plan");
         test_texture_variants(temp / "variants");
+        test_normal_map_variants(ctx, temp / "normal_variants");
         test_audio_variants(temp / "audio_variants");
         test_audio_cook_other_sources(temp / "audio_sources");
         test_shader_cook(temp / "shaders");

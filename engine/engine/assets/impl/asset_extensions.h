@@ -3,6 +3,7 @@
 #include <engine/engine_export.h>
 #include <filesystem/filesystem.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <string>
 #include <hpp/string_view.hpp>
@@ -572,6 +573,17 @@ inline auto get_asset_index_file_name() -> std::string
 inline auto get_patch_pack_file_name(std::uint32_t level) -> std::string
 {
     return "content_p" + std::to_string(level) + ".pak";
+}
+
+/// The names of the texture sets a web build can ship, one per block-compression family a browser's GPU may read.
+inline constexpr std::array<const char*, 3> TEXTURE_SET_NAMES = {"bc", "astc", "etc2"};
+
+/// The pack beside a protocol's pack that holds a web build's textures compressed for the set `set` (one of
+/// TEXTURE_SET_NAMES): "content_astc.pak". A web build with several sets ships its textures only in these; the page
+/// downloads the set the browser's GPU reads, and the game mounts that pack over the protocol's pack.
+inline auto get_texture_pack_file_name(const std::string& set) -> std::string
+{
+    return "content_" + set + ".pak";
 }
 
 /// The image beside a deployed game's executable that the game shows as its window's icon, where the executable

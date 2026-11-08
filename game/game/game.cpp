@@ -111,8 +111,24 @@ auto mount_bundled_packs(const std::string& protocol, const fs::path& root) -> b
     return true;
 }
 
-/// Mounts the protocol's pack when the deploy wrote one, then its patches in level order. A deploy
-/// without packs ships loose files.
+/// Mounts a web build's texture pack (ex::get_texture_pack_file_name) over the protocol's pack: of the build's texture
+/// sets, the page downloaded only the one the browser's GPU reads.
+auto mount_texture_set_pack(const std::string& protocol, const fs::path& root) -> bool
+{
+    fs::error_code ec;
+    for(const auto* set : ex::TEXTURE_SET_NAMES)
+    {
+        const auto pack = root / ex::get_texture_pack_file_name(set);
+        if(fs::exists(pack, ec))
+        {
+            return mount_pack_file(protocol, pack);
+        }
+    }
+    return true;
+}
+
+/// Mounts the protocol's pack when the deploy wrote one, then its patches in level order, then a web build's texture
+/// pack. A deploy without packs ships loose files.
 auto mount_asset_packs(const std::string& protocol) -> bool
 {
     const auto root = fs::resolve_protocol(protocol + ":/");
@@ -136,7 +152,7 @@ auto mount_asset_packs(const std::string& protocol) -> bool
             return false;
         }
     }
-    return true;
+    return mount_texture_set_pack(protocol, root);
 }
 } // namespace
 

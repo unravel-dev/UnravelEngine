@@ -12,11 +12,6 @@ namespace
 {
 constexpr cook_wording TEXTURE_WORDING{"texture(s)", "texture variant(s)", "texture cache"};
 
-auto is_texture_key(const std::string& key) -> bool
-{
-    return ex::is_format<gfx::texture>(fs::path(key).extension().generic_string());
-}
-
 /// What a texture compiles with for the profile and for the editor, from one read of its importer settings.
 struct texture_parameters_pair
 {
@@ -100,6 +95,36 @@ auto get_profile_texture_target(const deploy_settings& params, const settings& r
         target.family = get_compression_family(params.web.texture_compression);
     }
     return target;
+}
+
+auto is_texture_key(const std::string& key) -> bool
+{
+    return ex::is_format<gfx::texture>(fs::path(key).extension().generic_string());
+}
+
+auto get_texture_set_name(deploy_texture_compression compression) -> std::string
+{
+    return asset_compiler::get_family_name(get_compression_family(compression));
+}
+
+auto get_web_texture_sets(const web_deploy_settings& web) -> std::vector<deploy_texture_compression>
+{
+    if(web.phone_texture_compression == web.texture_compression)
+    {
+        return {web.texture_compression};
+    }
+    return {web.texture_compression, web.phone_texture_compression};
+}
+
+auto make_texture_set_cook_plan(const texture_cook_plan& plan,
+                                const fs::path& project_root,
+                                const std::string& protocol,
+                                deploy_texture_compression compression) -> texture_cook_plan
+{
+    texture_cook_plan set = plan;
+    set.target.family = get_compression_family(compression);
+    set.variants = get_profile_texture_set_folder(project_root, plan.profile, get_texture_set_name(compression), protocol);
+    return set;
 }
 
 auto make_texture_cook_plan(const fs::path& project_root,

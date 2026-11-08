@@ -119,6 +119,10 @@ struct web_deploy_settings
     /// BC for the browsers of computers, ASTC for phones and tablets; a browser that reads neither decodes the
     /// textures at load.
     deploy_texture_compression texture_compression{deploy_texture_compression::bc};
+    /// A second set of the textures for browsers whose GPU does not read texture_compression's formats, ASTC for the
+    /// phones and tablets that read no BC. A packed build ships each set in a pack of its own and the page downloads
+    /// one; the same format as texture_compression ships one set.
+    deploy_texture_compression phone_texture_compression{deploy_texture_compression::astc};
 };
 
 /// The open project's folder, which a relative deploy location lies in.

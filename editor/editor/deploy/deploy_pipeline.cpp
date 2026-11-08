@@ -94,6 +94,9 @@ struct deploy_plan
     /// The project's textures and the engine's, each cooked to the profile's formats.
     texture_cook_plan textures;
     texture_cook_plan engine_textures;
+    /// Packed web deploys with a phone texture format of their own: the project's and the engine's textures cooked
+    /// to it, a second set the page downloads where the browser's GPU does not read the first.
+    std::vector<texture_cook_plan> texture_set_cooks;
     /// The project's audio clips the profile compiles differently from the editor.
     audio_cook_plan audio;
     shader_cook_plan shaders;
@@ -255,6 +258,30 @@ auto make_version_info(const settings::app_settings& app, const fs::path& execut
     return info;
 }
 
+/// A packed web deploy whose phone texture format differs from its texture format ships both sets: the protocols'
+/// packs hold no texture, and each set's pack holds them as the set compiles them.
+void add_texture_sets(deploy_plan& plan)
+{
+    const auto sets = get_web_texture_sets(plan.params.web);
+    if(!is_web(plan) || !plan.params.deploy_packed_assets || sets.size() < 2)
+    {
+        return;
+    }
+    const auto second = sets.back();
+    plan.texture_set_cooks.push_back(make_texture_set_cook_plan(plan.textures, get_project_root(), CONTENT_PROTOCOL, second));
+    plan.texture_set_cooks.push_back(make_texture_set_cook_plan(plan.engine_textures, get_project_root(), ENGINE_PROTOCOL, second));
+    const auto first_name = get_texture_set_name(sets.front());
+    const auto second_name = get_texture_set_name(second);
+    APPLOG_INFO("Deploy: profile {} ships two texture sets, {} for the browsers of computers and {} for the phones and "
+                "tablets that cannot read it; the page downloads one.",
+                plan.params.profile,
+                first_name,
+                second_name);
+    plan.app.texture_sets = {{first_name, {plan.textures.variants}}, {second_name, {plan.texture_set_cooks[0].variants}}};
+    plan.engine.texture_sets = {{first_name, {plan.engine_textures.variants}},
+                                {second_name, {plan.texture_set_cooks[1].variants}}};
+}
+
 auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path& staging, std::unordered_set<std::string> left_out)
     -> deploy_plan
 {
@@ -314,6 +341,7 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
                                     ENGINE_PROTOCOL,
                                     {staging / ENGINE_PROTOCOL, plan.engine_textures.variants, engine_shaders},
                                     std::move(left_out));
+    add_texture_sets(plan);
     // The browser player carries its .NET runtime and the script bridge.
     if(!is_web(plan))
     {
@@ -460,7 +488,13 @@ void deploy_web_site(const deploy_plan& plan)
         copy_web_player(plan.web_player, plan.output);
     }
     const auto& app = plan.runtime_settings.app;
-    write_web_data_manifest(plan.output, {plan.version_info.product_name, get_web_user_folder(app.company, app.product)});
+    std::vector<std::string> texture_sets;
+    for(const auto& set : plan.app.texture_sets)
+    {
+        texture_sets.push_back(set.name);
+    }
+    write_web_data_manifest(plan.output,
+                            {plan.version_info.product_name, get_web_user_folder(app.company, app.product), texture_sets});
 }
 
 auto schedule_step(threader& th, const deploy_step& step) -> tpp::shared_future<void>
@@ -662,6 +696,10 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
                                               {
                                                   cook_textures(plan->textures);
                                                   cook_textures(plan->engine_textures);
+                                                  for(const auto& set : plan->texture_set_cooks)
+                                                  {
+                                                      cook_textures(set);
+                                                  }
                                               }});
     const auto audio_cook = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
     deploy_jobs engine_cooks{{STEP_COOK_TEXTURES, textures_cook}};

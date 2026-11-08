@@ -13,6 +13,7 @@ namespace
 constexpr const char* PROFILE_CACHES_FOLDER = "profiles";
 constexpr const char* SHADERS_FOLDER = "shaders";
 constexpr const char* AUDIO_FOLDER = "audio";
+constexpr const char* TEXTURE_SET_FOLDER_PREFIX = "textures_";
 
 auto get_profile_caches_folder(const fs::path& project_root) -> fs::path
 {
@@ -55,6 +56,14 @@ auto get_profile_cache_folder(const fs::path& project_root, const std::string& p
 auto get_profile_variants_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path
 {
     return get_profile_cache_folder(project_root, profile) / protocol;
+}
+
+auto get_profile_texture_set_folder(const fs::path& project_root,
+                                    const std::string& profile,
+                                    const std::string& set,
+                                    const std::string& protocol) -> fs::path
+{
+    return get_profile_cache_folder(project_root, profile) / (TEXTURE_SET_FOLDER_PREFIX + set) / protocol;
 }
 
 auto get_profile_shaders_folder(const fs::path& project_root, const std::string& profile, const std::string& protocol) -> fs::path

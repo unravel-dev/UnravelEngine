@@ -427,20 +427,33 @@ REFLECT(web_deploy_settings)
             entt::attribute{"tooltip",
                             "The formats the game's textures are compressed to in the browser.\n\n"
                             "BC (Desktop): the formats the editor compiles for this computer, which the\n"
-                            "browsers of computers read. Most phones and tablets do not, and decode the\n"
-                            "textures when they load, into four to eight times the memory.\n"
+                            "browsers of computers read. Most phones and tablets do not, and load the\n"
+                            "Phone Texture Format's set instead.\n"
                             "ASTC: the better image for its size, which phones, tablets and Apple's\n"
                             "computers read. Other computers decode the textures when they load, into\n"
                             "four times the memory.\n"
                             "ETC2: read by Android phones, at a lower quality.\n\n"
                             "The deploy compresses the project's textures and the engine's for this\n"
                             "profile and keeps them in the project's cache/profiles folder."},
+        })
+        .data<&web_deploy_settings::phone_texture_compression>("phone_texture_compression"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "phone_texture_compression"},
+            entt::attribute{"pretty_name", "Phone Texture Format"},
+            entt::attribute{"tooltip",
+                            "A second set of the game's textures, for browsers whose graphics card does\n"
+                            "not read the Texture Format's. ASTC suits the phones and tablets that read no\n"
+                            "BC; every browser with WebGPU reads BC, or both ASTC and ETC2.\n\n"
+                            "A packed build puts each set in a pack of its own, and the page downloads\n"
+                            "only the set the graphics card reads. The same format as the Texture Format\n"
+                            "ships one set, which a browser that cannot read it decodes when it loads."},
         });
 }
 
 SAVE(web_deploy_settings)
 {
     try_save(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
+    try_save(ar, ser20::make_nvp("phone_texture_compression", obj.phone_texture_compression));
 }
 SAVE_INSTANTIATE(web_deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(web_deploy_settings, ser20::oarchive_binary_t);
@@ -448,6 +461,7 @@ SAVE_INSTANTIATE(web_deploy_settings, ser20::oarchive_binary_t);
 LOAD(web_deploy_settings)
 {
     try_load(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
+    try_load(ar, ser20::make_nvp("phone_texture_compression", obj.phone_texture_compression));
 }
 LOAD_INSTANTIATE(web_deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(web_deploy_settings, ser20::iarchive_binary_t);

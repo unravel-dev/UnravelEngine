@@ -22,6 +22,17 @@ namespace unravel::deployment
 /// defaults.
 auto get_profile_texture_target(const deploy_settings& params, const settings& runtime_settings) -> asset_compiler::texture_target;
 
+/// Whether the asset at `key` ("app:/data/...") is a texture.
+auto is_texture_key(const std::string& key) -> bool;
+
+/// The name a texture set's pack, cache folder and page call the set compressed to `compression` by: one of
+/// ex::TEXTURE_SET_NAMES.
+auto get_texture_set_name(deploy_texture_compression compression) -> std::string;
+
+/// The texture sets a web profile ships, the one computers read first: its texture format, and its phone texture
+/// format when that differs.
+auto get_web_texture_sets(const web_deploy_settings& web) -> std::vector<deploy_texture_compression>;
+
 /// What cooking a profile's textures reads, resolved before it runs.
 struct texture_cook_plan
 {
@@ -55,6 +66,15 @@ auto make_texture_cook_plan(const fs::path& project_root,
                             const asset_database::database_t& database,
                             const std::unordered_set<std::string>& left_out,
                             const asset_compiler::texture_target& editor_target) -> texture_cook_plan;
+
+/**
+ * @brief The plan of a web profile's second texture set: `plan`'s textures compressed to `compression`, cooked into
+ * the set's own folder (get_profile_texture_set_folder).
+ */
+auto make_texture_set_cook_plan(const texture_cook_plan& plan,
+                                const fs::path& project_root,
+                                const std::string& protocol,
+                                deploy_texture_compression compression) -> texture_cook_plan;
 
 /**
  * @brief Brings the profile's variants in step with the project: every shipped texture the profile
