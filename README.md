@@ -24,7 +24,8 @@ with gameplay scripted in C# on CoreCLR. It is in active development and not pro
 - **Rendering** - physically based deferred renderer with real-time global illumination,
   reflection probes, SSR, GTAO / ASSAO, SSIL, TAA, FXAA, bloom, auto exposure, tonemapping,
   render scale, physical sky and clouds, and spatial post-process volumes.
-- **Graphics APIs** - Direct3D 11, Direct3D 12, Vulkan, OpenGL and Metal through bgfx.
+- **Graphics APIs** - Direct3D 11, Direct3D 12, Vulkan, OpenGL and Metal through bgfx, and WebGPU in
+  the browser.
 - **Scripting** - C# on CoreCLR with hot reload; scripts open in Visual Studio Code.
 - **Animation** - animation controllers, blend spaces, humanoid retargeting and IK.
 - **Physics** - Box3D or Bullet backends.
@@ -32,8 +33,8 @@ with gameplay scripted in C# on CoreCLR. It is in active development and not pro
   space, and 3D audio (miniaudio).
 - **Editor** - scene editing, prefabs with overrides, asset browser and import pipeline,
   undo / redo, play mode and a profiler.
-- **Deploy** - one-click deploy for the desktop the editor runs on and for Android, with
-  per-platform settings profiles.
+- **Deploy** - one-click deploy for the desktop the editor runs on, Android and the browser, uploads
+  to Steam, and per-platform settings profiles.
 - **AI tooling** - a local MCP server that lets AI assistants drive the editor.
 
 Supported formats: models through Assimp (FBX, glTF / GLB, OBJ, DAE and more), textures (PNG,
@@ -73,34 +74,95 @@ JPG, TGA, DDS, KTX, HDR) and audio (WAV, MP3, OGG Vorbis, FLAC).
 Requirements: 64-bit Windows 10 / 11 or Linux (Ubuntu 20.04 or newer), and a GPU with
 Direct3D 11, Vulkan or OpenGL support.
 
+## Platforms
+
+| Editor runs on | Deploys to |
+|---|---|
+| Windows 10 / 11 (x64) | Windows, Android, Web |
+| Linux x64 (Ubuntu 20.04 or newer) | Linux, Android, Web |
+
+A desktop deploy builds for the system the editor runs on: Windows builds come from the Windows
+editor and Linux builds from the Linux editor. Android and web deploys work from both. The editor
+packages carry the Android and browser players, so deploying needs neither the Android NDK nor
+Emscripten. The editor also builds from source on macOS, but there is no macOS package.
+
+| Deploy | Output | Needs on this computer |
+|---|---|---|
+| Desktop | The player with the game's data beside it | Nothing more |
+| Android | An `.apk` for arm64 phones with Android 10 or newer (Vulkan) | The Android SDK platform tools and a JDK, see [Android](#android) |
+| Web | A folder for any static web host (WebGPU) | Nothing more; `cloudflared` for a public test link, see [Browser](#browser) |
+| Steam | A desktop build uploaded to a Steamworks depot | SteamCMD, see [Steam](#steam) |
+
 ## Building from source
 
-Prerequisites:
+The editor and the desktop player need the tools in the first row. The Android and browser players
+are optional: configure builds each one when it finds its tools and prints `Android player: on` or
+`Web player: on`, or names what is missing. A source-built editor deploys to Android or the web only
+when it built that player.
 
-- Git, CMake 3.21 or newer, and Ninja
-- A C++20 compiler: MSVC 2022 or Clang on Windows, GCC 12+ or Clang 15+ on Linux, Xcode 16 on macOS
-- The .NET SDK (9 or newer) on `PATH`
-- On Linux, the development packages:
+| To build | Windows | Linux |
+|---|---|---|
+| Editor and desktop player | Git, CMake 3.21 or newer, Ninja, Visual Studio 2022 (17.5 or newer) or 2026 with **Desktop development with C++**, and the .NET SDK 10 (`install_dotnet.ps1`) | Git, CMake 3.21 or newer, Ninja, GCC 12+ or Clang 15+, the packages below, and the .NET SDK 10 (`install_dotnet.sh`) |
+| Android player | Android Studio with NDK 30.0.16248370, or `install_android_studio.ps1`, see [Android](#android) | `install_android_studio.sh`, see [Android](#android) |
+| Browser player | `install_web_tools.ps1`, see [Browser](#browser) | `install_web_tools.sh` and Python 3.10 or newer, see [Browser](#browser) |
 
-  ```bash
-  sudo apt install cmake ninja-build libglew-dev libgtk-3-dev libasound2-dev libjack-dev libudev-dev
-  ```
+The setup scripts are in the repository root. Run the `.sh` ones as your own user with
+`bash <script>.sh` (they ask for `sudo` themselves), and the `.ps1` ones with
+`powershell -ExecutionPolicy Bypass -File <script>.ps1`, which allows the script for that run only.
+The editor also builds with the .NET SDK 9; the Android player needs 10. Ubuntu 20.04's CMake is
+3.16: take a newer one from [CMake's releases](https://github.com/Kitware/CMake/releases).
 
-  On Ubuntu 22.04 and newer, add `libpipewire-0.3-dev`.
+**Windows**
 
-Build:
+Run the commands from an **x64 Native Tools Command Prompt** of Visual Studio, which puts the MSVC
+headers and libraries on the path:
 
-```bash
+```bat
 git clone --recursive https://github.com/unravel-dev/UnravelEngine.git
 cd UnravelEngine
+powershell -ExecutionPolicy Bypass -File install_dotnet.ps1
 cmake -B build/Release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/Release
 ```
 
-The editor, the player and their data end up in `build/Release/bin`. On Windows, run the
-commands from an x64 Developer Command Prompt for Visual Studio 2022.
+When `install_dotnet.ps1` installs .NET, open a new prompt before `cmake`, so it finds `dotnet`.
+That builds with MSVC. The release packages build with clang against the same MSVC libraries: install
+[LLVM](https://github.com/llvm/llvm-project/releases) and configure with
+`cmake --preset windows-x64-clang-msvc-gnu -B build/Release -DCMAKE_BUILD_TYPE=Release` instead.
+
+**Linux**
+
+Install a compiler (for example `sudo apt install g++-12` on Ubuntu 22.04), the development
+packages and the .NET SDK, then build:
+
+```bash
+sudo apt install git cmake ninja-build pkg-config curl unzip python3 \
+  libglew-dev libgtk-3-dev libasound2-dev libjack-dev libudev-dev libdbus-1-dev zlib1g-dev \
+  libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxcursor-dev \
+  libxinerama-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+  libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dev libglu1-mesa-dev libpipewire-0.3-dev
+git clone --recursive https://github.com/unravel-dev/UnravelEngine.git
+cd UnravelEngine
+bash install_dotnet.sh
+source ~/.profile
+cmake -B build/Release -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/Release
+```
+
+On Ubuntu 20.04, install `libpipewire-0.2-dev` instead of `libpipewire-0.3-dev`. Run
+`install_dotnet.sh` as your own user, not with `sudo`: it installs .NET 10 into `~/.dotnet` and asks
+for `sudo` itself.
+
+**macOS**
+
+CI builds the editor with Xcode 16 and the `macos-*` presets; there is no macOS package.
+
+**Output and tests**
+
+The editor, the player and their data end up in `build/Release/bin`. `build/Release/bin/unravel-tests`
+runs every test suite, and `--suite <text>` only the suites whose names contain the text.
 [CMakePresets.json](CMakePresets.json) holds the compiler presets the CI uses (for example
-`cmake --preset linux-gcc-13`).
+`cmake --preset linux-gcc-13`); they build into `develop/build/<preset>`.
 
 ## Android
 
@@ -117,6 +179,16 @@ build trees (such as Ninja) and needs Ninja installed.
 2. For source builds, open **SDK Manager > SDK Tools**, check **Show Package Details** and
    install **NDK (Side by side) 30.0.16248370**.
 3. Configure the build again.
+
+Without Android Studio, or to skip the SDK Manager, run the setup script from the repository instead:
+
+```bat
+powershell -ExecutionPolicy Bypass -File install_android_studio.ps1
+```
+
+It installs the SDK command-line tools, the platform tools and the NDK into
+`%LOCALAPPDATA%\Android\Sdk` (or `ANDROID_HOME`), the folder Android Studio uses. When it finds no
+JDK, neither `JAVA_HOME` nor Android Studio's, it installs JDK 17 with winget and sets `JAVA_HOME`.
 
 **Linux**
 
@@ -160,6 +232,41 @@ On macOS run `brew install cloudflared`; elsewhere download it from its
 `PATH` and, on Windows, where its installer puts it; **Editor Settings > External Tools** can name
 another one. Quick tunnels are for testing; for players, upload the folder to a web host.
 
+**Building the browser player from source**
+
+The browser player compiles with the Emscripten of the .NET 11 SDK's `wasm-tools` workload and links
+the .NET 11 browser runtime. That SDK goes into `.dotnet-web` in your home folder, beside the .NET the
+rest of the build uses, in the version [release.yml](.github/workflows/release.yml) pins as
+`WEB_DOTNET_SDK_VERSION`; configure takes it from there. The setup script installs both, on Linux:
+
+```bash
+bash install_web_tools.sh
+```
+
+and on Windows:
+
+```bat
+powershell -ExecutionPolicy Bypass -File install_web_tools.ps1
+```
+
+On Linux it also installs Ninja and Python from apt. `--cloudflared` (`-Cloudflared` on Windows)
+also installs `cloudflared` for the public link, or updates it. Then configure again, and it reports
+`Web player: on`. An SDK with the workload in another folder works too: name its `dotnet` with
+`-DUNRAVEL_WEB_DOTNET`. The workload brings Node.js, and on Windows and macOS Python as well. On
+Linux, Emscripten runs on the `python3` on the `PATH`, which must be 3.10 or newer; Ubuntu 20.04 has
+3.8, so name a newer one with `-DUNRAVEL_WEB_PYTHON`. Like the Android player, the browser player
+builds only in single-configuration build trees (such as Ninja).
+
+## Steam
+
+A desktop profile can upload its build to Steam with Valve's
+[SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD). Set the profile's Steam app id, depot,
+account and branch in the Deploy window, deploy the profile, then use **Upload to Steam**. The editor
+runs the `steamcmd` on `PATH`, or the one **Editor Settings > External Tools** names, and logs in with
+the login SteamCMD keeps for that account, so no password is stored: log the account in once in a
+terminal with `steamcmd +login <account>`. An upload sets the build live only on the profile's branch;
+Steam allows setting the default branch live only on the Steamworks website.
+
 ## Editor MCP server
 
 While the editor runs, it serves MCP (JSON-RPC over HTTP) at `http://127.0.0.1:27182/mcp`,
@@ -171,6 +278,8 @@ bound to localhost only. **Windows > MCP Server** shows its status, the endpoint
   `dotnet --info` lists an SDK, not only a runtime.
 - **Submodule errors** - run `git submodule update --init --recursive`.
 - **`Android player: off`** - the configure message names the missing tool (NDK, `dotnet` or Ninja).
+- **`Web player: off`** - the configure message names what is missing: the .NET 11 SDK, its
+  `wasm-tools` workload, Python 3.10 or Ninja.
 
 ## Contributing
 
@@ -187,7 +296,6 @@ Please keep pull requests focused and follow the style of the surrounding code.
 [Assimp](https://github.com/assimp/assimp),
 [Box3D](https://github.com/erincatto/box3d),
 [Bullet](https://github.com/bulletphysics/bullet3),
-[OpenAL Soft](https://github.com/kcat/openal-soft),
 [miniaudio](https://github.com/mackron/miniaudio),
 [FreeType](https://freetype.org),
 [GLM](https://github.com/g-truc/glm),
