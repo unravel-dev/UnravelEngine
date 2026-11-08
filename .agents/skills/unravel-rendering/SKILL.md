@@ -209,9 +209,8 @@ Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_f
 - A new compute pass: list its storage images and binding count in the table (the "render feature shaders"
   suite reads the committed compiled shaders and fails otherwise), check `is_available` where it is enabled,
   keep image stages below 8 (OpenGL) and every stage below 8 if it must run on D3D11 feature level 11_0.
-- bgfx gates indirect dispatch on `BGFX_CAPS_DISPATCH_INDIRECT`, added by
-  `deps/3rdparty/bgfx/patches/0003-dispatch-indirect-capability.patch` (Vulkan reports draw indirect only with
-  multi-draw).
+- Indirect dispatch needs compute only: bgfx checks `BGFX_CAPS_COMPUTE` for it (not `BGFX_CAPS_DRAW_INDIRECT`,
+  which Vulkan reports only with multi-draw), and `device_caps::has_dispatch_indirect` follows `has_compute`.
 - The editor shows unavailable features under the Allowed Features rows, on the components that ask for them
   (`COMPONENT_RENDER_FEATURE_ATTRIBUTE`) and in the profiler's GPU Resources; MCP `editor_get_status` has a
   `graphics` block.

@@ -556,7 +556,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     init_data.swapChain.formatColor = bgfx::TextureFormat::RGBA8;
 #elif UNRAVEL_PLATFORM_EMSCRIPTEN
     // The browser renders through WebGPU, on the device the page created before the engine started: bgfx cannot
-    // wait for an adapter or a device itself there (deps/3rdparty/bgfx/patches/0003).
+    // wait for an adapter or a device itself there without JSPI or Asyncify.
     init_data.type = bgfx::RendererType::WebGPU;
     init_data.fallback = false;
     init_data.platformData.context = emscripten_webgpu_get_device();

@@ -8,7 +8,7 @@ texture whatever range the binding names.
 diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
 --- a/src/renderer_webgpu.cpp
 +++ b/src/renderer_webgpu.cpp
-@@ -4240,9 +4240,12 @@ WGPU_IMPORT
+@@ -4235,9 +4235,12 @@ WGPU_IMPORT
  								&& 0 != (resolvedFlags & BGFX_SAMPLER_SAMPLE_STENCIL)
  								;
  

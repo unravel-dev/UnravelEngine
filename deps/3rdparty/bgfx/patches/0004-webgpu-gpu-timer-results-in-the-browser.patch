@@ -1,0 +1,36 @@
+WebGPU: GPU timer results in the browser
+
+A device the page created reaches bgfx through emscripten_webgpu_get_device, which imports it into no instance:
+emdawnwebgpu queues the callbacks of its objects under the null instance. bgfx waits for the timer readback with
+an AllowProcessEvents callback and calls wgpuInstanceProcessEvents on the instance it created itself, so the
+callback never ran, the readback stayed pending, and no timer query was resolved again: every GPU time stayed 0.
+In the browser the callback is now spontaneous; the page has one thread, so it runs from the event loop, between
+frames.
+
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -6996,6 +6996,14 @@ WGPU_IMPORT
+ 		m_resolved   = false;
+ 		m_mapPending = true;
+ 
++		// In the browser a device the page created belongs to no instance: wgpuInstanceProcessEvents on bgfx's
++		// own instance never runs its callbacks. The page has one thread, so a spontaneous callback runs from the
++		// event loop, between frames.
++		const WGPUCallbackMode callbackMode = BX_ENABLED(BX_PLATFORM_EMSCRIPTEN)
++			? WGPUCallbackMode_AllowSpontaneous
++			: WGPUCallbackMode_AllowProcessEvents
++			;
++
+ 		WGPU_CHECK(wgpuBufferMapAsync(
+ 			  m_readback
+ 			, WGPUMapMode_Read
+@@ -7003,7 +7011,7 @@ WGPU_IMPORT
+ 			, size_t(getBufferSize() )
+ 			, {
+ 				.nextInChain = NULL,
+-				.mode        = WGPUCallbackMode_AllowProcessEvents,
++				.mode        = callbackMode,
+ 				.callback    = readTimestampResultsCb,
+ 				.userdata1   = this,
+ 				.userdata2   = NULL,

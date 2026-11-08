@@ -8,7 +8,7 @@ write-only: the cap has no per-format form.
 diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
 --- a/src/renderer_webgpu.cpp
 +++ b/src/renderer_webgpu.cpp
-@@ -1516,7 +1516,7 @@ WGPU_IMPORT
+@@ -1510,7 +1510,7 @@ WGPU_IMPORT
  							| BGFX_CAPS_BLEND_INDEPENDENT
  							| BGFX_CAPS_COMPUTE
  							| BGFX_CAPS_DRAW_INDIRECT

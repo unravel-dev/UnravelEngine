@@ -2,7 +2,7 @@
 // engine (game/web/Program.cs).
 //
 // The device is created here because bgfx cannot wait for it inside the engine without JSPI or Asyncify, which the
-// .NET runtime does not use (deps/3rdparty/bgfx/patches/0003). The game's files come from data_manifest.json, which a
+// .NET runtime does not use; the engine hands it to bgfx. The game's files come from data_manifest.json, which a
 // web deploy writes next to this page, into the module's file system at the paths the engine reads them from. The
 // engine's arguments come from the page's address, one per arg= (index.html?arg=--log-level&arg=trace).
 //
@@ -209,8 +209,7 @@ async function createDevice() {
   for (const key in adapter.limits) {
     requiredLimits[key] = adapter.limits[key];
   }
-  // Timestamps are left off in the browser (deps/3rdparty/bgfx/patches/0002).
-  const requiredFeatures = [...adapter.features].filter((feature) => feature !== 'timestamp-query');
+  const requiredFeatures = [...adapter.features];
   const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
   return { device, isSoftware };
 }
