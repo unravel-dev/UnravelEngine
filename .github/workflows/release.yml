@@ -357,12 +357,45 @@ jobs:
             libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxcursor-dev \
             libxinerama-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
             libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dev libglu1-mesa-dev libdbus-1-dev zlib1g-dev
+      # GitHub's release pages answer 5xx at times, for minutes on end, while its REST API keeps serving the same
+      # assets. download_release_asset.sh <owner/repository> <tag> <asset> <file> tries the release page, then the
+      # API, with GH_TOKEN when it is set (without a token the API allows 60 requests an hour). curl waits 1 s
+      # before its first retry and doubles the wait each time, so 7 retries span about two minutes. The helper is
+      # written here, not kept in the repository: steps before the checkout use it, and an older commit to build
+      # would not carry it. Save-ReleaseAsset of .github/actions/windows-build-tools does the same on Windows.
+      - name: Write the release download helper
+        run: |
+          cat > "${RUNNER_TEMP}/download_release_asset.sh" << 'EOF'
+          set -euo pipefail
+          repository="$1"
+          tag="$2"
+          asset="$3"
+          file="$4"
+          if curl -fsSL --retry 3 -o "$file" "https://github.com/${repository}/releases/download/${tag}/${asset}"; then
+            exit 0
+          fi
+          echo "The release page did not serve ${asset}; downloading it through the REST API."
+          authorization=()
+          if [ -n "${GH_TOKEN:-}" ]; then
+            authorization=(-H "Authorization: Bearer ${GH_TOKEN}")
+          fi
+          release_url="https://api.github.com/repos/${repository}/releases/tags/${tag}"
+          select_asset='import json, sys; print(next((a["url"] for a in json.load(sys.stdin)["assets"] if a["name"] == sys.argv[1]), ""))'
+          asset_url="$(curl -fsSL --retry 7 "${authorization[@]}" "$release_url" | python3 -c "$select_asset" "$asset")"
+          if [ -z "$asset_url" ]; then
+            echo "Release ${tag} of ${repository} has no asset ${asset}." >&2
+            exit 1
+          fi
+          curl -fsSL --retry 7 "${authorization[@]}" -H 'Accept: application/octet-stream' -o "$file" "$asset_url"
+          EOF
       # The release's own CMake can be older than the presets need (3.21; Ubuntu 20.04 has 3.16).
       - name: Install CMake and Ninja
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL --retry 3 "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
-            | tar -xz --strip-components=1 -C /usr/local
-          curl -fsSL --retry 3 -o /tmp/ninja.zip "https://github.com/ninja-build/ninja/releases/download/v${NINJA_VERSION}/ninja-linux.zip"
+          bash "${RUNNER_TEMP}/download_release_asset.sh" Kitware/CMake "v${CMAKE_VERSION}" "cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" /tmp/cmake.tar.gz
+          tar -xzf /tmp/cmake.tar.gz --strip-components=1 -C /usr/local
+          bash "${RUNNER_TEMP}/download_release_asset.sh" ninja-build/ninja "v${NINJA_VERSION}" ninja-linux.zip /tmp/ninja.zip
           unzip -o /tmp/ninja.zip -d /usr/local/bin
           cmake --version
           ninja --version
@@ -400,10 +433,12 @@ jobs:
       # its own OpenSSL looks by default.
       - name: Install Python for Emscripten
         if: matrix.standalone_python && matrix.web_player == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           archive="cpython-${PYTHON_STANDALONE_VERSION}+${PYTHON_STANDALONE_RELEASE}-x86_64-unknown-linux-gnu-install_only.tar.gz"
-          curl -fsSL --retry 3 -o "/tmp/${archive}" "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE_RELEASE}/${archive}"
+          bash "${RUNNER_TEMP}/download_release_asset.sh" astral-sh/python-build-standalone "${PYTHON_STANDALONE_RELEASE}" "${archive}" "/tmp/${archive}"
           echo "${PYTHON_STANDALONE_SHA256}  /tmp/${archive}" | sha256sum -c -
           mkdir -p /opt/python-standalone
           tar -xzf "/tmp/${archive}" -C /opt/python-standalone --strip-components=1

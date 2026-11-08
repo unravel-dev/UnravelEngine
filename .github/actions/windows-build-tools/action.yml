@@ -26,25 +26,39 @@ runs:
         LLVM_VERSION: ${{ inputs.llvm-version }}
         CMAKE_VERSION: ${{ inputs.cmake-version }}
         NINJA_VERSION: ${{ inputs.ninja-version }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         $ErrorActionPreference = 'Stop'
         $tools = Join-Path $env:RUNNER_TEMP 'tools'
         New-Item -ItemType Directory -Force -Path $tools | Out-Null
-        function Save-Download([string] $url, [string] $file) {
-            curl.exe --fail --silent --show-error --location --retry 3 --output $file $url
-            if ($LASTEXITCODE -ne 0) { throw "Downloading $url failed." }
+        # GitHub's release pages answer 5xx at times, for minutes on end, while its REST API keeps serving the
+        # same assets: when the release page fails, the asset comes through the API, with GH_TOKEN when it is set
+        # (without a token the API allows 60 requests an hour). curl waits 1 s before its first retry and doubles
+        # the wait each time, so 7 retries span about two minutes. The Linux jobs of .github/workflows/release.yml
+        # write a download_release_asset.sh that does the same.
+        function Save-ReleaseAsset([string] $repository, [string] $tag, [string] $asset, [string] $file) {
+            curl.exe --fail --silent --show-error --location --retry 3 --output $file "https://github.com/$repository/releases/download/$tag/$asset"
+            if ($LASTEXITCODE -eq 0) { return }
+            Write-Host "The release page did not serve $asset; downloading it through the REST API."
+            $authorization = if ($env:GH_TOKEN) { @('--header', "Authorization: Bearer $env:GH_TOKEN") } else { @() }
+            $release = curl.exe --fail --silent --show-error --location --retry 7 @authorization "https://api.github.com/repos/$repository/releases/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Reading release $tag of $repository failed." }
+            $asset_url = (($release -join "`n" | ConvertFrom-Json).assets | Where-Object name -eq $asset).url
+            if (-not $asset_url) { throw "Release $tag of $repository has no asset $asset." }
+            curl.exe --fail --silent --show-error --location --retry 7 @authorization --header 'Accept: application/octet-stream' --output $file $asset_url
+            if ($LASTEXITCODE -ne 0) { throw "Downloading $asset of $repository $tag failed." }
         }
         # LLVM in a folder of its own: the runner's preinstalled LLVM is another version.
         $llvm = Join-Path $tools 'llvm'
-        Save-Download "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/LLVM-$env:LLVM_VERSION-win64.exe" "$tools\llvm-setup.exe"
+        Save-ReleaseAsset 'llvm/llvm-project' "llvmorg-$env:LLVM_VERSION" "LLVM-$env:LLVM_VERSION-win64.exe" "$tools\llvm-setup.exe"
         Start-Process -FilePath "$tools\llvm-setup.exe" -ArgumentList '/S', "/D=$llvm" -Wait
         $clang_version = & "$llvm\bin\clang++.exe" --version | Select-Object -First 1
         if ($clang_version -notmatch [regex]::Escape($env:LLVM_VERSION)) { throw "Expected clang $env:LLVM_VERSION, found: $clang_version" }
-        Save-Download "https://github.com/Kitware/CMake/releases/download/v$env:CMAKE_VERSION/cmake-$env:CMAKE_VERSION-windows-x86_64.zip" "$tools\cmake.zip"
+        Save-ReleaseAsset 'Kitware/CMake' "v$env:CMAKE_VERSION" "cmake-$env:CMAKE_VERSION-windows-x86_64.zip" "$tools\cmake.zip"
         Expand-Archive -Path "$tools\cmake.zip" -DestinationPath $tools
         $cmake = Join-Path $tools "cmake-$env:CMAKE_VERSION-windows-x86_64\bin"
         $ninja = Join-Path $tools 'ninja'
-        Save-Download "https://github.com/ninja-build/ninja/releases/download/v$env:NINJA_VERSION/ninja-win.zip" "$tools\ninja.zip"
+        Save-ReleaseAsset 'ninja-build/ninja' "v$env:NINJA_VERSION" 'ninja-win.zip' "$tools\ninja.zip"
         Expand-Archive -Path "$tools\ninja.zip" -DestinationPath $ninja
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
         $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
