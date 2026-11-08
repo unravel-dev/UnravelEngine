@@ -39,8 +39,14 @@
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
 #include <emscripten/em_js.h>
 
-// emdawnwebgpu's import of the WebGPU device the page created (Module.preinitializedWebGPUDevice).
-extern "C" void* emscripten_webgpu_get_device(void);
+// emdawnwebgpu's WebGPU library object: its importJsDevice turns a JS GPUDevice into a WGPUDevice.
+EM_JS_DEPS(unravel_webgpu, "$WebGPU");
+
+// The WebGPU device the page created (Module.preinitializedWebGPUDevice) as a WGPUDevice that holds one reference,
+// the caller's. It is imported without a parent instance: bgfx creates an instance of its own for it.
+EM_JS(void*, unravel_import_page_webgpu_device, (), {
+    return WebGPU.importJsDevice(Module.preinitializedWebGPUDevice);
+});
 
 // Counts a submitted frame until the page's device has finished everything submitted so far.
 EM_JS(void, unravel_count_gpu_frame, (), {
@@ -61,6 +67,14 @@ thread_local std::vector<uint32_t> s_bgfx_profiler_scope_stack;
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
 /// Submitted frames the GPU may still be drawing when the next one starts, in the browser.
 constexpr int MAX_GPU_FRAMES_IN_FLIGHT = 2;
+
+/// The page's WebGPU device, imported once: every bgfx start gets the same handle, and the engine keeps its
+/// reference for the page's lifetime, as the page keeps the device.
+auto get_page_webgpu_device() -> void*
+{
+    static void* const device = unravel_import_page_webgpu_device();
+    return device;
+}
 #endif
 }
 
@@ -559,7 +573,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // wait for an adapter or a device itself there without JSPI or Asyncify.
     init_data.type = bgfx::RendererType::WebGPU;
     init_data.fallback = false;
-    init_data.platformData.context = emscripten_webgpu_get_device();
+    init_data.platformData.context = get_page_webgpu_device();
 #endif
     std::string video_driver = os::window::get_current_video_driver();
     if(video_driver == "wayland")
