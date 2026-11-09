@@ -121,6 +121,7 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
     {.name = "GI reflection page feedback",
      .fallback = "GI reflections keep their default page resolution.",
      .needs_compute = true,
+     .needs_texture_read_back = true,
      .compute_bindings = 3,
      .images = GI_PAGE_FEEDBACK_IMAGES,
      .depends_on = GI_PAGE_FEEDBACK_DEPENDS,
@@ -221,6 +222,7 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
     {.name = "Temporal stability probe",
      .fallback = "The temporal stability measurement is not available.",
      .needs_compute = true,
+     .needs_texture_read_back = true,
      .compute_bindings = 9,
      .images = TEMPORAL_PROBE_IMAGES,
      .shader_prefixes = TEMPORAL_PROBE_SHADERS},
@@ -332,6 +334,10 @@ auto find_missing_capability(const gfx::device_caps& caps, const render_feature_
     if(needs.needs_vertex_storage_buffers && !caps.has_vertex_storage_buffers)
     {
         return "This GPU cannot read storage buffers in vertex shaders.";
+    }
+    if(needs.needs_texture_read_back && !caps.has_texture_read_back)
+    {
+        return "This device cannot read textures back from the GPU.";
     }
     if(needs.compute_bindings > caps.max_compute_bindings)
     {

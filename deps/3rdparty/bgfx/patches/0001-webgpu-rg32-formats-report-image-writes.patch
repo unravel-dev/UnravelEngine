@@ -1,0 +1,22 @@
+WebGPU: rg32 formats report image writes with core-features-and-limits
+
+getCaps gave RG32I, RG32U and RG32F no storage, so they never reported BGFX_CAPS_FORMAT_TEXTURE_IMAGE_WRITE, and
+an application that checks the cap before writing one of them from a compute shader turned that path off.
+WebGPU allows rg32uint, rg32sint and rg32float as write-only and read-only storage textures when the device has
+core-features-and-limits; only compatibility mode leaves them out. Read-write access stays with the r32 formats,
+so the rg32 formats report the write cap only.
+
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -704,8 +704,8 @@ namespace bgfx { namespace wgpu
+ 			case TextureFormat::R32U:      framebuffer = true;          multisample = true;          storage = true;           supported = true; break;
+ 			case TextureFormat::R32F:      framebuffer = true;          multisample = m_core;        storage = true;           supported = true; break;
+ 			case TextureFormat::RG32I:
+-			case TextureFormat::RG32U:     framebuffer = true;          multisample = m_core;        storage = false;          supported = true; break;
+-			case TextureFormat::RG32F:     framebuffer = true;          multisample = m_core;        storage = false;          supported = true; break;
++			case TextureFormat::RG32U:     framebuffer = true;          multisample = m_core;        storage = m_core;         supported = true; break;
++			case TextureFormat::RG32F:     framebuffer = true;          multisample = m_core;        storage = m_core;         supported = true; break;
+ 			case TextureFormat::RGBA32I:
+ 			case TextureFormat::RGBA32U:   framebuffer = true;          multisample = m_core;        storage = true;           supported = true; break;
+ 			case TextureFormat::RGBA32F:   framebuffer = true;          multisample = m_core;        storage = true;           supported = true; break;

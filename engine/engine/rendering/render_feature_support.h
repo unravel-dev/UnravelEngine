@@ -112,6 +112,8 @@ struct render_feature_requirements
     bool needs_dispatch_indirect{};
     bool needs_blend_independent{};
     bool needs_vertex_storage_buffers{};
+    /// Reads textures back to the CPU (bgfx::readTexture).
+    bool needs_texture_read_back{};
     /// The highest binding stage of the feature's compute shaders, plus one.
     std::uint8_t compute_bindings{};
     /// The most storage images one of the feature's shaders binds; 0 for a feature that fits WebGPU's core limit
