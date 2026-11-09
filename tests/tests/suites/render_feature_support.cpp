@@ -16,7 +16,10 @@
  *   - the engine compute shaders of a feature the device does not run are left empty (the longest shader prefix
  *     decides the feature), every other shader is created;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
- *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one;
+ *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one, and its particles
+ *     read their data from textures, culled and sorted on the CPU;
+ *   - where the particle storage buffers are unavailable (no compute, or no vertex storage buffers) the particle
+ *     programs draw with the data texture variants vs_particle.eshader lists;
  *   - a feature whose dependency is unavailable is unavailable, and says why;
  *   - the --gfx-disable names parse into the mask they describe;
  *   - every requirement entry has a name and a fallback sentence.
@@ -24,9 +27,14 @@
 
 #include "../tests.h"
 
+#include <asset_compiler/eshader_file.h>
+#include <engine/rendering/particles/ps/particle_data_texture.h>
 #include <engine/rendering/render_feature_support.h>
+#include <filesystem/filesystem.h>
 #include <graphics/device_caps.h>
+#include <graphics/shader.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 
@@ -142,7 +150,7 @@ void test_feature_level_11_0()
     check_available(support, render_feature::local_exposure, true, device);
     check_available(support, render_feature::irradiance_sh, true, device);
     check_available(support, render_feature::reflection_probe_prefilter, true, device);
-    check_available(support, render_feature::gpu_particles, true, device);
+    check_available(support, render_feature::particle_storage_buffers, true, device);
     check_available(support, render_feature::gpu_particles_indirect, true, device);
     const auto limits = support.get_device_limits();
     check(!limits.global_illumination && !limits.volumetric_fog, "feature level 11_0: GI and volumetric fog are off");
@@ -304,15 +312,68 @@ void test_no_compute()
 
 void test_no_vertex_storage_buffers()
 {
-    std::printf("a device without vertex storage buffers loses only the skinned mesh batching\n");
+    std::printf("a device without vertex storage buffers batches no skinned meshes and reads particles from textures\n");
     gfx::device_caps_mask mask;
     mask.drops_vertex_storage_buffers = true;
     const auto support = render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask));
     for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
     {
         const auto feature = static_cast<render_feature>(index);
-        check_available(support, feature, feature != render_feature::skinned_mesh_batching, "no vertex storage");
+        const bool needs_vertex_storage = feature == render_feature::skinned_mesh_batching ||
+                                          feature == render_feature::particle_storage_buffers ||
+                                          feature == render_feature::gpu_particles_indirect;
+        check_available(support, feature, !needs_vertex_storage, "no vertex storage");
     }
+    check(support.get_status(render_feature::gpu_particles_indirect).reason.rfind("It depends on Particle storage buffers.", 0) == 0,
+          "no vertex storage: the GPU particle culling names the storage buffers it depends on");
+}
+
+/// Whether vs_particle.eshader lists @p name as a variant that reads the particle data from textures.
+auto is_data_texture_variant(const asset_compiler::eshader_file& file, const std::string& name) -> bool
+{
+    return std::any_of(file.variants.begin(),
+                       file.variants.end(),
+                       [&](const asset_compiler::eshader_variant& variant)
+                       {
+                           return variant.name == name && std::find(variant.defines.begin(),
+                                                                    variant.defines.end(),
+                                                                    "PARTICLE_DATA_TEXTURES") != variant.defines.end();
+                       });
+}
+
+void check_particle_vertex_variants()
+{
+#if defined(ENGINE_DATA_DIR)
+    asset_compiler::eshader_file file;
+    std::string error;
+    const fs::path path = fs::path(ENGINE_DATA_DIR) / "data" / "shaders" / "particles" / "vs_particle.eshader";
+    check(asset_compiler::load_eshader_file(path, file, error), "vs_particle.eshader parses: " + error);
+    for(const std::string variant : {gfx::shader::DEFAULT_VARIANT, "lit", "velocity"})
+    {
+        const std::string texture_variant = ps_soa::get_particle_vertex_variant(variant);
+        check(is_data_texture_variant(file, texture_variant),
+              "the " + variant + " particle program draws with " + texture_variant + ", which reads data textures");
+    }
+#endif
+}
+
+void test_particle_data_textures()
+{
+    std::printf("particles read their data from textures where the storage buffer path is unavailable\n");
+    const render_feature_support saved = get_render_feature_support();
+    set_render_feature_support(render_feature_support::resolve(make_desktop_caps()));
+    check(!ps_soa::uses_data_textures(), "desktop: particles read storage buffers");
+    check(ps_soa::get_particle_vertex_variant("lit") == "lit", "desktop: the lit particle program keeps its variant");
+    gfx::device_caps_mask mask;
+    mask.drops_compute = true;
+    set_render_feature_support(render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask)));
+    check(ps_soa::uses_data_textures(), "no compute: particles read data textures");
+    mask = {};
+    mask.drops_vertex_storage_buffers = true;
+    set_render_feature_support(render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask)));
+    check(ps_soa::uses_data_textures(), "no vertex storage: particles read data textures");
+    check_particle_vertex_variants();
+    set_render_feature_support(saved);
 }
 
 void test_dependency_reason()
@@ -408,6 +469,7 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_shaders_of_unavailable_features();
     test_no_compute();
     test_no_vertex_storage_buffers();
+    test_particle_data_textures();
     test_dependency_reason();
     test_render_target_sample_counts();
     test_mask_parsing();

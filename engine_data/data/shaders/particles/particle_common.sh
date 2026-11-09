@@ -11,7 +11,9 @@
  *   1 s_particle_static   vec4  PARTICLE_STATIC_VEC4S per emitter (changes with the emitter's settings)
  *   2 s_particle_dynamic  uint  PARTICLE_DYNAMIC_UINTS per emitter (rewritten every frame)
  *   3 s_particle_luts     vec4  PARTICLE_LUT_ROWS x PARTICLE_LUT_SIZE per curve set
- * and binds the turbulence noise volume this file declares at stage 7 (s_particle_noise).
+ * and binds the turbulence noise volume this file declares at stage 7 (s_particle_noise). They are storage buffers,
+ * or with PARTICLE_DATA_TEXTURES textures of the same data in rows of PARTICLE_DATA_TEXTURE_WIDTH texels (rgba32u,
+ * rgba32f, rgba32u, rgba32f), for devices without storage buffers in vertex shaders, as WebGL.
  */
 
 #define PARTICLE_RECORD_UINTS 16u
@@ -20,6 +22,8 @@
 #define PARTICLE_LUT_SIZE 256u
 #define PARTICLE_LUT_ROWS 7u
 #define PARTICLE_TICKS_PER_SECOND 8192.0
+/// Texels per row of the data textures (particle_gpu_schema.h, data_texture_width).
+#define PARTICLE_DATA_TEXTURE_WIDTH 2048u
 
 /// Slots of the emitter static row (particle_record.h, static_slot).
 #define PARTICLE_STATIC_APPEARANCE 0u
@@ -152,28 +156,42 @@ float particle_random(uint seed, uint salt)
 	return float(particle_hash(seed ^ (salt * 2654435769u)) >> 8u) * (1.0 / 16777216.0);
 }
 
-vec3 particle_load_vec3(uint base)
+#if PARTICLE_DATA_TEXTURES
+/// The texel @p index of a data texture, counted along its rows.
+ivec2 particle_data_coord(uint index)
 {
-	return uintBitsToFloat(uvec3(s_particle_records[base], s_particle_records[base + 1u], s_particle_records[base + 2u]));
+	return ivec2(int(index % PARTICLE_DATA_TEXTURE_WIDTH), int(index / PARTICLE_DATA_TEXTURE_WIDTH));
 }
 
-particle_record particle_load(uint slot)
+/// Four uints of the record pool, from uint 4 x @p index on.
+uvec4 particle_record_quad(uint index)
 {
-	uint base = slot * PARTICLE_RECORD_UINTS;
-	particle_record record;
-	record.start = particle_load_vec3(base);
-	record.birth = s_particle_records[base + 3u];
-	record.velocity = particle_load_vec3(base + 4u);
-	record.lifespan = s_particle_records[base + 7u];
-	record.seed = s_particle_records[base + 8u];
-	uint picks = s_particle_records[base + 9u];
-	record.size_picks = vec2(float(picks & 0xffffu), float(picks >> 16u)) * (1.0 / 65535.0);
-	record.size_factor = uintBitsToFloat(s_particle_records[base + 10u]);
-	record.size_offset = uintBitsToFloat(s_particle_records[base + 11u]);
-	record.tint = vec4(particle_unpack_half2(s_particle_records[base + 12u]), particle_unpack_half2(s_particle_records[base + 13u]));
-	record.emitter = s_particle_records[base + 14u] & 0xffffu;
-	record.motion_offset = s_particle_records[base + 15u];
-	return record;
+	return texelFetch(s_particle_records, particle_data_coord(index), 0);
+}
+
+vec4 particle_static(uint emitter, uint index)
+{
+	return texelFetch(s_particle_static, particle_data_coord(emitter * PARTICLE_STATIC_VEC4S + index), 0);
+}
+
+uint particle_dynamic_uint(uint emitter, uint index)
+{
+	uint word = emitter * PARTICLE_DYNAMIC_UINTS + index;
+	uvec4 quad = texelFetch(s_particle_dynamic, particle_data_coord(word / 4u), 0);
+	return quad[int(word % 4u)];
+}
+
+/// Entry @p index of the curve-set atlas.
+vec4 particle_lut_entry(uint index)
+{
+	return texelFetch(s_particle_luts, particle_data_coord(index), 0);
+}
+#else
+/// Four uints of the record pool, from uint 4 x @p index on.
+uvec4 particle_record_quad(uint index)
+{
+	uint base = index * 4u;
+	return uvec4(s_particle_records[base], s_particle_records[base + 1u], s_particle_records[base + 2u], s_particle_records[base + 3u]);
 }
 
 vec4 particle_static(uint emitter, uint index)
@@ -181,14 +199,45 @@ vec4 particle_static(uint emitter, uint index)
 	return s_particle_static[emitter * PARTICLE_STATIC_VEC4S + index];
 }
 
-float particle_dynamic_float(uint emitter, uint index)
-{
-	return uintBitsToFloat(s_particle_dynamic[emitter * PARTICLE_DYNAMIC_UINTS + index]);
-}
-
 uint particle_dynamic_uint(uint emitter, uint index)
 {
 	return s_particle_dynamic[emitter * PARTICLE_DYNAMIC_UINTS + index];
+}
+
+/// Entry @p index of the curve-set atlas.
+vec4 particle_lut_entry(uint index)
+{
+	return s_particle_luts[index];
+}
+#endif
+
+particle_record particle_load(uint slot)
+{
+	// The record's four quads (particle_record.h): start and birth, velocity and lifespan, seed and the size terms,
+	// then tint, emitter and motion offset.
+	uint first = slot * (PARTICLE_RECORD_UINTS / 4u);
+	uvec4 placement = particle_record_quad(first);
+	uvec4 motion = particle_record_quad(first + 1u);
+	uvec4 shape = particle_record_quad(first + 2u);
+	uvec4 identity = particle_record_quad(first + 3u);
+	particle_record record;
+	record.start = uintBitsToFloat(placement.xyz);
+	record.birth = placement.w;
+	record.velocity = uintBitsToFloat(motion.xyz);
+	record.lifespan = motion.w;
+	record.seed = shape.x;
+	record.size_picks = vec2(float(shape.y & 0xffffu), float(shape.y >> 16u)) * (1.0 / 65535.0);
+	record.size_factor = uintBitsToFloat(shape.z);
+	record.size_offset = uintBitsToFloat(shape.w);
+	record.tint = vec4(particle_unpack_half2(identity.x), particle_unpack_half2(identity.y));
+	record.emitter = identity.z & 0xffffu;
+	record.motion_offset = identity.w;
+	return record;
+}
+
+float particle_dynamic_float(uint emitter, uint index)
+{
+	return uintBitsToFloat(particle_dynamic_uint(emitter, index));
 }
 
 vec4 particle_dynamic_vec4(uint emitter, uint index)
@@ -218,7 +267,7 @@ vec4 particle_lut(uint emitter, uint row, float t)
 	uint base = uint(particle_static(emitter, PARTICLE_STATIC_SIZE_AXES).w) + row * PARTICLE_LUT_SIZE;
 	float position = clamp(t, 0.0, 1.0) * float(PARTICLE_LUT_SIZE - 1u);
 	uint index = min(uint(position), PARTICLE_LUT_SIZE - 2u);
-	return mix(s_particle_luts[base + index], s_particle_luts[base + index + 1u], position - float(index));
+	return mix(particle_lut_entry(base + index), particle_lut_entry(base + index + 1u), position - float(index));
 }
 
 vec3 particle_local_to_world_point(uint emitter, vec3 position)

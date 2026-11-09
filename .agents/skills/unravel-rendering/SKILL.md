@@ -194,7 +194,7 @@ Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_f
   samples)` and `can_generate_mips(format)`.
 - `--gfx-disable=` masks the snapshot to test fallbacks on a desktop: `compute`, `draw_indirect`,
   `dispatch_indirect`, `image_rw`, `blend_independent`, `typed_image_loads`, `extended_storage_formats`,
-  `bindings8`, `format:<name>:<write|read|render|msaa|mips|all>`. D3D11 feature level 11_0 is
+  `vertex_storage_buffers`, `bindings8`, `format:<name>:<write|read|render|msaa|mips|all>`. D3D11 feature level 11_0 is
   `bindings8,image_rw,typed_image_loads`; the S21 is `draw_indirect`. Compute programs fail to build under
   `compute`, as on a real device.
 - Minimum requirements (compute, RGBA16F and D32F targets, 4 color attachments, R32F image writes) are checked
@@ -207,6 +207,11 @@ Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_f
   view; `pipeline::apply_feature_support` turns GTAO (ASSAO takes over), ASSAO and auto exposure off; the other
   features check `is_available` where they decide to run (GI init, Hi-Z, prefilter, exposure, irradiance,
   particles, fog, cloud shadow, skinned batching, UI MSAA, the temporal probe).
+- Particles read their data from storage buffers, or from data textures where
+  `render_feature::particle_storage_buffers` is unavailable (no compute, or no storage buffers in vertex shaders,
+  as WebGL): `vs_particle.eshader`'s `*_textures` variants (`ps_soa::get_particle_vertex_variant`), and the CPU
+  writes the records, culls and sorts (`particles/ps/particle_data_texture.h`). Desktop test:
+  `--gfx-disable=vertex_storage_buffers`, also with `-r opengl`.
 - A new compute pass: list its storage images and binding count in the table (the "render feature shaders"
   suite reads the committed compiled shaders and fails otherwise), check `is_available` where it is enabled,
   keep image stages below 8 (OpenGL) and every stage below 8 if it must run on D3D11 feature level 11_0.

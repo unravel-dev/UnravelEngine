@@ -1,6 +1,7 @@
 #pragma once
 
 #include "particle_cutout.h"
+#include "particle_data_texture.h"
 #include "particle_eval.h"
 #include "particle_gpu_schema.h"
 #include "particle_record.h"
@@ -29,6 +30,9 @@ namespace ps_soa
  * staging) at flush; the record pool is GPU-written, filled by the scatter kernel from the staging
  * buffer. bgfx applies a frame's updates before any of its views run, so each flush within a frame
  * stages into its own buffer.
+ *
+ * Where the device has no storage buffer path (uses_data_textures) the same data lives in data textures:
+ * the CPU writes the records into the pool texture at flush, and culls and sorts every view.
  */
 class particle_gpu
 {
@@ -195,6 +199,8 @@ private:
         bgfx::DynamicIndexBufferHandle batches = BGFX_INVALID_HANDLE;
         uint32_t batch_capacity = 0;
         bgfx::DynamicIndexBufferHandle cpu_list = BGFX_INVALID_HANDLE;
+        /// The CPU list's slots, in place of cpu_list where the data lives in textures.
+        data_texture cpu_list_texture{bgfx::TextureFormat::R32U};
         uint32_t cpu_list_capacity = 0;
         uint32_t cpu_list_used = 0;
         std::vector<uint32_t> cpu_list_data;
@@ -220,6 +226,14 @@ private:
     auto allocate_cutout_range(uint32_t size) -> uint32_t;
     /// Scatters the staged records into the pool; false when the scatter could not run (they stay staged).
     auto upload_staging(bgfx::ViewId view) -> bool;
+    /// Writes the staged records into the pool texture, each run of consecutive slots in one update.
+    void write_staged_records();
+    void update_static_rows(uint32_t first, uint32_t count);
+    void update_dynamic_rows(uint32_t count);
+    void create_data_samplers();
+    /// Binds the particle data of a draw; false while some of it does not exist yet.
+    auto bind_data_buffers(bool is_cpu_list) -> bool;
+    auto bind_data_textures() -> bool;
     /// Keeps only the last record staged for each slot: records kept over frames may stage a slot again.
     void keep_latest_staged();
     auto current_view_buffers() -> view_buffers&;
@@ -237,6 +251,19 @@ private:
     buffer_clear clear_;
     bool can_draw_ = false;
     bool can_sort_ = false;
+    /// The particle data lives in the data textures below instead of the buffers (uses_data_textures, at init).
+    bool uses_data_textures_ = false;
+    data_texture records_texture_{bgfx::TextureFormat::RGBA32U};
+    data_texture static_texture_{bgfx::TextureFormat::RGBA32F};
+    data_texture dynamic_texture_{bgfx::TextureFormat::RGBA32U};
+    data_texture lut_texture_{bgfx::TextureFormat::RGBA32F};
+    data_texture cutout_texture_{bgfx::TextureFormat::RGBA32F};
+    bgfx::UniformHandle u_records_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_static_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_dynamic_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_luts_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_sorted_ = BGFX_INVALID_HANDLE;
+    bgfx::UniformHandle u_cutouts_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_scatter_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_view0_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_view1_ = BGFX_INVALID_HANDLE;

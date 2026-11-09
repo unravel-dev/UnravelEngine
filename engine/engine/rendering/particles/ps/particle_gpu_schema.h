@@ -35,6 +35,13 @@ constexpr uint32_t trail_index_count = trail_segments * 6;
 constexpr uint32_t trail_first_index = cutout_first_index + cutout_index_count;
 /// Stages of a particle draw. The vertex shaders' buffers stay below 8, the fewest buffer bindings a GL driver
 /// may offer; the textures take the stages above.
+/// The particle data the vertex shaders read: the record pool, the emitter tables, the curve-set atlas and the view's
+/// sorted list (storage buffers, or data textures on devices without storage buffers in vertex shaders).
+constexpr uint8_t gpu_records_stage = 0;
+constexpr uint8_t gpu_static_stage = 1;
+constexpr uint8_t gpu_dynamic_stage = 2;
+constexpr uint8_t gpu_luts_stage = 3;
+constexpr uint8_t gpu_sorted_stage = 4;
 /// The cutout tables the vertex shaders read (vec4: two polygon points each).
 constexpr uint8_t gpu_cutout_stage = 6;
 /// vec4 per sheet frame of a cutout table.
@@ -48,6 +55,9 @@ constexpr uint8_t gpu_color_texture_stage = 13;
 constexpr uint8_t gpu_scene_depth_stage = 15;
 /// uints per batch of the per-view batch table: index count, first index.
 constexpr uint32_t gpu_batch_uints = 2;
+/// Texels per row of the data textures (PARTICLE_DATA_TEXTURE_WIDTH in particle_common.sh): WebGL 2's smallest
+/// maximum texture size.
+constexpr uint32_t data_texture_width = 2048;
 
 /// cs_particle_keygen.eshader PARTICLE_SORT_KIND_*.
 enum class gpu_sort_kind : uint32_t

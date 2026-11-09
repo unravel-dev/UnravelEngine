@@ -42,7 +42,7 @@ enum class render_feature : std::uint8_t
     reflection_probe_prefilter,
     volumetric_fog,
     cloud_shadow,
-    gpu_particles,
+    particle_storage_buffers,
     gpu_particles_indirect,
     particle_reactive_mask,
     skinned_mesh_batching,

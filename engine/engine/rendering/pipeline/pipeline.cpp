@@ -27,6 +27,7 @@
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
+#include <engine/rendering/particles/ps/particle_data_texture.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/engine.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -780,7 +781,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     {
         auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/particles/vs_particle.eshader");
         auto fs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/particles/" + fs + ".eshader");
-        return std::make_unique<gpu_program>(vs_shader, vs_variant, fs_shader, fs_variant);
+        return std::make_unique<gpu_program>(vs_shader, ps_soa::get_particle_vertex_variant(vs_variant), fs_shader, fs_variant);
     };
     constexpr auto default_variant = gfx::shader::DEFAULT_VARIANT;
 

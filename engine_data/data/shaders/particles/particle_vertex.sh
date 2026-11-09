@@ -3,17 +3,23 @@
 
 /*
  * One particle quad corner per vertex, shared by the particle vertex shaders. The instance picks the
- * particle from the draw's range of the sorted list (stage 4: interleaved key / slot pairs), and the
- * particle is evaluated at the emitter's current time from its birth record (particle_common.sh) - no
- * per-particle data is written per frame. The including shader declares the buffers of
- * particle_common.sh and s_particle_sorted at stage 4, then includes particle_common.sh.
+ * particle from the draw's range of the sorted list (stage 4: interleaved key / slot pairs, or a texture of
+ * slots with PARTICLE_DATA_TEXTURES), and the particle is evaluated at the emitter's current time from its
+ * birth record (particle_common.sh) - no per-particle data is written per frame. The including shader
+ * declares the buffers or textures of particle_common.sh and s_particle_sorted at stage 4, then includes
+ * particle_common.sh.
  */
 
+#if PARTICLE_DATA_TEXTURES
+/// Cutout tables (particle_cutout.h): per sheet frame 4 texels, two polygon points (texture coordinates) each.
+SAMPLER2D(s_particle_cutouts, 6);
+#else
 /// Each GPU batch's live count (cs_particle_draw_args.eshader): a ribbon reads its neighbours within it. The vertex
 /// shaders' buffers stay below stage 8 (particle_gpu_schema.h).
 BUFFER_RO(s_particle_batch_counts, uint, 5);
 /// Cutout tables (particle_cutout.h): per sheet frame 4 vec4, two polygon points (texture coordinates) each.
 BUFFER_RO(s_particle_cutouts, vec4, 6);
+#endif
 
 // View matrix (glm column-major upload). Billboard uses camera axes from the view matrix.
 uniform mat4 u_viewCamera;
@@ -195,14 +201,39 @@ void particle_trail_corner(particle_record record, vec2 corner, float width, vec
 /// The live particles the draw's list holds (a CPU list's count, or its GPU batch's).
 uint particle_draw_count()
 {
+#if PARTICLE_DATA_TEXTURES
+	// Data textures draw CPU lists only: the CPU culls and sorts where the GPU cannot.
+	return uint(u_particle_draw.z);
+#else
 	return u_particle_draw.z >= 0.0 ? uint(u_particle_draw.z) : s_particle_batch_counts[uint(u_particle_draw.y)];
+#endif
+}
+
+/// The pool slot of entry @p entry of the view's sorted list.
+uint particle_sorted_slot(uint entry)
+{
+#if PARTICLE_DATA_TEXTURES
+	return texelFetch(s_particle_sorted, particle_data_coord(entry), 0).x;
+#else
+	return s_particle_sorted[entry * 2u + 1u];
+#endif
+}
+
+/// Entry @p index of the cutout tables.
+vec4 particle_cutout_points(uint index)
+{
+#if PARTICLE_DATA_TEXTURES
+	return texelFetch(s_particle_cutouts, particle_data_coord(index), 0);
+#else
+	return s_particle_cutouts[index];
+#endif
 }
 
 /// The particle of the draw's list entry @p index (its first entry is 0), and its position.
 particle_state particle_ribbon_point(uint index, out particle_record record)
 {
 	uint entry = uint(u_particle_draw.x) + index;
-	record = particle_load(s_particle_sorted[entry * 2u + 1u]);
+	record = particle_load(particle_sorted_slot(entry));
 	return particle_place(record);
 }
 
@@ -288,8 +319,7 @@ void particle_ribbon_corner(uint segment, vec2 corner, vec3 camera_position, ino
 particle_vertex particle_build_vertex(vec3 corner_position, vec2 corner_uv, uint instance)
 {
 	uint entry = uint(u_particle_draw.x) + instance;
-	uint slot = s_particle_sorted[entry * 2u + 1u];
-	particle_record record = particle_load(slot);
+	particle_record record = particle_load(particle_sorted_slot(entry));
 	particle_state state = particle_place(record);
 	uint emitter = record.emitter;
 	uint flags = particle_flags(emitter);
@@ -310,7 +340,7 @@ particle_vertex particle_build_vertex(vec3 corner_position, vec2 corner_uv, uint
 		uint tiles_x = uint(1.0 / uv_scale.x + 0.5);
 		uint frame = uint(sheet.y / uv_scale.y + 0.5) * tiles_x + uint(sheet.x / uv_scale.x + 0.5);
 		uint cutout_vertex = uint(corner_position.z - 0.5);
-		vec4 points = s_particle_cutouts[uint(cutout_table - 0.5) + frame * 4u + cutout_vertex / 2u];
+		vec4 points = particle_cutout_points(uint(cutout_table - 0.5) + frame * 4u + cutout_vertex / 2u);
 		corner_uv = (cutout_vertex % 2u) == 0u ? points.xy : points.zw;
 		corner_position = vec3(corner_uv.x - 0.5, 0.5 - corner_uv.y, 0.0);
 	}

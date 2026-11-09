@@ -90,7 +90,7 @@ constexpr const char* FOG_SHADERS[] = {"fog/"};
 constexpr render_target_need CLOUD_SHADOW_TARGETS[] = {{bgfx::TextureFormat::R8, 1, true}};
 
 constexpr const char* PARTICLE_SHADERS[] = {"particles/"};
-constexpr render_feature PARTICLES_INDIRECT_DEPENDS[] = {render_feature::gpu_particles};
+constexpr render_feature PARTICLES_INDIRECT_DEPENDS[] = {render_feature::particle_storage_buffers};
 
 /// Variance (RG32F) and exponential (R32F) shadow maps are blurred and sampled filtered.
 constexpr render_target_need SOFT_SHADOW_TARGETS[] = {{.format = bgfx::TextureFormat::RG32F, .needs_filtering = true},
@@ -197,9 +197,10 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
      .images = FOG_IMAGES,
      .shader_prefixes = FOG_SHADERS},
     {.name = "Cloud shadows", .fallback = "Clouds cast no shadows.", .render_targets = CLOUD_SHADOW_TARGETS},
-    {.name = "GPU particles",
-     .fallback = "Particles do not render.",
+    {.name = "Particle storage buffers",
+     .fallback = "Particles read their data from textures, and the CPU writes new particles, culls and sorts them.",
      .needs_compute = true,
+     .needs_vertex_storage_buffers = true,
      .compute_bindings = 8,
      .shader_prefixes = PARTICLE_SHADERS},
     {.name = "GPU particle culling and sorting",

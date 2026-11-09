@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <numeric>
 #include <unordered_map>
 
 namespace unravel
@@ -36,6 +37,12 @@ constexpr uint32_t k_staging_uints_per_record = record_uints + 1;
 /// uints per sorted-list entry: the key and the pool slot.
 constexpr uint32_t k_list_uints_per_entry = 2;
 constexpr uint32_t k_key_bits = 32;
+/// uints per texel of the rgba32u data textures: records and dynamic rows fill whole texels.
+constexpr uint32_t k_uints_per_texel = 4;
+constexpr uint32_t k_record_texels = record_uints / k_uints_per_texel;
+constexpr uint32_t k_dynamic_row_texels = dynamic_row_uints / k_uints_per_texel;
+static_assert(record_uints % k_uints_per_texel == 0 && dynamic_row_uints % k_uints_per_texel == 0,
+              "records and dynamic rows fill whole texels of the data textures");
 
 struct quad_vertex
 {
@@ -147,8 +154,9 @@ auto load_compute(asset_manager& assets, const char* key, const char* label) -> 
         return {};
     }
     auto program = std::make_shared<gpu_program>(shader);
-    // On a device without GPU particles the program is never built; the renderer's feature log says so once.
-    if(!program->is_valid() && get_render_feature_support().is_available(render_feature::gpu_particles))
+    // On a device without the particle storage buffers the program is never built; the renderer's feature log says
+    // so once.
+    if(!program->is_valid() && get_render_feature_support().is_available(render_feature::particle_storage_buffers))
     {
         APPLOG_WARNING("Particles: {} does not compile yet", label);
     }
@@ -203,6 +211,11 @@ void particle_gpu::init(rtti::context& ctx)
     u_args_ = bgfx::createUniform("u_particle_args", bgfx::UniformType::Vec4);
     u_draw_ = bgfx::createUniform("u_particle_draw", bgfx::UniformType::Vec4);
     u_noise_ = bgfx::createUniform("s_particle_noise", bgfx::UniformType::Sampler);
+    uses_data_textures_ = uses_data_textures();
+    if(uses_data_textures_)
+    {
+        create_data_samplers();
+    }
     auto& assets = ctx.get_cached<asset_manager>();
     scatter_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_scatter.eshader", "record scatter");
     keygen_program_ = load_compute(assets, "engine:/data/shaders/particles/cs_particle_keygen.eshader", "cull / sort keys");
@@ -218,6 +231,16 @@ void particle_gpu::init(rtti::context& ctx)
     {
         APPLOG_WARNING("Particles: GPU culling and sorting cannot run. Particles cull and sort on the CPU.");
     }
+}
+
+void particle_gpu::create_data_samplers()
+{
+    u_records_ = bgfx::createUniform("s_particle_records", bgfx::UniformType::Sampler);
+    u_static_ = bgfx::createUniform("s_particle_static", bgfx::UniformType::Sampler);
+    u_dynamic_ = bgfx::createUniform("s_particle_dynamic", bgfx::UniformType::Sampler);
+    u_luts_ = bgfx::createUniform("s_particle_luts", bgfx::UniformType::Sampler);
+    u_sorted_ = bgfx::createUniform("s_particle_sorted", bgfx::UniformType::Sampler);
+    u_cutouts_ = bgfx::createUniform("s_particle_cutouts", bgfx::UniformType::Sampler);
 }
 
 void particle_gpu::create_noise_texture()
@@ -250,7 +273,8 @@ auto particle_gpu::get_noise_texture() const -> bgfx::TextureHandle
 void particle_gpu::refresh_programs()
 {
     const auto& support = get_render_feature_support();
-    can_draw_ = support.is_available(render_feature::gpu_particles) && refresh(scatter_program_);
+    // Data textures need no kernel to draw: the CPU writes the records.
+    can_draw_ = uses_data_textures_ || refresh(scatter_program_);
     // The GPU path draws with indirect arguments; without indirect draws the CPU culls, sorts and counts.
     can_sort_ = can_draw_ && support.is_available(render_feature::gpu_particles_indirect) && refresh(keygen_program_) &&
                 refresh(sort_program_) && refresh(args_program_);
@@ -274,6 +298,12 @@ void particle_gpu::shutdown()
     destroy_handle(u_args_);
     destroy_handle(u_draw_);
     destroy_handle(u_noise_);
+    destroy_handle(u_records_);
+    destroy_handle(u_static_);
+    destroy_handle(u_dynamic_);
+    destroy_handle(u_luts_);
+    destroy_handle(u_sorted_);
+    destroy_handle(u_cutouts_);
     destroy_handle(quad_vertices_);
     destroy_handle(quad_indices_);
     destroy_handle(noise_texture_);
@@ -291,6 +321,11 @@ void particle_gpu::destroy_buffers()
     destroy_handle(dynamic_table_);
     destroy_handle(lut_atlas_);
     destroy_handle(cutout_buffer_);
+    records_texture_.destroy();
+    static_texture_.destroy();
+    dynamic_texture_.destroy();
+    lut_texture_.destroy();
+    cutout_texture_.destroy();
     cutout_buffer_capacity_ = 0;
     cutouts_dirty_ = true;
     destroy_handle(sort_);
@@ -308,6 +343,7 @@ void particle_gpu::destroy_buffers()
         destroy_handle(buffers.tasks);
         destroy_handle(buffers.batches);
         destroy_handle(buffers.cpu_list);
+        buffers.cpu_list_texture.destroy();
     }
     view_buffers_.clear();
     pool_capacity_ = 0;
@@ -397,8 +433,15 @@ void particle_gpu::grow_pool(uint32_t required)
     const uint32_t old_capacity = pool_capacity_;
     const uint32_t new_capacity = grow_capacity(old_capacity, required, k_min_pool_capacity);
     destroy_handle(records_);
-    records_ = bgfx::createDynamicIndexBuffer(new_capacity * record_uints,
-                                              BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+    if(uses_data_textures_)
+    {
+        records_texture_.reserve(new_capacity * k_record_texels);
+    }
+    else
+    {
+        records_ = bgfx::createDynamicIndexBuffer(new_capacity * record_uints,
+                                                  BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+    }
     pool_capacity_ = new_capacity;
     release_range(old_capacity, new_capacity - old_capacity);
     // The new buffer starts empty: everything staged against the old one is restaged by its emitter.
@@ -530,13 +573,22 @@ auto particle_gpu::allocate_cutout_range(uint32_t size) -> uint32_t
 void particle_gpu::ensure_cutout_buffer()
 {
     const uint32_t required = math::max(uint32_t(cutout_data_.size()), 1u);
-    if(bgfx::isValid(cutout_buffer_) && cutout_buffer_capacity_ >= required)
+    const bool is_valid = uses_data_textures_ ? cutout_texture_.is_valid() : bgfx::isValid(cutout_buffer_);
+    if(is_valid && cutout_buffer_capacity_ >= required)
     {
         return;
     }
     destroy_handle(cutout_buffer_);
     cutout_buffer_capacity_ = grow_capacity(cutout_buffer_capacity_, required, k_min_cutout_vec4s);
-    cutout_buffer_ = bgfx::createDynamicVertexBuffer(cutout_buffer_capacity_, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
+    if(uses_data_textures_)
+    {
+        cutout_texture_.reserve(cutout_buffer_capacity_);
+    }
+    else
+    {
+        cutout_buffer_ =
+            bgfx::createDynamicVertexBuffer(cutout_buffer_capacity_, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
+    }
     cutouts_dirty_ = true;
 }
 
@@ -547,7 +599,14 @@ void particle_gpu::upload_cutouts()
     {
         return;
     }
-    bgfx::update(cutout_buffer_, 0, bgfx::copy(cutout_data_.data(), uint32_t(cutout_data_.size() * sizeof(math::vec4))));
+    if(uses_data_textures_)
+    {
+        cutout_texture_.update(0, uint32_t(cutout_data_.size()), cutout_data_.data());
+    }
+    else
+    {
+        bgfx::update(cutout_buffer_, 0, bgfx::copy(cutout_data_.data(), uint32_t(cutout_data_.size() * sizeof(math::vec4))));
+    }
     cutouts_dirty_ = false;
 }
 
@@ -588,18 +647,49 @@ void particle_gpu::ensure_tables()
     {
         return;
     }
-    const uint32_t table_rows = bgfx::isValid(static_table_) ? table_rows_ : 0;
+    const bool is_valid = uses_data_textures_ ? static_texture_.is_valid() : bgfx::isValid(static_table_);
+    const uint32_t table_rows = is_valid ? table_rows_ : 0;
     if(table_rows >= rows)
     {
         return;
     }
     destroy_handle(static_table_);
     destroy_handle(dynamic_table_);
-    static_table_ = bgfx::createDynamicVertexBuffer(rows * static_row_vec4s, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
-    dynamic_table_ =
-        bgfx::createDynamicIndexBuffer(rows * dynamic_row_uints, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+    if(uses_data_textures_)
+    {
+        static_texture_.reserve(rows * static_row_vec4s);
+        dynamic_texture_.reserve(rows * k_dynamic_row_texels);
+    }
+    else
+    {
+        static_table_ =
+            bgfx::createDynamicVertexBuffer(rows * static_row_vec4s, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
+        dynamic_table_ =
+            bgfx::createDynamicIndexBuffer(rows * dynamic_row_uints, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+    }
     table_rows_ = rows;
     tables_need_full_upload_ = true;
+}
+
+void particle_gpu::update_static_rows(uint32_t first, uint32_t count)
+{
+    const static_row* rows = &static_rows_[first];
+    if(uses_data_textures_)
+    {
+        static_texture_.update(first * static_row_vec4s, count * static_row_vec4s, rows);
+        return;
+    }
+    bgfx::update(static_table_, first * static_row_vec4s, bgfx::copy(rows, uint32_t(count * sizeof(static_row))));
+}
+
+void particle_gpu::update_dynamic_rows(uint32_t count)
+{
+    if(uses_data_textures_)
+    {
+        dynamic_texture_.update(0, count * k_dynamic_row_texels, dynamic_rows_.data());
+        return;
+    }
+    bgfx::update(dynamic_table_, 0, bgfx::copy(dynamic_rows_.data(), uint32_t(count * sizeof(dynamic_row))));
 }
 
 void particle_gpu::upload_tables()
@@ -619,10 +709,7 @@ void particle_gpu::upload_tables()
         }
         if(!is_dirty && run_start != rows)
         {
-            const uint32_t count = row - run_start;
-            bgfx::update(static_table_,
-                         run_start * static_row_vec4s,
-                         bgfx::copy(&static_rows_[run_start], uint32_t(count * sizeof(static_row))));
+            update_static_rows(run_start, row - run_start);
             run_start = rows;
         }
         if(row < rows)
@@ -631,18 +718,27 @@ void particle_gpu::upload_tables()
         }
     }
     tables_need_full_upload_ = false;
-    bgfx::update(dynamic_table_, 0, bgfx::copy(dynamic_rows_.data(), uint32_t(rows * sizeof(dynamic_row))));
+    update_dynamic_rows(rows);
 }
 
 void particle_gpu::ensure_lut_atlas()
 {
-    if(lut_atlas_blocks_ >= lut_block_count_ && bgfx::isValid(lut_atlas_))
+    const bool is_valid = uses_data_textures_ ? lut_texture_.is_valid() : bgfx::isValid(lut_atlas_);
+    if(lut_atlas_blocks_ >= lut_block_count_ && is_valid)
     {
         return;
     }
     const uint32_t blocks = grow_capacity(lut_atlas_blocks_, lut_block_count_, k_min_lut_blocks);
     destroy_handle(lut_atlas_);
-    lut_atlas_ = bgfx::createDynamicVertexBuffer(blocks * lut_set_vec4s, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
+    if(uses_data_textures_)
+    {
+        lut_texture_.reserve(blocks * lut_set_vec4s);
+    }
+    else
+    {
+        lut_atlas_ =
+            bgfx::createDynamicVertexBuffer(blocks * lut_set_vec4s, gpu_resource::get_vec4_layout(), BGFX_BUFFER_COMPUTE_READ);
+    }
     lut_atlas_blocks_ = blocks;
     // A new atlas holds nothing yet: upload every live block.
     dirty_lut_blocks_.clear();
@@ -668,6 +764,11 @@ void particle_gpu::upload_luts()
             continue;
         }
         const lut_set& data = *luts_.at(key->second).data;
+        if(uses_data_textures_)
+        {
+            lut_texture_.update(block * lut_set_vec4s, lut_set_vec4s, data.data.data());
+            continue;
+        }
         bgfx::update(lut_atlas_, block * lut_set_vec4s, bgfx::copy(data.data.data(), uint32_t(sizeof(data.data))));
     }
     dirty_lut_blocks_.clear();
@@ -705,6 +806,37 @@ auto particle_gpu::upload_staging(bgfx::ViewId view) -> bool
     dispatch_threads(view, scatter_program_->native_handle(), count);
     scatter_program_->end();
     return true;
+}
+
+void particle_gpu::write_staged_records()
+{
+    if(staged_slots_.empty() || !records_texture_.is_valid())
+    {
+        return;
+    }
+    keep_latest_staged();
+    std::vector<uint32_t> order(staged_slots_.size());
+    std::iota(order.begin(), order.end(), 0u);
+    std::sort(order.begin(),
+              order.end(),
+              [&](uint32_t a, uint32_t b)
+              {
+                  return staged_slots_[a] < staged_slots_[b];
+              });
+    std::vector<particle_record> run;
+    run.reserve(order.size());
+    for(size_t i = 0; i < order.size(); ++i)
+    {
+        run.push_back(staged_records_[order[i]]);
+        const uint32_t slot = staged_slots_[order[i]];
+        const bool is_run_end = i + 1 == order.size() || staged_slots_[order[i + 1]] != slot + 1;
+        if(is_run_end)
+        {
+            const uint32_t first_slot = slot + 1 - uint32_t(run.size());
+            records_texture_.update(first_slot * k_record_texels, uint32_t(run.size()) * k_record_texels, run.data());
+            run.clear();
+        }
+    }
 }
 
 void particle_gpu::keep_latest_staged()
@@ -755,7 +887,11 @@ void particle_gpu::flush()
         keep_latest_staged();
         has_kept_staging_ = false;
     }
-    if(!staged_slots_.empty() && bgfx::isValid(records_))
+    if(uses_data_textures_)
+    {
+        write_staged_records();
+    }
+    else if(!staged_slots_.empty() && bgfx::isValid(records_))
     {
         gfx::render_pass pass("Particles/Upload");
         pass.touch();
@@ -996,7 +1132,11 @@ auto particle_gpu::upload_cpu_list(const std::vector<uint32_t>& slots) -> uint32
     const uint32_t first = buffers.cpu_list_used;
     for(uint32_t slot : slots)
     {
-        buffers.cpu_list_data.push_back(0u);
+        // The buffer holds key / slot pairs as the GPU sort writes them; the texture holds the slots alone.
+        if(!uses_data_textures_)
+        {
+            buffers.cpu_list_data.push_back(0u);
+        }
         buffers.cpu_list_data.push_back(slot);
     }
     buffers.cpu_list_used += uint32_t(slots.size());
@@ -1010,22 +1150,77 @@ void particle_gpu::upload_view_lists()
     {
         return;
     }
-    if(buffers.cpu_list_capacity < buffers.cpu_list_used || !bgfx::isValid(buffers.cpu_list))
+    const bool is_valid = uses_data_textures_ ? buffers.cpu_list_texture.is_valid() : bgfx::isValid(buffers.cpu_list);
+    if(buffers.cpu_list_capacity < buffers.cpu_list_used || !is_valid)
     {
         destroy_handle(buffers.cpu_list);
         buffers.cpu_list_capacity = grow_capacity(buffers.cpu_list_capacity, buffers.cpu_list_used, k_min_list_entries);
-        buffers.cpu_list = bgfx::createDynamicIndexBuffer(buffers.cpu_list_capacity * k_list_uints_per_entry,
-                                                          BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+        if(uses_data_textures_)
+        {
+            buffers.cpu_list_texture.reserve(buffers.cpu_list_capacity);
+        }
+        else
+        {
+            buffers.cpu_list = bgfx::createDynamicIndexBuffer(buffers.cpu_list_capacity * k_list_uints_per_entry,
+                                                              BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+        }
+    }
+    if(uses_data_textures_)
+    {
+        buffers.cpu_list_texture.update(0, buffers.cpu_list_used, buffers.cpu_list_data.data());
+        return;
     }
     bgfx::update(buffers.cpu_list,
                  0,
                  bgfx::copy(buffers.cpu_list_data.data(), uint32_t(buffers.cpu_list_data.size() * sizeof(uint32_t))));
 }
 
+auto particle_gpu::bind_data_buffers(bool is_cpu_list) -> bool
+{
+    const bgfx::DynamicIndexBufferHandle list = is_cpu_list ? current_view_buffers().cpu_list : sort_;
+    if(!bgfx::isValid(list) || !bgfx::isValid(records_) || !bgfx::isValid(static_table_) || !bgfx::isValid(lut_atlas_))
+    {
+        return false;
+    }
+    bgfx::setBuffer(gpu_records_stage, records_, bgfx::Access::Read);
+    bgfx::setBuffer(gpu_static_stage, static_table_, bgfx::Access::Read);
+    bgfx::setBuffer(gpu_dynamic_stage, dynamic_table_, bgfx::Access::Read);
+    bgfx::setBuffer(gpu_luts_stage, lut_atlas_, bgfx::Access::Read);
+    bgfx::setBuffer(gpu_sorted_stage, list, bgfx::Access::Read);
+    if(bgfx::isValid(batch_counts_))
+    {
+        bgfx::setBuffer(gpu_batch_counts_stage, batch_counts_, bgfx::Access::Read);
+    }
+    else
+    {
+        bgfx::setBuffer(gpu_batch_counts_stage, list, bgfx::Access::Read);
+    }
+    ensure_cutout_buffer();
+    bgfx::setBuffer(gpu_cutout_stage, cutout_buffer_, bgfx::Access::Read);
+    return true;
+}
+
+auto particle_gpu::bind_data_textures() -> bool
+{
+    const data_texture& list = current_view_buffers().cpu_list_texture;
+    if(!list.is_valid() || !records_texture_.is_valid() || !static_texture_.is_valid() || !lut_texture_.is_valid())
+    {
+        return false;
+    }
+    bgfx::setTexture(gpu_records_stage, u_records_, records_texture_.get_handle());
+    bgfx::setTexture(gpu_static_stage, u_static_, static_texture_.get_handle());
+    bgfx::setTexture(gpu_dynamic_stage, u_dynamic_, dynamic_texture_.get_handle());
+    bgfx::setTexture(gpu_luts_stage, u_luts_, lut_texture_.get_handle());
+    bgfx::setTexture(gpu_sorted_stage, u_sorted_, list.get_handle());
+    ensure_cutout_buffer();
+    bgfx::setTexture(gpu_cutout_stage, u_cutouts_, cutout_texture_.get_handle());
+    return true;
+}
+
 void particle_gpu::submit_draw(const draw_params& params)
 {
-    const bgfx::DynamicIndexBufferHandle list = params.is_cpu_list ? current_view_buffers().cpu_list : sort_;
-    if(!bgfx::isValid(list) || !bgfx::isValid(records_) || !bgfx::isValid(static_table_) || !bgfx::isValid(lut_atlas_))
+    const bool is_bound = uses_data_textures_ ? bind_data_textures() : bind_data_buffers(params.is_cpu_list);
+    if(!is_bound)
     {
         return;
     }
@@ -1038,21 +1233,6 @@ void particle_gpu::submit_draw(const draw_params& params)
     bgfx::setVertexBuffer(0, quad_vertices_);
     // Indirect draws take their index range from the draw arguments.
     bgfx::setIndexBuffer(quad_indices_, params.first_index, params.index_count);
-    bgfx::setBuffer(0, records_, bgfx::Access::Read);
-    bgfx::setBuffer(1, static_table_, bgfx::Access::Read);
-    bgfx::setBuffer(2, dynamic_table_, bgfx::Access::Read);
-    bgfx::setBuffer(3, lut_atlas_, bgfx::Access::Read);
-    bgfx::setBuffer(4, list, bgfx::Access::Read);
-    if(bgfx::isValid(batch_counts_))
-    {
-        bgfx::setBuffer(gpu_batch_counts_stage, batch_counts_, bgfx::Access::Read);
-    }
-    else
-    {
-        bgfx::setBuffer(gpu_batch_counts_stage, list, bgfx::Access::Read);
-    }
-    ensure_cutout_buffer();
-    bgfx::setBuffer(gpu_cutout_stage, cutout_buffer_, bgfx::Access::Read);
     bgfx::setState(params.state, params.blend_rgba);
     if(params.is_cpu_list)
     {

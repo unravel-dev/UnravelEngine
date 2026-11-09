@@ -28,7 +28,9 @@
  *     which devices with fewer storage textures a stage turn it off by; a compute shader whose workgroup size the
  *     check cannot read fails it;
  *   - every language check in the engine's shaders that names SPIR-V names WGSL too: the WebGPU shaders are compiled
- *     with BGFX_SHADER_LANGUAGE_WGSL in place of BGFX_SHADER_LANGUAGE_SPIRV, through the same HLSL path.
+ *     with BGFX_SHADER_LANGUAGE_WGSL in place of BGFX_SHADER_LANGUAGE_SPIRV, through the same HLSL path;
+ *   - the particle vertex shader's data texture variants compile to GLSL ES and read textures, no storage buffer:
+ *     WebGL 2 has none.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
@@ -84,6 +86,9 @@ constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
 constexpr const char* WEBGPU_TIER_FOLDER = "gi";
 /// bgfx's own shader headers among the engine's, which spell their language checks bgfx's way.
 constexpr std::array<const char*, 2> BGFX_SHADER_HEADERS = {"bgfx_shader.sh", "bgfx_compute.sh"};
+/// The particle vertex shader's variants that read their data from textures (particle_data_texture.h): what a device
+/// without storage buffers in vertex shaders, as WebGL 2, draws particles with.
+constexpr std::array<const char*, 3> PARTICLE_DATA_TEXTURE_VARIANTS = {"textures", "lit_textures", "velocity_textures"};
 
 int g_checks = 0;
 int g_failures = 0;
@@ -764,6 +769,31 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
               "), so devices with fewer turn it off");
 }
 
+void test_particle_data_textures_compile_for_webgl(unravel::asset_manager& am, const fs::path& root)
+{
+    std::printf("test_particle_data_textures_compile_for_webgl\n");
+    const auto source = fs::path(ENGINE_DATA_DIR) / "data/shaders/particles/vs_particle.eshader";
+    const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
+    const auto compiled = compile_variants(am, source.string(), root / "essl", renderer);
+    check(!compiled.empty(), "vs_particle.eshader compiles to GLSL ES");
+    for(const char* name : PARTICLE_DATA_TEXTURE_VARIANTS)
+    {
+        const auto found = std::find_if(compiled.begin(),
+                                        compiled.end(),
+                                        [&](const unravel::compiled_shader_variant& variant)
+                                        {
+                                            return variant.name == name;
+                                        });
+        check(found != compiled.end(), std::string("vs_particle.eshader has the ") + name + " variant on GLSL ES");
+        if(found != compiled.end())
+        {
+            const auto code = as_string(*found);
+            check(contains_text(code, "usampler2D") && !contains_text(code, " buffer "),
+                  std::string(name) + " reads textures and no storage buffer, which WebGL 2 lacks");
+        }
+    }
+}
+
 /// The #if and #elif conditions of a shader source, a line continued with a backslash joined to the next.
 auto read_preprocessor_conditions(const fs::path& file) -> std::vector<std::string>
 {
@@ -898,6 +928,7 @@ auto run_eshader_files_suite(rtti::context& ctx) -> int
         test_failed_loads_are_retried(am);
         test_shipped_shaders_compile(am, temp);
         test_engine_shaders_fit_webgpu(am, temp);
+        test_particle_data_textures_compile_for_webgl(am, temp);
     }
     else
     {
