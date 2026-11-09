@@ -84,9 +84,9 @@ if(EMSCRIPTEN)
     add_definitions(-DBGFX_CONFIG_RENDERER_WEBGPU=1)
 endif()
 
-# Fixes to bgfx itself (patches/, applied in file name order by apply_patches.cmake). bgfx.cmake fetches bgfx
-# with FetchContent, and the first FetchContent_Declare of a name wins: this one, with bgfx.cmake's pin and a
-# patch step, replaces bgfx.cmake's own. A bgfx from BGFX_DIR or an in-tree checkout is built as it is.
+# Fixes to bgfx itself go in patches/ (*.patch, applied in file name order by apply_patches.cmake). bgfx.cmake
+# fetches bgfx with FetchContent, and the first FetchContent_Declare of a name wins: this one, with bgfx.cmake's pin
+# and a patch step, replaces bgfx.cmake's own. A bgfx from BGFX_DIR or an in-tree checkout is built as it is.
 include(FetchContent)
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/bgfx/CMakeLists.txt bgfx_cmake_lists)
 if(NOT bgfx_cmake_lists MATCHES "FetchContent_Declare\\([ \t\r\n]*bgfx[ \t\r\n]+[^)]*GIT_TAG[ \t\r\n]+([0-9a-fA-F]+)")

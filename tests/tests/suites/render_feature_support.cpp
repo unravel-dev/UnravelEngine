@@ -192,7 +192,10 @@ void test_webgpu_read_write_formats()
           "WebGPU with texture-formats-tier2: rgba16f and r32f are read-write");
     const auto support = render_feature_support::resolve(caps);
     check_available(support, render_feature::global_illumination, true, "WebGPU with tier2");
-    caps.has_image_read_write = false;
+    // Without texture-formats-tier2 bgfx reports image reads for the 32-bit single-channel formats only.
+    gfx::device_caps_mask core_mask;
+    core_mask.drops_typed_image_loads = true;
+    caps = gfx::apply_device_caps_mask(caps, core_mask);
     check(!caps.can_read_write_image(bgfx::TextureFormat::RGBA16F) && caps.can_read_write_image(bgfx::TextureFormat::R32F),
           "WebGPU without tier2: only the 32-bit single-channel formats are read-write");
     const auto core_support = render_feature_support::resolve(caps);
