@@ -201,6 +201,9 @@ if(NOT UNRAVEL_WEB_PLAYER STREQUAL "OFF")
         set(web_em_cache "${web_build_dir}/em_cache")
         file(MAKE_DIRECTORY "${web_em_cache}")
         unravel_write_emscripten_config("${web_em_config}" "${web_em_cache}")
+        # bgfx links Dawn's WebGPU port (--use-port=emdawnwebgpu), which Emscripten would download in one attempt.
+        include(${CMAKE_CURRENT_LIST_DIR}/web_emscripten_port.cmake)
+        unravel_fetch_emscripten_port("${web_emscripten}" "${web_em_cache}" emdawnwebgpu)
         set(web_env "${CMAKE_COMMAND}" -E env "EM_CONFIG=${web_em_config}" "EMSDK_PYTHON=${web_python}")
         ExternalProject_Add(web_player_build
             SOURCE_DIR "${PROJECT_SOURCE_DIR}"

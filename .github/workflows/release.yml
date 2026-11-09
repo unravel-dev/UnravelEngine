@@ -429,8 +429,8 @@ jobs:
         with:
           sdk-version: ${{ env.WEB_DOTNET_SDK_VERSION }}
       # Into a folder of its own; the configure hands it to Emscripten (UNRAVEL_WEB_PYTHON). Emscripten downloads
-      # its WebGPU port with Python, so SSL_CERT_FILE points that Python at Ubuntu's certificate bundle, wherever
-      # its own OpenSSL looks by default.
+      # its WebGPU port with Python when the configure could not (cmake/web_emscripten_port.cmake), so SSL_CERT_FILE
+      # points that Python at Ubuntu's certificate bundle, wherever its own OpenSSL looks by default.
       - name: Install Python for Emscripten
         if: matrix.standalone_python && matrix.web_player == 'build'
         env:
