@@ -17,7 +17,6 @@
  *     decides the feature), every other shader is created;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
  *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one;
- *   - WebGPU reads no textures back, so the GI page feedback and the temporal probe do not run there;
  *   - a feature whose dependency is unavailable is unavailable, and says why;
  *   - the --gfx-disable names parse into the mask they describe;
  *   - every requirement entry has a name and a fallback sentence.
@@ -70,7 +69,6 @@ auto make_desktop_caps() -> gfx::device_caps
     caps.has_image_read_write = true;
     caps.has_blend_independent = true;
     caps.has_vertex_storage_buffers = true;
-    caps.has_texture_read_back = true;
     caps.max_compute_bindings = ALL_COMPUTE_BINDINGS;
     caps.max_storage_textures_per_stage = ALL_COMPUTE_BINDINGS;
     caps.max_texture_size = 16384;
@@ -317,26 +315,6 @@ void test_no_vertex_storage_buffers()
     }
 }
 
-void test_no_texture_read_back()
-{
-    std::printf("WebGPU reads no textures back: only the GI page feedback and the temporal probe turn off\n");
-    bgfx::Caps webgpu_caps{};
-    webgpu_caps.rendererType = bgfx::RendererType::WebGPU;
-    check(!gfx::make_device_caps(webgpu_caps).has_texture_read_back, "WebGPU: no texture read-back");
-    auto caps = make_desktop_caps();
-    caps.has_texture_read_back = false;
-    const auto support = render_feature_support::resolve(caps);
-    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
-    {
-        const auto feature = static_cast<render_feature>(index);
-        const bool reads_back =
-            feature == render_feature::gi_page_feedback || feature == render_feature::temporal_probe;
-        check_available(support, feature, !reads_back, "no texture read-back");
-    }
-    check(support.get_status(render_feature::gi_page_feedback).reason.find("read textures back") != std::string::npos,
-          "no texture read-back: the page feedback says why");
-}
-
 void test_dependency_reason()
 {
     std::printf("a feature whose dependency is unavailable says why\n");
@@ -430,7 +408,6 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_shaders_of_unavailable_features();
     test_no_compute();
     test_no_vertex_storage_buffers();
-    test_no_texture_read_back();
     test_dependency_reason();
     test_render_target_sample_counts();
     test_mask_parsing();

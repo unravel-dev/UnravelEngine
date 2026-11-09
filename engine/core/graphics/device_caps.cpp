@@ -363,7 +363,6 @@ auto make_device_caps(const bgfx::Caps& caps) -> device_caps
     result.has_image_read_write = 0 != (caps.supported & BGFX_CAPS_IMAGE_RW);
     result.has_blend_independent = 0 != (caps.supported & BGFX_CAPS_BLEND_INDEPENDENT);
     result.has_vertex_storage_buffers = caps.rendererType != bgfx::RendererType::OpenGLES;
-    result.has_texture_read_back = caps.rendererType != bgfx::RendererType::WebGPU;
     result.max_compute_bindings =
         static_cast<std::uint8_t>(std::min<std::uint32_t>(caps.limits.maxComputeBindings, UINT8_MAX));
     result.max_storage_textures_per_stage = result.max_compute_bindings;
@@ -512,8 +511,7 @@ auto describe_device_caps(const device_caps& caps) -> std::string
                        (caps.has_draw_indirect ? "yes" : "no") + ", indirect dispatches " +
                        (caps.has_dispatch_indirect ? "yes" : "no") + ", independent blend " +
                        (caps.has_blend_independent ? "yes" : "no") + ", vertex storage buffers " +
-                       (caps.has_vertex_storage_buffers ? "yes" : "no") + ", texture read-back " +
-                       (caps.has_texture_read_back ? "yes" : "no") + ".";
+                       (caps.has_vertex_storage_buffers ? "yes" : "no") + ".";
     return text;
 }
 

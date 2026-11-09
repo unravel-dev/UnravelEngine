@@ -44,9 +44,6 @@ struct device_caps
     bool has_blend_independent{};
     /// Storage buffer reads in vertex shaders. bgfx reports no limit; OpenGL ES 3.1 guarantees none.
     bool has_vertex_storage_buffers{};
-    /// Texture reads back to the CPU (bgfx::readTexture). Not under WebGPU, which the engine runs in the browser only:
-    /// bgfx's backend waits for the read in a loop the page's only thread never leaves.
-    bool has_texture_read_back{};
     /// The resources a compute dispatch binds: stages at or above it are not bound.
     std::uint8_t max_compute_bindings{};
     /// The storage images one shader stage binds. bgfx reports no such limit (its WebGPU backend reports 16 compute

@@ -1,0 +1,56 @@
+WebGPU: readTexture in the browser completes from the browser's event loop
+
+With a device from PlatformData::context in the browser, readTexture mapped its read-back buffer and then waited
+for the map in a loop calling wgpuInstanceProcessEvents. The map's callback (AllowProcessEvents) is filed under
+the instance the device was imported into, never bgfx's own, and the browser resolves a map only from its event
+loop, which the waiting loop never returns to: the page hangs on the first read. With such a device the map now
+uses the spontaneous callback mode the timer and occlusion query read-backs use: readTexture returns at once, and
+the callback copies the texels and frees the read when the browser resolves the map, between the frames before
+the read is due. readBuffer and requestScreenShot wait the same way and are not changed here.
+
+diff --git a/src/renderer_webgpu.cpp b/src/renderer_webgpu.cpp
+--- a/src/renderer_webgpu.cpp
++++ b/src/renderer_webgpu.cpp
+@@ -1981,7 +1981,14 @@ WGPU_IMPORT
+ 
+ 			wgpuRelease(readTexture.buffer);
+ 
+-			*(bool*)(_userdata2) = true;
++			if (NULL == _userdata2)
++			{
++				bx::deleteObject(g_allocator, &readTexture);
++			}
++			else
++			{
++				*(bool*)(_userdata2) = true;
++			}
+ 		}
+ 
+ 		struct ReadBuffer
+@@ -2145,6 +2152,26 @@ WGPU_IMPORT
+ 				.texelSize     = blockInfo.blockSize,
+ 			};
+ 
++			if (WGPUCallbackMode_AllowSpontaneous == m_callbackMode)
++			{
++				// In the browser this thread cannot wait for the map: the browser completes it from its event loop,
++				// between the frames that pass before the read is due. The callback owns the read.
++				WGPU_CHECK(wgpuBufferMapAsync(
++					  readTextureBuffer
++					, WGPUMapMode_Read
++					, 0
++					, copySize
++					, {
++						.nextInChain = NULL,
++						.mode        = m_callbackMode,
++						.callback    = readTextureCb,
++						.userdata1   = BX_NEW(g_allocator, ReadTexture)(readTexture),
++						.userdata2   = NULL,
++					}) );
++
++				return;
++			}
++
+ 			WGPU_CHECK(wgpuBufferMapAsync(
+ 				  readTextureBuffer
+ 				, WGPUMapMode_Read
