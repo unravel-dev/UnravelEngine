@@ -24,6 +24,9 @@ SAMPLER2D(s_cloudNoise2D, 1);
 
 // Star twinkle period in seconds of u_cloud_time (which wraps at a multiple of it).
 #define STAR_TWINKLE_PERIOD            10.0
+// How far the dither noise spreads around its mean: 0.4 times the sum of two uniform hashes gives a standard
+// deviation of about 0.16.
+#define DITHER_SPREAD                  0.4
 
 // ----------------------------- Dithering helpers -----------------------------
 
@@ -32,11 +35,14 @@ float nrand(in vec2 n)
     return fract(sin(dot(n.xy, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
+/// Dither noise around 0.5 (0.1 to 0.9): two uniform hashes summed into a triangular distribution. No logarithm
+/// or square root: Apple GPUs return infinity from the Gaussian form, sqrt(-log(hash)), at some pixels, and one
+/// infinite sky pixel fills a reflection probe's blurriest mips.
 float n4rand_ss(in vec2 n)
 {
     float nrnd0 = nrand(n + 0.07 * fract(u_time));
     float nrnd1 = nrand(n + 0.11 * fract(u_time + 0.573953));
-    return 0.23 * sqrt(-log(nrnd0 + 0.00001)) * cos(2.0 * 3.141592 * nrnd1) + 0.5;
+    return 0.5 + DITHER_SPREAD * (nrnd0 + nrnd1 - 1.0);
 }
 
 // ----------------------------- Procedural noise -----------------------------
