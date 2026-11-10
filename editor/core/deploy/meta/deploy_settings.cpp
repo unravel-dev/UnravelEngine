@@ -56,7 +56,73 @@ REFLECT(android_deploy_settings)
         .data<deploy_texture_compression::bc>("bc"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bc"},
-            entt::attribute{"pretty_name", "BC (Desktop)"},
+            entt::attribute{"pretty_name", "BC"},
+        });
+
+    entt::meta_factory<web_graphics>{}
+        .type("web_graphics"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "web_graphics"},
+            entt::attribute{"pretty_name", "Graphics"},
+        })
+        .data<web_graphics::webgpu>("webgpu"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "webgpu"},
+            entt::attribute{"pretty_name", "WebGPU Only"},
+        })
+        .data<web_graphics::webgpu_then_webgl2>("webgpu_then_webgl2"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "webgpu_then_webgl2"},
+            entt::attribute{"pretty_name", "WebGPU, Then WebGL 2"},
+        })
+        .data<web_graphics::webgl2>("webgl2"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "webgl2"},
+            entt::attribute{"pretty_name", "WebGL 2 Only"},
+        });
+
+    entt::meta_factory<web_fallback_notice>{}
+        .type("web_fallback_notice"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "web_fallback_notice"},
+            entt::attribute{"pretty_name", "When WebGL 2 Stands In"},
+        })
+        .data<web_fallback_notice::tell>("tell"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "tell"},
+            entt::attribute{"pretty_name", "Tell the Player"},
+        })
+        .data<web_fallback_notice::ask>("ask"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "ask"},
+            entt::attribute{"pretty_name", "Ask the Player First"},
+        })
+        .data<web_fallback_notice::silent>("silent"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "silent"},
+            entt::attribute{"pretty_name", "Say Nothing"},
+        });
+
+    entt::meta_factory<web_run_graphics>{}
+        .type("web_run_graphics"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "web_run_graphics"},
+            entt::attribute{"pretty_name", "Run With"},
+        })
+        .data<web_run_graphics::automatic>("automatic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "automatic"},
+            entt::attribute{"pretty_name", "Auto"},
+        })
+        .data<web_run_graphics::webgpu>("webgpu"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "webgpu"},
+            entt::attribute{"pretty_name", "WebGPU"},
+        })
+        .data<web_run_graphics::webgl2>("webgl2"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "webgl2"},
+            entt::attribute{"pretty_name", "WebGL 2"},
         });
 
     entt::meta_factory<android_permissions>{}
@@ -235,7 +301,7 @@ REFLECT(android_deploy_settings)
                             "ASTC: the better image for its size. A phone without it decodes the\n"
                             "textures when they load, into four times the memory.\n"
                             "ETC2: read by every OpenGL ES 3 and Vulkan phone, at a lower quality.\n"
-                            "BC (Desktop): the formats the editor compiles for this computer, shipped\n"
+                            "BC: the formats the editor compiles for this computer, shipped\n"
                             "as they are. Only some phones read them; the others decode the textures\n"
                             "when they load, into four to eight times the memory.\n\n"
                             "The deploy compresses the textures for this profile and keeps them\n"
@@ -420,13 +486,62 @@ REFLECT(web_deploy_settings)
             entt::attribute{"category", "EDITOR"},
             entt::attribute{"pretty_name", "Web"},
         })
+        .data<&web_deploy_settings::graphics>("graphics"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "graphics"},
+            entt::attribute{"pretty_name", "Graphics"},
+            entt::attribute{"tooltip",
+                            "The graphics APIs the game renders with in the browser.\n\n"
+                            "WebGPU Only: every rendering feature the device runs. A browser without\n"
+                            "WebGPU cannot start the game.\n"
+                            "WebGPU, Then WebGL 2: WebGPU where the browser offers it, WebGL 2 elsewhere.\n"
+                            "The game always runs on the graphics card: an API the browser offers only\n"
+                            "without it counts as unavailable.\n"
+                            "WebGL 2 has no compute shaders, so GI, screen space effects, ambient occlusion,\n"
+                            "auto exposure and volumetric fog are off there; the deploy cooks the shaders\n"
+                            "for both.\n"
+                            "WebGL 2 Only: WebGL 2 in every browser, with those features off everywhere."},
+        })
+        .data<&web_deploy_settings::fallback_notice>("fallback_notice"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fallback_notice"},
+            entt::attribute{"pretty_name", "When WebGL 2 Stands In"},
+            entt::attribute{"tooltip",
+                            "What the page tells the player when the browser's WebGPU is unavailable, or\n"
+                            "would draw without the graphics card, and the game starts on WebGL 2 instead.\n\n"
+                            "Tell the Player: a notice over the game for a few seconds says why, with simpler\n"
+                            "lighting, and how to turn WebGPU on. It shows once per game and reason.\n"
+                            "Ask the Player First: before the download, a screen says why and offers to\n"
+                            "continue on WebGL 2. The answer is kept per game and reason.\n"
+                            "Say Nothing: only the browser's console says why.\n\n"
+                            "Most players cannot turn WebGPU on (a blocked driver, a managed browser, a\n"
+                            "phone), so asking suits games whose look depends on what WebGL 2 turns off."},
+        })
+        .data<&web_deploy_settings::help_link>("help_link"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "help_link"},
+            entt::attribute{"pretty_name", "Help Link"},
+            entt::attribute{"tooltip",
+                            "A web page on turning WebGPU on, which the notice and the error screen link to,\n"
+                            "such as your game's support page. Empty: the page gives its own advice for the\n"
+                            "reason, such as updating the browser or the graphics driver."},
+        })
+        .data<&web_deploy_settings::run_graphics>("run_graphics"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "run_graphics"},
+            entt::attribute{"pretty_name", "Run With"},
+            entt::attribute{"tooltip",
+                            "The graphics API Deploy and Run and the public link start the game with, to see\n"
+                            "the WebGL 2 version on a computer whose browser has WebGPU.\n\n"
+                            "Auto: the page chooses as it does for players."},
+        })
         .data<&web_deploy_settings::texture_compression>("texture_compression"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "texture_compression"},
             entt::attribute{"pretty_name", "Texture Format"},
             entt::attribute{"tooltip",
                             "The formats the game's textures are compressed to in the browser.\n\n"
-                            "BC (Desktop): the formats the editor compiles for this computer, which the\n"
+                            "BC: the formats the editor compiles for this computer, which the\n"
                             "browsers of computers read. Most phones and tablets do not, and load the\n"
                             "Phone Texture Format's set instead.\n"
                             "ASTC: the better image for its size, which phones, tablets and Apple's\n"
@@ -452,6 +567,10 @@ REFLECT(web_deploy_settings)
 
 SAVE(web_deploy_settings)
 {
+    try_save(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_save(ar, ser20::make_nvp("fallback_notice", obj.fallback_notice));
+    try_save(ar, ser20::make_nvp("help_link", obj.help_link));
+    try_save(ar, ser20::make_nvp("run_graphics", obj.run_graphics));
     try_save(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
     try_save(ar, ser20::make_nvp("phone_texture_compression", obj.phone_texture_compression));
 }
@@ -460,6 +579,10 @@ SAVE_INSTANTIATE(web_deploy_settings, ser20::oarchive_binary_t);
 
 LOAD(web_deploy_settings)
 {
+    try_load(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_load(ar, ser20::make_nvp("fallback_notice", obj.fallback_notice));
+    try_load(ar, ser20::make_nvp("help_link", obj.help_link));
+    try_load(ar, ser20::make_nvp("run_graphics", obj.run_graphics));
     try_load(ar, ser20::make_nvp("texture_compression", obj.texture_compression));
     try_load(ar, ser20::make_nvp("phone_texture_compression", obj.phone_texture_compression));
 }

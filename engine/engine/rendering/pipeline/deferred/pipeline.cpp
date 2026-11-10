@@ -1,5 +1,7 @@
 #include "pipeline_internal.h"
 
+#include <engine/rendering/render_feature_support.h>
+
 #include <utility>
 
 namespace unravel
@@ -398,6 +400,8 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Run Pipeline");
+    update_light_programs(params.limits);
+    update_skinned_batch_programs(batch_collector::is_skinned_mesh_batching_enabled());
     const usize32_t render_size = get_run_render_size(camera.get_viewport_size(), params);
     const run_context run{output, scn, camera, rview, dt, params, render_mask, render_size};
     const run_scope scope(*this, run);
@@ -580,7 +584,7 @@ void deferred::finish_camera_image(const run_context& run, const lit_scene& lit)
         run_upscale_pass(make_upscale_params(run.rview, scene, run.output), run.params);
     }
     // After every pass that samples PREV_DEPTH.
-    snapshot_prev_depth(run.rview, run.render_size, has_prev_depth_reader(run.rview, run.params));
+    snapshot_prev_depth(run.rview, has_prev_depth_reader(run.rview, run.params));
 }
 
 void deferred::render_post_processing(const run_context& run,
@@ -644,23 +648,29 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     constexpr auto default_variant = gfx::shader::DEFAULT_VARIANT;
 
-    auto load_program = [&](const std::string& vs, const std::string& vs_variant, const std::string& fs, const std::string& fs_variant)
+    auto load_program = [&](const std::string& vs,
+                            const std::string& vs_variant,
+                            const std::string& fs,
+                            const std::string& fs_variant,
+                            bool is_wanted = true)
     {
         auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/" + vs + ".eshader");
         auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/" + fs + ".eshader");
 
-        return std::make_unique<gpu_program>(vs_shader, vs_variant, fs_shadfer, fs_variant);
+        return std::make_unique<gpu_program>(vs_shader, vs_variant, fs_shadfer, fs_variant, is_wanted);
     };
 
-    const auto load_geom_program = [&](const std::string& vs_variant, const std::string& fs_variant)
+    const auto load_geom_program = [&](const std::string& vs_variant, const std::string& fs_variant, bool is_wanted = true)
     {
-        return load_program("deferred_geom/vs_deferred_geom", vs_variant, "deferred_geom/fs_deferred_geom", fs_variant);
+        return load_program("deferred_geom/vs_deferred_geom", vs_variant, "deferred_geom/fs_deferred_geom", fs_variant, is_wanted);
     };
 
-    const auto load_velocity_program = [&](const std::string& vs_variant)
+    const auto load_velocity_program = [&](const std::string& vs_variant, bool is_wanted = true)
     {
-        return load_program("velocity/vs_velocity", vs_variant, "velocity/fs_velocity", default_variant);
+        return load_program("velocity/vs_velocity", vs_variant, "velocity/fs_velocity", default_variant, is_wanted);
     };
+    // The batched skinned programs build at the first run that has skinned batching on (update_skinned_batch_programs).
+    constexpr bool is_built_by_run = false;
 
     const auto load_screen_program = [&](const std::string& vs, const std::string& fs, const std::string& fs_variant = gfx::shader::DEFAULT_VARIANT)
     {
@@ -680,10 +690,11 @@ auto deferred::init(rtti::context& ctx) -> bool
     geom_program_instanced_material_.program = load_geom_program("instanced_material", "instance_material");
 
     geom_program_skinned_instanced_.cache_uniforms();
-    geom_program_skinned_instanced_.program = load_geom_program("skinned_instanced", default_variant);
+    geom_program_skinned_instanced_.program = load_geom_program("skinned_instanced", default_variant, is_built_by_run);
 
     geom_program_skinned_instanced_material_.cache_uniforms();
-    geom_program_skinned_instanced_material_.program = load_geom_program("skinned_instanced_material", "instance_material");
+    geom_program_skinned_instanced_material_.program =
+        load_geom_program("skinned_instanced_material", "instance_material", is_built_by_run);
 
     geom_program_skinned_baked_instanced_.cache_uniforms();
     geom_program_skinned_baked_instanced_.program = load_geom_program("skinned_baked_instanced", default_variant);
@@ -702,7 +713,7 @@ auto deferred::init(rtti::context& ctx) -> bool
     velocity_program_instanced_.program = load_velocity_program("instanced");
 
     velocity_program_skinned_instanced_.cache_uniforms();
-    velocity_program_skinned_instanced_.program = load_velocity_program("skinned_instanced");
+    velocity_program_skinned_instanced_.program = load_velocity_program("skinned_instanced", is_built_by_run);
 
     velocity_program_skinned_baked_instanced_.cache_uniforms();
     velocity_program_skinned_baked_instanced_.program = load_velocity_program("skinned_baked_instanced");
@@ -756,11 +767,22 @@ auto deferred::init(rtti::context& ctx) -> bool
     debug_visualization_program_.cache_uniforms();
     debug_visualization_program_.program = load_screen_program("vs_clip_quad", "gbuffer/fs_gbuffer_visualize");
 
-    // Color lighting.
+    // Color lighting: the programs the project's limits allow on this device. Each run updates them to its view's
+    // limits (update_light_programs).
+    declare_light_programs();
+    const auto device_limits = get_render_feature_support().get_device_limits();
+    update_light_programs(ctx.has<settings>() ? intersect_feature_limits(ctx.get<settings>().graphics.limits, device_limits)
+                                              : device_limits);
 
-    // Uniforms before programs (the cache_uniform order contract): every slot shares the
-    // same uniform set, so registering one of each array is enough for all of them.
-    // Every program of an array of light programs, whatever its dimensions.
+    ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");
+
+    return pipeline::init(ctx);
+}
+
+void deferred::declare_light_programs()
+{
+    // Uniforms before programs (the cache_uniform order contract): every slot shares the same uniform set, and the
+    // programs a change of limits creates later find them registered.
     const auto cache_light_uniforms = [](const auto& self, auto& programs) -> void
     {
         for(auto& entry : programs)
@@ -780,69 +802,106 @@ auto deferred::init(rtti::context& ctx) -> bool
     cache_light_uniforms(cache_light_uniforms, color_lighting_no_shadow_);
     cache_light_uniforms(cache_light_uniforms, color_lighting_);
     cache_light_uniforms(cache_light_uniforms, color_lighting_pcf_tent_);
-    // Each light program with its variants (light_program_variants). A shadow filter starts its variants' names; without
-    // shadows there is none.
-    const auto load_light_program = [&](light_program_variants& variants, const std::string& fs, const std::string& shadow_filter)
+    struct light_shader
     {
-        const auto prefix = shadow_filter.empty() ? std::string{} : shadow_filter + "_";
-        variants.full.program = load_screen_program("vs_clip_quad", fs, shadow_filter.empty() ? default_variant : shadow_filter);
-        variants.no_contact.program = load_screen_program("vs_clip_quad", fs, prefix + "no_contact");
-        variants.no_contact_no_subsurface.program = load_screen_program("vs_clip_quad", fs, prefix + "no_contact_no_subsurface");
+        light_type type;
+        const char* fragment_shader;
     };
+    constexpr light_shader light_shaders[] = {{light_type::spot, "fs_deferred_spot_light"},
+                                              {light_type::point, "fs_deferred_point_light"},
+                                              {light_type::directional, "fs_deferred_directional_light"}};
+    constexpr sm_depth depths[] = {sm_depth::invz, sm_depth::linear};
+    light_program_slots_.clear();
+    for(const auto& shader : light_shaders)
+    {
+        const auto type = uint8_t(shader.type);
+        light_program_slots_.push_back({&color_lighting_no_shadow_[type], shader.fragment_shader, ""});
+        for(const auto depth : depths)
+        {
+            const std::string suffix = depth == sm_depth::linear ? "_linear" : "";
+            auto& programs = color_lighting_[type][uint8_t(depth)];
+            // Linear spot and point maps keep the point-tap PCF and have no tent sizes: their PCF program filters the
+            // narrow PCF too.
+            const bool has_tents = depth == sm_depth::invz || shader.type == light_type::directional;
+            const auto pcf_filtering = has_tents ? shadow_filtering_limit::pcf : shadow_filtering_limit::pcf_3x3;
+            light_program_slots_.push_back({&programs[uint8_t(sm_impl::hard)], shader.fragment_shader, "hard" + suffix});
+            light_program_slots_.push_back({&programs[uint8_t(sm_impl::pcf)], shader.fragment_shader, "pcf" + suffix, pcf_filtering});
+            for(const auto& [impl, name] : {std::pair{sm_impl::pcss, "pcss"}, std::pair{sm_impl::vsm, "vsm"}, std::pair{sm_impl::esm, "esm"}})
+            {
+                light_program_slots_.push_back(
+                    {&programs[uint8_t(impl)], shader.fragment_shader, name + suffix, shadow_filtering_limit::pcf, true});
+            }
+        }
+    }
+    // The tent sizes the shaders have: point lights never reach the 7x7.
+    const auto add_tent = [&](light_type type, sm_depth depth, size_t slot, const char* fragment_shader, const char* name)
+    {
+        const auto filtering = slot == ANONYMOUS::pcf_tent3_slot ? shadow_filtering_limit::pcf_3x3 : shadow_filtering_limit::pcf;
+        light_program_slots_.push_back(
+            {&color_lighting_pcf_tent_[uint8_t(type)][uint8_t(depth)][slot], fragment_shader, name, filtering});
+    };
+    add_tent(light_type::spot, sm_depth::invz, ANONYMOUS::pcf_tent3_slot, "fs_deferred_spot_light", "pcf_tent3");
+    add_tent(light_type::spot, sm_depth::invz, ANONYMOUS::pcf_tent7_slot, "fs_deferred_spot_light", "pcf_tent7");
+    add_tent(light_type::point, sm_depth::invz, ANONYMOUS::pcf_tent3_slot, "fs_deferred_point_light", "pcf_tent3");
+    add_tent(light_type::directional, sm_depth::invz, ANONYMOUS::pcf_tent3_slot, "fs_deferred_directional_light", "pcf_tent3");
+    add_tent(light_type::directional, sm_depth::invz, ANONYMOUS::pcf_tent7_slot, "fs_deferred_directional_light", "pcf_tent7");
+    add_tent(light_type::directional, sm_depth::linear, ANONYMOUS::pcf_tent3_slot, "fs_deferred_directional_light", "pcf_linear_tent3");
+    add_tent(light_type::directional, sm_depth::linear, ANONYMOUS::pcf_tent7_slot, "fs_deferred_directional_light", "pcf_linear_tent7");
+}
 
-    // clang-format off
-    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::spot)], "fs_deferred_spot_light", "");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light", "hard");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light", "pcf");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light", "pcss");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light", "vsm");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light", "esm");
+auto deferred::is_light_program_allowed(const light_program_slot& slot, const light_program_limits& limits) -> bool
+{
+    return slot.min_filtering <= limits.max_shadow_filtering && (!slot.is_soft || limits.soft_shadows);
+}
 
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_spot_light", "hard_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_spot_light", "pcf_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_spot_light", "pcss_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_spot_light", "vsm_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::spot)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_spot_light", "esm_linear");
+void deferred::set_light_program(color_lighting& entry, const std::string& fragment_shader, const std::string& variant, bool is_wanted)
+{
+    if(!is_wanted)
+    {
+        entry.program.reset();
+        return;
+    }
+    if(entry.program)
+    {
+        return;
+    }
+    auto& assets = engine::context().get_cached<asset_manager>();
+    auto vertex = assets.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.eshader");
+    auto fragment = assets.get_asset<gfx::shader>("engine:/data/shaders/" + fragment_shader + ".eshader");
+    entry.program = std::make_unique<gpu_program>(vertex, gfx::shader::DEFAULT_VARIANT, fragment, variant);
+}
 
-    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::point)], "fs_deferred_point_light", "");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_point_light", "hard");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light", "pcf");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light", "pcss");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light", "vsm");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light", "esm");
+void deferred::update_light_programs(const feature_limits& limits)
+{
+    const light_program_limits wanted{limits.contact_shadows, limits.subsurface, limits.soft_shadows, limits.max_shadow_filtering};
+    if(light_program_limits_ == wanted)
+    {
+        return;
+    }
+    light_program_limits_ = wanted;
+    for(const auto& slot : light_program_slots_)
+    {
+        const bool is_allowed = is_light_program_allowed(slot, wanted);
+        const std::string prefix = slot.shadow_filter.empty() ? std::string{} : slot.shadow_filter + "_";
+        const std::string full = slot.shadow_filter.empty() ? std::string(gfx::shader::DEFAULT_VARIANT) : slot.shadow_filter;
+        // The full variant holds the contact shadow code, the one without it the subsurface code; the leanest exists
+        // whenever the slot does, as the light a run's limits leave both out of draws with it.
+        set_light_program(slot.variants->full, slot.fragment_shader, full, is_allowed && wanted.contact_shadows);
+        set_light_program(slot.variants->no_contact, slot.fragment_shader, prefix + "no_contact", is_allowed && wanted.subsurface);
+        set_light_program(slot.variants->no_contact_no_subsurface, slot.fragment_shader, prefix + "no_contact_no_subsurface", is_allowed);
+    }
+}
 
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_point_light", "hard_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_point_light", "pcf_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_point_light", "pcss_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_point_light", "vsm_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::point)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_point_light", "esm_linear");
-
-    load_light_program(color_lighting_no_shadow_[uint8_t(light_type::directional)], "fs_deferred_directional_light", "");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light", "hard");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light", "pcf");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light", "pcss");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light", "vsm");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light", "esm");
-
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::hard)], "fs_deferred_directional_light", "hard_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcf) ], "fs_deferred_directional_light", "pcf_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::pcss) ], "fs_deferred_directional_light", "pcss_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::vsm) ], "fs_deferred_directional_light", "vsm_linear");
-    load_light_program(color_lighting_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][uint8_t(sm_impl::esm) ], "fs_deferred_directional_light", "esm_linear");
-
-    // Linear spot and point maps keep the point-tap PCF and have no tent sizes; point lights never reach the 7x7.
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_spot_light", "pcf_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::spot)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_spot_light", "pcf_tent7");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::point)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_point_light", "pcf_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light", "pcf_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::invz)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light", "pcf_tent7");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent3_slot], "fs_deferred_directional_light", "pcf_linear_tent3");
-    load_light_program(color_lighting_pcf_tent_[uint8_t(light_type::directional)][uint8_t(sm_depth::linear)][ANONYMOUS::pcf_tent7_slot], "fs_deferred_directional_light", "pcf_linear_tent7");
-    // clang-format on
-
-    ibl_brdf_lut_ = am.get_asset<gfx::texture>("engine:/data/textures/ibl_brdf_lut.png");
-
-    return pipeline::init(ctx);
+void deferred::update_skinned_batch_programs(bool is_batching)
+{
+    if(skinned_batch_programs_wanted_ == is_batching)
+    {
+        return;
+    }
+    skinned_batch_programs_wanted_ = is_batching;
+    geom_program_skinned_instanced_.program->set_wanted(is_batching);
+    geom_program_skinned_instanced_material_.program->set_wanted(is_batching);
+    velocity_program_skinned_instanced_.program->set_wanted(is_batching);
 }
 
 auto deferred::deinit(rtti::context& ctx) -> bool

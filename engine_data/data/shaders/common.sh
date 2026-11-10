@@ -7,7 +7,9 @@
 
 #include <bgfx_shader.sh>
 
-uniform mat4  u_world[BGFX_CONFIG_MAX_BONES];
+/// The draw's world matrix (gfx::set_world_transform). Skinned draws read their bones from the palettes of
+/// skinning_palette.sh.
+uniform mat4  u_world[1];
 
 #include "shaderlib.sh"
 

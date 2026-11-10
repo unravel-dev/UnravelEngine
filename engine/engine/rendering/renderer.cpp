@@ -8,6 +8,7 @@
 #include "render_feature_support.h"
 #include "shadow.h"
 #include "skinning_palette_buffer.h"
+#include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
 #include <engine/profiler/profiler.h>
 #include <engine/settings/boot_config.h>
@@ -28,6 +29,7 @@
 #include <ospp/message_box.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -64,9 +66,26 @@ namespace unravel
 namespace
 {
 thread_local std::vector<uint32_t> s_bgfx_profiler_scope_stack;
+/// The page's names of the reasons WebGL 2 stands in (--graphics-fallback), in graphics_fallback_reason's order.
+constexpr std::array<const char*, static_cast<std::size_t>(graphics_fallback_reason::count)>
+    GRAPHICS_FALLBACK_REASON_NAMES = {
+    "",
+    "insecure_page",
+    "api_missing",
+    "no_adapter",
+    "device_failed",
+    "software_adapter",
+    "forced",
+};
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
 /// Submitted frames the GPU may still be drawing when the next one starts, in the browser.
 constexpr int MAX_GPU_FRAMES_IN_FLIGHT = 2;
+/// Whether the page chose WebGL 2 (--graphics webgl2); otherwise the engine renders through WebGPU.
+auto is_webgl2_chosen(const cmd_line::parser& parser) -> bool
+{
+    std::string graphics;
+    return parser.try_get("graphics", graphics) && graphics == ex::WEBGL2_GRAPHICS_NAME;
+}
 
 /// The page's WebGPU device, imported once: every bgfx start gets the same handle, and the engine keeps its
 /// reference for the page's lifetime, as the page keeps the device.
@@ -76,6 +95,37 @@ auto get_page_webgpu_device() -> void*
     return device;
 }
 #endif
+/// The --graphics-fallback option's help: the reasons the page names.
+auto make_graphics_fallback_help() -> std::string
+{
+    std::string reasons;
+    for(const auto* name : GRAPHICS_FALLBACK_REASON_NAMES)
+    {
+        if(*name != '\0')
+        {
+            reasons += (reasons.empty() ? "" : ", ") + std::string(name);
+        }
+    }
+    return "In the browser, why the page chose WebGL 2 over WebGPU: " + reasons + ".";
+}
+} // namespace
+
+auto get_graphics_fallback_reason_name(graphics_fallback_reason reason) -> const char*
+{
+    const auto index = static_cast<std::size_t>(reason);
+    return index < GRAPHICS_FALLBACK_REASON_NAMES.size() ? GRAPHICS_FALLBACK_REASON_NAMES[index] : "";
+}
+
+auto parse_graphics_fallback_reason(const std::string& name) -> graphics_fallback_reason
+{
+    if(name.empty())
+    {
+        return graphics_fallback_reason::none;
+    }
+    const auto found = std::find(GRAPHICS_FALLBACK_REASON_NAMES.begin(), GRAPHICS_FALLBACK_REASON_NAMES.end(), name);
+    return found != GRAPHICS_FALLBACK_REASON_NAMES.end()
+               ? static_cast<graphics_fallback_reason>(found - GRAPHICS_FALLBACK_REASON_NAMES.begin())
+               : graphics_fallback_reason::none;
 }
 
 renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
@@ -177,6 +227,13 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
     ev.on_app_enter_foreground.connect(sentinel_, this, &renderer::invalidate_cached_shadow_maps);
 
     parser.set_optional<std::string>("r", "renderer", "auto", "Select preferred renderer.");
+    parser.set_optional<std::string>("",
+                                     "graphics",
+                                     ex::WEBGPU_GRAPHICS_NAME,
+                                     fmt::format("In the browser, the graphics API the page chose: {} or {}.",
+                                                 ex::WEBGPU_GRAPHICS_NAME,
+                                                 ex::WEBGL2_GRAPHICS_NAME));
+    parser.set_optional<std::string>("", "graphics-fallback", "", make_graphics_fallback_help());
     parser.set_optional<bool>("n", "novsync", false, "Disable vsync.");
     parser.set_optional<bool>("", "gfx-stats", false, "Show the graphics backend's statistics over the frame.");
     parser.set_optional<bool>("",
@@ -194,7 +251,7 @@ renderer::renderer(rtti::context& ctx, cmd_line::parser& parser)
                                      "Render as a device without the named graphics features would, as a "
                                      "comma-separated list (compute, draw_indirect, dispatch_indirect, image_rw, "
                                      "blend_independent, typed_image_loads, extended_storage_formats, "
-                                     "vertex_storage_buffers, bindings<count> such as bindings8, "
+                                     "vertex_storage_buffers, depth_blit, bindings<count> such as bindings8, "
                                      "format:<name>:<write|read|render|msaa|mips|all> such as format:rg11b10f:write).");
     parser.set_optional<std::string>("W",
                                      "window",
@@ -569,11 +626,24 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // created, but every frame it shows is black. Later resizes keep the main swap chain's format.
     init_data.swapChain.formatColor = bgfx::TextureFormat::RGBA8;
 #elif UNRAVEL_PLATFORM_EMSCRIPTEN
-    // The browser renders through WebGPU, on the device the page created before the engine started: bgfx cannot
-    // wait for an adapter or a device itself there without JSPI or Asyncify.
-    init_data.type = bgfx::RendererType::WebGPU;
+    // The page chooses the browser's graphics API before the engine starts. WebGPU runs on the device the page
+    // created: bgfx cannot wait for an adapter or a device itself there without JSPI or Asyncify. For WebGL 2 bgfx
+    // creates the context on the canvas itself, which the page leaves untouched for either API.
     init_data.fallback = false;
-    init_data.platformData.context = get_page_webgpu_device();
+    if(is_webgl2_chosen(parser))
+    {
+        init_data.type = bgfx::RendererType::OpenGLES;
+        std::string fallback;
+        parser.try_get("graphics-fallback", fallback);
+        graphics_fallback_reason_ = parse_graphics_fallback_reason(fallback);
+        const std::string reason = get_graphics_fallback_reason_name(graphics_fallback_reason_);
+        APPLOG_INFO("The page started WebGL 2{}.", reason.empty() ? "" : " in place of WebGPU (" + reason + ")");
+    }
+    else
+    {
+        init_data.type = bgfx::RendererType::WebGPU;
+        init_data.platformData.context = get_page_webgpu_device();
+    }
 #endif
     std::string video_driver = os::window::get_current_video_driver();
     if(video_driver == "wayland")
@@ -614,6 +684,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         return false;
     }
     resolve_render_feature_support();
+    skinning_palettes_->init();
     const auto debug = read_debug_options(parser, window);
     debug_text_scale_ = debug.text_scale;
     can_toggle_stats_by_touch_ = debug.can_toggle_stats;
@@ -856,6 +927,11 @@ auto renderer::get_skinning_palettes() -> skinning_palette_buffer&
     return *skinning_palettes_;
 }
 
+auto renderer::get_graphics_fallback_reason() const -> graphics_fallback_reason
+{
+    return graphics_fallback_reason_;
+}
+
 void renderer::sync_main_surface()
 {
     if(!render_window_)
@@ -896,10 +972,7 @@ void renderer::frame_begin(rtti::context& ctx, const frame_times& /*times*/)
         const settings::graphics_settings& graphics = ctx.get<settings>().graphics;
         update_eviction(graphics.eviction);
         batch_collector::set_static_mesh_batching_enabled(graphics.static_mesh_batching);
-        // The batched draws read the bone palettes from a buffer in the vertex shader.
-        batch_collector::set_skinned_mesh_batching_enabled(
-            graphics.skinned_mesh_batching &&
-            get_render_feature_support().is_available(render_feature::skinned_mesh_batching));
+        batch_collector::set_skinned_mesh_batching_enabled(graphics.skinned_mesh_batching);
         shadow::set_map_caching_enabled(graphics.shadow_map_caching);
         const auto& particles = graphics.particles;
         ps_soa::set_quality({particles.spawn_scale,
@@ -920,7 +993,9 @@ void renderer::frame_begin(rtti::context& ctx, const frame_times& /*times*/)
 auto renderer::is_gpu_behind() const -> bool
 {
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
-    return is_initialized_ && unravel_get_gpu_frames_in_flight() >= MAX_GPU_FRAMES_IN_FLIGHT;
+    // Counted on the page's WebGPU device; WebGL 2 queues its work in the browser's own frame.
+    return is_initialized_ && bgfx::getRendererType() == bgfx::RendererType::WebGPU &&
+           unravel_get_gpu_frames_in_flight() >= MAX_GPU_FRAMES_IN_FLIGHT;
 #else
     return false;
 #endif
@@ -938,7 +1013,10 @@ void renderer::frame_end(rtti::context& /*ctx*/, const frame_times& /*times*/)
     skinning_palettes_->flush();
     gfx::frame();
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
-    unravel_count_gpu_frame();
+    if(bgfx::getRendererType() == bgfx::RendererType::WebGPU)
+    {
+        unravel_count_gpu_frame();
+    }
 #endif
     if(gpu_pass_log_)
     {

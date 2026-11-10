@@ -1,5 +1,6 @@
 #pragma once
 #include <engine/engine_export.h>
+#include <engine/rendering/shader_buffer.h>
 
 #include <bgfx/bgfx.h>
 #include <entt/container/dense_map.hpp>
@@ -18,10 +19,14 @@ namespace unravel
 {
 struct pose_mat4;
 
-/// Binding stage of the palette buffer in the instanced skinned shaders (s_skin_palettes in skinning_palette.sh).
-/// Below 8: D3D11 feature level 11.0 binds 8 buffers per draw. Clear of the G-buffer material samplers (0-5) and the
-/// shadow cutout sampler (0).
+/// Binding stage of the palettes in the skinned shaders (s_skin_palettes in skinning_palette.sh). Below 8: D3D11
+/// feature level 11.0 binds 8 buffers per draw. Clear of the G-buffer material samplers (0-5) and the shadow cutout
+/// sampler (0).
 constexpr uint8_t SKINNING_PALETTE_STAGE = 7;
+/// The palettes' sampler uniform where they live in a texture (skinning_palette.sh).
+constexpr const char* SKINNING_PALETTE_SAMPLER = "s_skin_palettes";
+/// Rows the palette storages start with (64 KiB): the frame's palettes and the baked animations' rows.
+constexpr uint32_t SKINNING_PALETTE_INITIAL_ROWS = 4096;
 
 /**
  * @brief The bone rows of one frame before they reach the GPU. A bone is the top three rows of its affine skinning
@@ -57,14 +62,16 @@ private:
 };
 
 /**
- * @brief The bone palettes of the instanced skinned draws of one frame, in one GPU buffer.
+ * @brief The bone palettes of the skinned draws of one frame, in one shader buffer: a storage buffer, or a texture on
+ * devices whose vertex shaders read no storage buffers.
  *
  * The first draw path that needs a model's palettes in a frame reserves their rows; every later view of the frame
  * (shadow cascades and faces, probe captures, the velocity pass) gets the same rows. pack_pending() fills the rows in
  * parallel at the end of each pipeline run, while the models' palettes are certain to be alive. flush() uploads
- * everything once, right before the frame is submitted: bgfx runs dynamic-buffer updates ahead of the frame's draws, so
- * draws recorded earlier in the frame read this frame's rows, and when the buffer has to grow bgfx re-points the draws
- * already recorded at the new storage. Main thread only.
+ * everything once, right before the frame is submitted: bgfx runs updates ahead of the frame's draws, so draws recorded
+ * earlier in the frame read this frame's rows. A draw binds storage that holds every row reserved so far; when later
+ * rows need more, new storage takes over and the old one gets the rows it holds too, for the draws recorded with it.
+ * Main thread only.
  */
 class ENGINE_EXPORT skinning_palette_buffer
 {
@@ -83,13 +90,17 @@ public:
     skinning_palette_buffer(const skinning_palette_buffer&) = delete;
     auto operator=(const skinning_palette_buffer&) -> skinning_palette_buffer& = delete;
 
+    /// Picks the storage the device's vertex shaders read and creates the uniforms the skinned programs link with.
+    /// Call once the renderer resolved the device's features, before the skinned programs are created.
+    void init();
     /// Forgets the previous frame's rows. Keeps the storage.
     void begin_frame();
     /**
      * @brief The rows of @p owner's palettes this frame, reserving them on the first call of the frame. The palettes
      * are read by the next pack_pending(), so they must stay unchanged until then.
      * @param owner The model's entity. Not the component's address: the editor deletes and creates entities between
-     *        the runs of a frame, and a new component can take a deleted one's storage.
+     *        the runs of a frame, and a new component can take a deleted one's storage. Without one, the palettes
+     *        get rows of their own.
      * @param palettes The model's current palettes (model_component::get_skinning_transforms).
      * @param previous The previous-frame palettes for the velocity pass, or null. A palette whose previous pose is
      *        missing or has another bone count gets its current rows.
@@ -97,14 +108,25 @@ public:
     auto acquire(entt::const_handle owner,
                  const std::vector<pose_mat4>& palettes,
                  const std::vector<pose_mat4>* previous) -> model_rows;
+    /**
+     * @brief acquire(), with the rows it reserves packed at once instead of by the next pack_pending(): for a single
+     * draw, which may come outside a pipeline run. The other palettes waiting stay for pack_pending()'s parallel pack.
+     */
+    auto acquire_packed(entt::const_handle owner,
+                        const std::vector<pose_mat4>& palettes,
+                        const std::vector<pose_mat4>* previous) -> model_rows;
     /// Packs the palettes acquired since the last call into their rows. Call before the models can change: at the end
     /// of each pipeline run.
     void pack_pending();
-    /// Binds the buffer for the next draw (bindings are discarded with each submit).
+    /// Binds the palettes for the next instanced draw, whose instances carry their first rows (bindings are discarded
+    /// with each submit).
     void bind();
+    /// Binds the palettes for the next draw of one skinned submesh, whose palette starts at @p first_row and its
+    /// previous-frame palette at @p previous_first_row (u_skin_rows of skinning_palette.sh).
+    void bind(uint32_t first_row, uint32_t previous_first_row);
     /// Uploads this frame's rows. Call once per frame, before gfx::frame().
     void flush();
-    /// Releases the GPU buffer. Call before the graphics backend shuts down.
+    /// Releases the GPU storage and the uniforms. Call before the graphics backend shuts down.
     void destroy();
 
     /// Rows uploaded by the last flush(), for statistics.
@@ -158,7 +180,10 @@ private:
     /// Reserves the rows of @p bones and queues their packing; returns the first row.
     auto queue_palette(hpp::span<const math::mat4> bones) -> uint32_t;
     auto take_free_storage() -> upload_storage&;
-    void ensure_buffer();
+    /// Makes the storage hold every row reserved so far, retiring storage that holds fewer.
+    void ensure_storage();
+    /// Gives the retired storages this frame's rows they hold and releases them.
+    void upload_retired(hpp::span<const math::vec4> rows);
 
     skinning_palette_rows rows_;
     /// The palettes' first rows, a run per owner (and a second run once its previous palettes were asked for).
@@ -166,10 +191,11 @@ private:
     entt::dense_map<owner_key, owner_entry, owner_key_hash> owners_;
     std::vector<pack_job> pending_;
     std::vector<std::unique_ptr<upload_storage>> uploads_;
-    bgfx::VertexLayout layout_;
-    bgfx::DynamicVertexBufferHandle buffer_ = BGFX_INVALID_HANDLE;
-    /// The rows the GPU buffer holds.
-    uint32_t capacity_rows_ = 0;
+    shader_buffer storage_{SKINNING_PALETTE_SAMPLER, shader_buffer_element::float4, shader_buffer_storage::buffer};
+    /// Storage that held too few rows this frame: the draws recorded with it read it until the frame is done.
+    std::vector<shader_buffer> retired_;
+    /// u_skin_rows of skinning_palette.sh.
+    bgfx::UniformHandle rows_uniform_ = BGFX_INVALID_HANDLE;
     uint32_t uploaded_row_count_ = 0;
     /// Set by flush(): rows acquired later in the same frame would never reach the GPU.
     bool flushed_ = false;

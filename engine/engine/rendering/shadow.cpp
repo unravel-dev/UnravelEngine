@@ -1441,6 +1441,11 @@ void shadowmap_generator::update_atlas_tile()
     atlas_rect_[3] = float(tile->size) / atlas_size;
 }
 
+void shadowmap_generator::request_programs(const feature_limits& limits)
+{
+    programs_.request(limits.soft_shadows, batch_collector::is_skinned_mesh_batching_enabled());
+}
+
 void shadowmap_generator::update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active)
 {
     if(!l.casts_shadows)
@@ -2571,8 +2576,7 @@ auto shadowmap_generator::is_baked_animation_enabled(const ShadowMapSettings* cu
 {
     const gpu_program* baked_prog =
         resolve_skinned_baked_instanced_pack_program(programs_, currentSmSettings->m_progPackSkinned);
-    return get_render_feature_support().is_available(render_feature::skinned_mesh_batching) && baked_prog != nullptr &&
-           baked_prog->is_valid();
+    return baked_prog != nullptr && baked_prog->is_valid();
 }
 
 auto shadowmap_generator::prepare_shadow_casters(const shadow_map_models_t& models,
@@ -3505,6 +3509,52 @@ void shadowmap_generator::submit_shadow_instances(gpu_program& prog,
     bgfx::submit(viewId, prog.native_handle(), 0, BGFX_DISCARD_ALL);
 }
 
+void Programs::request(bool soft_shadows, bool skinned_batching)
+{
+    const std::uint32_t frame = gfx::get_render_frame();
+    if(frame != frame_)
+    {
+        last_frame_ = frame_ + 1 == frame ? this_frame_ : wishes{};
+        this_frame_ = {};
+        frame_ = frame;
+    }
+    this_frame_.soft_shadows |= soft_shadows;
+    this_frame_.skinned_batching |= skinned_batching;
+    apply({this_frame_.soft_shadows || last_frame_.soft_shadows,
+           this_frame_.skinned_batching || last_frame_.skinned_batching});
+}
+
+void Programs::apply(const wishes& wanted)
+{
+    if(wanted == built_)
+    {
+        return;
+    }
+    built_ = wanted;
+    // Each pack program table by whether its casters need skinned batching.
+    const auto want = [&](gpu_program::ptr (&programs)[DepthImpl::Count][PackDepth::Count], bool needs_batching)
+    {
+        const bool is_drawn = !needs_batching || wanted.skinned_batching;
+        for(auto& depth : programs)
+        {
+            depth[PackDepth::RGBA]->set_wanted(is_drawn);
+            depth[PackDepth::VSM]->set_wanted(is_drawn && wanted.soft_shadows);
+        }
+    };
+    want(m_packDepth, false);
+    want(m_packDepthSkinned, false);
+    want(m_packDepthInstanced, false);
+    want(m_packDepthCutout, false);
+    want(m_packDepthSkinnedCutout, false);
+    want(m_packDepthInstancedCutout, false);
+    want(m_packDepthSkinnedBakedInstanced, false);
+    want(m_packDepthSkinnedBakedInstancedCutout, false);
+    want(m_packDepthSkinnedInstanced, true);
+    want(m_packDepthSkinnedInstancedCutout, true);
+    m_vBlur[PackDepth::VSM]->set_wanted(wanted.soft_shadows);
+    m_hBlur[PackDepth::VSM]->set_wanted(wanted.soft_shadows);
+}
+
 void Programs::init(rtti::context& ctx)
 {
     // clang-format off
@@ -3513,12 +3563,21 @@ void Programs::init(rtti::context& ctx)
 
     constexpr auto defaultVariant = gfx::shader::DEFAULT_VARIANT;
 
+    // The soft shadow and skinned batching programs build when a run asks for them (request).
+    built_ = {};
+    this_frame_ = {};
+    last_frame_ = {};
+    const auto is_built_at_init = [](const std::string& vsVariant, const std::string& fsVariant)
+    {
+        return fsVariant.find("vsm") == std::string::npos && vsVariant.find("skinned_instanced") == std::string::npos;
+    };
+
     auto loadProgram = [&](const std::string& vs, const std::string& fs, const std::string& fsVariant = gfx::shader::DEFAULT_VARIANT)
     {
         auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/" + vs + ".eshader");
         auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/" + fs + ".eshader");
 
-        return std::make_shared<gpu_program>(vs_shader, defaultVariant, fs_shadfer, fsVariant);
+        return std::make_shared<gpu_program>(vs_shader, defaultVariant, fs_shadfer, fsVariant, is_built_at_init(defaultVariant, fsVariant));
     };
 
     auto loadPackDepth = [&](const std::string& vsVariant, const std::string& fsVariant)
@@ -3526,7 +3585,7 @@ void Programs::init(rtti::context& ctx)
         auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/packdepth/vs_shadowmaps_packdepth.eshader");
         auto fs_shadfer = am.get_asset<gfx::shader>("engine:/data/shaders/shadowmaps/packdepth/fs_shadowmaps_packdepth.eshader");
 
-        return std::make_shared<gpu_program>(vs_shader, vsVariant, fs_shadfer, fsVariant);
+        return std::make_shared<gpu_program>(vs_shader, vsVariant, fs_shadfer, fsVariant, is_built_at_init(vsVariant, fsVariant));
     };
 
     // clang-format off

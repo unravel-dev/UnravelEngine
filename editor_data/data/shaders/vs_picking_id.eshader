@@ -1,6 +1,9 @@
 [variants]
 default
-skinned   SKINNED
+// skinned: the bone palette comes from the palettes (skinning_palette.sh) at u_skin_rows.x; skinned_textures reads them
+// from a texture (shader_buffer.sh), for devices whose vertex shaders read no storage buffers.
+skinned            SKINNED
+skinned_textures   SKINNED SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
@@ -11,15 +14,14 @@ vec4 a_indices
 
 [code]
 #include "common.sh"
+#if SKINNED
+#include "skinning_palette.sh"
+#endif
 
 void main()
 {
 #if SKINNED
-    //u_world should already be in the right space
-    mat4 model = a_weight.x * u_world[int(a_indices.x)] +
-                 a_weight.y * u_world[int(a_indices.y)] +
-                 a_weight.z * u_world[int(a_indices.z)] +
-                 a_weight.w * u_world[int(a_indices.w)];
+    mat4 model = skin_palette_matrix(u_skin_rows.x, a_indices, a_weight);
 #else
     mat4 model = u_world[0];
 #endif

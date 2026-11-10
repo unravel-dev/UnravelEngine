@@ -12,6 +12,8 @@
 #include "render_proxy.h"
 #include "batch_collector.h"
 
+#include <entt/entity/handle.hpp>
+#include <entt/entity/registry.hpp>
 #include <hpp/small_vector.hpp>
 
 #include <graphics/graphics.h>
@@ -273,12 +275,17 @@ struct model_submit_extras
     /// (see submesh_pose_mat4::transform_index::casts_shadow) are skipped.
     bool shadow_pass{false};
 
+    /// The model's entity: its skinned submeshes draw with the palette rows the frame gave it
+    /// (skinning_palette_buffer::acquire), shared by every view. Without one they get rows of their own.
+    entt::const_handle owner{};
+
     /// Velocity pass only: previous-frame transforms mirrored from the current ones. When set,
     /// the submit path uploads the matching previous transform via gfx::set_prev_world_transform
-    /// (uniform u_prev_world) next to every u_world upload. A missing or size-mismatched prev
-    /// lookup (armature rebuilt, palette resized) falls back to the CURRENT transform, which
-    /// degrades that draw to zero object velocity instead of producing a bogus one. Null
-    /// pointers (every non-velocity pass) skip the extra uploads entirely.
+    /// (uniform u_prev_world) next to every u_world upload, and skinned submeshes draw with their
+    /// previous palettes too. A missing or size-mismatched prev lookup (armature rebuilt, palette
+    /// resized) falls back to the CURRENT transform, which degrades that draw to zero object
+    /// velocity instead of producing a bogus one. Null pointers (every non-velocity pass) skip the
+    /// extra uploads entirely.
     const math::mat4* prev_world_transform{nullptr};
     const submesh_pose_mat4* prev_submesh_transforms{nullptr};
     const std::vector<pose_mat4>* prev_skinning_transforms{nullptr};
@@ -687,8 +694,9 @@ public:
      * from @c gl_VertexID and reads per-vertex data (positions, bone indices, bone
      * weights, ...) directly from the vertex buffer bound as a read-only compute
      * buffer. Before each per-submesh callback the model has already:
-     *   - Set @c u_world via @c gfx::set_world_transform() with either the per-
-     *     submesh non-skinned matrix or the per-submesh bone matrices.
+     *   - Set @c u_world via @c gfx::set_world_transform() with the per-submesh
+     *     non-skinned matrix, or bound the submesh's bone palette
+     *     (skinning_palette_buffer::bind).
      *   - Bound the mesh's hardware vertex buffer on compute stage @c 0 and its
      *     hardware index buffer on compute stage @c 1 (both read-only).
      * The callback is expected to set the shader program, any additional uniforms,
@@ -723,7 +731,8 @@ public:
         std::function<void(const params& info)> setup_begin;
         /// Called once per pass after @c setup_begin. Typically used to set instance-level uniforms.
         std::function<void(const params& info)> setup_params_per_instance;
-        /// Called once per submesh instance after u_world and the raw VB/IB have been bound.
+        /// Called once per submesh instance after u_world (a skinned submesh: its bone palette) and the raw
+        /// VB/IB have been bound.
         std::function<void(const params& info)> setup_params_per_submesh;
         /// Called once per pass at the end. Typically used to end the program.
         std::function<void(const params& info)> setup_end;

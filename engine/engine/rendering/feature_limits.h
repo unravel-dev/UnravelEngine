@@ -19,6 +19,19 @@ enum class anti_aliasing_limit : std::uint8_t
     temporal,
 };
 
+/// The widest shadow filter a light may use, from the cheapest. Each filter allowed is one more lighting program per
+/// light type and shadow depth format, which every device builds when the pipeline starts; WebGL 2 spends seconds on
+/// each of the wider ones there.
+enum class shadow_filtering_limit : std::uint8_t
+{
+    /// One depth comparison per pixel: every shadowed light renders hard shadows.
+    hard,
+    /// PCF with the 3x3 tent: wider PCF and soft shadows (PCSS, VSM, ESM) filter with it.
+    pcf_3x3,
+    /// PCF of every width, and soft shadows where soft_shadows allows them.
+    pcf,
+};
+
 /**
  * @brief The most expensive rendering features a project's scenes may use.
  *
@@ -46,6 +59,8 @@ struct feature_limits
     sm_resolution max_shadow_resolution{sm_resolution::very_high};
     /// Soft shadows (PCSS, VSM and ESM, with their blur passes); off, those lights filter their shadows with PCF.
     bool soft_shadows{true};
+    /// The widest shadow filter a light may use; lights asking for a wider one filter with this one.
+    shadow_filtering_limit max_shadow_filtering{shadow_filtering_limit::pcf};
     /// Contact shadows.
     bool contact_shadows{true};
     /// Subsurface scattering: off, the G-buffer holds every material's subsurface color as black, and the lighting
@@ -76,7 +91,8 @@ struct feature_limits
 
 /**
  * @brief The light as `limits` let it render: its shadow map no larger than the limit, soft shadows (PCSS,
- * VSM, ESM) filtered with PCF without soft shadows, no contact shadows without them, and no more cascades than allowed.
+ * VSM, ESM) filtered with PCF without soft shadows, its filter no wider than max_shadow_filtering, no contact shadows
+ * without them, and no more cascades than allowed.
  *
  * The shadow pass and the lighting pass must both render the limited light, so the maps and the program
  * reading them agree.

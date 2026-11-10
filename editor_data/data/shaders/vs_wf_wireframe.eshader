@@ -1,6 +1,9 @@
 [variants]
 default
-skinned   SKINNED
+// skinned: the bone palette comes from the palettes (skinning_palette.sh) at u_skin_rows.x; skinned_textures reads them
+// from a texture (shader_buffer.sh), for devices whose vertex shaders read no storage buffers.
+skinned            SKINNED
+skinned_textures   SKINNED SHADER_BUFFER_TEXTURES
 
 [outputs]
 vec4 v_color = vec4(1.0, 1.0, 1.0, 1.0)
@@ -8,6 +11,9 @@ vec4 v_color = vec4(1.0, 1.0, 1.0, 1.0)
 [code]
 #include "common.sh"
 #include <bgfx_compute.sh>
+#if SKINNED
+#include "skinning_palette.sh"
+#endif
 
 uniform vec4 u_wf_params[3];
 #define u_wfColor         u_wf_params[0].xyz
@@ -66,16 +72,10 @@ vec4 get_bone_indices(uint index)
                 rawLoadFloat(u_positions, base + 3u));
 }
 
-// Skinned world transform. u_world[i] is filled by gfx::set_world_transform(bones)
-// with per-bone skinning matrices before submitting each submesh.
+// Skinned world transform: the submesh's palette at u_skin_rows.x (skinning_palette_buffer::bind).
 mat4 get_world_matrix(uint index)
 {
-    vec4 weights = get_weight(index);
-    vec4 bones   = get_bone_indices(index);
-    return weights.x * u_world[int(bones.x)]
-         + weights.y * u_world[int(bones.y)]
-         + weights.z * u_world[int(bones.z)]
-         + weights.w * u_world[int(bones.w)];
+    return skin_palette_matrix(u_skin_rows.x, get_bone_indices(index), get_weight(index));
 }
 #else
 // Non-skinned world transform. u_world[0] is filled by gfx::set_world_transform().

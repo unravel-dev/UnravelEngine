@@ -72,6 +72,7 @@ auto rendering_system::init(rtti::context& ctx) -> bool
     ev.on_frame_end.connect(sentinel_, 1000, this, &rendering_system::on_frame_end);
     ev.on_play_end.connect(sentinel_, -10, this, &rendering_system::on_play_end);
 
+    baked_animations_.init();
     debug_draw_callbacks_.reserve(128);
     return true;
 }

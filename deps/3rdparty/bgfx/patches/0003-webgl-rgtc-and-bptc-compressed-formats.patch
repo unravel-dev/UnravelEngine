@@ -1,0 +1,34 @@
+WebGL: BC4, BC5, BC6H and BC7 with the RGTC and BPTC extensions
+
+On Emscripten every texture format is checked against the WebGL extensions it needs (isTextureFormatValidPerSpec),
+and BC4, BC5, BC6H, BC6HU and BC7 fell through to the default case, so they were never supported in the browser
+even where the context offers EXT_texture_compression_rgtc and EXT_texture_compression_bptc, which nearly every
+browser that offers WEBGL_compressed_texture_s3tc offers too. BC4 and BC5 already switch to the RGTC formats when
+the extension is listed, and the BPTC formats are the ones WebGL's extension takes, so only the check was missing.
+BC4, BC5 and BC6H have no sRGB form; BC7 has one in EXT_texture_compression_bptc.
+
+diff --git a/src/renderer_gl.cpp b/src/renderer_gl.cpp
+--- a/src/renderer_gl.cpp
++++ b/src/renderer_gl.cpp
+@@ -1748,6 +1748,21 @@ namespace bgfx { namespace gl
+ 					&& (!_srgb || emscripten_webgl_enable_extension(ctx, "WEBGL_compressed_texture_s3tc_srgb") )
+ 					;
+ 
++			case TextureFormat::BC4:
++			case TextureFormat::BC5:
++				return !_srgb
++					&& emscripten_webgl_enable_extension(ctx, "EXT_texture_compression_rgtc")
++					;
++
++			case TextureFormat::BC6H:
++			case TextureFormat::BC6HU:
++				return !_srgb
++					&& emscripten_webgl_enable_extension(ctx, "EXT_texture_compression_bptc")
++					;
++
++			case TextureFormat::BC7:
++				return emscripten_webgl_enable_extension(ctx, "EXT_texture_compression_bptc");
++
+ 			case TextureFormat::PTC12:
+ 			case TextureFormat::PTC14:
+ 			case TextureFormat::PTC12A:

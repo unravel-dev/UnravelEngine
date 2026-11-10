@@ -4,6 +4,7 @@ default
 // (u_card_capture_view_proj) in place of the view's, so one pass draws every capture of a frame, each into its tile of the
 // capture atlas.
 card_capture                 DEFERRED_GEOM_CARD_CAPTURE
+// skinned: the bone palette comes from the palettes (skinning_palette.sh) at u_skin_rows.x.
 skinned                      SKINNED
 instanced                    INSTANCED
 // *_material: for batches whose instances carry per-instance material values (material instances that share their shared
@@ -17,6 +18,12 @@ skinned_instanced_material   SKINNED_INSTANCED INSTANCE_MATERIAL
 // the instance carries its world matrix. i_data0..2 = world matrix rows, i_data3 = (frame row, previous frame row, LOD
 // parameter, unused); u_baked_part adds the drawn submesh's palette.
 skinned_baked_instanced      SKINNED_BAKED_INSTANCED
+// *_textures: the skinned variants reading the palettes from a texture (shader_buffer.sh), for devices whose vertex
+// shaders read no storage buffers, as WebGL 2.
+skinned_textures                      SKINNED SHADER_BUFFER_TEXTURES
+skinned_instanced_textures            SKINNED_INSTANCED SHADER_BUFFER_TEXTURES
+skinned_instanced_material_textures   SKINNED_INSTANCED INSTANCE_MATERIAL SHADER_BUFFER_TEXTURES
+skinned_baked_instanced_textures      SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
@@ -67,7 +74,7 @@ flat vec4 v_material3
  */
 
 #include "../common.sh"
-#if SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
+#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
 #include "../skinning_palette.sh"
 #endif
 #include "normal_basis.sh"
@@ -86,11 +93,7 @@ uniform mat4 u_card_capture_view_proj;
 void main()
 {
 #if SKINNED
-    //u_world should already be in the right space
-    mat4 model = a_weight.x * u_world[int(a_indices.x)] +
-                 a_weight.y * u_world[int(a_indices.y)] +
-                 a_weight.z * u_world[int(a_indices.z)] +
-                 a_weight.w * u_world[int(a_indices.w)];
+    mat4 model = skin_palette_matrix(u_skin_rows.x, a_indices, a_weight);
 #elif SKINNED_INSTANCED
     mat4 model = skin_palette_matrix(i_data0.x, a_indices, a_weight);
 #elif SKINNED_BAKED_INSTANCED

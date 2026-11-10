@@ -420,4 +420,23 @@ struct light
     } contact_shadow;
 };
 
+/// The PCF kernels the deferred light programs filter with, from the narrowest: tents of 3x3, 5x5 and 7x7 texels.
+enum class pcf_kernel : uint8_t
+{
+    tent3,
+    tent5,
+    tent7,
+};
+
+/**
+ * @brief The PCF kernel a PCF light filters with: the larger of its PCF offsets gives a filter radius in shadow map
+ * texels (a quarter of it on a point light's tetrahedron faces), and a tent of N texels stands in for a disk of radius
+ * (N - 1) / 2.
+ */
+ENGINE_EXPORT auto get_pcf_kernel(const light& l) -> pcf_kernel;
+
+/// Narrows @p l's PCF offsets to the 3x3 tent's radius, one texel, where they are wider: get_pcf_kernel then gives
+/// pcf_kernel::tent3.
+ENGINE_EXPORT void narrow_pcf_to_tent3(light& l);
+
 } // namespace unravel

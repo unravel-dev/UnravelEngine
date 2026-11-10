@@ -19,30 +19,19 @@ constexpr uint8_t light_cloud_shadow_stage = 11;
 constexpr uint8_t light_pre_exposure_stage = 6;
 constexpr uint8_t indirect_pre_exposure_stage = 13;
 
-/// PCF filter radius in shadow map texels at PCF offset 1, at least one texel.
-constexpr float pcf_radius_texels_per_offset = 2.0f;
-constexpr float pcf_min_radius_texels = 1.0f;
-/// Point lights pack four tetrahedron faces into one map and filter each at this fraction of the radius.
-constexpr float pcf_point_face_radius_scale = 0.25f;
-/// A tent of N texels stands in for a filter disk of radius (N - 1) / 2: radii below these pick the 3x3 and
-/// the 5x5 tent, larger ones the 7x7.
-constexpr float pcf_tent3_max_radius_texels = 1.5f;
-constexpr float pcf_tent5_max_radius_texels = 2.5f;
-/// The color_lighting_pcf_tent_ slot of a PCF light, or no slot for the 5x5 tent.
+/// The color_lighting_pcf_tent_ slot of a PCF light (get_pcf_kernel), or no slot for the 5x5 tent.
 auto get_pcf_tent_slot(const light& l) -> hpp::optional<size_t>
 {
-    const float offset = std::max(l.shadow_params.pcf.x_offset, l.shadow_params.pcf.y_offset);
-    const float face_scale = l.type == light_type::point ? pcf_point_face_radius_scale : 1.0f;
-    const float radius_texels = std::max(pcf_radius_texels_per_offset * offset * face_scale, pcf_min_radius_texels);
-    if(radius_texels < pcf_tent3_max_radius_texels)
+    switch(get_pcf_kernel(l))
     {
-        return pcf_tent3_slot;
+        case pcf_kernel::tent3:
+            return pcf_tent3_slot;
+        case pcf_kernel::tent7:
+            return pcf_tent7_slot;
+        case pcf_kernel::tent5:
+        default:
+            return hpp::nullopt;
     }
-    if(radius_texels >= pcf_tent5_max_radius_texels)
-    {
-        return pcf_tent7_slot;
-    }
-    return hpp::nullopt;
 }
 
 /// Whether a light runs the contact shadow ray march: the length submit_light uploads is above 0.
@@ -57,18 +46,26 @@ auto is_program_loaded(const Program& program) -> bool
     return program.program && program.program->is_valid();
 }
 
-/// The leanest of a light's @p variants (deferred::light_program_variants) that draws its image: without the contact
-/// shadow code for a light without contact shadows, and without the subsurface code too when the G-buffer holds no
-/// subsurface color. A variant that did not load falls back to the fuller one.
+/// The leanest of a light's @p variants (deferred::light_program_variants) that draws its image: with the contact
+/// shadow code for a light with contact shadows, with the subsurface code when the G-buffer holds subsurface colors,
+/// and without both otherwise. The run's limits decide which variants exist (deferred::update_light_programs); one
+/// that did not load falls back to another that did.
 template<typename Variants>
 auto pick_light_variant(const light& l, bool gbuffer_has_subsurface, const Variants& variants) -> const auto&
 {
-    if(has_contact_shadow(l) || !is_program_loaded(variants.no_contact))
+    if(has_contact_shadow(l) && is_program_loaded(variants.full))
     {
         return variants.full;
     }
-    const bool is_subsurface_free = !gbuffer_has_subsurface && is_program_loaded(variants.no_contact_no_subsurface);
-    return is_subsurface_free ? variants.no_contact_no_subsurface : variants.no_contact;
+    if(gbuffer_has_subsurface && is_program_loaded(variants.no_contact))
+    {
+        return variants.no_contact;
+    }
+    if(is_program_loaded(variants.no_contact_no_subsurface))
+    {
+        return variants.no_contact_no_subsurface;
+    }
+    return is_program_loaded(variants.no_contact) ? variants.no_contact : variants.full;
 }
 
 /// The leanest of the indirect pass's @p variants (deferred::indirect_lighting_no_screen_inputs_variants) that draws this
@@ -137,8 +134,9 @@ auto deferred::get_light_program(const light& l) const -> const color_lighting&
     const auto impl = uint8_t(l.shadow_params.type);
     const hpp::optional<size_t> tent_slot =
         l.shadow_params.type == sm_impl::pcf ? ANONYMOUS::get_pcf_tent_slot(l) : hpp::optional<size_t>{};
-    // The tent is chosen on the full programs, so a missing variant never changes the filter.
-    if(tent_slot && color_lighting_pcf_tent_[type][depth][*tent_slot].full.program)
+    // The tent is chosen on the variant every allowed slot has, created or still loading, so a variant that is
+    // missing never changes the filter.
+    if(tent_slot && color_lighting_pcf_tent_[type][depth][*tent_slot].no_contact_no_subsurface.program)
     {
         return ANONYMOUS::pick_light_variant(l, gbuffer_has_subsurface_, color_lighting_pcf_tent_[type][depth][*tent_slot]);
     }

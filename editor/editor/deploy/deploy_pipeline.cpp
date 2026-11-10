@@ -341,6 +341,8 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
                                     {staging / ENGINE_PROTOCOL, plan.engine_textures.front().variants, engine_shaders},
                                     std::move(left_out));
     add_texture_sets(plan);
+    plan.app.shader_sets = get_web_shader_sets(params);
+    plan.engine.shader_sets = plan.app.shader_sets;
     // The browser player carries its .NET runtime and the script bridge.
     if(!is_web(plan))
     {
@@ -484,13 +486,19 @@ void deploy_web_site(const deploy_plan& plan)
         copy_web_player(plan.web_player, plan.output);
     }
     const auto& app = plan.runtime_settings.app;
-    std::vector<std::string> texture_sets;
+    web_page_info page;
+    page.title = plan.version_info.product_name;
+    page.user_folder = get_web_user_folder(app.company, app.product);
     for(const auto& set : plan.app.texture_sets)
     {
-        texture_sets.push_back(set.name);
+        page.texture_sets.push_back(set.name);
     }
-    write_web_data_manifest(plan.output,
-                            {plan.version_info.product_name, get_web_user_folder(app.company, app.product), texture_sets});
+    for(const auto& set : plan.app.shader_sets)
+    {
+        page.shader_sets.push_back(set.name);
+    }
+    page.graphics = make_web_graphics_policy(plan.params.web);
+    write_web_data_manifest(plan.output, page);
 }
 
 /// Runs `step` here, between its log lines.
@@ -601,7 +609,10 @@ void open_web_deploy(const deploy_plan& plan)
         fs::show_in_graphical_env(plan.output);
         return;
     }
-    const auto page = make_web_page_address(origin, site_path, split_run_arguments(plan.params.deploy_run_arguments));
+    const auto page = make_web_page_address(origin,
+                                            site_path,
+                                            split_run_arguments(plan.params.deploy_run_arguments),
+                                            get_web_run_graphics(plan.params.web));
     APPLOG_INFO("Serving {} at {} until the editor closes.", plan.output.generic_string(), page);
     if(!os::url::open(page))
     {

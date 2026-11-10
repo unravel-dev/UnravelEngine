@@ -352,27 +352,74 @@ static uint64_t applyContainerSrgbFlag(const bimg::ImageContainer* imageContaine
     return _flags;
 }
 
+/// The texture shapes bgfx tells apart in its emulated format caps.
+enum class texture_shape : int
+{
+    flat,
+    volume,
+    cube,
+};
+
+static auto getTextureShape(const bimg::ImageContainer* imageContainer) -> texture_shape
+{
+    if(imageContainer->m_cubeMap)
+    {
+        return texture_shape::cube;
+    }
+    return imageContainer->m_depth > 1 ? texture_shape::volume : texture_shape::flat;
+}
+
+/// The emulated cap of one texture shape: a backend may sample a format in 2D and not in 3D (WebGL 2 has no
+/// compressed 3D textures of the BC formats), and bgfx marks the format emulated for that shape only.
+static auto getEmulatedCap(texture_shape shape) -> uint32_t
+{
+    switch(shape)
+    {
+        case texture_shape::cube:
+            return BGFX_CAPS_FORMAT_TEXTURE_CUBE_EMULATED;
+        case texture_shape::volume:
+            return BGFX_CAPS_FORMAT_TEXTURE_3D_EMULATED;
+        case texture_shape::flat:
+        default:
+            return BGFX_CAPS_FORMAT_TEXTURE_2D_EMULATED;
+    }
+}
+
+static auto getTextureShapeText(texture_shape shape) -> const char*
+{
+    switch(shape)
+    {
+        case texture_shape::cube:
+            return "Cube textures";
+        case texture_shape::volume:
+            return "3D textures";
+        case texture_shape::flat:
+        default:
+            return "Textures";
+    }
+}
+
 // A format the GPU cannot sample is decoded to RGBA8 (BGRA8 on Direct3D and Vulkan) when the texture is created:
-// it loads slower, takes four to eight times the memory and loses its sRGB view. Warned once per format, so a
-// texture compression the deploy target lacks shows in the log.
+// it loads slower, takes four to eight times the memory and loses its sRGB view. Warned once per format and shape,
+// so a texture compression the deploy target lacks shows in the log.
 static void warnEmulatedFormat(const bimg::ImageContainer* imageContainer)
 {
-    constexpr uint32_t emulatedCaps = BGFX_CAPS_FORMAT_TEXTURE_2D_EMULATED | BGFX_CAPS_FORMAT_TEXTURE_3D_EMULATED |
-                                      BGFX_CAPS_FORMAT_TEXTURE_CUBE_EMULATED;
+    const texture_shape shape = getTextureShape(imageContainer);
     const uint32_t formatCaps = bgfx::getCaps()->formats[bgfx::TextureFormat::Enum(imageContainer->m_format)];
-    if(0 == (formatCaps & emulatedCaps))
+    if(0 == (formatCaps & getEmulatedCap(shape)))
     {
         return;
     }
     static std::mutex mutex;
-    static std::set<int> warnedFormats;
+    static std::set<std::pair<int, int>> warnedFormats;
     std::lock_guard<std::mutex> lock(mutex);
-    if(!warnedFormats.insert(int(imageContainer->m_format)).second)
+    if(!warnedFormats.insert({int(imageContainer->m_format), int(shape)}).second)
     {
         return;
     }
     gfx::log("warning",
-             std::string("Textures in ") + bimg::getName(bimg::TextureFormat::Enum(imageContainer->m_format)) +
+             std::string(getTextureShapeText(shape)) + " in " +
+                 bimg::getName(bimg::TextureFormat::Enum(imageContainer->m_format)) +
                  " are decoded when they load because this GPU cannot sample the format. They take more memory "
                  "and lose their sRGB view.",
              __FILE__,

@@ -467,6 +467,31 @@ REFLECT_INLINE(anti_aliasing_limit)
         });
 }
 
+REFLECT_INLINE(shadow_filtering_limit)
+{
+    entt::meta_factory<shadow_filtering_limit>{}
+        .type("shadow_filtering_limit"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "shadow_filtering_limit"},
+            entt::attribute{"pretty_name", "Shadow Filtering Limit"},
+        })
+        .data<shadow_filtering_limit::hard>("hard"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hard"},
+            entt::attribute{"pretty_name", "Hard"},
+        })
+        .data<shadow_filtering_limit::pcf_3x3>("pcf_3x3"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pcf_3x3"},
+            entt::attribute{"pretty_name", "PCF 3x3"},
+        })
+        .data<shadow_filtering_limit::pcf>("pcf"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "pcf"},
+            entt::attribute{"pretty_name", "PCF"},
+        });
+}
+
 REFLECT_INLINE(feature_limits)
 {
     entt::meta_factory<feature_limits>{}
@@ -535,6 +560,16 @@ REFLECT_INLINE(feature_limits)
             entt::attribute{"pretty_name", "Soft Shadows"},
             entt::attribute{"tooltip", "Allow soft shadows (PCSS, VSM and ESM). When off, those lights filter their shadows with PCF."},
             entt::attribute{"hint", make_device_hint(render_feature::soft_shadows)},
+        })
+        .data<&feature_limits::max_shadow_filtering>("max_shadow_filtering"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_shadow_filtering"},
+            entt::attribute{"pretty_name", "Max Shadow Filtering"},
+            entt::attribute{"tooltip", "The widest shadow filter a light may use. Lights asking for a wider one filter "
+                                       "with this one. Hard: one depth comparison per pixel. PCF 3x3: the 3x3 tent, "
+                                       "also for soft shadows. PCF: every PCF width, and soft shadows where allowed. "
+                                       "Every filter allowed is one more lighting program each device builds when "
+                                       "it starts; WebGL 2 takes seconds for each of the wider ones."},
         })
         .data<&feature_limits::contact_shadows>("contact_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -609,6 +644,7 @@ SAVE_INLINE(feature_limits)
     try_save(ar, ser20::make_nvp("max_anti_aliasing", obj.max_anti_aliasing));
     try_save(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
     try_save(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
+    try_save(ar, ser20::make_nvp("max_shadow_filtering", obj.max_shadow_filtering));
     try_save(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
     try_save(ar, ser20::make_nvp("subsurface", obj.subsurface));
     try_save(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
@@ -630,6 +666,7 @@ LOAD_INLINE(feature_limits)
     try_load(ar, ser20::make_nvp("max_anti_aliasing", obj.max_anti_aliasing));
     try_load(ar, ser20::make_nvp("max_shadow_resolution", obj.max_shadow_resolution));
     try_load(ar, ser20::make_nvp("soft_shadows", obj.soft_shadows));
+    try_load(ar, ser20::make_nvp("max_shadow_filtering", obj.max_shadow_filtering));
     try_load(ar, ser20::make_nvp("contact_shadows", obj.contact_shadows));
     try_load(ar, ser20::make_nvp("subsurface", obj.subsurface));
     try_load(ar, ser20::make_nvp("volumetric_clouds", obj.volumetric_clouds));
@@ -666,9 +703,8 @@ REFLECT_INLINE(settings::graphics_settings)
             entt::attribute{"name", "skinned_mesh_batching"},
             entt::attribute{"pretty_name", "Skinned Mesh Batching"},
             entt::attribute{"tooltip",
-                            "Draw the skinned meshes that share a mesh and a material with one instanced draw call. "
-                            "Their bone palettes reach the GPU once per frame for every view, instead of once per "
-                            "draw."},
+                            "Draw the skinned meshes that share a mesh and a material with one instanced draw call "
+                            "instead of a draw call each. Off, the batching programs are not built."},
         })
         .data<&settings::graphics_settings::shadow_map_caching>("shadow_map_caching"_hs)
         .custom<entt::attributes>(entt::attributes{

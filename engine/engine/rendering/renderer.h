@@ -20,6 +20,33 @@ namespace unravel
 class gpu_pass_log;
 class skinning_palette_buffer;
 
+/// Why the browser page started WebGL 2 instead of WebGPU (--graphics-fallback, game/web/wwwroot/graphics.js).
+enum class graphics_fallback_reason : std::uint8_t
+{
+    /// WebGL 2 does not stand in: the game runs on WebGPU, on a build for WebGL 2 only, or outside the browser.
+    none,
+    /// The page is not served over HTTPS, which WebGPU needs.
+    insecure_page,
+    /// The browser offers no WebGPU.
+    api_missing,
+    /// The browser gave no WebGPU adapter: a blocked driver, hardware acceleration turned off.
+    no_adapter,
+    /// The WebGPU device could not be created.
+    device_failed,
+    /// WebGPU would draw without the graphics card here, WebGL 2 draws with it.
+    software_adapter,
+    /// The page's address asked for WebGL 2 (graphics=webgl2).
+    forced,
+
+    count
+};
+
+/// The reason the page names ("no_adapter"); none for an empty or unknown name.
+ENGINE_EXPORT auto parse_graphics_fallback_reason(const std::string& name) -> graphics_fallback_reason;
+
+/// The page's name of @p reason ("no_adapter"); empty for none.
+ENGINE_EXPORT auto get_graphics_fallback_reason_name(graphics_fallback_reason reason) -> const char*;
+
 struct ENGINE_EXPORT renderer
 {
     using render_window_t = std::unique_ptr<render_window>;
@@ -105,8 +132,11 @@ struct ENGINE_EXPORT renderer
     auto get_vsync() const -> bool;
     void set_vsync(bool vsync);
 
-    /// The bone palettes of this frame's instanced skinned draws, uploaded once in frame_end.
+    /// The bone palettes of this frame's skinned draws, uploaded once in frame_end.
     auto get_skinning_palettes() -> skinning_palette_buffer&;
+
+    /// Why the browser page started WebGL 2 instead of WebGPU; none everywhere else.
+    auto get_graphics_fallback_reason() const -> graphics_fallback_reason;
 
 protected:
     auto init_backend(const cmd_line::parser& parser) -> bool;
@@ -146,6 +176,7 @@ protected:
 
     /// Set once init() has brought the backend up; read by the destructor.
     bool is_initialized_{};
+    graphics_fallback_reason graphics_fallback_reason_{};
     /// Logs the GPU time of every render pass (--gfx-profile) or the frame times alone (--gfx-frame-log);
     /// null when off.
     std::unique_ptr<gpu_pass_log> gpu_pass_log_{};

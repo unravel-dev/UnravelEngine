@@ -52,14 +52,26 @@ public:
      * @brief Constructor to create a program from variants of vertex and fragment shader assets.
      *
      * @param vertex_shader The vertex shader asset.
-     * @param vertex_variant The vertex shader's variant, as its .eshader lists it.
+     * @param vertex_variant The vertex shader's variant, as its .eshader lists it. Where vertex shaders read their
+     *        shader buffers from textures, the program draws with the variant's texture twin when the shader has one
+     *        (get_shader_buffer_variant).
      * @param fragment_shader The fragment shader asset.
      * @param fragment_variant The fragment shader's variant, as its .eshader lists it.
+     * @param is_wanted Whether the program builds now (set_wanted).
      */
     gpu_program(asset_handle<gfx::shader> vertex_shader,
                 std::string vertex_variant,
                 asset_handle<gfx::shader> fragment_shader,
-                std::string fragment_variant = gfx::shader::DEFAULT_VARIANT);
+                std::string fragment_variant = gfx::shader::DEFAULT_VARIANT,
+                bool is_wanted = true);
+
+    /**
+     * @brief Whether the program is built. An unwanted one releases its GPU program and stays invalid, begin() false,
+     * until it is wanted again, when it builds at once. For programs of features a project's settings may turn off:
+     * the GPU program costs memory and, on WebGL 2, a link when it is created. The program object stays, so pointers
+     * to it stay good.
+     */
+    void set_wanted(bool is_wanted);
 
     /**
      * @brief Begins usage of the program. Checks validity of attached shaders and
@@ -214,6 +226,7 @@ private:
     shader_assets shaders_cached_{nullptr, nullptr}; ///< Cached shaders.
     std::shared_ptr<gfx::program> program_ = std::make_shared<gfx::program>(); ///< The GPU program, never null.
     std::uint32_t revision_ = 0;                     ///< Rebuilds of the program.
+    bool is_wanted_ = true;                          ///< Whether the program is built (set_wanted).
 };
 
 /**
@@ -267,7 +280,6 @@ namespace gfx
  *
  * @param matrices The vector of transformation matrices.
  */
-void set_world_transform(const std::vector<math::transform::mat4_t>& matrices);
 void set_transform(const std::vector<math::transform::mat4_t>& matrices);
 
 /**
@@ -275,7 +287,6 @@ void set_transform(const std::vector<math::transform::mat4_t>& matrices);
  *
  * @param matrices The vector of transformations.
  */
-void set_world_transform(const std::vector<math::transform>& matrices);
 void set_transform(const std::vector<math::transform>& matrices);
 
 /**
@@ -295,10 +306,9 @@ void set_world_transform(const math::transform& matrix);
 void set_transform(const math::transform& matrix);
 
 /**
- * @brief Previous-frame counterparts of set_world_transform (uniform u_prev_world), used by
- * the velocity (motion vector) pass to deliver last frame's world matrix / bone palette.
+ * @brief Previous-frame counterpart of set_world_transform (uniform u_prev_world), used by
+ * the velocity (motion vector) pass to deliver last frame's world matrix.
  */
-void set_prev_world_transform(const std::vector<math::transform::mat4_t>& matrices);
 void set_prev_world_transform(const math::transform::mat4_t& matrix);
 
 /**

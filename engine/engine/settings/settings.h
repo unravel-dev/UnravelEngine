@@ -97,8 +97,8 @@ struct settings
         /// Draws the meshes that share a mesh and a material with one instanced draw call. The renderer
         /// applies it every frame.
         bool static_mesh_batching{true};
-        /// Draws the skinned meshes that share a mesh and a material with one instanced draw call, their
-        /// bone palettes uploaded once per frame for every view. The renderer applies it every frame.
+        /// Draws the skinned meshes that share a mesh and a material with one instanced draw call instead of a
+        /// draw call each; off, the batching programs are not built. The renderer applies it every frame.
         bool skinned_mesh_batching{true};
         /// Keeps a light's shadow map, or a cascade of the sun, across frames while nothing it shows changed,
         /// instead of rendering it again every frame. The renderer applies it every frame.

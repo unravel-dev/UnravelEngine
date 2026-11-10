@@ -232,7 +232,7 @@ auto parse_mask_name(hpp::string_view name, device_caps_mask& mask) -> bool
     {
         return parse_bindings_name(name, mask);
     }
-    const std::array<std::pair<const char*, bool*>, 8> flags = {{
+    const std::array<std::pair<const char*, bool*>, 9> flags = {{
         {"compute", &mask.drops_compute},
         {"draw_indirect", &mask.drops_draw_indirect},
         {"dispatch_indirect", &mask.drops_dispatch_indirect},
@@ -241,6 +241,7 @@ auto parse_mask_name(hpp::string_view name, device_caps_mask& mask) -> bool
         {"typed_image_loads", &mask.drops_typed_image_loads},
         {"extended_storage_formats", &mask.drops_extended_storage_formats},
         {"vertex_storage_buffers", &mask.drops_vertex_storage_buffers},
+        {"depth_blit", &mask.drops_depth_blit},
     }};
     const auto found = std::find_if(flags.begin(),
                                     flags.end(),
@@ -326,7 +327,8 @@ auto device_caps_mask::is_empty() const -> bool
 {
     return !drops_compute && !drops_draw_indirect && !drops_dispatch_indirect && !drops_image_read_write &&
            !drops_blend_independent && !drops_typed_image_loads && !drops_extended_storage_formats &&
-           !drops_vertex_storage_buffers && max_compute_bindings == 0 && dropped_format_caps.empty();
+           !drops_vertex_storage_buffers && !drops_depth_blit && max_compute_bindings == 0 &&
+           dropped_format_caps.empty();
 }
 
 auto parse_device_caps_mask(hpp::string_view text, std::vector<std::string>& unknown_names) -> device_caps_mask
@@ -363,6 +365,7 @@ auto make_device_caps(const bgfx::Caps& caps) -> device_caps
     result.has_image_read_write = 0 != (caps.supported & BGFX_CAPS_IMAGE_RW);
     result.has_blend_independent = 0 != (caps.supported & BGFX_CAPS_BLEND_INDEPENDENT);
     result.has_vertex_storage_buffers = caps.rendererType != bgfx::RendererType::OpenGLES;
+    result.has_depth_blit = caps.rendererType != bgfx::RendererType::OpenGLES;
     result.max_compute_bindings =
         static_cast<std::uint8_t>(std::min<std::uint32_t>(caps.limits.maxComputeBindings, UINT8_MAX));
     result.max_storage_textures_per_stage = result.max_compute_bindings;
@@ -380,6 +383,7 @@ auto apply_device_caps_mask(device_caps caps, const device_caps_mask& mask) -> d
     caps.has_image_read_write = caps.has_image_read_write && !mask.drops_image_read_write;
     caps.has_blend_independent = caps.has_blend_independent && !mask.drops_blend_independent;
     caps.has_vertex_storage_buffers = caps.has_vertex_storage_buffers && !mask.drops_vertex_storage_buffers;
+    caps.has_depth_blit = caps.has_depth_blit && !mask.drops_depth_blit;
     if(mask.max_compute_bindings != 0)
     {
         caps.max_compute_bindings = std::min(caps.max_compute_bindings, mask.max_compute_bindings);
@@ -424,7 +428,10 @@ void init_device_caps()
 {
     real_device_caps_ = make_device_caps(*bgfx::getCaps());
 #if UNRAVEL_PLATFORM_EMSCRIPTEN
-    const int browser_limit = unravel_get_webgpu_storage_textures_per_stage();
+    // The page may have created its WebGPU device and still chosen WebGL 2: its limit holds for WebGPU only.
+    const int browser_limit = real_device_caps_.renderer == bgfx::RendererType::WebGPU
+                                  ? unravel_get_webgpu_storage_textures_per_stage()
+                                  : 0;
     if(browser_limit > 0)
     {
         real_device_caps_.max_storage_textures_per_stage =
@@ -444,10 +451,15 @@ auto get_real_device_caps() -> const device_caps&
     return real_device_caps_;
 }
 
+auto is_compute_required(bgfx::RendererType::Enum renderer) -> bool
+{
+    return renderer != bgfx::RendererType::OpenGLES;
+}
+
 auto get_missing_minimum_requirements(const device_caps& caps) -> std::vector<std::string>
 {
     std::vector<std::string> missing;
-    if(!caps.has_compute)
+    if(is_compute_required(caps.renderer) && !caps.has_compute)
     {
         missing.emplace_back("It has no compute shaders.");
     }
@@ -511,7 +523,8 @@ auto describe_device_caps(const device_caps& caps) -> std::string
                        (caps.has_draw_indirect ? "yes" : "no") + ", indirect dispatches " +
                        (caps.has_dispatch_indirect ? "yes" : "no") + ", independent blend " +
                        (caps.has_blend_independent ? "yes" : "no") + ", vertex storage buffers " +
-                       (caps.has_vertex_storage_buffers ? "yes" : "no") + ".";
+                       (caps.has_vertex_storage_buffers ? "yes" : "no") + ", depth blits " +
+                       (caps.has_depth_blit ? "yes" : "no") + ".";
     return text;
 }
 

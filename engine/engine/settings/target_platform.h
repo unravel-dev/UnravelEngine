@@ -15,8 +15,8 @@ enum class target_platform : std::uint8_t
     desktop,
     /// An Android package (.apk) built from the editor's Android player.
     android,
-    /// A folder a web server serves: the editor's browser player (WebGPU, .NET in the browser) beside the
-    /// game's files.
+    /// A folder a web server serves: the editor's browser player (WebGPU or WebGL 2, .NET in the browser) beside
+    /// the game's files.
     web,
 };
 

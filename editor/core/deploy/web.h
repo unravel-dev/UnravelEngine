@@ -1,9 +1,15 @@
 #pragma once
 
+#include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/filesystem.h>
 
 #include <string>
 #include <vector>
+
+namespace unravel
+{
+struct web_deploy_settings;
+} // namespace unravel
 
 /// The browser player and what a web deploy writes beside it.
 namespace unravel::deployment
@@ -57,6 +63,29 @@ auto find_web_template(const fs::path& root, const std::string& engine_version) 
  */
 auto get_web_user_folder(const std::string& company, const std::string& product) -> std::string;
 
+/**
+ * @brief The graphics APIs a web build's page may start the game with and what it tells the player when WebGL 2
+ * stands in for WebGPU: the manifest's graphics block (game/web/wwwroot/graphics.js reads it).
+ */
+struct web_graphics_policy
+{
+    /// "webgpu" and "webgl2", in the order the page prefers them.
+    std::vector<std::string> backends{ex::WEBGPU_GRAPHICS_NAME};
+    /// "tell", "ask" or "silent" (web_fallback_notice).
+    std::string fallback_notice{"tell"};
+    /// The page the notices link to on turning WebGPU on; empty: the page's own advice.
+    std::string help_link;
+};
+
+/// The policy of a web profile's settings.
+auto make_web_graphics_policy(const web_deploy_settings& web) -> web_graphics_policy;
+
+/**
+ * @brief The graphics API Deploy and Run and the public link ask the page for ("webgpu" or "webgl2"): the profile's
+ * run_graphics where it renders with both; empty to let the page choose.
+ */
+auto get_web_run_graphics(const web_deploy_settings& web) -> std::string;
+
 /// What a web build's page shows and keeps, written into its data_manifest.json.
 struct web_page_info
 {
@@ -64,21 +93,26 @@ struct web_page_info
     std::string title;
     /// Where the player keeps the game's own files (get_web_user_folder).
     std::string user_folder;
-    /// The texture sets the build ships in packs of their own (ex::get_texture_pack_file_name), the one computers read
+    /// The texture sets the build ships in packs of their own (ex::get_set_pack_file_name), the one computers read
     /// first; empty when its textures ship in the protocols' packs.
     std::vector<std::string> texture_sets;
+    /// The shader sets the build ships in packs of their own (ex::get_set_pack_file_name), one per graphics API;
+    /// empty when its shaders ship in the protocols' packs.
+    std::vector<std::string> shader_sets;
+    web_graphics_policy graphics;
 };
 
 /**
  * @brief The data_manifest.json of a web build in `site`: the page's `title` and `user_folder`, the size of the
  * runtime it downloads first (runtime_size: its _framework/ folder, uncompressed, which weighs the runtime's part of
- * the loading bar against the data's), and every file under its data/ folder, as the page fetches it
- * ("data/engine/content.pak"), with a fingerprint of its content and its size, in name order. The page writes each
- * one to that path in the player's file system, which the engine reads as its own folder, and keeps it in the
- * browser's cache under its fingerprint, so a later visit fetches only the files a new deploy changed. With texture
+ * the loading bar against the data's), the graphics policy (graphics), and every file under its data/ folder, as the
+ * page fetches it ("data/engine/content.pak"), with a fingerprint of its content and its size, in name order. The page
+ * writes each one to that path in the player's file system, which the engine reads as its own folder, and keeps it in
+ * the browser's cache under its fingerprint, so a later visit fetches only the files a new deploy changed. With texture
  * sets, the manifest lists them (texture_sets) and names the set of each set's pack (texture_set): the page downloads
- * the packs of the first set the browser's GPU reads, the first set's when it reads none. Throws when a file cannot be
- * listed or read.
+ * the packs of the first set the browser's GPU reads, the first set's when it reads none. Shader sets are listed the
+ * same way (shader_sets, shader_set): the page downloads the set of the graphics API it chose. Throws when a file
+ * cannot be listed or read.
  */
 auto make_web_data_manifest(const fs::path& site, const web_page_info& page) -> std::string;
 
@@ -100,10 +134,14 @@ auto make_web_site_path(const std::string& project, const std::string& profile) 
 
 /**
  * @brief The address of a web build's page: `origin` ("http://127.0.0.1:8742"), the site path with each part
- * encoded, and the run arguments, one arg= each, which the page hands the game (game/web/wwwroot/main.js).
+ * encoded, the graphics API the page starts the game with when `graphics` names one (graphics=webgl2, see
+ * get_web_run_graphics), and the run arguments, one arg= each, which the page hands the game
+ * (game/web/wwwroot/main.js).
  */
-auto make_web_page_address(const std::string& origin, const std::string& site_path, const std::vector<std::string>& arguments)
-    -> std::string;
+auto make_web_page_address(const std::string& origin,
+                           const std::string& site_path,
+                           const std::vector<std::string>& arguments,
+                           const std::string& graphics = {}) -> std::string;
 
 /// The tunnel tool a public link runs when Editor Settings names none: Cloudflare's cloudflared on PATH.
 constexpr const char* DEFAULT_CLOUDFLARED = "cloudflared";

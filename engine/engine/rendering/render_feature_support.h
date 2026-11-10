@@ -42,10 +42,10 @@ enum class render_feature : std::uint8_t
     reflection_probe_prefilter,
     volumetric_fog,
     cloud_shadow,
+    vertex_storage_buffers,
     particle_storage_buffers,
     gpu_particles_indirect,
     particle_reactive_mask,
-    skinned_mesh_batching,
     soft_shadows,
     ui_msaa,
     temporal_probe,
@@ -159,7 +159,8 @@ public:
 
     /**
      * @brief Whether the shader asset @p key is for something the device runs: false for an engine compute shader
-     * of a feature it does not run, true for every other shader.
+     * of a feature it does not run, and for every engine compute shader on a device without compute; true for every
+     * other shader.
      *
      * Such a shader may declare storage formats the device lacks, which WebGPU rejects as soon as the shader is
      * created: the shader loader leaves it empty, as a program without compute is.
@@ -184,6 +185,7 @@ public:
 
 private:
     std::array<render_feature_status, static_cast<std::size_t>(render_feature::count)> statuses_{};
+    bool has_compute_{true};
 };
 
 /// The support the renderer resolved for the running device.

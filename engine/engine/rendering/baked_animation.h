@@ -102,11 +102,12 @@ private:
 
 /**
  * @class baked_animation_store
- * @brief The baked animations scripts made (BakedAnimation.Bake), their rows in one GPU buffer.
+ * @brief The baked animations scripts made (BakedAnimation.Bake), their rows in one shader buffer: a storage buffer, or
+ * a texture on devices whose vertex shaders read no storage buffers.
  *
- * Draws bind the buffer at SKINNING_PALETTE_STAGE in place of the frame's palette buffer, so the instanced skinned
- * shaders read baked rows with the same skin_palette_matrix. The buffer keeps its rows across frames and is uploaded
- * again only when the rows change. A released bake keeps its rows while draws still hold it; reclaim_released() then
+ * Draws bind the rows at SKINNING_PALETTE_STAGE in place of the frame's palettes, so the instanced skinned shaders read
+ * baked rows with the same skin_palette_matrix. The storage keeps its rows across frames and is uploaded again only
+ * when the rows change. A released bake keeps its rows while draws still hold it; reclaim_released() then
  * packs the other bakes' rows over them. Main thread only.
  */
 class ENGINE_EXPORT baked_animation_store
@@ -116,6 +117,10 @@ public:
     ~baked_animation_store();
     baked_animation_store(const baked_animation_store&) = delete;
     auto operator=(const baked_animation_store&) -> baked_animation_store& = delete;
+
+    /// Picks the storage the device's vertex shaders read and creates the uniforms the baked programs link with. Call
+    /// once the renderer resolved the device's features, before the baked programs are created.
+    void init();
 
     /**
      * @brief Starts a bake of @p render_mesh, loading the mesh first when it is not loaded.
@@ -142,7 +147,7 @@ public:
      * (baked_animation::get_palette_offset(), is_rigid()).
      */
     void bind(uint32_t palette_offset, bool is_rigid);
-    /// Releases the GPU buffer and uniform; the destructor does too. Call before the graphics backend shuts down.
+    /// Releases the GPU storage and uniforms; the destructor does too. Call before the graphics backend shuts down.
     void destroy();
     /// Every row, for tests.
     auto get_rows() const -> hpp::span<const math::vec4>;
@@ -157,8 +162,7 @@ private:
     std::vector<std::shared_ptr<baked_animation>> released_;
     uint32_t next_id_ = 1;
     skinning_palette_rows rows_;
-    bgfx::VertexLayout layout_;
-    bgfx::DynamicVertexBufferHandle buffer_ = BGFX_INVALID_HANDLE;
+    shader_buffer storage_{SKINNING_PALETTE_SAMPLER, shader_buffer_element::float4, shader_buffer_storage::buffer};
     /// u_baked_part of skinning_palette.sh: x = palette offset, y = 1 for a rigid submesh.
     bgfx::UniformHandle part_uniform_ = BGFX_INVALID_HANDLE;
     bool is_upload_pending_ = false;

@@ -201,6 +201,16 @@ auto make_jobs_result(const deploy_snapshot& snapshot) -> tool_result
 
 constexpr const char* ORIENTATION_NAMES[] = {"landscape", "portrait", "automatic"};
 constexpr const char* TEXTURE_COMPRESSION_NAMES[] = {"astc", "etc2", "bc"};
+constexpr const char* WEB_GRAPHICS_NAMES[] = {"webgpu", "webgpu_then_webgl2", "webgl2"};
+constexpr const char* WEB_FALLBACK_NOTICE_NAMES[] = {"tell", "ask", "silent"};
+constexpr const char* WEB_RUN_GRAPHICS_NAMES[] = {"automatic", "webgpu", "webgl2"};
+/// The arguments of a web profile's own settings.
+constexpr const char* WEB_SETTING_KEYS[] = {"web_graphics",
+                                            "web_fallback_notice",
+                                            "web_help_link",
+                                            "web_run_graphics",
+                                            "web_texture_compression",
+                                            "web_phone_texture_compression"};
 
 /// Sets `out` from the name at `key` when the arguments have one; false (with `error`) for an unknown name.
 template<typename Enum, std::size_t Count>
@@ -405,13 +415,21 @@ auto read_desktop_settings(rtti::context& ctx,
     return true;
 }
 
-/// Reads web_texture_compression and web_phone_texture_compression; `is_given` says whether the arguments had either.
+/// Reads the web profile's settings (WEB_SETTING_KEYS); `is_given` says whether the arguments had any.
 auto read_web_settings(const simdjson::dom::object& args, web_deploy_settings& web, bool& is_given, std::string& error) -> bool
 {
-    simdjson::dom::element value;
-    is_given = args["web_texture_compression"].get(value) == simdjson::SUCCESS ||
-               args["web_phone_texture_compression"].get(value) == simdjson::SUCCESS;
-    return read_enum_name(args, "web_texture_compression", TEXTURE_COMPRESSION_NAMES, web.texture_compression, error) &&
+    is_given = std::any_of(std::begin(WEB_SETTING_KEYS),
+                           std::end(WEB_SETTING_KEYS),
+                           [&args](const char* key)
+                           {
+                               simdjson::dom::element value;
+                               return args[key].get(value) == simdjson::SUCCESS;
+                           });
+    read_string(args, "web_help_link", web.help_link);
+    return read_enum_name(args, "web_graphics", WEB_GRAPHICS_NAMES, web.graphics, error) &&
+           read_enum_name(args, "web_fallback_notice", WEB_FALLBACK_NOTICE_NAMES, web.fallback_notice, error) &&
+           read_enum_name(args, "web_run_graphics", WEB_RUN_GRAPHICS_NAMES, web.run_graphics, error) &&
+           read_enum_name(args, "web_texture_compression", TEXTURE_COMPRESSION_NAMES, web.texture_compression, error) &&
            read_enum_name(args,
                           "web_phone_texture_compression",
                           TEXTURE_COMPRESSION_NAMES,
@@ -422,7 +440,11 @@ auto read_web_settings(const simdjson::dom::object& args, web_deploy_settings& w
 auto web_settings_to_json(const web_deploy_settings& web) -> std::string
 {
     return fmt::format(
-        R"({{"texture_compression":{},"phone_texture_compression":{}}})",
+        R"({{"graphics":{},"fallback_notice":{},"help_link":{},"run_graphics":{},"texture_compression":{},"phone_texture_compression":{}}})",
+        make_json_string(WEB_GRAPHICS_NAMES[static_cast<std::size_t>(web.graphics)]),
+        make_json_string(WEB_FALLBACK_NOTICE_NAMES[static_cast<std::size_t>(web.fallback_notice)]),
+        make_json_string(web.help_link),
+        make_json_string(WEB_RUN_GRAPHICS_NAMES[static_cast<std::size_t>(web.run_graphics)]),
         make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<std::size_t>(web.texture_compression)]),
         make_json_string(TEXTURE_COMPRESSION_NAMES[static_cast<std::size_t>(web.phone_texture_compression)]));
 }
@@ -864,7 +886,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "scope says where the settings other than location and the profile's own go: \"shared\" (default) "
              "writes them for every profile that does not override them, \"profile\" stores them as overrides of the "
              "profile only. location is always shared; patch_release, desktop_icon, steam_*, the android_* settings "
-             "and web_texture_compression and web_phone_texture_compression always belong to the profile. steam_app_id, steam_depot_id and steam_account say where deploy_upload_steam "
+             "and the web_* settings always belong to the profile. steam_app_id, steam_depot_id and steam_account say where deploy_upload_steam "
              "sends a desktop profile's build; steam_branch is the branch it is set live on (empty: none; never "
              "default, which Steam sets live only on its website). written lists where each value went; shadowed lists shared values the profile overrides, so it "
              "keeps deploying with its own (revert them, or pass scope profile). revert lists settings, named as this "
@@ -886,12 +908,19 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "android_device is an adb serial from deploy_get_state's device list, used by run_after_deploy and not "
              "saved. android_texture_compression picks the formats the profile's textures are cooked to (astc "
              "default, etc2, or bc: the desktop formats, which ship the editor's own files and which only some "
-             "Android GPUs read). web_texture_compression does the same for a web profile (bc default, for the browsers "
+             "Android GPUs read). web_graphics picks the graphics APIs a web profile renders with (webgpu default; "
+             "webgpu_then_webgl2: WebGPU where the browser offers it, WebGL 2 elsewhere, cooking the shaders for both; "
+             "webgl2). For webgpu_then_webgl2: web_fallback_notice says what the page tells the player when WebGL 2 "
+             "stands in for WebGPU (tell default: a notice once per game and reason; ask: a screen before the download "
+             "that offers to continue; silent: the console only), web_help_link is a page the notices link to on "
+             "turning WebGPU on (empty: the page's own advice), and web_run_graphics is the API Deploy "
+             "and Run and the public link start the build with (automatic default: the page chooses; webgpu; webgl2). "
+             "web_texture_compression picks the formats a web profile's textures are cooked to (bc default, for the browsers "
              "of computers; astc for phones and tablets; etc2), and web_phone_texture_compression gives a packed web "
              "build a second set for browsers whose GPU does not read the first (astc default; the same format ships "
              "one set). Omitted fields keep their value.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, steam_*, android_*, web_texture_compression, web_phone_texture_compression, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location and the profile's own go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"web_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: the formats the project's textures are cooked to"},"web_phone_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: a second texture set for browsers whose GPU does not read web_texture_compression's; the same format ships one set"},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":"string","description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>"},"steam_branch":{"type":"string","description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"Desktop profiles: a kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
+             R"json({"type":"object","properties":{"profile":{"type":"string","description":"The profile this call writes (its overrides, patch_release, desktop_icon, steam_*, android_*, web_*, revert); default the deploy profile. Does not change the deploy profile"},"deploy_profile":{"type":"string","description":"Select the profile deploys build, as the Deploy window's profile picker does"},"scope":{"type":"string","enum":["shared","profile"],"description":"Where the settings other than location and the profile's own go; default shared"},"revert":{"type":"array","items":{"type":"string"},"description":"Settings, named as this tool's arguments (e.g. pack_assets), the profile stops overriding"},"android_texture_compression":{"type":"string","enum":["astc","etc2","bc"]},"web_graphics":{"type":"string","enum":["webgpu","webgpu_then_webgl2","webgl2"],"description":"Web profiles: the graphics APIs the game renders with; webgpu_then_webgl2 also cooks the WebGL 2 shaders"},"web_fallback_notice":{"type":"string","enum":["tell","ask","silent"],"description":"Web profiles: what the page tells the player when WebGL 2 stands in for WebGPU"},"web_help_link":{"type":"string","description":"Web profiles: a page on turning WebGPU on that the notices link to; empty for the page's own advice"},"web_run_graphics":{"type":"string","enum":["automatic","webgpu","webgl2"],"description":"Web profiles: the API Deploy and Run and the public link start a webgpu_then_webgl2 build with"},"web_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: the formats the project's textures are cooked to"},"web_phone_texture_compression":{"type":"string","enum":["astc","etc2","bc"],"description":"Web profiles: a second texture set for browsers whose GPU does not read web_texture_compression's; the same format ships one set"},"android_application_id":{"type":"string","description":"e.g. com.company.game; empty: com.<company>.<product>, made from the product settings and following them"},"android_permissions":{"type":"object","properties":{"internet":{"type":"boolean"},"network_state":{"type":"boolean"},"vibrate":{"type":"boolean"},"microphone":{"type":"boolean"},"camera":{"type":"boolean"},"location":{"type":"boolean"},"notifications":{"type":"boolean"},"other":{"type":"array","items":{"type":"string"},"description":"Further permissions by name; a name without a dot gets android.permission. in front"}},"description":"The permissions the manifest asks for; a partial object changes only what it names. Defaults: internet and vibrate on"},"android_version_code":{"type":"integer","minimum":1},"android_orientation":{"type":"string","enum":["landscape","portrait","automatic"]},"android_icon":{"type":["string","null"],"description":"Key or uid of a texture the launcher icon is made from, square at best; null or empty for the engine's logo"},"android_icon_background":{"type":"array","items":{"type":"number"},"description":"[r,g,b] from 0 to 1: the opaque color behind the icon's image; default white"},"desktop_icon":{"type":["string","null"],"description":"Desktop profiles: key or uid of a texture the executable's icon is made from (Windows), square at best; null or empty for the engine's logo"},"steam_app_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the game's Steamworks app id; 0: not uploaded"},"steam_depot_id":{"type":"integer","minimum":0,"description":"Desktop profiles: the depot of the operating system the profile builds for"},"steam_account":{"type":"string","description":"Desktop profiles: the Steam account that uploads, logged in once in a terminal with steamcmd +login <account>"},"steam_branch":{"type":"string","description":"Desktop profiles: the branch the uploaded build is set live on, such as beta; empty for none"},"android_release":{"type":"boolean","description":"A release package signed with android_keystore (passwords from UNRAVEL_KEYSTORE_PASSWORD / UNRAVEL_KEY_PASSWORD); default false, a debug package"},"android_keystore":{"type":"string"},"android_key_alias":{"type":"string"},"android_device":{"type":"string","description":"adb serial of the device run_after_deploy installs on"},"location":{"type":"string","description":"Destination folder: absolute, or relative to the project folder such as .deploy"},"deploy_dependencies":{"type":"boolean"},"run_after_deploy":{"type":"boolean"},"run_arguments":{"type":"string","description":"Command line options run_after_deploy starts the game with, separated by spaces, e.g. --gfx-stats (graphics statistics overlay) or --novsync"},"cook_assets":{"type":"boolean"},"include_debug_symbols":{"type":"boolean","description":"Ship the script libraries' .pdb and .xml files; default false"},"pack_assets":{"type":"boolean","description":"Pack the compiled assets into one compressed file per protocol; default true"},"patch_release":{"type":"string","description":"Desktop profiles: a kept release to patch; empty for a full build"},"only_used_assets":{"type":"boolean","description":"Ship only the project assets the scenes and scripts use; default false (everything)"},"scenes":{"type":"array","items":{"type":"string"},"description":"Scene keys the game loads besides the startup scene, e.g. app:/data/levels/two.spfb"},"include":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that always ship"},"exclude":{"type":"array","items":{"type":"string"},"description":"Folder or asset keys that never ship"},"create_location":{"type":"boolean","description":"Create the destination folder when it does not exist; default true"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -986,8 +1015,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              }
              if(has_web_settings && found->platform != deploy_platform::web)
              {
-                 return {.text = fmt::format("Profile {} is no web profile: web_texture_compression and web_phone_texture_compression belong to a web "
-                                             "profile (pass profile).",
+                 return {.text = fmt::format("Profile {} is no web profile: the web_* settings belong to a web profile (pass profile).",
                                              profile),
                          .is_error = true};
              }
@@ -1315,7 +1343,7 @@ void register_deploy_tools(mcp_tool_registry& registry)
              "from the editor (its formats, its defaults) are cooked first (Cooking Textures and Cooking Engine "
              "Textures), so are audio clips (Cooking Audio: its audio default, a clip's own compression for its "
              "platform) and shaders for a renderer the "
-             "editor does not compile for (Cooking Shaders: WGSL for the web); all are kept in the project's "
+             "editor does not compile for (Cooking Shaders: WGSL and, with web_graphics webgpu_then_webgl2 or webgl2, GLSL ES for the web); all are kept in the project's "
              "cache/profiles/<profile> for its next deploys.",
          .input_schema_json =
              R"json({"type":"object","properties":{"location":{"type":"string","description":"Deploy folder, absolute or relative to the project folder; the profile builds into <location>/<profile>. Also saved into the deploy settings. Optional when already set"},"run_after_deploy":{"type":"boolean","description":"For this deploy only"},"profile":{"type":"string","description":"The profile to deploy; it becomes the deploy profile. An Android profile builds an .apk; with run_after_deploy it is installed and started on android_device"},"android_device":{"type":"string","description":"adb serial from deploy_get_state's android.devices"},"android_replace_installed":{"type":"boolean","description":"When the game on the device was signed with another key (debug vs release), uninstall it first, which removes its saved data; default false reports android.install_conflict instead"},"timeout_ms":{"type":"integer","minimum":1000,"maximum":900000}}})json",

@@ -1,4 +1,5 @@
 #include "gpu_program.h"
+#include "shader_buffer.h"
 #include <algorithm>
 #include <logging/logging.h>
 
@@ -16,6 +17,20 @@ auto list_variant_names(const gfx::shader& shader) -> std::string
     }
     std::sort(names.begin(), names.end());
     return fmt::format("{}", fmt::join(names, ", "));
+}
+
+/// The variant @p name of @p shader this device draws with: where vertex shaders read their shader buffers from
+/// textures, its texture twin (get_shader_buffer_variant) when the shader has one, else @p name itself.
+auto find_device_variant(const gfx::shader& shader, const std::string& name) -> const gfx::shader*
+{
+    if(get_vertex_shader_buffer_storage() == shader_buffer_storage::texture)
+    {
+        if(const auto* twin = shader.find_variant(get_shader_buffer_variant(name, shader_buffer_storage::texture)))
+        {
+            return twin;
+        }
+    }
+    return shader.find_variant(name);
 }
 } // namespace
 
@@ -49,10 +64,29 @@ gpu_program::gpu_program(asset_handle<gfx::shader> vertex_shader, asset_handle<g
 gpu_program::gpu_program(asset_handle<gfx::shader> vertex_shader,
                          std::string vertex_variant,
                          asset_handle<gfx::shader> fragment_shader,
-                         std::string fragment_variant)
+                         std::string fragment_variant,
+                         bool is_wanted)
+    : is_wanted_(is_wanted)
 {
     attach_shader(std::move(vertex_shader), std::move(vertex_variant));
     attach_shader(std::move(fragment_shader), std::move(fragment_variant));
+    populate();
+}
+
+void gpu_program::set_wanted(bool is_wanted)
+{
+    if(is_wanted_ == is_wanted)
+    {
+        return;
+    }
+    is_wanted_ = is_wanted;
+    if(!is_wanted_)
+    {
+        program_ = std::make_shared<gfx::program>();
+        ++revision_;
+        shaders_cached_ = {nullptr, nullptr};
+        return;
+    }
     populate();
 }
 
@@ -117,6 +151,10 @@ void gpu_program::create_program(const selected_shaders& selected)
 
 void gpu_program::populate()
 {
+    if(!is_wanted_)
+    {
+        return;
+    }
     // The assets are held for the whole rebuild: a reload on another thread can replace them, and the variants live in them.
     shader_assets assets{nullptr, nullptr};
     selected_shaders selected{nullptr, nullptr};
@@ -127,7 +165,7 @@ void gpu_program::populate()
             return;
         }
         assets[i] = shaders_[i].get();
-        selected[i] = assets[i]->find_variant(variants_[i]);
+        selected[i] = find_device_variant(*assets[i], variants_[i]);
     }
     const auto refusal = find_refusal(assets, selected);
     if(!refusal.empty())
@@ -211,6 +249,10 @@ auto gpu_program::is_valid() const -> bool
 
 auto gpu_program::begin() -> bool
 {
+    if(!is_wanted_)
+    {
+        return false;
+    }
     for(std::size_t i = 0; i < shaders_.size(); ++i)
     {
         if(shaders_[i] && shaders_cached_[i] != shaders_[i].get())
@@ -237,34 +279,6 @@ void gpu_program::end()
 namespace gfx
 {
 
-void set_world_transform(const std::vector<math::transform::mat4_t>& matrices)
-{
-    if(matrices.empty())
-    {
-        return;
-    }
-
-    gfx::set_world_transform(matrices.data(), static_cast<std::uint16_t>(matrices.size()));
-}
-
-void set_world_transform(const std::vector<math::transform>& matrices)
-{
-    if(matrices.empty())
-    {
-        return;
-    }
-
-    using mat_type = math::transform::mat4_t;
-    std::vector<mat_type> mats;
-    mats.reserve(matrices.size());
-    for(const auto& m : matrices)
-    {
-        mats.emplace_back(m.get_matrix());
-    }
-
-    set_world_transform(mats);
-}
-
 void set_world_transform(const math::transform::mat4_t& matrix)
 {
     auto mat4 = (const void*)math::value_ptr(matrix);
@@ -274,16 +288,6 @@ void set_world_transform(const math::transform::mat4_t& matrix)
 void set_world_transform(const math::transform& matrix)
 {
     set_world_transform(matrix.get_matrix());
-}
-
-void set_prev_world_transform(const std::vector<math::transform::mat4_t>& matrices)
-{
-    if(matrices.empty())
-    {
-        return;
-    }
-
-    gfx::set_prev_world_transform(matrices.data(), static_cast<std::uint16_t>(matrices.size()));
 }
 
 void set_prev_world_transform(const math::transform::mat4_t& matrix)

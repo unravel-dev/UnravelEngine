@@ -164,6 +164,7 @@ void deferred::build_shadows(scene& scn,
             // to the view being rendered, and a render mask makes even a local light's caster
             // set view specific, so neither is ever skipped.
             auto& generator = light_comp.get_shadowmap_generator();
+            generator.request_programs(limits);
             if(!camera_dependant && generator.already_resolved())
             {
                 return;

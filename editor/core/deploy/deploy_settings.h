@@ -42,6 +42,37 @@ enum class deploy_texture_compression : std::uint8_t
     bc,
 };
 
+/// The graphics APIs a web build renders with.
+enum class web_graphics : std::uint8_t
+{
+    /// WebGPU only: a browser without it cannot run the game.
+    webgpu,
+    /// WebGPU where the browser offers it, WebGL 2 elsewhere. The deploy cooks the shaders for both.
+    webgpu_then_webgl2,
+    /// WebGL 2 in every browser.
+    webgl2,
+};
+
+/// What the page tells the player when it starts WebGL 2 because the browser's WebGPU is unavailable.
+enum class web_fallback_notice : std::uint8_t
+{
+    /// A notice over the game for a few seconds, once per game and reason.
+    tell,
+    /// Before the download, a screen says why and offers to continue; the answer is kept per game and reason.
+    ask,
+    /// Nothing; the browser's console says why.
+    silent,
+};
+
+/// The graphics API Deploy and Run and the public link start a web build with.
+enum class web_run_graphics : std::uint8_t
+{
+    /// The page chooses for the browser, as it does for players.
+    automatic,
+    webgpu,
+    webgl2,
+};
+
 /// The permissions an Android build asks for in its manifest. The named ones are what a game commonly
 /// uses (get_android_permission_entries maps them to manifest names); `other` holds any further one.
 struct android_permissions
@@ -112,10 +143,18 @@ struct desktop_deploy_settings
     steam_deploy_settings steam;
 };
 
-/// What a web build is cooked for: the formats its textures are compressed to. A web profile holds one
-/// (profiles/<name>/profile.cfg).
+/// What a web build is cooked for: the graphics APIs it renders with and the formats its textures are compressed to.
+/// A web profile holds one (profiles/<name>/profile.cfg).
 struct web_deploy_settings
 {
+    /// The graphics APIs the page may start the game with; a profile file without the key renders with WebGPU only.
+    web_graphics graphics{web_graphics::webgpu};
+    /// What the page tells the player when WebGL 2 stands in for WebGPU (graphics webgpu_then_webgl2).
+    web_fallback_notice fallback_notice{web_fallback_notice::tell};
+    /// A page on turning WebGPU on, which the notices link to; empty: the page's own advice for the reason.
+    std::string help_link;
+    /// The graphics API Deploy and Run and the public link start the build with.
+    web_run_graphics run_graphics{web_run_graphics::automatic};
     /// BC for the browsers of computers, ASTC for phones and tablets; a browser that reads neither decodes the
     /// textures at load.
     deploy_texture_compression texture_compression{deploy_texture_compression::bc};

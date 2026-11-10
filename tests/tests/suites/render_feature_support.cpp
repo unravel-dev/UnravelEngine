@@ -16,10 +16,12 @@
  *   - the engine compute shaders of a feature the device does not run are left empty (the longest shader prefix
  *     decides the feature), every other shader is created;
  *   - a device without compute loses every compute feature and fails the minimum requirements;
- *   - a device without vertex-stage storage buffers (OpenGL ES) draws skinned meshes one by one, and its particles
- *     read their data from textures, culled and sorted on the CPU;
+ *   - a device without vertex-stage storage buffers (OpenGL ES) reads bone palettes and particle data from textures,
+ *     its particles culled and sorted on the CPU;
  *   - where the particle storage buffers are unavailable (no compute, or no vertex storage buffers) the particle
  *     programs draw with the data texture variants vs_particle.eshader lists;
+ *   - a WebGL 2 device (OpenGL ES 3.0) meets the minimum requirements without compute, loses every compute feature
+ *     and creates no engine compute shader, not even one of no feature;
  *   - a feature whose dependency is unavailable is unavailable, and says why;
  *   - the --gfx-disable names parse into the mask they describe;
  *   - every requirement entry has a name and a fallback sentence.
@@ -28,15 +30,25 @@
 #include "../tests.h"
 
 #include <asset_compiler/eshader_file.h>
-#include <engine/rendering/particles/ps/particle_data_texture.h>
+#include <engine/rendering/particles/ps/particle_gpu.h>
+#include <engine/rendering/shader_buffer.h>
 #include <engine/rendering/render_feature_support.h>
 #include <filesystem/filesystem.h>
 #include <graphics/device_caps.h>
 #include <graphics/shader.h>
 
+#include <engine/rendering/renderer.h>
+
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdio>
+#include <map>
+#include <fstream>
+#include <regex>
+#include <sstream>
 #include <string>
+#include <vector>
 
 using namespace unravel;
 
@@ -77,6 +89,7 @@ auto make_desktop_caps() -> gfx::device_caps
     caps.has_image_read_write = true;
     caps.has_blend_independent = true;
     caps.has_vertex_storage_buffers = true;
+    caps.has_depth_blit = true;
     caps.max_compute_bindings = ALL_COMPUTE_BINDINGS;
     caps.max_storage_textures_per_stage = ALL_COMPUTE_BINDINGS;
     caps.max_texture_size = 16384;
@@ -312,68 +325,208 @@ void test_no_compute()
 
 void test_no_vertex_storage_buffers()
 {
-    std::printf("a device without vertex storage buffers batches no skinned meshes and reads particles from textures\n");
+    std::printf("a device without vertex storage buffers reads bone palettes and particles from textures\n");
     gfx::device_caps_mask mask;
     mask.drops_vertex_storage_buffers = true;
     const auto support = render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask));
     for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
     {
         const auto feature = static_cast<render_feature>(index);
-        const bool needs_vertex_storage = feature == render_feature::skinned_mesh_batching ||
+        const bool needs_vertex_storage = feature == render_feature::vertex_storage_buffers ||
                                           feature == render_feature::particle_storage_buffers ||
                                           feature == render_feature::gpu_particles_indirect;
         check_available(support, feature, !needs_vertex_storage, "no vertex storage");
     }
+    check(support.get_status(render_feature::particle_storage_buffers).reason.rfind("It depends on Vertex storage buffers.", 0) == 0,
+          "no vertex storage: the particle storage buffers name the vertex storage buffers they depend on");
     check(support.get_status(render_feature::gpu_particles_indirect).reason.rfind("It depends on Particle storage buffers.", 0) == 0,
           "no vertex storage: the GPU particle culling names the storage buffers it depends on");
 }
 
-/// Whether vs_particle.eshader lists @p name as a variant that reads the particle data from textures.
-auto is_data_texture_variant(const asset_compiler::eshader_file& file, const std::string& name) -> bool
+/// A WebGL 2 device: OpenGL ES 3.0, so no compute, no indirect draws, no images, no vertex storage buffers and no
+/// depth blits.
+auto make_webgl2_caps() -> gfx::device_caps
 {
-    return std::any_of(file.variants.begin(),
-                       file.variants.end(),
-                       [&](const asset_compiler::eshader_variant& variant)
-                       {
-                           return variant.name == name && std::find(variant.defines.begin(),
-                                                                    variant.defines.end(),
-                                                                    "PARTICLE_DATA_TEXTURES") != variant.defines.end();
-                       });
+    auto caps = make_desktop_caps();
+    caps.renderer = bgfx::RendererType::OpenGLES;
+    caps.has_compute = false;
+    caps.has_draw_indirect = false;
+    caps.has_dispatch_indirect = false;
+    caps.has_image_read_write = false;
+    caps.has_vertex_storage_buffers = false;
+    caps.has_depth_blit = false;
+    caps.max_compute_bindings = 0;
+    caps.max_storage_textures_per_stage = 0;
+    return caps;
 }
 
-void check_particle_vertex_variants()
+void test_webgl2_device()
+{
+    std::printf("a WebGL 2 device starts without compute and runs no compute shader\n");
+    const auto caps = make_webgl2_caps();
+    check(gfx::get_missing_minimum_requirements(caps).empty(), "WebGL 2: the minimum requirements are met without compute");
+    check(gfx::is_compute_required(bgfx::RendererType::WebGPU) && !gfx::is_compute_required(bgfx::RendererType::OpenGLES),
+          "compute is a minimum on WebGPU, not on OpenGL ES");
+    const auto support = render_feature_support::resolve(caps);
+    for(std::size_t index = 0; index < static_cast<std::size_t>(render_feature::count); ++index)
+    {
+        const auto feature = static_cast<render_feature>(index);
+        if(get_render_feature_requirements(feature).needs_compute)
+        {
+            check_available(support, feature, false, "WebGL 2");
+        }
+    }
+    check(!support.runs_shader("engine:/data/shaders/cs_clear_uints.eshader"),
+          "WebGL 2: a compute shader of no feature is left empty too");
+    check(!support.runs_shader("engine:/data/shaders/particles/cs_particle_scatter.eshader"),
+          "WebGL 2: the particle scatter is left empty");
+    check(support.runs_shader("engine:/data/shaders/particles/vs_particle.eshader"),
+          "WebGL 2: the particle vertex shader is created");
+    check(render_feature_support::resolve(make_desktop_caps()).runs_shader("engine:/data/shaders/cs_clear_uints.eshader"),
+          "with compute, a compute shader of no feature is created");
+    bgfx::Caps backend{};
+    backend.rendererType = bgfx::RendererType::OpenGLES;
+    check(!gfx::make_device_caps(backend).has_depth_blit, "OpenGL ES copies depth with a draw, not a blit");
+    backend.rendererType = bgfx::RendererType::WebGPU;
+    check(gfx::make_device_caps(backend).has_depth_blit, "WebGPU blits depth");
+}
+
+/// shader_buffer.sh counts the texture rows as shader_buffer.h does.
+void check_texture_width()
 {
 #if defined(ENGINE_DATA_DIR)
-    asset_compiler::eshader_file file;
-    std::string error;
-    const fs::path path = fs::path(ENGINE_DATA_DIR) / "data" / "shaders" / "particles" / "vs_particle.eshader";
-    check(asset_compiler::load_eshader_file(path, file, error), "vs_particle.eshader parses: " + error);
-    for(const std::string variant : {gfx::shader::DEFAULT_VARIANT, "lit", "velocity"})
-    {
-        const std::string texture_variant = ps_soa::get_particle_vertex_variant(variant);
-        check(is_data_texture_variant(file, texture_variant),
-              "the " + variant + " particle program draws with " + texture_variant + ", which reads data textures");
-    }
+    std::ifstream stream(fs::path(ENGINE_DATA_DIR) / "data" / "shaders" / "shader_buffer.sh");
+    std::stringstream text;
+    text << stream.rdbuf();
+    const std::string source = text.str();
+    std::smatch width;
+    const bool is_found = std::regex_search(source, width, std::regex(R"(#define SHADER_BUFFER_TEXTURE_WIDTH (\d+)u)"));
+    check(is_found && std::stoul(width[1].str()) == SHADER_BUFFER_TEXTURE_WIDTH,
+          "shader_buffer.sh has SHADER_BUFFER_TEXTURE_WIDTH texels a row, as shader_buffer.h");
 #endif
 }
 
-void test_particle_data_textures()
+void test_shader_buffer_storage()
 {
-    std::printf("particles read their data from textures where the storage buffer path is unavailable\n");
+    std::printf("bone palettes and particle data live in textures where vertex shaders read no storage buffers\n");
     const render_feature_support saved = get_render_feature_support();
     set_render_feature_support(render_feature_support::resolve(make_desktop_caps()));
-    check(!ps_soa::uses_data_textures(), "desktop: particles read storage buffers");
-    check(ps_soa::get_particle_vertex_variant("lit") == "lit", "desktop: the lit particle program keeps its variant");
+    check(get_vertex_shader_buffer_storage() == shader_buffer_storage::buffer, "desktop: palettes live in buffers");
+    check(ps_soa::get_particle_data_storage() == shader_buffer_storage::buffer, "desktop: particles read storage buffers");
     gfx::device_caps_mask mask;
     mask.drops_compute = true;
     set_render_feature_support(render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask)));
-    check(ps_soa::uses_data_textures(), "no compute: particles read data textures");
+    check(get_vertex_shader_buffer_storage() == shader_buffer_storage::texture, "no compute: palettes live in textures");
+    check(ps_soa::get_particle_data_storage() == shader_buffer_storage::texture, "no compute: particles read textures");
     mask = {};
     mask.drops_vertex_storage_buffers = true;
     set_render_feature_support(render_feature_support::resolve(gfx::apply_device_caps_mask(make_desktop_caps(), mask)));
-    check(ps_soa::uses_data_textures(), "no vertex storage: particles read data textures");
-    check_particle_vertex_variants();
+    check(get_vertex_shader_buffer_storage() == shader_buffer_storage::texture,
+          "no vertex storage: palettes live in textures");
+    check(ps_soa::get_particle_data_storage() == shader_buffer_storage::texture,
+          "no vertex storage: particles read textures");
+    check(get_shader_buffer_variant("skinned", shader_buffer_storage::texture) == "skinned_textures" &&
+              get_shader_buffer_variant(gfx::shader::DEFAULT_VARIANT, shader_buffer_storage::texture) == "textures" &&
+              get_shader_buffer_variant("lit", shader_buffer_storage::buffer) == "lit",
+          "a variant's texture twin is named after it");
     set_render_feature_support(saved);
+    check_texture_width();
+}
+
+/// The script names of render_feature's values (RenderFeature in Graphics.cs), by the engine's names.
+constexpr std::array<std::pair<render_feature, const char*>, static_cast<std::size_t>(render_feature::count)>
+    SCRIPT_FEATURE_NAMES = {{
+        {render_feature::global_illumination, "GlobalIllumination"},
+        {render_feature::gi_page_feedback, "GlobalIlluminationPageFeedback"},
+        {render_feature::hiz, "HierarchicalDepth"},
+        {render_feature::screen_space_reflections, "ScreenSpaceReflections"},
+        {render_feature::screen_space_indirect_lighting, "ScreenSpaceIndirectLighting"},
+        {render_feature::gtao, "GroundTruthAmbientOcclusion"},
+        {render_feature::assao, "AdaptiveScreenSpaceAmbientOcclusion"},
+        {render_feature::auto_exposure, "AutoExposure"},
+        {render_feature::local_exposure, "LocalExposure"},
+        {render_feature::gpu_pre_exposure, "GpuPreExposure"},
+        {render_feature::irradiance_sh, "SkyIrradiance"},
+        {render_feature::reflection_probe_prefilter, "ReflectionProbeFiltering"},
+        {render_feature::volumetric_fog, "VolumetricFog"},
+        {render_feature::cloud_shadow, "CloudShadows"},
+        {render_feature::vertex_storage_buffers, "VertexStorageBuffers"},
+        {render_feature::particle_storage_buffers, "ParticleStorageBuffers"},
+        {render_feature::gpu_particles_indirect, "GpuParticleCulling"},
+        {render_feature::particle_reactive_mask, "ParticleReactiveMask"},
+        {render_feature::soft_shadows, "SoftShadows"},
+        {render_feature::ui_msaa, "UIMultisampling"},
+        {render_feature::temporal_probe, "TemporalStabilityProbe"},
+    }};
+
+/// The members of C# enum @p name in @p source by their values.
+auto read_script_enum(const std::string& source, const std::string& name) -> std::map<std::string, int>
+{
+    std::map<std::string, int> members;
+    std::smatch body;
+    if(!std::regex_search(source, body, std::regex("enum " + name + R"(\s*\{([^}]*)\})")))
+    {
+        return members;
+    }
+    // The members, the doc comments left out: they may hold "name=value" text.
+    const std::string code = std::regex_replace(body[1].str(), std::regex(R"(///[^\n]*)"), "");
+    const std::regex member(R"((\w+)\s*=\s*(\d+))");
+    for(std::sregex_iterator it(code.begin(), code.end(), member), end; it != end; ++it)
+    {
+        members[(*it)[1].str()] = std::stoi((*it)[2].str());
+    }
+    return members;
+}
+
+/// "InsecurePage" for "insecure_page": the script name of a page's fallback reason.
+auto make_script_name(const std::string& page_name) -> std::string
+{
+    std::string name;
+    bool is_word_start = true;
+    for(const char letter : page_name)
+    {
+        if(letter == '_')
+        {
+            is_word_start = true;
+            continue;
+        }
+        name += is_word_start ? static_cast<char>(std::toupper(static_cast<unsigned char>(letter))) : letter;
+        is_word_start = false;
+    }
+    return name;
+}
+
+void test_script_enums_mirror_the_engine()
+{
+    std::printf("Graphics.cs mirrors render_feature and graphics_fallback_reason value by value\n");
+#if defined(ENGINE_DATA_DIR)
+    std::ifstream stream(fs::path(ENGINE_DATA_DIR) / "data" / "scripts" / "rendering" / "Graphics.cs");
+    std::stringstream text;
+    text << stream.rdbuf();
+    const std::string source = text.str();
+    std::map<std::string, int> expected_features;
+    for(const auto& [feature, name] : SCRIPT_FEATURE_NAMES)
+    {
+        expected_features[name] = static_cast<int>(feature);
+    }
+    check(read_script_enum(source, "RenderFeature") == expected_features,
+          "RenderFeature in Graphics.cs holds every render_feature at its value");
+    const auto reasons = read_script_enum(source, "GraphicsFallbackReason");
+    bool is_mirrored = reasons.size() == static_cast<std::size_t>(graphics_fallback_reason::count) &&
+                       reasons.contains("None") && reasons.at("None") == static_cast<int>(graphics_fallback_reason::none);
+    for(const auto& [name, value] : reasons)
+    {
+        bool is_found = name == "None";
+        for(int index = 1; index < static_cast<int>(graphics_fallback_reason::count) && !is_found; ++index)
+        {
+            const auto reason = static_cast<graphics_fallback_reason>(index);
+            const std::string page_name = get_graphics_fallback_reason_name(reason);
+            is_found = make_script_name(page_name) == name && value == index;
+        }
+        is_mirrored = is_mirrored && is_found;
+    }
+    check(is_mirrored, "GraphicsFallbackReason in Graphics.cs holds every graphics_fallback_reason at its value");
+#endif
 }
 
 void test_dependency_reason()
@@ -404,11 +557,13 @@ void test_mask_parsing()
     std::printf("the --gfx-disable names parse into their mask\n");
     std::vector<std::string> unknown;
     const auto mask = gfx::parse_device_caps_mask(
-        "Compute, draw_indirect,bindings8,format:rg11b10f:write,extended_storage_formats,vertex_storage_buffers,bogus",
+        "Compute, draw_indirect,bindings8,format:rg11b10f:write,extended_storage_formats,vertex_storage_buffers,"
+        "depth_blit,bogus",
         unknown);
     check(mask.drops_compute && mask.drops_draw_indirect && mask.drops_extended_storage_formats &&
-              mask.drops_vertex_storage_buffers,
+              mask.drops_vertex_storage_buffers && mask.drops_depth_blit,
           "the flag names set their drops");
+    check(!gfx::apply_device_caps_mask(make_desktop_caps(), mask).has_depth_blit, "depth_blit drops depth blits");
     check(mask.max_compute_bindings == FEATURE_LEVEL_11_0_BINDINGS, "bindings8 sets eight compute bindings");
     check(mask.dropped_format_caps.size() == 1 && mask.dropped_format_caps[0].first == bgfx::TextureFormat::RG11B10F &&
               mask.dropped_format_caps[0].second == BGFX_CAPS_FORMAT_TEXTURE_IMAGE_WRITE,
@@ -469,7 +624,9 @@ auto run_render_feature_support_suite(rtti::context& /*ctx*/) -> int
     test_shaders_of_unavailable_features();
     test_no_compute();
     test_no_vertex_storage_buffers();
-    test_particle_data_textures();
+    test_shader_buffer_storage();
+    test_script_enums_mirror_the_engine();
+    test_webgl2_device();
     test_dependency_reason();
     test_render_target_sample_counts();
     test_mask_parsing();

@@ -1377,6 +1377,7 @@ auto model_component::get_submit_extras(bool shadow_pass) const -> model_submit_
     // update_armature runs a full refresh and clears the flag.
     extras.proxies = render_proxies_stale_ ? nullptr : &render_proxies_;
     extras.shadow_pass = shadow_pass;
+    extras.owner = get_owner();
     return extras;
 }
 

@@ -191,10 +191,11 @@ auto schedule_load(tpp::thread_pool& pool, asset_handle<T>& output, const std::s
 }
 
 /// One compiled variant as a GPU shader, named so a GPU capture tells the variants apart; empty unless @p is_used.
+/// A variant compiled without code (one WebGL 2 cannot run, asset_compiler) is empty too.
 auto create_shader_variant(const compiled_shader_variant& variant, const std::string& key, bool is_used)
     -> std::shared_ptr<gfx::shader>
 {
-    if(!is_used)
+    if(!is_used || variant.bytes.empty())
     {
         return std::make_shared<gfx::shader>();
     }

@@ -108,6 +108,19 @@
     .loader-button:hover { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.30); }
     .loader-button:focus-visible { outline: 2px solid var(--loader-fill-end); outline-offset: 3px; }
     .loader.has-error .loader-bar, .loader.has-error .loader-row, .loader.has-error .loader-detail { display: none; }
+    .loader-link {
+      display: inline-block; margin: 0 0 20px;
+      color: var(--loader-text); font-size: 13px; text-underline-offset: 3px;
+    }
+    .loader-link[hidden] { display: none; }
+
+    /* Before the download, when WebGL 2 would stand in and the build asks the player first (main.js). */
+    .loader-ask { margin-top: 4px; text-align: center; }
+    .loader-ask[hidden] { display: none; }
+    .loader-ask-title { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+    .loader-ask-text { margin: 0 0 12px; font-size: 13px; line-height: 1.5; color: var(--loader-muted); }
+    .loader-ask-advice { margin: 0 0 20px; font-size: 12px; line-height: 1.5; color: var(--loader-faint); user-select: text; }
+    .loader.is-asking .loader-bar, .loader.is-asking .loader-row, .loader.is-asking .loader-detail { display: none; }
     .loader-credit {
       position: absolute; left: 0; right: 0; bottom: max(22px, env(safe-area-inset-bottom));
       margin: 0; text-align: center;
@@ -118,11 +131,21 @@
     .notice {
       position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); z-index: 1;
       transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); box-sizing: border-box;
-      padding: 12px 16px; border-radius: 10px;
+      padding: 12px 40px 12px 16px; border-radius: 10px;
       background: rgba(10, 12, 16, 0.86); border: 1px solid rgba(255, 255, 255, 0.12);
       color: var(--loader-muted); font: 13px/1.5 var(--loader-font);
       box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+      transition: opacity 0.4s ease;
     }
+    .notice.is-gone { opacity: 0; pointer-events: none; }
+    .notice-link { color: var(--loader-text); text-underline-offset: 3px; white-space: nowrap; }
+    .notice-close {
+      position: absolute; top: 6px; right: 6px; width: 28px; height: 28px;
+      font: 18px/1 var(--loader-font); color: var(--loader-muted);
+      background: none; border: 0; border-radius: 6px; cursor: pointer;
+    }
+    .notice-close:hover { color: var(--loader-text); background: rgba(255, 255, 255, 0.08); }
+    .notice-close:focus-visible { outline: 2px solid var(--loader-fill-end); outline-offset: 1px; }
 
     @keyframes loader-sheen { to { transform: translateX(340%); } }
     @keyframes loader-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
@@ -151,7 +174,15 @@
       <div id="loader-error" class="loader-error" role="alert" hidden>
         <p class="loader-error-title">The game could not start.</p>
         <p id="loader-error-text" class="loader-error-text"></p>
-        <button id="loader-retry" class="loader-button" type="button">Try again</button>
+        <a id="loader-error-help" class="loader-link" target="_blank" rel="noopener" hidden>How to turn on WebGPU</a>
+        <div><button id="loader-retry" class="loader-button" type="button">Try again</button></div>
+      </div>
+      <div id="loader-ask" class="loader-ask" role="dialog" aria-labelledby="loader-ask-title" hidden>
+        <p id="loader-ask-title" class="loader-ask-title">Play on WebGL 2?</p>
+        <p id="loader-ask-text" class="loader-ask-text"></p>
+        <p id="loader-ask-advice" class="loader-ask-advice"></p>
+        <a id="loader-ask-help" class="loader-link" target="_blank" rel="noopener" hidden>How to turn on WebGPU</a>
+        <div><button id="loader-ask-continue" class="loader-button" type="button">Continue</button></div>
       </div>
     </div>
     <p class="loader-credit">Made with Unravel Engine</p>

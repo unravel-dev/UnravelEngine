@@ -860,9 +860,10 @@ auto run_shaderc(const shader_compile_input& input,
     }
     else if(renderer == bgfx::RendererType::OpenGLES)
     {
-        // OpenGL ES 3.0 is the bgfx baseline and compute needs ES 3.1. shaderc raises a
-        // vertex/fragment shader to ES 3.1 itself when it uses storage buffers or images.
-        str_platform = "android";
+        // The OpenGL ES shaders are WebGL 2's: GLSL ES 3.00, shaderc's asm.js platform. shaderc raises a
+        // vertex/fragment shader to ES 3.1 itself when it uses storage buffers or images, which WebGL 2 cannot
+        // compile (compile_eshader_variants leaves those variants without code), and no compute shader is compiled.
+        str_platform = "asm.js";
         str_profile = cs ? "310_es" : "300_es";
     }
     else if(renderer == bgfx::RendererType::OpenGL)
@@ -894,10 +895,10 @@ auto run_shaderc(const shader_compile_input& input,
         str_type = "unknown";
 
     // shaderc reads --define once, as one list.
-    std::string str_defines = "BGFX_CONFIG_MAX_BONES=" + std::to_string(gfx::get_max_blend_transforms());
+    std::string str_defines;
     for(const auto& define : input.defines)
     {
-        str_defines += ";" + define;
+        str_defines += (str_defines.empty() ? "" : ";") + define;
     }
 
     std::vector<std::string> args_array = {
@@ -910,11 +911,15 @@ auto run_shaderc(const shader_compile_input& input,
         "--varyingdef",
         str_varying,
         "--type",
-        str_type,
-        "--define",
-        str_defines
+        str_type
         //        "--Werror"
     };
+
+    if(!str_defines.empty())
+    {
+        args_array.emplace_back("--define");
+        args_array.emplace_back(str_defines);
+    }
 
     if(!str_platform.empty())
     {
@@ -1131,8 +1136,32 @@ auto prepare_eshader_jobs(const fs::path& source_path,
     return true;
 }
 
+/// Whether compiled GLSL ES code needs OpenGL ES 3.1, by the test bgfx starts it with (ShaderGL::create): storage
+/// buffers and images come out of shaderc with layout bindings, and cube map arrays are ES 3.1 too.
+auto needs_essl_310(const std::vector<std::uint8_t>& bytes) -> bool
+{
+    const std::string_view code(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return code.find("binding = ") != std::string_view::npos || code.find("CubeArray") != std::string_view::npos;
+}
+
+/// @p file's variants named, without code: what a renderer gets of a shader it never runs.
+auto make_variants_without_code(const eshader_file& file) -> std::vector<compiled_shader_variant>
+{
+    std::vector<compiled_shader_variant> compiled;
+    compiled.reserve(file.variants.size());
+    for(const auto& variant : file.variants)
+    {
+        compiled.push_back({variant.name, {}, {}});
+    }
+    return compiled;
+}
+
 /**
  * @brief Runs shaderc once per variant, on the current pool.
+ *
+ * The OpenGL ES shaders are WebGL 2's (OpenGL ES 3.0), which runs no compute shader and compiles no shader that needs
+ * ES 3.1: a compute shader keeps its variants' names without code, and so does a variant that needs ES 3.1. The loader
+ * leaves such a variant empty, and the features that use it do not run there (render_feature_support).
  *
  * @param[out] compiled Every variant's output, filled only when all of them compile: a renderer's compiled file holds
  *             a source's variants or does not change.
@@ -1143,6 +1172,12 @@ auto compile_eshader_variants(const fs::path& source_path,
                               bgfx::RendererType::Enum renderer,
                               std::vector<compiled_shader_variant>& compiled) -> bool
 {
+    const bool is_webgl2 = renderer == bgfx::RendererType::OpenGLES;
+    if(is_webgl2 && get_shader_stage(source_path.stem().string()) == shader_stage::compute)
+    {
+        compiled = make_variants_without_code(file);
+        return true;
+    }
     compile_temp_files temp_files(temp_dir);
     shader_compile_input input;
     input.name = source_path.stem().string();
@@ -1171,6 +1206,10 @@ auto compile_eshader_variants(const fs::path& source_path,
     compiled.reserve(jobs.size());
     for(auto& job : jobs)
     {
+        if(is_webgl2 && needs_essl_310(job.bytes))
+        {
+            job.bytes.clear();
+        }
         compiled.push_back({job.variant->name, std::move(job.bytes), varyings});
     }
     return true;

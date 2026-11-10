@@ -579,7 +579,15 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                     prog->end();
                 };
 
-                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, current_lod_data.current_lod_index, callbacks);
+                model.submit(world_transform,
+                             submesh_transforms,
+                             bone_transforms,
+                             skinning_transforms,
+                             current_lod_data.current_lod_index,
+                             callbacks,
+                             nullptr,
+                             nullptr,
+                             model_comp.get_submit_extras());
             });
 
         bgfx::discard();

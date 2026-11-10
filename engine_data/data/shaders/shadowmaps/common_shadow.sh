@@ -19,12 +19,16 @@ vec2 sampleVogelDisk(int index, int sampleCount)
     return vec2(cos(a), sin(a)) * r;
 }
 
-// One of 64 points of a Poisson disk in the unit circle; the sample loops read the first ones in order. A switch,
-// not a table: compiled through SPIR-V (Vulkan, OpenGL, WebGPU), a table indexed at run time
-// becomes a local array every pixel fills.
-vec2 samplePoisson(int index)
+// Point @p index of a loop of @p sampleCount samples over the unit circle. WebGL 2 (GLSL ES) takes the golden-angle
+// spiral: ANGLE compiles to Direct3D with FXC, which spends seconds per light shader on the Poisson switch below
+// inlined in every sample loop. Everywhere else it is one of 64 points of a Poisson disk, read in order; a switch,
+// not a table: compiled through SPIR-V (Vulkan, OpenGL, WebGPU), a table indexed at run time becomes a local array
+// every pixel fills.
+vec2 samplePoisson(int index, int sampleCount)
 {
-	//return sampleVogelDisk(index, 10);
+#if BGFX_SHADER_LANGUAGE_ESSL
+	return sampleVogelDisk(index, sampleCount);
+#else
 	switch(int(mod(float(index), 64.0)))
 	{
 	case 0: return vec2(-0.94201624, -0.39906216);
@@ -92,6 +96,7 @@ vec2 samplePoisson(int index)
 	case 62: return vec2(-0.009628, -0.483058);
 	default: return vec2(-0.018516, 0.435703);
 	}
+#endif
 }
 
 // Rotate a 2D sample by a precomputed sin/cos pair.
@@ -214,7 +219,7 @@ float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord
     float totalWeight = 0.0;
     for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
     {
-        vec2 jitteredOffset = rotateSample(samplePoisson(i), _diskRotation) * offset;
+        vec2 jitteredOffset = rotateSample(samplePoisson(i, PCF_LOD_OFFSET_NUM_SAMPLES), _diskRotation) * offset;
         vec4 sampleCoord = _shadowCoord + vec4(jitteredOffset, 0.0, 0.0);
         vec2 sampleUV = sampleCoord.xy / sampleCoord.w;
         float edgeDist = min(min(sampleUV.x, 1.0 - sampleUV.x),
@@ -228,7 +233,7 @@ float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord
 #else
     for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
     {
-        vec2 jitteredOffset = rotateSample(samplePoisson(i), _diskRotation) * offset;
+        vec2 jitteredOffset = rotateSample(samplePoisson(i, PCF_LOD_OFFSET_NUM_SAMPLES), _diskRotation) * offset;
         result += hardShadowLod(_sampler, lod, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias, _planeGrad, jitteredOffset * invW);
     }
     return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
@@ -468,7 +473,7 @@ float transmittancePCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 
     float totalWeight = 0.0;
     for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
     {
-        vec2 jitteredOffset = rotateSample(samplePoisson(i), diskRotation) * offset;
+        vec2 jitteredOffset = rotateSample(samplePoisson(i, PCF_LOD_OFFSET_NUM_SAMPLES), diskRotation) * offset;
         vec4 sampleCoord = _shadowCoord + vec4(jitteredOffset, 0.0, 0.0);
         vec2 sampleUV = sampleCoord.xy / sampleCoord.w;
         float edgeDist = min(min(sampleUV.x, 1.0 - sampleUV.x),
@@ -482,7 +487,7 @@ float transmittancePCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 
 #else
     for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
     {
-        vec2 jitteredOffset = rotateSample(samplePoisson(i), diskRotation) * offset;
+        vec2 jitteredOffset = rotateSample(samplePoisson(i, PCF_LOD_OFFSET_NUM_SAMPLES), diskRotation) * offset;
         result += transmittanceLod(_sampler, 0.0, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias, _planeGrad, jitteredOffset * invW, _model, _density);
     }
     return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
@@ -604,7 +609,7 @@ vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float 
     // Search around the shadow coordinate to find blockers
     for( int i = 0; i < BLOCKER_SEARCH_NUM_SAMPLES; ++i )
     {
-        vec2 offset = rotateSample(samplePoisson(i), _diskRotation) * _searchSize;
+        vec2 offset = rotateSample(samplePoisson(i, BLOCKER_SEARCH_NUM_SAMPLES), _diskRotation) * _searchSize;
         vec2 sampleUV = texCoord + offset;
 #if SM_CSM
         sampleUV = saturate(sampleUV);

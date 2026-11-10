@@ -701,12 +701,41 @@ void test_cooked_shader_variants()
     deploy_settings params;
     params.deploy_target = unravel::deploy_platform::web;
     const std::set<std::string> webgpu{".wgsl"};
-    check(deployment::get_shader_variants(params) == webgpu, "a web build ships WGSL shaders only");
-    check(deployment::get_cooked_shader_variants(webgpu) == webgpu, "the editor compiles no WGSL for itself, so a deploy cooks it");
+    const std::set<std::string> webgl2{".essl"};
+    const std::set<std::string> both{".wgsl", ".essl"};
+    check(deployment::get_shader_variants(params) == webgpu, "a web build ships WGSL shaders only by default");
+    params.web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    check(deployment::get_shader_variants(params) == both, "WebGPU, then WebGL 2 ships WGSL and GLSL ES");
+    params.web.graphics = unravel::web_graphics::webgl2;
+    check(deployment::get_shader_variants(params) == webgl2, "WebGL 2 only ships GLSL ES only");
+    check(deployment::get_cooked_shader_variants(both) == both,
+          "the editor compiles neither WGSL nor GLSL ES for itself, so a deploy cooks both");
     check(deployment::get_cooked_shader_variants(gfx::get_renderer_platform_supported_filename_extensions()).empty(),
           "the renderers the editor compiles for are never cooked");
     params.deploy_target = unravel::deploy_platform::desktop;
     check(deployment::get_shader_variants(params).empty(), "a desktop build ships every variant the editor compiled");
+}
+
+void test_web_shader_sets()
+{
+    std::printf("test_web_shader_sets\n");
+    deploy_settings params;
+    params.deploy_target = unravel::deploy_platform::web;
+    params.deploy_packed_assets = true;
+    check(deployment::get_web_shader_sets(params).empty(), "a WebGPU only build ships its shaders in the protocols' packs");
+    params.web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    const auto sets = deployment::get_web_shader_sets(params);
+    check(sets.size() == 2 && sets[0].name == "webgpu" && sets[0].renderer_extension == ".wgsl" && sets[1].name == "webgl2" &&
+              sets[1].renderer_extension == ".essl",
+          "a packed build for both APIs ships each API's shaders in a set of its own, named as the page names the API");
+    params.deploy_packed_assets = false;
+    check(deployment::get_web_shader_sets(params).empty(), "a loose build ships both, as it ships every texture set");
+    params.deploy_packed_assets = true;
+    params.web.graphics = unravel::web_graphics::webgl2;
+    check(deployment::get_web_shader_sets(params).empty(), "a WebGL 2 only build has one set");
+    params.deploy_target = unravel::deploy_platform::desktop;
+    params.web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    check(deployment::get_web_shader_sets(params).empty(), "other platforms have none");
 }
 
 void test_shader_cook_plan(const fs::path& root)
@@ -1068,11 +1097,13 @@ void test_web_site(const fs::path& root)
     const auto pack_hash = fs::hash_file_fingerprint(site / "data/engine/content.pak", false);
     check(read_text(site / deployment::WEB_DATA_MANIFEST_NAME) ==
               "{\n  \"title\": \"Game \\\"Two\\\"\",\n  \"user_folder\": \"/libsdl/Studio/Game\",\n  \"runtime_size\": 6,\n"
+              "  \"graphics\": {\"backends\": [\"webgpu\"], \"fallback_notice\": \"tell\", \"help_link\": \"\"},\n"
               "  \"files\": [\n    {\"path\": \"data/app/settings/settings.cfg\", \"hash\": \"" + settings_hash +
                   "\", \"size\": 8},\n    {\"path\": \"data/engine/content.pak\", \"hash\": \"" + pack_hash +
                   "\", \"size\": 11}\n  ]\n}\n",
-          "the manifest names the game and its folder, weighs the runtime without its precompressed copies, and lists the "
-          "data's files by name with their content's fingerprint and size, as the page fetches, caches and counts them");
+          "the manifest names the game and its folder, weighs the runtime without its precompressed copies, gives the "
+          "graphics policy (WebGPU only by default) and lists the data's files by name with their content's fingerprint "
+          "and size, as the page fetches, caches and counts them");
     write_text(site / "data/engine/content.pak", "another engine pack");
     check(deployment::make_web_data_manifest(site, page).find(pack_hash) == std::string::npos,
           "a changed file has another fingerprint, so the page fetches it again");
@@ -1097,6 +1128,30 @@ void test_web_site(const fs::path& root)
           "with texture sets the manifest lists them, the computers' first, and names each set's pack");
     check(deployment::make_web_data_manifest(site, page).find("texture_set") == std::string::npos,
           "a build with one set names none");
+    write_text(site / "data/engine/content_webgl2.pak", "gles shaders");
+    write_text(site / "data/engine/content_webgpu.pak", "webgpu shaders");
+    unravel::web_deploy_settings web;
+    web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    web.fallback_notice = unravel::web_fallback_notice::ask;
+    web.help_link = "https://example.com/webgpu";
+    deployment::web_page_info shaders_page{"Game", "/libsdl/Game", {}, {"webgpu", "webgl2"}};
+    shaders_page.graphics = deployment::make_web_graphics_policy(web);
+    const auto shaders_manifest = deployment::make_web_data_manifest(site, shaders_page);
+    check(shaders_manifest.find("  \"graphics\": {\"backends\": [\"webgpu\", \"webgl2\"], \"fallback_notice\": \"ask\", "
+                                "\"help_link\": \"https://example.com/webgpu\"},\n") !=
+              std::string::npos,
+          "the graphics block carries the profile's APIs in the order the page tries them and what it tells the player");
+    check(shaders_manifest.find("\"shader_sets\": [\"webgpu\", \"webgl2\"],") != std::string::npos &&
+              shaders_manifest.find("content_webgl2.pak\", \"hash\": \"" +
+                                    fs::hash_file_fingerprint(site / "data/engine/content_webgl2.pak", false) +
+                                    "\", \"size\": 12, \"shader_set\": \"webgl2\"}") != std::string::npos &&
+              shaders_manifest.find("content_webgpu.pak\", \"hash\": \"" +
+                                    fs::hash_file_fingerprint(site / "data/engine/content_webgpu.pak", false) +
+                                    "\", \"size\": 14, \"shader_set\": \"webgpu\"}") != std::string::npos,
+          "with shader sets the manifest lists them and names each set's pack");
+    web.graphics = unravel::web_graphics::webgl2;
+    check(deployment::make_web_graphics_policy(web).backends == std::vector<std::string>{"webgl2"},
+          "a WebGL 2 only build lists WebGL 2 only");
 }
 
 void test_web_addresses()
@@ -1116,6 +1171,16 @@ void test_web_addresses()
     check(deployment::make_web_page_address("http://127.0.0.1:8742", site, {"--log-level", "a&b c"}) ==
               "http://127.0.0.1:8742/My%20Game/Web/?arg=--log-level&arg=a%26b%20c",
           "run arguments go one per arg=, encoded");
+    check(deployment::make_web_page_address("http://127.0.0.1:8742", site, {"--novsync"}, "webgl2") ==
+              "http://127.0.0.1:8742/My%20Game/Web/?graphics=webgl2&arg=--novsync",
+          "a graphics API to run with goes first, as graphics=");
+    unravel::web_deploy_settings web;
+    web.run_graphics = unravel::web_run_graphics::webgl2;
+    check(deployment::get_web_run_graphics(web).empty(), "a WebGPU only build runs as it is");
+    web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    check(deployment::get_web_run_graphics(web) == "webgl2", "a build for both APIs runs with the chosen one");
+    web.run_graphics = unravel::web_run_graphics::automatic;
+    check(deployment::get_web_run_graphics(web).empty(), "Auto lets the page choose");
 }
 
 void test_web_tunnel()
@@ -1830,13 +1895,77 @@ void test_packed_protocol(deployment::protocol_job& job)
     fs::unmount_packs();
 }
 
+/// Mounts the protocol's pack and, over it, the shader pack of `set`.
+auto mount_shader_set(const fs::path& protocol_root, const std::string& set) -> bool
+{
+    std::string error;
+    fs::unmount_packs();
+    const bool is_mounted = fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_pack_file_name(), error) &&
+                            fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_set_pack_file_name(set), error);
+    check(is_mounted, "the protocol's pack and the " + set + " shader pack mount: " + error);
+    return is_mounted;
+}
+
+void test_shader_set_packs(const fs::path& root)
+{
+    std::printf("test_shader_set_packs\n");
+    auto job = make_protocol_job(root);
+    const auto cooked_shaders = root / "cooked/shaders";
+    write_text(cooked_shaders / "shaders/fs_a.eshader.asset.wgsl", "wgsl a");
+    write_text(cooked_shaders / "shaders/fs_a.eshader.asset.essl", "essl a");
+    write_text(job.compiled_root / "shaders/fs_a.eshader.asset.dxbc", "dxbc a");
+    job.cooked.push_back(cooked_shaders);
+    job.shader_variants = {".wgsl", ".essl"};
+    job.shader_sets = {{"webgpu", ".wgsl"}, {"webgl2", ".essl"}};
+    deployment::deploy_protocol_data(job);
+    const auto& protocol_root = job.protocol_root;
+    fs::add_path_protocol(TEST_PROTOCOL, protocol_root);
+    if(mount_deployed(protocol_root, false))
+    {
+        check(!is_packed("compiled/shaders/fs_a.eshader.asset.wgsl") && !is_packed("compiled/shaders/fs_a.eshader.asset.essl") &&
+                  !is_packed("compiled/shaders/fs_a.eshader.asset.dxbc") &&
+                  read_packed_text("compiled/textures/wall.png.asset") == "wall",
+              "with shader sets the protocol's pack holds every shipped asset but the shaders");
+    }
+    if(mount_shader_set(protocol_root, "webgpu"))
+    {
+        check(read_packed_text("compiled/shaders/fs_a.eshader.asset.wgsl") == "wgsl a" &&
+                  !is_packed("compiled/shaders/fs_a.eshader.asset.essl"),
+              "the WebGPU set's pack holds the WGSL shaders only");
+    }
+    if(mount_shader_set(protocol_root, "webgl2"))
+    {
+        check(read_packed_text("compiled/shaders/fs_a.eshader.asset.essl") == "essl a" &&
+                  !is_packed("compiled/shaders/fs_a.eshader.asset.wgsl"),
+              "the WebGL 2 set's pack holds the GLSL ES shaders only");
+    }
+    fs::unmount_packs();
+    std::string error;
+    check(fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_set_pack_file_name("webgl2"), error) &&
+              !is_packed(ex::get_asset_index_file_name()) && !is_packed("compiled/textures/wall.png.asset"),
+          "a shader pack holds shaders only, no index");
+    fs::unmount_packs();
+    job.shader_sets.clear();
+    deployment::deploy_protocol_data(job);
+    check(!is_present(protocol_root / ex::get_set_pack_file_name("webgpu")) &&
+              !is_present(protocol_root / ex::get_set_pack_file_name("webgl2")),
+          "a build without shader sets removes the shader packs an earlier build left");
+    if(mount_deployed(protocol_root, false))
+    {
+        check(read_packed_text("compiled/shaders/fs_a.eshader.asset.wgsl") == "wgsl a" &&
+                  read_packed_text("compiled/shaders/fs_a.eshader.asset.essl") == "essl a",
+              "and its protocol's pack holds both APIs' shaders again");
+    }
+    fs::unmount_packs();
+}
+
 /// Mounts the protocol's pack and, over it, the texture pack of `set`.
 auto mount_texture_set(const fs::path& protocol_root, const std::string& set) -> bool
 {
     std::string error;
     fs::unmount_packs();
     const bool is_mounted = fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_pack_file_name(), error) &&
-                            fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_texture_pack_file_name(set), error);
+                            fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_set_pack_file_name(set), error);
     check(is_mounted, "the protocol's pack and the " + set + " texture pack mount: " + error);
     return is_mounted;
 }
@@ -1867,14 +1996,14 @@ void test_texture_set_packs(const fs::path& root)
     }
     fs::unmount_packs();
     std::string error;
-    check(fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_texture_pack_file_name("astc"), error) &&
+    check(fs::mount_pack(TEST_PROTOCOL, protocol_root / ex::get_set_pack_file_name("astc"), error) &&
               !is_packed(ex::get_asset_index_file_name()) && !is_packed("compiled/prefabs/a.pfb.asset"),
           "a texture pack holds textures only, no index");
     fs::unmount_packs();
     job.texture_sets.clear();
     deployment::deploy_protocol_data(job);
-    check(!is_present(protocol_root / ex::get_texture_pack_file_name("bc")) &&
-              !is_present(protocol_root / ex::get_texture_pack_file_name("astc")),
+    check(!is_present(protocol_root / ex::get_set_pack_file_name("bc")) &&
+              !is_present(protocol_root / ex::get_set_pack_file_name("astc")),
           "a build with one set removes the texture packs an earlier build left");
 }
 
@@ -2263,6 +2392,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_file_classification(temp / "files");
         test_shader_variants(temp / "variants");
         test_cooked_shader_variants();
+        test_web_shader_sets();
         test_shader_cook_plan(temp / "shader_cook");
         test_profile_locations();
         test_deploy_locations(temp / "locations");
@@ -2301,6 +2431,7 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_loose_protocol(job);
         test_patch_over_release(job, temp / "protocol");
         test_texture_set_packs(temp / "texture_sets");
+        test_shader_set_packs(temp / "shader_sets");
         test_release_names();
         test_keep_and_remove_release(temp / "releases");
         test_debug_files(temp / "debug_files");

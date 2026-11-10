@@ -127,6 +127,23 @@ auto make_shader_cook_protocol(const fs::path& variants,
     return protocol;
 }
 
+/// The renderer extensions of a web build: WGSL for WebGPU, GLSL ES for WebGL 2 (OpenGL ES).
+auto get_web_shader_variants(web_graphics graphics) -> std::set<std::string>
+{
+    const std::string webgpu = gfx::get_renderer_filename_extension(bgfx::RendererType::WebGPU);
+    const std::string webgl2 = gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
+    switch(graphics)
+    {
+        case web_graphics::webgpu_then_webgl2:
+            return {webgpu, webgl2};
+        case web_graphics::webgl2:
+            return {webgl2};
+        case web_graphics::webgpu:
+        default:
+            return {webgpu};
+    }
+}
+
 } // namespace
 
 auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>
@@ -136,11 +153,22 @@ auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>
         case deploy_platform::android:
             return {gfx::get_renderer_filename_extension(bgfx::RendererType::Vulkan)};
         case deploy_platform::web:
-            return {gfx::get_renderer_filename_extension(bgfx::RendererType::WebGPU)};
+            return get_web_shader_variants(params.web.graphics);
         case deploy_platform::desktop:
         default:
             return {};
     }
+}
+
+auto get_web_shader_sets(const deploy_settings& params) -> std::vector<shader_set_job>
+{
+    if(params.deploy_target != deploy_platform::web || !params.deploy_packed_assets ||
+       params.web.graphics != web_graphics::webgpu_then_webgl2)
+    {
+        return {};
+    }
+    return {{ex::WEBGPU_GRAPHICS_NAME, gfx::get_renderer_filename_extension(bgfx::RendererType::WebGPU)},
+            {ex::WEBGL2_GRAPHICS_NAME, gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES)}};
 }
 
 auto get_cooked_shader_variants(const std::set<std::string>& shipped) -> std::set<std::string>

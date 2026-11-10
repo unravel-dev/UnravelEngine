@@ -12,6 +12,8 @@
  *     limits for the passes that read them;
  *   - limit_light caps a light's shadow map resolution and cascades, filters PCSS with PCF without soft shadows and
  *     drops contact shadows without them, and leaves an allowed light as it is;
+ *   - max_shadow_filtering: hard renders every light hard, PCF 3x3 narrows wider PCF (point light faces too) and soft
+ *     shadows to the 3x3 tent, PCF keeps every width, and two limits keep the narrower;
  *   - the graphics settings' render scale and limits round trip through a settings document;
  *   - get_render_size scales a view's size from MIN_RENDER_SCALE, keeps it at 1, for a scale that is not a
  *     number and for an empty view, and never goes below a texel;
@@ -23,6 +25,7 @@
 
 #include <engine/meta/settings/settings.hpp>
 #include <engine/rendering/feature_limits.h>
+#include <engine/rendering/render_feature_support.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <engine/rendering/render_scale.h>
 #include <engine/settings/settings.h>
@@ -156,6 +159,41 @@ void test_limited_lights()
     limits_check(limit_light(source, limits).directional_shadow_params.num_splits == 3, "fewer cascades than allowed are kept");
 }
 
+void test_shadow_filtering_limit()
+{
+    std::printf("test_shadow_filtering_limit\n");
+    light source;
+    source.type = light_type::spot;
+    source.shadow_params.type = sm_impl::pcf;
+    source.shadow_params.pcf.x_offset = 2.0f;
+    source.shadow_params.pcf.y_offset = 0.5f;
+    limits_check(get_pcf_kernel(source) == pcf_kernel::tent7, "a PCF offset of 2 filters a spot light with the 7x7 tent");
+    limits_check(limit_light(source, feature_limits{}).shadow_params.pcf.x_offset == 2.0f,
+                 "the default limits keep every PCF width");
+    feature_limits limits;
+    limits.max_shadow_filtering = shadow_filtering_limit::pcf_3x3;
+    const auto narrow = limit_light(source, limits);
+    limits_check(narrow.shadow_params.type == sm_impl::pcf && get_pcf_kernel(narrow) == pcf_kernel::tent3,
+                 "under PCF 3x3 a wider PCF light filters with the 3x3 tent");
+    limits_check(narrow.shadow_params.pcf.y_offset == 0.5f, "a PCF offset already narrow enough is kept");
+    source.type = light_type::point;
+    source.shadow_params.pcf.x_offset = 8.0f;
+    limits_check(get_pcf_kernel(limit_light(source, limits)) == pcf_kernel::tent3,
+                 "a point light's faces narrow to the 3x3 tent too");
+    source.shadow_params.type = sm_impl::pcss;
+    limits_check(limit_light(source, limits).shadow_params.type == sm_impl::pcf, "under PCF 3x3 soft shadows filter with PCF");
+    limits.max_shadow_filtering = shadow_filtering_limit::hard;
+    for(const auto filter : {sm_impl::pcf, sm_impl::pcss, sm_impl::vsm, sm_impl::esm, sm_impl::hard})
+    {
+        source.shadow_params.type = filter;
+        limits_check(limit_light(source, limits).shadow_params.type == sm_impl::hard, "under hard every light renders hard shadows");
+    }
+    feature_limits other;
+    other.max_shadow_filtering = shadow_filtering_limit::pcf_3x3;
+    limits_check(intersect_feature_limits(feature_limits{}, other).max_shadow_filtering == shadow_filtering_limit::pcf_3x3,
+                 "two limits keep the narrower shadow filtering");
+}
+
 void test_settings_round_trip()
 {
     std::printf("test_settings_round_trip\n");
@@ -165,6 +203,7 @@ void test_settings_round_trip()
     saved.graphics.limits.volumetric_fog = false;
     saved.graphics.limits.max_anti_aliasing = anti_aliasing_limit::fxaa;
     saved.graphics.limits.max_shadow_resolution = sm_resolution::medium;
+    saved.graphics.limits.max_shadow_filtering = shadow_filtering_limit::pcf_3x3;
     saved.graphics.limits.subsurface = false;
     saved.graphics.limits.volumetric_clouds = false;
     saved.graphics.limits.detailed_indirect_lighting = false;
@@ -212,6 +251,7 @@ auto run_feature_limits_suite(rtti::context& /*ctx*/) -> int
     test_effects_turned_off();
     test_anti_aliasing_limits();
     test_limited_lights();
+    test_shadow_filtering_limit();
     test_settings_round_trip();
     test_render_size();
     test_view_render_size();

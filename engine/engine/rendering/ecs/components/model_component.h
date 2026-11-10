@@ -558,9 +558,10 @@ private:
 
     /**
      * @brief Velocity (motion vector) state: what the PREVIOUS frame rendered with.
-     * prev_world_/prev_submesh_pose_/prev_skinning_pose_ feed u_prev_world in the velocity
-     * pass; recorded_world_ is the two-slot staging for the world matrix (transforms are
-     * already this frame's value at promotion time, unlike the pose caches).
+     * prev_world_/prev_submesh_pose_ feed u_prev_world in the velocity pass and
+     * prev_skinning_pose_ the previous bone palettes (skinning_palette_buffer); recorded_world_
+     * is the two-slot staging for the world matrix (transforms are already this frame's value
+     * at promotion time, unlike the pose caches).
      */
     math::mat4 prev_world_{1.0f};
     math::mat4 recorded_world_{1.0f};

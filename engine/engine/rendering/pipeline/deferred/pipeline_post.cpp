@@ -89,21 +89,18 @@ void deferred::snapshot_prev_scene_color(gfx::render_view& rview,
     scene_history_pass_.run(rview, source, depth, camera);
 }
 
-void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size, bool has_consumer)
+void deferred::snapshot_prev_depth(gfx::render_view& rview, bool has_consumer)
 {
     if(!has_consumer)
     {
         rview.tex_remove("PREV_DEPTH");
+        rview.fbo_remove("PREV_DEPTH");
         return;
     }
-    auto depth_src = rview.fbo_get("GBUFFER")->get_texture(4);
-    const auto& prev_depth = rview.tex_acquire(
-        "PREV_DEPTH",
-        {.size = viewport_size, .format = bgfx::TextureFormat::D32F, .flags = BGFX_TEXTURE_BLIT_DST});
-    gfx::render_pass blit_pass("History/Prev Depth Blit Pass");
-    bgfx::blit(blit_pass.id,
-               bgfx::TextureRegion{.handle = prev_depth->native_handle()},
-               bgfx::TextureRegion{.handle = depth_src->native_handle()});
+    depth_copy_pass_.run(rview,
+                         {.name = "PREV_DEPTH",
+                          .source = rview.fbo_get("GBUFFER")->get_texture(4),
+                          .pass_name = "History/Prev Depth Copy Pass"});
 }
 
 void deferred::run_velocity_debug_pass(const camera& camera,

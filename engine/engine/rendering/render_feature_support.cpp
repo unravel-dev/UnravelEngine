@@ -90,6 +90,7 @@ constexpr const char* FOG_SHADERS[] = {"fog/"};
 constexpr render_target_need CLOUD_SHADOW_TARGETS[] = {{bgfx::TextureFormat::R8, 1, true}};
 
 constexpr const char* PARTICLE_SHADERS[] = {"particles/"};
+constexpr render_feature PARTICLE_STORAGE_DEPENDS[] = {render_feature::vertex_storage_buffers};
 constexpr render_feature PARTICLES_INDIRECT_DEPENDS[] = {render_feature::particle_storage_buffers};
 
 /// Variance (RG32F) and exponential (R32F) shadow maps are blurred and sampled filtered.
@@ -197,11 +198,16 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
      .images = FOG_IMAGES,
      .shader_prefixes = FOG_SHADERS},
     {.name = "Cloud shadows", .fallback = "Clouds cast no shadows.", .render_targets = CLOUD_SHADOW_TARGETS},
+    {.name = "Vertex storage buffers",
+     .fallback = "Vertex shaders read bone palettes and particle data from textures.",
+     .needs_compute = true,
+     .needs_vertex_storage_buffers = true},
     {.name = "Particle storage buffers",
      .fallback = "Particles read their data from textures, and the CPU writes new particles, culls and sorts them.",
      .needs_compute = true,
      .needs_vertex_storage_buffers = true,
      .compute_bindings = 8,
+     .depends_on = PARTICLE_STORAGE_DEPENDS,
      .shader_prefixes = PARTICLE_SHADERS},
     {.name = "GPU particle culling and sorting",
      .fallback = "Particles are culled and sorted on the CPU.",
@@ -211,10 +217,6 @@ constexpr std::array<render_feature_requirements, RENDER_FEATURE_COUNT> RENDER_F
     {.name = "Particle reactive mask",
      .fallback = "Temporal anti-aliasing treats particles like the rest of the scene.",
      .needs_blend_independent = true},
-    {.name = "Skinned mesh batching",
-     .fallback = "Skinned meshes draw one by one.",
-     .needs_compute = true,
-     .needs_vertex_storage_buffers = true},
     {.name = "Soft shadows", .fallback = "Soft shadows filter with PCF.", .render_targets = SOFT_SHADOW_TARGETS},
     {.name = "UI multisampling",
      .fallback = "UI layers render without multisampling.",
@@ -404,6 +406,7 @@ auto find_shader_render_feature(hpp::string_view shader) -> render_feature
 auto render_feature_support::resolve(const gfx::device_caps& caps) -> render_feature_support
 {
     render_feature_support support;
+    support.has_compute_ = caps.has_compute;
     for(std::size_t index = 0; index < RENDER_FEATURE_COUNT; ++index)
     {
         const auto& needs = RENDER_FEATURE_REQUIREMENTS[index];
@@ -445,6 +448,10 @@ auto render_feature_support::runs_shader(hpp::string_view key) const -> bool
     if(shader.empty())
     {
         return true;
+    }
+    if(!has_compute_)
+    {
+        return false;
     }
     const render_feature feature = find_shader_render_feature(shader);
     return feature == render_feature::count || is_available(feature);
@@ -527,6 +534,7 @@ auto intersect_feature_limits(const feature_limits& lhs, const feature_limits& r
     limits.max_anti_aliasing = std::min(lhs.max_anti_aliasing, rhs.max_anti_aliasing);
     limits.max_shadow_resolution = std::min(lhs.max_shadow_resolution, rhs.max_shadow_resolution);
     limits.soft_shadows = lhs.soft_shadows && rhs.soft_shadows;
+    limits.max_shadow_filtering = std::min(lhs.max_shadow_filtering, rhs.max_shadow_filtering);
     limits.contact_shadows = lhs.contact_shadows && rhs.contact_shadows;
     limits.subsurface = lhs.subsurface && rhs.subsurface;
     limits.volumetric_clouds = lhs.volumetric_clouds && rhs.volumetric_clouds;

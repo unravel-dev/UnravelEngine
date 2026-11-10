@@ -578,10 +578,21 @@ inline auto get_patch_pack_file_name(std::uint32_t level) -> std::string
 /// The names of the texture sets a web build can ship, one per block-compression family a browser's GPU may read.
 inline constexpr std::array<const char*, 3> TEXTURE_SET_NAMES = {"bc", "astc", "etc2"};
 
-/// The pack beside a protocol's pack that holds a web build's textures compressed for the set `set` (one of
-/// TEXTURE_SET_NAMES): "content_astc.pak". A web build with several sets ships its textures only in these; the page
-/// downloads the set the browser's GPU reads, and the game mounts that pack over the protocol's pack.
-inline auto get_texture_pack_file_name(const std::string& set) -> std::string
+/// The browser graphics APIs by the names the page, the engine's --graphics and the deploy give them
+/// (game/web/wwwroot/graphics.js).
+inline constexpr const char* WEBGPU_GRAPHICS_NAME = "webgpu";
+inline constexpr const char* WEBGL2_GRAPHICS_NAME = "webgl2";
+
+/// The names of the shader sets a web build can ship: the graphics APIs the page may start the game with.
+inline constexpr std::array<const char*, 2> SHADER_SET_NAMES = {WEBGPU_GRAPHICS_NAME, WEBGL2_GRAPHICS_NAME};
+
+/**
+ * @brief The pack beside a protocol's pack that holds a web build's set `set`: a texture set (TEXTURE_SET_NAMES,
+ * "content_astc.pak") or a shader set (SHADER_SET_NAMES, "content_webgl2.pak"), whose names differ. A web build with
+ * several sets of a kind ships those files only in their packs; the page downloads the set it chose, and the game
+ * mounts that pack over the protocol's pack.
+ */
+inline auto get_set_pack_file_name(const std::string& set) -> std::string
 {
     return "content_" + set + ".pak";
 }

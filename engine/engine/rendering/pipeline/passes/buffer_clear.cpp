@@ -3,6 +3,7 @@
 
 #include <engine/assets/asset_manager.h>
 
+#include <graphics/device_caps.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
@@ -28,7 +29,8 @@ auto buffer_clear::init(rtti::context& ctx) -> bool
     program_.cache_uniforms();
     auto shader = am.get_asset<gfx::shader>("engine:/data/shaders/cs_clear_uints.eshader");
     program_.program = std::make_unique<gpu_program>(shader);
-    if(!is_ready())
+    // Without compute (WebGL 2) nothing writes the counters it clears, and its shader stays empty on purpose.
+    if(!is_ready() && gfx::get_device_caps().has_compute)
     {
         APPLOG_WARNING("The buffer clear program failed to load; GPU-written counters cannot start over.");
     }

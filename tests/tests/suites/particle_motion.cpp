@@ -1464,7 +1464,6 @@ void test_shader_layout_matches_cpp()
     };
     const shader_constant expected[] = {
         {"PARTICLE_RECORD_UINTS", ps_soa::record_uints},
-        {"PARTICLE_DATA_TEXTURE_WIDTH", ps_soa::data_texture_width},
         {"PARTICLE_STATIC_VEC4S", ps_soa::static_row_vec4s},
         {"PARTICLE_DYNAMIC_UINTS", ps_soa::dynamic_row_uints},
         {"PARTICLE_LUT_SIZE", ps_soa::lut_size},

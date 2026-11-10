@@ -29,8 +29,12 @@
  *     check cannot read fails it;
  *   - every language check in the engine's shaders that names SPIR-V names WGSL too: the WebGPU shaders are compiled
  *     with BGFX_SHADER_LANGUAGE_WGSL in place of BGFX_SHADER_LANGUAGE_SPIRV, through the same HLSL path;
- *   - the particle vertex shader's data texture variants compile to GLSL ES and read textures, no storage buffer:
- *     WebGL 2 has none.
+ *   - every engine shader compiles to GLSL ES for WebGL 2: compute shaders and the variants that need OpenGL ES 3.1
+ *     come without code, no variant with code needs ES 3.1, and no vertex variant declares more uniform vectors
+ *     than every WebGL 2 device grants;
+ *   - a vertex variant WebGL 2 cannot compile, for the storage buffers it reads, has a texture twin (shader_buffer.h)
+ *     that compiles and reads textures, unless its shader belongs to a feature that needs compute; each twin defines
+ *     its variant's defines and SHADER_BUFFER_TEXTURES.
  * Everything lives in a temp folder and the tests' app protocol.
  */
 
@@ -46,6 +50,7 @@
 #include <engine/meta/rendering/shader_variants.hpp>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/render_feature_support.h>
+#include <engine/rendering/shader_buffer.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
 #include <graphics/graphics.h>
@@ -86,9 +91,15 @@ constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
 constexpr const char* WEBGPU_TIER_FOLDER = "gi";
 /// bgfx's own shader headers among the engine's, which spell their language checks bgfx's way.
 constexpr std::array<const char*, 2> BGFX_SHADER_HEADERS = {"bgfx_shader.sh", "bgfx_compute.sh"};
-/// The particle vertex shader's variants that read their data from textures (particle_data_texture.h): what a device
-/// without storage buffers in vertex shaders, as WebGL 2, draws particles with.
-constexpr std::array<const char*, 3> PARTICLE_DATA_TEXTURE_VARIANTS = {"textures", "lit_textures", "velocity_textures"};
+/// The define of a vertex variant that reads its shader buffers from textures (shader_buffer.sh).
+constexpr const char* SHADER_BUFFER_TEXTURES_DEFINE = "SHADER_BUFFER_TEXTURES";
+/// Vertex shaders that draw only what compute shaders wrote, so they never run without storage buffers and need no
+/// texture twin: the shader print debug text.
+constexpr std::array<const char*, 1> COMPUTE_FED_VERTEX_SHADERS = {"shader_print/vs_shader_print"};
+
+/// The vertex uniform vectors every WebGL 2 device grants (MAX_VERTEX_UNIFORM_VECTORS): a vertex shader that declares
+/// more fails to compile on some devices, and bgfx stops at a failed compile.
+constexpr std::size_t WEBGL2_MIN_VERTEX_UNIFORM_VECTORS = 256;
 
 int g_checks = 0;
 int g_failures = 0;
@@ -769,29 +780,198 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
               "), so devices with fewer turn it off");
 }
 
-void test_particle_data_textures_compile_for_webgl(unravel::asset_manager& am, const fs::path& root)
+/// Variants compiled for WebGL 2, by whether they have code.
+struct webgl2_variant_counts
 {
-    std::printf("test_particle_data_textures_compile_for_webgl\n");
-    const auto source = fs::path(ENGINE_DATA_DIR) / "data/shaders/particles/vs_particle.eshader";
-    const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
-    const auto compiled = compile_variants(am, source.string(), root / "essl", renderer);
-    check(!compiled.empty(), "vs_particle.eshader compiles to GLSL ES");
-    for(const char* name : PARTICLE_DATA_TEXTURE_VARIANTS)
+    std::size_t with_code = 0;
+    std::size_t without_code = 0;
+    std::size_t most_vertex_uniform_vectors = 0;
+    std::size_t texture_twins = 0;
+};
+
+/// The compiled variant @p name of @p compiled, or null.
+auto find_compiled_variant(const compiled_variants& compiled, const std::string& name)
+    -> const unravel::compiled_shader_variant*
+{
+    const auto found = std::find_if(compiled.begin(),
+                                    compiled.end(),
+                                    [&](const unravel::compiled_shader_variant& variant)
+                                    {
+                                        return variant.name == name;
+                                    });
+    return found != compiled.end() ? &*found : nullptr;
+}
+
+/// The variant of @p file named @p name, or null.
+auto find_source_variant(const ac::eshader_file& file, const std::string& name) -> const ac::eshader_variant*
+{
+    const auto found = std::find_if(file.variants.begin(),
+                                    file.variants.end(),
+                                    [&](const ac::eshader_variant& variant)
+                                    {
+                                        return variant.name == name;
+                                    });
+    return found != file.variants.end() ? &*found : nullptr;
+}
+
+/// The variant a texture twin stands in for: "default" for "textures", the name without "_textures" for the others.
+auto get_twin_base_name(const std::string& twin) -> std::string
+{
+    const std::string suffix = "_textures";
+    if(twin == unravel::get_shader_buffer_variant(gfx::shader::DEFAULT_VARIANT, unravel::shader_buffer_storage::texture))
     {
-        const auto found = std::find_if(compiled.begin(),
-                                        compiled.end(),
-                                        [&](const unravel::compiled_shader_variant& variant)
-                                        {
-                                            return variant.name == name;
-                                        });
-        check(found != compiled.end(), std::string("vs_particle.eshader has the ") + name + " variant on GLSL ES");
-        if(found != compiled.end())
+        return gfx::shader::DEFAULT_VARIANT;
+    }
+    return twin.size() > suffix.size() ? twin.substr(0, twin.size() - suffix.size()) : std::string{};
+}
+
+/// @p defines without @p removed, sorted.
+auto sort_defines_without(std::vector<std::string> defines, const std::string& removed) -> std::vector<std::string>
+{
+    std::erase(defines, removed);
+    std::sort(defines.begin(), defines.end());
+    return defines;
+}
+
+/// Each texture twin of @p file defines its variant's defines and SHADER_BUFFER_TEXTURES.
+void check_twin_defines(const std::string& name, const ac::eshader_file& file)
+{
+    for(const auto& twin : file.variants)
+    {
+        if(std::find(twin.defines.begin(), twin.defines.end(), SHADER_BUFFER_TEXTURES_DEFINE) == twin.defines.end())
         {
-            const auto code = as_string(*found);
-            check(contains_text(code, "usampler2D") && !contains_text(code, " buffer "),
-                  std::string(name) + " reads textures and no storage buffer, which WebGL 2 lacks");
+            continue;
+        }
+        const auto* base = find_source_variant(file, get_twin_base_name(twin.name));
+        const std::vector<std::string> base_defines = base != nullptr ? base->defines : std::vector<std::string>{};
+        check(base != nullptr && sort_defines_without(twin.defines, SHADER_BUFFER_TEXTURES_DEFINE) ==
+                                     sort_defines_without(base_defines, SHADER_BUFFER_TEXTURES_DEFINE),
+              name + " variant " + twin.name + " is the texture twin of " + get_twin_base_name(twin.name) +
+                  ": its defines and " + SHADER_BUFFER_TEXTURES_DEFINE);
+    }
+}
+
+/**
+ * Each vertex variant of @p compiled that WebGL 2 cannot compile has a texture twin that it can, reading textures and
+ * no storage buffer. The shaders of a feature that needs compute run only where storage buffers do, and need none.
+ */
+void check_texture_twins(const fs::path& source,
+                         const std::string& name,
+                         const compiled_variants& compiled,
+                         webgl2_variant_counts& counts)
+{
+    const auto shader = fs::path(name).replace_extension().generic_string();
+    const auto feature = unravel::find_shader_render_feature(shader);
+    const bool is_compute_fed =
+        std::find(COMPUTE_FED_VERTEX_SHADERS.begin(), COMPUTE_FED_VERTEX_SHADERS.end(), shader) !=
+        COMPUTE_FED_VERTEX_SHADERS.end();
+    if(is_compute_fed ||
+       (feature != unravel::render_feature::count && unravel::get_render_feature_requirements(feature).needs_compute))
+    {
+        return;
+    }
+    ac::eshader_file file;
+    std::string error;
+    if(!ac::load_eshader_file(source, file, error))
+    {
+        check(false, name + " parses: " + error);
+        return;
+    }
+    check_twin_defines(name, file);
+    for(const auto& variant : compiled)
+    {
+        if(!variant.bytes.empty())
+        {
+            continue;
+        }
+        const auto twin_name = unravel::get_shader_buffer_variant(variant.name, unravel::shader_buffer_storage::texture);
+        const auto* twin = find_compiled_variant(compiled, twin_name);
+        const auto code = twin != nullptr ? as_string(*twin) : std::string{};
+        check(contains_text(code, "sampler2D") && !contains_text(code, " buffer "),
+              name + " variant " + variant.name + ", which WebGL 2 cannot compile, has the texture twin " + twin_name +
+                  " that it can, reading textures and no storage buffer");
+        ++counts.texture_twins;
+    }
+}
+
+/// The uniform vectors GLSL ES @p code declares: a mat4 takes 4, a mat3 3, a mat2 2 and anything else 1, times the
+/// array length; samplers take none. Counted without packing, so never fewer than a driver counts.
+auto count_uniform_vectors(const std::string& code) -> std::size_t
+{
+    static const std::regex uniform(R"(uniform\s+(?:(?:lowp|mediump|highp)\s+)?(\w+)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;)");
+    static const std::map<std::string, std::size_t> rows = {{"mat4", 4}, {"mat3", 3}, {"mat2", 2}};
+    std::set<std::string> counted;
+    std::size_t vectors = 0;
+    for(std::sregex_iterator it(code.begin(), code.end(), uniform), end; it != end; ++it)
+    {
+        const std::string type = (*it)[1].str();
+        if(type.find("sampler") != std::string::npos || !counted.insert((*it)[2].str()).second)
+        {
+            continue;
+        }
+        const auto found = rows.find(type);
+        const std::size_t length = (*it)[3].matched ? std::stoul((*it)[3].str()) : 1;
+        vectors += (found != rows.end() ? found->second : 1) * length;
+    }
+    return vectors;
+}
+
+void check_webgl2_variants(const std::string& name,
+                           const compiled_variants& compiled,
+                           bool is_compute,
+                           bool is_vertex,
+                           webgl2_variant_counts& counts)
+{
+    for(const auto& variant : compiled)
+    {
+        const auto code = as_string(variant);
+        const std::string label = name + " variant " + variant.name;
+        check(!is_compute || code.empty(), label + " has no code: WebGL 2 runs no compute shader");
+        check(!contains_text(code, "binding = "), label + " needs no OpenGL ES 3.1 storage, which WebGL 2 cannot compile");
+        if(is_vertex)
+        {
+            const std::size_t vectors = count_uniform_vectors(code);
+            counts.most_vertex_uniform_vectors = std::max(counts.most_vertex_uniform_vectors, vectors);
+            check(vectors <= WEBGL2_MIN_VERTEX_UNIFORM_VECTORS,
+                  label + " declares " + std::to_string(vectors) + " uniform vectors, within the " +
+                      std::to_string(WEBGL2_MIN_VERTEX_UNIFORM_VECTORS) + " every WebGL 2 device grants");
+        }
+        ++(code.empty() ? counts.without_code : counts.with_code);
+    }
+}
+
+void test_engine_shaders_compile_for_webgl2(unravel::asset_manager& am, const fs::path& root)
+{
+    std::printf("test_engine_shaders_compile_for_webgl2\n");
+    const fs::path shaders = fs::path(ENGINE_DATA_DIR) / "data/shaders";
+    const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::OpenGLES);
+    webgl2_variant_counts counts;
+    fs::error_code ec;
+    for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
+    {
+        if(entry.path().extension() != ex::get_format<gfx::shader>())
+        {
+            continue;
+        }
+        const auto name = entry.path().lexically_relative(shaders).generic_string();
+        const auto compiled = compile_variants(am, entry.path().string(), root / "webgl2", renderer);
+        check(!compiled.empty(), name + " compiles to GLSL ES");
+        const std::string file_name = entry.path().filename().string();
+        const bool is_vertex = file_name.rfind("vs_", 0) == 0;
+        check_webgl2_variants(name, compiled, file_name.rfind("cs_", 0) == 0, is_vertex, counts);
+        if(is_vertex)
+        {
+            check_texture_twins(entry.path(), name, compiled, counts);
         }
     }
+    std::printf("  %zu GLSL ES variants with code, %zu without (compute, or OpenGL ES 3.1 only), %zu with a texture "
+                "twin; vertex variants declare up to %zu uniform vectors\n",
+                counts.with_code,
+                counts.without_code,
+                counts.texture_twins,
+                counts.most_vertex_uniform_vectors);
+    check(counts.with_code > 0, "the engine's shaders are found and compile for WebGL 2");
+    check(counts.texture_twins > 0, "the shaders that read shader buffers have texture twins");
 }
 
 /// The #if and #elif conditions of a shader source, a line continued with a backslash joined to the next.
@@ -928,7 +1108,7 @@ auto run_eshader_files_suite(rtti::context& ctx) -> int
         test_failed_loads_are_retried(am);
         test_shipped_shaders_compile(am, temp);
         test_engine_shaders_fit_webgpu(am, temp);
-        test_particle_data_textures_compile_for_webgl(am, temp);
+        test_engine_shaders_compile_for_webgl2(am, temp);
     }
     else
     {

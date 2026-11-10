@@ -77,11 +77,14 @@ if(ANDROID)
     add_definitions(-DBGFX_CONFIG_RENDERER_VULKAN=1)
 endif()
 
-# The browser renders through WebGPU. bgfx's src/config.h leaves it off on Emscripten unless defined, and
-# bgfx.cmake's option of the same name only links Dawn's emdawnwebgpu port.
+# The browser renders through WebGPU, or through WebGL 2 (the OpenGL ES 3.0 backend) where the page cannot get
+# WebGPU. bgfx's src/config.h leaves WebGPU off on Emscripten unless defined, and once one renderer is defined it
+# leaves out every one that is not, so both are named. bgfx.cmake's option of the WebGPU name only links Dawn's
+# emdawnwebgpu port.
 if(EMSCRIPTEN)
     set(BGFX_CONFIG_RENDERER_WEBGPU ON CACHE BOOL "Enable the webgpu renderer" FORCE)
     add_definitions(-DBGFX_CONFIG_RENDERER_WEBGPU=1)
+    add_definitions(-DBGFX_CONFIG_RENDERER_OPENGLES=30)
 endif()
 
 # Fixes to bgfx itself go in patches/ (*.patch, applied in file name order by apply_patches.cmake). bgfx.cmake

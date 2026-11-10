@@ -1,6 +1,7 @@
 #pragma once
 
 #include "deploy_settings.h"
+#include "protocol_data.h"
 #include "variant_cook.h"
 
 #include <engine/assets/asset_storage.h>
@@ -11,15 +12,21 @@
 #include <vector>
 
 /// A deploy's cooked shaders: the compiled shaders a profile's renderer reads and the editor does not compile
-/// for itself (WGSL for the web) ship from the profile's cache, cache/profiles/<profile>/shaders/<protocol>,
+/// for itself (WGSL and GLSL ES for the web) ship from the profile's cache, cache/profiles/<profile>/shaders/<protocol>,
 /// laid out as the protocol's compiled folder.
 namespace unravel::deployment
 {
 
-/// The renderer extensions of the compiled shaders a deploy ships: Android's player renders with Vulkan and the
-/// browser player with WebGPU only. Empty for the desktop, which ships every variant its platform compiles, since
-/// the game picks its renderer when it starts.
+/// The renderer extensions of the compiled shaders a deploy ships: Android's player renders with Vulkan, the browser
+/// player with the Web profile's graphics APIs (WebGPU, WebGL 2 or both). Empty for the desktop, which ships every
+/// variant its platform compiles, since the game picks its renderer when it starts.
 auto get_shader_variants(const deploy_settings& params) -> std::set<std::string>;
+
+/**
+ * @brief The shader sets of a packed web deploy for WebGPU and WebGL 2: each API's shaders in a pack of its own, of
+ * which the page downloads the one it starts. Empty for every other deploy, whose shaders ship in the protocols' packs.
+ */
+auto get_web_shader_sets(const deploy_settings& params) -> std::vector<shader_set_job>;
 
 /// The ones of `shipped` (get_shader_variants) the editor does not compile for itself: the deploy cooks them.
 auto get_cooked_shader_variants(const std::set<std::string>& shipped) -> std::set<std::string>;
@@ -37,7 +44,7 @@ struct shader_cook_protocol
 struct shader_cook_plan
 {
     std::string profile;
-    /// The renderer extensions cooked (".wgsl"); none: the deploy cooks no shader.
+    /// The renderer extensions cooked (".wgsl", ".essl"); none: the deploy cooks no shader.
     std::set<std::string> renderers;
     std::vector<shader_cook_protocol> protocols;
 

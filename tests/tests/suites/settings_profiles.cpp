@@ -1355,6 +1355,13 @@ void test_web_profile(const fs::path& root)
     check(deployment::get_web_texture_sets(web.web) == std::vector<compression>{compression::astc},
           "a phone format the same as the texture format ships one set");
     web.web.phone_texture_compression = unravel::deploy_texture_compression::etc2;
+    check(web.web.graphics == unravel::web_graphics::webgpu && web.web.fallback_notice == unravel::web_fallback_notice::tell &&
+              web.web.run_graphics == unravel::web_run_graphics::automatic,
+          "a web profile renders with WebGPU only and, once WebGL 2 is allowed, tells the player when it stands in");
+    web.web.graphics = unravel::web_graphics::webgpu_then_webgl2;
+    web.web.fallback_notice = unravel::web_fallback_notice::ask;
+    web.web.help_link = "https://example.com/webgpu";
+    web.web.run_graphics = unravel::web_run_graphics::webgl2;
     check(deployment::save_profile(root, web).is_ok(), "a web profile saves");
     const auto list = deployment::load_profiles(root, base, deploy_base);
     check(list.warnings.empty() && list.profiles.size() == 1 && list.profiles.front().platform == target_platform::web &&
@@ -1363,6 +1370,11 @@ void test_web_profile(const fs::path& root)
     check(list.profiles.size() == 1 && list.profiles.front().web.texture_compression == unravel::deploy_texture_compression::astc &&
               list.profiles.front().web.phone_texture_compression == unravel::deploy_texture_compression::etc2,
           "with its texture formats");
+    check(list.profiles.size() == 1 && list.profiles.front().web.graphics == unravel::web_graphics::webgpu_then_webgl2 &&
+              list.profiles.front().web.fallback_notice == unravel::web_fallback_notice::ask &&
+              list.profiles.front().web.help_link == "https://example.com/webgpu" &&
+              list.profiles.front().web.run_graphics == unravel::web_run_graphics::webgl2,
+          "and its graphics APIs with what the page does when WebGL 2 stands in");
     deploy_settings params;
     params.deploy_target = target_platform::web;
     params.web.texture_compression = unravel::deploy_texture_compression::astc;

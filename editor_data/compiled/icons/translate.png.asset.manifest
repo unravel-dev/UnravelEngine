@@ -1,5 +1,6 @@
 {
  "source_fingerprint": "319d5150498b3d7eb3e880f5a7ab71a3",
  "format_version": 1,
- "fingerprint_version": 2
+ "fingerprint_version": 2,
+ "compile_parameters": "v5/bc/compression_3/size_7"
 }

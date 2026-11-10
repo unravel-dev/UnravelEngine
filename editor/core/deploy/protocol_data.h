@@ -13,13 +13,22 @@
 namespace unravel::deployment
 {
 
-/// One set of a web build's textures, shipped in a pack of its own (ex::get_texture_pack_file_name).
+/// One set of a web build's textures, shipped in a pack of its own (ex::get_set_pack_file_name).
 struct texture_set_job
 {
     /// The set's name (one of ex::TEXTURE_SET_NAMES).
     std::string name;
     /// The folders of the set's texture variants, which replace compiled files.
     cooked_folders cooked;
+};
+
+/// One set of a web build's shaders, shipped in a pack of its own (ex::get_set_pack_file_name).
+struct shader_set_job
+{
+    /// The set's name (one of ex::SHADER_SET_NAMES).
+    std::string name;
+    /// The extension of the set's compiled shaders (".wgsl").
+    std::string renderer_extension;
 };
 
 /// One protocol's compiled assets and index, as a deploy step ships them. Every path is resolved and the
@@ -49,12 +58,17 @@ struct protocol_job
     /// A packed web build's texture sets when it ships several: the protocol's pack then holds no texture, each set
     /// goes into a pack of its own and the page downloads one. Empty: the textures ship in the protocol's pack.
     std::vector<texture_set_job> texture_sets;
+    /// A packed web build's shader sets when it ships the shaders of several graphics APIs: the protocol's pack then
+    /// holds none of them, each set goes into a pack of its own and the page downloads one. Empty: the shaders ship in
+    /// the protocol's pack.
+    std::vector<shader_set_job> shader_sets;
 };
 
 /**
  * @brief Ships one protocol into protocol_root: a pack (or a patch over a kept release) beside the loose
- * script libraries, and a pack per texture set when the job has several, or loose files. An earlier build there is updated in place: unchanged files and pack
- * entries are kept, what this build no longer has is removed. Throws on failure.
+ * script libraries, and a pack per texture set and per shader set when the job has several, or loose files. An
+ * earlier build there is updated in place: unchanged files and pack entries are kept, what this build no longer has
+ * is removed. Throws on failure.
  */
 void deploy_protocol_data(const protocol_job& job);
 

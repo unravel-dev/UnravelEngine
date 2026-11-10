@@ -25,7 +25,7 @@ with gameplay scripted in C# on CoreCLR. It is in active development and not pro
   reflection probes, SSR, GTAO / ASSAO, SSIL, TAA, FXAA, bloom, auto exposure, tonemapping,
   render scale, physical sky and clouds, and spatial post-process volumes.
 - **Graphics APIs** - Direct3D 11, Direct3D 12, Vulkan, OpenGL and Metal through bgfx, and WebGPU in
-  the browser.
+  the browser, with WebGL 2 where WebGPU is unavailable.
 - **Scripting** - C# on CoreCLR with hot reload; scripts open in Visual Studio Code.
 - **Animation** - animation controllers, blend spaces, humanoid retargeting and IK.
 - **Physics** - Box3D or Bullet backends.
@@ -90,7 +90,7 @@ Emscripten. The editor also builds from source on macOS, but there is no macOS p
 |---|---|---|
 | Desktop | The player with the game's data beside it | Nothing more |
 | Android | An `.apk` for arm64 phones with Android 10 or newer (Vulkan) | The Android SDK platform tools and a JDK, see [Android](#android) |
-| Web | A folder for any static web host (WebGPU) | Nothing more; `cloudflared` for a public test link, see [Browser](#browser) |
+| Web | A folder for any static web host (WebGPU, optionally WebGL 2) | Nothing more; `cloudflared` for a public test link, see [Browser](#browser) |
 | Steam | A desktop build uploaded to a Steamworks depot | SteamCMD, see [Steam](#steam) |
 
 ## Building from source
@@ -214,6 +214,17 @@ Enable **Developer options > USB debugging** on the phone, connect it and accept
 A web settings profile builds a folder for any static web host: the browser player, which
 renders with WebGPU, with the game's data beside it. **Deploy and Run** serves that folder on
 this computer and opens it in the default browser.
+
+**WebGL 2 where WebGPU is unavailable**
+
+A profile's **Graphics** setting can be **WebGPU, Then WebGL 2**: the deploy then also cooks the
+shaders for WebGL 2, and the page starts WebGL 2 in a browser without WebGPU (an older browser,
+a blocked graphics driver, a page served without HTTPS). WebGL 2 has no compute shaders, so
+global illumination, screen space effects, ambient occlusion, auto exposure and volumetric fog
+are off there. **When WebGL 2 Stands In** says what the page tells the player: a short notice by
+default, a question before the download, or nothing. **Run With** starts Deploy and Run and the
+public link on WebGL 2, to see that version on a computer whose browser has WebGPU; scripts read
+`Graphics.backend` and `Graphics.fallbackReason`.
 
 **Public link for testing**
 

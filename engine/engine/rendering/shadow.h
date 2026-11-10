@@ -19,6 +19,9 @@
 #include <graphics/graphics.h>
 #include <hpp/small_vector.hpp>
 
+#include <cstdint>
+#include <limits>
+
 namespace unravel
 {
 class instanced_mesh_source;
@@ -553,6 +556,13 @@ struct PosVertex : gfx::vertex<PosVertex>
 struct Programs
 {
     void init(rtti::context& ctx);
+    /**
+     * @brief A run's wish for the programs a project's settings may leave unused: the soft shadow (VSM) ones when its
+     * limits allow soft shadows, the skinned batching ones when batching is on. They are built while a run of this or
+     * the last frame wishes for them, so views of differing limits do not rebuild them every frame, and released one
+     * frame after none does. init() creates them unbuilt.
+     */
+    void request(bool soft_shadows, bool skinned_batching);
 
     void destroy()
     {
@@ -617,6 +627,23 @@ struct Programs
     /// from the settings table's skinned program like the instanced skinned ones.
     gpu_program::ptr m_packDepthSkinnedBakedInstanced[DepthImpl::Count][PackDepth::Count];
     gpu_program::ptr m_packDepthSkinnedBakedInstancedCutout[DepthImpl::Count][PackDepth::Count];
+
+private:
+    /// What runs wish for (request).
+    struct wishes
+    {
+        bool soft_shadows{};
+        bool skinned_batching{};
+
+        friend auto operator==(const wishes& lhs, const wishes& rhs) -> bool = default;
+    };
+    /// Builds or releases the programs @p wanted names.
+    void apply(const wishes& wanted);
+
+    wishes built_{};
+    wishes this_frame_{};
+    wishes last_frame_{};
+    std::uint32_t frame_{std::numeric_limits<std::uint32_t>::max()};
 };
 
 struct ShadowMapSettings
@@ -781,6 +808,8 @@ public:
     void deinit_uniforms();
 
     void update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active);
+    /// A run's wish for the programs its limits and skinned batching use (Programs::request).
+    void request_programs(const feature_limits& limits);
 
     /**
      * @brief True when this light's shadow maps already hold their result for the current

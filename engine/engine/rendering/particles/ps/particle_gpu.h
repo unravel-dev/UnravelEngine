@@ -1,13 +1,13 @@
 #pragma once
 
 #include "particle_cutout.h"
-#include "particle_data_texture.h"
 #include "particle_eval.h"
 #include "particle_gpu_schema.h"
 #include "particle_record.h"
 
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/buffer_clear.h>
+#include <engine/rendering/shader_buffer.h>
 
 #include <bgfx/bgfx.h>
 #include <context/context.hpp>
@@ -23,6 +23,12 @@ namespace ps_soa
 {
 
 /**
+ * @brief Where the particle data lives on this device: storage buffers where it runs
+ * render_feature::particle_storage_buffers; elsewhere textures, which the CPU fills, culling and sorting the particles.
+ */
+auto get_particle_data_storage() -> shader_buffer_storage;
+
+/**
  * @brief The GPU side of the particles: one pool of particle records shared by every emitter, the
  * emitter tables, the curve-set atlas, and the per-view cull / sort / draw work.
  *
@@ -31,8 +37,9 @@ namespace ps_soa
  * buffer. bgfx applies a frame's updates before any of its views run, so each flush within a frame
  * stages into its own buffer.
  *
- * Where the device has no storage buffer path (uses_data_textures) the same data lives in data textures:
- * the CPU writes the records into the pool texture at flush, and culls and sorts every view.
+ * The record pool, the emitter tables, the curve-set atlas, the cutout tables and the CPU-sorted lists are shader
+ * buffers: where the device has no storage buffer path (get_particle_data_storage) they are textures, the CPU writes
+ * the records into the pool at flush, and culls and sorts every view.
  */
 class particle_gpu
 {
@@ -198,9 +205,8 @@ private:
         uint32_t task_capacity = 0;
         bgfx::DynamicIndexBufferHandle batches = BGFX_INVALID_HANDLE;
         uint32_t batch_capacity = 0;
-        bgfx::DynamicIndexBufferHandle cpu_list = BGFX_INVALID_HANDLE;
-        /// The CPU list's slots, in place of cpu_list where the data lives in textures.
-        data_texture cpu_list_texture{bgfx::TextureFormat::R32U};
+        /// Key / slot pairs as the GPU sort writes them, the keys left 0 (init_view_buffers).
+        shader_buffer cpu_list{"s_particle_sorted", shader_buffer_element::uint1, shader_buffer_storage::buffer};
         uint32_t cpu_list_capacity = 0;
         uint32_t cpu_list_used = 0;
         std::vector<uint32_t> cpu_list_data;
@@ -230,10 +236,11 @@ private:
     void write_staged_records();
     void update_static_rows(uint32_t first, uint32_t count);
     void update_dynamic_rows(uint32_t count);
-    void create_data_samplers();
     /// Binds the particle data of a draw; false while some of it does not exist yet.
-    auto bind_data_buffers(bool is_cpu_list) -> bool;
-    auto bind_data_textures() -> bool;
+    auto bind_data(bool is_cpu_list) -> bool;
+    auto uses_textures() const -> bool;
+    /// Gives @p buffers a CPU list in the particle data's storage.
+    void init_view_buffers(view_buffers& buffers) const;
     /// Keeps only the last record staged for each slot: records kept over frames may stage a slot again.
     void keep_latest_staged();
     auto current_view_buffers() -> view_buffers&;
@@ -251,19 +258,8 @@ private:
     buffer_clear clear_;
     bool can_draw_ = false;
     bool can_sort_ = false;
-    /// The particle data lives in the data textures below instead of the buffers (uses_data_textures, at init).
-    bool uses_data_textures_ = false;
-    data_texture records_texture_{bgfx::TextureFormat::RGBA32U};
-    data_texture static_texture_{bgfx::TextureFormat::RGBA32F};
-    data_texture dynamic_texture_{bgfx::TextureFormat::RGBA32U};
-    data_texture lut_texture_{bgfx::TextureFormat::RGBA32F};
-    data_texture cutout_texture_{bgfx::TextureFormat::RGBA32F};
-    bgfx::UniformHandle u_records_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle u_static_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle u_dynamic_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle u_luts_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle u_sorted_ = BGFX_INVALID_HANDLE;
-    bgfx::UniformHandle u_cutouts_ = BGFX_INVALID_HANDLE;
+    /// Where the particle data lives (get_particle_data_storage, at init).
+    shader_buffer_storage storage_ = shader_buffer_storage::buffer;
     bgfx::UniformHandle u_scatter_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_view0_ = BGFX_INVALID_HANDLE;
     bgfx::UniformHandle u_view1_ = BGFX_INVALID_HANDLE;
@@ -279,8 +275,11 @@ private:
     bgfx::IndexBufferHandle quad_indices_ = BGFX_INVALID_HANDLE;
     bgfx::TextureHandle noise_texture_ = BGFX_INVALID_HANDLE;
 
-    // Record pool.
-    bgfx::DynamicIndexBufferHandle records_ = BGFX_INVALID_HANDLE;
+    // Record pool: the scatter kernel writes it on the GPU path.
+    shader_buffer records_{"s_particle_records",
+                           shader_buffer_element::uint4,
+                           shader_buffer_storage::buffer,
+                           BGFX_BUFFER_COMPUTE_READ_WRITE};
     uint32_t pool_capacity_ = 0;
     std::vector<range> free_ranges_;
     bool pool_reset_ = false;
@@ -292,8 +291,8 @@ private:
     uint32_t staging_used_this_frame_ = 0;
 
     // Emitter tables.
-    bgfx::DynamicVertexBufferHandle static_table_ = BGFX_INVALID_HANDLE;
-    bgfx::DynamicIndexBufferHandle dynamic_table_ = BGFX_INVALID_HANDLE;
+    shader_buffer static_table_{"s_particle_static", shader_buffer_element::float4, shader_buffer_storage::buffer};
+    shader_buffer dynamic_table_{"s_particle_dynamic", shader_buffer_element::uint4, shader_buffer_storage::buffer};
     std::vector<static_row> static_rows_;
     std::vector<dynamic_row> dynamic_rows_;
     std::vector<uint8_t> static_dirty_;
@@ -307,13 +306,13 @@ private:
     std::vector<uint32_t> free_lut_blocks_;
     std::vector<uint32_t> dirty_lut_blocks_;
     uint32_t lut_block_count_ = 0;
-    bgfx::DynamicVertexBufferHandle lut_atlas_ = BGFX_INVALID_HANDLE;
+    shader_buffer lut_atlas_{"s_particle_luts", shader_buffer_element::float4, shader_buffer_storage::buffer};
     std::unordered_map<uint64_t, cutout_entry> cutouts_;
     /// The tables' vec4, their free ranges, and whether the buffer needs them again.
     std::vector<math::vec4> cutout_data_;
     std::vector<range> free_cutout_ranges_;
     bool cutouts_dirty_ = false;
-    bgfx::DynamicVertexBufferHandle cutout_buffer_ = BGFX_INVALID_HANDLE;
+    shader_buffer cutout_buffer_{"s_particle_cutouts", shader_buffer_element::float4, shader_buffer_storage::buffer};
     uint32_t cutout_buffer_capacity_ = 0;
     uint32_t lut_atlas_blocks_ = 0;
 

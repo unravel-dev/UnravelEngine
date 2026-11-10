@@ -7,9 +7,11 @@
 #include "mesh.h"
 #include "camera.h"
 #include "batch_collector.h"
+#include "renderer.h"
 #include "skinning_palette_buffer.h"
 
 #include <engine/assets/asset_manager.h>
+#include <engine/engine.h>
 #include <engine/profiler/profiler.h>
 
 #include <algorithm>
@@ -36,6 +38,26 @@ constexpr float LOD_SCREEN_SIZE_FALLOFF = 0.5f;
 constexpr float MIN_PERSPECTIVE_W_SCALE = 0.000001f;
 /// Keeps the division finite for bounds at the camera, (1cm)^2.
 constexpr float MIN_VIEW_DISTANCE_SQUARED = 0.0001f;
+
+auto get_skinning_palettes() -> skinning_palette_buffer&
+{
+    return engine::context().get_cached<renderer>().get_skinning_palettes();
+}
+
+/// The frame's palette rows of @p skinning_transforms, packed at once (skinning_palette_buffer::acquire_packed).
+auto acquire_skinning_palettes(const std::vector<pose_mat4>& skinning_transforms, const model_submit_extras& extras)
+    -> skinning_palette_buffer::model_rows
+{
+    return get_skinning_palettes().acquire_packed(extras.owner, skinning_transforms, extras.prev_skinning_transforms);
+}
+
+/// Binds the palette of skinned submesh @p index, and its previous-frame palette where the rows have one.
+void bind_skinning_palette(const skinning_palette_buffer::model_rows& rows, size_t index)
+{
+    const uint32_t first_row = rows.current[index];
+    const uint32_t previous_first_row = rows.previous.empty() ? first_row : rows.previous[index];
+    get_skinning_palettes().bind(first_row, previous_first_row);
+}
 
 /**
  * Looks up the cached world-space AABB for a submesh instance from the retained proxies.
@@ -944,7 +966,8 @@ void model::submit(const math::mat4& world_transform,
             callbacks.setup_params_per_instance(params);
         }
 
-        auto render_submesh_skinned = [this, frustum, view, &extras]
+        const auto palette_rows = acquire_skinning_palettes(skinning_transforms, extras);
+        auto render_submesh_skinned = [this, frustum, view, &extras, &palette_rows]
                                       (const std::shared_ptr<unravel::mesh>& mesh,
                                        uint32_t lod,
                                        uint32_t group_id,
@@ -979,17 +1002,7 @@ void model::submit(const math::mat4& world_transform,
                     continue;
                 }
 
-                gfx::set_world_transform(submesh_skinning_transforms.transforms);
-                if(extras.prev_skinning_transforms != nullptr)
-                {
-                    const auto& prev_all = *extras.prev_skinning_transforms;
-                    const bool has_matching_prev =
-                        index < prev_all.size() &&
-                        prev_all[index].transforms.size() == submesh_skinning_transforms.transforms.size();
-                    gfx::set_prev_world_transform(has_matching_prev ? prev_all[index].transforms
-                                                                    : submesh_skinning_transforms.transforms);
-                }
-
+                bind_skinning_palette(palette_rows, index);
                 mesh->bind_render_buffers_for_submesh(choice.submesh, choice.lod);
                 params.preserve_state = &index != &indices.back();
                 callbacks.setup_params_per_submesh(params, *group_mat);
@@ -1056,8 +1069,8 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
     // range from that LOD's submesh entry. When @p effective_lod matches the model-wide
     // @p lod, the pre-fetched @c ib is reused; otherwise the LOD-specific IB is looked up.
     // The callback is responsible for uniforms, state, vertex count and the actual submit
-    // call - the model only guarantees that u_world and the raw buffers on stages 0/1
-    // are set.
+    // call - the model only guarantees that u_world (a skinned submesh: its bone palette)
+    // and the raw buffers on stages 0/1 are set.
     auto bind_and_submit = [&](uint32_t submesh_index, uint32_t effective_lod) -> void
     {
         const auto& lod_submeshes = (effective_lod == lod) ? submeshes : mesh->get_submeshes(effective_lod);
@@ -1168,13 +1181,14 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
 
     // ------------------- SKINNED PASS -------------------
     // Skinned rendering additionally needs the bone weight/indices attribute
-    // offsets so the shader can blend u_world[bone_i] per vertex.
+    // offsets so the shader can blend the palette's bones per vertex.
     if(skinned_count > 0 && !skinning_transforms.empty()
        && vertex_format.has(bgfx::Attrib::Weight) && vertex_format.has(bgfx::Attrib::Indices))
     {
         params.skinned = true;
         params.weight_offset_floats = vertex_format.getOffset(bgfx::Attrib::Weight) / float_size;
         params.indices_offset_floats = vertex_format.getOffset(bgfx::Attrib::Indices) / float_size;
+        const auto palette_rows = acquire_skinning_palettes(skinning_transforms, extras);
 
         if(callbacks.setup_begin)
         {
@@ -1228,7 +1242,7 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
 
                 params.preserve_state = &index != &indices.back();
 
-                gfx::set_world_transform(bones.transforms);
+                bind_skinning_palette(palette_rows, index);
                 bind_and_submit(static_cast<uint32_t>(index), lod);
             }
         }

@@ -57,20 +57,28 @@ auto get_cloudflared_candidates(const fs::path& setting) -> std::vector<fs::path
     return candidates;
 }
 
+/// The page a public link shares: the profile's served path and the graphics API the page starts the game with
+/// (get_web_run_graphics; empty: the page chooses).
+struct shared_page
+{
+    std::string site_path;
+    std::string graphics;
+};
+
 /// One cloudflared at a time, and what its output said about the tunnel.
 class public_link
 {
 public:
     auto start(const std::vector<fs::path>& programs,
                const std::string& local_origin,
-               const std::string& site_path,
+               const shared_page& page,
                const std::string& profile) -> bool
     {
         stop();
         {
             std::lock_guard<std::mutex> lock(mutex_);
             status_ = {public_link_state::starting, profile, {}, {}};
-            site_path_ = site_path;
+            page_ = page;
             error_lines_.clear();
         }
         const auto on_line = [this](const std::string& line)
@@ -127,7 +135,7 @@ private:
         {
             if(const auto origin = find_web_tunnel_origin(line); !origin.empty())
             {
-                status_.page_address = make_web_page_address(origin, site_path_, {});
+                status_.page_address = make_web_page_address(origin, page_.site_path, {}, page_.graphics);
                 get_web_preview_server().set_tunnel_origin(origin);
             }
         }
@@ -164,8 +172,8 @@ private:
     subprocess::stream process_;
     std::mutex mutex_;
     public_link_status status_;
-    /// The served path of the shared profile, which the page's public address ends in.
-    std::string site_path_;
+    /// The shared profile's page, which its public address names.
+    shared_page page_;
     std::deque<std::string> error_lines_;
 };
 
@@ -206,7 +214,8 @@ auto start_public_link(rtti::context& ctx, const deploy_settings& params) -> std
         return get_link().get_status().error;
     }
     const auto& setting = ctx.get_cached<project_manager>().get_editor_settings().external_tools.cloudflared_executable;
-    if(!get_link().start(get_cloudflared_candidates(setting), origin, site_path, params.profile))
+    const shared_page page{site_path, get_web_run_graphics(params.web)};
+    if(!get_link().start(get_cloudflared_candidates(setting), origin, page, params.profile))
     {
         return get_link().get_status().error;
     }

@@ -4,6 +4,11 @@ skinned                   SKINNED
 instanced                 INSTANCED
 skinned_instanced         SKINNED_INSTANCED
 skinned_baked_instanced   SKINNED_BAKED_INSTANCED
+// *_textures: the skinned variants reading the palettes from a texture (shader_buffer.sh), for devices whose vertex
+// shaders read no storage buffers, as WebGL 2.
+skinned_textures                   SKINNED SHADER_BUFFER_TEXTURES
+skinned_instanced_textures         SKINNED_INSTANCED SHADER_BUFFER_TEXTURES
+skinned_baked_instanced_textures   SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
@@ -33,13 +38,13 @@ vec4 v_prev_static_pos
 
 [code]
 #include "../common.sh"
-#if SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
+#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
 #include "../skinning_palette.sh"
 #endif
 
-#if !(INSTANCED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED)
-// Previous-frame counterpart of u_world, or skinning palette (see gfx::set_prev_world_transform).
-uniform mat4 u_prev_world[BGFX_CONFIG_MAX_BONES];
+#if !(SKINNED || INSTANCED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED)
+// Previous-frame counterpart of u_world (gfx::set_prev_world_transform).
+uniform mat4 u_prev_world[1];
 #endif
 // Previous frame's view-projection, jitter removed (camera::get_prev_view_projection_unjittered).
 uniform mat4 u_prev_view_proj;
@@ -49,16 +54,9 @@ void main()
     // The current pose MUST go through the same math as vs_deferred_geom.eshader's variant of this name: the EQUAL depth
     // test against the G-buffer's raster depends on identical position math.
 #if SKINNED
-    // u_world is already the pre-multiplied (bind-inverse x world) palette.
-    mat4 model = a_weight.x * u_world[int(a_indices.x)] +
-                 a_weight.y * u_world[int(a_indices.y)] +
-                 a_weight.z * u_world[int(a_indices.z)] +
-                 a_weight.w * u_world[int(a_indices.w)];
-
-    mat4 prev_model = a_weight.x * u_prev_world[int(a_indices.x)] +
-                      a_weight.y * u_prev_world[int(a_indices.y)] +
-                      a_weight.z * u_prev_world[int(a_indices.z)] +
-                      a_weight.w * u_prev_world[int(a_indices.w)];
+    // u_skin_rows.x is the first row of the current palette, u_skin_rows.y the first row of the previous one.
+    mat4 model = skin_palette_matrix(u_skin_rows.x, a_indices, a_weight);
+    mat4 prev_model = skin_palette_matrix(u_skin_rows.y, a_indices, a_weight);
 #elif SKINNED_INSTANCED
     // i_data0.x is the first row of the current palette, i_data0.y the first row of the previous one.
     mat4 model = skin_palette_matrix(i_data0.x, a_indices, a_weight);

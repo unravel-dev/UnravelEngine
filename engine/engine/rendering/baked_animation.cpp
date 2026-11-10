@@ -2,6 +2,7 @@
 
 #include <engine/animation/animation_player.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gpu_resource_utils.h>
 #include <engine/rendering/mesh.h>
 
 #include <algorithm>
@@ -16,7 +17,6 @@ namespace
 constexpr float FRAME_COUNT_TOLERANCE = 1e-3f;
 constexpr float MIN_FRAMES_PER_SECOND = 1.0f;
 constexpr float MAX_FRAMES_PER_SECOND = 240.0f;
-constexpr uint32_t INITIAL_CAPACITY_ROWS = 4096;
 /// A base name (no FBX namespace) that two bones share binds neither.
 constexpr int AMBIGUOUS_INDEX = -2;
 
@@ -204,9 +204,17 @@ auto baked_animation::get_frame_count() const -> uint32_t
     return uint32_t(frame_rows_.size());
 }
 
-baked_animation_store::baked_animation_store()
+baked_animation_store::baked_animation_store() = default;
+
+void baked_animation_store::init()
 {
-    layout_.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
+    storage_.set_storage(get_vertex_shader_buffer_storage());
+    storage_.init();
+    if(!bgfx::isValid(part_uniform_))
+    {
+        part_uniform_ = bgfx::createUniform("u_baked_part", bgfx::UniformType::Vec4);
+    }
+    is_upload_pending_ = rows_.get_row_count() > 0;
 }
 
 baked_animation_store::~baked_animation_store()
@@ -451,41 +459,29 @@ void baked_animation_store::clear()
 
 void baked_animation_store::bind(uint32_t palette_offset, bool is_rigid)
 {
-    if(!bgfx::isValid(buffer_))
+    const uint32_t row_count = rows_.get_row_count();
+    if(!storage_.is_valid() || row_count > storage_.get_capacity())
     {
-        buffer_ = bgfx::createDynamicVertexBuffer(std::max(rows_.get_row_count(), INITIAL_CAPACITY_ROWS),
-                                                  layout_,
-                                                  BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE);
+        storage_.reserve(gpu_resource::grow_capacity(storage_.get_capacity(), row_count, SKINNING_PALETTE_INITIAL_ROWS));
+        is_upload_pending_ = row_count > 0;
     }
     if(is_upload_pending_)
     {
-        // Every row again: a grown buffer starts empty. Bakes are rare, and bgfx runs the update ahead of the frame's
+        // Every row again: new storage starts empty. Bakes are rare, and bgfx runs the update ahead of the frame's
         // draws, also the ones recorded before it.
         const auto rows = rows_.get_rows();
-        bgfx::update(buffer_, 0, bgfx::copy(rows.data(), uint32_t(rows.size() * sizeof(math::vec4))));
+        storage_.update(0, row_count, rows.data());
         is_upload_pending_ = false;
     }
-    bgfx::setBuffer(SKINNING_PALETTE_STAGE, buffer_, bgfx::Access::Read);
-    if(!bgfx::isValid(part_uniform_))
-    {
-        part_uniform_ = bgfx::createUniform("u_baked_part", bgfx::UniformType::Vec4);
-    }
+    storage_.bind(SKINNING_PALETTE_STAGE);
     const math::vec4 part(float(palette_offset), is_rigid ? 1.0f : 0.0f, 0.0f, 0.0f);
     bgfx::setUniform(part_uniform_, math::value_ptr(part));
 }
 
 void baked_animation_store::destroy()
 {
-    if(bgfx::isValid(buffer_))
-    {
-        bgfx::destroy(buffer_);
-        buffer_ = BGFX_INVALID_HANDLE;
-    }
-    if(bgfx::isValid(part_uniform_))
-    {
-        bgfx::destroy(part_uniform_);
-        part_uniform_ = BGFX_INVALID_HANDLE;
-    }
+    storage_.destroy();
+    gpu_resource::destroy_handle(part_uniform_);
 }
 
 auto baked_animation_store::get_rows() const -> hpp::span<const math::vec4>

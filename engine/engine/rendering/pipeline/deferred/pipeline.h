@@ -958,6 +958,58 @@ private:
     /// color_lighting_ have the 5x5 one. Slots without a program fall back to color_lighting_.
     light_program_variants color_lighting_pcf_tent_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][2];
     light_program_variants color_lighting_no_shadow_[uint8_t(light_type::count)];
+
+    /// One light program of the arrays above and what its view's limits must allow for it to exist.
+    struct light_program_slot
+    {
+        light_program_variants* variants{};
+        std::string fragment_shader;
+        /// The shadow filter its variants' names start with ("hard", "pcf_linear_tent3"); empty: no shadows.
+        std::string shadow_filter;
+        /// The narrowest feature_limits::max_shadow_filtering its filter runs under.
+        shadow_filtering_limit min_filtering{shadow_filtering_limit::hard};
+        /// A soft filter (PCSS, VSM, ESM), which needs feature_limits::soft_shadows as well.
+        bool is_soft{};
+    };
+    /// The limits that decide which light programs exist.
+    struct light_program_limits
+    {
+        bool contact_shadows{};
+        bool subsurface{};
+        bool soft_shadows{};
+        shadow_filtering_limit max_shadow_filtering{};
+
+        friend auto operator==(const light_program_limits& lhs, const light_program_limits& rhs) -> bool = default;
+    };
+    /// Every light program this pipeline may create, listed at init.
+    std::vector<light_program_slot> light_program_slots_;
+    /// The limits the light programs were last created for; none before the first update.
+    hpp::optional<light_program_limits> light_program_limits_;
+
+    /// Lists every light program's slot (light_program_slots_) and caches the uniforms they share.
+    void declare_light_programs();
+    /**
+     * @brief Creates the light programs @p limits allow and releases the others, when they differ from the limits the
+     * programs were last created for.
+     *
+     * Every variant the limits allow exists whether a light uses it now or not, so a light that switches its shadow
+     * filter or contact shadows on during play draws without building a program. A view's limits change when the
+     * project's settings do (an options menu, the editor), and the programs follow then.
+     */
+    void update_light_programs(const feature_limits& limits);
+    /**
+     * @brief Builds the G-buffer and velocity programs of skinned batching when @p is_batching
+     * (batch_collector::is_skinned_mesh_batching_enabled), and releases them otherwise, when that changed: a project
+     * with skinned batching off never builds them, and switching it on builds them once.
+     */
+    void update_skinned_batch_programs(bool is_batching);
+    /// Whether the skinned batching programs were last built (update_skinned_batch_programs); none before the first run.
+    hpp::optional<bool> skinned_batch_programs_wanted_;
+    /// Whether this pipeline's view may use @p slot under @p limits.
+    static auto is_light_program_allowed(const light_program_slot& slot, const light_program_limits& limits) -> bool;
+    /// Gives @p entry a program of @p fragment_shader's @p variant when @p is_wanted, and none otherwise.
+    static void set_light_program(color_lighting& entry, const std::string& fragment_shader, const std::string& variant, bool is_wanted);
+
     /// Whether this run's G-buffer holds subsurface colors: its limits allow subsurface (feature_limits::subsurface),
     /// set by run_g_buffer_pass. Without it the G-buffer draws write every subsurface color black, and the light and
     /// indirect passes use their programs without the subsurface code.
@@ -1037,7 +1089,7 @@ private:
     /// @p has_consumer false releases the texture instead: this pipeline is the sole owner of its
     /// lifetime, so it is dropped here rather than by whichever consumer happens to run first and
     /// notice it does not need it.
-    void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size, bool has_consumer);
+    void snapshot_prev_depth(gfx::render_view& rview, bool has_consumer);
 
     /// After TAA; copies the SCENE-REFERRED linear HDR target into @c PREV_SCENE_HDR for
     /// next frame's SSR trace and the GI screen traces. Deliberately pre-bloom/tonemap/UI:

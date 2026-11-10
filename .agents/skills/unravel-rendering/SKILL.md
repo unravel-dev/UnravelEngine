@@ -168,14 +168,29 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
 - `model_component` / `submesh_component` - mesh rendering
 - `batch_collector` - static mesh batching stats in `pipeline_stats`
 - Skinned mesh batching (`graphics.skinned_mesh_batching`): skinned submeshes instance by (mesh, material,
-  LOD, submesh) in the G-buffer, velocity and shadow passes; the bones live in `skinning_palette_buffer`
-  (one upload per frame, read by every view; shaders include `skinning_palette.sh`, buffer at stage 7).
-  The G-buffer and velocity skinned shaders must call the same `skin_palette_matrix` (EQUAL depth test).
-  Editor picking / outline / wireframe keep the per-draw `u_world` palette path.
-- Bone palettes: one per submesh, at most `gfx::get_max_blend_transforms()` (128) bones, the size of `u_world`
-  (with `u_prev_world` that is 16 KB of vertex uniforms, Vulkan's guaranteed range, copied whole per draw).
-  `mesh::apply_skin_to_load_data` splits a submesh reaching more bones into pieces whose palettes fit, so any
-  bone count works on both paths; `gfx::set_world_transform` clamps the count it uploads.
+  LOD, submesh) in the G-buffer, velocity and shadow passes. Every skinned draw, batched or not (editor picking,
+  outline and wireframe too), reads its bones from `skinning_palette_buffer` (one upload per frame, read by
+  every view; shaders include `skinning_palette.sh`, stage 7): an instance carries its first row, a single draw
+  gets it from `u_skin_rows` (`skinning_palette_buffer::bind(first, previous)`, rows acquired by
+  `model_submit_extras::owner`). The G-buffer and velocity skinned shaders must call the same
+  `skin_palette_matrix` (EQUAL depth test). `u_world` / `u_prev_world` hold one matrix.
+- Bone palettes: one per submesh, at most `gfx::get_max_blend_transforms()` (128) bones;
+  `mesh::apply_skin_to_load_data` splits a submesh reaching more bones into pieces whose palettes fit.
+- Shader buffers (`shader_buffer.h`, `shader_buffer.sh`): data vertex shaders read by index, a storage buffer
+  or, without `render_feature::vertex_storage_buffers` (WebGL 2, GLES without vertex SSBOs), an rgba32f /
+  rgba32u / r32u texture of 2048 texels a row read with `texelFetch`. The bone palettes, the baked animation
+  rows and the particle data use it. A shader declares `SHADER_BUFFER_FLOAT4` / `_UINT4` / `_UINT` and reads
+  with `shader_buffer_*`; its texture twin variant defines `SHADER_BUFFER_TEXTURES` and is named
+  `<variant>_textures` (`textures` for default): `gpu_program` draws with it on texture storage, so programs name
+  the plain variant (particles name theirs with `get_shader_buffer_variant`, their storage is their own). Texture storage needs
+  `shader_buffer::init()` before its programs are created: GL wires samplers at link time. A palette draw binds
+  storage that holds every row reserved so far; growth retires the old storage until the frame is done. The eshader
+  suite finds every vertex variant WebGL 2 cannot compile and requires its texture twin.
+- Programs of features the settings may turn off are built only while allowed: `gpu_program::set_wanted` (the
+  object stays, so raw pointers to it stay good). Deferred: skinned batching programs follow
+  `batch_collector::is_skinned_mesh_batching_enabled()`; shadows: `Programs::request` (VSM ones by soft shadows,
+  skinned batching ones by batching, wished for over this and the last frame). New gated programs: create them
+  unwanted (`gpu_program(..., false)`) so init builds nothing the settings leave off.
 - Skin weights: the skinned shaders take the blended bone matrix as affine (`v_wpos = wpos.xyz`, no divide by w),
   so `apply_skin_to_load_data` keeps each vertex's four strongest weights scaled to sum to one. A sum off one
   scales `v_wpos` about the world origin, which breaks the double-sided normal flip far from it.
@@ -194,11 +209,30 @@ Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_f
   samples)` and `can_generate_mips(format)`.
 - `--gfx-disable=` masks the snapshot to test fallbacks on a desktop: `compute`, `draw_indirect`,
   `dispatch_indirect`, `image_rw`, `blend_independent`, `typed_image_loads`, `extended_storage_formats`,
-  `vertex_storage_buffers`, `bindings8`, `format:<name>:<write|read|render|msaa|mips|all>`. D3D11 feature level 11_0 is
+  `vertex_storage_buffers`, `depth_blit`, `bindings8`, `format:<name>:<write|read|render|msaa|mips|all>`. D3D11 feature level 11_0 is
   `bindings8,image_rw,typed_image_loads`; the S21 is `draw_indirect`. Compute programs fail to build under
   `compute`, as on a real device.
 - Minimum requirements (compute, RGBA16F and D32F targets, 4 color attachments, R32F image writes) are checked
-  on the real device at init; a device without them gets a message box.
+  on the real device at init; a device without them gets a message box. On OpenGL ES (WebGL 2) compute is a
+  feature, not a minimum (`gfx::is_compute_required`), and `runs_shader` drops every compute shader there.
+- WebGL 2: the web player has both bgfx renderers; `--graphics webgpu|webgl2` picks one. The page chooses it
+  (`game/web/wwwroot/graphics.js`, tested by `node --test game/web/tests/graphics.test.mjs`) from the manifest's
+  `graphics` block and passes `--graphics-fallback <reason>` (`renderer::get_graphics_fallback_reason`, C#
+  `Graphics.fallbackReason`); `?graphics=webgl2` forces it where the build ships it. Every vertex variant stays
+  within the 256 uniform vectors WebGL 2 guarantees (the "eshader files" suite counts them in the cooked GLSL
+  ES): large data goes into shader buffers. `RenderFeature` and `GraphicsFallbackReason` in `Graphics.cs` mirror the
+  engine's enums by value (static_asserts in `graphics_bindings.cpp`). OpenGL ES shaders compile for shaderc's `asm.js` platform (ESSL 300); a variant whose ESSL needs
+  3.1 (`binding = `, `CubeArray`) is cooked without code, as are compute shaders, because bgfx's GL renderer
+  treats a failed compile as fatal. ANGLE links every program at creation and the cost grows faster than the shader size, so the
+  deferred lighting loads only the variants the effective limits allow (`pipeline::update_light_programs`,
+  re-run when the limits change): `contact_shadows`, `subsurface`, `soft_shadows` and `max_shadow_filtering`
+  (hard / PCF 3x3 / PCF) decide which light programs exist, and `limit_light` clamps lights to them.
+- Depth copies go through `depth_copy_pass`: a blit where `device_caps::has_depth_blit`, else a draw that writes
+  depth. bgfx's OpenGL ES blit without copy-image copies through a color attachment, which fails for depth.
+- OpenGL ES samples depth textures (without comparison) and 32-bit float textures (without
+  `OES_texture_float_linear`) only with point filtering, else they read as zero; bgfx patch 0004 forces it.
+  To debug a WebGL frame, read back each framebuffer's color attachments from the page (a Playwright init script
+  that wraps `framebufferTexture2D` and the draw calls) instead of guessing from the final image.
 - `render_feature` (`engine/engine/rendering/render_feature_support.h`) lists what each feature needs:
   compute, indirect draw or dispatch, independent blend, compute bindings, storage images (format, dimension,
   access), render targets, dependencies and the compute shaders it owns. `get_render_feature_support()` holds
@@ -206,12 +240,11 @@ Every GPU feature checks the device in one place. Plan and results: `tasks/gpu_f
 - Where it applies: `apply_view_params` ANDs the device limits into the project's `feature_limits` in every
   view; `pipeline::apply_feature_support` turns GTAO (ASSAO takes over), ASSAO and auto exposure off; the other
   features check `is_available` where they decide to run (GI init, Hi-Z, prefilter, exposure, irradiance,
-  particles, fog, cloud shadow, skinned batching, UI MSAA, the temporal probe).
-- Particles read their data from storage buffers, or from data textures where
-  `render_feature::particle_storage_buffers` is unavailable (no compute, or no storage buffers in vertex shaders,
-  as WebGL): `vs_particle.eshader`'s `*_textures` variants (`ps_soa::get_particle_vertex_variant`), and the CPU
-  writes the records, culls and sorts (`particles/ps/particle_data_texture.h`). Desktop test:
-  `--gfx-disable=vertex_storage_buffers`, also with `-r opengl`.
+  particles, fog, cloud shadow, UI MSAA, the temporal probe).
+- Particles read their data from shader buffers: textures where `render_feature::particle_storage_buffers` is
+  unavailable (no compute, or no storage buffers in vertex shaders, as WebGL), `vs_particle.eshader`'s
+  `*_textures` variants (`ps_soa::get_particle_data_storage`), and the CPU writes the records, culls and sorts.
+  Desktop test: `--gfx-disable=vertex_storage_buffers`, also with `-r opengl`.
 - A new compute pass: list its storage images and binding count in the table (the "render feature shaders"
   suite reads the committed compiled shaders and fails otherwise), check `is_available` where it is enabled,
   keep image stages below 8 (OpenGL) and every stage below 8 if it must run on D3D11 feature level 11_0.

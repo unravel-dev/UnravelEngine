@@ -187,7 +187,8 @@ auto make_frame_pacing_text(bool is_vsync_on, int max_fps) -> frame_pacing_text
 }
 
 /// The renderer a profile's builds start with: Android's player renders with Vulkan, the browser player with
-/// WebGPU, and a desktop build with the one its settings prefer on this platform.
+/// WebGPU (OpenGL ES, which runs WebGL 2, for a WebGL 2 only profile), and a desktop build with the one its settings
+/// prefer on this platform.
 auto get_profile_renderer(const settings_profile& profile, const settings& profile_settings) -> bgfx::RendererType::Enum
 {
     switch(profile.platform)
@@ -195,7 +196,8 @@ auto get_profile_renderer(const settings_profile& profile, const settings& profi
         case target_platform::android:
             return bgfx::RendererType::Vulkan;
         case target_platform::web:
-            return bgfx::RendererType::WebGPU;
+            return profile.web.graphics == web_graphics::webgl2 ? bgfx::RendererType::OpenGLES
+                                                                 : bgfx::RendererType::WebGPU;
         case target_platform::desktop:
         default:
             return preferred_renderer_to_gfx_type(profile_settings.graphics.renderer.get_for_current_platform());

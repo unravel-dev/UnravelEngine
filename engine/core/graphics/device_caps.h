@@ -44,6 +44,9 @@ struct device_caps
     bool has_blend_independent{};
     /// Storage buffer reads in vertex shaders. bgfx reports no limit; OpenGL ES 3.1 guarantees none.
     bool has_vertex_storage_buffers{};
+    /// Blits of depth textures. bgfx's OpenGL ES blit without a copy-image extension (WebGL 2) copies through a
+    /// color attachment, which a depth texture cannot be; bgfx does not report which blit a device has.
+    bool has_depth_blit{};
     /// The resources a compute dispatch binds: stages at or above it are not bound.
     std::uint8_t max_compute_bindings{};
     /// The storage images one shader stage binds. bgfx reports no such limit (its WebGPU backend reports 16 compute
@@ -94,6 +97,7 @@ struct device_caps_mask
     /// The storage formats Vulkan offers only with shaderStorageImageExtendedFormats lose image access.
     bool drops_extended_storage_formats{};
     bool drops_vertex_storage_buffers{};
+    bool drops_depth_blit{};
     /// The compute bindings of the simulated device; 0 keeps the real count.
     std::uint8_t max_compute_bindings{};
     /// BGFX_CAPS_FORMAT_TEXTURE_* removed from single formats.
@@ -104,7 +108,7 @@ struct device_caps_mask
 
 /**
  * @brief Reads a --gfx-disable value: comma-separated names among compute, draw_indirect, dispatch_indirect,
- * image_rw, blend_independent, typed_image_loads, extended_storage_formats, vertex_storage_buffers,
+ * image_rw, blend_independent, typed_image_loads, extended_storage_formats, vertex_storage_buffers, depth_blit,
  * bindings<count> (for example bindings8) and format:<name>:<write|read|render|msaa|mips|all> (for example
  * format:rg11b10f:write).
  * @param unknown_names Receives each name that matched nothing.
@@ -129,6 +133,12 @@ auto get_device_caps() -> const device_caps&;
 
 /// What the device really offers, without the simulation mask.
 auto get_real_device_caps() -> const device_caps&;
+
+/**
+ * @brief Whether @p renderer needs compute to run the engine. OpenGL ES 3.0 (WebGL 2) has none: there every feature
+ * that needs it turns off (render_feature_support) and the rest renders.
+ */
+auto is_compute_required(bgfx::RendererType::Enum renderer) -> bool;
 
 /**
  * @brief The features the engine cannot render without, missing from @p caps: one sentence each, empty when

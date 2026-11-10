@@ -3,23 +3,19 @@
 
 /*
  * One particle quad corner per vertex, shared by the particle vertex shaders. The instance picks the
- * particle from the draw's range of the sorted list (stage 4: interleaved key / slot pairs, or a texture of
- * slots with PARTICLE_DATA_TEXTURES), and the particle is evaluated at the emitter's current time from its
- * birth record (particle_common.sh) - no per-particle data is written per frame. The including shader
- * declares the buffers or textures of particle_common.sh and s_particle_sorted at stage 4, then includes
- * particle_common.sh.
+ * particle from the draw's range of the sorted list (stage 4: interleaved key / slot pairs), and the particle
+ * is evaluated at the emitter's current time from its birth record (particle_common.sh) - no per-particle data
+ * is written per frame. The including shader declares the shader buffers of particle_common.sh and
+ * s_particle_sorted at stage 4, then includes particle_common.sh.
  */
 
-#if PARTICLE_DATA_TEXTURES
-/// Cutout tables (particle_cutout.h): per sheet frame 4 texels, two polygon points (texture coordinates) each.
-SAMPLER2D(s_particle_cutouts, 6);
-#else
+#if !SHADER_BUFFER_TEXTURES
 /// Each GPU batch's live count (cs_particle_draw_args.eshader): a ribbon reads its neighbours within it. The vertex
 /// shaders' buffers stay below stage 8 (particle_gpu_schema.h).
 BUFFER_RO(s_particle_batch_counts, uint, 5);
-/// Cutout tables (particle_cutout.h): per sheet frame 4 vec4, two polygon points (texture coordinates) each.
-BUFFER_RO(s_particle_cutouts, vec4, 6);
 #endif
+/// Cutout tables (particle_cutout.h): per sheet frame 4 vec4, two polygon points (texture coordinates) each.
+SHADER_BUFFER_FLOAT4(s_particle_cutouts, 6);
 
 // View matrix (glm column-major upload). Billboard uses camera axes from the view matrix.
 uniform mat4 u_viewCamera;
@@ -201,8 +197,8 @@ void particle_trail_corner(particle_record record, vec2 corner, float width, vec
 /// The live particles the draw's list holds (a CPU list's count, or its GPU batch's).
 uint particle_draw_count()
 {
-#if PARTICLE_DATA_TEXTURES
-	// Data textures draw CPU lists only: the CPU culls and sorts where the GPU cannot.
+#if SHADER_BUFFER_TEXTURES
+	// The texture variants draw CPU lists only: the CPU culls and sorts where the GPU cannot.
 	return uint(u_particle_draw.z);
 #else
 	return u_particle_draw.z >= 0.0 ? uint(u_particle_draw.z) : s_particle_batch_counts[uint(u_particle_draw.y)];
@@ -212,21 +208,13 @@ uint particle_draw_count()
 /// The pool slot of entry @p entry of the view's sorted list.
 uint particle_sorted_slot(uint entry)
 {
-#if PARTICLE_DATA_TEXTURES
-	return texelFetch(s_particle_sorted, particle_data_coord(entry), 0).x;
-#else
-	return s_particle_sorted[entry * 2u + 1u];
-#endif
+	return shader_buffer_uint(s_particle_sorted, entry * 2u + 1u);
 }
 
 /// Entry @p index of the cutout tables.
 vec4 particle_cutout_points(uint index)
 {
-#if PARTICLE_DATA_TEXTURES
-	return texelFetch(s_particle_cutouts, particle_data_coord(index), 0);
-#else
-	return s_particle_cutouts[index];
-#endif
+	return shader_buffer_float4(s_particle_cutouts, index);
 }
 
 /// The particle of the draw's list entry @p index (its first entry is 0), and its position.

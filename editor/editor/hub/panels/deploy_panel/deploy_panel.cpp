@@ -1349,12 +1349,19 @@ void deploy_panel::draw_android_permissions(rtti::context& ctx)
 
 void deploy_panel::draw_web_section(rtti::context& ctx)
 {
-    widgets::draw_muted_text("A folder for a web server: the browser player, which renders with WebGPU and runs the "
-                             "scripts on .NET in the browser, with the game's data beside it. Browsers load the game "
-                             "only from a web server, not from a folder on the disk.");
-    ImGui::SeparatorText("Textures");
+    widgets::draw_muted_text("A folder for a web server: the browser player, which renders with WebGPU or WebGL 2 and "
+                             "runs the scripts on .NET in the browser, with the game's data beside it. Browsers load the "
+                             "game only from a web server, not from a folder on the disk.");
+    ImGui::SeparatorText("Graphics and Textures");
     auto& web = settings_editor_.get().web;
-    if(inspect_profile_properties(ctx, web, {"texture_compression"_hs}).edit_finished)
+    auto result = inspect_profile_properties(ctx, web, {"graphics"_hs});
+    // What the page does when WebGL 2 stands in only matters where both APIs ship.
+    if(web.graphics == web_graphics::webgpu_then_webgl2)
+    {
+        result |= inspect_profile_properties(ctx, web, {"fallback_notice"_hs, "help_link"_hs, "run_graphics"_hs});
+    }
+    result |= inspect_profile_properties(ctx, web, {"texture_compression"_hs});
+    if(result.edit_finished)
     {
         auto& pm = ctx.get_cached<project_manager>();
         set_profile_message(pm.set_profile_web(ctx, settings_editor_.get_profile(), web), {});

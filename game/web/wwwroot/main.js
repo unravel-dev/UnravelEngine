@@ -1,10 +1,14 @@
-// Starts the browser player: the WebGPU device, the .NET runtime, the game's files, then Main, which starts the
-// engine (game/web/Program.cs).
+// Starts the browser player: the graphics, the .NET runtime, the game's files, then Main, which starts the engine
+// (game/web/Program.cs).
 //
-// The device is created here because bgfx cannot wait for it inside the engine without JSPI or Asyncify, which the
-// .NET runtime does not use; the engine hands it to bgfx. The game's files come from data_manifest.json, which a
-// web deploy writes next to this page, into the module's file system at the paths the engine reads them from. The
-// engine's arguments come from the page's address, one per arg= (index.html?arg=--log-level&arg=trace).
+// The page chooses the graphics API first (graphics.js): WebGPU, or WebGL 2 where the build allows it and the browser's
+// WebGPU is unavailable, as the manifest's graphics block says. Depending on that block it asks the player before the
+// download, or tells them once the game runs. For WebGPU the page creates the device, because bgfx cannot wait for it
+// inside the engine without JSPI or Asyncify, which the .NET runtime does not use; the engine hands it to bgfx. For
+// WebGL 2 bgfx creates the context on the canvas itself. The game's files come from data_manifest.json, which a web
+// deploy writes next to this page, into the module's file system at the paths the engine reads them from. The
+// engine's arguments come from the page's address, one per arg= (index.html?arg=--log-level&arg=trace), with the
+// graphics API the page chose; graphics=webgl2 in the address starts WebGL 2 where the build ships it.
 //
 // The player's own files (user:/ and cache:/, in the game's folder the manifest names, where SDL puts them) are kept in
 // the browser's IndexedDB, in a database of that folder, so games on one site keep their saves apart: read in before
@@ -19,14 +23,36 @@
 // their bytes: the runtime's, weighed by the manifest's runtime_size, then the game's files by their sizes.
 //
 // A deploy with several texture sets lists them in the manifest (texture_sets, the one computers read first) and
-// names each set's packs (texture_set): the page downloads the packs of the first set the device's GPU reads (it lists
-// the set's feature and creates a texture of its format), the first set's when it reads none, and the engine mounts
-// them over the game's packs.
+// names each set's packs (texture_set): the page downloads the packs of the first set the device's GPU reads (on WebGPU
+// it lists the set's feature and creates a texture of its format, on WebGL 2 it offers the set's extensions), the
+// first set's when it reads none, and the engine mounts them over the game's packs. A deploy for both graphics APIs
+// ships their shaders the same way (shader_sets, shader_set), and the page downloads the set of the API it chose.
 import { dotnet } from './_framework/dotnet.js';
+import {
+  DEFAULT_GRAPHICS_POLICY,
+  WEBGL2,
+  WEBGPU,
+  WEBGPU_REASONS,
+  decideGraphics,
+  describeFailure,
+  isFallbackReason,
+  makeGraphicsArguments,
+  probeWebGL2,
+  probeWebGPU,
+  readGraphicsArguments,
+  recall,
+  remember,
+} from './graphics.js';
 
-/// What the page shows when the browser draws WebGPU on the processor (such as SwiftShader).
-const SOFTWARE_ADAPTER_NOTICE = 'This browser draws without the graphics card, so the game runs very slowly. Turn on '
-  + 'hardware acceleration in the browser settings, or play in a browser that gives WebGPU the graphics card.';
+/// What changes when WebGL 2 stands in for WebGPU, as the page tells the player.
+const WEBGL2_CHANGES = 'The game runs on WebGL 2, with simpler lighting and effects.';
+/// The text of a link to the build's help page on turning WebGPU on.
+const HELP_LINK_TEXT = 'How to turn on WebGPU';
+/// How long the notice that WebGL 2 stands in stays, and how long a notice takes to fade (index.html, .notice).
+const FALLBACK_NOTICE_MS = 12000;
+const NOTICE_FADE_MS = 400;
+/// The help links the page opens: a page on the web, never a script.
+const WEB_LINK = /^https?:\/\//i;
 /// Data files downloaded at once: each is held twice while it goes into the cache and the file system, so fewer keep
 /// the page's memory low on a large game.
 const LOAD_CONCURRENCY = 4;
@@ -79,7 +105,13 @@ const loader = {
   detail: document.getElementById('loader-detail'),
   error: document.getElementById('loader-error'),
   errorText: document.getElementById('loader-error-text'),
+  errorHelp: document.getElementById('loader-error-help'),
   retry: document.getElementById('loader-retry'),
+  ask: document.getElementById('loader-ask'),
+  askText: document.getElementById('loader-ask-text'),
+  askAdvice: document.getElementById('loader-ask-advice'),
+  askHelp: document.getElementById('loader-ask-help'),
+  askContinue: document.getElementById('loader-ask-continue'),
   progress: 0,
 };
 
@@ -139,9 +171,18 @@ function storeTimings(timings) {
   }
 }
 
-function showError(message) {
+/// Points `anchor` at the build's help page; hidden without one.
+function showHelpLink(anchor, link) {
+  anchor.hidden = !WEB_LINK.test(link ?? '');
+  if (!anchor.hidden) {
+    anchor.href = link;
+  }
+}
+
+function showError(message, helpLink) {
   loader.root.classList.add('has-error');
   loader.errorText.textContent = message;
+  showHelpLink(loader.errorHelp, helpLink);
   loader.error.hidden = false;
   loader.retry.addEventListener('click', () => location.reload());
   console.log('[player] The game could not start: ' + message);
@@ -209,15 +250,6 @@ function createDownloadProgress(manifest, downloadsEnd) {
   };
 }
 
-async function requestAdapter() {
-  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-  if (!adapter) {
-    throw new Error('The browser could not reach the graphics card through WebGPU. Turn on hardware acceleration in '
-      + 'the browser settings, then try again.');
-  }
-  return adapter;
-}
-
 /// A device of `adapter` with every limit it offers and every feature but `excludedFeatures`.
 async function requestDeviceFrom(adapter, excludedFeatures) {
   const requiredLimits = {};
@@ -262,55 +294,157 @@ async function findRefusedCompressionFeatures(device) {
   return refused;
 }
 
-/// The page's WebGPU device. A compression feature the device lists but refuses textures of is left out of a second
-/// device, so the engine decodes those formats when they load instead of failing every texture of them.
-async function createDevice() {
-  if (!globalThis.isSecureContext) {
-    throw new Error('The game needs a secure page: serve it over HTTPS, or open it from this computer.');
-  }
-  if (!navigator.gpu) {
-    throw new Error('This browser has no WebGPU, which is required. Play the game in a browser that supports WebGPU '
-      + 'and is up to date.');
-  }
-  const adapter = await requestAdapter();
-  const info = adapter.info ?? {};
-  const isSoftware = Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter);
-  const name = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' ');
-  console.log(`[player] WebGPU on ${name || 'an unnamed adapter'}${isSoftware ? ', in software' : ''}`);
-  if (isSoftware) {
-    console.warn('[player] ' + SOFTWARE_ADAPTER_NOTICE);
-  }
+/// The page's WebGPU device on the probed `adapter`. A compression feature the device lists but refuses textures of
+/// is left out of a second device, from a new adapter (an adapter gives one device), so the engine decodes those
+/// formats when they load instead of failing every texture of them. Throws when no device can be created.
+async function createDevice(adapter) {
   let device = await requestDeviceFrom(adapter, []);
   const refused = await findRefusedCompressionFeatures(device);
   if (refused.length > 0) {
     console.warn(`[player] The GPU lists ${refused.join(', ')} but refuses its textures: they are decoded when they load.`);
     device.destroy();
-    device = await requestDeviceFrom(await requestAdapter(), refused);
+    const again = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!again) {
+      throw new Error('The browser gave no second WebGPU adapter.');
+    }
+    device = await requestDeviceFrom(again, refused);
   }
-  return { device, isSoftware };
+  return device;
 }
 
-/// The texture set the page downloads: the first of the manifest's sets whose feature the device has (createDevice
-/// leaves out the features it refuses), the first one when it has none (the engine decodes those textures when they
-/// load); null for a deploy with one set.
-function chooseTextureSet(sets, features) {
+/// The graphics the game starts with: decideGraphics's choice over the probes of the APIs the build allows, with the
+/// WebGPU device when it chose WebGPU. A device that cannot be created lets WebGL 2 stand in where the build allows it.
+async function chooseGraphics(policy, forced) {
+  const allowsWebGL2 = policy.backends.includes(WEBGL2);
+  const isWebGL2Forced = forced === WEBGL2 && allowsWebGL2;
+  let webgpu = policy.backends.includes(WEBGPU) && !isWebGL2Forced ? await probeWebGPU() : undefined;
+  // WebGL 2 is probed only where it may start the game: its throwaway contexts cost a little.
+  let webgl2 = allowsWebGL2 && !webgpu?.isUsable ? probeWebGL2() : undefined;
+  const choice = decideGraphics({ policy, forced, webgpu, webgl2 });
+  if (choice.backend !== WEBGPU) {
+    return { ...choice, webgpu, webgl2 };
+  }
+  try {
+    return { ...choice, device: await createDevice(webgpu.adapter), webgpu, webgl2 };
+  } catch (e) {
+    console.warn('[player] The WebGPU device could not be created: ' + e.message);
+    webgpu = { isUsable: false, reason: 'device_failed' };
+    webgl2 = webgl2 ?? (allowsWebGL2 ? probeWebGL2() : undefined);
+    return { ...decideGraphics({ policy, forced, webgpu, webgl2 }), webgpu, webgl2 };
+  }
+}
+
+/// One console line on what the game renders with and why, for a developer reading a player's console.
+function logGraphics(graphics) {
+  if (graphics.backend === WEBGPU) {
+    console.log(`[player] Graphics: WebGPU on ${graphics.webgpu.name}`);
+    return;
+  }
+  const instead = graphics.reason === 'none' ? '' : ` in place of WebGPU (${graphics.reason})`;
+  console.log(`[player] Graphics: WebGL 2 on ${graphics.webgl2.name}${instead}`);
+}
+
+/// The texture sets whose formats the chosen API reads: the WebGPU device's features (createDevice leaves out the
+/// features it refuses), or the WebGL 2 extensions.
+function findReadableTextureSets(graphics) {
+  if (graphics.backend === WEBGL2) {
+    return graphics.webgl2.textureSets;
+  }
+  const features = graphics.device.features;
+  return new Set(Object.keys(TEXTURE_SET_FEATURES).filter((set) => features.has(TEXTURE_SET_FEATURES[set].feature)));
+}
+
+/// The texture set the page downloads: the first of the manifest's sets in `readable`, the first one when none is (the
+/// engine decodes those textures when they load); null for a deploy with one set.
+function chooseTextureSet(sets, readable) {
   if (!sets || sets.length === 0) {
     return null;
   }
-  return sets.find((set) => features.has(TEXTURE_SET_FEATURES[set]?.feature)) ?? sets[0];
+  return sets.find((set) => readable.has(set)) ?? sets[0];
 }
 
-/// The manifest's files the page downloads: every file but the packs of the texture sets it did not choose.
-function selectDataFiles(files, textureSet) {
-  return files.filter((file) => !file.texture_set || file.texture_set === textureSet);
+/// The manifest's files the page downloads: every file but the packs of the texture sets it did not choose and of the
+/// other graphics API's shaders.
+function selectDataFiles(files, textureSet, backend) {
+  return files.filter((file) => (!file.texture_set || file.texture_set === textureSet)
+    && (!file.shader_set || file.shader_set === backend));
 }
 
-// Above the canvas, which takes the page once the engine starts.
-function showNotice(text) {
+/// A notice above the canvas, which takes the page once the engine starts, with the build's help page when `link`
+/// names one; it goes when closed, and after `duration` ms when one is given.
+function showNotice({ text, link = '', duration = 0 }) {
   const notice = document.createElement('div');
   notice.className = 'notice';
-  notice.textContent = text;
+  notice.setAttribute('role', 'status');
+  const body = document.createElement('span');
+  body.textContent = text;
+  notice.appendChild(body);
+  if (WEB_LINK.test(link)) {
+    const anchor = document.createElement('a');
+    anchor.className = 'notice-link';
+    anchor.href = link;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+    anchor.textContent = HELP_LINK_TEXT;
+    notice.append(' ', anchor);
+  }
+  const close = document.createElement('button');
+  close.className = 'notice-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Close');
+  close.textContent = '\u00d7';
+  notice.appendChild(close);
+  const dismiss = () => {
+    notice.classList.add('is-gone');
+    setTimeout(() => notice.remove(), NOTICE_FADE_MS);
+  };
+  close.addEventListener('click', dismiss, { once: true });
   document.body.appendChild(notice);
+  if (duration > 0) {
+    setTimeout(dismiss, duration);
+  }
+}
+
+/// What the page says about WebGPU being unavailable for `reason`: its sentence, and the advice unless the build's help
+/// page gives it.
+function describeReason(reason, helpLink) {
+  const { sentence, help } = WEBGPU_REASONS[reason];
+  return WEB_LINK.test(helpLink) ? sentence : `${sentence} ${help}`;
+}
+
+/// Before the download, asks the player whether to continue on WebGL 2 (the build's "ask"), once per game and reason:
+/// resolves when they continue. The page holds there otherwise; the help link opens beside it.
+function askToContinue(reason, policy) {
+  const { sentence, help } = WEBGPU_REASONS[reason];
+  report('Waiting for your answer');
+  loader.root.classList.add('is-asking');
+  loader.askText.textContent = `${sentence} ${WEBGL2_CHANGES}`;
+  loader.askAdvice.textContent = `To play with WebGPU: ${help}`;
+  showHelpLink(loader.askHelp, policy.help_link);
+  loader.ask.hidden = false;
+  loader.askContinue.focus();
+  return new Promise((resolve) => {
+    loader.askContinue.addEventListener('click', () => {
+      remember('asked', reason);
+      loader.ask.hidden = true;
+      loader.root.classList.remove('is-asking');
+      resolve();
+    }, { once: true });
+  });
+}
+
+/// The notice of a started game that WebGL 2 stands in (the build's "tell"), once per game and reason.
+function tellAboutGraphics(graphics, policy) {
+  if (graphics.backend !== WEBGL2 || !isFallbackReason(graphics.reason) || policy.fallback_notice !== 'tell'
+    || recall('told', graphics.reason)) {
+    return;
+  }
+  remember('told', graphics.reason);
+  showNotice({
+    text: `${WEBGL2_CHANGES} ${describeReason(graphics.reason, policy.help_link)}`,
+    link: policy.help_link,
+    duration: FALLBACK_NOTICE_MS,
+  });
 }
 
 async function openCache(kind) {
@@ -514,12 +648,22 @@ async function start() {
     : DEFAULT_ENGINE_SHARE;
   const downloadsEnd = 1 - engineShare;
   report('Starting the graphics');
-  const { device, isSoftware } = await createDevice();
-  const textureSet = chooseTextureSet(manifest.texture_sets, device.features);
+  const policy = { ...DEFAULT_GRAPHICS_POLICY, ...manifest.graphics };
+  const { args, forced } = readGraphicsArguments(location.search);
+  const graphics = await chooseGraphics(policy, forced);
+  if (!graphics.backend) {
+    throw Object.assign(new Error(describeFailure(graphics)), { helpLink: policy.help_link });
+  }
+  logGraphics(graphics);
+  if (policy.fallback_notice === 'ask' && isFallbackReason(graphics.reason) && !recall('asked', graphics.reason)) {
+    await askToContinue(graphics.reason, policy);
+    report('Starting the graphics');
+  }
+  const textureSet = chooseTextureSet(manifest.texture_sets, findReadableTextureSets(graphics));
   if (textureSet) {
     console.log(`[player] textures: ${textureSet}`);
   }
-  manifest.files = selectDataFiles(manifest.files, textureSet);
+  manifest.files = selectDataFiles(manifest.files, textureSet, graphics.backend);
   const progress = createDownloadProgress(manifest, downloadsEnd);
   setProgress(PROGRESS_DOWNLOADS_START);
   report('Loading the runtime');
@@ -528,9 +672,9 @@ async function start() {
   const usedRuntime = new Set();
   const usedData = new Set();
   const runtime = await dotnet
-    .withModuleConfig({ preinitializedWebGPUDevice: device })
+    .withModuleConfig(graphics.device ? { preinitializedWebGPUDevice: graphics.device } : {})
     .withResourceLoader(loadRuntimeResource(runtimeCache, usedRuntime, progress.addRuntimeBytes))
-    .withApplicationArgumentsFromQuery()
+    .withApplicationArguments(...args, ...makeGraphicsArguments(graphics))
     .create();
   progress.finishRuntime();
   const module = runtime.Module;
@@ -555,11 +699,8 @@ async function start() {
     storeUserFilesWhenHidden(module);
   }
   unlockAudioOnKey();
-  if (isSoftware) {
-    showNotice(SOFTWARE_ADAPTER_NOTICE);
-  }
   console.log('[player] started');
-  hideLoader();
+  hideLoader().then(() => tellAboutGraphics(graphics, policy));
   return () => Promise.all([dropUnused(runtimeCache, usedRuntime), dropUnused(dataCache, usedData)]);
 }
 
@@ -567,7 +708,7 @@ let dropUnusedFiles = null;
 try {
   dropUnusedFiles = await start();
 } catch (e) {
-  showError(e.message);
+  showError(e.message, e.helpLink);
   console.error(e);
 }
 if (dropUnusedFiles) {

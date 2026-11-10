@@ -3,13 +3,100 @@ using System.Runtime.CompilerServices;
 
 namespace Unravel.Core
 {
+    /// <summary>The graphics API the game renders with (<see cref="Graphics.backend"/>).</summary>
+    public enum GraphicsBackend
+    {
+        /// <summary>No graphics: a run without a window, such as tests.</summary>
+        None = 0,
+        Direct3D11 = 1,
+        Direct3D12 = 2,
+        Metal = 3,
+        OpenGL = 4,
+        OpenGLES = 5,
+        Vulkan = 6,
+        /// <summary>WebGPU, in the browser.</summary>
+        WebGPU = 7,
+        /// <summary>WebGL 2, in the browser: no compute shaders, so the features that need them are off.</summary>
+        WebGL2 = 8,
+    }
+
+    /// <summary>Why the browser page started WebGL 2 instead of WebGPU (<see cref="Graphics.fallbackReason"/>).</summary>
+    public enum GraphicsFallbackReason
+    {
+        /// <summary>WebGL 2 does not stand in: the game runs on WebGPU, on a build for WebGL 2 only, or outside the
+        /// browser.</summary>
+        None = 0,
+        /// <summary>The page is not served over HTTPS, which WebGPU needs.</summary>
+        InsecurePage = 1,
+        /// <summary>The browser offers no WebGPU.</summary>
+        ApiMissing = 2,
+        /// <summary>The browser gave no WebGPU adapter: a blocked graphics driver, or hardware acceleration turned
+        /// off.</summary>
+        NoAdapter = 3,
+        /// <summary>The WebGPU device could not be created.</summary>
+        DeviceFailed = 4,
+        /// <summary>WebGPU would draw without the graphics card, WebGL 2 draws with it.</summary>
+        SoftwareAdapter = 5,
+        /// <summary>The page's address asked for WebGL 2 (graphics=webgl2).</summary>
+        Forced = 6,
+    }
+
+    /// <summary>A rendering feature whose GPU needs a device may not meet (<see cref="Graphics.IsFeatureAvailable"/>).</summary>
+    public enum RenderFeature
+    {
+        GlobalIllumination = 0,
+        GlobalIlluminationPageFeedback = 1,
+        HierarchicalDepth = 2,
+        ScreenSpaceReflections = 3,
+        ScreenSpaceIndirectLighting = 4,
+        GroundTruthAmbientOcclusion = 5,
+        AdaptiveScreenSpaceAmbientOcclusion = 6,
+        AutoExposure = 7,
+        LocalExposure = 8,
+        GpuPreExposure = 9,
+        SkyIrradiance = 10,
+        ReflectionProbeFiltering = 11,
+        VolumetricFog = 12,
+        CloudShadows = 13,
+        VertexStorageBuffers = 14,
+        ParticleStorageBuffers = 15,
+        GpuParticleCulling = 16,
+        ParticleReactiveMask = 17,
+        SoftShadows = 18,
+        UIMultisampling = 19,
+        TemporalStabilityProbe = 20,
+    }
+
     /// <summary>
     /// Draws meshes without entities. For systems that keep many objects in script arrays (crowds, projectiles,
     /// debris): one call per frame draws them all as instances, in the same passes as models (lighting, shadows,
-    /// motion for anti-aliasing and motion blur), culled by ground tile against every camera and shadow.
+    /// motion for anti-aliasing and motion blur), culled by ground tile against every camera and shadow. Also tells
+    /// which graphics API the game renders with and which rendering features the device runs.
     /// </summary>
     public static class Graphics
     {
+        /// <summary>
+        /// The graphics API the game renders with. In the browser, <see cref="GraphicsBackend.WebGL2"/> runs where
+        /// WebGPU is unavailable, when the build allows it; <see cref="fallbackReason"/> says why.
+        /// </summary>
+        public static GraphicsBackend backend => (GraphicsBackend)internal_m2n_graphics_get_backend();
+
+        /// <summary>
+        /// Why the browser page started WebGL 2 instead of WebGPU, for a game's own notice or its analytics;
+        /// <see cref="GraphicsFallbackReason.None"/> everywhere else.
+        /// </summary>
+        public static GraphicsFallbackReason fallbackReason => (GraphicsFallbackReason)internal_m2n_graphics_get_fallback_reason();
+
+        /// <summary>
+        /// Whether the device runs <paramref name="feature"/>. Where it does not, the engine renders its fallback
+        /// (the log names it), and a game can drop an effect that depends on it.
+        /// </summary>
+        /// <param name="feature">The feature.</param>
+        public static bool IsFeatureAvailable(RenderFeature feature)
+        {
+            return internal_m2n_graphics_is_feature_available((int)feature);
+        }
+
         /// <summary>
         /// Draws <paramref name="mesh"/> once at every matrix of <paramref name="transforms"/>, this frame only (while
         /// the game is paused, the last draws stay): call it every frame the instances should show, from the main
@@ -159,6 +246,15 @@ namespace Unravel.Core
             }
             return id;
         }
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_graphics_get_backend();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern int internal_m2n_graphics_get_fallback_reason();
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_graphics_is_feature_available(int feature);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_graphics_draw_mesh_instanced(Guid mesh, Guid material, int materialInstance, IntPtr transforms, int count, IntPtr previous, bool castShadows, int layerMask);

@@ -20,6 +20,7 @@
 #include "passes/atmospheric_pass_skybox.h"
 #include "passes/auto_exposure_pass.h"
 #include "passes/blit_pass.h"
+#include "passes/depth_copy_pass.h"
 #include "passes/fog_pass.h"
 #include "passes/fxaa_pass.h"
 #include "passes/hiz_pass.h"
@@ -415,6 +416,7 @@ public:
 protected:
     prefilter_pass prefilter_pass_{};
     blit_pass blit_pass_{};
+    depth_copy_pass depth_copy_pass_{};
     upscale_pass upscale_pass_{};
     atmospheric_pass_perez atmospheric_pass_perez_{};
     atmospheric_pass_skybox atmospheric_pass_skybox_{};

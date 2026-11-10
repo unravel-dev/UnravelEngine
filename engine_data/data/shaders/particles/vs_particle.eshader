@@ -5,11 +5,11 @@ lit        LIT
 // velocity: the particle quads of the velocity pass: the color pass's corners with their motion since the last frame. The
 // clip positions are interpolated and divided per pixel (fs_particle_velocity.eshader), as the scene's velocity pass does.
 velocity   VELOCITY
-// textures, lit_textures, velocity_textures: the same, reading the particle data from textures (particle_common.sh) on
-// devices without storage buffers in vertex shaders, as WebGL.
-textures            PARTICLE_DATA_TEXTURES
-lit_textures        LIT PARTICLE_DATA_TEXTURES
-velocity_textures   VELOCITY PARTICLE_DATA_TEXTURES
+// textures, lit_textures, velocity_textures: the same, reading the particle data from textures (shader_buffer.sh) on
+// devices without storage buffers in vertex shaders, as WebGL 2.
+textures            SHADER_BUFFER_TEXTURES
+lit_textures        LIT SHADER_BUFFER_TEXTURES
+velocity_textures   VELOCITY SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
@@ -39,20 +39,13 @@ vec4 v_prev_static_clip = vec4(0.0, 0.0, 0.0, 1.0)
 
 #include <bgfx_shader.sh>
 #include <bgfx_compute.sh>
+#include "../shader_buffer.sh"
 
-#if PARTICLE_DATA_TEXTURES
-USAMPLER2D(s_particle_records, 0);
-SAMPLER2D(s_particle_static, 1);
-USAMPLER2D(s_particle_dynamic, 2);
-SAMPLER2D(s_particle_luts, 3);
-USAMPLER2D(s_particle_sorted, 4);
-#else
-BUFFER_RO(s_particle_records, uint, 0);
-BUFFER_RO(s_particle_static, vec4, 1);
-BUFFER_RO(s_particle_dynamic, uint, 2);
-BUFFER_RO(s_particle_luts, vec4, 3);
-BUFFER_RO(s_particle_sorted, uint, 4);
-#endif
+SHADER_BUFFER_UINT4(s_particle_records, 0);
+SHADER_BUFFER_FLOAT4(s_particle_static, 1);
+SHADER_BUFFER_UINT4(s_particle_dynamic, 2);
+SHADER_BUFFER_FLOAT4(s_particle_luts, 3);
+SHADER_BUFFER_UINT(s_particle_sorted, 4);
 
 #if VELOCITY
 #include "../shaderlib.sh"

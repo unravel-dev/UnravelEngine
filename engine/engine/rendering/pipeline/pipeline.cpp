@@ -27,7 +27,8 @@
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/shadow.h>
 #include <engine/rendering/ecs/systems/particle_system.h>
-#include <engine/rendering/particles/ps/particle_data_texture.h>
+#include <engine/rendering/particles/ps/particle_gpu.h>
+#include <engine/rendering/shader_buffer.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/engine.h>
 #include <RmlUi/Core/ElementDocument.h>
@@ -53,28 +54,21 @@ namespace rendering
 namespace
 {
 /// The opaque depth soft particles fade against: this frame's Hi-Z first mip when the pipeline
-/// built one, otherwise a copy of the depth buffer blitted in @p view, before the particles draw.
+/// built one, otherwise a copy of the depth buffer, made in a view before the particles' view.
 /// The depth buffer itself is that view's depth target, so it cannot be sampled while they draw.
-auto resolve_particle_scene_depth(gfx::render_view& rview, const gfx::texture::ptr& hiz_depth, bgfx::ViewId view)
+auto resolve_particle_scene_depth(gfx::render_view& rview, const gfx::texture::ptr& hiz_depth, depth_copy_pass& depth_copy)
     -> bgfx::TextureHandle
 {
     if(hiz_depth)
     {
         return hiz_depth->native_handle();
     }
-    const auto& depth = rview.tex_find("DEPTH");
-    if(!depth)
-    {
-        return BGFX_INVALID_HANDLE;
-    }
-    const auto& copy = rview.tex_acquire("PARTICLE_DEPTH",
-                                         {.size = depth->get_size(),
-                                          .format = bgfx::TextureFormat::D32F,
-                                          .flags = BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP});
-    bgfx::blit(view,
-               bgfx::TextureRegion{.handle = copy->native_handle()},
-               bgfx::TextureRegion{.handle = depth->native_handle()});
-    return copy->native_handle();
+    const auto copy = depth_copy.run(rview,
+                                     {.name = "PARTICLE_DEPTH",
+                                      .source = rview.tex_find("DEPTH"),
+                                      .sampler_flags = BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP,
+                                      .pass_name = "Particles/Scene Depth Copy"});
+    return copy ? copy->native_handle() : bgfx::TextureHandle(BGFX_INVALID_HANDLE);
 }
 
 /// Nearby point / spot lights a lit particle draw reads (particle_lighting.sh, PARTICLE_MAX_LIGHTS), and the
@@ -742,6 +736,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     };
     report_feature_pass("reflection probe prefilter", render_feature::reflection_probe_prefilter, prefilter_pass_.init(ctx));
     report_pass("blit", blit_pass_.init(ctx));
+    report_pass("depth copy", depth_copy_pass_.init(ctx));
     report_pass("upscale", upscale_pass_.init(ctx));
     report_pass("Perez sky", atmospheric_pass_perez_.init(ctx));
     report_pass("skybox", atmospheric_pass_skybox_.init(ctx));
@@ -781,7 +776,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
     {
         auto vs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/particles/vs_particle.eshader");
         auto fs_shader = am.get_asset<gfx::shader>("engine:/data/shaders/particles/" + fs + ".eshader");
-        return std::make_unique<gpu_program>(vs_shader, ps_soa::get_particle_vertex_variant(vs_variant), fs_shader, fs_variant);
+        const std::string variant = get_shader_buffer_variant(vs_variant, ps_soa::get_particle_data_storage());
+        return std::make_unique<gpu_program>(vs_shader, variant, fs_shader, fs_variant);
     };
     constexpr auto default_variant = gfx::shader::DEFAULT_VARIANT;
 
@@ -1539,11 +1535,12 @@ auto pipeline::run_particle_pass(scene& scn,
                 bool has_drawn = false;
                 if(!full_batches.empty())
                 {
+                    params.scene_depth = wants_scene_depth
+                                             ? resolve_particle_scene_depth(rview, hiz_depth, depth_copy_pass_)
+                                             : bgfx::TextureHandle(BGFX_INVALID_HANDLE);
                     gfx::render_pass pass("Particles/Pass");
                     pass.bind(targets.get());
                     pass.set_view_proj(camera.get_view(), camera.get_projection());
-                    params.scene_depth = wants_scene_depth ? resolve_particle_scene_depth(rview, hiz_depth, pass.id)
-                                                           : bgfx::TextureHandle(BGFX_INVALID_HANDLE);
                     has_drawn = draw_batches(pass.id, full_batches);
                 }
                 if(!half_batches.empty())

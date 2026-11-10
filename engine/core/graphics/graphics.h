@@ -151,11 +151,13 @@ bool check_avail_transient_buffers(uint32_t _numVertices,
                                    bool _index32 = false);
 uint32_t get_render_frame();
 
-void set_world_transform(const void* _mtx, uint16_t _num = 1);
+/// Sets the draw's world matrix (uniform @c u_world). Skinned draws bind their bone palettes instead
+/// (skinning_palette_buffer::bind).
+void set_world_transform(const void* _mtx);
 
 /// Previous-frame counterpart of @ref set_world_transform (uniform @c u_prev_world), consumed by
-/// the velocity (motion vector) pass. Same 128-matrix capacity as @c u_world.
-void set_prev_world_transform(const void* _mtx, uint16_t _num = 1);
+/// the velocity (motion vector) pass.
+void set_prev_world_transform(const void* _mtx);
 
 /// Estimate of GPU memory a texture occupies for eviction accounting. Matches bgfx's internal
 /// @c textureMemoryUsed baseline (@ref texture_info::storageSize), with row-pitch uplift for

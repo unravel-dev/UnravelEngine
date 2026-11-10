@@ -2,6 +2,7 @@
 #include "model.h"
 
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gpu_resource_utils.h>
 
 #include <base/hash.hpp>
 
@@ -14,10 +15,6 @@ namespace unravel
 {
 namespace
 {
-/// Rows the buffer starts with (64 KiB).
-constexpr uint32_t INITIAL_CAPACITY_ROWS = 4096;
-/// How much the buffer grows by when a frame needs more rows than it holds.
-constexpr uint32_t CAPACITY_GROWTH_FACTOR = 2;
 /// Fewer palettes than this are packed on the calling thread: the dispatch would cost more than the packing.
 constexpr size_t PARALLEL_PACK_MIN_PALETTES = 64;
 
@@ -100,14 +97,21 @@ auto skinning_palette_rows::unpack_bone(const math::vec4* rows) -> math::mat4
     return bone;
 }
 
-skinning_palette_buffer::skinning_palette_buffer()
-{
-    layout_.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
-}
+skinning_palette_buffer::skinning_palette_buffer() = default;
 
 skinning_palette_buffer::~skinning_palette_buffer()
 {
-    assert(!bgfx::isValid(buffer_) && "destroy() must run before the graphics backend shuts down");
+    assert(!bgfx::isValid(rows_uniform_) && "destroy() must run before the graphics backend shuts down");
+}
+
+void skinning_palette_buffer::init()
+{
+    storage_.set_storage(get_vertex_shader_buffer_storage());
+    storage_.init();
+    if(!bgfx::isValid(rows_uniform_))
+    {
+        rows_uniform_ = bgfx::createUniform("u_skin_rows", bgfx::UniformType::Vec4);
+    }
 }
 
 void skinning_palette_buffer::begin_frame()
@@ -131,7 +135,8 @@ auto skinning_palette_buffer::acquire(entt::const_handle owner,
                                       const std::vector<pose_mat4>* previous) -> model_rows
 {
     assert(!flushed_ && "palettes acquired after this frame's upload never reach the GPU");
-    auto& entry = owners_[owner_key{owner.registry(), owner.entity()}];
+    owner_entry unowned;
+    auto& entry = owner ? owners_[owner_key{owner.registry(), owner.entity()}] : unowned;
     reserve_rows(entry, palettes, previous);
     model_rows result;
     result.current = {first_rows_.data() + entry.first_current, entry.palette_count};
@@ -140,6 +145,23 @@ auto skinning_palette_buffer::acquire(entt::const_handle owner,
         result.previous = {first_rows_.data() + entry.first_previous, entry.palette_count};
     }
     return result;
+}
+
+auto skinning_palette_buffer::acquire_packed(entt::const_handle owner,
+                                             const std::vector<pose_mat4>& palettes,
+                                             const std::vector<pose_mat4>* previous) -> model_rows
+{
+    const auto first_job = static_cast<std::ptrdiff_t>(pending_.size());
+    const auto rows = acquire(owner, palettes, previous);
+    const auto jobs_begin = pending_.begin() + first_job;
+    std::for_each(jobs_begin,
+                  pending_.end(),
+                  [&](const pack_job& job)
+                  {
+                      rows_.pack(job.first_row, job.bones);
+                  });
+    pending_.erase(jobs_begin, pending_.end());
+    return rows;
 }
 
 void skinning_palette_buffer::reserve_rows(owner_entry& entry,
@@ -201,8 +223,15 @@ void skinning_palette_buffer::pack_pending()
 
 void skinning_palette_buffer::bind()
 {
-    ensure_buffer();
-    bgfx::setBuffer(SKINNING_PALETTE_STAGE, buffer_, bgfx::Access::Read);
+    ensure_storage();
+    storage_.bind(SKINNING_PALETTE_STAGE);
+}
+
+void skinning_palette_buffer::bind(uint32_t first_row, uint32_t previous_first_row)
+{
+    bind();
+    const math::vec4 rows(float(first_row), float(previous_first_row), 0.0f, 0.0f);
+    bgfx::setUniform(rows_uniform_, math::value_ptr(rows));
 }
 
 void skinning_palette_buffer::flush()
@@ -213,23 +242,33 @@ void skinning_palette_buffer::flush()
     uploaded_row_count_ = rows_.get_row_count();
     if(uploaded_row_count_ == 0)
     {
+        upload_retired({});
         return;
     }
-    ensure_buffer();
+    ensure_storage();
+    if(!storage_.is_valid())
+    {
+        upload_retired(rows_.get_rows());
+        return;
+    }
     // The rows go to bgfx by reference: the storage stays with this frame's upload until bgfx releases it, and the rows
     // continue in a free storage.
     auto& upload = take_free_storage();
     rows_.swap_storage(upload.rows);
-    if(uploaded_row_count_ > capacity_rows_)
-    {
-        // bgfx resizes the buffer to the update that overflows it: the update carries the headroom, so a crowd that
-        // grows a little every frame does not recreate the buffer every frame.
-        capacity_rows_ = std::max(uploaded_row_count_, capacity_rows_ * CAPACITY_GROWTH_FACTOR);
-        upload.rows.resize(capacity_rows_);
-    }
+    upload_retired({upload.rows.data(), uploaded_row_count_});
     upload.in_flight.store(true, std::memory_order_relaxed);
-    const auto size = static_cast<uint32_t>(upload.rows.size() * sizeof(math::vec4));
-    bgfx::update(buffer_, 0, bgfx::makeRef(upload.rows.data(), size, &release_upload_storage, &upload.in_flight));
+    storage_.update_by_reference(uploaded_row_count_, upload.rows.data(), &release_upload_storage, &upload.in_flight);
+}
+
+void skinning_palette_buffer::upload_retired(hpp::span<const math::vec4> rows)
+{
+    // bgfx keeps a destroyed resource until the frame that used it is rendered.
+    for(auto& retired : retired_)
+    {
+        retired.update(0, static_cast<uint32_t>(rows.size()), rows.data());
+        retired.destroy();
+    }
+    retired_.clear();
 }
 
 auto skinning_palette_buffer::take_free_storage() -> upload_storage&
@@ -248,11 +287,9 @@ auto skinning_palette_buffer::take_free_storage() -> upload_storage&
 
 void skinning_palette_buffer::destroy()
 {
-    if(bgfx::isValid(buffer_))
-    {
-        bgfx::destroy(buffer_);
-        buffer_ = BGFX_INVALID_HANDLE;
-    }
+    upload_retired({});
+    storage_.destroy();
+    gpu_resource::destroy_handle(rows_uniform_);
 }
 
 auto skinning_palette_buffer::get_uploaded_row_count() const -> uint32_t
@@ -265,16 +302,26 @@ auto skinning_palette_buffer::get_rows() const -> hpp::span<const math::vec4>
     return rows_.get_rows();
 }
 
-void skinning_palette_buffer::ensure_buffer()
+void skinning_palette_buffer::ensure_storage()
 {
-    if(bgfx::isValid(buffer_))
+    const uint32_t reserved = rows_.get_row_count();
+    const uint32_t capacity = storage_.get_capacity();
+    if(storage_.is_valid() && reserved <= capacity)
     {
         return;
     }
-    buffer_ = bgfx::createDynamicVertexBuffer(INITIAL_CAPACITY_ROWS,
-                                              layout_,
-                                              BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE);
-    capacity_rows_ = INITIAL_CAPACITY_ROWS;
+    shader_buffer grown(SKINNING_PALETTE_SAMPLER, shader_buffer_element::float4, storage_.get_storage());
+    grown.init();
+    grown.reserve(gpu_resource::grow_capacity(capacity, reserved, SKINNING_PALETTE_INITIAL_ROWS));
+    if(storage_.is_valid())
+    {
+        retired_.push_back(std::move(storage_));
+    }
+    else
+    {
+        storage_.destroy();
+    }
+    storage_ = std::move(grown);
 }
 
 } // namespace unravel

@@ -673,8 +673,7 @@ void deferred::submit_batched_skinned_geometry(gfx::render_pass& pass, const cam
 auto deferred::is_baked_animation_active() const -> bool
 {
     const auto is_usable = [](const auto& program) { return program.program && program.program->is_valid(); };
-    return get_render_feature_support().is_available(render_feature::skinned_mesh_batching) &&
-           is_usable(geom_program_skinned_baked_instanced_) && is_usable(velocity_program_skinned_baked_instanced_);
+    return is_usable(geom_program_skinned_baked_instanced_) && is_usable(velocity_program_skinned_baked_instanced_);
 }
 
 namespace

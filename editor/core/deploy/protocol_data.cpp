@@ -17,24 +17,49 @@ auto is_texture_file(const std::string& protocol, const fs::path& relative) -> b
     return is_asset_key<gfx::texture>(get_source_key(protocol, relative));
 }
 
-/// Removes the texture set packs (ex::get_texture_pack_file_name) of the sets `job` does not ship, left by an earlier
-/// build: the page would download them and the game mount them over the protocol's pack.
-void remove_unshipped_texture_packs(const protocol_job& job)
+/// Whether `file` is a compiled shader of one of `job`'s shader sets.
+auto is_shader_set_file(const protocol_job& job, const fs::path& file) -> bool
+{
+    const auto extension = file.extension().generic_string();
+    return std::any_of(job.shader_sets.begin(),
+                       job.shader_sets.end(),
+                       [&extension](const shader_set_job& set)
+                       {
+                           return set.renderer_extension == extension;
+                       });
+}
+
+/// Removes the packs (ex::get_set_pack_file_name) of the sets among `names` that `shipped` does not list, left by an
+/// earlier build: the page would download them and the game mount them over the protocol's pack.
+template<typename Names, typename Sets>
+void remove_unshipped_set_packs(const fs::path& protocol_root, const Names& names, const Sets& shipped)
 {
     fs::error_code ec;
-    for(const auto* set : ex::TEXTURE_SET_NAMES)
+    for(const auto* name : names)
     {
-        const bool is_shipped = std::any_of(job.texture_sets.begin(),
-                                            job.texture_sets.end(),
-                                            [set](const texture_set_job& shipped)
+        const bool is_shipped = std::any_of(shipped.begin(),
+                                            shipped.end(),
+                                            [name](const auto& set)
                                             {
-                                                return shipped.name == set;
+                                                return set.name == name;
                                             });
         if(!is_shipped)
         {
-            fs::remove(job.protocol_root / ex::get_texture_pack_file_name(set), ec);
+            fs::remove(protocol_root / ex::get_set_pack_file_name(name), ec);
         }
     }
+}
+
+/// Writes `pack` with the shipped files `is_in_set` takes, from the compiled cache under `cooked`, without the index.
+void write_set_pack(const protocol_job& job, const cooked_folders& cooked, const compiled_file_filter& is_in_set, const fs::path& pack)
+{
+    auto inputs = collect_pack_inputs(job.compiled_root, cooked, {}, is_in_set);
+    std::erase_if(inputs,
+                  [](const fs::pack_input& input)
+                  {
+                      return input.name == ex::get_asset_index_file_name();
+                  });
+    write_pack_file(pack, inputs);
 }
 
 /// Writes a pack per texture set of `job`, each holding the shipped textures as the set compiles them.
@@ -46,13 +71,20 @@ void write_texture_set_packs(const protocol_job& job, const compiled_file_filter
     };
     for(const auto& set : job.texture_sets)
     {
-        auto inputs = collect_pack_inputs(job.compiled_root, set.cooked, {}, is_shipped_texture);
-        std::erase_if(inputs,
-                      [](const fs::pack_input& input)
-                      {
-                          return input.name == ex::get_asset_index_file_name();
-                      });
-        write_pack_file(job.protocol_root / ex::get_texture_pack_file_name(set.name), inputs);
+        write_set_pack(job, set.cooked, is_shipped_texture, job.protocol_root / ex::get_set_pack_file_name(set.name));
+    }
+}
+
+/// Writes a pack per shader set of `job`, each holding the shipped shaders compiled for its graphics API.
+void write_shader_set_packs(const protocol_job& job, const compiled_file_filter& is_shipped)
+{
+    for(const auto& set : job.shader_sets)
+    {
+        const compiled_file_filter is_set_shader = [&](const fs::path& file, const fs::path& relative)
+        {
+            return is_shipped(file, relative) && file.extension().generic_string() == set.renderer_extension;
+        };
+        write_set_pack(job, job.cooked, is_set_shader, job.protocol_root / ex::get_set_pack_file_name(set.name));
     }
 }
 
@@ -91,10 +123,11 @@ void deploy_packed(const protocol_job& job, const fs::path& destination, const f
                     {
                         return is_loose_only_file(file) && is_shipped_compiled_file(file, job.with_debug_symbols);
                     });
-    // With texture sets, the protocol's pack ships no texture: each set's pack holds them.
+    // With texture or shader sets, the protocol's pack ships none of their files: each set's pack holds them.
     const compiled_file_filter is_packed = [&](const fs::path& file, const fs::path& relative)
     {
-        return is_shipped(file, relative) && (job.texture_sets.empty() || !is_texture_file(job.protocol, relative));
+        return is_shipped(file, relative) && (job.texture_sets.empty() || !is_texture_file(job.protocol, relative)) &&
+               !is_shader_set_file(job, file);
     };
     const auto inputs = collect_pack_inputs(job.compiled_root, job.cooked, index, is_packed);
     if(job.patch_release_pack.empty())
@@ -106,6 +139,7 @@ void deploy_packed(const protocol_job& job, const fs::path& destination, const f
         write_patch_over_release(job.protocol_root, inputs, job.patch_release_pack);
     }
     write_texture_set_packs(job, is_shipped);
+    write_shader_set_packs(job, is_shipped);
 }
 } // namespace
 
@@ -122,7 +156,8 @@ void deploy_protocol_data(const protocol_job& job)
                           return !is_asset_key<script>(location) && !job.left_out.contains(location);
                       });
     const auto is_shipped = make_shipped_filter(job);
-    remove_unshipped_texture_packs(job);
+    remove_unshipped_set_packs(job.protocol_root, ex::TEXTURE_SET_NAMES, job.texture_sets);
+    remove_unshipped_set_packs(job.protocol_root, ex::SHADER_SET_NAMES, job.shader_sets);
     if(!job.is_packed)
     {
         deploy_loose(job, destination, is_shipped);

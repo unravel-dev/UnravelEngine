@@ -23,6 +23,20 @@ skinned_baked_instanced                SKINNED_BAKED_INSTANCED
 linear_skinned_baked_instanced         LINEAR SKINNED_BAKED_INSTANCED
 skinned_baked_instanced_cutout         SKINNED_BAKED_INSTANCED CUTOUT
 linear_skinned_baked_instanced_cutout  LINEAR SKINNED_BAKED_INSTANCED CUTOUT
+// *_textures: the skinned variants reading the palettes from a texture (shader_buffer.sh), for devices whose vertex
+// shaders read no storage buffers, as WebGL 2.
+skinned_textures                                SKINNED SHADER_BUFFER_TEXTURES
+linear_skinned_textures                         LINEAR SKINNED SHADER_BUFFER_TEXTURES
+skinned_cutout_textures                         SKINNED CUTOUT SHADER_BUFFER_TEXTURES
+linear_skinned_cutout_textures                  LINEAR SKINNED CUTOUT SHADER_BUFFER_TEXTURES
+skinned_instanced_textures                      SKINNED_INSTANCED SHADER_BUFFER_TEXTURES
+linear_skinned_instanced_textures               LINEAR SKINNED_INSTANCED SHADER_BUFFER_TEXTURES
+skinned_instanced_cutout_textures               SKINNED_INSTANCED CUTOUT SHADER_BUFFER_TEXTURES
+linear_skinned_instanced_cutout_textures        LINEAR SKINNED_INSTANCED CUTOUT SHADER_BUFFER_TEXTURES
+skinned_baked_instanced_textures                SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES
+linear_skinned_baked_instanced_textures         LINEAR SKINNED_BAKED_INSTANCED SHADER_BUFFER_TEXTURES
+skinned_baked_instanced_cutout_textures         SKINNED_BAKED_INSTANCED CUTOUT SHADER_BUFFER_TEXTURES
+linear_skinned_baked_instanced_cutout_textures  LINEAR SKINNED_BAKED_INSTANCED CUTOUT SHADER_BUFFER_TEXTURES
 
 [inputs]
 vec3 a_position
@@ -59,18 +73,14 @@ vec2 v_texcoord0
  */
 
 #include "../../common.sh"
-#if SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
+#if SKINNED || SKINNED_INSTANCED || SKINNED_BAKED_INSTANCED
 #include "../../skinning_palette.sh"
 #endif
 
 void main()
 {
 #if SKINNED
-    //u_world should already be in the right space
-    mat4 model = a_weight.x * u_world[int(a_indices.x)] +
-                 a_weight.y * u_world[int(a_indices.y)] +
-                 a_weight.z * u_world[int(a_indices.z)] +
-                 a_weight.w * u_world[int(a_indices.w)];
+    mat4 model = skin_palette_matrix(u_skin_rows.x, a_indices, a_weight);
 #elif SKINNED_INSTANCED
     mat4 model = skin_palette_matrix(i_data0.x, a_indices, a_weight);
 #elif SKINNED_BAKED_INSTANCED

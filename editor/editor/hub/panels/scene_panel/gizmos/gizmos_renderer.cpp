@@ -274,7 +274,15 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                     prog->end();
                 };
 
-                model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, current_lod_data.current_lod_index, callbacks);
+                model.submit(world_transform,
+                             submesh_transforms,
+                             bone_transforms,
+                             skinning_transforms,
+                             current_lod_data.current_lod_index,
+                             callbacks,
+                             nullptr,
+                             nullptr,
+                             model_comp->get_submit_extras());
 
                 any_drawn = true;
             }
@@ -423,7 +431,10 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
                                       submesh_transforms,
                                       skinning_transforms,
                                       lod_data.current_lod_index,
-                                      callbacks);
+                                      callbacks,
+                                      nullptr,
+                                      nullptr,
+                                      model_comp->get_submit_extras());
     }
 }
 

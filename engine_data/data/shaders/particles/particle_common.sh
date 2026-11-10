@@ -11,10 +11,12 @@
  *   1 s_particle_static   vec4  PARTICLE_STATIC_VEC4S per emitter (changes with the emitter's settings)
  *   2 s_particle_dynamic  uint  PARTICLE_DYNAMIC_UINTS per emitter (rewritten every frame)
  *   3 s_particle_luts     vec4  PARTICLE_LUT_ROWS x PARTICLE_LUT_SIZE per curve set
- * and binds the turbulence noise volume this file declares at stage 7 (s_particle_noise). They are storage buffers,
- * or with PARTICLE_DATA_TEXTURES textures of the same data in rows of PARTICLE_DATA_TEXTURE_WIDTH texels (rgba32u,
- * rgba32f, rgba32u, rgba32f), for devices without storage buffers in vertex shaders, as WebGL.
+ * and binds the turbulence noise volume this file declares at stage 7 (s_particle_noise). They are shader buffers
+ * (shader_buffer.sh) of uint4, float4, uint4 and float4 elements: storage buffers, or textures in the
+ * SHADER_BUFFER_TEXTURES variants, for devices without storage buffers in vertex shaders, as WebGL 2.
  */
+
+#include "../shader_buffer.sh"
 
 #define PARTICLE_RECORD_UINTS 16u
 #define PARTICLE_STATIC_VEC4S 16u
@@ -22,8 +24,6 @@
 #define PARTICLE_LUT_SIZE 256u
 #define PARTICLE_LUT_ROWS 7u
 #define PARTICLE_TICKS_PER_SECOND 8192.0
-/// Texels per row of the data textures (particle_gpu_schema.h, data_texture_width).
-#define PARTICLE_DATA_TEXTURE_WIDTH 2048u
 
 /// Slots of the emitter static row (particle_record.h, static_slot).
 #define PARTICLE_STATIC_APPEARANCE 0u
@@ -156,60 +156,28 @@ float particle_random(uint seed, uint salt)
 	return float(particle_hash(seed ^ (salt * 2654435769u)) >> 8u) * (1.0 / 16777216.0);
 }
 
-#if PARTICLE_DATA_TEXTURES
-/// The texel @p index of a data texture, counted along its rows.
-ivec2 particle_data_coord(uint index)
-{
-	return ivec2(int(index % PARTICLE_DATA_TEXTURE_WIDTH), int(index / PARTICLE_DATA_TEXTURE_WIDTH));
-}
-
 /// Four uints of the record pool, from uint 4 x @p index on.
 uvec4 particle_record_quad(uint index)
 {
-	return texelFetch(s_particle_records, particle_data_coord(index), 0);
+	return shader_buffer_uint4(s_particle_records, index);
 }
 
 vec4 particle_static(uint emitter, uint index)
 {
-	return texelFetch(s_particle_static, particle_data_coord(emitter * PARTICLE_STATIC_VEC4S + index), 0);
+	return shader_buffer_float4(s_particle_static, emitter * PARTICLE_STATIC_VEC4S + index);
 }
 
 uint particle_dynamic_uint(uint emitter, uint index)
 {
 	uint word = emitter * PARTICLE_DYNAMIC_UINTS + index;
-	uvec4 quad = texelFetch(s_particle_dynamic, particle_data_coord(word / 4u), 0);
-	return quad[int(word % 4u)];
+	return shader_buffer_uint4_word(s_particle_dynamic, word);
 }
 
 /// Entry @p index of the curve-set atlas.
 vec4 particle_lut_entry(uint index)
 {
-	return texelFetch(s_particle_luts, particle_data_coord(index), 0);
+	return shader_buffer_float4(s_particle_luts, index);
 }
-#else
-/// Four uints of the record pool, from uint 4 x @p index on.
-uvec4 particle_record_quad(uint index)
-{
-	uint base = index * 4u;
-	return uvec4(s_particle_records[base], s_particle_records[base + 1u], s_particle_records[base + 2u], s_particle_records[base + 3u]);
-}
-
-vec4 particle_static(uint emitter, uint index)
-{
-	return s_particle_static[emitter * PARTICLE_STATIC_VEC4S + index];
-}
-
-uint particle_dynamic_uint(uint emitter, uint index)
-{
-	return s_particle_dynamic[emitter * PARTICLE_DYNAMIC_UINTS + index];
-}
-
-/// Entry @p index of the curve-set atlas.
-vec4 particle_lut_entry(uint index)
-{
-	return s_particle_luts[index];
-}
-#endif
 
 particle_record particle_load(uint slot)
 {

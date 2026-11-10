@@ -496,8 +496,8 @@ bool init(bgfx::Init init_data)
         return false;
     }
     init_device_caps();
-    s_context.u_world = bgfx::createUniform("u_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
-    s_context.u_prev_world = bgfx::createUniform("u_prev_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
+    s_context.u_world = bgfx::createUniform("u_world", bgfx::UniformType::Mat4);
+    s_context.u_prev_world = bgfx::createUniform("u_prev_world", bgfx::UniformType::Mat4);
 
     bgfx::frame();
     // Initialize after the first frame so the backend has reported its GPU memory budget.
@@ -926,24 +926,14 @@ uint32_t get_render_frame()
     return s_context.frame;
 }
 
-namespace
+void set_world_transform(const void* _mtx)
 {
-/// The matrices of a world transform upload that fit its uniform. bgfx copies every matrix it is given into the
-/// uniform's storage without checking the count it was created with.
-auto get_world_transform_count(uint16_t _num) -> uint16_t
-{
-    return uint16_t(std::min<uint32_t>(_num, get_max_blend_transforms()));
-}
-} // namespace
-
-void set_world_transform(const void* _mtx, uint16_t _num)
-{
-    bgfx::setUniform(s_context.u_world, _mtx, get_world_transform_count(_num));
+    bgfx::setUniform(s_context.u_world, _mtx);
 }
 
-void set_prev_world_transform(const void* _mtx, uint16_t _num)
+void set_prev_world_transform(const void* _mtx)
 {
-    bgfx::setUniform(s_context.u_prev_world, _mtx, get_world_transform_count(_num));
+    bgfx::setUniform(s_context.u_prev_world, _mtx);
 }
 
 
