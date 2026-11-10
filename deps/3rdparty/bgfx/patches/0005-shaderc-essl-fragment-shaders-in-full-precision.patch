@@ -1,0 +1,20 @@
+shaderc: GLSL ES fragment shaders compute in full precision
+
+SPIRV-Cross writes `precision mediump float;` at the top of every GLSL ES fragment shader unless told otherwise, and
+shaderc never told it: every local and varying of a fragment shader was mediump. Desktop GPUs run mediump at full
+precision, but mobile GPUs (Apple, Mali, Adreno) may compute it in 16-bit floats: HDR lighting overflows past 65504
+and positions rebuilt from depth lose their precision. Fragment shaders now default to highp, which OpenGL ES 3.0
+requires every fragment shader to support, and compute in 32-bit floats as the other shader languages bgfx writes do.
+
+diff --git a/tools/shaderc/shaderc_glsl.cpp b/tools/shaderc/shaderc_glsl.cpp
+--- a/tools/shaderc/shaderc_glsl.cpp
++++ b/tools/shaderc/shaderc_glsl.cpp
+@@ -226,6 +226,8 @@ namespace bgfx { namespace glsl
+ 			compilerOptions.vulkan_semantics                   = false;
+ 			compilerOptions.enable_420pack_extension           = false;
+ 			compilerOptions.emit_uniform_buffer_as_plain_uniforms = true;
++			// GLSL ES fragment shaders default to mediump, which mobile GPUs compute in 16-bit floats.
++			compilerOptions.fragment.default_float_precision   = spirv_cross::CompilerGLSL::Options::Highp;
+ 			compiler.set_common_options(compilerOptions);
+ 
+ 			spirv_cross::ShaderResources resources = compiler.get_shader_resources();

@@ -1144,6 +1144,18 @@ auto needs_essl_310(const std::vector<std::uint8_t>& bytes) -> bool
     return code.find("binding = ") != std::string_view::npos || code.find("CubeArray") != std::string_view::npos;
 }
 
+/// What a GLSL ES shader's manifest records beside its sources: shaderc writes its fragment shaders in full precision
+/// (bgfx patch 0005) and keeps the shaders that use bit encoders in GLSL ES 3.00 (bgfx patch 0006), and a cooked file
+/// without this record compiles again.
+constexpr std::string_view ESSL_COMPILE_PARAMETERS = "fragment precision highp; bit encoders in essl 300";
+
+/// The compile parameters of a shader compiled to @p output, by its renderer's file name extension.
+auto get_shader_compile_parameters(const fs::path& output) -> std::string
+{
+    const auto renderer = gfx::get_renderer_based_on_filename_extension(output.extension().string());
+    return renderer == bgfx::RendererType::OpenGLES ? std::string(ESSL_COMPILE_PARAMETERS) : std::string{};
+}
+
 /// @p file's variants named, without code: what a renderer gets of a shader it never runs.
 auto make_variants_without_code(const eshader_file& file) -> std::vector<compiled_shader_variant>
 {
@@ -1472,7 +1484,7 @@ auto compile_shader(const fs::path& key, const fs::path& output) -> bool
     auto absolute_path = resolve_input_file(key);
     auto renderer = gfx::get_renderer_based_on_filename_extension(output.extension().string());
     // Before the source is read: an edit during the compile leaves a manifest the source no longer matches, so it compiles again.
-    const auto manifest = make_manifest<gfx::shader>(absolute_path);
+    const auto manifest = make_manifest<gfx::shader>(absolute_path, get_shader_compile_parameters(output));
     if(!compile_eshader_to_file(absolute_path, output, renderer))
     {
         return false;
@@ -1487,7 +1499,7 @@ auto compile_shader(const fs::path& key, const fs::path& output) -> bool
 
 auto is_shader_compiled(const fs::path& key, const fs::path& output) -> bool
 {
-    return is_compiled_with<gfx::shader>(key, output, {});
+    return is_compiled_with<gfx::shader>(key, output, get_shader_compile_parameters(output));
 }
 
 template<>

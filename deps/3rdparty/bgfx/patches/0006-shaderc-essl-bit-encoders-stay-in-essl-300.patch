@@ -1,0 +1,40 @@
+shaderc: GLSL ES shaders that use the bit encoders stay GLSL ES 3.00
+
+A fragment shader that calls floatBitsToUint, floatBitsToInt, intBitsToFloat or uintBitsToFloat raised its GLSL ES
+version to 3.10, as images and storage buffers do. The bit encoders are GLSL ES 3.00 built-ins, and at 3.10 SPIRV-Cross
+writes code only 3.10 compiles, such as mix() of integer vectors for a select between two ivec2: OpenGL ES 3.0 and
+WebGL 2 reject the shader. The bit encoders now raise only the desktop GLSL version.
+
+diff --git a/tools/shaderc/shaderc.cpp b/tools/shaderc/shaderc.cpp
+index 8b7dc2da0..3f9d279a9 100644
+--- a/tools/shaderc/shaderc.cpp
++++ b/tools/shaderc/shaderc.cpp
+@@ -2339,8 +2339,12 @@ namespace bgfx
+ 								&& !bx::findIdentifierMatch(preprocessedInput, s_bitsToEncoders).isEmpty()
+ 								;
+ 
+-							if (!bx::strFind(preprocessedInput, "layout(std430").isEmpty()
+-							||  !bx::strFind(preprocessedInput, "image2D").isEmpty()
++							const bool usesImagesOrStorageBuffers = false
++								|| !bx::strFind(preprocessedInput, "layout(std430").isEmpty()
++								|| !bx::strFind(preprocessedInput, "image2D").isEmpty()
++								;
++
++							if (usesImagesOrStorageBuffers
+ 							||  usesBitsToEncoders)
+ 							{
+ 								if (glsl_profile < 430)
+@@ -2348,8 +2352,11 @@ namespace bgfx
+ 									glsl_profile = 430;
+ 								}
+ 
+-								// Images, and storage buffers, require ESSL 3.10.
+-								if (0 != esslVersion)
++								// Images, and storage buffers, require ESSL 3.10. The bit encoders are ESSL 3.00
++								// built-ins: raised for them, SPIRV-Cross writes ESSL 3.10 code (mix() of integer
++								// vectors) that OpenGL ES 3.0 and WebGL 2 reject.
++								if (0 != esslVersion
++								&&  usesImagesOrStorageBuffers)
+ 								{
+ 									esslVersion = bx::max<uint32_t>(esslVersion, 310);
+ 								}
