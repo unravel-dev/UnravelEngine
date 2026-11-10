@@ -220,6 +220,13 @@ public:
     auto find_material_instance(uint32_t id) const -> std::shared_ptr<material_instance>;
     void release_material_instance(uint32_t id);
 
+    /**
+     * @brief Shows one of the pipeline's debug views (pipeline::set_debug_pass) in every camera this system renders,
+     * for a player without the editor's debug views: the player's --debug-pass.
+     * @param pass The debug pass, or nothing for the lit image; the editor sets its views on the pipelines itself.
+     */
+    void set_debug_pass(const hpp::optional<int>& pass);
+
 private:
     /// Draws the debug callbacks over what the camera entity just rendered.
     void render_debug(entt::handle camera_entity);
@@ -246,6 +253,8 @@ private:
     usize32_t game_view_size_{};
     /// The handheld device the game view stands for, set by the editor for phone and tablet presets.
     hpp::optional<game_view_device> game_view_device_;
+    /// The debug pass of set_debug_pass; nothing leaves the pipelines' own.
+    hpp::optional<int> debug_pass_;
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
 

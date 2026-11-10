@@ -3,12 +3,15 @@
 #include <engine/engine.h>
 #include <engine/play_mode.h>
 #include <engine/rendering/display_manager.h>
+#include <engine/rendering/ecs/systems/rendering_system.h>
 #include <engine/rendering/renderer.h>
 #include <engine/meta/settings/settings.hpp>
 #include <engine/assets/asset_manager.h>
 #include <engine/meta/assets/asset_database.hpp>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/settings/boot_config.h>
+#include <engine/settings/settings.h>
+#include <engine/rendering/feature_limits.h>
 #include "bundled_files.h"
 #include "runner/runner.h"
 
@@ -17,10 +20,13 @@
 #include <bx/allocator.h>
 #include <filesystem/filesystem.h>
 #include <filesystem/pack.h>
+#include <hpp/string_view.hpp>
 #include <logging/logging.h>
 #include <ospp/bundle.h>
 #include <reflection/registration.h>
 
+#include <algorithm>
+#include <array>
 #include <fstream>
 
 namespace unravel
@@ -33,6 +39,90 @@ constexpr const char* SETTINGS_PATH = "app:/settings/settings.cfg";
 constexpr const char* LOGS_PATH = "user:/logs";
 /// Bytes of an RGBA8 texel.
 constexpr std::size_t RGBA8_TEXEL_SIZE = 4;
+/// The option that shows one of the pipeline's debug views, and its value for the lit image.
+constexpr const char* DEBUG_PASS_OPTION = "debug-pass";
+constexpr int NO_DEBUG_PASS = -1;
+
+/// The option that turns graphics features off over the project's settings, and what separates their names.
+constexpr const char* GRAPHICS_OFF_OPTION = "graphics-off";
+constexpr char GRAPHICS_OFF_SEPARATOR = ',';
+
+/// A feature --graphics-off can turn off: its name and the limit that turns it off.
+struct graphics_off_switch
+{
+    hpp::string_view name;
+    void (*turn_off)(feature_limits& limits);
+};
+
+constexpr std::array GRAPHICS_OFF_SWITCHES = {
+    graphics_off_switch{"gi", [](feature_limits& limits) { limits.global_illumination = false; }},
+    graphics_off_switch{"ssr", [](feature_limits& limits) { limits.screen_space_reflections = false; }},
+    graphics_off_switch{"ssil", [](feature_limits& limits) { limits.screen_space_indirect_lighting = false; }},
+    graphics_off_switch{"ao", [](feature_limits& limits) { limits.ambient_occlusion = false; }},
+    graphics_off_switch{"bloom", [](feature_limits& limits) { limits.bloom = false; }},
+    graphics_off_switch{"fog", [](feature_limits& limits) { limits.volumetric_fog = false; }},
+    graphics_off_switch{"taa", [](feature_limits& limits) { limits.max_anti_aliasing = anti_aliasing_limit::fxaa; }},
+    graphics_off_switch{"aa", [](feature_limits& limits) { limits.max_anti_aliasing = anti_aliasing_limit::none; }},
+    graphics_off_switch{"soft_shadows", [](feature_limits& limits) { limits.soft_shadows = false; }},
+    graphics_off_switch{"contact_shadows", [](feature_limits& limits) { limits.contact_shadows = false; }},
+    graphics_off_switch{"subsurface", [](feature_limits& limits) { limits.subsurface = false; }},
+    graphics_off_switch{"clouds", [](feature_limits& limits) { limits.volumetric_clouds = false; }},
+    graphics_off_switch{"detailed_indirect", [](feature_limits& limits) { limits.detailed_indirect_lighting = false; }},
+    graphics_off_switch{"full_precision", [](feature_limits& limits) { limits.full_precision_light_targets = false; }},
+};
+
+/// Shows the debug view --debug-pass names in every camera; the lit image without it.
+void apply_debug_pass(rtti::context& ctx, const cmd_line::parser& parser)
+{
+    int pass = NO_DEBUG_PASS;
+    if(!parser.try_get(DEBUG_PASS_OPTION, pass) || pass == NO_DEBUG_PASS)
+    {
+        return;
+    }
+    APPLOG_INFO("Showing debug pass {} (--{}).", pass, DEBUG_PASS_OPTION);
+    ctx.get_cached<rendering_system>().set_debug_pass(pass);
+}
+
+/// Turns off one feature by its --graphics-off name; false for a name no switch has.
+auto turn_off_graphics_feature(feature_limits& limits, hpp::string_view name) -> bool
+{
+    const auto found = std::find_if(GRAPHICS_OFF_SWITCHES.begin(),
+                                    GRAPHICS_OFF_SWITCHES.end(),
+                                    [&](const graphics_off_switch& entry) { return entry.name == name; });
+    if(found == GRAPHICS_OFF_SWITCHES.end())
+    {
+        return false;
+    }
+    found->turn_off(limits);
+    return true;
+}
+
+/// Turns off the features --graphics-off names, for this run only: the renderer reads the settings' limits every
+/// frame.
+void apply_graphics_off(rtti::context& ctx, const cmd_line::parser& parser)
+{
+    std::string names;
+    if(!parser.try_get(GRAPHICS_OFF_OPTION, names) || names.empty())
+    {
+        return;
+    }
+    auto& limits = ctx.get<settings>().graphics.limits;
+    hpp::string_view rest = names;
+    while(!rest.empty())
+    {
+        const auto end = std::min(rest.find(GRAPHICS_OFF_SEPARATOR), rest.size());
+        const auto name = rest.substr(0, end);
+        rest = rest.substr(std::min(end + 1, rest.size()));
+        if(turn_off_graphics_feature(limits, name))
+        {
+            APPLOG_INFO("Graphics feature {} is off (--{}).", name, GRAPHICS_OFF_OPTION);
+        }
+        else
+        {
+            APPLOG_WARNING("--{} names no graphics feature {}.", GRAPHICS_OFF_OPTION, name);
+        }
+    }
+}
 
 /// Shows the icon a deploy puts beside the game where the executable carries none (Linux); nothing without one.
 void set_window_icon(os::window& window)
@@ -187,6 +277,16 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
                               "log-here",
                               false,
                               "Write the log and the crash log beside the executable, not in the user's data folder.");
+    parser.set_optional<int>("",
+                             DEBUG_PASS_OPTION,
+                             NO_DEBUG_PASS,
+                             "Show one of the renderer's debug views (the editor's view ids), for this run only.");
+    parser.set_optional<std::string>("",
+                                     GRAPHICS_OFF_OPTION,
+                                     "",
+                                     "Turn graphics features off for this run only, as a comma-separated list (gi, ssr, "
+                                     "ssil, ao, bloom, fog, taa, aa, soft_shadows, contact_shadows, subsurface, clouds, "
+                                     "detailed_indirect, full_precision).");
 
     return true;
 }
@@ -244,6 +344,8 @@ auto game::init(const cmd_line::parser& parser) -> bool
     {
         return false;
     }
+    apply_debug_pass(ctx, parser);
+    apply_graphics_off(ctx, parser);
 
     if(!ctx.get_cached<runner>().init(ctx))
     {

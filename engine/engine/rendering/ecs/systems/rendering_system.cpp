@@ -147,6 +147,11 @@ void rendering_system::release_material_instance(uint32_t id)
     material_instances_.erase(id);
 }
 
+void rendering_system::set_debug_pass(const hpp::optional<int>& pass)
+{
+    debug_pass_ = pass;
+}
+
 void rendering_system::on_frame_update(scene& scn, const frame_times& times)
 {
     APP_SCOPE_PERF("Rendering/On Frame Update");
@@ -217,6 +222,10 @@ auto rendering_system::render_camera(const gfx::frame_buffer::ptr& output,
     auto& pipeline = pipeline_data.get_pipeline();
     auto& rview = camera_comp.get_render_view();
     auto& ui = ctx.get_cached<ui_system>();
+    if(debug_pass_)
+    {
+        pipeline->set_debug_pass(*debug_pass_);
+    }
     bool process_input = view.render_screen_space;
     ui.update_screen_space(ctx, camera_ent, scn, process_input);
     ui.update_world_space(ctx, camera_ent, scn, process_input);
