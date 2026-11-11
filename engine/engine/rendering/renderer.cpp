@@ -10,6 +10,7 @@
 #include "skinning_palette_buffer.h"
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
+#include <engine/loading_screen.h>
 #include <engine/profiler/profiler.h>
 #include <engine/settings/boot_config.h>
 #include <engine/settings/settings.h>
@@ -26,7 +27,6 @@
 #include <logging/logging.h>
 
 #include <ospp/event.h>
-#include <ospp/message_box.h>
 
 #include <algorithm>
 #include <array>
@@ -657,11 +657,8 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     {
         APPLOG_ERROR("Could not initialize rendering backend!");
 #if UNRAVEL_PLATFORM_ANDROID
-        // The application closes next; a phone shows no log, so say why.
-        if(!engine::is_interrupted())
-        {
-            os::message_box::show(os::message_box::kind::error, window.get_title(), NO_VULKAN_MESSAGE);
-        }
+        // The application closes next; a phone shows no log, so the host says why.
+        engine::context().get_cached<loading_screen>().fail(NO_VULKAN_MESSAGE);
 #endif
         return false;
     }
@@ -673,11 +670,8 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     const std::string requirements_message = get_minimum_requirements_message();
     if(!requirements_message.empty())
     {
-        APPLOG_ERROR("{}", requirements_message);
-        if(!engine::is_interrupted())
-        {
-            os::message_box::show(os::message_box::kind::error, window.get_title(), requirements_message);
-        }
+        // The host shows the reason: the application closes next.
+        engine::context().get_cached<loading_screen>().fail(requirements_message);
         // The destructor skips the shutdown of a renderer that never finished init, and the
         // backend still presents to the main window.
         gfx::shutdown();

@@ -1,6 +1,7 @@
 #include "game.h"
 
 #include <engine/engine.h>
+#include <engine/loading_screen.h>
 #include <engine/play_mode.h>
 #include <engine/rendering/display_manager.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -23,6 +24,8 @@
 #include <hpp/string_view.hpp>
 #include <logging/logging.h>
 #include <ospp/bundle.h>
+#include <ospp/hints.h>
+#include <ospp/message_box.h>
 #include <reflection/registration.h>
 
 #include <algorithm>
@@ -46,6 +49,44 @@ constexpr int NO_DEBUG_PASS = -1;
 /// The option that turns graphics features off over the project's settings, and what separates their names.
 constexpr const char* GRAPHICS_OFF_OPTION = "graphics-off";
 constexpr char GRAPHICS_OFF_SEPARATOR = ',';
+
+/// What a failed start tells the player, as far as the start got: the game's name, and the folder of its log.
+struct start_report
+{
+    std::string title{"Unravel Game"};
+    std::string log_folder;
+};
+
+auto get_start_report() -> start_report&
+{
+    static start_report report;
+    return report;
+}
+
+/// Fails the start with what went wrong, which the player is shown.
+void fail_start(const std::string& message)
+{
+    engine::context().get_cached<loading_screen>().fail(message);
+}
+
+/// Shows why the game did not start: its window never appears, and the log is in a folder a player does not look
+/// in. A browser page reports a failed start itself.
+void show_start_failure(const std::string& message)
+{
+#if !UNRAVEL_PLATFORM_EMSCRIPTEN
+    if(engine::is_interrupted())
+    {
+        return;
+    }
+    const auto& report = get_start_report();
+    const auto log_note = report.log_folder.empty() ? std::string{} : fmt::format("\n\nThe log is in {}.", report.log_folder);
+    os::message_box::show(os::message_box::kind::error,
+                          report.title,
+                          fmt::format("The game could not start.\n\n{}{}", message, log_note));
+#else
+    (void)message;
+#endif
+}
 
 /// A feature --graphics-off can turn off: its name and the limit that turns it off.
 struct graphics_off_switch
@@ -161,7 +202,7 @@ auto mount_pack_file(const std::string& protocol, const fs::path& pack) -> bool
     std::string error;
     if(!fs::mount_pack(protocol, pack, error))
     {
-        APPLOG_CRITICAL("Failed to mount asset pack: {}", error);
+        fail_start(fmt::format("Failed to mount asset pack: {}", error));
         return false;
     }
     APPLOG_INFO("Mounted asset pack {}", pack.generic_string());
@@ -192,7 +233,7 @@ auto mount_bundled_packs(const std::string& protocol, const fs::path& root) -> b
         std::string error;
         if(!fs::mount_pack(protocol, std::move(region), error))
         {
-            APPLOG_CRITICAL("Failed to mount asset pack: {}", error);
+            fail_start(fmt::format("Failed to mount asset pack: {}", error));
             return false;
         }
         APPLOG_INFO("Mounted asset pack {} from the application package", name);
@@ -263,6 +304,9 @@ REFLECTION_REGISTRATION
 auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 {
     ctx.add<deploy>();
+    // Android's Back reaches the game as a key (KeyCode.AcBack), for its scripts to act on: the system's own
+    // answer to it closes the game.
+    os::set_hint("HINT_ANDROID_TRAP_BACK_BUTTON", "1");
 
     if(!engine::create(ctx, parser))
     {
@@ -293,19 +337,25 @@ auto game::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 
 auto game::init(const cmd_line::parser& parser) -> bool
 {
-    if(!extract_bundled_files())
+    auto& ctx = engine::context();
+    auto& ls = ctx.get_cached<loading_screen>();
+    ls.set_on_fail([](const std::string&, const std::string& message)
+    {
+        show_start_failure(message);
+    });
+
+    ls.begin_module("Game Files");
+    if(!ls.check(extract_bundled_files()))
     {
         return false;
     }
 
-    if(!init_protocols(parser))
+    if(!ls.check(init_protocols(parser)))
     {
         return false;
     }
     init_user_protocols(parser);
     open_log(parser);
-
-    auto& ctx = engine::context();
 
     // Peek settings for cold boot fields only: nothing is initialized yet, so the peek
     // must not visit the asset handles inside settings.cfg. The full load happens below,
@@ -324,18 +374,21 @@ auto game::init(const cmd_line::parser& parser) -> bool
         return false;
     }
 
-    if(!init_assets(ctx))
+    ls.begin_module("Game Assets");
+    if(!ls.check(init_assets(ctx)))
     {
         return false;
     }
 
     // Full settings load now that asset databases can resolve handles.
-    if(!init_settings(ctx))
+    ls.begin_module("Game Settings");
+    if(!ls.check(init_settings(ctx)))
     {
         return false;
     }
 
-    if(!show_main_window(ctx))
+    ls.begin_module("Window");
+    if(!ls.check(show_main_window(ctx)))
     {
         return false;
     }
@@ -347,7 +400,8 @@ auto game::init(const cmd_line::parser& parser) -> bool
     apply_debug_pass(ctx, parser);
     apply_graphics_off(ctx, parser);
 
-    if(!ctx.get_cached<runner>().init(ctx))
+    ls.begin_module("Game");
+    if(!ls.check(ctx.get_cached<runner>().init(ctx)))
     {
         return false;
     }
@@ -357,8 +411,9 @@ auto game::init(const cmd_line::parser& parser) -> bool
         am.preload_all_assets();
     }
 
+    ls.begin_module("Game Scripts");
     auto& scr = ctx.get_cached<script_system>();
-    if(!scr.load_app_domain(ctx, false))
+    if(!ls.check(scr.load_app_domain(ctx, false)))
     {
         return false;
     }
@@ -394,6 +449,7 @@ void game::init_user_protocols(const cmd_line::parser& parser)
     load_app_section_from_file(fs::resolve_protocol(SETTINGS_PATH).string(), app);
     const std::string product =
         app.product.empty() ? fs::executable_path(parser.app_name().c_str()).stem().string() : app.product;
+    get_start_report().title = product;
     engine::set_user_protocols(app.company, product);
 }
 
@@ -405,10 +461,16 @@ void game::open_log(const cmd_line::parser& parser)
     // binary:/ is the application's own storage there, outside the folder its backup rules keep.
     is_beside_binary = true;
 #endif
-    if(is_beside_binary || !engine::open_log(fs::resolve_protocol(LOGS_PATH)))
+    auto folder = fs::resolve_protocol(LOGS_PATH);
+    if(is_beside_binary || !engine::open_log(folder))
     {
-        engine::open_log(fs::resolve_protocol("binary:/"));
+        folder = fs::resolve_protocol("binary:/");
+        if(!engine::open_log(folder))
+        {
+            return;
+        }
     }
+    get_start_report().log_folder = fs::to_utf8_string(folder);
 }
 
 auto game::prepare_boot_config(rtti::context& ctx, const cmd_line::parser& parser) -> bool
@@ -441,11 +503,11 @@ auto load_asset_index(asset_manager& am, const std::string& protocol) -> bool
         return true;
     }
     const auto index = fs::resolve_protocol(protocol + ":/" + ex::get_asset_index_file_name());
-    APPLOG_CRITICAL("The {} asset index {} {}. The build is incomplete or does not match this version of the "
-                    "game. Deploy the game again.",
-                    protocol,
-                    index.generic_string(),
-                    fs::is_readable_file(index) ? "could not be read" : "is missing");
+    fail_start(fmt::format("The {} asset index {} {}. The build is incomplete or does not match this version of the "
+                           "game. Deploy the game again.",
+                           protocol,
+                           index.generic_string(),
+                           fs::is_readable_file(index) ? "could not be read" : "is missing"));
     return false;
 }
 
@@ -455,7 +517,7 @@ auto game::init_settings(rtti::context& ctx) -> bool
     const auto settings_path = fs::resolve_protocol(SETTINGS_PATH);
     if(!load_from_file(settings_path.string(), s))
     {
-        APPLOG_CRITICAL("Failed to load project settings {}", settings_path.string());
+        fail_start(fmt::format("Failed to load project settings {}", settings_path.string()));
         return false;
     }
     return true;
