@@ -528,19 +528,52 @@ async function readBytes(response, size, onBytes) {
   return length === bytes.byteLength ? bytes : bytes.slice(0, length);
 }
 
+/// Whether `bytes` are as long as the manifest says their file is; an older manifest lists no sizes.
+function hasListedSize(bytes, size) {
+  return !Number.isFinite(size) || bytes.byteLength === size;
+}
+
 /// The bytes of a data file from `cache` under `key`, or from the network, then stored in the cache from the same
-/// bytes: the download is read once.
+/// bytes: the download is read once. Bytes of another length than the manifest lists are not the build's file (a
+/// host's page for a missing file, a build replaced mid-download): a cached copy is downloaded again, and a download
+/// is refused before it reaches the cache, where every later visit would read it back.
 async function fetchDataFile(cache, url, key, used, size, onBytes) {
   used.add(key);
   const cached = cache ? await cache.match(key) : undefined;
   if (cached) {
-    return readBytes(cached, size, onBytes);
+    const stored = await readBytes(cached, size, onBytes);
+    if (hasListedSize(stored, size)) {
+      return stored;
+    }
+    await cache.delete(key);
+    onBytes(-stored.byteLength);
   }
   const bytes = await readBytes(await download(url), size, onBytes);
+  if (!hasListedSize(bytes, size)) {
+    throw new Error(`${url} has ${bytes.byteLength} bytes where the build lists ${size}: the host sent another `
+      + 'file. Try again in a moment.');
+  }
   if (cache) {
     await cache.put(key, new Response(bytes)).catch(() => {});
   }
   return bytes;
+}
+
+/// Starts the engine. When it does not start, the cached game files go: one of them may be what stops it, and the
+/// next visit then downloads them again instead of reading the same bytes back.
+async function runEngine(runtime, dataCache) {
+  const dropCachedData = () => dropUnused(dataCache, new Set()).catch(() => {});
+  let result = -1;
+  try {
+    result = await runtime.runMain();
+  } catch (e) {
+    await dropCachedData();
+    throw e;
+  }
+  if (result !== 0) {
+    await dropCachedData();
+    throw new Error(`The engine did not start (${result}).`);
+  }
 }
 
 /// Drops what `cache` holds that this start did not use: files an older deploy had.
@@ -690,10 +723,7 @@ async function start() {
   creepProgress(ENGINE_CREEP_END, (last ? last.engine_ms : DEFAULT_ENGINE_START_MS) * ENGINE_CREEP_SLACK);
   await nextFrames(2);
   const engineBegin = performance.now();
-  const result = await runtime.runMain();
-  if (result !== 0) {
-    throw new Error(`The engine did not start (${result}).`);
-  }
+  await runEngine(runtime, dataCache);
   storeTimings({ downloads_ms: Math.round(downloadsMs), engine_ms: Math.round(performance.now() - engineBegin) });
   if (isStored) {
     storeUserFilesWhenHidden(module);
