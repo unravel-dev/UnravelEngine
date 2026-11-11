@@ -1,0 +1,211 @@
+shaderc: WGSL loops come without continuing blocks
+
+Safari 18's WebGPU (measured on iOS 18.7) reads zeros from a loop that enters a `continuing` block through `continue`:
+the loop's results stay as they were initialized. tint writes nearly every loop of an optimized shader in that form,
+with the loop's body in the `continuing` block, so on those devices the loops return nothing (a temporal resolve turned
+the image black). The same loop without the block runs right there, as plain for loops do, and iOS 27 runs both forms.
+
+The WGSL writer takes a new option, inline_continuing_blocks, which shaderc sets: the statements of a loop's
+`continuing` block are written before each of the loop's `continue` statements and, where the body can run to its end,
+after it; a `break if` among them becomes an `if` that breaks. A loop whose `continuing` block ends in `break if` keeps
+the block when one of its `continue` statements is inside a `switch`, where that `break` would leave the switch.
+
+diff --git a/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.cc b/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.cc
+index b87771f5b..9f39f608d 100644
+--- a/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.cc
++++ b/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.cc
+@@ -775,6 +775,9 @@ void ASTPrinter::EmitCompoundAssign(const ast::CompoundAssignmentStatement* stmt
+ }
+ 
+ void ASTPrinter::EmitContinue(const ast::ContinueStatement*) {
++    if (inlined_continuing_) {
++        EmitInlinedContinuing(inlined_continuing_);
++    }
+     Line() << "continue;";
+ }
+ 
+@@ -832,7 +835,63 @@ void ASTPrinter::EmitDiscard(const ast::DiscardStatement*) {
+     Line() << "discard;";
+ }
+ 
++namespace {
++
++/// @returns true if control never runs past the end of @p stmt
++bool EndsWithJump(const ast::Statement* stmt) {
++    return Switch(
++        stmt,  //
++        [](const ast::BreakStatement*) { return true; },
++        [](const ast::ContinueStatement*) { return true; },
++        [](const ast::ReturnStatement*) { return true; },
++        [](const ast::BlockStatement* block) {
++            return !block->Empty() && EndsWithJump(block->Last());
++        },
++        [](const ast::IfStatement* if_) {
++            return if_->else_statement && EndsWithJump(if_->body) &&
++                   EndsWithJump(if_->else_statement);
++        },
++        [](Default) { return false; });
++}
++
++/// @returns true if @p stmt holds a `continue` of its enclosing loop inside a `switch`
++bool HasContinueInSwitch(const ast::Statement* stmt, bool in_switch = false) {
++    return Switch(
++        stmt,  //
++        [&](const ast::ContinueStatement*) { return in_switch; },
++        [&](const ast::BlockStatement* block) {
++            for (auto* s : block->statements) {
++                if (HasContinueInSwitch(s, in_switch)) {
++                    return true;
++                }
++            }
++            return false;
++        },
++        [&](const ast::IfStatement* if_) {
++            return HasContinueInSwitch(if_->body, in_switch) ||
++                   (if_->else_statement && HasContinueInSwitch(if_->else_statement, in_switch));
++        },
++        [&](const ast::SwitchStatement* switch_) {
++            for (auto* c : switch_->body) {
++                if (HasContinueInSwitch(c->body, true)) {
++                    return true;
++                }
++            }
++            return false;
++        },
++        // A nested loop's `continue` statements are its own.
++        [](Default) { return false; });
++}
++
++}  // namespace
++
+ void ASTPrinter::EmitLoop(const ast::LoopStatement* stmt) {
++    const bool has_continuing = stmt->continuing && !stmt->continuing->Empty();
++    // An inlined `break if` is a `break`, which inside a `switch` would leave the switch, not the loop.
++    const bool inlines_continuing =
++        options_.inline_continuing_blocks && has_continuing &&
++        !(stmt->continuing->Last()->Is<ast::BreakIfStatement>() && HasContinueInSwitch(stmt->body));
++    TINT_SCOPED_ASSIGNMENT(inlined_continuing_, inlines_continuing ? stmt->continuing : nullptr);
+     {
+         auto out = Line();
+ 
+@@ -848,7 +907,11 @@ void ASTPrinter::EmitLoop(const ast::LoopStatement* stmt) {
+ 
+     EmitStatements(stmt->body->statements);
+ 
+-    if (stmt->continuing && !stmt->continuing->Empty()) {
++    if (inlines_continuing) {
++        if (!EndsWithJump(stmt->body)) {
++            EmitInlinedContinuing(stmt->continuing);
++        }
++    } else if (has_continuing) {
+         Line();
+         {
+             auto out = Line();
+@@ -867,7 +930,36 @@ void ASTPrinter::EmitLoop(const ast::LoopStatement* stmt) {
+     Line() << "}";
+ }
+ 
++void ASTPrinter::EmitInlinedContinuing(const ast::BlockStatement* continuing) {
++    TINT_SCOPED_ASSIGNMENT(inlined_continuing_, nullptr);
++    Line() << "{";
++    {
++        ScopedIndent si(this);
++        for (auto* stmt : continuing->statements) {
++            auto* break_if = stmt->As<ast::BreakIfStatement>();
++            if (!break_if) {
++                EmitStatement(stmt);
++                continue;
++            }
++            {
++                auto out = Line();
++                out << "if (";
++                EmitExpression(out, break_if->condition);
++                out << ") {";
++            }
++            {
++                ScopedIndent break_indent(this);
++                Line() << "break;";
++            }
++            Line() << "}";
++        }
++    }
++    Line() << "}";
++}
++
+ void ASTPrinter::EmitForLoop(const ast::ForLoopStatement* stmt) {
++    // A `continue` in the body is this loop's.
++    TINT_SCOPED_ASSIGNMENT(inlined_continuing_, nullptr);
+     TextBuffer init_buf;
+     if (auto* init = stmt->initializer) {
+         TINT_SCOPED_ASSIGNMENT(current_buffer_, &init_buf);
+@@ -939,6 +1031,8 @@ void ASTPrinter::EmitForLoop(const ast::ForLoopStatement* stmt) {
+ }
+ 
+ void ASTPrinter::EmitWhile(const ast::WhileStatement* stmt) {
++    // A `continue` in the body is this loop's.
++    TINT_SCOPED_ASSIGNMENT(inlined_continuing_, nullptr);
+     {
+         auto out = Line();
+ 
+diff --git a/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.h b/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.h
+index 8670a71bc..38afdd236 100644
+--- a/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.h
++++ b/3rdparty/dawn/src/tint/lang/wgsl/writer/ast_printer/ast_printer.h
+@@ -187,6 +187,9 @@ class ASTPrinter : public tint::TextGenerator {
+     /// Handles a loop statement
+     /// @param stmt the statement to emit
+     void EmitLoop(const ast::LoopStatement* stmt);
++    /// Emits the statements of a loop's continuing block where the loop's body hands over to them
++    /// @param continuing the continuing block
++    void EmitInlinedContinuing(const ast::BlockStatement* continuing);
+     /// Handles a for-loop statement
+     /// @param stmt the statement to emit
+     void EmitForLoop(const ast::ForLoopStatement* stmt);
+@@ -252,6 +255,9 @@ class ASTPrinter : public tint::TextGenerator {
+     Hashset<std::string_view, 8> unrenameable_;
+     Hashmap<tint::Symbol, std::string, 8> symbol_to_name_;
+     uint64_t next_minified_name_idx_ = 0;
++    /// The continuing block of the innermost `loop` being emitted, when its statements are written at
++    /// the loop's `continue` statements instead (Options::inline_continuing_blocks).
++    const ast::BlockStatement* inlined_continuing_ = nullptr;
+ };
+ 
+ }  // namespace tint::wgsl::writer
+diff --git a/3rdparty/dawn/src/tint/lang/wgsl/writer/common/options.h b/3rdparty/dawn/src/tint/lang/wgsl/writer/common/options.h
+index b38e2ac33..f21ff1e18 100644
+--- a/3rdparty/dawn/src/tint/lang/wgsl/writer/common/options.h
++++ b/3rdparty/dawn/src/tint/lang/wgsl/writer/common/options.h
+@@ -47,12 +47,17 @@ struct Options {
+     /// Set to `true` to minify the output WGSL.
+     bool minify = false;
+ 
++    /// Set to `true` to write the statements of a loop's `continuing` block before each of the loop's
++    /// `continue` statements and at the end of its body, instead of in a `continuing` block.
++    bool inline_continuing_blocks = false;
++
+     /// Reflect the fields of this class so that it can be used by tint::ForeachField().
+     TINT_REFLECT(Options,
+                  allow_non_uniform_derivatives,
+                  allow_non_uniform_subgroup_operations,
+                  allowed_features,
+-                 minify);
++                 minify,
++                 inline_continuing_blocks);
+ };
+ 
+ }  // namespace tint::wgsl::writer
+diff --git a/tools/shaderc/shaderc_wgsl.cpp b/tools/shaderc/shaderc_wgsl.cpp
+index 42be4e773..bf520e1d0 100644
+--- a/tools/shaderc/shaderc_wgsl.cpp
++++ b/tools/shaderc/shaderc_wgsl.cpp
+@@ -800,6 +800,10 @@ namespace bgfx { namespace wgsl
+ 									tint::wgsl::LanguageFeature::kReadonlyAndReadwriteStorageTextures,
+ 								}
+ 							},
++							// Safari 18's WebGPU reads zeros from a loop that enters a `continuing` block through
++							// `continue`, the form nearly every loop of an optimized shader takes. Without the block,
++							// its statements written before each `continue` instead, the loop runs right there too.
++							.inline_continuing_blocks = true,
+ 						  }
+ 						);
+ 					translated = result == tint::Success;

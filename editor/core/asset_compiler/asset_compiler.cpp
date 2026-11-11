@@ -1149,11 +1149,23 @@ auto needs_essl_310(const std::vector<std::uint8_t>& bytes) -> bool
 /// without this record compiles again.
 constexpr std::string_view ESSL_COMPILE_PARAMETERS = "fragment precision highp; bit encoders in essl 300";
 
+/// What a WGSL shader's manifest records beside its sources: shaderc writes its loops without `continuing` blocks
+/// (bgfx patch 0007), and a cooked file without this record compiles again.
+constexpr std::string_view WGSL_COMPILE_PARAMETERS = "loops without continuing blocks";
+
 /// The compile parameters of a shader compiled to @p output, by its renderer's file name extension.
 auto get_shader_compile_parameters(const fs::path& output) -> std::string
 {
     const auto renderer = gfx::get_renderer_based_on_filename_extension(output.extension().string());
-    return renderer == bgfx::RendererType::OpenGLES ? std::string(ESSL_COMPILE_PARAMETERS) : std::string{};
+    if(renderer == bgfx::RendererType::OpenGLES)
+    {
+        return std::string(ESSL_COMPILE_PARAMETERS);
+    }
+    if(renderer == bgfx::RendererType::WebGPU)
+    {
+        return std::string(WGSL_COMPILE_PARAMETERS);
+    }
+    return {};
 }
 
 /// @p file's variants named, without code: what a renderer gets of a shader it never runs.

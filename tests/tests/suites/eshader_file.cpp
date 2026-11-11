@@ -27,6 +27,9 @@
  *     texture-formats-tier2, within the workgroup limits and the storage textures its feature requirements declare,
  *     which devices with fewer storage textures a stage turn it off by; a compute shader whose workgroup size the
  *     check cannot read fails it;
+ *   - no engine shader's WGSL holds a `continuing` block, while its loops are there: Safari 18's WebGPU reads zeros
+ *     from a loop that enters one through `continue`, so shaderc writes the block's statements before each
+ *     `continue` instead (bgfx patch 0007);
  *   - every language check in the engine's shaders that names SPIR-V names WGSL too: the WebGPU shaders are compiled
  *     with BGFX_SHADER_LANGUAGE_WGSL in place of BGFX_SHADER_LANGUAGE_SPIRV, through the same HLSL path;
  *   - every engine shader compiles to GLSL ES for WebGL 2: compute shaders and the variants that need OpenGL ES 3.1
@@ -89,6 +92,9 @@ constexpr std::size_t WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE = 4;
 /// texture-formats-tier2 and binds more storage textures a stage than core WebGPU grants. Its workgroups are held to
 /// the core limits; its storage textures to what its feature requirements declare.
 constexpr const char* WEBGPU_TIER_FOLDER = "gi";
+/// How tint writes a loop and its `continuing` block, the block no engine shader's WGSL may hold.
+constexpr std::string_view WGSL_LOOP = "loop {";
+constexpr std::string_view WGSL_CONTINUING_BLOCK = "continuing {";
 /// bgfx's own shader headers among the engine's, which spell their language checks bgfx's way.
 constexpr std::array<const char*, 2> BGFX_SHADER_HEADERS = {"bgfx_shader.sh", "bgfx_compute.sh"};
 /// The define of a vertex variant that reads its shader buffers from textures (shader_buffer.sh).
@@ -744,6 +750,7 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
     const fs::path shaders = fs::path(ENGINE_DATA_DIR) / "data/shaders";
     const auto renderer = gfx::get_renderer_filename_extension(bgfx::RendererType::WebGPU);
     std::size_t variant_count = 0;
+    std::size_t looping_variant_count = 0;
     std::size_t tier_storage_textures = 0;
     fs::error_code ec;
     for(const auto& entry : fs::recursive_directory_iterator(shaders, ec))
@@ -761,6 +768,10 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
         {
             const auto problems = find_webgpu_limit_problems(variant, is_tier_shader);
             check(problems.empty(), name + " variant " + variant.name + " exceeds WebGPU's core limits: " + problems);
+            const std::string wgsl = as_string(variant);
+            check(wgsl.find(WGSL_CONTINUING_BLOCK) == std::string::npos,
+                  name + " variant " + variant.name + " holds no continuing block");
+            looping_variant_count += wgsl.find(WGSL_LOOP) != std::string::npos ? 1 : 0;
             if(is_tier_shader)
             {
                 tier_storage_textures = std::max(tier_storage_textures, count_storage_textures(as_string(variant)));
@@ -768,10 +779,12 @@ void test_engine_shaders_fit_webgpu(unravel::asset_manager& am, const fs::path& 
             ++variant_count;
         }
     }
-    std::printf("  %zu WGSL variants; global illumination binds up to %zu storage textures a stage\n",
+    std::printf("  %zu WGSL variants, %zu with loops; global illumination binds up to %zu storage textures a stage\n",
                 variant_count,
+                looping_variant_count,
                 tier_storage_textures);
     check(variant_count > 0, "the engine's shaders are found");
+    check(looping_variant_count > 0, "the engine's WGSL has loops, written as the continuing block check reads them");
     const auto declared =
         unravel::get_render_feature_requirements(unravel::render_feature::global_illumination).storage_textures_per_stage;
     check(tier_storage_textures > WEBGPU_MAX_STORAGE_TEXTURES_PER_STAGE && tier_storage_textures <= declared,
