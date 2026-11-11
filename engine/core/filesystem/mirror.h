@@ -34,6 +34,7 @@ auto copy_file_if_changed(const path& from, const path& to, bool& is_copied, err
  *
  * New and changed files are copied with copy_file_if_changed, the others left alone. Files under `to`
  * that `from` does not have, or that `include` turns down, are removed, and so are folders left empty.
+ * A `to` that does not exist is created with the first file copied; with none to copy it stays missing.
  * Names compare as make_path_key does: case-insensitively where the file system is.
  * @return False with `ec` set when a file cannot be listed, copied or removed; `to` may then be partly
  * updated.

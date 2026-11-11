@@ -12,7 +12,8 @@
  *   - files the filter turns down are neither copied nor kept;
  *   - a rename in letter case leaves exactly the source's files;
  *   - a stale file that cannot be removed fails the mirror (Windows, where an open file is locked);
- *   - a missing source fails with an error.
+ *   - a missing source fails with an error;
+ *   - a source with no file to mirror succeeds and creates no target.
  * Everything lives in a temp folder.
  */
 
@@ -182,6 +183,21 @@ void test_missing_source(const fs::path& target)
           "a missing source fails with an error");
 }
 
+void test_nothing_to_mirror(const fs::path& target)
+{
+    std::printf("test_nothing_to_mirror\n");
+    const auto source = get_temp_folder() / "unfiltered_source";
+    write_text(source / "a.txt", "not a library");
+    const auto only_libraries = [](const fs::path& file)
+    {
+        return file.extension() == ".dll";
+    };
+    const auto stats = mirror(source, target, only_libraries);
+    fs::error_code ec;
+    check(stats.copied == 0 && stats.removed == 0, "a source with no file the filter takes mirrors nothing");
+    check(!fs::exists(target, ec), "and creates no target folder");
+}
+
 auto run_fs_mirror_suite(rtti::context&) -> int
 {
     g_checks = 0;
@@ -197,6 +213,7 @@ auto run_fs_mirror_suite(rtti::context&) -> int
     test_case_only_rename(get_temp_folder() / "case_target");
     test_removal_failure(get_temp_folder() / "locked_target");
     test_missing_source(target);
+    test_nothing_to_mirror(get_temp_folder() / "unmade_target");
     fs::remove_all(get_temp_folder(), ec);
     std::printf("fs mirror: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

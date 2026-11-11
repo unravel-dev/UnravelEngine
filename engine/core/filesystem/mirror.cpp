@@ -62,6 +62,11 @@ auto find_unmirrored(const path& to,
 auto remove_unmirrored(const path& to, const std::unordered_set<std::string>& kept, mirror_stats& stats, error_code& ec)
     -> bool
 {
+    // A source with no file to mirror never creates `to`, and a folder that is not there holds nothing stale.
+    if(!exists(to, ec))
+    {
+        return !ec;
+    }
     std::vector<path> stale_files;
     std::vector<path> directories;
     if(!find_unmirrored(to, kept, stale_files, directories, ec))
