@@ -235,10 +235,17 @@ auto web_preview_server::start() -> bool
     return false;
 }
 
-void web_preview_server::set_tunnel_origin(const std::string& origin)
+void web_preview_server::set_tunnel(const std::string& origin, const std::string& site_path)
 {
     std::lock_guard<std::mutex> lock(sites_mutex_);
     tunnel_origin_ = origin;
+    tunnel_site_path_ = site_path;
+}
+
+auto web_preview_server::is_tunnel_site(const std::string& request_path) -> bool
+{
+    std::lock_guard<std::mutex> lock(sites_mutex_);
+    return !tunnel_site_path_.empty() && request_path.compare(0, tunnel_site_path_.size(), tunnel_site_path_) == 0;
 }
 
 auto web_preview_server::is_tunnel_request(const httplib::Request& request) -> bool
@@ -250,10 +257,17 @@ auto web_preview_server::is_tunnel_request(const httplib::Request& request) -> b
 void web_preview_server::handle(const httplib::Request& request, httplib::Response& response)
 {
     std::string refusal;
-    if(!is_tunnel_request(request) && !is_loopback_request(request, refusal))
+    const bool is_through_tunnel = is_tunnel_request(request);
+    if(!is_through_tunnel && !is_loopback_request(request, refusal))
     {
         APPLOG_WARNING("Web deploy server: {}.", refusal);
         response.status = httplib::StatusCode::Forbidden_403;
+        return;
+    }
+    // The link shares one build: the other sites served here stay this computer's.
+    if(is_through_tunnel && !is_tunnel_site(request.path))
+    {
+        response.status = httplib::StatusCode::NotFound_404;
         return;
     }
     std::string relative;

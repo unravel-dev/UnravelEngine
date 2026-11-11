@@ -26,7 +26,7 @@ namespace unravel::deployment
  * address - and with it their saves and caches - from one editor session to the next. A file's .br or .gz beside it
  * goes compressed to a browser that accepts that encoding, every file is checked again on each visit (the page keeps
  * the game's files in its own caches by content), and only this computer can connect - and, while a public link is
- * shared (web_public_link.h), that link's tunnel.
+ * shared (web_public_link.h), that link's tunnel, which reaches the shared build only.
  */
 class web_preview_server
 {
@@ -46,13 +46,15 @@ public:
     /// Stops serving every site; the next serve starts again.
     void stop();
     /// Lets requests through the quick tunnel at @p origin ("https://<name>.trycloudflare.com") in as well, besides
-    /// this computer's; empty: this computer's only.
-    void set_tunnel_origin(const std::string& origin);
+    /// this computer's, for the site at @p site_path only; an empty origin: this computer's only.
+    void set_tunnel(const std::string& origin, const std::string& site_path);
 
 private:
     auto start() -> bool;
     void handle(const httplib::Request& request, httplib::Response& response);
     auto is_tunnel_request(const httplib::Request& request) -> bool;
+    /// Whether @p request_path lies in the site the tunnel shares.
+    auto is_tunnel_site(const std::string& request_path) -> bool;
     /// The folder of the site @p request_path lies in, and the path below the site in @p relative; empty when none.
     auto find_site(const std::string& request_path, std::string& relative) -> fs::path;
 
@@ -63,6 +65,8 @@ private:
     std::map<std::string, fs::path> sites_;
     /// The public link's tunnel, whose requests come in too; empty when none is shared. Guarded by sites_mutex_.
     std::string tunnel_origin_;
+    /// The one site the tunnel's requests may read. Guarded by sites_mutex_.
+    std::string tunnel_site_path_;
     int port_{-1};
 };
 

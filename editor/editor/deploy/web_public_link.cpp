@@ -107,7 +107,7 @@ public:
     void stop()
     {
         process_.stop();
-        get_web_preview_server().set_tunnel_origin({});
+        get_web_preview_server().set_tunnel({}, {});
         std::lock_guard<std::mutex> lock(mutex_);
         status_ = {};
     }
@@ -120,7 +120,7 @@ public:
         {
             status_.state = public_link_state::failed;
             status_.error = describe_stop();
-            get_web_preview_server().set_tunnel_origin({});
+            get_web_preview_server().set_tunnel({}, {});
         }
         return status_;
     }
@@ -136,7 +136,7 @@ private:
             if(const auto origin = find_web_tunnel_origin(line); !origin.empty())
             {
                 status_.page_address = make_web_page_address(origin, page_.site_path, {}, page_.graphics);
-                get_web_preview_server().set_tunnel_origin(origin);
+                get_web_preview_server().set_tunnel(origin, page_.site_path);
             }
         }
         const bool is_connected = line.find(TUNNEL_CONNECTED) != std::string::npos;
