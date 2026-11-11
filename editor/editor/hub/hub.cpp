@@ -3,6 +3,7 @@
 #include <editor/events.h>
 #include "panels/panels_defs.h"
 #include <editor/deploy/deploy_android.h>
+#include <editor/deploy/deploy_pipeline.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/project/project_info.h>
 #include <editor/system/project_manager.h>
@@ -23,6 +24,13 @@
 
 namespace unravel
 {
+namespace
+{
+/// What closing the editor during a deploy answers, and how long the toast shows it.
+constexpr const char* DEPLOY_RUNNING_NOTE =
+    "A deploy is running. Cancel it in the Deploy window, or close the editor once it finishes.";
+constexpr int DEPLOY_RUNNING_TOAST_MILLISECONDS = 5000;
+} // namespace
 
 hub::hub(rtti::context& ctx)
 {
@@ -212,9 +220,18 @@ void hub::on_os_event(rtti::context& ctx, os::event& e)
             {
                 if(render_window->get_window().get_id() == window_id)
                 {
-                    editor_actions::prompt_save_scene(ctx, []() {
-                        engine::interrupt();
-                    });
+                    // A deploy's steps write the build and their staging folder: they end before the editor does.
+                    if(deployment::is_deploy_running())
+                    {
+                        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Warning, DEPLOY_RUNNING_TOAST_MILLISECONDS, DEPLOY_RUNNING_NOTE));
+                        APPLOG_WARNING("{}", DEPLOY_RUNNING_NOTE);
+                    }
+                    else
+                    {
+                        editor_actions::prompt_save_scene(ctx, []() {
+                            engine::interrupt();
+                        });
+                    }
 
                     e = {};
                 }

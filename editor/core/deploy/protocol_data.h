@@ -40,7 +40,8 @@ struct protocol_job
     /// The protocol's compiled cache.
     fs::path compiled_root;
     /// Folders of cooked variants that replace compiled files, the first winning: the prefabs the deploy
-    /// cooked, the profile's texture variants. A folder that does not exist holds none.
+    /// cooked and the script library it built, the profile's texture variants. A folder that does not exist
+    /// holds none.
     cooked_folders cooked;
     /// The build's data/<protocol> folder.
     fs::path protocol_root;

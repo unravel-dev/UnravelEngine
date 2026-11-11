@@ -1,6 +1,7 @@
 #include "subprocess.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 
 namespace subprocess
@@ -8,6 +9,8 @@ namespace subprocess
 namespace
 {
 constexpr std::size_t READ_BUFFER_SIZE = 4096;
+/// How often a call asks whether to end its process.
+constexpr auto STOP_POLL_INTERVAL = std::chrono::milliseconds(200);
 // No window: a process started without a console (detached, or from a shortcut) would otherwise open a
 // console window for every tool it runs; the output is read from pipes.
 constexpr int CREATE_OPTIONS = subprocess_option_search_user_path | subprocess_option_combined_stdout_stderr |
@@ -112,10 +115,55 @@ void read_output(subprocess_s& process, line_splitter& splitter, std::string* ou
     }
     splitter.finish();
 }
+
+/// Ends a process once `should_stop` says so, from a thread of its own: the caller's read blocks until the
+/// process closes its output.
+class process_stopper
+{
+public:
+    process_stopper(subprocess_s& process, const stop_check& should_stop)
+    {
+        if(!should_stop)
+        {
+            return;
+        }
+        watcher_ = std::thread(
+            [this, &process, should_stop]()
+            {
+                while(!is_done_)
+                {
+                    if(should_stop())
+                    {
+                        subprocess_terminate(&process);
+                        return;
+                    }
+                    std::this_thread::sleep_for(STOP_POLL_INTERVAL);
+                }
+            });
+    }
+
+    ~process_stopper()
+    {
+        is_done_ = true;
+        if(watcher_.joinable())
+        {
+            watcher_.join();
+        }
+    }
+
+    process_stopper(const process_stopper&) = delete;
+    auto operator=(const process_stopper&) -> process_stopper& = delete;
+
+private:
+    std::atomic<bool> is_done_{false};
+    std::thread watcher_;
+};
 } // namespace
 
-auto call(const std::vector<std::string>& args_array, const std::vector<std::string>& environment_array, const line_callback& on_line)
-    -> call_result
+auto call(const std::vector<std::string>& args_array,
+          const std::vector<std::string>& environment_array,
+          const line_callback& on_line,
+          const stop_check& should_stop) -> call_result
 {
     call_result result;
     subprocess_s process;
@@ -126,7 +174,11 @@ auto call(const std::vector<std::string>& args_array, const std::vector<std::str
     }
     result.started = true;
     line_splitter splitter(on_line);
-    read_output(process, splitter, &result.out_output);
+    {
+        // Gone before the join: it must not end a process that already exited.
+        const process_stopper stopper(process, should_stop);
+        read_output(process, splitter, &result.out_output);
+    }
     subprocess_join(&process, &result.retcode);
     subprocess_destroy(&process);
     return result;

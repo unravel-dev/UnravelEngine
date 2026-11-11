@@ -22,13 +22,37 @@ constexpr const char* PROJECT_SETTINGS_FOLDER = "settings";
 constexpr const char* PROJECT_DEPLOY_SETTINGS_FOLDER = "deploy";
 constexpr const char* PROJECT_EDITOR_FOLDER = "editor";
 constexpr const char* SCRIPT_BUILD_FOLDER = "temp";
+// A build stamp's keys, and its state values.
+constexpr const char* STAMP_STATE_KEY = "state";
+constexpr const char* STAMP_PROFILE_KEY = "profile";
+constexpr const char* STAMP_ENGINE_VERSION_KEY = "engine_version";
+constexpr const char* STAMP_FINISHED = "finished";
+constexpr const char* STAMP_UNFINISHED = "unfinished";
+
+auto make_stamp_line(const char* key, const std::string& value) -> std::string
+{
+    return std::string(key) + "=" + value + "\n";
+}
 } // namespace
+
+auto write_build_stamp(const fs::path& folder, const build_stamp& stamp) -> bool
+{
+    const auto text = make_stamp_line(STAMP_STATE_KEY, stamp.is_finished ? STAMP_FINISHED : STAMP_UNFINISHED) +
+                      make_stamp_line(STAMP_PROFILE_KEY, stamp.profile) +
+                      make_stamp_line(STAMP_ENGINE_VERSION_KEY, stamp.engine_version);
+    return write_file(folder / BUILD_STAMP_NAME, text.data(), text.size());
+}
+
+auto is_finished_build(const fs::path& folder) -> bool
+{
+    return read_stamp(folder / BUILD_STAMP_NAME)[STAMP_STATE_KEY] == STAMP_FINISHED;
+}
 
 auto is_previous_deploy(const fs::path& folder) -> bool
 {
     const auto app_root = folder / DATA_FOLDER / "app";
-    return is_present(app_root / ex::get_asset_index_file_name()) || is_present(app_root / ex::get_pack_file_name()) ||
-           is_present(app_root / LEGACY_ASSET_INDEX_NAME);
+    return is_present(folder / BUILD_STAMP_NAME) || is_present(app_root / ex::get_asset_index_file_name()) ||
+           is_present(app_root / ex::get_pack_file_name()) || is_present(app_root / LEGACY_ASSET_INDEX_NAME);
 }
 
 auto is_android_package_folder(const fs::path& folder) -> bool
@@ -43,6 +67,10 @@ auto is_android_package_folder(const fs::path& folder) -> bool
         if(entry.is_regular_file(ec) && (extension == ".apk" || extension == ".aab"))
         {
             has_package = true;
+        }
+        else if(entry.is_regular_file(ec) && path.filename() == BUILD_STAMP_NAME)
+        {
+            continue;
         }
         else if(const auto name = path.filename().generic_string();
                 entry.is_regular_file(ec) && hpp::string_view(name).ends_with(hpp::string_view(NATIVE_SYMBOLS_FILE_SUFFIX)))

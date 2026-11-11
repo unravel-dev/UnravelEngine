@@ -113,7 +113,7 @@ void keep_cache_file(std::unordered_set<std::string>& kept, const std::string& f
 
 /**
  * @brief Cooks every key: `cook(i)` for keys[i], on the background pool, since a compile can hold every thread it
- * gets for seconds; the largest sources first.
+ * gets for seconds; the largest sources first. A cancelled deploy cooks no further key, and the call throws.
  * @return The outcomes, by the keys' order.
  */
 auto cook_all(const std::vector<std::string>& keys, const std::function<cook_outcome(std::size_t index)>& cook)

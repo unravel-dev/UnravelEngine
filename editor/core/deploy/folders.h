@@ -8,8 +8,33 @@
 namespace unravel::deployment
 {
 
-/// Whether `folder` holds a build an earlier deploy wrote: every deploy writes the app's asset index,
-/// loose or inside its pack.
+/// The file a deploy keeps at the top of a profile's folder: whose build the folder holds, and whether the
+/// deploy that wrote it finished.
+constexpr const char* BUILD_STAMP_NAME = "build.stamp";
+
+/// What a build's stamp says.
+struct build_stamp
+{
+    std::string profile;
+    std::string engine_version;
+    /// False from the deploy's start until its last step succeeded: a failed, cancelled or interrupted deploy
+    /// leaves a folder with parts of two builds.
+    bool is_finished{};
+};
+
+/// Writes `stamp` into `folder`; false when the file cannot be written.
+auto write_build_stamp(const fs::path& folder, const build_stamp& stamp) -> bool;
+
+/// Whether the last deploy into `folder` finished: what uploads the build or keeps it as a release asks first.
+auto is_finished_build(const fs::path& folder) -> bool;
+
+/// What a folder whose build is not finished is refused with.
+constexpr const char* UNFINISHED_BUILD_PROBLEM =
+    "The folder's build is not marked as finished: its last deploy failed, was cancelled, or came from an older "
+    "editor. Deploy again first.";
+
+/// Whether `folder` holds a build an earlier deploy wrote: every deploy writes its stamp first, and the app's
+/// asset index, loose or inside its pack.
 auto is_previous_deploy(const fs::path& folder) -> bool;
 
 /// How the name of the native debug symbols a release Android deploy writes beside its package ends.
@@ -17,8 +42,8 @@ constexpr const char* NATIVE_SYMBOLS_FILE_SUFFIX = "-native-debug-symbols.zip";
 /// The folder of player templates beside the editor (the Android package's, the browser player's).
 constexpr const char* PLAYER_TEMPLATES_FOLDER = "binary:/players/";
 
-/// Whether `folder` holds nothing but Android packages (.apk, .aab), their native debug symbols, and the
-/// data/ an earlier Android deploy left beside them: what an Android deploy may replace. True for an empty
+/// Whether `folder` holds nothing but Android packages (.apk, .aab), their native debug symbols, a deploy's
+/// stamp, and the data/ an earlier Android deploy left beside them: what an Android deploy may replace. True for an empty
 /// folder; false for data/ without a package, which is a desktop build without its player.
 auto is_android_package_folder(const fs::path& folder) -> bool;
 

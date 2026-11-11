@@ -1487,12 +1487,36 @@ void register_deploy_tools(mcp_tool_registry& registry)
          .effect = tool_effect::destructive});
 
     registry.add(
+        {.name = "deploy_cancel",
+         .description =
+             "Stop the running deploy, as the Deploy window's Cancel Deploy does: steps that have not started are "
+             "skipped, the cooks stop between two assets and an Android package build is ended. Returns at once; "
+             "deploy_get_state reports the steps as they end, each stopped one failed with \"Cancelled.\". The folder "
+             "keeps an unfinished build, which deploy_keep_release and deploy_upload_steam refuse until the profile "
+             "is deployed again. An error when no deploy runs.",
+         .input_schema_json = R"json({"type":"object","properties":{}})json",
+         .handler =
+             [](rtti::context&, const simdjson::dom::object&) -> tool_result
+         {
+             if(!deployment::is_deploy_running())
+             {
+                 return {.text = "No deploy is running.", .is_error = true};
+             }
+             deployment::cancel_deploy();
+             return {.text = R"({"ok":true,"cancelling":true})", .is_error = false};
+         },
+         .mutates_scene = false,
+         .effect = tool_effect::changes,
+         .idempotent = true});
+
+    registry.add(
         {.name = "deploy_upload_steam",
          .description =
              "Upload a desktop profile's build in its deploy folder to Steam, as the Deploy window's Upload to Steam "
              "does. steamcmd (Editor Settings > External Tools, or the one on PATH) logs in the profile's steam_account "
              "with the login it keeps from an earlier one in a terminal (steamcmd +login <account>; no password is ever "
-             "passed), uploads every file of the folder but logs left by --log-here to steam_depot_id of steam_app_id, "
+             "passed), uploads every file of the folder but the deploy's build.stamp and logs left by --log-here to "
+             "steam_depot_id of steam_app_id, "
              "and sets the build live on steam_branch when it names one (deploy_set_settings sets them). Deploy the "
              "profile first (project_deploy). profile defaults to the deploy profile. Waits up to timeout_ms (default "
              "180000); on timeout the upload keeps running and deploy_get_state reports it. steamcmd's output goes to "

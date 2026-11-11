@@ -98,7 +98,10 @@ Building a scene is not shipping a game. The rest of the chain:
   time); keys that name nothing come back as warnings. deploy_get_content lists
   every project asset with whether it ships and why, named_folders points at
   folders scripts build asset paths in (with the scripts that do), and
-  orphan_rules lists rules on paths that are gone. While a deploy runs, project and settings changes are refused.
+  orphan_rules lists rules on paths that are gone. While a deploy runs, project and settings changes are refused;
+  deploy_cancel stops it. A deploy builds the project's scripts optimized (Compiling Scripts), whatever mode the
+  editor's scripts run in. A deploy that failed or was cancelled leaves its folder marked as unfinished (build.stamp):
+  deploy_keep_release and deploy_upload_steam refuse it until the profile is deployed again.
 - Android: project_deploy with an Android profile (a new project has one;
   settings_profiles_create platform android makes more) builds <project>.apk; with run_after_deploy it is
   installed and started on android_device, and the game's log reaches the

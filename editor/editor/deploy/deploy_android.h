@@ -76,6 +76,9 @@ struct android_package_plan
 {
     android_toolchain tools;
     android_package_params package;
+    /// The profile's build folder, and the owner this deploy names in it.
+    fs::path build_dir;
+    android_build_owner build_owner;
     /// The finished package in the deploy folder.
     fs::path output;
     /// The device Deploy and Run installs on.
@@ -106,6 +109,10 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
 
 /// Builds the package with Gradle and puts it into the deploy folder. Throws on failure.
 void build_android_package(const android_package_plan& plan);
+
+/// Deletes the build folders beside the plan's that no deploy needs any more (find_unused_android_build_dirs): each
+/// holds a Gradle build and a copy of a game's data. A folder in use is left for a later attempt.
+void remove_unused_android_build_dirs(const android_package_plan& plan);
 
 /**
  * @brief Installs the package on the plan's device and starts it; returns at once.

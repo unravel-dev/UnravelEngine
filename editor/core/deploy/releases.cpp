@@ -1,5 +1,6 @@
 #include "releases.h"
 #include "files.h"
+#include "folders.h"
 
 #include <engine/assets/impl/asset_extensions.h>
 #include <filesystem/mirror.h>
@@ -67,6 +68,10 @@ auto check_full_packed_build(const fs::path& deploy_location) -> result
             return result::failure("The deploy folder holds a patch: keep a release from a full deploy (no Patch "
                                    "Against Release).");
         }
+    }
+    if(!is_finished_build(deploy_location))
+    {
+        return result::failure(UNFINISHED_BUILD_PROBLEM);
     }
     return {};
 }

@@ -117,12 +117,18 @@ void deploy_loose(const protocol_job& job, const fs::path& destination, const co
 /// from the compiled cache.
 void deploy_packed(const protocol_job& job, const fs::path& destination, const fs::path& index, const compiled_file_filter& is_shipped)
 {
+    const compiled_file_filter is_loose = [&](const fs::path& file, const fs::path&)
+    {
+        return is_loose_only_file(file) && is_shipped_compiled_file(file, job.with_debug_symbols);
+    };
     mirror_or_throw(job.compiled_root,
                     destination,
                     [&](const fs::path& file)
                     {
-                        return is_loose_only_file(file) && is_shipped_compiled_file(file, job.with_debug_symbols);
+                        return is_loose(file, {});
                     });
+    // A script library the deploy built replaces the editor's.
+    copy_cooked_or_throw(job.cooked, destination, is_loose);
     // With texture or shader sets, the protocol's pack ships none of their files: each set's pack holds them.
     const compiled_file_filter is_packed = [&](const fs::path& file, const fs::path& relative)
     {

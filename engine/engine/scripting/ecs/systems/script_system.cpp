@@ -1847,6 +1847,15 @@ void script_system::set_library_builder(library_builder builder)
     script_library_builder = std::move(builder);
 }
 
+auto script_system::build_library_to(asset_manager& am, const std::string& protocol, const fs::path& output, bool debug)
+    -> bool
+{
+    const uint32_t flags = debug ? uint32_t(script_library::compilation_flags::debug) : 0u;
+    // Every build compiles at the same temp path, whatever its output.
+    std::lock_guard<std::mutex> lock(library_files_mutex);
+    return script_library_builder && script_library_builder(am, get_lib_data_key(protocol), output, flags);
+}
+
 void script_system::set_needs_recompile(const std::string& protocol, bool now)
 {
     if(!initted)

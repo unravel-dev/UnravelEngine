@@ -6,9 +6,11 @@
 
 #include <asset_compiler/audio_compression.h>
 #include <deploy/audio_variants.h>
+#include <deploy/cancellation.h>
 #include <deploy/content.h>
 #include <deploy/dependencies.h>
 #include <deploy/files.h>
+#include <deploy/folders.h>
 #include <deploy/icon_image.h>
 #include <deploy/keys.h>
 #include <deploy/profile_cache.h>
@@ -24,9 +26,11 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/meta/settings/settings.hpp>
+#include <engine/scripting/ecs/systems/script_system.h>
 #include <logging/logging.h>
 #include <ospp/url.h>
 #include <process/process.h>
+#include <version/version.h>
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
@@ -46,10 +50,12 @@ namespace
 // Step names, as the Deploy window and the deploy tool list them.
 constexpr const char* STEP_CHECK_ASSETS = "Checking Assets";
 constexpr const char* STEP_COOK = "Cooking Prefabs";
+constexpr const char* STEP_FOLDER = "Deploy Folder";
 constexpr const char* STEP_COOK_TEXTURES = "Cooking Textures";
 constexpr const char* STEP_COOK_ENGINE_TEXTURES = "Cooking Engine Textures";
 constexpr const char* STEP_COOK_AUDIO = "Cooking Audio";
 constexpr const char* STEP_COOK_SHADERS = "Cooking Shaders";
+constexpr const char* STEP_COMPILE_SCRIPTS = "Compiling Scripts";
 constexpr const char* STEP_DEPENDENCIES = "Dependencies";
 constexpr const char* STEP_SETTINGS = "Project Settings";
 constexpr const char* STEP_PROJECT_DATA = "Project Data";
@@ -92,6 +98,8 @@ struct deploy_plan
     protocol_job engine;
     runtime_plan runtime;
     fs::path cook_staging;
+    /// The project's script library as the deploy builds it, in the cooked prefabs' folder of the staging.
+    fs::path script_library;
     /// The project's textures and the engine's, one plan per texture set: the first cooked to the profile's formats.
     /// A packed web deploy with a phone texture format of its own adds the textures cooked to it, a second set the page
     /// downloads where the browser's GPU does not read the first.
@@ -281,6 +289,18 @@ void add_texture_sets(deploy_plan& plan)
     plan.engine.texture_sets = {{first_name, {plan.engine_textures[0].variants}}, {second_name, {plan.engine_textures[1].variants}}};
 }
 
+/// A browser keeps a game's saves per web address under the game's company and product, and a game without a product
+/// name would share one folder with every other such game at that address: a web build ships the project's name as
+/// its product then, which both the page and the game name the folder by.
+void name_web_game(rtti::context& ctx, deploy_plan& plan)
+{
+    auto& app = plan.runtime_settings.app;
+    if(is_web(plan) && app.product.empty())
+    {
+        app.product = ctx.get_cached<project_manager>().get_name();
+    }
+}
+
 auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path& staging, left_out_assets left_out)
     -> deploy_plan
 {
@@ -299,6 +319,7 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
     plan.symbols = get_profile_symbols_folder(get_project_root(), params.profile);
     plan.icon_image = params.desktop.icon ? fs::resolve_protocol(params.desktop.icon.id()) : fs::path{};
     plan.version_info = make_version_info(plan.runtime_settings.app, plan.executable);
+    name_web_game(ctx, plan);
     plan.dependency_scanner = fs::resolve_protocol(DEPENDENCY_SCANNER);
     plan.settings_folder = data_params.deploy_location / DATA_FOLDER / CONTENT_PROTOCOL / SETTINGS_FOLDER;
     plan.textures = {make_texture_cook_plan(get_project_root(),
@@ -349,6 +370,7 @@ auto make_plan(rtti::context& ctx, const deploy_settings& params, const fs::path
         plan.runtime = make_runtime_plan(ctx, data_params);
     }
     plan.cook_staging = staging;
+    plan.script_library = staging / CONTENT_PROTOCOL / script_system::get_lib_name(CONTENT_PROTOCOL);
     if(is_android(plan))
     {
         // The managed bridge ships as for the desktop; the .NET runtime comes with the Android player.
@@ -501,9 +523,10 @@ void deploy_web_site(const deploy_plan& plan)
     write_web_data_manifest(plan.output, page);
 }
 
-/// Runs `step` here, between its log lines.
+/// Runs `step` here, between its log lines; a cancelled deploy starts no step.
 void run_step(const deploy_step& step)
 {
+    throw_if_deploy_cancelled();
     APPLOG_INFO("Deploying {}...", step.name);
     step.run();
     APPLOG_INFO("Deploying {} - Done", step.name);
@@ -532,9 +555,14 @@ auto get_futures(const deploy_jobs& jobs) -> std::vector<tpp::shared_future<void
     return futures;
 }
 
-/// Why a step that waits for `prerequisites` is skipped: the first of them that failed; empty when none did.
+/// Why a step that waits for `prerequisites` is skipped: the deploy was cancelled, or the first of them that failed;
+/// empty when it runs.
 auto get_skip_reason(const deploy_jobs& prerequisites) -> std::string
 {
+    if(is_deploy_cancelled())
+    {
+        return CANCELLED_STEP_ERROR;
+    }
     for(const auto& prerequisite : prerequisites)
     {
         if(!get_step_error(prerequisite.job).empty())
@@ -564,7 +592,7 @@ void run_step_after(const deploy_step& step, const deploy_jobs& prerequisites, c
     }
     catch(...)
     {
-        skip_dependents(fmt::format("Skipped: {} failed.", step.name));
+        skip_dependents(is_deploy_cancelled() ? std::string(CANCELLED_STEP_ERROR) : fmt::format("Skipped: {} failed.", step.name));
         throw;
     }
 }
@@ -620,8 +648,27 @@ void open_web_deploy(const deploy_plan& plan)
     }
 }
 
-/// Runs on the main thread once every step ended. A failed step left a partial build: the Deploy window
-/// names it, and running or showing that build would only hide the failure.
+/// The stamp of the build `params` deploys.
+auto make_build_stamp(const deploy_settings& params, bool is_finished) -> build_stamp
+{
+    return {params.profile, version::get_full(), is_finished};
+}
+
+/// Says in the log how a deploy with a failed step ended.
+void log_unfinished_deploy(const deploy_plan& plan)
+{
+    const auto folder = plan.output.generic_string();
+    if(is_deploy_cancelled())
+    {
+        APPLOG_WARNING("Deploy to {} was cancelled. The folder holds an unfinished build until the next deploy.", folder);
+        return;
+    }
+    APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", folder);
+}
+
+/// Runs on the main thread once every step ended. A failed step left a partial build, which its stamp keeps
+/// marked as unfinished: the Deploy window names the step, and running or showing that build would only hide the
+/// failure.
 void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future<void>>& steps)
 {
     fs::error_code ec;
@@ -629,7 +676,14 @@ void finish_deploy(const deploy_plan& plan, const std::vector<tpp::shared_future
     --running_deploys;
     if(has_failed_step(steps))
     {
-        APPLOG_ERROR("Deploy to {} failed. See the Deploy window for the step.", get_output_location(plan.params).generic_string());
+        log_unfinished_deploy(plan);
+        return;
+    }
+    if(!write_build_stamp(plan.output, make_build_stamp(plan.params, true)))
+    {
+        APPLOG_ERROR("Deploy to {} could not mark its build as finished: {} cannot be written.",
+                     plan.output.generic_string(),
+                     BUILD_STAMP_NAME);
         return;
     }
     // An Android game was started by the package step, and its session finishes the device steps.
@@ -665,6 +719,16 @@ void cook_texture_sets(const std::vector<texture_cook_plan>& sets)
     std::for_each(sets.begin(), sets.end(), cook_textures);
 }
 
+/// Builds the project's script library for the build: optimized, whatever mode the editor's scripts run in. It
+/// reads the script sources as the editor's own builds do.
+void build_script_library(asset_manager& am, const deploy_plan& plan)
+{
+    if(!script_system::build_library_to(am, CONTENT_PROTOCOL, plan.script_library, false))
+    {
+        throw std::runtime_error("The project's scripts did not compile. The Console lists the errors.");
+    }
+}
+
 /// The cooks of a deploy, and the ones each data step packs the results of.
 struct cook_jobs
 {
@@ -672,17 +736,18 @@ struct cook_jobs
     deploy_jobs all;
     /// The engine's textures and the shaders.
     deploy_jobs engine;
-    /// The project's textures, its audio and the shaders.
+    /// The project's textures, its audio, its script library and the shaders.
     deploy_jobs app;
 };
 
-auto schedule_cooks(threader& th, const std::shared_ptr<const deploy_plan>& plan) -> cook_jobs
+auto schedule_cooks(threader& th, asset_manager& am, const std::shared_ptr<const deploy_plan>& plan) -> cook_jobs
 {
     const auto textures = schedule_step(th, {STEP_COOK_TEXTURES, [plan]() { cook_texture_sets(plan->textures); }});
     const auto engine_textures =
         schedule_step(th, {STEP_COOK_ENGINE_TEXTURES, [plan]() { cook_texture_sets(plan->engine_textures); }});
     const auto audio = schedule_step(th, {STEP_COOK_AUDIO, [plan]() { cook_audio(plan->audio); }});
-    cook_jobs cooks{{textures, engine_textures, audio}, {engine_textures}, {textures, audio}};
+    const auto scripts = schedule_step(th, {STEP_COMPILE_SCRIPTS, [plan, &am]() { build_script_library(am, *plan); }});
+    cook_jobs cooks{{textures, engine_textures, audio, scripts}, {engine_textures}, {textures, audio, scripts}};
     if(plan->shaders.has_work())
     {
         const auto shaders = schedule_step(th, {STEP_COOK_SHADERS, [plan]() { cook_shaders(plan->shaders); }});
@@ -695,9 +760,9 @@ auto schedule_cooks(threader& th, const std::shared_ptr<const deploy_plan>& plan
 
 /// Schedules every step of the plan: the cooks and the steps that need only the plan at once, each data step after its
 /// protocol's cooks, the browser player and the Android package after all of those.
-auto schedule_steps(threader& th, const std::shared_ptr<const deploy_plan>& plan) -> deploy_jobs
+auto schedule_steps(threader& th, asset_manager& am, const std::shared_ptr<const deploy_plan>& plan) -> deploy_jobs
 {
-    const auto cooks = schedule_cooks(th, plan);
+    const auto cooks = schedule_cooks(th, am, plan);
     deploy_jobs jobs = cooks.all;
     for(const auto& step : make_steps(plan))
     {
@@ -720,6 +785,8 @@ auto schedule_steps(threader& th, const std::shared_ptr<const deploy_plan>& plan
                                            }));
         const auto device_jobs = get_device_jobs(plan->android);
         jobs.insert(jobs.end(), device_jobs.begin(), device_jobs.end());
+        // Beside the deploy's steps: it frees the disk space other builds left, and nothing waits for it.
+        th.pool->schedule("Removing unused Android build folders", [plan]() { remove_unused_android_build_dirs(plan->android); });
     }
     return jobs;
 }
@@ -727,6 +794,7 @@ auto schedule_steps(threader& th, const std::shared_ptr<const deploy_plan>& plan
 
 auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy_jobs
 {
+    reset_deploy_cancel();
     auto& th = ctx.get_cached<threader>();
     auto& am = ctx.get_cached<asset_manager>();
     const auto shipped_settings = ctx.get_cached<project_manager>().get_profile_settings(params.profile);
@@ -749,14 +817,21 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
         return make_failed_step(th, STEP_COOK, cook_error);
     }
     fs::error_code ec;
-    fs::create_directories(get_output_location(params), ec);
+    const auto output = get_output_location(params);
+    fs::create_directories(output, ec);
+    // From here the folder changes: it holds an unfinished build until the last step succeeded.
+    if(!write_build_stamp(output, make_build_stamp(params, false)))
+    {
+        fs::remove_all(staging, ec);
+        return make_failed_step(th, STEP_FOLDER, fmt::format("The deploy folder {} cannot be written.", output.generic_string()));
+    }
     if(params.deploy_target == deploy_platform::android)
     {
         fs::create_directories(get_android_content_dir(params.profile), ec);
     }
     const auto plan = std::make_shared<const deploy_plan>(make_plan(ctx, params, staging, std::move(left_out)));
     ++running_deploys;
-    auto jobs = schedule_steps(th, plan);
+    auto jobs = schedule_steps(th, am, plan);
     const auto futures = get_futures(jobs);
     tpp::when_all(futures.begin(), futures.end())
         .then(tpp::this_thread::get_id(),
@@ -770,6 +845,16 @@ auto deploy_project(rtti::context& ctx, const deploy_settings& params) -> deploy
 auto is_deploy_running() -> bool
 {
     return running_deploys.load() > 0;
+}
+
+void cancel_deploy()
+{
+    if(!is_deploy_running() || is_deploy_cancelled())
+    {
+        return;
+    }
+    APPLOG_INFO("Cancelling the deploy: the running steps stop where they can, and the others are skipped.");
+    request_deploy_cancel();
 }
 
 /// A ready future rethrows its job's exception.

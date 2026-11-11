@@ -2,6 +2,7 @@
 #include "deploy_preflight.h"
 
 #include <deploy/android_icon.h>
+#include <deploy/cancellation.h>
 #include <deploy/files.h>
 #include <deploy/folders.h>
 #include <deploy/run_arguments.h>
@@ -14,6 +15,7 @@
 #include <version/version.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -38,6 +40,13 @@ namespace
 /// rebuilds only what changed, and outside the project so its thousands of files stay out of the editor's
 /// watchers.
 constexpr const char* GRADLE_STAGING_FOLDER = "unravel-android";
+/// A build folder no deploy used for this long is deleted; a later deploy of its profile builds it anew.
+constexpr int UNUSED_BUILD_DAYS = 14;
+constexpr int HOURS_PER_DAY = 24;
+constexpr auto UNUSED_BUILD_LIFETIME = std::chrono::hours(HOURS_PER_DAY * UNUSED_BUILD_DAYS);
+/// The names Gradle and IDEs give what they make in a project; the template has none of them.
+constexpr std::array<const char*, 5> GRADLE_GENERATED_NAMES = {"build", ".gradle", ".kotlin", ".idea", "local.properties"};
+constexpr const char* IDE_MODULE_EXTENSION = ".iml";
 constexpr const char* DEFAULT_VERSION_NAME = "1.0";
 constexpr const char* SESSION_THREAD_NAME = "Android Game Session";
 /// Gradle output lines kept in a failed step's message.
@@ -73,12 +82,19 @@ auto get_build_dir(const std::string& profile) -> fs::path
     return fs::temp_directory_path() / GRADLE_STAGING_FOLDER / fmt::format("{:016x}", key);
 }
 
+/// Removes a build folder with everything in it. Gradle's outputs in it have paths longer than the 260 characters
+/// Windows takes by default, where a plain removal stops and leaves the folder half removed.
+void remove_build_dir(const fs::path& build_dir, fs::error_code& ec)
+{
+    fs::remove_all(fs::make_extended_length_path(build_dir), ec);
+}
+
 } // namespace
 
 void remove_android_build_dir(const std::string& profile)
 {
     fs::error_code ec;
-    fs::remove_all(get_build_dir(profile), ec);
+    remove_build_dir(get_build_dir(profile), ec);
 }
 
 namespace
@@ -106,16 +122,56 @@ void remove_earlier_data(const fs::path& output_folder)
     }
 }
 
-/// Copies the template's Gradle project over the build folder's copy: files that changed are replaced,
-/// and Gradle's own files in it (.gradle, build outputs) stay for the next build.
+auto is_gradle_generated(const fs::path& entry) -> bool
+{
+    const auto name = entry.filename().generic_string();
+    return entry.extension() == IDE_MODULE_EXTENSION ||
+           std::find(GRADLE_GENERATED_NAMES.begin(), GRADLE_GENERATED_NAMES.end(), name) != GRADLE_GENERATED_NAMES.end();
+}
+
+/// The files of the build folder's Gradle project that the template does not have, outside what Gradle makes there.
+auto find_dropped_project_files(const fs::path& source, const fs::path& destination) -> std::vector<fs::path>
+{
+    std::vector<fs::path> dropped;
+    fs::error_code ec;
+    for(fs::recursive_directory_iterator it(destination, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(is_gradle_generated(it->path()))
+        {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if(it->is_regular_file(ec) && !is_present(source / it->path().lexically_relative(destination)))
+        {
+            dropped.push_back(it->path());
+        }
+    }
+    return dropped;
+}
+
+/// Makes the build folder's Gradle project the template's: its files are copied where they differ, whichever is the
+/// newer, and the files a template no longer has are removed, so a folder that another editor version built in
+/// builds this one's project. What Gradle makes in it (.gradle, build outputs) stays for the next build.
 void update_gradle_project(const fs::path& source, const fs::path& destination)
 {
     fs::error_code ec;
-    fs::create_directories(destination, ec);
-    fs::copy(source, destination, fs::copy_options::recursive | fs::copy_options::update_existing, ec);
+    for(fs::recursive_directory_iterator it(source, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_regular_file(ec))
+        {
+            copy_file_or_throw(it->path(), destination / it->path().lexically_relative(source));
+        }
+    }
     if(ec)
     {
-        throw std::runtime_error(fmt::format("Copying the Android project to {} failed: {}.", destination.generic_string(), ec.message()));
+        throw std::runtime_error(fmt::format("Listing the Android project {} failed: {}.", source.generic_string(), ec.message()));
+    }
+    for(const auto& file : find_dropped_project_files(source, destination))
+    {
+        if(!fs::remove(file, ec))
+        {
+            throw std::runtime_error(fmt::format("Removing {} failed: {}.", file.generic_string(), ec.message()));
+        }
     }
 }
 
@@ -906,6 +962,8 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
         plan.start_step = std::make_shared<device_step>();
     }
     auto& package = plan.package;
+    plan.build_dir = get_build_dir(params.profile);
+    plan.build_owner = {get_project_root(), params.profile};
     package.player = get_android_template().found;
     package.project_dir = get_gradle_project_dir(params.profile);
     package.content_dir = get_android_content_dir(params.profile);
@@ -925,9 +983,37 @@ auto make_android_package_plan(rtti::context& ctx, const deploy_settings& params
     return plan;
 }
 
+void remove_unused_android_build_dirs(const android_package_plan& plan)
+{
+    std::size_t removed = 0;
+    for(const auto& folder : find_unused_android_build_dirs(plan.build_dir.parent_path(), plan.build_dir, UNUSED_BUILD_LIFETIME))
+    {
+        fs::error_code ec;
+        remove_build_dir(folder, ec);
+        if(ec)
+        {
+            APPLOG_TRACE("Deploy: the unused Android build folder {} stays for now: {}", folder.generic_string(), ec.message());
+            continue;
+        }
+        ++removed;
+    }
+    if(removed > 0)
+    {
+        APPLOG_INFO("Deploy: removed {} Android build folder(s) in {} that no deploy used for {} days, or whose project is "
+                    "gone.",
+                    removed,
+                    plan.build_dir.parent_path().generic_string(),
+                    UNUSED_BUILD_DAYS);
+    }
+}
+
 void build_android_package(const android_package_plan& plan)
 {
     const auto& package = plan.package;
+    if(!write_android_build_owner(plan.build_dir, plan.build_owner))
+    {
+        throw std::runtime_error(fmt::format("The Android build folder {} cannot be written.", plan.build_dir.generic_string()));
+    }
     update_gradle_project(package.player.get_project_dir(), package.project_dir);
     write_text_or_throw(package.project_dir / "local.properties", make_gradle_local_properties(plan.tools.sdk));
     const auto icon = write_android_icon(package.icon_image, package.icon_background, package.icon_dir);
@@ -948,7 +1034,9 @@ void build_android_package(const android_package_plan& plan)
                                              {
                                                  APPLOG_TRACE("[Gradle] {}", line);
                                              }
-                                         });
+                                         },
+                                         &is_deploy_cancelled);
+    throw_if_deploy_cancelled();
     if(!result.started)
     {
         throw std::runtime_error(fmt::format("Java did not start ({}).", plan.tools.java.generic_string()));

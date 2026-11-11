@@ -1,4 +1,5 @@
 #include "variant_cook.h"
+#include "cancellation.h"
 #include "files.h"
 #include "profile_cache.h"
 
@@ -116,8 +117,13 @@ auto cook_all(const std::vector<std::string>& keys, const std::function<cook_out
                                              costs,
                                              [&](std::size_t index)
                                              {
-                                                 outcomes[index] = cook(index);
+                                                 if(!is_deploy_cancelled())
+                                                 {
+                                                     outcomes[index] = cook(index);
+                                                 }
                                              });
+    // Before the caller sweeps its cache by outcomes that are not all there.
+    throw_if_deploy_cancelled();
     return outcomes;
 }
 

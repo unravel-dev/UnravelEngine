@@ -11,6 +11,8 @@ namespace subprocess
 {
 /// Gets one line of a process's output (stdout and stderr together), without its line break.
 using line_callback = std::function<void(const std::string& line)>;
+/// Asked a few times a second while a call's process runs, on a thread of the call's own; true ends the process.
+using stop_check = std::function<bool()>;
 
 struct call_result
 {
@@ -29,10 +31,13 @@ struct call_result
  * @param args_array The program, then its arguments.
  * @param environment_array "NAME=value" entries that add to or replace this process's environment.
  * @param on_line Gets every output line as it arrives, on this thread; may be empty.
+ * @param should_stop Ends the process early when it returns true; may be empty. The result then has the exit
+ *        code of an ended process and the output up to there.
  */
 auto call(const std::vector<std::string>& args_array,
           const std::vector<std::string>& environment_array = {},
-          const line_callback& on_line = {}) -> call_result;
+          const line_callback& on_line = {},
+          const stop_check& should_stop = {}) -> call_result;
 
 inline auto call(const std::string& process, const std::vector<std::string>& args_array = {}) -> call_result
 {

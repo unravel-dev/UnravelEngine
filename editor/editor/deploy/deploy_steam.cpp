@@ -2,6 +2,7 @@
 #include "deploy_preflight.h"
 
 #include <deploy/files.h>
+#include <deploy/folders.h>
 #include <deploy/steam.h>
 #include <editor/system/project_manager.h>
 #include <engine/threading/threader.h>
@@ -127,6 +128,10 @@ auto get_steam_upload_problem(rtti::context& ctx, const deploy_settings& params)
     if(!is_present(get_deployed_executable(ctx, params)))
     {
         return fmt::format("Deploy {} first: {} holds no build of it.", params.profile, get_output_location(params).generic_string());
+    }
+    if(!is_finished_build(get_output_location(params)))
+    {
+        return UNFINISHED_BUILD_PROBLEM;
     }
     return {};
 }

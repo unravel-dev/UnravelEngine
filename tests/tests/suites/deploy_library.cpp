@@ -32,24 +32,29 @@
  *     project folders the editor manages;
  *   - Android: default and invalid application ids, adb device lists and one entry per phone, logcat
  *     lines, which are the game's or the device system's and the engine lines' text, the player template's
- *     stamp checks, Gradle's command line, the start command with the game's options;
+ *     stamp checks, Gradle's command line, the start command with the game's options; a build folder's owner,
+ *     and the build folders no deploy needs any more;
  *   - the desktop player's stamp checks; text files written byte for byte, or a throw;
  *   - Windows executables: version numbers from version text, the icon group and version resources byte by
  *     byte, icon images per size, and on Windows a copied executable's icon and version replaced and read
  *     back as Windows reads them; the window icon file written beside executables that carry no icon;
  *   - run arguments: split on whitespace, quoted for a device shell;
- *   - subprocess::call hands over output lines and adds environment variables; subprocess::stream stops
- *     its process at once, and reports a program that does not exist as not started;
+ *   - subprocess::call hands over output lines, adds environment variables and ends its process when its stop
+ *     check says so; subprocess::stream stops its process at once, and reports a program that does not exist as
+ *     not started;
+ *   - a cancelled deploy's cooks: nothing more is cooked and the cook throws;
  *   - a protocol shipped packed, loose, packed again, as a patch over a kept release and full again,
- *     with left out assets;
+ *     with left out assets; a script library the deploy built shipped in place of the editor's; a protocol
+ *     without a script library shipped packed;
  *   - the content walk over a profile's shipped settings instead of the settings file;
  *   - releases: names, keep / list / remove, and their refusals; a profile's releases folder, and the
  *     releases of a project from before profiles moved into one; a build's debug files kept, and kept with
- *     a release;
+ *     a release; only a build its deploy marked as finished is kept;
  *   - Steam: the settings an upload needs, the app build script byte by byte, steamcmd's command line, the
  *     build id and login failures read from its output;
  *   - dependency scanner output parsed; a failed scan throws every time;
- *   - folder checks: earlier deploys, Android package folders, inside / outside, an executable in use;
+ *   - folder checks: earlier deploys, a build's stamp (started, finished), Android package folders, inside /
+ *     outside, an executable in use;
  *   - unravel::process::spawn_detached runs a program and reports one that does not start.
  * Everything lives in a temp folder.
  */
@@ -58,6 +63,7 @@
 
 #include <deploy/android.h>
 #include <deploy/android_icon.h>
+#include <deploy/cancellation.h>
 #include <deploy/content.h>
 #include <deploy/content_tree.h>
 #include <deploy/dependencies.h>
@@ -71,6 +77,7 @@
 #include <deploy/run_arguments.h>
 #include <deploy/shader_cook.h>
 #include <deploy/steam.h>
+#include <deploy/variant_cook.h>
 #include <deploy/web.h>
 #include <deploy/windows_resources.h>
 #include <engine/assets/impl/asset_extensions.h>
@@ -1669,6 +1676,10 @@ void test_subprocess(const fs::path& root)
           "its output arrives line by line, without line breaks, and sees the added variable");
     check(result.out_output.find("second") != std::string::npos, "its whole output is kept too");
     check(!subprocess::call({(root / "no_such_program.exe").string()}).started, "a program that does not exist does not start");
+    const auto call_begin = std::chrono::steady_clock::now();
+    const auto stopped = subprocess::call(waiting, {}, {}, []() { return true; });
+    check(stopped.started && std::chrono::steady_clock::now() - call_begin < std::chrono::seconds(20),
+          "a call whose stop check says so ends its process");
     subprocess::stream stream;
     check(stream.start(waiting, {}), "a stream starts a process");
     check(stream.is_running(), "it runs");
@@ -1748,6 +1759,64 @@ void test_cooked_only_pack_inputs(const fs::path& root)
           "cooked files without a compiled file ship, as the filter keeps them, without their manifests");
     check(inputs.size() == 3 && read_text(inputs[1].source) == "wgsl a" && read_text(inputs[2].source) == "first",
           "each is read from its cooked folder, the first folder winning");
+}
+
+void test_android_build_dirs(const fs::path& root)
+{
+    std::printf("test_android_build_dirs\n");
+    constexpr auto lifetime = std::chrono::hours(24);
+    const auto long_ago = fs::file_time_type::clock::now() - std::chrono::hours(48);
+    const auto staging = root / "staging";
+    const auto project = root / "project";
+    fs::error_code ec;
+    fs::create_directories(project, ec);
+    check(deployment::find_unused_android_build_dirs(staging, staging / "kept", lifetime).empty(), "no staging folder: nothing is unused");
+    check(deployment::write_android_build_owner(staging / "kept", {project, "Android"}), "a deploy names its build folder's owner");
+    const auto owner = deployment::read_android_build_owner(staging / "kept");
+    check(owner.project == project && owner.profile == "Android", "and the owner is read back");
+    check(deployment::read_android_build_owner(staging / "none").project.empty(), "a folder without an owner names none");
+    deployment::write_android_build_owner(staging / "used", {project, "Other"});
+    deployment::write_android_build_owner(staging / "old", {project, "Old"});
+    fs::last_write_time(staging / "old" / "owner.stamp", long_ago, ec);
+    deployment::write_android_build_owner(staging / "gone", {root / "no_such_project", "Android"});
+    write_text(staging / "older_editor_used" / "project" / "local.properties", "sdk.dir=");
+    write_text(staging / "older_editor_old" / "project" / "local.properties", "sdk.dir=");
+    fs::last_write_time(staging / "older_editor_old" / "project" / "local.properties", long_ago, ec);
+    deployment::write_android_build_owner(staging / "kept_old", {project, "Kept"});
+    fs::last_write_time(staging / "kept_old" / "owner.stamp", long_ago, ec);
+    auto unused = deployment::find_unused_android_build_dirs(staging, staging / "kept_old", lifetime);
+    std::sort(unused.begin(), unused.end());
+    const std::vector<fs::path> expected = {staging / "gone", staging / "old", staging / "older_editor_old"};
+    check(unused == expected,
+          "the folders of a project that is gone and the ones no deploy used for the lifetime are unused; the asking "
+          "deploy's own folder never is");
+}
+
+void test_cancellation()
+{
+    std::printf("test_cancellation\n");
+    const std::vector<std::string> keys = {"app:/data/textures/wall.png"};
+    std::size_t cooked = 0;
+    const auto cook = [&cooked](std::size_t)
+    {
+        ++cooked;
+        return deployment::cook_outcome{};
+    };
+    deployment::reset_deploy_cancel();
+    check(deployment::cook_all(keys, cook).size() == 1 && cooked == 1, "a cook runs while no cancel is asked for");
+    deployment::request_deploy_cancel();
+    std::string error;
+    try
+    {
+        deployment::cook_all(keys, cook);
+    }
+    catch(const std::exception& ex)
+    {
+        error = ex.what();
+    }
+    check(error == deployment::CANCELLED_STEP_ERROR && cooked == 1, "a cancelled deploy cooks nothing more, and its cook throws");
+    deployment::reset_deploy_cancel();
+    check(!deployment::is_deploy_cancelled() && deployment::cook_all(keys, cook).size() == 1, "the next deploy cooks again");
 }
 
 void test_stale_binaries(const fs::path& root)
@@ -1881,6 +1950,17 @@ void test_packed_protocol(deployment::protocol_job& job)
     check(!is_present(protocol_root / ex::get_asset_index_file_name()), "the index travels inside the pack");
     check(read_text(protocol_root / "compiled/scripts/game.dll") == "library", "libraries stay loose");
     check(!is_present(protocol_root / "compiled/scripts/game.pdb"), "symbols ship only when asked for");
+    write_text(job.cooked.front() / "scripts/game.dll", "library the deploy built");
+    write_text(job.cooked.front() / "scripts/game.pdb", "symbols the deploy built");
+    deployment::deploy_protocol_data(job);
+    check(read_text(protocol_root / "compiled/scripts/game.dll") == "library the deploy built" &&
+              !is_present(protocol_root / "compiled/scripts/game.pdb"),
+          "a library the deploy built ships in place of the editor's, its symbols only when asked for");
+    fs::error_code ec;
+    fs::remove(job.cooked.front() / "scripts/game.dll", ec);
+    fs::remove(job.cooked.front() / "scripts/game.pdb", ec);
+    deployment::deploy_protocol_data(job);
+    check(read_text(protocol_root / "compiled/scripts/game.dll") == "library", "without one the editor's library ships again");
     fs::add_path_protocol(TEST_PROTOCOL, protocol_root);
     if(mount_deployed(protocol_root, false))
     {
@@ -2007,6 +2087,27 @@ void test_texture_set_packs(const fs::path& root)
           "a build with one set removes the texture packs an earlier build left");
 }
 
+/// A project without scripts has no library: its packed build has nothing to keep loose.
+void test_packed_protocol_without_library(const fs::path& root)
+{
+    std::printf("test_packed_protocol_without_library\n");
+    auto job = make_protocol_job(root);
+    fs::error_code ec;
+    fs::remove(job.compiled_root / "scripts/game.dll", ec);
+    fs::remove(job.compiled_root / "scripts/game.pdb", ec);
+    bool is_deployed = true;
+    try
+    {
+        deployment::deploy_protocol_data(job);
+    }
+    catch(const std::exception&)
+    {
+        is_deployed = false;
+    }
+    check(is_deployed && is_present(job.protocol_root / ex::get_pack_file_name()), "a protocol without a script library ships packed");
+    check(!is_present(job.protocol_root / "compiled"), "and leaves no folder of loose files");
+}
+
 void test_loose_protocol(deployment::protocol_job& job)
 {
     std::printf("test_loose_protocol\n");
@@ -2075,6 +2176,10 @@ void test_keep_and_remove_release(const fs::path& root)
     {
         write_text(build / deployment::DATA_FOLDER / protocol / ex::get_pack_file_name(), std::string("pack of ") + protocol);
     }
+    check(!deployment::keep_release(project, build, symbols, "0.9").is_ok(), "a build no deploy marked as finished cannot be kept");
+    check(deployment::write_build_stamp(build, {"Desktop", "v1", false}) && !deployment::keep_release(project, build, symbols, "0.9").is_ok(),
+          "nor can the build of a deploy that did not finish");
+    check(deployment::write_build_stamp(build, {"Desktop", "v1", true}), "a finished deploy marks its build");
     check(!deployment::keep_release(project, build, symbols, "a/b").is_ok(), "an invalid name is refused");
     check(deployment::keep_release(project, build, symbols, "0.9").is_ok() &&
               !fs::exists(deployment::get_release_symbols_folder(project, "0.9")),
@@ -2198,10 +2303,12 @@ void test_steam_build_script()
                                  "\t\t\t\"FileExclusion\" \"Log.txt\"\n"
                                  "\t\t\t\"FileExclusion\" \"CrashLog.txt\"\n"
                                  "\t\t\t\"FileExclusion\" \"CrashLog.dmp\"\n"
+                                 "\t\t\t\"FileExclusion\" \"build.stamp\"\n"
                                  "\t\t}\n"
                                  "\t}\n"
                                  "}\n";
-    check(script == expected, "the app build script maps the whole folder into the depot, logs left out:\n" + script);
+    check(script == expected,
+          "the app build script maps the whole folder into the depot, logs and the build's stamp left out:\n" + script);
     check(script.find("SetLive") == std::string::npos, "no branch: the build is set live nowhere");
     build.branch = "beta";
     check(deployment::make_steam_app_build_script(build).find("\t\"SetLive\" \"beta\"\n") != std::string::npos,
@@ -2297,6 +2404,16 @@ void test_folders(const fs::path& root)
     const auto older_build = root / "older_build";
     write_text(older_build / deployment::DATA_FOLDER / "app" / deployment::LEGACY_ASSET_INDEX_NAME, "index");
     check(deployment::is_previous_deploy(older_build), "a loose build of an older engine version is an earlier deploy");
+    const auto started_build = root / "started_build";
+    fs::create_directories(started_build, ec);
+    check(!deployment::is_finished_build(started_build), "a folder without a stamp holds no finished build");
+    check(deployment::write_build_stamp(started_build, {"Desktop", "v1", false}) && deployment::is_previous_deploy(started_build) &&
+              !deployment::is_finished_build(started_build),
+          "a deploy that started marks the folder as its own, and its build as unfinished");
+    check(deployment::write_build_stamp(started_build, {"Desktop", "v1", true}) && deployment::is_finished_build(started_build),
+          "a deploy that finished marks its build as finished");
+    const auto read_only = root / "no_such_folder" / "build";
+    check(!deployment::write_build_stamp(read_only, {"Desktop", "v1", true}), "a stamp that cannot be written is reported");
     const auto android = root / "android";
     fs::create_directories(android, ec);
     check(deployment::is_android_package_folder(android), "an empty folder takes an Android package");
@@ -2306,6 +2423,8 @@ void test_folders(const fs::path& root)
     write_text(android / "Game.aab", "aab");
     write_text(android / "Game-native-debug-symbols.zip", "zip");
     check(deployment::is_android_package_folder(android), "the store's bundle and symbols belong to an Android deploy");
+    check(deployment::write_build_stamp(android, {"Android", "v1", true}) && deployment::is_android_package_folder(android),
+          "and so does the deploy's stamp");
     const auto zip_only = root / "zip_only";
     write_text(zip_only / "Backup.zip", "zip");
     check(!deployment::is_android_package_folder(zip_only), "any other archive keeps the folder from an Android deploy");
@@ -2426,10 +2545,13 @@ auto run_deploy_library_suite(rtti::context&) -> int
         test_pack_inputs(temp / "inputs");
         test_cooked_only_pack_inputs(temp / "cooked_only_inputs");
         test_stale_binaries(temp / "binaries");
+        test_android_build_dirs(temp / "android_build_dirs");
+        test_cancellation();
         auto job = make_protocol_job(temp / "protocol");
         test_packed_protocol(job);
         test_loose_protocol(job);
         test_patch_over_release(job, temp / "protocol");
+        test_packed_protocol_without_library(temp / "scriptless");
         test_texture_set_packs(temp / "texture_sets");
         test_shader_set_packs(temp / "shader_sets");
         test_release_names();

@@ -17,6 +17,12 @@ namespace unravel::deployment
 namespace
 {
 constexpr const char* TEMPLATE_STAMP_NAME = "template.stamp";
+/// The file of a build folder's owner, and its keys.
+constexpr const char* BUILD_OWNER_NAME = "owner.stamp";
+constexpr const char* OWNER_PROJECT_KEY = "project";
+constexpr const char* OWNER_PROFILE_KEY = "profile";
+/// The file every deploy writes into a build folder's Gradle project, also before build folders named their owner.
+constexpr const char* GRADLE_LOCAL_PROPERTIES = "project/local.properties";
 constexpr const char* DEFAULT_COMPANY_PART = "unravel";
 constexpr const char* DEFAULT_PRODUCT_PART = "game";
 /// Put before an application id part that does not start with a letter.
@@ -198,6 +204,73 @@ auto android_template::get_sdl_java_dir() const -> fs::path
 auto android_template::get_dotnet_dir() const -> fs::path
 {
     return root / "dotnet";
+}
+
+namespace
+{
+auto make_owner_line(const char* key, const std::string& value) -> std::string
+{
+    return std::string(key) + "=" + value + "\n";
+}
+} // namespace
+
+auto write_android_build_owner(const fs::path& build_dir, const android_build_owner& owner) -> bool
+{
+    fs::error_code ec;
+    fs::create_directories(build_dir, ec);
+    const auto text = make_owner_line(OWNER_PROJECT_KEY, fs::to_utf8_string(owner.project)) +
+                      make_owner_line(OWNER_PROFILE_KEY, owner.profile);
+    return write_file(build_dir / BUILD_OWNER_NAME, text.data(), text.size());
+}
+
+auto read_android_build_owner(const fs::path& build_dir) -> android_build_owner
+{
+    auto values = read_stamp(build_dir / BUILD_OWNER_NAME);
+    return {fs::from_utf8_string(values[OWNER_PROJECT_KEY]), values[OWNER_PROFILE_KEY]};
+}
+
+namespace
+{
+/// When a deploy last used `build_dir`: when it wrote the folder's owner, or set up its Gradle project; for a
+/// folder with neither, when the folder itself last changed.
+auto get_last_use(const fs::path& build_dir) -> fs::file_time_type
+{
+    fs::error_code ec;
+    for(const auto& written : {build_dir / BUILD_OWNER_NAME, build_dir / GRADLE_LOCAL_PROPERTIES})
+    {
+        const auto time = fs::last_write_time(written, ec);
+        if(!ec)
+        {
+            return time;
+        }
+    }
+    return fs::last_write_time(build_dir, ec);
+}
+
+auto is_unused_build_dir(const fs::path& build_dir, std::chrono::hours lifetime) -> bool
+{
+    const auto owner = read_android_build_owner(build_dir);
+    if(!owner.project.empty() && !is_present(owner.project))
+    {
+        return true;
+    }
+    return get_last_use(build_dir) < fs::file_time_type::clock::now() - lifetime;
+}
+} // namespace
+
+auto find_unused_android_build_dirs(const fs::path& staging, const fs::path& kept, std::chrono::hours lifetime)
+    -> std::vector<fs::path>
+{
+    std::vector<fs::path> unused;
+    fs::error_code ec;
+    for(fs::directory_iterator it(staging, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if(it->is_directory(ec) && it->path().filename() != kept.filename() && is_unused_build_dir(it->path(), lifetime))
+        {
+            unused.push_back(it->path());
+        }
+    }
+    return unused;
 }
 
 auto find_android_template(const fs::path& root, const std::string& engine_version, const std::string& configuration)

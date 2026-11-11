@@ -5,6 +5,7 @@
 #include <filesystem/filesystem.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -67,6 +68,31 @@ struct android_template_lookup
  */
 auto find_android_template(const fs::path& root, const std::string& engine_version, const std::string& configuration)
     -> android_template_lookup;
+
+/// Whose build a profile's Android build folder holds (its Gradle project and the data it packages), kept in a file
+/// in it. Every deploy that uses the folder writes the file again, so its write time is when the folder was last
+/// used.
+struct android_build_owner
+{
+    /// The project's folder.
+    fs::path project;
+    std::string profile;
+};
+
+/// Writes `owner` into `build_dir`, which is created when missing; false when it cannot be written.
+auto write_android_build_owner(const fs::path& build_dir, const android_build_owner& owner) -> bool;
+
+/// The owner `build_dir` names; every field empty for a folder without one, which an older editor made.
+auto read_android_build_owner(const fs::path& build_dir) -> android_build_owner;
+
+/**
+ * @brief The build folders under `staging` that no deploy needs any more: those whose project folder is gone, and
+ * those no deploy used for `lifetime`. A folder an older editor made counts from the last time its Gradle project
+ * was set up.
+ * @param kept Never listed: the folder of the deploy that asks.
+ */
+auto find_unused_android_build_dirs(const fs::path& staging, const fs::path& kept, std::chrono::hours lifetime)
+    -> std::vector<fs::path>;
 
 /**
  * @brief The application id a project gets when it names none: com.<company>.<product>.

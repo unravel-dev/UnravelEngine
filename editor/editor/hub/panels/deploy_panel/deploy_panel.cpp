@@ -5,6 +5,7 @@
 #include "../visualization_widgets.h"
 #include "deploy_panel_widgets.h"
 
+#include <deploy/cancellation.h>
 #include <deploy/steam.h>
 #include <editor/deploy/deploy_android.h>
 #include <editor/deploy/deploy_steam.h>
@@ -78,6 +79,7 @@ constexpr const char* RENAME_PROFILE_POPUP = "##rename_profile";
 constexpr const char* REMOVE_PROFILE_POPUP = "##remove_profile_confirm";
 constexpr const char* STEAM_UPLOAD_POPUP = "##steam_upload_confirm";
 constexpr const char* STEAM_UPLOAD_LABEL = ICON_MDI_STEAM " Upload to Steam";
+constexpr const char* CANCEL_DEPLOY_LABEL = ICON_MDI_CLOSE_CIRCLE_OUTLINE " Cancel Deploy";
 const std::string DEPLOY_RUNNING_PROBLEM = "A deploy is running.";
 // The space between a device's name and its details, in item spacings.
 constexpr float DEVICE_DETAILS_GAP = 2.0f;
@@ -379,7 +381,8 @@ void draw_step_row(const deployment::deploy_jobs& steps)
     for(const auto& step : steps)
     {
         const auto error = deployment::get_step_error(step.job);
-        if(!error.empty())
+        // The bar above says the deploy was cancelled: once, not for every step.
+        if(!error.empty() && error != deployment::CANCELLED_STEP_ERROR)
         {
             widgets::draw_gap(widgets::LINE_GAP);
             widgets::draw_icon_line(ICON_MDI_ALERT_CIRCLE_OUTLINE,
@@ -387,6 +390,33 @@ void draw_step_row(const deployment::deploy_jobs& steps)
                                     fmt::format("{}: {}", step.name, error).c_str(),
                                     ImGui::GetColorU32(ImGuiCol_Text));
         }
+    }
+}
+
+/// Whether the steps are of a deploy that was cancelled.
+auto is_cancelled(const deployment::deploy_jobs& steps) -> bool
+{
+    return std::any_of(steps.begin(),
+                       steps.end(),
+                       [](const deployment::deploy_job& step)
+                       {
+                           return deployment::get_step_error(step.job) == deployment::CANCELLED_STEP_ERROR;
+                       });
+}
+
+/// Cancel, where Deploy stands while no deploy runs; disabled once the deploy was asked to stop.
+void draw_cancel_button()
+{
+    const bool is_stopping = deployment::is_deploy_cancelled();
+    if(widgets::draw_button(CANCEL_DEPLOY_LABEL, false, !is_stopping))
+    {
+        deployment::cancel_deploy();
+    }
+    if(ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        ImGui::SetTooltip("%s",
+                          is_stopping ? "The deploy is stopping: its running steps end where they can."
+                                      : "Stop the deploy. Its folder keeps an unfinished build until the next deploy.");
     }
 }
 
@@ -1834,6 +1864,10 @@ void deploy_panel::draw_status(rtti::context& ctx)
     {
         summary = is_steam_upload_ ? fmt::format("Uploading {} to Steam", location) : fmt::format("Deploying to {}", location);
     }
+    else if(is_cancelled(deploy_jobs_))
+    {
+        summary = fmt::format("Deploy to {} was cancelled", location);
+    }
     else if(has_failed)
     {
         summary = is_steam_upload_ ? fmt::format("Upload of {} to Steam failed", location)
@@ -1862,8 +1896,10 @@ void deploy_panel::draw_actions(rtti::context& ctx)
     const char* stop_label = ICON_MDI_STOP " Stop Game";
     const bool is_game_running = deployment::is_android_game_running();
     const bool has_steam_upload = deployment::has_steam_upload(params);
-    float buttons_width =
-        widgets::calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x + widgets::calc_button_width(deploy_label);
+    // A running deploy shows Cancel where Deploy stands; a Steam upload and a run of the last build cannot stop.
+    const bool can_cancel = deployment::is_deploy_running();
+    float buttons_width = widgets::calc_button_width(open_label) + ImGui::GetStyle().ItemSpacing.x +
+                          widgets::calc_button_width(can_cancel ? CANCEL_DEPLOY_LABEL : deploy_label);
     if(is_game_running)
     {
         buttons_width += widgets::calc_button_width(stop_label) + ImGui::GetStyle().ItemSpacing.x;
@@ -1899,6 +1935,11 @@ void deploy_panel::draw_actions(rtti::context& ctx)
         }
         ImGui::SetItemTooltipEx("%s", "Stop the game on the device.");
         ImGui::SameLine();
+    }
+    if(can_cancel)
+    {
+        draw_cancel_button();
+        return;
     }
     // The cached answer may be a moment old: the deploy itself checks again.
     if(widgets::draw_button(deploy_label, true, can_deploy) && start_deploy(ctx, params))

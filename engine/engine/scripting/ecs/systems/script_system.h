@@ -37,6 +37,14 @@ struct script_system
      *        and a host without one (the player) only loads libraries built beforehand.
      */
     static void set_library_builder(library_builder builder);
+    /**
+     * @brief Builds a protocol's script library into @p output, apart from the library the editor loads and
+     *        from the mode its scripts run in: a deploy ships a build of its own. Runs on the calling thread.
+     * @return False when the build failed or no builder is installed. A protocol without scripts builds
+     *         no library and succeeds.
+     */
+    static auto build_library_to(asset_manager& am, const std::string& protocol, const fs::path& output, bool debug)
+        -> bool;
     static void set_needs_recompile(const std::string& protocol, bool now = false);
     static auto get_script_debug_mode() -> bool;
     static void set_script_debug_mode(bool debug);

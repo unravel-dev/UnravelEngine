@@ -1,4 +1,5 @@
 #include "steam.h"
+#include "folders.h"
 
 #include <logging/logging.h>
 #include <string_utils/utils.h>
@@ -13,8 +14,9 @@ namespace unravel::deployment
 {
 namespace
 {
-/// The files a game run with --log-here writes beside its executable (engine::open_log, the crash handler).
-constexpr std::array<const char*, 3> EXCLUDED_FILES = {"Log.txt", "CrashLog.txt", "CrashLog.dmp"};
+/// The files a game run with --log-here writes beside its executable (engine::open_log, the crash handler), and
+/// the deploy's own stamp of the build.
+constexpr std::array<const char*, 4> EXCLUDED_FILES = {"Log.txt", "CrashLog.txt", "CrashLog.dmp", BUILD_STAMP_NAME};
 /// What steamcmd prints when a build is committed: "Successfully finished AppID 480 build (BuildID 123)."
 constexpr hpp::string_view FINISHED_BUILD_TEXT = "Successfully finished AppID";
 constexpr hpp::string_view BUILD_ID_TEXT = "BuildID ";
