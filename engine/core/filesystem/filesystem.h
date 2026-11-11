@@ -118,6 +118,14 @@ auto to_utf8_string(const path& _path) -> std::string;
 /// The path UTF-8 text names (to_utf8_string's inverse).
 auto from_utf8_string(const std::string& text) -> path;
 
+/**
+ * @brief The form of a path that Windows takes at any length: absolute, "." and ".." resolved, backslashes only,
+ * behind the "\\?\" prefix ("\\?\UNC\" for a network share). File system calls stop at 260 characters without it,
+ * so folders an outside tool filled with longer paths (a Gradle build) are listed, copied and removed through this
+ * form. A path already in it stays as it is. On other systems the path is returned unchanged.
+ */
+auto make_extended_length_path(const path& _path) -> path;
+
 //-----------------------------------------------------------------------------
 //  Name : has_known_protocol()
 /// <summary>

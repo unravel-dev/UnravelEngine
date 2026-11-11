@@ -383,6 +383,53 @@ path from_utf8_string(const std::string& text)
     return path(std::u8string(text.begin(), text.end()));
 }
 
+#if defined(_WIN32)
+namespace
+{
+/// What Windows takes a path of any length after, for a drive and for a network share.
+const std::wstring EXTENDED_LENGTH_PREFIX = L"\\\\?\\";
+const std::wstring EXTENDED_LENGTH_SHARE_PREFIX = L"\\\\?\\UNC\\";
+/// How a device path starts, which Windows takes as written too.
+const std::wstring DEVICE_PREFIX = L"\\\\.\\";
+/// How a network share's path starts.
+const std::wstring SHARE_PREFIX = L"\\\\";
+
+bool is_taken_as_written(const std::wstring& text)
+{
+    return text.starts_with(EXTENDED_LENGTH_PREFIX) || text.starts_with(DEVICE_PREFIX);
+}
+} // namespace
+#endif
+
+path make_extended_length_path(const path& _path)
+{
+#if defined(_WIN32)
+    if(_path.empty() || is_taken_as_written(path(_path).make_preferred().native()))
+    {
+        return _path;
+    }
+    error_code ec;
+    auto resolved = absolute(_path, ec).lexically_normal().make_preferred();
+    if(ec)
+    {
+        return _path;
+    }
+    // A trailing separator names no file; a drive's root keeps its own.
+    if(!resolved.has_filename() && resolved.has_relative_path())
+    {
+        resolved = resolved.parent_path();
+    }
+    const std::wstring& text = resolved.native();
+    if(text.starts_with(SHARE_PREFIX))
+    {
+        return path(EXTENDED_LENGTH_SHARE_PREFIX + text.substr(SHARE_PREFIX.size()));
+    }
+    return path(EXTENDED_LENGTH_PREFIX + text);
+#else
+    return _path;
+#endif
+}
+
 path replace(const path& _path, const path& _sequence, const path& _new_sequence)
 {
     return path(detail::replace_seq(_path.string(), _sequence.string(), _new_sequence.string()));

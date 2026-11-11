@@ -16,10 +16,13 @@
  *   - a protocol path stays as it is, also with a root at the working folder (the browser player's is the
  *     file system root, which every absolute path lies under);
  *   - a path that does not exist yet converts, and resolve_protocol maps the result back to the same file;
- *   - a path with letters outside the system code page survives to_utf8_string / from_utf8_string.
+ *   - a path with letters outside the system code page survives to_utf8_string / from_utf8_string;
+ *   - make_extended_length_path: the "\\?\" form of drive, relative and network share paths on Windows, a path
+ *     already in it left alone, the path unchanged on other systems, and a folder with paths past 260
+ *     characters made and removed through it.
  *
  * Environment: UNRAVEL_PROTOCOL_TEST_DIR overrides the scratch folder. Every run writes into a fresh subfolder
- * and nothing is deleted; the protocols it registers are removed again.
+ * and nothing is deleted but the long folder the last test makes; the protocols it registers are removed again.
  */
 
 #include "../tests.h"
@@ -237,6 +240,44 @@ void test_utf8_round_trip(const fs::path& run_root)
     check(fs::to_utf8_string(fs::path("a") / "b") == "a/b", "separators are written as '/'");
 }
 
+void test_extended_length_paths(const fs::path& run_root)
+{
+    std::printf("test_extended_length_paths\n");
+    check(fs::make_extended_length_path({}).empty(), "an empty path stays empty");
+#ifdef _WIN32
+    check_equal(fs::make_extended_length_path("C:\\games\\data").string(), "\\\\?\\C:\\games\\data", "a drive path gets the prefix");
+    check_equal(fs::make_extended_length_path("C:/games/./data/../pack/").string(),
+                "\\\\?\\C:\\games\\pack",
+                "separators become backslashes, '.' and '..' are resolved and a trailing separator goes");
+    check_equal(fs::make_extended_length_path("C:\\").string(), "\\\\?\\C:\\", "a drive's root keeps its separator");
+    check_equal(fs::make_extended_length_path("\\\\server\\share\\data").string(),
+                "\\\\?\\UNC\\server\\share\\data",
+                "a network share takes the UNC form");
+    check_equal(fs::make_extended_length_path("\\\\?\\C:\\games\\..\\data").string(),
+                "\\\\?\\C:\\games\\..\\data",
+                "a path already in the form stays as it is");
+    check_equal(fs::make_extended_length_path("data").string(),
+                "\\\\?\\" + (fs::current_path() / "data").make_preferred().string(),
+                "a relative path is made absolute");
+#else
+    check(fs::make_extended_length_path("/games/./data") == fs::path("/games/./data"), "the path is returned as it is");
+#endif
+    // A folder as a Gradle build leaves them: its paths pass the 260 characters Windows takes by default.
+    constexpr std::size_t levels = 6;
+    const std::string level_name(60, 'a');
+    auto deep = run_root / "long";
+    for(std::size_t level = 0; level < levels; ++level)
+    {
+        deep /= level_name;
+    }
+    fs::error_code err;
+    fs::create_directories(fs::make_extended_length_path(deep), err);
+    write_file(fs::make_extended_length_path(deep / "file.bin"));
+    check(!err && fs::exists(fs::make_extended_length_path(deep / "file.bin"), err), "a folder with paths past 260 characters is made");
+    fs::remove_all(fs::make_extended_length_path(run_root / "long"), err);
+    check(!err && !fs::exists(run_root / "long", err), "and removed whole");
+}
+
 auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
 {
     g_checks = 0;
@@ -250,6 +291,7 @@ auto run_fs_protocols_suite(rtti::context& /*ctx*/) -> int
     test_protocol_path_unchanged(run_root);
     test_missing_file_round_trip(run_root);
     test_utf8_round_trip(run_root);
+    test_extended_length_paths(run_root);
     std::printf("fs protocols: %d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }
