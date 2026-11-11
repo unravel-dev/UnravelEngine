@@ -9,8 +9,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * The player's activity. SDL is linked statically into libmain.so, so that is the only native
- * library to load; SDL then calls its SDL_main.
+ * The player's activity. SDL is linked statically into libmain.so, the library SDL calls SDL_main in.
  */
 public class UnravelActivity extends SDLActivity {
     /**
@@ -27,9 +26,17 @@ public class UnravelActivity extends SDLActivity {
      */
     private static final String STATS_GESTURE_OPTION = "--gfx-stats-gesture";
 
+    /**
+     * The .NET runtime's cryptography library keeps the Java VM that loads it, and reaches Android's
+     * hashing, certificates and TLS through it. Only a load from Java hands it that VM, so it is loaded
+     * here before the runtime opens it; the game's library comes last, as SDL takes the last for the
+     * one with SDL_main.
+     */
+    private static final String DOTNET_CRYPTOGRAPHY_LIBRARY = "System.Security.Cryptography.Native.Android";
+
     @Override
     protected String[] getLibraries() {
-        return new String[] { "main" };
+        return new String[] { DOTNET_CRYPTOGRAPHY_LIBRARY, "main" };
     }
 
     @Override

@@ -229,6 +229,13 @@ android {
     }
 }
 
+// The Java half of the .NET runtime's cryptography library (libSystem.Security.Cryptography.Native.Android.so),
+// which reaches Android's hashing, certificates and TLS through these classes: without them a script's first hash
+// or https:// request ends the game.
+dependencies {
+    implementation(fileTree(dotnetRuntimeDir.resolve("native")) { include("*.jar") })
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(stagePlayerLibrary, StagePlayerLibrary::outputDir)

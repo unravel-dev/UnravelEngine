@@ -8,7 +8,8 @@
 #   symbols/<abi>/libmain.so.sym  the player's symbol table, which store packages upload beside the game
 #   project/                the Gradle project (game/android)
 #   sdl/java/               SDL's Java sources, from the SDL that libmain.so links
-#   dotnet/native/          the .NET runtime's native libraries (libcoreclr.so, libclrjit.so, ...)
+#   dotnet/native/          the .NET runtime's native libraries (libcoreclr.so, libclrjit.so, ...) and the Java
+#                           classes its cryptography library calls (a .jar)
 #   dotnet/lib/<framework>/ the .NET runtime's managed framework
 #   template.stamp          key=value lines: engine_version, configuration, abi, dotnet_runtime,
 #                           dotnet_framework, symbols
@@ -89,9 +90,10 @@ if(NOT IS_DIRECTORY "${runtime_dir}/lib/${dotnet_framework}")
     endif()
 endif()
 # The pack's static archives are for linking it into an executable; the debugger's libraries
-# (mscordaccore, mscordbi) are left out.
+# (mscordaccore, mscordbi) are left out. The .jar holds the Java classes of the cryptography library, which the
+# Gradle project compiles into the package.
 file(COPY "${runtime_dir}/native/" DESTINATION "${OUTPUT}/dotnet/native"
-     FILES_MATCHING PATTERN "*.so"
+     FILES_MATCHING PATTERN "*.so" PATTERN "*.jar"
      PATTERN "libmscord*" EXCLUDE)
 file(COPY "${runtime_dir}/lib/${dotnet_framework}" DESTINATION "${OUTPUT}/dotnet/lib")
 
